@@ -1,0 +1,35 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Editor and local files
+.idea/
+.vscode/
+*.swp
+*.swo
+*.log
+
+# CocoaSkill generated runtime/install artifacts
+.agents/
+.claude/skills/
+.codex/skills/
+.gemini/skills/
+.cursor/rules/
+
