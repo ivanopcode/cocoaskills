@@ -177,6 +177,9 @@ repositories.
 }
 ```
 
+`csk project add` requires the project path to already exist. It fails with a
+configuration error instead of creating arbitrary project directories.
+
 ## Schema Version Policy
 
 MVP supports only `schema_version: 1`.
@@ -548,6 +551,18 @@ Adapter behavior:
 Adapter entries are refreshed on every install. In copy mode, an adapter
 directory is replaced when the canonical `.agents/skills/<skill>` context
 changes.
+
+Adapter directories may contain user-authored content. `csk` must not delete
+entries that it did not create. Each adapter root records csk-owned entries in:
+
+```text
+<adapter-root>/.csk-managed.json
+```
+
+Cleanup removes only entries recorded in `.csk-managed.json` and no longer
+declared by the project manifest. If an expected adapter target already exists
+and is not known to be csk-managed, installation fails instead of overwriting
+user content.
 
 When `adapter_mode: copy` copies installed skill context directories, the copied
 adapter directory may contain `.csk-install.json`. That is acceptable for
