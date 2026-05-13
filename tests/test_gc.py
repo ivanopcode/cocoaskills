@@ -14,9 +14,19 @@ def test_runtime_gc_keeps_referenced_runtime_across_projects(tmp_path, skills_ro
         "skill-tool",
         {
             "csk-skill.json": json.dumps(
-                {"schema_version": 1, "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}}}
+                {
+                    "schema_version": 1,
+                    "commands": {
+                        "tool": {
+                            "type": "script",
+                            "unix_path": "scripts/tool",
+                            "win_path": "scripts/tool.cmd",
+                        }
+                    },
+                }
             ),
             "scripts/tool": "#!/bin/sh\n",
+            "scripts/tool.cmd": "@echo off\r\n",
         },
         tag="v1",
     )
@@ -42,4 +52,3 @@ def test_runtime_gc_keeps_referenced_runtime_across_projects(tmp_path, skills_ro
     results = installer.install(cfg)
     assert all(not result.errors for result in results)
     assert any(runtime_root.iterdir())
-

@@ -62,9 +62,19 @@ def test_cleanup_removes_undeclared_skill_and_runtime(tmp_path, skills_root, csk
         "skill-tool",
         {
             "csk-skill.json": json.dumps(
-                {"schema_version": 1, "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}}}
+                {
+                    "schema_version": 1,
+                    "commands": {
+                        "tool": {
+                            "type": "script",
+                            "unix_path": "scripts/tool",
+                            "win_path": "scripts/tool.cmd",
+                        }
+                    },
+                }
             ),
             "scripts/tool": "#!/bin/sh\n",
+            "scripts/tool.cmd": "@echo off\r\n",
         },
         tag="v1",
     )
