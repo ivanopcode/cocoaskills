@@ -5,10 +5,6 @@
 [![License](https://img.shields.io/pypi/l/cocoaskill.svg)](https://github.com/ivanopcode/cocoaskills/blob/main/LICENSE)
 [![CI](https://github.com/ivanopcode/cocoaskills/actions/workflows/ci.yml/badge.svg)](https://github.com/ivanopcode/cocoaskills/actions/workflows/ci.yml)
 
-**Project status:** v0.1.0 release in progress. PyPI and Homebrew channels
-activate on the first published release. Until then, install from source via
-`python -m pip install -e .` from a clone.
-
 `csk` is a local skill manager for AI agent skills. It installs reusable skill
 packages from local git repositories into your project repositories with
 reproducible, content-hashed installs and multi-agent adapter support
@@ -67,7 +63,7 @@ mise use -g pipx:cocoaskill@latest
 ### Convenience install script
 
 ```bash
-curl -sSL https://cocoaskill.dev/install.sh | sh
+curl -fsSL https://cocoaskills.cc/install.sh | sh
 ```
 
 The script detects Python, prefers `pipx` or `uv tool`, and falls back to
