@@ -11,9 +11,9 @@ class LockError(Exception):
 
 
 class GlobalLock:
-    def __init__(self, csk_home: Path, timeout: float = 30.0):
+    def __init__(self, csk_home: Path, timeout: float | None = None):
         self.path = csk_home / ".lock"
-        self.timeout = timeout
+        self.timeout = _timeout_from_env() if timeout is None else timeout
         self.acquired = False
 
     def __enter__(self) -> "GlobalLock":
@@ -53,3 +53,12 @@ def _timeout_message(path: Path) -> str:
         "remove it only after verifying the process is stale"
     )
 
+
+def _timeout_from_env() -> float:
+    raw = os.environ.get("CSK_LOCK_TIMEOUT")
+    if raw is None:
+        return 30.0
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 30.0

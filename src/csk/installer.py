@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -85,49 +87,63 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
             return result
 
         effective_locale = project_manifest.locale or config.preferred_locale
-        plans = _build_plans(config, project_manifest)
-        _detect_command_collisions(plans)
-        _check_system_commands(plans)
-        if options.strict_tags:
-            _check_moved_tags_strict(project.path, plans)
-        else:
-            result.messages.extend(_moved_tag_warnings(project.path, plans))
+        with ExitStack() as stack:
+            plans = _build_plans(config, project_manifest, use_cache=not options.dry_run, stack=stack)
+            _detect_command_collisions(plans)
+            _check_system_commands(plans)
+            if options.strict_tags:
+                _check_moved_tags_strict(project.path, plans)
+            else:
+                result.messages.extend(_moved_tag_warnings(project.path, plans))
 
-        if options.dry_run:
-            result.messages.append(f"{project.alias}: dry-run; no files modified")
+            if options.dry_run:
+                result.messages.append(f"{project.alias}: dry-run; no files modified")
+                return result
+
+            installed_names: list[str] = []
+            expected_commands: set[str] = set()
+            for plan in plans:
+                command_names = _install_runtime_commands(config.path.parent, project.path, plan)
+                expected_commands.update(command_names)
+                installed = _install_skill_context(project.path, plan, effective_locale, agents)
+                installed_names.append(plan.decl.name)
+                result.messages.append(
+                    f"{project.alias}: {plan.decl.name} {plan.resolved.kind} {plan.resolved.ref} "
+                    f"{plan.resolved.commit[:7]} {installed}"
+                )
+
+            _cleanup_removed_skills(project.path, {plan.decl.name for plan in plans})
+            shims.remove_stale_shims(project.path, expected_commands)
+            env_files.write_env_files(project.path)
+            adapters.refresh_adapters(project.path, agents, installed_names, config.adapter_mode)
             return result
-
-        installed_names: list[str] = []
-        expected_commands: set[str] = set()
-        for plan in plans:
-            command_names = _install_runtime_commands(config.path.parent, project.path, plan)
-            expected_commands.update(command_names)
-            installed = _install_skill_context(project.path, plan, effective_locale, agents)
-            installed_names.append(plan.decl.name)
-            result.messages.append(
-                f"{project.alias}: {plan.decl.name} {plan.resolved.kind} {plan.resolved.ref} "
-                f"{plan.resolved.commit[:7]} {installed}"
-            )
-
-        _cleanup_removed_skills(project.path, {plan.decl.name for plan in plans})
-        shims.remove_stale_shims(project.path, expected_commands)
-        env_files.write_env_files(project.path)
-        adapters.refresh_adapters(project.path, agents, installed_names, config.adapter_mode)
-        return result
     except Exception as exc:
         result.status = "failed"
         result.errors.append(str(exc))
         return result
 
 
-def _build_plans(config: GlobalConfig, project_manifest: manifest.ProjectManifest) -> list[SkillPlan]:
+def _build_plans(
+    config: GlobalConfig,
+    project_manifest: manifest.ProjectManifest,
+    *,
+    use_cache: bool = True,
+    stack: ExitStack | None = None,
+) -> list[SkillPlan]:
     plans: list[SkillPlan] = []
     for decl in project_manifest.skills:
         repo = config.skills_root / decl.source
         if not repo.exists():
             raise InstallError(f"Skill repository not found for {decl.name}: {repo}")
         resolved = git_ops.resolve_ref(repo, decl.ref.kind, decl.ref.value)
-        snap = snapshot.get_snapshot(config.path.parent, decl.source, repo, resolved.commit)
+        if use_cache:
+            snap = snapshot.get_snapshot(config.path.parent, decl.source, repo, resolved.commit)
+        else:
+            if stack is None:
+                raise InstallError("dry-run snapshot planning requires an ExitStack")
+            tmp_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="csk-dry-run-snapshot-")))
+            snap = tmp_root / decl.source
+            git_ops.archive(repo, resolved.commit, snap)
         if git_ops.repository_has_submodules(snap):
             raise InstallError(f"Submodules are unsupported in MVP: {decl.source}")
         spec = skillspec.load_skill_spec(snap)
