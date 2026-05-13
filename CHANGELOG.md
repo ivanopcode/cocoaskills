@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-13
+
+### Fixed
+
+- Updated the published install script domain to `cocoaskills.org`.
+
 ## [0.1.0] - 2026-05-13
 
 Initial public release.
@@ -43,5 +49,6 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/ivanopcode/cocoaskills/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ivanopcode/cocoaskills/releases/tag/v0.1.0

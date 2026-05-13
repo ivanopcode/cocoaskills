@@ -63,7 +63,7 @@ mise use -g pipx:cocoaskill@latest
 ### Convenience install script
 
 ```bash
-curl -fsSL https://cocoaskills.cc/install.sh | sh
+curl -fsSL https://cocoaskills.org/install.sh | sh
 ```
 
 The script detects Python, prefers `pipx` or `uv tool`, and falls back to
