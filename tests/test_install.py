@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import sys
+
+import pytest
 
 from conftest import commit_all, make_config, make_project, make_skill_repo, run, write_files, write_skillfile
 from csk import installer
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Asserts POSIX symlink shim in .agents/bin")
 def test_install_declared_script_to_runtime_not_skill_context(tmp_path, skills_root, csk_home):
     project = make_project(tmp_path)
     make_skill_repo(

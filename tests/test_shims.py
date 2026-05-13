@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import os
+import sys
+
+import pytest
 
 from csk import shims
 from csk.skillspec import CommandSpec
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shim layout uses symlinks")
 def test_unix_shim_is_symlink_and_runtime_is_executable(tmp_path):
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()

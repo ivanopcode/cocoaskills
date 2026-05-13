@@ -26,6 +26,9 @@ dist/
 *.swo
 *.log
 
+# setuptools-scm
+src/csk/_version.py
+
 # CocoaSkill generated runtime/install artifacts
 .agents/
 .claude/skills/

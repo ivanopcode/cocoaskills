@@ -1,29 +1,69 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=80", "setuptools-scm[simple]>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cocoaskills"
-version = "0.1.0"
-description = "Local skill manager for agent skills"
+name = "cocoaskill"
+dynamic = ["version"]
+description = "Local skill manager for AI agent skills with reproducible per-project installs"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
   { name = "Ivan Oparin", email = "oparin@me.com" }
+]
+keywords = [
+  "skills",
+  "ai-agents",
+  "claude-code",
+  "cursor",
+  "codex",
+  "gemini",
+  "dependency-manager",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development",
+  "Topic :: Software Development :: Build Tools",
+  "Topic :: System :: Software Distribution",
 ]
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=9"]
+dev = [
+  "pytest>=9",
+  "build>=1.2",
+  "twine>=5",
+]
 
 [project.scripts]
 csk = "csk.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ivanopcode/cocoaskills"
+Source = "https://github.com/ivanopcode/cocoaskills"
+Issues = "https://github.com/ivanopcode/cocoaskills/issues"
+Changelog = "https://github.com/ivanopcode/cocoaskills/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/ivanopcode/cocoaskills/blob/main/docs/mvp-design.md"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools_scm]
+version_file = "src/csk/_version.py"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

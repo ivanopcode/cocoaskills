@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from csk import adapters
 
 
@@ -49,6 +53,7 @@ def test_adapter_cleanup_removes_only_previous_managed_entries(tmp_path):
     assert (rules / "manual" / "SKILL.md").exists()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Symlink mode requires Developer Mode on Windows")
 def test_symlink_adapter_creates_link(tmp_path):
     project = tmp_path / "project"
     canonical = project / ".agents" / "skills" / "skill-a"
