@@ -6,7 +6,7 @@ import sys
 import pytest
 
 from conftest import commit_all, make_config, make_project, make_skill_repo, run, write_files, write_skillfile
-from csk import installer
+from csk import config, installer, snapshot
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Asserts POSIX symlink shim in .agents/bin")
@@ -55,6 +55,20 @@ def test_install_is_idempotent_for_unchanged_inputs(tmp_path, skills_root, csk_h
     assert any("up-to-date" in message for message in second.messages)
 
 
+def test_dry_run_does_not_modify_project_or_cache(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+
+    result = installer.install(cfg, options=installer.InstallOptions(dry_run=True))[0]
+
+    assert not result.errors
+    assert any("dry-run" in message for message in result.messages)
+    assert not (project / ".agents").exists()
+    assert not (csk_home / "cache").exists()
+
+
 def test_cleanup_removes_undeclared_skill_and_runtime(tmp_path, skills_root, csk_home):
     project = make_project(tmp_path)
     make_skill_repo(
@@ -87,6 +101,55 @@ def test_cleanup_removes_undeclared_skill_and_runtime(tmp_path, skills_root, csk
     assert not (project / ".agents" / "skills" / "skill-tool").exists()
     assert not (project / ".agents" / "bin" / "tool").exists()
     assert not (csk_home / "runtime" / "skill-tool").exists() or not any((csk_home / "runtime" / "skill-tool").iterdir())
+
+
+def test_marker_schema_mismatch_fails_cleanly(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+    assert not installer.install(cfg)[0].errors
+
+    marker_path = project / ".agents" / "skills" / "skill-a" / ".csk-install.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["schema_version"] = 2
+    marker_path.write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
+
+    result = installer.install(cfg)[0]
+
+    assert result.errors
+    assert "Unsupported installed marker schema" in result.errors[0]
+
+
+def test_snapshot_cache_reused_for_same_skill_commit_across_projects(tmp_path, skills_root, csk_home):
+    project_one = make_project(tmp_path, "project-one")
+    project_two = make_project(tmp_path, "project-two")
+    _, commit = make_skill_repo(skills_root, "skill-a", tag="v1")
+    for project in (project_one, project_two):
+        write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg = config.GlobalConfig(
+        path=csk_home / "config.json",
+        skills_root=skills_root,
+        preferred_locale=None,
+        default_agents=["codex_cli"],
+        adapter_mode="auto",
+        projects={
+            "one": config.ProjectConfig(alias="one", path=project_one, agents=["codex_cli"]),
+            "two": config.ProjectConfig(alias="two", path=project_two, agents=["codex_cli"]),
+        },
+    )
+
+    first = installer.install(cfg, alias="one")[0]
+    snap = snapshot.snapshot_dir(csk_home, "skill-a", commit)
+    assert not first.errors
+    assert snap.exists()
+    before = snap.stat().st_mtime_ns
+
+    second = installer.install(cfg, alias="two")[0]
+
+    assert not second.errors
+    assert snap.stat().st_mtime_ns == before
+    assert (project_two / ".agents" / "skills" / "skill-a").exists()
 
 
 def test_moved_tag_warns_by_default_and_strict_tags_fail(tmp_path, skills_root, csk_home):
