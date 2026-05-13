@@ -1,0 +1,347 @@
+name: Distribution Smoke
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version or tag to smoke, for example 0.1.1 or v0.1.1"
+        required: true
+        type: string
+      include_homebrew:
+        description: "Also test the Homebrew tap. Enable after the tap formula is bumped."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Normalize version
+        id: version
+        env:
+          RAW_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event.release.tag_name }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+
+          raw = os.environ["RAW_VERSION"].strip()
+          tag = raw if raw.startswith("v") else f"v{raw}"
+          version = raw[1:] if raw.startswith("v") else raw
+          version = version.replace("-rc", "rc").replace("-alpha", "a").replace("-beta", "b")
+          print(f"tag={tag}")
+          print(f"version={version}")
+          PY
+
+  smoke:
+    name: ${{ matrix.channel }} / ${{ matrix.os }}
+    needs: resolve-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            channel: pipx
+          - os: macos-latest
+            channel: pipx
+          - os: windows-latest
+            channel: pipx
+          - os: ubuntu-latest
+            channel: uv-tool
+          - os: macos-latest
+            channel: uv-tool
+          - os: windows-latest
+            channel: uv-tool
+          - os: ubuntu-latest
+            channel: mise
+          - os: macos-latest
+            channel: mise
+          - os: ubuntu-latest
+            channel: install-sh
+          - os: macos-latest
+            channel: install-sh
+    defaults:
+      run:
+        shell: bash
+    env:
+      CSK_VERSION: ${{ needs.resolve-version.outputs.version }}
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure git
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+          git config --global core.autocrlf false
+          git config --global core.symlinks false
+
+      - name: Install with pipx
+        if: matrix.channel == 'pipx'
+        run: |
+          python -m pip install --upgrade pip pipx
+          python -m pipx install "cocoaskill==$CSK_VERSION"
+          python - <<'PY' >> "$GITHUB_PATH"
+          import subprocess
+          import sys
+
+          print(subprocess.check_output(
+              [sys.executable, "-m", "pipx", "environment", "--value", "PIPX_BIN_DIR"],
+              text=True,
+          ).strip())
+          PY
+
+      - name: Install with uv tool
+        if: matrix.channel == 'uv-tool'
+        run: |
+          python -m pip install --upgrade pip uv
+          python -m uv tool install "cocoaskill==$CSK_VERSION"
+          python -m uv tool dir --bin >> "$GITHUB_PATH"
+
+      - name: Install with mise
+        if: matrix.channel == 'mise'
+        run: |
+          curl -fsSL https://mise.run | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/mise" install -y "pipx:cocoaskill@$CSK_VERSION"
+          mkdir -p "$RUNNER_TEMP/csk-mise-wrapper"
+          cat > "$RUNNER_TEMP/csk-mise-wrapper/csk" <<EOF
+          #!/usr/bin/env bash
+          exec "$HOME/.local/bin/mise" exec -y "pipx:cocoaskill@$CSK_VERSION" -- csk "\$@"
+          EOF
+          chmod +x "$RUNNER_TEMP/csk-mise-wrapper/csk"
+          echo "$RUNNER_TEMP/csk-mise-wrapper" >> "$GITHUB_PATH"
+
+      - name: Install with install.sh
+        id: install_sh
+        if: matrix.channel == 'install-sh'
+        continue-on-error: true
+        run: |
+          python -m pip install --upgrade pip uv
+          curl -fsSL https://cocoaskills.org/install.sh | sh
+          python -m uv tool dir --bin >> "$GITHUB_PATH"
+
+      - name: Verify installed CLI version
+        if: matrix.channel != 'install-sh' || steps.install_sh.outcome == 'success'
+        run: |
+          actual="$(csk --version)"
+          printf '%s\n' "$actual"
+          case "$actual" in
+            *" $CSK_VERSION") ;;
+            *) echo "Expected csk $CSK_VERSION, got: $actual" >&2; exit 1 ;;
+          esac
+
+      - name: Run minimal published-package E2E
+        if: matrix.channel != 'install-sh' || steps.install_sh.outcome == 'success'
+        run: |
+          root="$(mktemp -d)"
+          skills="$root/skills"
+          project="$root/project"
+          csk_home="$root/csk-home"
+          mkdir -p "$skills/skill-a" "$project" "$csk_home"
+
+          (
+            cd "$skills/skill-a"
+            git init
+            git branch -M main
+            printf '%s\n' '---' 'name: skill-a' '---' '' '# Skill A' > SKILL.md
+            git add SKILL.md
+            git commit -m "skill"
+            git tag v1
+          )
+
+          (
+            cd "$project"
+            git init
+            git branch -M main
+            printf '.agents/\n' > .gitignore
+            cat > Skillfile.json <<'JSON'
+          {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [
+              { "name": "skill-a", "tag": "v1" }
+            ]
+          }
+          JSON
+            git add .gitignore Skillfile.json
+            git commit -m "project"
+          )
+
+          cat > "$csk_home/config.json" <<JSON
+          {
+            "schema_version": 1,
+            "skills_root": "$skills",
+            "default_agents": ["codex_cli"],
+            "adapter_mode": "auto",
+            "projects": {
+              "app": {
+                "path": "$project",
+                "agents": ["codex_cli"]
+              }
+            }
+          }
+          JSON
+
+          export CSK_CONFIG="$csk_home/config.json"
+          csk install app
+          test -f "$project/.agents/skills/skill-a/SKILL.md"
+          test -f "$project/.agents/skills/skill-a/.csk-install.json"
+          csk status app | tee "$root/status.txt"
+          grep -q "up-to-date" "$root/status.txt"
+
+          python - <<PY > "$RUNNER_TEMP/content-sha256-${{ matrix.os }}-${{ matrix.channel }}.txt"
+          import json
+          from pathlib import Path
+
+          marker = Path("$project/.agents/skills/skill-a/.csk-install.json")
+          print(json.loads(marker.read_text())["content_sha256"])
+          PY
+
+      - name: Upload content hash
+        if: matrix.channel != 'install-sh' || steps.install_sh.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: content-hash-${{ matrix.os }}-${{ matrix.channel }}
+          path: ${{ runner.temp }}/content-sha256-${{ matrix.os }}-${{ matrix.channel }}.txt
+          if-no-files-found: error
+
+  compare-hashes:
+    name: Compare content hashes
+    needs: smoke
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download content hashes
+        uses: actions/download-artifact@v4
+        with:
+          pattern: content-hash-*
+          path: hashes
+          merge-multiple: true
+
+      - name: Assert cross-channel hash stability
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          values = {}
+          for path in sorted(Path("hashes").glob("*.txt")):
+              values[path.name] = path.read_text(encoding="utf-8").strip()
+
+          if len(values) < 2:
+              raise SystemExit(f"Expected at least two content hash artifacts, got {len(values)}")
+
+          unique = set(values.values())
+          for name, value in values.items():
+              print(f"{name}: {value}")
+
+          if len(unique) != 1:
+              raise SystemExit("content_sha256 differs across smoke jobs")
+          PY
+
+  homebrew-smoke:
+    name: homebrew / macos-latest
+    needs: resolve-version
+    runs-on: macos-latest
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.include_homebrew }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CSK_VERSION: ${{ needs.resolve-version.outputs.version }}
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure git
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+          git config --global core.autocrlf false
+          git config --global core.symlinks false
+
+      - name: Install with Homebrew
+        run: |
+          brew tap ivanopcode/csk
+          brew install cocoaskill
+
+      - name: Verify installed CLI version
+        run: |
+          actual="$(csk --version)"
+          printf '%s\n' "$actual"
+          case "$actual" in
+            *" $CSK_VERSION") ;;
+            *) echo "Expected csk $CSK_VERSION, got: $actual" >&2; exit 1 ;;
+          esac
+
+      - name: Run minimal Homebrew E2E
+        run: |
+          root="$(mktemp -d)"
+          skills="$root/skills"
+          project="$root/project"
+          csk_home="$root/csk-home"
+          mkdir -p "$skills/skill-a" "$project" "$csk_home"
+
+          (
+            cd "$skills/skill-a"
+            git init
+            git branch -M main
+            printf '%s\n' '---' 'name: skill-a' '---' '' '# Skill A' > SKILL.md
+            git add SKILL.md
+            git commit -m "skill"
+            git tag v1
+          )
+
+          (
+            cd "$project"
+            git init
+            git branch -M main
+            printf '.agents/\n' > .gitignore
+            cat > Skillfile.json <<'JSON'
+          {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [
+              { "name": "skill-a", "tag": "v1" }
+            ]
+          }
+          JSON
+            git add .gitignore Skillfile.json
+            git commit -m "project"
+          )
+
+          cat > "$csk_home/config.json" <<JSON
+          {
+            "schema_version": 1,
+            "skills_root": "$skills",
+            "default_agents": ["codex_cli"],
+            "adapter_mode": "auto",
+            "projects": {
+              "app": {
+                "path": "$project",
+                "agents": ["codex_cli"]
+              }
+            }
+          }
+          JSON
+
+          export CSK_CONFIG="$csk_home/config.json"
+          csk install app
+          test -f "$project/.agents/skills/skill-a/SKILL.md"
+          csk status app | grep -q "up-to-date"
