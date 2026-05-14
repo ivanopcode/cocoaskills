@@ -203,33 +203,60 @@ jobs:
             git commit -m "project"
           )
 
-          cat > "$csk_home/config.json" <<JSON
-          {
-            "schema_version": 1,
-            "skills_root": "$skills",
-            "default_agents": ["codex_cli"],
-            "adapter_mode": "auto",
-            "projects": {
-              "app": {
-                "path": "$project",
-                "agents": ["codex_cli"]
-              }
-            }
-          }
-          JSON
+          config_file="$csk_home/config.json"
+          config_skills="$skills"
+          config_project="$project"
+          if command -v cygpath >/dev/null 2>&1; then
+            config_file="$(cygpath -w "$config_file")"
+            config_skills="$(cygpath -w "$config_skills")"
+            config_project="$(cygpath -w "$config_project")"
+          fi
 
-          export CSK_CONFIG="$csk_home/config.json"
+          CONFIG_FILE="$config_file" CONFIG_SKILLS="$config_skills" CONFIG_PROJECT="$config_project" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          config_file = Path(os.environ["CONFIG_FILE"])
+          config_file.parent.mkdir(parents=True, exist_ok=True)
+          config_file.write_text(
+              json.dumps(
+                  {
+                      "schema_version": 1,
+                      "skills_root": os.environ["CONFIG_SKILLS"],
+                      "default_agents": ["codex_cli"],
+                      "adapter_mode": "auto",
+                      "projects": {
+                          "app": {
+                              "path": os.environ["CONFIG_PROJECT"],
+                              "agents": ["codex_cli"],
+                          }
+                      },
+                  },
+                  indent=2,
+              ),
+              encoding="utf-8",
+          )
+          PY
+
+          export CSK_CONFIG="$config_file"
           csk install app
           test -f "$project/.agents/skills/skill-a/SKILL.md"
           test -f "$project/.agents/skills/skill-a/.csk-install.json"
           csk status app | tee "$root/status.txt"
           grep -q "up-to-date" "$root/status.txt"
 
-          python - <<PY > "$RUNNER_TEMP/content-sha256-${{ matrix.os }}-${{ matrix.channel }}.txt"
+          marker_file="$project/.agents/skills/skill-a/.csk-install.json"
+          if command -v cygpath >/dev/null 2>&1; then
+            marker_file="$(cygpath -w "$marker_file")"
+          fi
+
+          MARKER_FILE="$marker_file" python - <<PY > "$RUNNER_TEMP/content-sha256-${{ matrix.os }}-${{ matrix.channel }}.txt"
           import json
+          import os
           from pathlib import Path
 
-          marker = Path("$project/.agents/skills/skill-a/.csk-install.json")
+          marker = Path(os.environ["MARKER_FILE"])
           print(json.loads(marker.read_text())["content_sha256"])
           PY
 
