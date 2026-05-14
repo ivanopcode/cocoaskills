@@ -16,6 +16,7 @@ def test_full_install_then_upgrade_advances_branch(monkeypatch, tmp_path, skills
         preferred_locale=None,
         default_agents=["codex_cli"],
         adapter_mode="auto",
+        worktree_alias_pattern="[A-Z]+-[0-9]+",
         projects={"app": config.ProjectConfig(alias="app", path=project, agents=["codex_cli"])},
     )
     config.save_config(cfg)
@@ -53,6 +54,7 @@ def test_upgrade_fetches_remote_branch_then_installs(monkeypatch, tmp_path, skil
         preferred_locale=None,
         default_agents=["codex_cli"],
         adapter_mode="auto",
+        worktree_alias_pattern="[A-Z]+-[0-9]+",
         projects={"app": config.ProjectConfig(alias="app", path=project, agents=["codex_cli"])},
     )
     config.save_config(cfg)
@@ -93,6 +95,7 @@ def test_upgrade_without_alias_updates_all_projects(monkeypatch, tmp_path, skill
         preferred_locale=None,
         default_agents=["codex_cli"],
         adapter_mode="auto",
+        worktree_alias_pattern="[A-Z]+-[0-9]+",
         projects={
             "one": config.ProjectConfig(alias="one", path=project_one, agents=["codex_cli"]),
             "two": config.ProjectConfig(alias="two", path=project_two, agents=["codex_cli"]),

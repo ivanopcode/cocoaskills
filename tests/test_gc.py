@@ -39,6 +39,7 @@ def test_runtime_gc_keeps_referenced_runtime_across_projects(tmp_path, skills_ro
         preferred_locale=cfg.preferred_locale,
         default_agents=cfg.default_agents,
         adapter_mode=cfg.adapter_mode,
+        worktree_alias_pattern=cfg.worktree_alias_pattern,
         projects={
             "p1": type(next(iter(cfg.projects.values())))(alias="p1", path=project1, agents=[]),
             "p2": type(next(iter(cfg.projects.values())))(alias="p2", path=project2, agents=[]),

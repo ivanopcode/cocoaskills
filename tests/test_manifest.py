@@ -9,6 +9,7 @@ def test_manifest_parses_skill_refs(tmp_path):
     parsed = manifest.parse_manifest(
         {
             "schema_version": 1,
+            "project": {"alias": "partners-ios"},
             "agents": ["codex_cli"],
             "locale": "ru",
             "skills": [{"name": "skill-a", "source": "repo-a", "tag": "v1"}],
@@ -18,6 +19,7 @@ def test_manifest_parses_skill_refs(tmp_path):
     assert parsed.skills[0].name == "skill-a"
     assert parsed.skills[0].source == "repo-a"
     assert parsed.skills[0].ref.kind == "tag"
+    assert parsed.project_alias == "partners-ios"
 
 
 def test_manifest_rejects_duplicate_skill_names(tmp_path):
@@ -40,4 +42,3 @@ def test_manifest_requires_exactly_one_ref(tmp_path):
             {"schema_version": 1, "skills": [{"name": "bad", "tag": "v1", "branch": "main"}]},
             tmp_path / "Skillfile.json",
         )
-

@@ -101,6 +101,7 @@ def make_config(csk_home: Path, skills_root: Path, project: Path, *, agents: lis
         preferred_locale="ru",
         default_agents=agents,
         adapter_mode="auto",
+        worktree_alias_pattern="[A-Z]+-[0-9]+",
         projects={
             "app": ProjectConfig(alias="app", path=project, agents=agents),
         },

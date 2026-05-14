@@ -133,6 +133,7 @@ def test_snapshot_cache_reused_for_same_skill_commit_across_projects(tmp_path, s
         preferred_locale=None,
         default_agents=["codex_cli"],
         adapter_mode="auto",
+        worktree_alias_pattern="[A-Z]+-[0-9]+",
         projects={
             "one": config.ProjectConfig(alias="one", path=project_one, agents=["codex_cli"]),
             "two": config.ProjectConfig(alias="two", path=project_two, agents=["codex_cli"]),

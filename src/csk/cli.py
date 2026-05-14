@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, config, git_ops, installer, manifest, shell_init, status
+from . import __version__, config, git_ops, installer, manifest, project_resolver, shell_init, status
 from .locking import GlobalLock, LockError
 
 
@@ -29,7 +29,13 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_OK
     try:
         return _dispatch(args)
-    except (config.ConfigError, manifest.ManifestError, installer.InstallError, ValueError) as exc:
+    except (
+        config.ConfigError,
+        manifest.ManifestError,
+        project_resolver.ProjectResolutionError,
+        installer.InstallError,
+        ValueError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_CONFIG
     except LockError as exc:
@@ -45,12 +51,13 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Local documentation index:\n"
             "  csk bootstrap          create ~/.cocoaskills/config.json\n"
-            "  csk install [alias]    apply Skillfile.json without fetching\n"
+            "  csk install [target]   apply Skillfile.json without fetching\n"
             "  csk update             fetch local skill repositories\n"
-            "  csk upgrade [alias]    update, then install\n"
-            "  csk status [alias]     show manifest vs installed state\n"
+            "  csk upgrade [target]   update, then install\n"
+            "  csk status [target]    show manifest vs installed state\n"
             "  csk list               list configured projects and skills\n"
-            "  csk project add        add a project and create Skillfile.json\n"
+            "  csk project add        add a configured project\n"
+            "  csk project resolve    show current checkout resolution\n"
             "  csk config show        show config path and content\n"
             "  csk shell-init         print shell hook code\n\n"
             "Run 'csk <command> --help' for command-specific documentation."
@@ -80,19 +87,20 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Labels:\n  up-to-date, missing, update-available, content-drift, error\n\n"
             "Files read:\n  ~/.cocoaskills/config.json, Skillfile.json, .agents/skills/*/.csk-install.json\n\n"
-            "Examples:\n  csk status\n  csk status partners-app-ios"
+            "Examples:\n  csk status\n  csk status partners-app-ios\n  csk status ."
         ),
     )
-    status_parser.add_argument("alias", nargs="?", help="project alias")
-    sub.add_parser(
+    status_parser.add_argument("target", nargs="?", help="project alias, '.', or project path")
+    list_parser = sub.add_parser(
         "list",
         help="List configured projects and declared skills.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Files read:\n  ~/.cocoaskills/config.json and project Skillfile.json files when present.\n\n"
-            "Example:\n  csk list"
+            "Examples:\n  csk list\n  csk list --paths"
         ),
     )
+    list_parser.add_argument("--paths", action="store_true", help="include project_alias, checkout_alias, and paths")
 
     project = sub.add_parser("project", help="Manage configured projects.")
     project_sub = project.add_subparsers(dest="project_command", required=True)
@@ -108,6 +116,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add.add_argument("alias")
     add.add_argument("path")
+    resolve = project_sub.add_parser(
+        "resolve",
+        help="Resolve a project alias/path without installing.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Shows which Skillfile.json is used, which alias is selected, and where generated files land.\n\n"
+            "Examples:\n  csk project resolve .\n  csk project resolve /path/to/worktree"
+        ),
+    )
+    resolve.add_argument("target", nargs="?", default=".", help="project alias, '.', or project path")
 
     config_parser = sub.add_parser("config", help="Inspect csk config.")
     config_sub = config_parser.add_subparsers(dest="config_command", required=True)
@@ -164,10 +182,12 @@ def _add_install(sub, name: str, description: str) -> None:
             "Examples:\n"
             f"  csk {name}\n"
             f"  csk {name} partners-app-ios\n"
+            f"  csk {name} .\n"
+            f"  csk {name} /path/to/project\n"
             f"  csk {name} --fix-gitignore\n"
         ),
     )
-    parser.add_argument("alias", nargs="?", help="project alias")
+    parser.add_argument("target", nargs="?", help="project alias, '.', or project path")
     parser.add_argument("--dry-run", action="store_true", help="plan work without modifying files")
     parser.add_argument("--verbose", action="store_true", help="print detailed progress")
     parser.add_argument("--fix-gitignore", action="store_true", help="append missing CocoaSkill gitignore entries")
@@ -181,16 +201,21 @@ def _dispatch(args: argparse.Namespace) -> int:
         return _cmd_config_show()
     if args.command == "project" and args.project_command == "add":
         return _cmd_project_add(args.alias, Path(args.path))
+    if args.command == "project" and args.project_command == "resolve":
+        cfg = config.load_config()
+        print(_render_project_resolution(cfg, args))
+        return EXIT_OK
     if args.command == "shell-init":
         print(shell_init.shell_init(args.shell))
         return EXIT_OK
 
     cfg = config.load_config()
     if args.command == "list":
-        print(_render_list(cfg))
+        print(_render_list(cfg, show_paths=args.paths))
         return EXIT_OK
     if args.command == "status":
-        print(status.render_status(cfg, alias=args.alias))
+        cfg, alias = _cfg_and_alias_for_target(cfg, args, save=False)
+        print(status.render_status(cfg, alias=alias))
         return EXIT_OK
 
     if args.command in {"install", "update", "upgrade"}:
@@ -200,8 +225,10 @@ def _dispatch(args: argparse.Namespace) -> int:
                 return _cmd_update(cfg)
             if args.command == "upgrade":
                 update_code = _cmd_update(cfg)
+                cfg, args = _prepare_install_target(cfg, args)
                 install_code = _cmd_install(cfg, args)
                 return install_code if install_code != EXIT_OK else update_code
+            cfg, args = _prepare_install_target(cfg, args)
             return _cmd_install(cfg, args)
 
     raise ValueError(f"Unknown command: {args.command}")
@@ -232,6 +259,7 @@ def _cmd_bootstrap() -> int:
         preferred_locale=preferred_locale,
         default_agents=default_agents,
         adapter_mode="auto",
+        worktree_alias_pattern=config.DEFAULT_WORKTREE_ALIAS_PATTERN,
         projects=projects,
     )
     config.save_config(cfg)
@@ -289,10 +317,17 @@ def _cmd_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
     return EXIT_PARTIAL_FAIL if failed else EXIT_OK
 
 
-def _render_list(cfg: config.GlobalConfig) -> str:
+def _render_list(cfg: config.GlobalConfig, *, show_paths: bool = False) -> str:
     lines = [f"Config: {cfg.path}", f"Skills root: {cfg.skills_root}"]
     for alias, project in cfg.projects.items():
-        lines.append(f"Project {alias}: {project.path}")
+        if show_paths:
+            suffix = "" if project.path.exists() else " (missing)"
+            lines.append(
+                f"Project {alias}: path={project.path}{suffix} "
+                f"project_alias={project.project_alias or alias} checkout_alias={project.checkout_alias or alias}"
+            )
+        else:
+            lines.append(f"Project {alias}: {project.path}")
         project_manifest = manifest.load_manifest(project.path)
         if project_manifest is None:
             lines.append("  Skillfile.json missing")
@@ -303,6 +338,114 @@ def _render_list(cfg: config.GlobalConfig) -> str:
         for decl in project_manifest.skills:
             lines.append(f"  {decl.name} ({decl.ref.kind} {decl.ref.value})")
     return "\n".join(lines)
+
+
+def _prepare_install_target(
+    cfg: config.GlobalConfig, args: argparse.Namespace
+) -> tuple[config.GlobalConfig, argparse.Namespace]:
+    cfg, alias = _cfg_and_alias_for_target(cfg, args, save=not args.dry_run)
+    args.alias = alias
+    return cfg, args
+
+
+def _cfg_and_alias_for_target(
+    cfg: config.GlobalConfig,
+    args: argparse.Namespace,
+    *,
+    save: bool,
+) -> tuple[config.GlobalConfig, str | None]:
+    path_target = _path_target_from_args(args)
+    if path_target is None:
+        target = getattr(args, "target", None)
+        return cfg, target
+    resolved = project_resolver.resolve(path_target, worktree_alias_pattern=cfg.worktree_alias_pattern)
+    project_manifest = manifest.load_manifest(resolved.root)
+    agents = project_manifest.agents if project_manifest and project_manifest.agents else cfg.default_agents
+    updated = config.add_project(
+        cfg,
+        resolved.checkout_alias,
+        resolved.root,
+        agents,
+        project_alias=resolved.project_alias,
+        checkout_alias=resolved.checkout_alias,
+    )
+    if save:
+        config.save_config(updated)
+    return updated, resolved.checkout_alias
+
+
+def _path_target_from_args(args: argparse.Namespace) -> Path | None:
+    target = getattr(args, "target", None)
+    if target and _looks_like_path(target):
+        return Path(target).expanduser()
+    return None
+
+
+def _looks_like_path(value: str) -> bool:
+    return (
+        value in {".", "..", "~"}
+        or value.startswith(("./", "../", "~/"))
+        or Path(value).is_absolute()
+    )
+
+
+def _render_project_resolution(cfg: config.GlobalConfig, args: argparse.Namespace) -> str:
+    path_target = _path_target_from_args(args)
+    target = getattr(args, "target", None)
+    if path_target is None and target and target in cfg.projects:
+        project = cfg.projects[target]
+        return _render_configured_project_resolution(project, cfg.worktree_alias_pattern)
+    if path_target is None and target and target not in {".", ""}:
+        raise ValueError(f"Unknown project alias: {target}")
+    resolved = project_resolver.resolve(path_target or Path.cwd(), worktree_alias_pattern=cfg.worktree_alias_pattern)
+    agents: list[str] = []
+    project_manifest = manifest.load_manifest(resolved.root)
+    if project_manifest:
+        agents = project_manifest.agents
+    lines = [
+        f"project_alias: {resolved.project_alias}",
+        f"checkout_alias: {resolved.checkout_alias}",
+        f"path: {resolved.root}",
+        f"skillfile: {resolved.skillfile}",
+        f"branch: {resolved.branch or ''}",
+        f"task_id: {resolved.task_id or ''}",
+        f"path_hash: {resolved.path_hash}",
+        "install_paths:",
+        f"  skills: {resolved.root / '.agents' / 'skills'}",
+        f"  bin: {resolved.root / '.agents' / 'bin'}",
+        f"  claude_code: {resolved.root / '.claude' / 'skills'}",
+        f"  codex_cli: {resolved.root / '.codex' / 'skills'}",
+        f"  cursor: {resolved.root / '.cursor' / 'rules'}",
+        f"  gemini: {resolved.root / '.gemini' / 'skills'}",
+        f"agents: {', '.join(agents or cfg.default_agents)}",
+    ]
+    return "\n".join(lines)
+
+
+def _render_configured_project_resolution(project: config.ProjectConfig, worktree_alias_pattern: str) -> str:
+    root = project.path
+    branch = project_resolver.git_branch(root)
+    task_id = project_resolver.task_id_from_branch(branch, worktree_alias_pattern)
+    path_hash = project_resolver.stable_path_hash(root) if root.exists() else ""
+    return "\n".join(
+        [
+            f"project_alias: {project.project_alias or project.alias}",
+            f"checkout_alias: {project.checkout_alias or project.alias}",
+            f"path: {root}",
+            f"skillfile: {root / manifest.MANIFEST_NAME}",
+            f"branch: {branch or ''}",
+            f"task_id: {task_id or ''}",
+            f"path_hash: {path_hash}",
+            "install_paths:",
+            f"  skills: {root / '.agents' / 'skills'}",
+            f"  bin: {root / '.agents' / 'bin'}",
+            f"  claude_code: {root / '.claude' / 'skills'}",
+            f"  codex_cli: {root / '.codex' / 'skills'}",
+            f"  cursor: {root / '.cursor' / 'rules'}",
+            f"  gemini: {root / '.gemini' / 'skills'}",
+            f"agents: {', '.join(project.agents)}",
+        ]
+    )
 
 
 if __name__ == "__main__":

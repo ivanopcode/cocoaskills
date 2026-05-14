@@ -93,10 +93,13 @@ Example:
   "preferred_locale": "ru",
   "default_agents": ["codex_cli", "claude_code", "cursor"],
   "adapter_mode": "auto",
+  "worktree_alias_pattern": "[A-Z]+-[0-9]+",
   "projects": {
     "partners-app-ios": {
       "path": "/Users/iv/Developer/Wildberries/partners-app-dev",
-      "agents": ["codex_cli", "claude_code", "cursor"]
+      "agents": ["codex_cli", "claude_code", "cursor"],
+      "project_alias": "partners-ios",
+      "checkout_alias": "partners-app-ios"
     }
   }
 }
@@ -111,7 +114,20 @@ Fields:
 | `preferred_locale` | no | Default locale used when a project does not specify one. |
 | `default_agents` | no | Agents used for new projects. |
 | `adapter_mode` | no | `auto`, `symlink`, or `copy`. Default is `auto`. |
+| `worktree_alias_pattern` | no | Regex used to extract a task id from non-shared branch names. Default is Jira/YouTrack-style `[A-Z]+-[0-9]+`, case-insensitive. |
 | `projects` | yes | Map of project alias to project config. |
+
+The key under `projects` is the checkout alias. MVP keeps this compatible with
+the original alias model while adding explicit alias layers:
+
+- `project_alias`: logical project name shared by many checkouts, for example
+  `partners-ios`.
+- `checkout_alias`: concrete working copy name, for example
+  `partners-ios-pma-23523-a3f1`.
+- `path`: filesystem path for that concrete checkout.
+
+If `project_alias` or `checkout_alias` is omitted in an older config, the
+project map key is used for both.
 
 ## Project Manifest
 
@@ -122,6 +138,9 @@ Example:
 ```json
 {
   "schema_version": 1,
+  "project": {
+    "alias": "partners-ios"
+  },
   "agents": ["codex_cli", "claude_code", "cursor"],
   "locale": "ru",
   "skills": [
@@ -151,6 +170,7 @@ Fields:
 | Field | Required | Description |
 | --- | --- | --- |
 | `schema_version` | yes | Manifest schema version. MVP value is `1`. |
+| `project.alias` | no | Logical project alias used by current-directory/worktree-aware commands. |
 | `agents` | no | Target agent adapters. Defaults to project config or global defaults. |
 | `locale` | no | Project locale. Overrides global `preferred_locale`. |
 | `skills` | yes | Skill declarations. |
@@ -267,12 +287,16 @@ MVP commands:
 
 ```text
 csk bootstrap
-csk install [alias]
+csk install [target]
+csk install .
+csk install /path/to/project
 csk update
-csk upgrade [alias]
-csk status [alias]
-csk list
+csk upgrade [target]
+csk status [target]
+csk status .
+csk list [--paths]
 csk project add <alias> <path>
+csk project resolve [target]
 csk config show
 csk shell-init [zsh|bash|powershell]
 csk --help
@@ -296,12 +320,17 @@ Command behavior:
 | `bootstrap` | Interactively creates global config, preferred locale, default agents, focused projects, and optionally shell hook instructions. |
 | `install` | Applies `Skillfile.json` using current local git refs. It does not fetch. |
 | `install <alias>` | Installs one configured project. |
+| `install .` / `install /path/to/project` | Finds `Skillfile.json` in or above the target directory, computes a checkout alias, updates global config for that checkout, then installs that checkout. |
 | `update` | Fetches all git repositories under `skills_root`. It does not modify projects. |
 | `upgrade` | Runs `update`, then `install`. This is the command that advances branch-based skills to newly fetched commits. |
 | `upgrade <alias>` | Runs `update`, then installs one project. |
+| `upgrade .` / `upgrade /path/to/project` | Runs `update`, then installs the resolved checkout. |
 | `status` | Shows manifest vs installed marker state. |
+| `status .` / `status /path/to/project` | Shows status for a resolved checkout without saving it to global config. |
 | `list` | Shows configured projects and their declared skills. |
+| `list --paths` | Includes `project_alias`, `checkout_alias`, and concrete project paths. |
 | `project add` | Adds a project to global config and creates an empty `Skillfile.json` if missing. |
+| `project resolve` | Shows which alias/path/Skillfile/install paths `csk` would use for a checkout. |
 | `config show` | Prints resolved config path and config content. |
 | `shell-init` | Prints shell hook code for automatic project-local `PATH` activation. |
 | `--help` | Prints top-level command help and local documentation index, then exits. |
@@ -316,6 +345,30 @@ Command behavior:
 `csk install` is suitable for CI because it never fetches or mutates local
 skill refs. CI that wants to reject locally moved tags should also use
 `--strict-tags`.
+
+## Current-Directory and Worktree Resolution
+
+`csk install .`, `csk install /path/to/project`, `csk status .`, and
+`csk project resolve .` make `csk` usable from disposable git worktrees without
+manually editing global config aliases.
+
+Resolution rules:
+
+1. Find `Skillfile.json` in the target directory or any parent directory.
+2. Treat that directory as the project root.
+3. Read `project.alias` from `Skillfile.json`. If absent, derive the logical
+   project alias from the project root directory name.
+4. Read the current git branch when available.
+5. If the branch is a shared branch (`main`, `master`, `develop`,
+   `development`, `dev`, `trunk`), use `project_alias` as the checkout alias.
+6. If the branch contains a task id matching `worktree_alias_pattern`, use
+   `<project_alias>-<task-id>-<stable-path-hash>`.
+7. If the branch is not shared and has no task id, use
+   `<project_alias>-worktree-<stable-path-hash>`.
+
+When path/current-directory install or upgrade is used, `csk` creates or
+updates the computed checkout entry in global config before installation.
+`status .` and `project resolve .` are diagnostic and do not save config.
 
 There is no `csk uninstall` command in MVP. To uninstall a skill from a project,
 remove it from `Skillfile.json` and run `csk install`; cleanup removes the

@@ -94,6 +94,7 @@ python -m pip install --user cocoaskill
    ```json
    {
      "schema_version": 1,
+     "project": { "alias": "partners-ios" },
      "agents": ["claude_code", "codex_cli", "cursor"],
      "locale": "en",
      "skills": [
@@ -103,20 +104,21 @@ python -m pip install --user cocoaskill
    }
    ```
 
-4. Run `csk install` from anywhere. It installs the declared skills into every
-   configured project.
+4. Run `csk install .` inside a checkout, or `csk install` from anywhere to
+   install every configured project.
 
 ## CLI
 
 | Command | Behavior |
 |---|---|
 | `csk bootstrap` | Interactively create the global config. |
-| `csk install [alias]` | Apply `Skillfile.json` using current local git refs. Does not fetch. |
+| `csk install [target]` | Apply `Skillfile.json` using current local git refs. Does not fetch. `target` may be an alias, `.`, or a project path. |
 | `csk update` | Fetch all git repositories under `skills_root`. Does not modify projects. |
-| `csk upgrade [alias]` | Run `update`, then `install`. |
-| `csk status [alias]` | Show manifest vs installed state. |
-| `csk list` | List configured projects and declared skills. |
+| `csk upgrade [target]` | Run `update`, then `install`. |
+| `csk status [target]` | Show manifest vs installed state. Supports `csk status .` without saving config. |
+| `csk list [--paths]` | List configured projects and declared skills. |
 | `csk project add <alias> <path>` | Register a project and create an empty manifest. |
+| `csk project resolve [target]` | Show resolved project alias, checkout alias, Skillfile, and install paths. |
 | `csk config show` | Print resolved config path and contents. |
 | `csk shell-init [zsh\|bash\|powershell]` | Print shell hook code for auto-`PATH` activation. |
 | `csk --version` | Print version and exit. |

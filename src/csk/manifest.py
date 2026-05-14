@@ -30,6 +30,7 @@ class SkillDecl:
 @dataclass(frozen=True)
 class ProjectManifest:
     path: Path
+    project_alias: str | None = None
     agents: list[str] = field(default_factory=list)
     locale: str | None = None
     skills: list[SkillDecl] = field(default_factory=list)
@@ -72,6 +73,8 @@ def parse_manifest(data: dict[str, Any], path: Path) -> ProjectManifest:
             f"Unsupported Skillfile schema_version {schema!r}; this Skillfile requires a newer csk"
         )
 
+    project_alias = _parse_project_alias(data, path)
+
     agents = data.get("agents", [])
     if not _is_str_list(agents):
         raise ManifestError("Skillfile field 'agents' must be a list of strings")
@@ -110,7 +113,27 @@ def parse_manifest(data: dict[str, Any], path: Path) -> ProjectManifest:
 
         skills.append(SkillDecl(name=name, source=source, ref=SkillRef(ref_kind, ref_value)))
 
-    return ProjectManifest(path=path, agents=list(agents), locale=locale, skills=skills)
+    return ProjectManifest(
+        path=path,
+        project_alias=project_alias,
+        agents=list(agents),
+        locale=locale,
+        skills=skills,
+    )
+
+
+def _parse_project_alias(data: dict[str, Any], path: Path) -> str | None:
+    project = data.get("project")
+    if project is None:
+        return None
+    if not isinstance(project, dict):
+        raise ManifestError("Skillfile field 'project' must be an object when present")
+    alias = project.get("alias")
+    if alias is None:
+        return None
+    if not isinstance(alias, str) or not alias:
+        raise ManifestError(f"{path} field 'project.alias' must be a non-empty string when present")
+    return alias
 
 
 def _is_str_list(value: Any) -> bool:
