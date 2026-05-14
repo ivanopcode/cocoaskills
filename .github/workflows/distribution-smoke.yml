@@ -3,6 +3,9 @@ name: Distribution Smoke
 on:
   release:
     types: [published]
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       version:
@@ -22,6 +25,7 @@ jobs:
   resolve-version:
     name: Resolve version
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
@@ -29,7 +33,7 @@ jobs:
       - name: Normalize version
         id: version
         env:
-          RAW_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event.release.tag_name }}
+          RAW_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.event.release.tag_name }}
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import os
