@@ -93,7 +93,16 @@ jobs:
         if: matrix.channel == 'pipx'
         run: |
           python -m pip install --upgrade pip pipx
-          python -m pipx install "cocoaskill==$CSK_VERSION"
+          for attempt in 1 2 3 4 5; do
+            if python -m pipx install "cocoaskill==$CSK_VERSION"; then
+              break
+            fi
+            python -m pipx uninstall cocoaskill >/dev/null 2>&1 || true
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
           python - <<'PY' >> "$GITHUB_PATH"
           import subprocess
           import sys
@@ -108,7 +117,16 @@ jobs:
         if: matrix.channel == 'uv-tool'
         run: |
           python -m pip install --upgrade pip uv
-          python -m uv tool install "cocoaskill==$CSK_VERSION"
+          for attempt in 1 2 3 4 5; do
+            if python -m uv tool install "cocoaskill==$CSK_VERSION"; then
+              break
+            fi
+            python -m uv tool uninstall cocoaskill >/dev/null 2>&1 || true
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
           python -m uv tool dir --bin >> "$GITHUB_PATH"
 
       - name: Install with mise
@@ -116,7 +134,15 @@ jobs:
         run: |
           curl -fsSL https://mise.run | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          "$HOME/.local/bin/mise" install -y "pipx:cocoaskill@$CSK_VERSION"
+          for attempt in 1 2 3 4 5; do
+            if "$HOME/.local/bin/mise" install -y "pipx:cocoaskill@$CSK_VERSION"; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
           mkdir -p "$RUNNER_TEMP/csk-mise-wrapper"
           cat > "$RUNNER_TEMP/csk-mise-wrapper/csk" <<EOF
           #!/usr/bin/env bash
@@ -163,7 +189,7 @@ jobs:
             cd "$project"
             git init
             git branch -M main
-            printf '.agents/\n' > .gitignore
+            printf '.agents/\n.codex/skills/\n' > .gitignore
             cat > Skillfile.json <<'JSON'
           {
             "schema_version": 1,
@@ -307,7 +333,7 @@ jobs:
             cd "$project"
             git init
             git branch -M main
-            printf '.agents/\n' > .gitignore
+            printf '.agents/\n.codex/skills/\n' > .gitignore
             cat > Skillfile.json <<'JSON'
           {
             "schema_version": 1,
