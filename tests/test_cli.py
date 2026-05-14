@@ -94,6 +94,7 @@ def test_cli_install_tilde_path_registers_checkout(monkeypatch, tmp_path, csk_ho
     )
     monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
 
     code = cli.main(["install", "~/project"])
 
