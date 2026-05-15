@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from csk import deprecation
 from csk.config import GlobalConfig, ProjectConfig
 
 
@@ -110,5 +111,6 @@ def make_config(csk_home: Path, skills_root: Path, project: Path, *, agents: lis
 
 @pytest.fixture(autouse=True)
 def stable_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    deprecation.reset_for_tests()
     monkeypatch.delenv("CSK_CONFIG", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-05-15
+
+### Changed
+
+- Added transitional warnings for the planned v0.3.0 current-project install
+  model: bare `install`/`status`/`upgrade`, path auto-registration, and
+  `--fix-gitignore`.
+- Added accepted RFC 0001 documenting the `csk init`, explicit `--all`, and
+  current-project install migration plan.
+
+## [0.2.0] - 2026-05-15
+
 ### Changed
 
 - Renamed the published distribution package from `cocoaskill` to
@@ -75,7 +87,9 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/ivanopcode/cocoaskills/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/ivanopcode/cocoaskills/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/ivanopcode/cocoaskills/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ivanopcode/cocoaskills/releases/tag/v0.1.0

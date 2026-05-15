@@ -158,6 +158,125 @@ def test_cli_install_dot_dry_run_does_not_save_config(monkeypatch, tmp_path, csk
     assert not (project / ".agents").exists()
 
 
+def test_cli_bare_install_emits_transition_warning(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg_path = csk_home / "config.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "projects": {"app": {"path": str(project), "agents": ["codex_cli"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+
+    code = cli.main(["install"])
+    err = capsys.readouterr().err
+
+    assert code == 0
+    assert "csk install: WARNING - semantics will change in v0.3.0" in err
+    assert "legacy behavior over 1 configured projects" in err
+
+
+def test_cli_bare_status_emits_transition_warning(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    project = make_project(tmp_path)
+    cfg_path = csk_home / "config.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "projects": {"app": {"path": str(project), "agents": ["codex_cli"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+
+    code = cli.main(["status"])
+    err = capsys.readouterr().err
+
+    assert code == 0
+    assert "csk status: WARNING - semantics will change in v0.3.0" in err
+    assert "for multi-project status, use 'csk status --all'" in err
+
+
+def test_cli_bare_upgrade_emits_transition_warning(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg_path = csk_home / "config.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "projects": {"app": {"path": str(project), "agents": ["codex_cli"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+
+    code = cli.main(["upgrade"])
+    err = capsys.readouterr().err
+
+    assert code == 0
+    assert "csk upgrade: WARNING - semantics will change in v0.3.0" in err
+    assert "for multi-project sync, use 'csk upgrade --all'" in err
+
+
+def test_cli_install_dot_auto_register_emits_transition_warning(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg_path = csk_home / "config.json"
+    cfg_path.write_text(
+        json.dumps({"schema_version": 1, "skills_root": str(skills_root), "projects": {}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+    monkeypatch.chdir(project)
+
+    code = cli.main(["install", "."])
+    err = capsys.readouterr().err
+
+    assert code == 0
+    assert "csk install .: WARNING - auto-register will be removed in v0.3.0" in err
+    assert "csk project add <alias> <path>" in err
+
+
+def test_cli_fix_gitignore_emits_deprecation_warning(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    project = make_project(tmp_path, gitignore=False)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg_path = csk_home / "config.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "projects": {"app": {"path": str(project), "agents": ["codex_cli"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+
+    code = cli.main(["install", "app", "--fix-gitignore"])
+    err = capsys.readouterr().err
+
+    assert code == 0
+    assert "--fix-gitignore: WARNING - deprecated for regular install flows" in err
+    assert "prefer 'csk init' once per project" in err
+    assert "scheduled for removal in a future release" in err
+
+
 def test_cli_project_resolve_reports_current_checkout(monkeypatch, tmp_path, csk_home, skills_root, capsys):
     project = make_project(tmp_path)
     write_skillfile(project, {"schema_version": 1, "project": {"alias": "partners-ios"}, "skills": []})

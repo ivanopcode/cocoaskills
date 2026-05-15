@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, config, git_ops, installer, manifest, project_resolver, shell_init, status
+from . import __version__, config, deprecation, git_ops, installer, manifest, project_resolver, shell_init, status
 from .locking import GlobalLock, LockError
 
 
@@ -214,6 +214,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         print(_render_list(cfg, show_paths=args.paths))
         return EXIT_OK
     if args.command == "status":
+        _warn_bare_project_command(args, cfg)
         cfg, alias = _cfg_and_alias_for_target(cfg, args, save=False)
         print(status.render_status(cfg, alias=alias))
         return EXIT_OK
@@ -224,10 +225,12 @@ def _dispatch(args: argparse.Namespace) -> int:
             if args.command == "update":
                 return _cmd_update(cfg)
             if args.command == "upgrade":
+                _warn_bare_project_command(args, cfg)
                 update_code = _cmd_update(cfg)
                 cfg, args = _prepare_install_target(cfg, args)
                 install_code = _cmd_install(cfg, args)
                 return install_code if install_code != EXIT_OK else update_code
+            _warn_bare_project_command(args, cfg)
             cfg, args = _prepare_install_target(cfg, args)
             return _cmd_install(cfg, args)
 
@@ -300,6 +303,8 @@ def _cmd_update(cfg: config.GlobalConfig) -> int:
 
 
 def _cmd_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
+    if args.fix_gitignore:
+        deprecation.warn_once("fix-gitignore")
     options = installer.InstallOptions(
         dry_run=args.dry_run,
         fix_gitignore=args.fix_gitignore,
@@ -358,6 +363,8 @@ def _cfg_and_alias_for_target(
     if path_target is None:
         target = getattr(args, "target", None)
         return cfg, target
+    if save:
+        deprecation.warn_once("auto-register")
     resolved = project_resolver.resolve(path_target, worktree_alias_pattern=cfg.worktree_alias_pattern)
     project_manifest = manifest.load_manifest(resolved.root)
     agents = project_manifest.agents if project_manifest and project_manifest.agents else cfg.default_agents
@@ -372,6 +379,17 @@ def _cfg_and_alias_for_target(
     if save:
         config.save_config(updated)
     return updated, resolved.checkout_alias
+
+
+def _warn_bare_project_command(args: argparse.Namespace, cfg: config.GlobalConfig) -> None:
+    if getattr(args, "target", None) is not None or not cfg.projects:
+        return
+    if args.command == "install":
+        deprecation.warn_once("bare-install", count=len(cfg.projects))
+    elif args.command == "status":
+        deprecation.warn_once("bare-status", count=len(cfg.projects))
+    elif args.command == "upgrade":
+        deprecation.warn_once("bare-upgrade", count=len(cfg.projects))
 
 
 def _path_target_from_args(args: argparse.Namespace) -> Path | None:
