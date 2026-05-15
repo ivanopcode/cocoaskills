@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed the published distribution package from `cocoaskill` to
+  `cocoaskills`. The CLI command remains `csk`, and existing runtime/config
+  paths under `~/.cocoaskills/` are unchanged.
+- Updated install documentation, install script, distribution smoke tests, and
+  Homebrew instructions to use `cocoaskills`.
+
+## [0.1.2] - 2026-05-14
+
+### Added
+
+- Current-checkout install resolution with `csk install .`, `csk status .`,
+  and `csk project resolve .`.
+- Worktree-aware checkout aliases derived from `Skillfile.json` project aliases,
+  branch task ids, and stable path hashes.
+- Distribution smoke workflow for published package installs across pipx, uv,
+  mise, install.sh, and Homebrew.
+
+### Fixed
+
+- Dry-run installs no longer populate the persistent snapshot cache.
+- Lock timeout is testable through `CSK_LOCK_TIMEOUT`.
+- Windows smoke tests use native paths where required.
+- Tilde paths are recognized as path targets.
+
 ## [0.1.1] - 2026-05-13
 
 ### Fixed
@@ -49,6 +75,7 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/ivanopcode/cocoaskills/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/ivanopcode/cocoaskills/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ivanopcode/cocoaskills/releases/tag/v0.1.0

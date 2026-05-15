@@ -6,7 +6,7 @@ from importlib.metadata import PackageNotFoundError, version as _metadata_versio
 
 def _resolve_version() -> str:
     try:
-        return _metadata_version("cocoaskill")
+        return _metadata_version("cocoaskills")
     except PackageNotFoundError:
         try:
             from ._version import __version__ as scm_version  # type: ignore[import-not-found]

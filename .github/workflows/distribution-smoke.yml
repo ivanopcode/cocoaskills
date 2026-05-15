@@ -98,10 +98,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip pipx
           for attempt in 1 2 3 4 5; do
-            if python -m pipx install "cocoaskill==$CSK_VERSION"; then
+            if python -m pipx install "cocoaskills==$CSK_VERSION"; then
               break
             fi
-            python -m pipx uninstall cocoaskill >/dev/null 2>&1 || true
+            python -m pipx uninstall cocoaskills >/dev/null 2>&1 || true
             if [ "$attempt" -eq 5 ]; then
               exit 1
             fi
@@ -122,10 +122,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip uv
           for attempt in 1 2 3 4 5; do
-            if python -m uv tool install "cocoaskill==$CSK_VERSION"; then
+            if python -m uv tool install "cocoaskills==$CSK_VERSION"; then
               break
             fi
-            python -m uv tool uninstall cocoaskill >/dev/null 2>&1 || true
+            python -m uv tool uninstall cocoaskills >/dev/null 2>&1 || true
             if [ "$attempt" -eq 5 ]; then
               exit 1
             fi
@@ -139,7 +139,7 @@ jobs:
           curl -fsSL https://mise.run | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           for attempt in 1 2 3 4 5; do
-            if "$HOME/.local/bin/mise" install -y "pipx:cocoaskill@$CSK_VERSION"; then
+            if "$HOME/.local/bin/mise" install -y "pipx:cocoaskills@$CSK_VERSION"; then
               break
             fi
             if [ "$attempt" -eq 5 ]; then
@@ -150,7 +150,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/csk-mise-wrapper"
           cat > "$RUNNER_TEMP/csk-mise-wrapper/csk" <<EOF
           #!/usr/bin/env bash
-          exec "$HOME/.local/bin/mise" exec -y "pipx:cocoaskill@$CSK_VERSION" -- csk "\$@"
+          exec "$HOME/.local/bin/mise" exec -y "pipx:cocoaskills@$CSK_VERSION" -- csk "\$@"
           EOF
           chmod +x "$RUNNER_TEMP/csk-mise-wrapper/csk"
           echo "$RUNNER_TEMP/csk-mise-wrapper" >> "$GITHUB_PATH"
@@ -331,7 +331,7 @@ jobs:
       - name: Install with Homebrew
         run: |
           brew tap ivanopcode/csk
-          brew install cocoaskill
+          brew install cocoaskills
 
       - name: Verify installed CLI version
         run: |

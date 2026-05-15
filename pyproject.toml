@@ -3,7 +3,7 @@ requires = ["setuptools>=80", "setuptools-scm[simple]>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cocoaskill"
+name = "cocoaskills"
 dynamic = ["version"]
 description = "Local skill manager for AI agent skills with reproducible per-project installs"
 readme = "README.md"

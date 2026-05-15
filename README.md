@@ -1,8 +1,8 @@
 # CocoaSkill
 
-[![PyPI](https://img.shields.io/pypi/v/cocoaskill.svg)](https://pypi.org/project/cocoaskill/)
-[![Python versions](https://img.shields.io/pypi/pyversions/cocoaskill.svg)](https://pypi.org/project/cocoaskill/)
-[![License](https://img.shields.io/pypi/l/cocoaskill.svg)](https://github.com/ivanopcode/cocoaskills/blob/main/LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/cocoaskills.svg)](https://pypi.org/project/cocoaskills/)
+[![Python versions](https://img.shields.io/pypi/pyversions/cocoaskills.svg)](https://pypi.org/project/cocoaskills/)
+[![License](https://img.shields.io/pypi/l/cocoaskills.svg)](https://github.com/ivanopcode/cocoaskills/blob/main/LICENSE)
 [![CI](https://github.com/ivanopcode/cocoaskills/actions/workflows/ci.yml/badge.svg)](https://github.com/ivanopcode/cocoaskills/actions/workflows/ci.yml)
 
 `csk` is a local skill manager for AI agent skills. It installs reusable skill
@@ -38,26 +38,26 @@ platform.
 ### pipx (recommended)
 
 ```bash
-pipx install cocoaskill
+pipx install cocoaskills
 ```
 
 ### uv tool
 
 ```bash
-uv tool install cocoaskill
+uv tool install cocoaskills
 ```
 
 ### Homebrew (macOS, Linux)
 
 ```bash
 brew tap ivanopcode/csk
-brew install cocoaskill
+brew install cocoaskills
 ```
 
 ### mise
 
 ```bash
-mise use -g pipx:cocoaskill@latest
+mise use -g pipx:cocoaskills@latest
 ```
 
 ### Convenience install script
@@ -72,7 +72,7 @@ The script detects Python, prefers `pipx` or `uv tool`, and falls back to
 ### Plain pip
 
 ```bash
-python -m pip install --user cocoaskill
+python -m pip install --user cocoaskills
 ```
 
 ## Quick start

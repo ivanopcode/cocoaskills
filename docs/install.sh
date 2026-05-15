@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-PACKAGE_NAME="cocoaskill"
+PACKAGE_NAME="cocoaskills"
 VERSION="${CSK_VERSION:-}"
 
 if [ -n "$VERSION" ]; then
@@ -15,7 +15,7 @@ log() {
 }
 
 fail() {
-  printf 'cocoaskill install: %s\n' "$*" >&2
+  printf 'cocoaskills install: %s\n' "$*" >&2
   exit 1
 }
 
