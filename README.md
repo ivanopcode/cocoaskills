@@ -87,9 +87,19 @@ python -m pip install --user cocoaskills
    ```
 
    This writes `~/.cocoaskills/config.json` with your `skills_root`, preferred
-   locale, default agents, and a list of managed projects.
+   locale, and default agents.
 
-3. In each managed project, declare which skills you want:
+3. Initialize CocoaSkill in each project:
+
+   ```bash
+   cd /path/to/project
+   csk init
+   ```
+
+   This creates `Skillfile.json` and adds the CocoaSkill generated paths to
+   `.gitignore`.
+
+4. Declare which skills you want:
 
    ```json
    {
@@ -104,20 +114,26 @@ python -m pip install --user cocoaskills
    }
    ```
 
-4. Run `csk install .` inside a checkout, or `csk install` from anywhere to
-   install every configured project.
+5. Run `csk install` inside the checkout.
+
+For multi-project sync, explicitly register projects with `csk project add` and
+run `csk install --all` or `csk upgrade --all`.
 
 ## CLI
 
 | Command | Behavior |
 |---|---|
-| `csk bootstrap` | Interactively create the global config. |
-| `csk install [target]` | Apply `Skillfile.json` using current local git refs. Does not fetch. `target` may be an alias, `.`, or a project path. |
+| `csk bootstrap` | Interactively create machine-level global config. |
+| `csk init [path]` | Create project `Skillfile.json` and the managed `.gitignore` block. |
+| `csk install [target]` | Apply `Skillfile.json` using current local git refs. Does not fetch. No target means current project; `target` may be an alias, `.`, or a project path. |
+| `csk install --all` | Install every project explicitly registered in global config. |
 | `csk update` | Fetch all git repositories under `skills_root`. Does not modify projects. |
 | `csk upgrade [target]` | Run `update`, then `install`. |
-| `csk status [target]` | Show manifest vs installed state. Supports `csk status .` without saving config. |
+| `csk upgrade --all` | Run `update`, then install every registered project. |
+| `csk status [target]` | Show manifest vs installed state. No target means current project. |
+| `csk status --all` | Show status for every registered project. |
 | `csk list [--paths]` | List configured projects and declared skills. |
-| `csk project add <alias> <path>` | Register a project and create an empty manifest. |
+| `csk project add <alias> <path>` | Register a project for `--all` and create a manifest if missing. |
 | `csk project resolve [target]` | Show resolved project alias, checkout alias, Skillfile, and install paths. |
 | `csk config show` | Print resolved config path and contents. |
 | `csk shell-init [zsh\|bash\|powershell]` | Print shell hook code for auto-`PATH` activation. |
@@ -127,7 +143,7 @@ Flags shared by `install` and `upgrade`:
 
 - `--dry-run` — plan work without modifying files.
 - `--verbose` — print detailed progress.
-- `--fix-gitignore` — append the managed CocoaSkill block to `.gitignore`.
+- `--fix-gitignore` — deprecated escape hatch; prefer `csk init`.
 - `--strict-tags` — fail if a tag was locally moved to another commit.
 
 Exit codes: `0` success, `1` one or more projects or skills failed, `2`

@@ -104,7 +104,7 @@ def test_upgrade_without_alias_updates_all_projects(monkeypatch, tmp_path, skill
     config.save_config(cfg)
     monkeypatch.setenv("CSK_CONFIG", str(cfg.path))
 
-    assert cli.main(["install"]) == 0
+    assert cli.main(["install", "--all"]) == 0
     markers = [
         project_one / ".agents" / "skills" / "skill-a" / ".csk-install.json",
         project_two / ".agents" / "skills" / "skill-a" / ".csk-install.json",
@@ -115,6 +115,6 @@ def test_upgrade_without_alias_updates_all_projects(monkeypatch, tmp_path, skill
     second_commit = commit_all(source, "two")
     run(["git", "push"], source)
 
-    assert cli.main(["upgrade"]) == 0
+    assert cli.main(["upgrade", "--all"]) == 0
 
     assert [json.loads(path.read_text(encoding="utf-8"))["commit"] for path in markers] == [second_commit, second_commit]

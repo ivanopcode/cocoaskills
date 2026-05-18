@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__, config, deprecation, git_ops, installer, manifest, project_resolver, shell_init, status
+from . import __version__, adapters, config, deprecation, git_ops, gitignore_gate, installer, manifest, project_resolver, shell_init, status
 from .locking import GlobalLock, LockError
 
 
@@ -51,7 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Local documentation index:\n"
             "  csk bootstrap          create ~/.cocoaskills/config.json\n"
-            "  csk install [target]   apply Skillfile.json without fetching\n"
+            "  csk init [path]        create project Skillfile.json and gitignore block\n"
+            "  csk install [target]   apply current/project Skillfile.json without fetching\n"
             "  csk update             fetch local skill repositories\n"
             "  csk upgrade [target]   update, then install\n"
             "  csk status [target]    show manifest vs installed state\n"
@@ -67,6 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     _add_bootstrap(sub)
+    _add_init(sub)
     _add_install(sub, "install", "Apply Skillfile.json using local refs. No fetch is performed.")
     sub.add_parser(
         "update",
@@ -87,10 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Labels:\n  up-to-date, missing, update-available, content-drift, error\n\n"
             "Files read:\n  ~/.cocoaskills/config.json, Skillfile.json, .agents/skills/*/.csk-install.json\n\n"
-            "Examples:\n  csk status\n  csk status partners-app-ios\n  csk status ."
+            "Examples:\n  csk status\n  csk status --all\n  csk status partners-app-ios\n  csk status ."
         ),
     )
     status_parser.add_argument("target", nargs="?", help="project alias, '.', or project path")
+    status_parser.add_argument("--all", action="store_true", help="show all registered projects")
     list_parser = sub.add_parser(
         "list",
         help="List configured projects and declared skills.",
@@ -155,14 +159,34 @@ def _add_bootstrap(sub) -> None:
         help="Interactively create global config.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
-            "Interactively asks for skills_root, preferred_locale, default_agents, "
-            "focused projects, and shell hook instructions."
+            "Interactively asks for machine-level settings: skills_root, preferred_locale, "
+            "default_agents, and shell hook instructions."
         ),
         epilog=(
-            "Files written:\n  ~/.cocoaskills/config.json and optional project Skillfile.json files.\n\n"
+            "Files written:\n  ~/.cocoaskills/config.json.\n\n"
             "Example:\n  csk bootstrap"
         ),
     )
+
+
+def _add_init(sub) -> None:
+    parser = sub.add_parser(
+        "init",
+        help="Create project Skillfile.json and CocoaSkill gitignore block.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Initializes CocoaSkill files in one project without installing skills.",
+        epilog=(
+            "Files written:\n  <project>/Skillfile.json and <project>/.gitignore.\n\n"
+            "Examples:\n"
+            "  csk init\n"
+            "  csk init --alias partners-ios --agents codex_cli,cursor\n"
+            "  csk init /path/to/project\n"
+        ),
+    )
+    parser.add_argument("path", nargs="?", default=".", help="project directory to initialize")
+    parser.add_argument("--alias", help="project.alias to write into Skillfile.json")
+    parser.add_argument("--agents", help="comma-separated agents list for Skillfile.json")
+    parser.add_argument("--no-interactive", action="store_true", help="accepted for scripting; prompts are not used")
 
 
 def _add_install(sub, name: str, description: str) -> None:
@@ -181,6 +205,7 @@ def _add_install(sub, name: str, description: str) -> None:
             "  0 success, 1 one or more projects/skills failed, 2 config error, 3 lock contention.\n\n"
             "Examples:\n"
             f"  csk {name}\n"
+            f"  csk {name} --all\n"
             f"  csk {name} partners-app-ios\n"
             f"  csk {name} .\n"
             f"  csk {name} /path/to/project\n"
@@ -188,15 +213,18 @@ def _add_install(sub, name: str, description: str) -> None:
         ),
     )
     parser.add_argument("target", nargs="?", help="project alias, '.', or project path")
+    parser.add_argument("--all", action="store_true", help="operate on all registered projects")
     parser.add_argument("--dry-run", action="store_true", help="plan work without modifying files")
     parser.add_argument("--verbose", action="store_true", help="print detailed progress")
-    parser.add_argument("--fix-gitignore", action="store_true", help="append missing CocoaSkill gitignore entries")
+    parser.add_argument("--fix-gitignore", action="store_true", help="deprecated; prefer csk init")
     parser.add_argument("--strict-tags", action="store_true", help="fail if an installed tag moved to another commit")
 
 
 def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "bootstrap":
         return _cmd_bootstrap()
+    if args.command == "init":
+        return _cmd_init(args)
     if args.command == "config" and args.config_command == "show":
         return _cmd_config_show()
     if args.command == "project" and args.project_command == "add":
@@ -214,8 +242,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         print(_render_list(cfg, show_paths=args.paths))
         return EXIT_OK
     if args.command == "status":
-        _warn_bare_project_command(args, cfg)
-        cfg, alias = _cfg_and_alias_for_target(cfg, args, save=False)
+        cfg, alias = _cfg_and_alias_for_target(cfg, args)
         print(status.render_status(cfg, alias=alias))
         return EXIT_OK
 
@@ -225,12 +252,10 @@ def _dispatch(args: argparse.Namespace) -> int:
             if args.command == "update":
                 return _cmd_update(cfg)
             if args.command == "upgrade":
-                _warn_bare_project_command(args, cfg)
                 update_code = _cmd_update(cfg)
                 cfg, args = _prepare_install_target(cfg, args)
                 install_code = _cmd_install(cfg, args)
                 return install_code if install_code != EXIT_OK else update_code
-            _warn_bare_project_command(args, cfg)
             cfg, args = _prepare_install_target(cfg, args)
             return _cmd_install(cfg, args)
 
@@ -248,14 +273,6 @@ def _cmd_bootstrap() -> int:
     preferred_locale = input("preferred_locale [none]: ").strip() or None
     default_agents_raw = input("default_agents comma-separated [codex_cli]: ").strip()
     default_agents = [item.strip() for item in default_agents_raw.split(",") if item.strip()] or ["codex_cli"]
-    projects: dict[str, config.ProjectConfig] = {}
-    while True:
-        alias = input("project alias [empty to finish]: ").strip()
-        if not alias:
-            break
-        project_path = Path(input(f"path for {alias}: ").strip()).expanduser()
-        projects[alias] = config.ProjectConfig(alias=alias, path=project_path, agents=list(default_agents))
-        manifest.ensure_empty_manifest(project_path)
     cfg = config.GlobalConfig(
         path=path,
         skills_root=Path(skills_root).expanduser(),
@@ -263,11 +280,46 @@ def _cmd_bootstrap() -> int:
         default_agents=default_agents,
         adapter_mode="auto",
         worktree_alias_pattern=config.DEFAULT_WORKTREE_ALIAS_PATTERN,
-        projects=projects,
+        projects={},
     )
     config.save_config(cfg)
     print(f"Wrote {path}")
     print("Install shell hook with: eval \"$(csk shell-init bash)\"")
+    return EXIT_OK
+
+
+def _cmd_init(args: argparse.Namespace) -> int:
+    target = Path(args.path).expanduser()
+    if not target.is_absolute():
+        target = Path.cwd() / target
+    try:
+        root = target.resolve()
+    except FileNotFoundError as exc:
+        raise manifest.ManifestError(f"target path does not exist: {target}") from exc
+    if not root.exists() or not root.is_dir():
+        raise manifest.ManifestError(f"target path does not exist: {root}")
+
+    parent = _nearest_parent_manifest(root)
+    if parent is not None:
+        raise manifest.ManifestError(f"already inside project at {parent}; nested projects unsupported")
+
+    agents = _init_agents(args)
+    raw_alias = args.alias or root.name
+    alias = project_resolver.clean_alias(raw_alias)
+    if not alias:
+        raise manifest.ManifestError("--alias must contain at least one alphanumeric character")
+
+    manifest.ensure_project_manifest(root, alias=alias, agents=agents)
+    gitignore_gate.append_entries(root / ".gitignore", adapters.all_gitignore_entries())
+    if not _is_inside_git_worktree(root):
+        print(
+            "csk init: WARNING - target is not inside a git repository\n"
+            "  Skillfile.json and .gitignore have been written.\n"
+            "  The .gitignore block has no effect until this directory becomes a git repository.\n"
+            "  Run 'git init' here if you intend to track it.",
+            file=sys.stderr,
+        )
+    print(f"Initialized CocoaSkill project at {root}")
     return EXIT_OK
 
 
@@ -285,7 +337,7 @@ def _cmd_project_add(alias: str, path: Path) -> int:
     cfg = config.load_config()
     updated = config.add_project(cfg, alias, path)
     config.save_config(updated)
-    manifest.ensure_empty_manifest(path)
+    manifest.ensure_project_manifest(path.expanduser(), alias=alias, agents=cfg.default_agents)
     print(f"Added project {alias}: {path}")
     return EXIT_OK
 
@@ -348,7 +400,7 @@ def _render_list(cfg: config.GlobalConfig, *, show_paths: bool = False) -> str:
 def _prepare_install_target(
     cfg: config.GlobalConfig, args: argparse.Namespace
 ) -> tuple[config.GlobalConfig, argparse.Namespace]:
-    cfg, alias = _cfg_and_alias_for_target(cfg, args, save=not args.dry_run)
+    cfg, alias = _cfg_and_alias_for_target(cfg, args)
     args.alias = alias
     return cfg, args
 
@@ -356,16 +408,26 @@ def _prepare_install_target(
 def _cfg_and_alias_for_target(
     cfg: config.GlobalConfig,
     args: argparse.Namespace,
-    *,
-    save: bool,
 ) -> tuple[config.GlobalConfig, str | None]:
+    target = getattr(args, "target", None)
+    if getattr(args, "all", False):
+        if target is not None:
+            raise ValueError("--all cannot be combined with a project target")
+        if not cfg.projects:
+            raise ValueError("no registered projects; use 'csk project add' or run 'csk install' inside a project")
+        return cfg, None
+
     path_target = _path_target_from_args(args)
-    if path_target is None:
-        target = getattr(args, "target", None)
+    if target is not None and path_target is None:
         return cfg, target
-    if save:
-        deprecation.warn_once("auto-register")
-    resolved = project_resolver.resolve(path_target, worktree_alias_pattern=cfg.worktree_alias_pattern)
+
+    path_target = path_target or Path.cwd()
+    try:
+        resolved = project_resolver.resolve(path_target, worktree_alias_pattern=cfg.worktree_alias_pattern)
+    except project_resolver.ProjectResolutionError as exc:
+        if target is not None:
+            raise
+        raise project_resolver.ProjectResolutionError(_missing_current_project_message(args.command, path_target, cfg)) from exc
     project_manifest = manifest.load_manifest(resolved.root)
     agents = project_manifest.agents if project_manifest and project_manifest.agents else cfg.default_agents
     updated = config.add_project(
@@ -376,20 +438,7 @@ def _cfg_and_alias_for_target(
         project_alias=resolved.project_alias,
         checkout_alias=resolved.checkout_alias,
     )
-    if save:
-        config.save_config(updated)
     return updated, resolved.checkout_alias
-
-
-def _warn_bare_project_command(args: argparse.Namespace, cfg: config.GlobalConfig) -> None:
-    if getattr(args, "target", None) is not None or not cfg.projects:
-        return
-    if args.command == "install":
-        deprecation.warn_once("bare-install", count=len(cfg.projects))
-    elif args.command == "status":
-        deprecation.warn_once("bare-status", count=len(cfg.projects))
-    elif args.command == "upgrade":
-        deprecation.warn_once("bare-upgrade", count=len(cfg.projects))
 
 
 def _path_target_from_args(args: argparse.Namespace) -> Path | None:
@@ -405,6 +454,47 @@ def _looks_like_path(value: str) -> bool:
         or value.startswith(("./", "../", "~/"))
         or Path(value).is_absolute()
     )
+
+
+def _missing_current_project_message(command: str, start: Path, cfg: config.GlobalConfig) -> str:
+    lines = [
+        f"no Skillfile.json found at or above {start.resolve()}",
+        "  hint: cd to a project root",
+        f"  hint: or run 'csk {command} /abs/path/to/project'",
+    ]
+    if cfg.projects:
+        lines.append(f"  hint: or run 'csk {command} --all' for multi-project sync ({len(cfg.projects)} projects configured)")
+    return "\n".join(lines)
+
+
+def _init_agents(args: argparse.Namespace) -> list[str]:
+    if args.agents is not None:
+        agents = [item.strip() for item in args.agents.split(",") if item.strip()]
+        if not agents:
+            raise manifest.ManifestError("--agents must contain at least one agent")
+        return agents
+    try:
+        cfg = config.load_config()
+    except config.ConfigError:
+        return list(config.DEFAULT_AGENTS)
+    return list(cfg.default_agents or config.DEFAULT_AGENTS)
+
+
+def _nearest_parent_manifest(root: Path) -> Path | None:
+    for parent in root.parents:
+        if (parent / manifest.MANIFEST_NAME).exists():
+            return parent
+    return None
+
+
+def _is_inside_git_worktree(root: Path) -> bool:
+    proc = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return proc.returncode == 0 and proc.stdout.strip() == "true"
 
 
 def _render_project_resolution(cfg: config.GlobalConfig, args: argparse.Namespace) -> str:

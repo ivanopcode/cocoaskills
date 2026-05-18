@@ -35,7 +35,7 @@ def resolve(start: Path, *, worktree_alias_pattern: str = DEFAULT_WORKTREE_ALIAS
     if project_manifest is None:
         raise ProjectResolutionError(f"Skillfile.json not found at project root: {root}")
 
-    project_alias = _clean_alias(project_manifest.project_alias or root.name)
+    project_alias = clean_alias(project_manifest.project_alias or root.name)
     if not project_alias:
         raise ProjectResolutionError(f"Cannot derive project alias for {root}")
 
@@ -103,6 +103,6 @@ def stable_path_hash(path: Path) -> str:
     return hashlib.sha1(str(path.resolve()).encode("utf-8")).hexdigest()[:4]
 
 
-def _clean_alias(value: str) -> str:
+def clean_alias(value: str) -> str:
     cleaned = ALIAS_CLEAN_RE.sub("-", value.strip().lower()).strip("-")
     return re.sub(r"-{2,}", "-", cleaned)

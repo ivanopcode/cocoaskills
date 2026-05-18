@@ -53,6 +53,27 @@ def ensure_empty_manifest(project_root: Path) -> Path:
     return path
 
 
+def ensure_project_manifest(project_root: Path, *, alias: str, agents: list[str]) -> Path:
+    if not project_root.exists() or not project_root.is_dir():
+        raise ManifestError(f"project path does not exist: {project_root}")
+    path = manifest_path(project_root)
+    if not path.exists():
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "project": {"alias": alias},
+                    "agents": agents,
+                    "skills": [],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    return path
+
+
 def load_manifest(project_root: Path) -> ProjectManifest | None:
     path = manifest_path(project_root)
     if not path.exists():

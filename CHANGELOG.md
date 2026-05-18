@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-18
+
+### Added
+
+- Added `csk init` for one-time per-project setup. It creates
+  `Skillfile.json`, writes `project.alias` and `agents`, and appends the
+  managed CocoaSkills `.gitignore` block.
+- Added `--all` to `install`, `upgrade`, and `status` for explicit
+  multi-project operations over registered projects.
+
+### Changed
+
+- `csk install`, `csk status`, and `csk upgrade` without a target now operate
+  on the current project resolved by walking up to `Skillfile.json`.
+- `csk install .` and path-based installs no longer auto-register checkouts in
+  global config.
+- `csk bootstrap` now only writes machine-level config and no longer prompts
+  for project registration.
+- `csk project add` remains the explicit opt-in path for registering projects
+  used by `--all`.
+
 ## [0.2.1] - 2026-05-15
 
 ### Changed
@@ -87,7 +108,8 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/ivanopcode/cocoaskills/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/ivanopcode/cocoaskills/compare/v0.1.1...v0.1.2

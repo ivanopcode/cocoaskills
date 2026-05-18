@@ -31,6 +31,10 @@ def required_gitignore_entries(agents: list[str]) -> list[str]:
     return sorted(set(entries))
 
 
+def all_gitignore_entries() -> list[str]:
+    return required_gitignore_entries(sorted(AGENT_PATHS))
+
+
 def refresh_adapters(project_root: Path, agents: list[str], skill_names: list[str], mode: str) -> None:
     canonical_root = project_root / ".agents" / "skills"
     for agent in agents:
