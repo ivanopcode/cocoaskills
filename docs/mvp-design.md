@@ -15,6 +15,8 @@ for this MVP unless explicitly marked as an interface reserved for later.
 - Provide a single Python script installable into `PATH`.
 - Work on macOS, Linux, and Windows using only the Python standard library.
 - Install skills from local git repositories under a configured skills root.
+- Clone a missing skill repository when a Skillfile declaration provides a
+  source `git` URL.
 - Install the same declared skills into multiple configured projects.
 - Keep project installs reproducible by recording resolved git commits and
   content hashes.
@@ -146,6 +148,7 @@ Example:
   "skills": [
     {
       "name": "skill-youtrack",
+      "git": "git@gitlab.example.com:agentic-infra/skill-youtrack.git",
       "tag": "v1.0.0"
     },
     {
@@ -180,6 +183,11 @@ Each skill declaration requires `name` and exactly one of `tag`, `branch`, or
 
 Optional `source` names the local skill repository directory when it differs
 from the installed skill name.
+
+Optional `git` names a remote repository URL. If `skills_root/source` does not
+exist during install, csk clones `git` into that path and continues with the
+declared `tag`, `branch`, or `revision`. If the local repository already exists,
+csk uses it as-is and does not fetch during `csk install`.
 
 Skill names must be unique within one `Skillfile.json`. Two declarations with
 the same `name` are a project error, even if they use different `source`

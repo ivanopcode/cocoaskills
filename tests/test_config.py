@@ -62,3 +62,19 @@ def test_config_rejects_invalid_worktree_alias_pattern(tmp_path):
 def test_config_path_uses_env(monkeypatch, tmp_path):
     monkeypatch.setenv("CSK_CONFIG", str(tmp_path / "custom.json"))
     assert config.config_path() == tmp_path / "custom.json"
+
+
+def test_validate_skills_root_creates_missing_directory(tmp_path):
+    cfg = config.GlobalConfig(
+        path=tmp_path / "config.json",
+        skills_root=tmp_path / "missing" / "skills",
+        preferred_locale=None,
+        default_agents=["codex_cli"],
+        adapter_mode="auto",
+        worktree_alias_pattern="[A-Z]+-[0-9]+",
+        projects={},
+    )
+
+    config.validate_skills_root_for_work(cfg)
+
+    assert cfg.skills_root.is_dir()

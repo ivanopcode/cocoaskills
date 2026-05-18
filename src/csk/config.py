@@ -186,11 +186,9 @@ def add_project(
 
 
 def validate_skills_root_for_work(config: GlobalConfig) -> None:
-    if not config.skills_root.exists() or not config.skills_root.is_dir():
-        raise ConfigError(f"skills_root does not exist or is not a directory: {config.skills_root}")
-    has_git_repo = any((child / ".git").exists() for child in config.skills_root.iterdir() if child.is_dir())
-    if not has_git_repo:
-        raise ConfigError(f"skills_root contains no git repositories: {config.skills_root}")
+    if config.skills_root.exists() and not config.skills_root.is_dir():
+        raise ConfigError(f"skills_root exists but is not a directory: {config.skills_root}")
+    config.skills_root.mkdir(parents=True, exist_ok=True)
 
 
 def _is_str_list(value: Any) -> bool:

@@ -53,7 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Local documentation index:\n"
             "  csk bootstrap          create ~/.cocoaskills/config.json\n"
             "  csk init [path]        create project Skillfile.json and gitignore block\n"
-            "  csk install [target]   apply current/project Skillfile.json without fetching\n"
+            "  csk install [target]   apply Skillfile.json; clone missing URL sources\n"
             "  csk update             fetch local skill repositories\n"
             "  csk upgrade [target]   update, then install\n"
             "  csk status [target]    show manifest vs installed state\n"
@@ -70,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_bootstrap(sub)
     _add_init(sub)
-    _add_install(sub, "install", "Apply Skillfile.json using local refs. No fetch is performed.")
+    _add_install(sub, "install", "Apply Skillfile.json using local refs. Missing git URL sources are cloned.")
     sub.add_parser(
         "update",
         help="Fetch all local skill repositories under skills_root.",
@@ -197,7 +197,8 @@ def _add_install(sub, name: str, description: str) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Files read:\n"
-            "  ~/.cocoaskills/config.json, <project>/Skillfile.json, local skill git repositories.\n\n"
+            "  ~/.cocoaskills/config.json, <project>/Skillfile.json, local skill git repositories.\n"
+            "  Missing repositories declared with `git` may be cloned into skills_root.\n\n"
             "Files written:\n"
             "  <project>/.agents/skills, <project>/.agents/bin, .agents/env.sh, .agents/env.ps1,\n"
             "  agent adapter directories, ~/.cocoaskills/runtime, ~/.cocoaskills/cache.\n\n"

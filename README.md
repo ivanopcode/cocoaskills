@@ -77,8 +77,10 @@ python -m pip install --user cocoaskills
 
 ## Quick start
 
-1. Pick or create a directory of cloned skill git repositories. Example:
-   `~/agents/skills/`.
+1. Pick or create a directory for skill git repositories. Example:
+   `~/agents/skills/`. Existing local skill repositories are read from this
+   directory; missing repositories can be cloned automatically when a skill
+   declaration provides `git`.
 
 2. Bootstrap the global config:
 
@@ -108,8 +110,16 @@ python -m pip install --user cocoaskills
      "agents": ["claude_code", "codex_cli", "cursor"],
      "locale": "en",
      "skills": [
-       { "name": "skill-youtrack", "tag": "v1.0.0" },
-       { "name": "skill-grafana", "branch": "main" }
+       {
+         "name": "skill-youtrack",
+         "git": "git@gitlab.example.com:agentic-infra/skill-youtrack.git",
+         "tag": "v1.0.0"
+       },
+       {
+         "name": "skill-grafana",
+         "source": "internal/skill-grafana",
+         "branch": "main"
+       }
      ]
    }
    ```
@@ -125,7 +135,7 @@ run `csk install --all` or `csk upgrade --all`.
 |---|---|
 | `csk bootstrap` | Interactively create machine-level global config. |
 | `csk init [path]` | Create project `Skillfile.json` and the managed `.gitignore` block. |
-| `csk install [target]` | Apply `Skillfile.json` using current local git refs. Does not fetch. No target means current project; `target` may be an alias, `.`, or a project path. |
+| `csk install [target]` | Apply `Skillfile.json` using current git refs. Missing `git` URL sources are cloned into `skills_root`; existing local repositories are not fetched. No target means current project; `target` may be an alias, `.`, or a project path. |
 | `csk install --all` | Install every project explicitly registered in global config. |
 | `csk update` | Fetch all git repositories under `skills_root`. Does not modify projects. |
 | `csk upgrade [target]` | Run `update`, then `install`. |

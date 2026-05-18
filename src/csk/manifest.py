@@ -25,6 +25,7 @@ class SkillDecl:
     name: str
     source: str
     ref: SkillRef
+    git: str | None = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,10 @@ def parse_manifest(data: dict[str, Any], path: Path) -> ProjectManifest:
         if not isinstance(source, str) or not source:
             raise ManifestError(f"Skill {name!r} field 'source' must be a non-empty string")
 
+        git_url = raw.get("git")
+        if git_url is not None and (not isinstance(git_url, str) or not git_url):
+            raise ManifestError(f"Skill {name!r} field 'git' must be a non-empty string when present")
+
         ref_keys = [key for key in ("tag", "branch", "revision") if key in raw]
         if len(ref_keys) != 1:
             raise ManifestError(f"Skill {name!r} must specify exactly one of tag, branch, or revision")
@@ -132,7 +137,7 @@ def parse_manifest(data: dict[str, Any], path: Path) -> ProjectManifest:
         if not isinstance(ref_value, str) or not ref_value:
             raise ManifestError(f"Skill {name!r} field '{ref_kind}' must be a non-empty string")
 
-        skills.append(SkillDecl(name=name, source=source, ref=SkillRef(ref_kind, ref_value)))
+        skills.append(SkillDecl(name=name, source=source, ref=SkillRef(ref_kind, ref_value), git=git_url))
 
     return ProjectManifest(
         path=path,

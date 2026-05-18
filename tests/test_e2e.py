@@ -118,3 +118,40 @@ def test_upgrade_without_alias_updates_all_projects(monkeypatch, tmp_path, skill
     assert cli.main(["upgrade", "--all"]) == 0
 
     assert [json.loads(path.read_text(encoding="utf-8"))["commit"] for path in markers] == [second_commit, second_commit]
+
+
+def test_update_fetches_skill_cloned_from_git_url(monkeypatch, tmp_path, skills_root, csk_home):
+    source = init_git_repo(tmp_path / "source-skill")
+    write_files(source, {"SKILL.md": "---\nname: skill-a\n---\n\n# one\n"})
+    first_commit = commit_all(source, "one")
+    remote = tmp_path / "skill-a.git"
+    run(["git", "init", "--bare", str(remote)], tmp_path)
+    run(["git", "remote", "add", "origin", str(remote)], source)
+    run(["git", "push", "-u", "origin", "main"], source)
+    run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], remote)
+
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "git": str(remote), "branch": "main"}]})
+    cfg = config.GlobalConfig(
+        path=csk_home / "config.json",
+        skills_root=skills_root,
+        preferred_locale=None,
+        default_agents=["codex_cli"],
+        adapter_mode="auto",
+        worktree_alias_pattern="[A-Z]+-[0-9]+",
+        projects={"app": config.ProjectConfig(alias="app", path=project, agents=["codex_cli"])},
+    )
+    config.save_config(cfg)
+    monkeypatch.setenv("CSK_CONFIG", str(cfg.path))
+
+    assert cli.main(["install", "app"]) == 0
+    marker_path = project / ".agents" / "skills" / "skill-a" / ".csk-install.json"
+    assert json.loads(marker_path.read_text(encoding="utf-8"))["commit"] == first_commit
+
+    write_files(source, {"SKILL.md": "---\nname: skill-a\n---\n\n# two\n"})
+    second_commit = commit_all(source, "two")
+    run(["git", "push"], source)
+
+    assert cli.main(["update"]) == 0
+    assert cli.main(["install", "app"]) == 0
+    assert json.loads(marker_path.read_text(encoding="utf-8"))["commit"] == second_commit

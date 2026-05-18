@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import shutil
 import tarfile
 from io import BytesIO
 from dataclasses import dataclass
@@ -25,6 +26,22 @@ def git(repo: Path, args: list[str], *, check: bool = True) -> subprocess.Comple
         stderr = proc.stderr.strip() or proc.stdout.strip()
         raise GitError(f"git {' '.join(args)} failed in {repo}: {stderr}")
     return proc
+
+
+def clone_repo(remote_url: str, destination: Path) -> None:
+    if destination.exists():
+        raise GitError(f"Clone destination already exists: {destination}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(
+        ["git", "clone", remote_url, str(destination)],
+        text=True,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        if destination.exists():
+            shutil.rmtree(destination)
+        stderr = proc.stderr.strip() or proc.stdout.strip()
+        raise GitError(f"git clone failed for {remote_url} -> {destination}: {stderr}")
 
 
 def ensure_git_repo(repo: Path) -> None:

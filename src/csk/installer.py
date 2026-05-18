@@ -132,9 +132,7 @@ def _build_plans(
 ) -> list[SkillPlan]:
     plans: list[SkillPlan] = []
     for decl in project_manifest.skills:
-        repo = config.skills_root / decl.source
-        if not repo.exists():
-            raise InstallError(f"Skill repository not found for {decl.name}: {repo}")
+        repo = _ensure_skill_repo(config, decl, use_persistent_clone=use_cache, stack=stack)
         resolved = git_ops.resolve_ref(repo, decl.ref.kind, decl.ref.value)
         if use_cache:
             snap = snapshot.get_snapshot(config.path.parent, decl.source, repo, resolved.commit)
@@ -149,6 +147,38 @@ def _build_plans(
         spec = skillspec.load_skill_spec(snap)
         plans.append(SkillPlan(decl=decl, resolved=resolved, repo=repo, snapshot=snap, spec=spec))
     return plans
+
+
+def _ensure_skill_repo(
+    config: GlobalConfig,
+    decl: manifest.SkillDecl,
+    *,
+    use_persistent_clone: bool,
+    stack: ExitStack | None,
+) -> Path:
+    repo = config.skills_root / decl.source
+    if repo.exists():
+        if not (repo / ".git").exists():
+            raise InstallError(f"Local skill path exists but is not a git repository: {repo}")
+        git_ops.ensure_git_repo(repo)
+        return repo
+    if not decl.git:
+        raise InstallError(f"Skill repository not found for {decl.name}: {repo}")
+    if use_persistent_clone:
+        try:
+            git_ops.clone_repo(decl.git, repo)
+        except git_ops.GitError as exc:
+            raise InstallError(f"Failed to clone {decl.name} from {decl.git}: {exc}") from exc
+        return repo
+    if stack is None:
+        raise InstallError("dry-run source cloning requires an ExitStack")
+    tmp_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="csk-dry-run-source-")))
+    tmp_repo = tmp_root / decl.source
+    try:
+        git_ops.clone_repo(decl.git, tmp_repo)
+    except git_ops.GitError as exc:
+        raise InstallError(f"Failed to clone {decl.name} from {decl.git}: {exc}") from exc
+    return tmp_repo
 
 
 def _detect_command_collisions(plans: list[SkillPlan]) -> None:
@@ -243,6 +273,8 @@ def _install_skill_context(project_root: Path, plan: SkillPlan, effective_locale
         "installed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "files": files,
     }
+    if plan.decl.git is not None:
+        marker_data["git"] = plan.decl.git
     (tmp / ".csk-install.json").write_text(json.dumps(marker_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _replace_dir(tmp, target)
     return "installed"

@@ -69,6 +69,114 @@ def test_dry_run_does_not_modify_project_or_cache(tmp_path, skills_root, csk_hom
     assert not (csk_home / "cache").exists()
 
 
+def test_install_clones_missing_skill_from_git_url(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    source_repo, _ = make_skill_repo(tmp_path / "remotes", "skill-a", tag="v1")
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [{"name": "skill-a", "git": str(source_repo), "tag": "v1"}],
+        },
+    )
+    cfg = make_config(csk_home, skills_root, project)
+
+    result = installer.install(cfg)[0]
+
+    assert not result.errors
+    assert (skills_root / "skill-a" / ".git").exists()
+    assert (project / ".agents" / "skills" / "skill-a" / "SKILL.md").exists()
+    marker = json.loads((project / ".agents" / "skills" / "skill-a" / ".csk-install.json").read_text(encoding="utf-8"))
+    assert marker["git"] == str(source_repo)
+
+
+def test_dry_run_clones_git_url_only_to_temporary_location(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    source_repo, _ = make_skill_repo(tmp_path / "remotes", "skill-a", tag="v1")
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [{"name": "skill-a", "git": str(source_repo), "tag": "v1"}],
+        },
+    )
+    cfg = make_config(csk_home, skills_root, project)
+
+    result = installer.install(cfg, options=installer.InstallOptions(dry_run=True))[0]
+
+    assert not result.errors
+    assert any("dry-run" in message for message in result.messages)
+    assert not (skills_root / "skill-a").exists()
+    assert not (project / ".agents").exists()
+    assert not (csk_home / "cache").exists()
+
+
+def test_missing_skill_without_git_url_still_fails(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "missing", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+
+    result = installer.install(cfg)[0]
+
+    assert result.errors
+    assert "Skill repository not found" in result.errors[0]
+
+
+def test_install_uses_existing_local_clone_even_when_git_declared(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-a",
+        {"SKILL.md": "---\nname: skill-a\n---\n\n# local wins\n"},
+        tag="v1",
+    )
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [{"name": "skill-a", "git": "/definitely/missing/remote.git", "tag": "v1"}],
+        },
+    )
+    cfg = make_config(csk_home, skills_root, project)
+
+    result = installer.install(cfg)[0]
+
+    assert not result.errors
+    assert "local wins" in (project / ".agents" / "skills" / "skill-a" / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_install_clone_failure_produces_clean_error(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    missing_remote = tmp_path / "does-not-exist.git"
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [{"name": "skill-a", "git": str(missing_remote), "tag": "v1"}],
+        },
+    )
+    cfg = make_config(csk_home, skills_root, project)
+
+    result = installer.install(cfg)[0]
+
+    assert result.errors
+    assert "Failed to clone skill-a" in result.errors[0]
+    assert str(missing_remote) in result.errors[0]
+    assert not (skills_root / "skill-a").exists()
+
+
+def test_local_path_exists_but_not_git_fails_cleanly(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    (skills_root / "skill-a").mkdir()
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+
+    result = installer.install(cfg)[0]
+
+    assert result.errors
+    assert "Local skill path exists but is not a git repository" in result.errors[0]
+
+
 def test_cleanup_removes_undeclared_skill_and_runtime(tmp_path, skills_root, csk_home):
     project = make_project(tmp_path)
     make_skill_repo(
