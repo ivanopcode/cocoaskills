@@ -711,7 +711,8 @@ Example:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "runtime_roots": ["scripts"],
   "commands": {
     "ytx": {
       "type": "script",
@@ -726,6 +727,12 @@ Example:
   }
 }
 ```
+
+Schema version `2` adds `runtime_roots` for multi-file command runtimes.
+Runtime roots are copied to `~/.cocoaskills/runtime/<skill>/<commit>/`, are
+excluded from installed prompt context, and allow command entrypoints to depend
+on sibling modules or helper scripts. Schema version `1` remains supported for
+single-file script commands.
 
 Command types:
 

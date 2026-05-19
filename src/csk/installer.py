@@ -231,16 +231,32 @@ def _moved_tag_warnings(project_root: Path, plans: list[SkillPlan]) -> list[str]
 
 def _install_runtime_commands(csk_home: Path, project_root: Path, plan: SkillPlan) -> set[str]:
     commands: set[str] = set()
-    for command in plan.spec.commands.values():
-        if command.type != "script":
-            continue
-        runtime_path = shims.install_runtime_command(
+    if plan.spec.runtime_roots:
+        shims.install_runtime_roots(
             csk_home=csk_home,
             skill_name=plan.decl.name,
             commit=plan.resolved.commit,
             snapshot=plan.snapshot,
-            command=command,
+            runtime_roots=plan.spec.runtime_roots,
         )
+    for command in plan.spec.commands.values():
+        if command.type != "script":
+            continue
+        if plan.spec.runtime_roots:
+            runtime_path = shims.runtime_root_command_path(
+                csk_home=csk_home,
+                skill_name=plan.decl.name,
+                commit=plan.resolved.commit,
+                command=command,
+            )
+        else:
+            runtime_path = shims.install_runtime_command(
+                csk_home=csk_home,
+                skill_name=plan.decl.name,
+                commit=plan.resolved.commit,
+                snapshot=plan.snapshot,
+                command=command,
+            )
         shims.write_project_shim(project_root, command.name, runtime_path)
         commands.add(command.name)
     return commands
@@ -256,7 +272,12 @@ def _install_skill_context(project_root: Path, plan: SkillPlan, effective_locale
     if tmp.exists():
         shutil.rmtree(tmp)
     include_scripts = not plan.spec.commands and (plan.snapshot / "scripts").exists()
-    files = whitelist.copy_context(plan.snapshot, tmp, include_scripts=include_scripts)
+    files = whitelist.copy_context(
+        plan.snapshot,
+        tmp,
+        include_scripts=include_scripts,
+        exclude_roots=plan.spec.runtime_roots,
+    )
     locale.render_locale(plan.snapshot, tmp, effective_locale)
     content_hash = hashing.content_sha256(tmp)
     marker_data = {
@@ -270,6 +291,8 @@ def _install_skill_context(project_root: Path, plan: SkillPlan, effective_locale
         "locale": effective_locale,
         "agents": agents,
         "commands": sorted(plan.spec.commands),
+        "skill_schema_version": plan.spec.schema_version,
+        "runtime_roots": list(plan.spec.runtime_roots),
         "installed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "files": files,
     }

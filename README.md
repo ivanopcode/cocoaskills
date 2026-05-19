@@ -129,6 +129,34 @@ python -m pip install --user cocoaskills
 For multi-project sync, explicitly register projects with `csk project add` and
 run `csk install --all` or `csk upgrade --all`.
 
+## Skill command manifests
+
+Skills can declare project-local commands through `csk-skill.json`. Schema v2
+supports multi-file runtimes: `runtime_roots` are copied into
+`~/.cocoaskills/runtime/<skill>/<commit>/` and excluded from agent prompt
+context.
+
+```json
+{
+  "schema_version": 2,
+  "runtime_roots": ["scripts"],
+  "commands": {
+    "gmr": {
+      "type": "script",
+      "unix_path": "scripts/gmr"
+    },
+    "glab": {
+      "type": "system",
+      "command": "glab",
+      "hint": "Install GitLab CLI through project bootstrap tooling"
+    }
+  }
+}
+```
+
+`system` commands are only checked with `shutil.which`; CocoaSkills does not
+install system tools.
+
 ## CLI
 
 | Command | Behavior |
@@ -184,6 +212,10 @@ from git tags; the generated `src/csk/_version.py` is not committed.
 
 ## Documentation
 
+- [Skill authoring guide](docs/skill-authoring.md) — practical contract for
+  authoring CocoaSkills-compatible skill repositories, including
+  `csk-skill.json` schema v2, `runtime_roots`, system dependencies, and release
+  checklist.
 - [MVP design specification](docs/mvp-design.md) — frozen contract for v0.1
   covering manifests, refs, install pipeline, locking, adapters, security
   boundary, and test surface.

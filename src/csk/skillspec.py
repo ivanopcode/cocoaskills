@@ -7,6 +7,11 @@ from typing import Any
 
 
 SCHEMA_VERSION = 1
+SUPPORTED_SCHEMA_VERSIONS = {1, 2}
+UPGRADE_HINT = (
+    "Upgrade with: pipx upgrade cocoaskills, brew upgrade cocoaskills, "
+    "or mise upgrade pipx:cocoaskills."
+)
 
 
 class SkillSpecError(Exception):
@@ -28,6 +33,8 @@ class CommandSpec:
 class SkillSpec:
     commands: dict[str, CommandSpec]
     source_file: str | None
+    schema_version: int = SCHEMA_VERSION
+    runtime_roots: tuple[str, ...] = ()
 
 
 def load_skill_spec(snapshot: Path) -> SkillSpec:
@@ -48,10 +55,17 @@ def _load_csk_skill(path: Path) -> SkillSpec:
     if not isinstance(data, dict):
         raise SkillSpecError(f"{path} must contain a JSON object")
     schema = data.get("schema_version")
-    if schema != SCHEMA_VERSION:
+    if not isinstance(schema, int) or isinstance(schema, bool):
+        raise SkillSpecError("csk-skill.json field 'schema_version' must be an integer")
+    if schema not in SUPPORTED_SCHEMA_VERSIONS:
         raise SkillSpecError(
-            f"Unsupported csk-skill.json schema_version {schema!r}; this skill requires a newer csk"
+            f"Unsupported csk-skill.json schema_version {schema!r}; this skill requires a newer csk. "
+            f"{UPGRADE_HINT}"
         )
+    if schema == 2:
+        _reject_unknown_fields(data, {"schema_version", "runtime_roots", "commands"}, "csk-skill.json")
+    runtime_roots_raw = data["runtime_roots"] if schema == 2 and "runtime_roots" in data else []
+    runtime_roots = _parse_runtime_roots(runtime_roots_raw, snapshot=path.parent) if schema == 2 else ()
     commands_raw = data.get("commands", {})
     if not isinstance(commands_raw, dict):
         raise SkillSpecError("csk-skill.json field 'commands' must be an object")
@@ -63,12 +77,28 @@ def _load_csk_skill(path: Path) -> SkillSpec:
             raise SkillSpecError(f"Command {name!r} must be an object")
         command_type = raw.get("type")
         if command_type == "script":
+            if schema == 2:
+                _reject_unknown_fields(raw, {"type", "unix_path", "win_path"}, f"commands.{name}")
             unix_path = raw.get("unix_path")
             win_path = raw.get("win_path")
+            if schema == 2 and unix_path is None and win_path is None:
+                raise SkillSpecError(f"Script command {name!r} requires 'unix_path' or 'win_path'")
             if unix_path is not None:
-                _validate_relative_path(unix_path, field=f"commands.{name}.unix_path")
+                unix_path = _validate_relative_path(
+                    unix_path,
+                    field=f"commands.{name}.unix_path",
+                    strict_posix=schema == 2,
+                )
+                if schema == 2:
+                    _validate_v2_script_path(path.parent, unix_path, runtime_roots, field=f"commands.{name}.unix_path")
             if win_path is not None:
-                _validate_relative_path(win_path, field=f"commands.{name}.win_path")
+                win_path = _validate_relative_path(
+                    win_path,
+                    field=f"commands.{name}.win_path",
+                    strict_posix=schema == 2,
+                )
+                if schema == 2:
+                    _validate_v2_script_path(path.parent, win_path, runtime_roots, field=f"commands.{name}.win_path")
             commands[name] = CommandSpec(
                 name=name,
                 type="script",
@@ -77,19 +107,29 @@ def _load_csk_skill(path: Path) -> SkillSpec:
                 source="csk-skill.json",
             )
         elif command_type == "system":
+            if schema == 2:
+                _reject_unknown_fields(raw, {"type", "command", "hint"}, f"commands.{name}")
             command = raw.get("command")
             if not isinstance(command, str) or not command:
                 raise SkillSpecError(f"System command {name!r} requires non-empty 'command'")
+            hint = raw.get("hint")
+            if hint is not None and not isinstance(hint, str):
+                raise SkillSpecError(f"System command {name!r} field 'hint' must be a string")
             commands[name] = CommandSpec(
                 name=name,
                 type="system",
                 command=command,
-                hint=raw.get("hint") if isinstance(raw.get("hint"), str) else None,
+                hint=hint,
                 source="csk-skill.json",
             )
         else:
             raise SkillSpecError(f"Command {name!r} has unsupported type {command_type!r}")
-    return SkillSpec(commands=commands, source_file="csk-skill.json")
+    return SkillSpec(
+        commands=commands,
+        source_file="csk-skill.json",
+        schema_version=schema,
+        runtime_roots=runtime_roots,
+    )
 
 
 def _load_runtime_fallback(path: Path) -> SkillSpec:
@@ -117,10 +157,67 @@ def _load_runtime_fallback(path: Path) -> SkillSpec:
     return SkillSpec(commands=commands, source_file="agents/runtime.json")
 
 
-def _validate_relative_path(value: Any, *, field: str) -> None:
+def _validate_relative_path(value: Any, *, field: str, strict_posix: bool = False) -> str:
     if not isinstance(value, str) or not value:
         raise SkillSpecError(f"{field} must be a non-empty string")
-    path = PurePosixPath(value)
+    normalized = value.rstrip("/")
+    if not normalized:
+        raise SkillSpecError(f"{field} must be a non-empty string")
+    if strict_posix and ("\\" in normalized or "//" in normalized):
+        raise SkillSpecError(f"{field} must be a POSIX-style relative path inside the skill repository")
+    if strict_posix and any(part in {"", "."} for part in normalized.split("/")):
+        raise SkillSpecError(f"{field} must be a POSIX-style relative path inside the skill repository")
+    path = PurePosixPath(normalized)
     if path.is_absolute() or ".." in path.parts:
         raise SkillSpecError(f"{field} must be a relative path inside the skill repository")
+    if not path.parts:
+        raise SkillSpecError(f"{field} must be a relative path inside the skill repository")
+    return path.as_posix()
 
+
+def _parse_runtime_roots(raw: Any, *, snapshot: Path) -> tuple[str, ...]:
+    if not isinstance(raw, list):
+        raise SkillSpecError("csk-skill.json field 'runtime_roots' must be a list")
+    roots: list[str] = []
+    for index, value in enumerate(raw):
+        root = _validate_relative_path(value, field=f"runtime_roots[{index}]", strict_posix=True)
+        root_path = snapshot / root
+        if not root_path.exists():
+            raise SkillSpecError(f"runtime root does not exist: {root}")
+        if not root_path.is_dir():
+            raise SkillSpecError(f"runtime root must be a directory: {root}")
+        roots.append(root)
+
+    if len(set(roots)) != len(roots):
+        raise SkillSpecError("runtime roots must be unique after normalization")
+
+    sorted_roots = sorted(roots)
+    for left_index, left in enumerate(sorted_roots):
+        for right in sorted_roots[left_index + 1 :]:
+            if _path_contains(left, right) or _path_contains(right, left):
+                container, contained = (left, right) if _path_contains(left, right) else (right, left)
+                raise SkillSpecError(f"runtime roots must be disjoint: {container} contains {contained}")
+    return tuple(roots)
+
+
+def _validate_v2_script_path(snapshot: Path, rel_path: str, runtime_roots: tuple[str, ...], *, field: str) -> None:
+    script_path = snapshot / rel_path
+    if not script_path.exists():
+        raise SkillSpecError(f"{field} source file not found: {rel_path}")
+    if not script_path.is_file():
+        raise SkillSpecError(f"{field} must point to a file: {rel_path}")
+    if runtime_roots and not any(_path_contains(root, rel_path) for root in runtime_roots):
+        raise SkillSpecError(f'command path "{rel_path}" is not inside any runtime_roots')
+
+
+def _path_contains(root: str, rel_path: str) -> bool:
+    root_parts = PurePosixPath(root).parts
+    path_parts = PurePosixPath(rel_path).parts
+    return len(path_parts) >= len(root_parts) and path_parts[: len(root_parts)] == root_parts
+
+
+def _reject_unknown_fields(data: dict[str, Any], allowed: set[str], label: str) -> None:
+    unknown = sorted(set(data) - allowed)
+    if unknown:
+        joined = ", ".join(repr(item) for item in unknown)
+        raise SkillSpecError(f"{label} has unsupported field(s): {joined}")

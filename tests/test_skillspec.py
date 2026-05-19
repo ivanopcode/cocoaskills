@@ -32,6 +32,101 @@ def test_runtime_json_fallback(tmp_path):
     assert spec.commands["legacy"].source == "agents/runtime.json"
 
 
+def test_csk_skill_schema_v2_parses_runtime_roots(tmp_path):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "runtime_roots": ["scripts/"],
+                "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    spec = skillspec.load_skill_spec(tmp_path)
+
+    assert spec.schema_version == 2
+    assert spec.runtime_roots == ("scripts",)
+    assert spec.commands["tool"].unix_path == "scripts/tool"
+
+
+def test_runtime_root_must_be_relative_directory(tmp_path):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+    cases = [
+        ["/scripts"],
+        ["../scripts"],
+        ["."],
+        ["scripts/./lib"],
+        ["scripts/missing"],
+        ["scripts/tool"],
+        None,
+    ]
+
+    for runtime_roots in cases:
+        (tmp_path / "csk-skill.json").write_text(
+            json.dumps({"schema_version": 2, "runtime_roots": runtime_roots, "commands": {}}),
+            encoding="utf-8",
+        )
+        with pytest.raises(skillspec.SkillSpecError):
+            skillspec.load_skill_spec(tmp_path)
+
+
+def test_runtime_roots_must_be_disjoint(tmp_path):
+    (tmp_path / "scripts" / "lib").mkdir(parents=True)
+    (tmp_path / "scripts" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps({"schema_version": 2, "runtime_roots": ["scripts", "scripts/lib"], "commands": {}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(skillspec.SkillSpecError, match="disjoint"):
+        skillspec.load_skill_spec(tmp_path)
+
+
+def test_script_command_must_be_inside_runtime_root(tmp_path):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "runtime_roots": ["scripts"],
+                "commands": {"tool": {"type": "script", "unix_path": "bin/tool"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(skillspec.SkillSpecError, match="not inside any runtime_roots"):
+        skillspec.load_skill_spec(tmp_path)
+
+
+def test_system_command_rejects_install_check_and_post_install_fields(tmp_path):
+    for forbidden in ("install", "check", "post_install", "script", "command_args"):
+        (tmp_path / "csk-skill.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "commands": {
+                        "tool": {
+                            "type": "system",
+                            "command": "tool",
+                            forbidden: "echo bad",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(skillspec.SkillSpecError, match=forbidden):
+            skillspec.load_skill_spec(tmp_path)
+
+
 def test_rejects_path_traversal(tmp_path):
     (tmp_path / "csk-skill.json").write_text(
         json.dumps({"schema_version": 1, "commands": {"bad": {"type": "script", "unix_path": "../bad"}}}),
@@ -43,8 +138,17 @@ def test_rejects_path_traversal(tmp_path):
 
 def test_csk_skill_schema_mismatch_fails(tmp_path):
     (tmp_path / "csk-skill.json").write_text(
-        json.dumps({"schema_version": 2, "commands": {}}),
+        json.dumps({"schema_version": 3, "commands": {}}),
         encoding="utf-8",
     )
-    with pytest.raises(skillspec.SkillSpecError):
+    with pytest.raises(skillspec.SkillSpecError, match="pipx upgrade cocoaskills"):
+        skillspec.load_skill_spec(tmp_path)
+
+
+def test_csk_skill_schema_must_be_integer(tmp_path):
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps({"schema_version": "2", "commands": {}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(skillspec.SkillSpecError, match="schema_version"):
         skillspec.load_skill_spec(tmp_path)

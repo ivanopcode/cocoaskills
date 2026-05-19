@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 import pytest
@@ -39,6 +40,92 @@ def test_install_declared_script_to_runtime_not_skill_context(tmp_path, skills_r
     assert runtime.exists()
     assert (project / ".agents" / "bin" / "tool").is_symlink()
     assert (project / ".claude" / "skills" / "skill-tool").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Uses POSIX shell runtime command")
+def test_schema_v2_copies_runtime_root_and_excludes_it_from_context(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-tool",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 2,
+                    "runtime_roots": ["scripts"],
+                    "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}},
+                }
+            ),
+            "scripts/tool": (
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "source_path=\"${BASH_SOURCE[0]}\"\n"
+                "while [[ -L \"$source_path\" ]]; do\n"
+                "  target_path=\"$(readlink \"$source_path\")\"\n"
+                "  if [[ \"$target_path\" == /* ]]; then\n"
+                "    source_path=\"$target_path\"\n"
+                "  else\n"
+                "    source_path=\"$(cd -P -- \"$(dirname -- \"$source_path\")\" && pwd)/$target_path\"\n"
+                "  fi\n"
+                "done\n"
+                "script_dir=\"$(cd -P -- \"$(dirname -- \"$source_path\")\" && pwd)\"\n"
+                "cat \"$script_dir/lib/message.txt\"\n"
+            ),
+            "scripts/lib/message.txt": "runtime side file\n",
+            "references/note.md": "prompt context\n",
+        },
+        tag="v1",
+    )
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-tool", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+
+    result = installer.install(cfg)[0]
+
+    assert not result.errors
+    installed = project / ".agents" / "skills" / "skill-tool"
+    marker = json.loads((installed / ".csk-install.json").read_text(encoding="utf-8"))
+    runtime = csk_home / "runtime" / "skill-tool" / marker["commit"]
+    assert marker["skill_schema_version"] == 2
+    assert marker["runtime_roots"] == ["scripts"]
+    assert (runtime / "scripts" / "tool").exists()
+    assert (runtime / "scripts" / "lib" / "message.txt").read_text(encoding="utf-8") == "runtime side file\n"
+    assert not (installed / "scripts").exists()
+    assert (installed / "references" / "note.md").exists()
+    command = project / ".agents" / "bin" / "tool"
+    output = run([str(command)], project).stdout
+    assert output == "runtime side file\n"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable bit check")
+def test_runtime_root_preserves_executable_bits_on_peer_files(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    repo, _ = make_skill_repo(
+        skills_root,
+        "skill-tool",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 2,
+                    "runtime_roots": ["scripts"],
+                    "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}},
+                }
+            ),
+            "scripts/tool": "#!/bin/sh\n",
+            "scripts/lib/helper": "#!/bin/sh\n",
+        },
+    )
+    (repo / "scripts" / "lib" / "helper").chmod(0o755)
+    commit_all(repo, "make helper executable")
+    run(["git", "tag", "v1"], repo)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-tool", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+
+    result = installer.install(cfg)[0]
+
+    assert not result.errors
+    marker = json.loads((project / ".agents" / "skills" / "skill-tool" / ".csk-install.json").read_text(encoding="utf-8"))
+    helper = csk_home / "runtime" / "skill-tool" / marker["commit"] / "scripts" / "lib" / "helper"
+    assert os.access(helper, os.X_OK)
 
 
 def test_install_is_idempotent_for_unchanged_inputs(tmp_path, skills_root, csk_home):
@@ -360,6 +447,46 @@ def test_system_command_missing_fails(tmp_path, skills_root, csk_home):
 
     assert result.errors
     assert "Missing system command" in result.errors[0]
+
+
+def test_missing_system_command_blocks_skill_install_without_overwriting_existing_install(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    repo, old_commit = make_skill_repo(
+        skills_root,
+        "skill-system",
+        {"SKILL.md": "---\nname: skill-system\n---\n\n# old\n"},
+    )
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-system", "branch": "main"}]})
+    cfg = make_config(csk_home, skills_root, project)
+    assert not installer.install(cfg)[0].errors
+
+    write_files(
+        repo,
+        {
+            "SKILL.md": "---\nname: skill-system\n---\n\n# new\n",
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 2,
+                    "commands": {
+                        "missing": {
+                            "type": "system",
+                            "command": "definitely-missing-csk-test-command",
+                        }
+                    },
+                }
+            ),
+        },
+    )
+    commit_all(repo, "add missing system dependency")
+
+    result = installer.install(cfg)[0]
+
+    assert result.errors
+    assert "Missing system command" in result.errors[0]
+    installed = project / ".agents" / "skills" / "skill-system"
+    assert "# old" in (installed / "SKILL.md").read_text(encoding="utf-8")
+    marker = json.loads((installed / ".csk-install.json").read_text(encoding="utf-8"))
+    assert marker["commit"] == old_commit
 
 
 def test_command_collision_fails(tmp_path, skills_root, csk_home):

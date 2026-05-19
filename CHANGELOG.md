@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-19
+
+### Added
+
+- Added `csk-skill.json` schema v2 with `runtime_roots` for multi-file command
+  runtimes. Runtime roots are copied to the global runtime store and excluded
+  from installed agent prompt context, while sibling files remain available to
+  command entrypoints at execution time.
+- Hardened `type: system` command validation in schema v2 with a closed
+  allow-list of fields (`type`, `command`, `hint`) and explicit rejection of
+  `install`, `check`, `post_install`, `script`, and `command_args`.
+- Markers now record `skill_schema_version` and `runtime_roots` for
+  diagnostics.
+
+### Changed
+
+- Hardened schema v2 `system` command declarations: `csk` validates only
+  `type`, `command`, and `hint`, checks presence with `shutil.which`, and never
+  runs manifest-provided install or check commands.
+- Missing `type: system` dependencies block skill installation before writes
+  to runtime store, project context, or shims, leaving any previously installed
+  version untouched.
+- Schema v1 skills and `agents/runtime.json` fallback remain supported
+  unchanged.
+
+## [0.4.0] - 2026-05-18
+
 ### Added
 
 - Added optional `git` URLs in `Skillfile.json` skill declarations. When a
@@ -114,7 +141,9 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/ivanopcode/cocoaskills/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.1.2...v0.2.0
