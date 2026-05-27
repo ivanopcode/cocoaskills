@@ -795,6 +795,11 @@ activation requires a one-time shell hook.
 `csk shell-init powershell` prints an equivalent PowerShell profile hook using
 `.agents/env.ps1`.
 
+Since v0.6.0, `csk shell-init` also activates the user-wide global scope from
+`~/.cocoaskills/global/env.sh` or `env.ps1` before project-local activation.
+This makes global commands available outside project checkouts while preserving
+project-local shadowing inside managed projects.
+
 `csk bootstrap` should offer to install or print shell hook instructions.
 
 If shell hook is not installed, `csk install` still succeeds but warns that

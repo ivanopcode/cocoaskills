@@ -263,7 +263,11 @@ def _install_runtime_commands(csk_home: Path, project_root: Path, plan: SkillPla
 
 
 def _install_skill_context(project_root: Path, plan: SkillPlan, effective_locale: str | None, agents: list[str]) -> str:
-    target = project_root / ".agents" / "skills" / plan.decl.name
+    return _install_skill_context_to_root(project_root / ".agents" / "skills", plan, effective_locale, agents)
+
+
+def _install_skill_context_to_root(target_root: Path, plan: SkillPlan, effective_locale: str | None, agents: list[str]) -> str:
+    target = target_root / plan.decl.name
     marker = _read_marker(target / ".csk-install.json")
     if _marker_is_current(marker, target, plan, effective_locale, agents):
         return "up-to-date"
@@ -354,7 +358,10 @@ def _replace_dir(new_dir: Path, target: Path) -> None:
 
 
 def _cleanup_removed_skills(project_root: Path, expected: set[str]) -> None:
-    skills_root = project_root / ".agents" / "skills"
+    _cleanup_removed_skills_root(project_root / ".agents" / "skills", expected)
+
+
+def _cleanup_removed_skills_root(skills_root: Path, expected: set[str]) -> None:
     if not skills_root.exists():
         return
     for child in skills_root.iterdir():

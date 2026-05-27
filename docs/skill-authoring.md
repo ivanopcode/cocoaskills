@@ -330,7 +330,30 @@ If the agent needs operational information, put it in `SKILL.md` or
 }
 ```
 
-## 9. Release Checklist
+## 9. Global and Project Installation
+
+Skill authors do not need a separate manifest for global use. The same
+`SKILL.md` and `csk-skill.json` are valid when the skill is installed:
+
+- into a project through `csk install`;
+- globally through `csk global install`.
+
+Global installation changes only the target scope:
+
+```text
+project scope: <project>/.agents/skills/<skill>/
+global scope:  ~/.cocoaskills/global/skills/<skill>/
+runtime:       ~/.cocoaskills/runtime/<skill>/<commit>/
+```
+
+The runtime store is shared. A project can pin a different commit of the same
+skill; project-local commands and agent adapters shadow global ones inside that
+checkout.
+
+Do not make a skill depend on being global. Project `Skillfile.json`
+declarations remain the source of truth for project behavior.
+
+## 10. Release Checklist
 
 Before tagging a skill release:
 
@@ -346,7 +369,7 @@ Before tagging a skill release:
 8. Update consuming project `Skillfile.json` to the new tag.
 9. Run `csk install` and `csk status`.
 
-## 10. Migration Notes
+## 11. Migration Notes
 
 For existing skills with `agents/runtime.json`:
 

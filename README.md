@@ -29,6 +29,8 @@ CocoaSkill makes per-project skill installation declarative and reproducible:
   `.gemini/skills/`.
 - Skill-provided command shims exposed via a project-local `.agents/bin/`
   directory on `PATH`.
+- Optional global skills installed once under `~/.cocoaskills/global/` and
+  exposed to supported agents outside any project checkout.
 
 ## Install
 
@@ -129,6 +131,31 @@ python -m pip install --user cocoaskills
 For multi-project sync, explicitly register projects with `csk project add` and
 run `csk install --all` or `csk upgrade --all`.
 
+## Global skills
+
+Global skills are user-wide baseline skills. They are installed under
+`~/.cocoaskills/global/` and linked into user-level agent directories such as
+`~/.claude/skills/` and `~/.codex/skills/`.
+
+```bash
+csk global init
+csk global add skill-grafana \
+  --git git@gitlab.example.com:agentic-infra/skill-grafana.git \
+  --tag v1.0.0
+csk global install
+```
+
+Global commands are exposed through `~/.cocoaskills/global/bin`. The shell hook
+activates global commands everywhere and project commands inside checkouts:
+
+```bash
+eval "$(csk shell-init zsh)"
+```
+
+Inside a project, project-local skills and `.agents/bin` shims shadow global
+skills with the same name. Global skills do not replace committed project
+`Skillfile.json` declarations.
+
 ## Skill command manifests
 
 Skills can declare project-local commands through `csk-skill.json`. Schema v2
@@ -173,8 +200,15 @@ install system tools.
 | `csk list [--paths]` | List configured projects and declared skills. |
 | `csk project add <alias> <path>` | Register a project for `--all` and create a manifest if missing. |
 | `csk project resolve [target]` | Show resolved project alias, checkout alias, Skillfile, and install paths. |
+| `csk global init` | Create the user-wide global `Skillfile.json`, global skill context, bin, and env files. |
+| `csk global add <name> --tag/--branch/--revision ...` | Add or replace a global skill declaration. |
+| `csk global remove <name>` | Remove a global declaration; the next global install cleans generated files. |
+| `csk global install` | Install all globally declared skills without fetching. |
+| `csk global update` | Fetch source repositories for globally declared skills. |
+| `csk global upgrade` | Run global update, then global install. |
+| `csk global status` | Show global manifest vs installed state. |
 | `csk config show` | Print resolved config path and contents. |
-| `csk shell-init [zsh\|bash\|powershell]` | Print shell hook code for auto-`PATH` activation. |
+| `csk shell-init [zsh\|bash\|powershell]` | Print shell hook code for global and project-local auto-`PATH` activation. |
 | `csk --version` | Print version and exit. |
 
 Flags shared by `install` and `upgrade`:

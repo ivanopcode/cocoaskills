@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added user-wide global skills under `~/.cocoaskills/global/`, managed through
+  `csk global init/add/remove/list/status/install/update/upgrade`.
+- Added global command shims under `~/.cocoaskills/global/bin` and shell-init
+  activation that exposes global commands everywhere while project-local shims
+  shadow them inside checkouts.
+- Added user-level global adapters for Claude Code, Codex CLI, Cursor, and
+  Gemini with `.csk-managed.json` ownership so handwritten user content is
+  preserved.
+
+### Changed
+
+- Runtime GC now scans global skill markers as well as project markers, so
+  runtime entries referenced only by global skills are preserved.
+
 ## [0.5.0] - 2026-05-19
 
 ### Added

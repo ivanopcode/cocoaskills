@@ -104,8 +104,15 @@ def runtime_root_command_path(
 
 
 def write_project_shim(project_root: Path, command_name: str, runtime_path: Path, *, platform_name: str | None = None) -> Path:
+    return write_bin_shim(project_root / ".agents" / "bin", command_name, runtime_path, platform_name=platform_name)
+
+
+def write_global_shim(csk_home: Path, command_name: str, runtime_path: Path, *, platform_name: str | None = None) -> Path:
+    return write_bin_shim(csk_home / "global" / "bin", command_name, runtime_path, platform_name=platform_name)
+
+
+def write_bin_shim(bin_dir: Path, command_name: str, runtime_path: Path, *, platform_name: str | None = None) -> Path:
     platform_name = platform_name or ("windows" if os.name == "nt" else "unix")
-    bin_dir = project_root / ".agents" / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     if platform_name == "windows":
         shim = bin_dir / f"{command_name}.cmd"
@@ -125,8 +132,15 @@ def write_project_shim(project_root: Path, command_name: str, runtime_path: Path
 
 
 def remove_stale_shims(project_root: Path, expected_commands: set[str], *, platform_name: str | None = None) -> None:
+    remove_stale_shims_in(project_root / ".agents" / "bin", expected_commands, platform_name=platform_name)
+
+
+def remove_stale_global_shims(csk_home: Path, expected_commands: set[str], *, platform_name: str | None = None) -> None:
+    remove_stale_shims_in(csk_home / "global" / "bin", expected_commands, platform_name=platform_name)
+
+
+def remove_stale_shims_in(bin_dir: Path, expected_commands: set[str], *, platform_name: str | None = None) -> None:
     platform_name = platform_name or ("windows" if os.name == "nt" else "unix")
-    bin_dir = project_root / ".agents" / "bin"
     if not bin_dir.exists():
         return
     for child in bin_dir.iterdir():

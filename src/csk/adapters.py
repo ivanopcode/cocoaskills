@@ -37,11 +37,41 @@ def all_gitignore_entries() -> list[str]:
 
 def refresh_adapters(project_root: Path, agents: list[str], skill_names: list[str], mode: str) -> None:
     canonical_root = project_root / ".agents" / "skills"
+    adapter_roots = {
+        agent: project_root / rel
+        for agent, rel in AGENT_PATHS.items()
+    }
+    _refresh_adapters(canonical_root, adapter_roots, agents, skill_names, mode)
+
+
+def refresh_global_adapters(
+    csk_home: Path,
+    agents: list[str],
+    skill_names: list[str],
+    mode: str,
+    *,
+    home: Path | None = None,
+) -> None:
+    canonical_root = csk_home / "global" / "skills"
+    user_home = home or Path.home()
+    adapter_roots = {
+        agent: user_home / rel
+        for agent, rel in AGENT_PATHS.items()
+    }
+    _refresh_adapters(canonical_root, adapter_roots, agents, skill_names, mode)
+
+
+def _refresh_adapters(
+    canonical_root: Path,
+    adapter_roots: dict[str, Path],
+    agents: list[str],
+    skill_names: list[str],
+    mode: str,
+) -> None:
     for agent in agents:
-        rel = AGENT_PATHS.get(agent)
-        if not rel:
+        adapter_root = adapter_roots.get(agent)
+        if adapter_root is None:
             continue
-        adapter_root = project_root / rel
         adapter_root.mkdir(parents=True, exist_ok=True)
         expected = set(skill_names)
         managed = _read_managed(adapter_root)

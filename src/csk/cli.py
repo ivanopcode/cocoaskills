@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__, adapters, config, deprecation, git_ops, gitignore_gate, installer, manifest, project_resolver, shell_init, status
+from . import __version__, adapters, config, deprecation, gc, git_ops, gitignore_gate, global_install, installer, manifest, project_resolver, shell_init, status
 from .locking import GlobalLock, LockError
 
 
@@ -34,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
         config.ConfigError,
         manifest.ManifestError,
         project_resolver.ProjectResolutionError,
+        global_install.GlobalInstallError,
         installer.InstallError,
         ValueError,
     ) as exc:
@@ -57,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  csk update             fetch local skill repositories\n"
             "  csk upgrade [target]   update, then install\n"
             "  csk status [target]    show manifest vs installed state\n"
+            "  csk global <command>   manage user-wide global skills\n"
             "  csk list               list configured projects and skills\n"
             "  csk project add        add a configured project\n"
             "  csk project resolve    show current checkout resolution\n"
@@ -83,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_install(sub, "upgrade", "Fetch skill repositories, then install.")
+    _add_global(sub)
     status_parser = sub.add_parser(
         "status",
         help="Show manifest vs installed state.",
@@ -150,6 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     shell.add_argument("shell", nargs="?", default="bash", choices=["zsh", "bash", "powershell"])
+    shell.add_argument("--no-global", action="store_true", help="do not activate global CocoaSkills bin")
     return parser
 
 
@@ -221,6 +225,46 @@ def _add_install(sub, name: str, description: str) -> None:
     parser.add_argument("--strict-tags", action="store_true", help="fail if an installed tag moved to another commit")
 
 
+def _add_global(sub) -> None:
+    parser = sub.add_parser(
+        "global",
+        help="Manage user-wide global skills.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Global scope:\n"
+            "  Uses ~/.cocoaskills/global/Skillfile.json and installs adapters into user-level agent dirs.\n\n"
+            "Examples:\n"
+            "  csk global init\n"
+            "  csk global add skill-grafana --git git@example.com:skills/skill-grafana.git --tag v1.0.0\n"
+            "  csk global install\n"
+            "  csk global upgrade\n"
+        ),
+    )
+    global_sub = parser.add_subparsers(dest="global_command", required=True)
+    global_sub.add_parser("init", help="create ~/.cocoaskills/global/Skillfile.json")
+    add = global_sub.add_parser("add", help="add or replace a global skill declaration")
+    add.add_argument("name")
+    add.add_argument("--git", help="git clone URL")
+    add.add_argument("--source", help="local source directory name under skills_root")
+    refs = add.add_mutually_exclusive_group(required=True)
+    refs.add_argument("--tag")
+    refs.add_argument("--branch")
+    refs.add_argument("--revision")
+    remove = global_sub.add_parser("remove", help="remove a global skill declaration")
+    remove.add_argument("name")
+    global_sub.add_parser("list", help="list declared global skills")
+    global_sub.add_parser("status", help="show global installed state")
+    install = global_sub.add_parser("install", help="install global skills")
+    install.add_argument("--dry-run", action="store_true", help="validate without modifying files")
+    install.add_argument("--verbose", action="store_true", help="print detailed progress")
+    install.add_argument("--strict-tags", action="store_true", help="accepted for symmetry; currently unused")
+    global_sub.add_parser("update", help="fetch global skill source repositories")
+    upgrade = global_sub.add_parser("upgrade", help="fetch global skill sources, then install")
+    upgrade.add_argument("--dry-run", action="store_true", help="validate install without modifying installed files")
+    upgrade.add_argument("--verbose", action="store_true", help="print detailed progress")
+    upgrade.add_argument("--strict-tags", action="store_true", help="accepted for symmetry; currently unused")
+
+
 def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "bootstrap":
         return _cmd_bootstrap()
@@ -235,8 +279,10 @@ def _dispatch(args: argparse.Namespace) -> int:
         print(_render_project_resolution(cfg, args))
         return EXIT_OK
     if args.command == "shell-init":
-        print(shell_init.shell_init(args.shell))
+        print(shell_init.shell_init(args.shell, include_global=not args.no_global))
         return EXIT_OK
+    if args.command == "global":
+        return _dispatch_global(args)
 
     cfg = config.load_config()
     if args.command == "list":
@@ -261,6 +307,69 @@ def _dispatch(args: argparse.Namespace) -> int:
             return _cmd_install(cfg, args)
 
     raise ValueError(f"Unknown command: {args.command}")
+
+
+def _dispatch_global(args: argparse.Namespace) -> int:
+    csk_home = config.config_path().parent
+    if args.global_command == "init":
+        default_agents = _global_default_agents()
+        path = global_install.init(csk_home, default_agents=default_agents)
+        print(f"Initialized global CocoaSkills at {path.parent}")
+        return EXIT_OK
+    if args.global_command == "add":
+        ref_kind, ref = _global_ref_from_args(args)
+        global_install.add_decl(
+            csk_home,
+            name=args.name,
+            ref_kind=ref_kind,
+            ref=ref,
+            git=args.git,
+            source=args.source,
+            default_agents=_global_default_agents(),
+        )
+        print(f"Added global skill {args.name}: {ref_kind} {ref}")
+        return EXIT_OK
+    if args.global_command == "remove":
+        global_install.remove_decl(csk_home, args.name)
+        print(f"Removed global skill {args.name}")
+        return EXIT_OK
+    if args.global_command == "list":
+        print(global_install.list_declared(csk_home))
+        return EXIT_OK
+
+    cfg = config.load_config()
+    if args.global_command == "status":
+        print(global_install.render_status(cfg))
+        return EXIT_OK
+    dry_run_install = args.global_command == "install" and getattr(args, "dry_run", False)
+    if not dry_run_install:
+        config.validate_skills_root_for_work(cfg)
+    with GlobalLock(cfg.path.parent):
+        if args.global_command == "update":
+            return _cmd_global_update(cfg)
+        if args.global_command == "install":
+            return _cmd_global_install(cfg, args)
+        if args.global_command == "upgrade":
+            update_code = _cmd_global_update(cfg)
+            install_code = _cmd_global_install(cfg, args)
+            return install_code if install_code != EXIT_OK else update_code
+    raise ValueError(f"Unknown global command: {args.global_command}")
+
+
+def _global_default_agents() -> list[str]:
+    try:
+        cfg = config.load_config()
+    except config.ConfigError:
+        return list(config.DEFAULT_AGENTS)
+    return list(cfg.default_agents or config.DEFAULT_AGENTS)
+
+
+def _global_ref_from_args(args: argparse.Namespace) -> tuple[str, str]:
+    for ref_kind in ("tag", "branch", "revision"):
+        value = getattr(args, ref_kind, None)
+        if value:
+            return ref_kind, value
+    raise ValueError("global add requires one of --tag, --branch, or --revision")
 
 
 def _cmd_bootstrap() -> int:
@@ -373,6 +482,31 @@ def _cmd_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
             failed = True
             print(f"{result.alias}: {error}", file=sys.stderr)
     return EXIT_PARTIAL_FAIL if failed else EXIT_OK
+
+
+def _cmd_global_update(cfg: config.GlobalConfig) -> int:
+    result = global_install.update(cfg)
+    for message in result.messages:
+        print(message)
+    for error in result.errors:
+        print(error, file=sys.stderr)
+    return EXIT_PARTIAL_FAIL if result.failed else EXIT_OK
+
+
+def _cmd_global_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
+    options = installer.InstallOptions(
+        dry_run=getattr(args, "dry_run", False),
+        strict_tags=getattr(args, "strict_tags", False),
+        verbose=getattr(args, "verbose", False),
+    )
+    result = global_install.install(cfg, options=options)
+    for message in result.messages:
+        print(message)
+    for error in result.errors:
+        print(f"global: {error}", file=sys.stderr)
+    if not options.dry_run:
+        gc.collect_runtime(cfg, cfg.path.parent)
+    return EXIT_PARTIAL_FAIL if result.failed else EXIT_OK
 
 
 def _render_list(cfg: config.GlobalConfig, *, show_paths: bool = False) -> str:
