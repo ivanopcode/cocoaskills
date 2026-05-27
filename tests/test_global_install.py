@@ -322,10 +322,17 @@ def test_runtime_gc_keeps_global_only_runtime(monkeypatch, tmp_path, skills_root
             "csk-skill.json": json.dumps(
                 {
                     "schema_version": 1,
-                    "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}},
+                    "commands": {
+                        "tool": {
+                            "type": "script",
+                            "unix_path": "scripts/tool",
+                            "win_path": "scripts/tool.cmd",
+                        }
+                    },
                 }
             ),
             "scripts/tool": "#!/bin/sh\n",
+            "scripts/tool.cmd": "@echo off\r\n",
         },
         tag="v1",
     )
