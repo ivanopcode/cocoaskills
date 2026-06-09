@@ -187,3 +187,53 @@ def test_gc_sweeps_orphan_tmp_dirs_of_dead_processes(tmp_path, skills_root, csk_
     assert not runtime_orphan.exists()
     assert live_tmp.exists()  # owner is alive; not ours to delete
     assert (skills_dir / "skill-tool").exists()
+
+
+def test_snapshot_cache_gc_removes_unreferenced_keeps_referenced(tmp_path, skills_root, csk_home):
+    from csk import gc as gc_mod
+
+    project1 = make_project(tmp_path, "p1")
+    _make_tool_repo(skills_root)
+    write_skillfile(project1, {"schema_version": 1, "skills": [{"name": "skill-tool", "tag": "v1"}]})
+    cfg = _two_project_config(csk_home, skills_root, project1)
+    assert not installer.install(cfg)[0].errors
+
+    referenced = list((csk_home / "cache" / "skill-tool").iterdir())
+    assert referenced  # install populated the snapshot cache
+
+    stale = csk_home / "cache" / "skill-tool" / ("0" * 40) / "snapshot"
+    stale.mkdir(parents=True)
+    nested_stale = csk_home / "cache" / "internal" / "skill-x" / ("1" * 40) / "snapshot"
+    nested_stale.mkdir(parents=True)
+
+    stats = gc_mod.collect_runtime(cfg, csk_home)
+
+    assert stats.snapshots_removed == 2
+    assert not stale.parent.exists()
+    assert not (csk_home / "cache" / "internal").exists()  # empty parents removed
+    assert all(path.exists() for path in referenced)
+
+
+def test_cli_gc_command_reports_summary(monkeypatch, tmp_path, skills_root, csk_home, capsys):
+    import json as json_mod
+
+    from csk import cli
+
+    project1 = make_project(tmp_path, "p1")
+    write_skillfile(project1, {"schema_version": 1, "skills": []})
+    cfg_path = csk_home / "config.json"
+    cfg_path.write_text(
+        json_mod.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "projects": {"p1": {"path": str(project1), "agents": ["codex_cli"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+
+    assert cli.main(["gc"]) == 0
+    out = capsys.readouterr().out
+    assert "gc: removed" in out

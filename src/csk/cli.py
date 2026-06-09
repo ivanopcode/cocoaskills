@@ -109,6 +109,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print machine-readable JSON instead of the table",
     )
+    sub.add_parser(
+        "gc",
+        help="Remove unreferenced runtime entries, snapshot cache entries, and dead consumer registry entries.",
+    )
     list_parser = sub.add_parser(
         "list",
         help="List configured projects and declared skills.",
@@ -308,6 +312,16 @@ def _dispatch(args: argparse.Namespace) -> int:
             print(status.render_collected(statuses))
         if args.check and not all(project.clean for project in statuses):
             return EXIT_PARTIAL_FAIL
+        return EXIT_OK
+
+    if args.command == "gc":
+        with GlobalLock(cfg.path.parent):
+            stats = gc.collect_runtime(cfg, cfg.path.parent)
+        print(
+            f"gc: removed {stats.runtime_removed} runtime dir(s), "
+            f"{stats.snapshots_removed} snapshot(s), "
+            f"pruned {stats.consumers_pruned} consumer(s)"
+        )
         return EXIT_OK
 
     if args.command in {"install", "update", "upgrade"}:
