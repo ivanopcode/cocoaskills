@@ -92,9 +92,9 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
             _detect_command_collisions(plans)
             _check_system_commands(plans)
             if options.strict_tags:
-                _check_moved_tags_strict(project.path, plans)
+                _check_moved_tags_strict(project.path / ".agents" / "skills", plans)
             else:
-                result.messages.extend(_moved_tag_warnings(project.path, plans))
+                result.messages.extend(_moved_tag_warnings(project.path / ".agents" / "skills", plans))
 
             if options.dry_run:
                 result.messages.append(f"{project.alias}: dry-run; no files modified")
@@ -112,6 +112,12 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                     f"{project.alias}: {plan.decl.name} {plan.resolved.kind} {plan.resolved.ref} "
                     f"{plan.resolved.commit[:7]} {installed}"
                 )
+                if options.verbose:
+                    result.messages.append(f"{project.alias}: {plan.decl.name} commit {plan.resolved.commit}")
+                    for command_name in sorted(command_names):
+                        result.messages.append(
+                            f"{project.alias}: {plan.decl.name} command {command_name} -> .agents/bin/{command_name}"
+                        )
 
             _cleanup_removed_skills(project.path, {plan.decl.name for plan in plans})
             shims.remove_stale_shims(project.path, expected_commands)
@@ -204,18 +210,18 @@ def _check_system_commands(plans: list[SkillPlan]) -> None:
                 raise InstallError(f"Missing system command {command.command!r} for {plan.decl.name}.{hint}")
 
 
-def _check_moved_tags_strict(project_root: Path, plans: list[SkillPlan]) -> None:
-    warnings = _moved_tag_warnings(project_root, plans)
+def _check_moved_tags_strict(skills_dir: Path, plans: list[SkillPlan]) -> None:
+    warnings = _moved_tag_warnings(skills_dir, plans)
     if warnings:
         raise InstallError("; ".join(warnings))
 
 
-def _moved_tag_warnings(project_root: Path, plans: list[SkillPlan]) -> list[str]:
+def _moved_tag_warnings(skills_dir: Path, plans: list[SkillPlan]) -> list[str]:
     warnings: list[str] = []
     for plan in plans:
         if plan.resolved.kind != "tag":
             continue
-        marker = _read_marker(project_root / ".agents" / "skills" / plan.decl.name / ".csk-install.json")
+        marker = _read_marker(skills_dir / plan.decl.name / ".csk-install.json")
         if not marker:
             continue
         if (

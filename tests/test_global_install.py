@@ -346,3 +346,55 @@ def test_runtime_gc_keeps_global_only_runtime(monkeypatch, tmp_path, skills_root
     assert cli.main(["install", "app"]) == 0
 
     assert (csk_home / "runtime" / "skill-tool" / commit).exists()
+
+
+def test_global_moved_tag_warns_by_default_and_strict_tags_fail(monkeypatch, tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    repo, _ = make_skill_repo(skills_root, "skill-a", tag="v1")
+    cfg = make_config(csk_home, skills_root, project)
+    _save_config(monkeypatch, cfg)
+    _write_global_skillfile(
+        csk_home,
+        {"schema_version": 1, "agents": ["codex_cli"], "skills": [{"name": "skill-a", "tag": "v1"}]},
+    )
+    first = global_install.install(cfg)
+    assert not first.errors
+
+    write_files(repo, {"SKILL.md": "---\nname: changed\n---\n"})
+    commit_all(repo, "move tag")
+    run(["git", "tag", "-f", "v1"], repo)
+
+    strict = global_install.install(cfg, options=installer.InstallOptions(strict_tags=True))
+    assert strict.errors and "Moved tag" in strict.errors[0]
+    relaxed = global_install.install(cfg)
+    assert not relaxed.errors
+    assert any("Moved tag" in message for message in relaxed.messages)
+
+
+def test_install_verbose_reports_commands_and_full_commit(monkeypatch, tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    _, commit = make_skill_repo(
+        skills_root,
+        "skill-tool",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 1,
+                    "commands": {
+                        "tool": {"type": "script", "unix_path": "scripts/tool", "win_path": "scripts/tool.cmd"}
+                    },
+                }
+            ),
+            "scripts/tool": "#!/bin/sh\n",
+            "scripts/tool.cmd": "@echo off\r\n",
+        },
+        tag="v1",
+    )
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-tool", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+
+    result = installer.install(cfg, options=installer.InstallOptions(verbose=True))[0]
+
+    assert not result.errors
+    assert any(f"commit {commit}" in message for message in result.messages)
+    assert any("command tool -> .agents/bin/tool" in message for message in result.messages)

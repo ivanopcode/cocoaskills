@@ -143,6 +143,11 @@ def install(config: GlobalConfig, *, options: installer.InstallOptions | None = 
                 result.errors.append(str(exc))
                 return result
             plans = _plans_with_available_system_commands(plans, result)
+            if options.strict_tags:
+                installer._check_moved_tags_strict(global_skills_root(csk_home), plans)
+            else:
+                for warning in installer._moved_tag_warnings(global_skills_root(csk_home), plans):
+                    result.messages.append(f"global: {warning}")
             if options.dry_run:
                 result.messages.append("global: dry-run; no files modified")
                 if result.errors:
@@ -167,6 +172,12 @@ def install(config: GlobalConfig, *, options: installer.InstallOptions | None = 
                     f"global: {plan.decl.name} {plan.resolved.kind} {plan.resolved.ref} "
                     f"{plan.resolved.commit[:7]} {installed}"
                 )
+                if options.verbose:
+                    result.messages.append(f"global: {plan.decl.name} commit {plan.resolved.commit}")
+                    for command_name in sorted(command_names):
+                        result.messages.append(
+                            f"global: {plan.decl.name} command {command_name} -> global/bin/{command_name}"
+                        )
             installer._cleanup_removed_skills_root(
                 global_skills_root(csk_home),
                 {decl.name for decl in global_manifest.skills},
