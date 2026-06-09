@@ -726,3 +726,20 @@ def test_cli_update_reports_missing_git_actionably(monkeypatch, tmp_path, csk_ho
     captured = capsys.readouterr()
     assert code == 1
     assert "install git" in captured.err
+
+
+def test_cli_status_json_is_machine_readable(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    project = make_project(tmp_path)
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    _register_project(monkeypatch, csk_home, skills_root, project)
+    assert cli.main(["install", "app"]) == 0
+    capsys.readouterr()
+
+    assert cli.main(["status", "app", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload[0]["alias"] == "app"
+    assert payload[0]["clean"] is True
+    assert payload[0]["skills"][0]["name"] == "skill-a"
+    assert payload[0]["skills"][0]["label"] == "up-to-date"

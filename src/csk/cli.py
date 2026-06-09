@@ -104,6 +104,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="exit non-zero unless every skill is up-to-date",
     )
+    status_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print machine-readable JSON instead of the table",
+    )
     list_parser = sub.add_parser(
         "list",
         help="List configured projects and declared skills.",
@@ -297,7 +302,10 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "status":
         cfg, alias = _cfg_and_alias_for_target(cfg, args)
         statuses = status.collect_status(cfg, alias=alias)
-        print(status.render_collected(statuses))
+        if args.json:
+            print(json.dumps(status.statuses_to_payload(statuses), indent=2, sort_keys=True))
+        else:
+            print(status.render_collected(statuses))
         if args.check and not all(project.clean for project in statuses):
             return EXIT_PARTIAL_FAIL
         return EXIT_OK

@@ -42,6 +42,31 @@ def collect_status(config: GlobalConfig, *, alias: str | None = None) -> list[Pr
     return statuses
 
 
+def statuses_to_payload(statuses: list[ProjectStatus]) -> list[dict]:
+    payload = []
+    for project in statuses:
+        payload.append(
+            {
+                "alias": project.alias,
+                "path": str(project.path),
+                "skillfile_present": project.skillfile_present,
+                "clean": project.clean,
+                "skills": [
+                    {
+                        "name": skill.name,
+                        "ref_kind": skill.ref_kind,
+                        "ref": skill.ref,
+                        "installed_commit": skill.installed_commit,
+                        "resolved_commit": skill.resolved_commit,
+                        "label": skill.label,
+                    }
+                    for skill in project.skills
+                ],
+            }
+        )
+    return payload
+
+
 def render_status(config: GlobalConfig, *, alias: str | None = None) -> str:
     return render_collected(collect_status(config, alias=alias))
 
