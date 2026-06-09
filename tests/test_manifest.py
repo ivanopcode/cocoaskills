@@ -9,7 +9,7 @@ def test_manifest_parses_skill_refs(tmp_path):
     parsed = manifest.parse_manifest(
         {
             "schema_version": 1,
-            "project": {"alias": "partners-ios"},
+            "project": {"alias": "demo-ios"},
             "agents": ["codex_cli"],
             "locale": "ru",
             "skills": [{"name": "skill-a", "source": "repo-a", "git": "git@example.com:skills/repo-a.git", "tag": "v1"}],
@@ -20,7 +20,7 @@ def test_manifest_parses_skill_refs(tmp_path):
     assert parsed.skills[0].source == "repo-a"
     assert parsed.skills[0].git == "git@example.com:skills/repo-a.git"
     assert parsed.skills[0].ref.kind == "tag"
-    assert parsed.project_alias == "partners-ios"
+    assert parsed.project_alias == "demo-ios"
 
 
 def test_manifest_rejects_duplicate_skill_names(tmp_path):
@@ -76,15 +76,15 @@ def test_manifest_accepts_typical_identifiers(tmp_path):
         {
             "schema_version": 1,
             "skills": [
-                {"name": "skill-bi", "tag": "v1"},
+                {"name": "skill-analytics", "tag": "v1"},
                 {"name": "skill_x.v2", "source": "repo.v2", "tag": "v1"},
-                {"name": "skill-grafana", "source": "internal/skill-grafana", "tag": "v1"},
+                {"name": "skill-metrics", "source": "internal/skill-metrics", "tag": "v1"},
             ],
         },
         tmp_path / "Skillfile.json",
     )
-    assert [skill.name for skill in parsed.skills] == ["skill-bi", "skill_x.v2", "skill-grafana"]
-    assert parsed.skills[2].source == "internal/skill-grafana"
+    assert [skill.name for skill in parsed.skills] == ["skill-analytics", "skill_x.v2", "skill-metrics"]
+    assert parsed.skills[2].source == "internal/skill-metrics"
 
 
 @pytest.mark.parametrize(

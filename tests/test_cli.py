@@ -69,7 +69,7 @@ def test_cli_init_creates_skillfile_and_gitignore_in_git_repo(monkeypatch, tmp_p
     )
     monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
 
-    code = cli.main(["init", str(project), "--alias", "Partners iOS"])
+    code = cli.main(["init", str(project), "--alias", "Demo iOS"])
     captured = capsys.readouterr()
 
     assert code == 0
@@ -77,7 +77,7 @@ def test_cli_init_creates_skillfile_and_gitignore_in_git_repo(monkeypatch, tmp_p
     data = json.loads((project / "Skillfile.json").read_text(encoding="utf-8"))
     assert data == {
         "schema_version": 1,
-        "project": {"alias": "partners-ios"},
+        "project": {"alias": "demo-ios"},
         "agents": ["codex_cli", "cursor"],
         "skills": [],
     }
@@ -152,12 +152,12 @@ def test_cli_install_dot_uses_current_checkout_without_saving_config(monkeypatch
         project,
         {
             "schema_version": 1,
-            "project": {"alias": "partners-ios"},
+            "project": {"alias": "demo-ios"},
             "agents": ["codex_cli"],
             "skills": [{"name": "skill-a", "tag": "v1"}],
         },
     )
-    run(["git", "checkout", "-b", "feature/PMA-23523-install"], project)
+    run(["git", "checkout", "-b", "feature/TASK-4242-install"], project)
     cfg_path = csk_home / "config.json"
     cfg_path.write_text(
         json.dumps({"schema_version": 1, "skills_root": str(skills_root), "projects": {}}),
@@ -172,7 +172,7 @@ def test_cli_install_dot_uses_current_checkout_without_saving_config(monkeypatch
     assert code == 0
     loaded = config.load_config(cfg_path)
     assert loaded.projects == {}
-    assert "partners-ios-pma-23523-" in out
+    assert "demo-ios-task-4242-" in out
     assert (project / ".agents" / "skills" / "skill-a" / "SKILL.md").exists()
 
 
@@ -207,7 +207,7 @@ def test_cli_status_dot_uses_current_checkout_without_saving_config(monkeypatch,
         project,
         {
             "schema_version": 1,
-            "project": {"alias": "partners-ios"},
+            "project": {"alias": "demo-ios"},
             "skills": [{"name": "skill-a", "tag": "v1"}],
         },
     )
@@ -223,7 +223,7 @@ def test_cli_status_dot_uses_current_checkout_without_saving_config(monkeypatch,
     out = capsys.readouterr().out
 
     assert code == 0
-    assert "Project partners-ios" in out
+    assert "Project demo-ios" in out
     assert "missing" in out
     assert config.load_config(cfg_path).projects == {}
 
@@ -235,7 +235,7 @@ def test_cli_install_dot_dry_run_does_not_save_config(monkeypatch, tmp_path, csk
         project,
         {
             "schema_version": 1,
-            "project": {"alias": "partners-ios"},
+            "project": {"alias": "demo-ios"},
             "skills": [{"name": "skill-a", "tag": "v1"}],
         },
     )
@@ -446,7 +446,7 @@ def test_cli_status_all_reports_registered_projects(monkeypatch, tmp_path, csk_h
 
 def test_cli_project_resolve_reports_current_checkout(monkeypatch, tmp_path, csk_home, skills_root, capsys):
     project = make_project(tmp_path)
-    write_skillfile(project, {"schema_version": 1, "project": {"alias": "partners-ios"}, "skills": []})
+    write_skillfile(project, {"schema_version": 1, "project": {"alias": "demo-ios"}, "skills": []})
     cfg_path = csk_home / "config.json"
     cfg_path.write_text(
         json.dumps({"schema_version": 1, "skills_root": str(skills_root), "projects": {}}),
@@ -459,15 +459,15 @@ def test_cli_project_resolve_reports_current_checkout(monkeypatch, tmp_path, csk
     out = capsys.readouterr().out
 
     assert code == 0
-    assert "project_alias: partners-ios" in out
-    assert "checkout_alias: partners-ios" in out
+    assert "project_alias: demo-ios" in out
+    assert "checkout_alias: demo-ios" in out
     assert f"skillfile: {project / 'Skillfile.json'}" in out
 
 
 def test_cli_project_resolve_configured_alias_reports_git_fields(monkeypatch, tmp_path, csk_home, skills_root, capsys):
     project = make_project(tmp_path)
-    write_skillfile(project, {"schema_version": 1, "project": {"alias": "partners-ios"}, "skills": []})
-    run(["git", "checkout", "-b", "feature/PMA-23523-resolve"], project)
+    write_skillfile(project, {"schema_version": 1, "project": {"alias": "demo-ios"}, "skills": []})
+    run(["git", "checkout", "-b", "feature/TASK-4242-resolve"], project)
     cfg_path = csk_home / "config.json"
     cfg_path.write_text(
         json.dumps(
@@ -475,11 +475,11 @@ def test_cli_project_resolve_configured_alias_reports_git_fields(monkeypatch, tm
                 "schema_version": 1,
                 "skills_root": str(skills_root),
                 "projects": {
-                    "partners-ios-pma-23523-test": {
+                    "demo-ios-task-4242-test": {
                         "path": str(project),
                         "agents": ["codex_cli"],
-                        "project_alias": "partners-ios",
-                        "checkout_alias": "partners-ios-pma-23523-test",
+                        "project_alias": "demo-ios",
+                        "checkout_alias": "demo-ios-task-4242-test",
                     }
                 },
             }
@@ -488,12 +488,12 @@ def test_cli_project_resolve_configured_alias_reports_git_fields(monkeypatch, tm
     )
     monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
 
-    code = cli.main(["project", "resolve", "partners-ios-pma-23523-test"])
+    code = cli.main(["project", "resolve", "demo-ios-task-4242-test"])
     out = capsys.readouterr().out
 
     assert code == 0
-    assert "branch: feature/PMA-23523-resolve" in out
-    assert "task_id: pma-23523" in out
+    assert "branch: feature/TASK-4242-resolve" in out
+    assert "task_id: task-4242" in out
     assert "path_hash: " in out and "path_hash: \n" not in out
 
 
@@ -553,11 +553,11 @@ def test_cli_list_paths_shows_alias_layers(monkeypatch, tmp_path, csk_home, skil
                 "schema_version": 1,
                 "skills_root": str(skills_root),
                 "projects": {
-                    "partners-ios-pma-23523": {
+                    "demo-ios-task-4242": {
                         "path": str(project),
                         "agents": ["codex_cli"],
-                        "project_alias": "partners-ios",
-                        "checkout_alias": "partners-ios-pma-23523",
+                        "project_alias": "demo-ios",
+                        "checkout_alias": "demo-ios-task-4242",
                     }
                 },
             }
@@ -570,8 +570,8 @@ def test_cli_list_paths_shows_alias_layers(monkeypatch, tmp_path, csk_home, skil
     out = capsys.readouterr().out
 
     assert code == 0
-    assert "project_alias=partners-ios" in out
-    assert "checkout_alias=partners-ios-pma-23523" in out
+    assert "project_alias=demo-ios" in out
+    assert "checkout_alias=demo-ios-task-4242" in out
     assert f"path={project}" in out
 
 

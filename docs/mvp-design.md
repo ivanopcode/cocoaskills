@@ -99,17 +99,17 @@ Example:
 ```json
 {
   "schema_version": 1,
-  "skills_root": "/Users/iv/agents/skills",
+  "skills_root": "/Users/dev/agents/skills",
   "preferred_locale": "ru",
   "default_agents": ["codex_cli", "claude_code", "cursor"],
   "adapter_mode": "auto",
   "worktree_alias_pattern": "[A-Z]+-[0-9]+",
   "projects": {
-    "partners-app-ios": {
-      "path": "/Users/iv/Developer/Wildberries/partners-app-dev",
+    "demo-app-ios": {
+      "path": "/Users/dev/projects/demo-app-dev",
       "agents": ["codex_cli", "claude_code", "cursor"],
-      "project_alias": "partners-ios",
-      "checkout_alias": "partners-app-ios"
+      "project_alias": "demo-ios",
+      "checkout_alias": "demo-app-ios"
     }
   }
 }
@@ -124,16 +124,16 @@ Fields:
 | `preferred_locale` | no | Default locale used when a project does not specify one. |
 | `default_agents` | no | Agents used for new projects. |
 | `adapter_mode` | no | `auto`, `symlink`, or `copy`. Default is `auto`. |
-| `worktree_alias_pattern` | no | Regex used to extract a task id from non-shared branch names. Default is Jira/YouTrack-style `[A-Z]+-[0-9]+`, case-insensitive. |
+| `worktree_alias_pattern` | no | Regex used to extract a task id from non-shared branch names. Default is Jira-style `[A-Z]+-[0-9]+`, case-insensitive. |
 | `projects` | yes | Map of project alias to project config. |
 
 The key under `projects` is the checkout alias. MVP keeps this compatible with
 the original alias model while adding explicit alias layers:
 
 - `project_alias`: logical project name shared by many checkouts, for example
-  `partners-ios`.
+  `demo-ios`.
 - `checkout_alias`: concrete working copy name, for example
-  `partners-ios-pma-23523-a3f1`.
+  `demo-ios-task-4242-a3f1`.
 - `path`: filesystem path for that concrete checkout.
 
 If `project_alias` or `checkout_alias` is omitted in an older config, the
@@ -149,23 +149,23 @@ Example:
 {
   "schema_version": 1,
   "project": {
-    "alias": "partners-ios"
+    "alias": "demo-ios"
   },
   "agents": ["codex_cli", "claude_code", "cursor"],
   "locale": "ru",
   "skills": [
     {
-      "name": "skill-youtrack",
-      "git": "git@gitlab.example.com:agentic-infra/skill-youtrack.git",
+      "name": "skill-tracker",
+      "git": "git@gitlab.example.com:skills/skill-tracker.git",
       "tag": "v1.0.0"
     },
     {
-      "name": "product-forensics",
-      "source": "skill-product-forensics",
+      "name": "insights",
+      "source": "skill-insights",
       "tag": "v1.0.1"
     },
     {
-      "name": "skill-grafana",
+      "name": "skill-metrics",
       "branch": "main"
     },
     {
@@ -454,9 +454,9 @@ Human-readable `csk status` output should be stable enough to test.
 Example:
 
 ```text
-Project partners-app-ios (/Users/iv/Developer/Wildberries/partners-app-dev)
-  skill-youtrack        tag v1.0.0      abc123d  up-to-date
-  skill-grafana         branch main     f417beb  update-available -> 6078e3b
+Project demo-app-ios (/Users/dev/projects/demo-app-dev)
+  skill-tracker        tag v1.0.0      abc123d  up-to-date
+  skill-metrics         branch main     f417beb  update-available -> 6078e3b
   logbook               revision 6deb71a          missing
 ```
 
@@ -722,15 +722,15 @@ Example:
   "schema_version": 2,
   "runtime_roots": ["scripts"],
   "commands": {
-    "ytx": {
+    "trkx": {
       "type": "script",
-      "unix_path": "scripts/ytx",
+      "unix_path": "scripts/trkx",
       "win_path": "scripts/ytx.cmd"
     },
-    "glab": {
+    "review-cli": {
       "type": "system",
-      "command": "glab",
-      "hint": "Install GitLab CLI"
+      "command": "review-cli",
+      "hint": "Install the review CLI"
     }
   }
 }
@@ -851,8 +851,8 @@ Example:
 ```json
 {
   "schema_version": 1,
-  "name": "skill-youtrack",
-  "source": "skill-youtrack",
+  "name": "skill-tracker",
+  "source": "skill-tracker",
   "ref_kind": "branch",
   "ref": "main",
   "commit": "abc123def4567890",

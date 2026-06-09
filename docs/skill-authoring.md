@@ -148,9 +148,9 @@ Example:
   "schema_version": 2,
   "runtime_roots": ["scripts"],
   "commands": {
-    "gmr": {
+    "mr": {
       "type": "script",
-      "unix_path": "scripts/gmr",
+      "unix_path": "scripts/mr",
       "win_path": "scripts/gmr.cmd"
     }
   }
@@ -201,10 +201,10 @@ Example:
 {
   "schema_version": 2,
   "commands": {
-    "glab": {
+    "review-cli": {
       "type": "system",
-      "command": "glab",
-      "hint": "Install GitLab CLI through project bootstrap tooling"
+      "command": "review-cli",
+      "hint": "Install the review CLI through project bootstrap tooling"
     }
   }
 }
@@ -230,7 +230,7 @@ Forbidden fields:
 If a system dependency is missing, `csk install` fails before writing runtime
 files, project context, or shims for that skill.
 
-Project bootstrap tooling owns system dependencies. In partners-ios this means
+Project bootstrap tooling owns system dependencies. In demo-ios this means
 Mise, Make, or a project bootstrap script, not the skill manager.
 
 ## 7. Localization Contract
@@ -287,66 +287,66 @@ Do not assume these are copied into prompt context:
 If the agent needs operational information, put it in `SKILL.md` or
 `references/`, not in `README.md`.
 
-## 9. Recommended Internal Skill Manifests
+## 9. Example Skill Manifests
 
-### skill-youtrack
+### skill-tracker
 
 ```json
 {
   "schema_version": 2,
   "runtime_roots": ["scripts"],
   "commands": {
-    "yt": {
+    "trk": {
       "type": "script",
-      "unix_path": "scripts/yt"
+      "unix_path": "scripts/trk"
     },
-    "ytx": {
+    "trkx": {
       "type": "script",
-      "unix_path": "scripts/ytx"
+      "unix_path": "scripts/trkx"
     }
   }
 }
 ```
 
-### skill-gitlab
+### skill-review
 
 ```json
 {
   "schema_version": 2,
   "runtime_roots": ["scripts"],
   "commands": {
-    "gmr": {
+    "mr": {
       "type": "script",
-      "unix_path": "scripts/gmr"
+      "unix_path": "scripts/mr"
     },
-    "glab": {
+    "review-cli": {
       "type": "system",
-      "command": "glab",
-      "hint": "Install GitLab CLI through project bootstrap tooling"
+      "command": "review-cli",
+      "hint": "Install the review CLI through project bootstrap tooling"
     }
   }
 }
 ```
 
-### skill-sentry
+### skill-monitor
 
 ```json
 {
   "schema_version": 2,
   "runtime_roots": ["scripts"],
   "commands": {
-    "sentry-api": {
+    "monitor-api": {
       "type": "script",
-      "unix_path": "scripts/sentry-api"
+      "unix_path": "scripts/monitor-api"
     },
-    "sentry-cli-auth": {
+    "monitor-cli-auth": {
       "type": "script",
-      "unix_path": "scripts/sentry-cli-auth"
+      "unix_path": "scripts/monitor-cli-auth"
     },
-    "sentry-cli": {
+    "monitor-cli": {
       "type": "system",
-      "command": "sentry-cli",
-      "hint": "Install Sentry CLI through project bootstrap tooling"
+      "command": "monitor-cli",
+      "hint": "Install the monitor CLI through project bootstrap tooling"
     }
   }
 }

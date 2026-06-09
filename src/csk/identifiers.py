@@ -19,7 +19,7 @@ def is_valid_identifier(value: str) -> bool:
 
 
 # A source may be a nested directory under skills_root (for example
-# "internal/skill-grafana"), so it is a POSIX-style relative path whose every
+# "internal/skill-metrics"), so it is a POSIX-style relative path whose every
 # segment is a safe identifier. That still rules out "..", absolute paths,
 # backslashes, and option-like segments.
 SOURCE_RULE = (

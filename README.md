@@ -108,18 +108,18 @@ python -m pip install --user cocoaskills
    ```json
    {
      "schema_version": 1,
-     "project": { "alias": "partners-ios" },
+     "project": { "alias": "demo-ios" },
      "agents": ["claude_code", "codex_cli", "cursor"],
      "locale": "en",
      "skills": [
        {
-         "name": "skill-youtrack",
-         "git": "git@gitlab.example.com:agentic-infra/skill-youtrack.git",
+         "name": "skill-tracker",
+         "git": "git@gitlab.example.com:skills/skill-tracker.git",
          "tag": "v1.0.0"
        },
        {
-         "name": "skill-grafana",
-         "source": "internal/skill-grafana",
+         "name": "skill-metrics",
+         "source": "internal/skill-metrics",
          "branch": "main"
        }
      ]
@@ -145,8 +145,8 @@ Global skills are user-wide baseline skills. They are installed under
 
 ```bash
 csk global init
-csk global add skill-grafana \
-  --git git@gitlab.example.com:agentic-infra/skill-grafana.git \
+csk global add skill-metrics \
+  --git git@gitlab.example.com:skills/skill-metrics.git \
   --tag v1.0.0
 csk global install
 ```
@@ -174,14 +174,14 @@ context.
   "schema_version": 2,
   "runtime_roots": ["scripts"],
   "commands": {
-    "gmr": {
+    "mr": {
       "type": "script",
-      "unix_path": "scripts/gmr"
+      "unix_path": "scripts/mr"
     },
-    "glab": {
+    "review-cli": {
       "type": "system",
-      "command": "glab",
-      "hint": "Install GitLab CLI through project bootstrap tooling"
+      "command": "review-cli",
+      "hint": "Install the review CLI through project bootstrap tooling"
     }
   }
 }

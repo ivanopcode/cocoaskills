@@ -94,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Labels:\n  up-to-date, missing, update-available, content-drift, error\n\n"
             "Files read:\n  ~/.cocoaskills/config.json, Skillfile.json, .agents/skills/*/.csk-install.json\n\n"
-            "Examples:\n  csk status\n  csk status --all\n  csk status partners-app-ios\n  csk status ."
+            "Examples:\n  csk status\n  csk status --all\n  csk status demo-app-ios\n  csk status ."
         ),
     )
     status_parser.add_argument("target", nargs="?", help="project alias, '.', or project path")
@@ -145,7 +145,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Side effects:\n"
             "  Updates ~/.cocoaskills/config.json and creates <project>/Skillfile.json if missing.\n\n"
-            "Example:\n  csk project add partners-app-ios /path/to/project"
+            "Example:\n  csk project add demo-app-ios /path/to/project"
         ),
     )
     add.add_argument("alias")
@@ -217,7 +217,7 @@ def _add_init(sub) -> None:
             "Files written:\n  <project>/Skillfile.json and <project>/.gitignore.\n\n"
             "Examples:\n"
             "  csk init\n"
-            "  csk init --alias partners-ios --agents codex_cli,cursor\n"
+            "  csk init --alias demo-ios --agents codex_cli,cursor\n"
             "  csk init /path/to/project\n"
         ),
     )
@@ -245,7 +245,7 @@ def _add_install(sub, name: str, description: str) -> None:
             "Examples:\n"
             f"  csk {name}\n"
             f"  csk {name} --all\n"
-            f"  csk {name} partners-app-ios\n"
+            f"  csk {name} demo-app-ios\n"
             f"  csk {name} .\n"
             f"  csk {name} /path/to/project\n"
             f"  csk {name} --fix-gitignore\n"
@@ -269,7 +269,7 @@ def _add_global(sub) -> None:
             "  Uses ~/.cocoaskills/global/Skillfile.json and installs adapters into user-level agent dirs.\n\n"
             "Examples:\n"
             "  csk global init\n"
-            "  csk global add skill-grafana --git git@example.com:skills/skill-grafana.git --tag v1.0.0\n"
+            "  csk global add skill-metrics --git git@example.com:skills/skill-metrics.git --tag v1.0.0\n"
             "  csk global install\n"
             "  csk global upgrade\n"
         ),
