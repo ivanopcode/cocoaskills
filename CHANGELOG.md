@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Skill names, source directory names, and command names are now validated as
+  safe identifiers. Previously a command key like `../../x` in a third-party
+  `csk-skill.json` could write a shim outside the designated bin directory.
+- `git clone` of `Skillfile.json` `git` URLs now rejects option-like URLs,
+  separates the URL with `--`, and restricts transports to
+  `file/git/http/https/ssh` via `GIT_ALLOW_PROTOCOL`, blocking remote-helper
+  URLs such as `ext::sh -c ...` that executed commands during `csk install`.
+
+### Added
+
+- Added `csk status --check`, exiting non-zero unless every skill of every
+  selected project is up-to-date, and `csk status --json` for machine-readable
+  output.
+- Runtime GC now tracks unregistered checkouts ('csk install .') through a
+  consumer registry at `~/.cocoaskills/consumers.json`, so it no longer
+  deletes runtime still referenced by worktree installs. Dead registry entries
+  are pruned automatically.
+
+### Changed
+
+- `csk install <target>` with an explicitly requested project now exits `1`
+  when the project is refused (gitignore gate, missing Skillfile) instead of
+  reporting success; `--all` keeps reporting skips without failing the run.
+- `--verbose` now prints the full resolved commit and the shim destination of
+  every installed command; `csk global install/upgrade --strict-tags` now
+  performs the moved-tag check it advertised.
+
+### Fixed
+
+- Generated `.agents/env.sh` now resolves the project root correctly under
+  zsh; previously it fell back to the caller's working directory.
+- A missing `git` binary now produces an actionable error instead of a raw
+  Python traceback.
+
+## [0.6.0] - 2026-05-27
+
 ### Added
 
 - Added user-wide global skills under `~/.cocoaskills/global/`, managed through
@@ -157,7 +195,8 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.2.1...v0.3.0

@@ -126,6 +126,12 @@ python -m pip install --user cocoaskills
    }
    ```
 
+   The optional `locale` field only affects skills that ship localized
+   metadata (`locales/metadata.json` plus `.skill_triggers/<locale>.md`).
+   Skills without localization files install unchanged. A skill that ships
+   `.skill_triggers/` must also ship `locales/metadata.json` covering the
+   requested locale, otherwise the install of that skill fails.
+
 5. Run `csk install` inside the checkout.
 
 For multi-project sync, explicitly register projects with `csk project add` and
@@ -189,13 +195,13 @@ install system tools.
 | Command | Behavior |
 |---|---|
 | `csk bootstrap` | Interactively create machine-level global config. |
-| `csk init [path]` | Create project `Skillfile.json` and the managed `.gitignore` block. |
+| `csk init [path]` | Create project `Skillfile.json` and the managed `.gitignore` block. Supports `--alias`, `--agents`, and `--no-interactive` for scripted setup. |
 | `csk install [target]` | Apply `Skillfile.json` using current git refs. Missing `git` URL sources are cloned into `skills_root`; existing local repositories are not fetched. No target means current project; `target` may be an alias, `.`, or a project path. |
 | `csk install --all` | Install every project explicitly registered in global config. |
 | `csk update` | Fetch all git repositories under `skills_root`. Does not modify projects. |
 | `csk upgrade [target]` | Run `update`, then `install`. |
 | `csk upgrade --all` | Run `update`, then install every registered project. |
-| `csk status [target]` | Show manifest vs installed state. No target means current project. |
+| `csk status [target]` | Show manifest vs installed state. No target means current project. `--check` exits non-zero unless everything is up-to-date; `--json` prints machine-readable output. |
 | `csk status --all` | Show status for every registered project. |
 | `csk list [--paths]` | List configured projects and declared skills. |
 | `csk project add <alias> <path>` | Register a project for `--all` and create a manifest if missing. |
@@ -207,14 +213,15 @@ install system tools.
 | `csk global update` | Fetch source repositories for globally declared skills. |
 | `csk global upgrade` | Run global update, then global install. |
 | `csk global status` | Show global manifest vs installed state. |
+| `csk global list` | List global skill declarations. |
 | `csk config show` | Print resolved config path and contents. |
-| `csk shell-init [zsh\|bash\|powershell]` | Print shell hook code for global and project-local auto-`PATH` activation. |
+| `csk shell-init [zsh\|bash\|powershell]` | Print shell hook code for global and project-local auto-`PATH` activation. `--no-global` limits activation to project checkouts. |
 | `csk --version` | Print version and exit. |
 
 Flags shared by `install` and `upgrade`:
 
 - `--dry-run` — plan work without modifying files.
-- `--verbose` — print detailed progress.
+- `--verbose` — print resolved commits and installed command shims.
 - `--fix-gitignore` — deprecated escape hatch; prefer `csk init`.
 - `--strict-tags` — fail if a tag was locally moved to another commit.
 

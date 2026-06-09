@@ -233,7 +233,24 @@ files, project context, or shims for that skill.
 Project bootstrap tooling owns system dependencies. In partners-ios this means
 Mise, Make, or a project bootstrap script, not the skill manager.
 
-## 7. Prompt Context Contract
+## 7. Localization Contract
+
+Localization is optional. If the skill ships no `locales/metadata.json` and no
+`.skill_triggers/` directory, installs are unaffected regardless of the
+project's `locale` setting.
+
+Once the skill ships either of them, installs with a configured `locale`
+require both:
+
+- `locales/metadata.json` with a `locales.<locale>` object (its `description`
+  replaces the `SKILL.md` frontmatter description);
+- `.skill_triggers/<locale>.md` with the trigger catalog for that locale.
+
+If either file is missing for the requested locale, installation of the skill
+fails. Ship a catalog and metadata entry for every locale you intend to
+support.
+
+## 8. Prompt Context Contract
 
 Agent-facing files should be placed in prompt context roots:
 
@@ -265,7 +282,7 @@ Do not assume these are copied into prompt context:
 If the agent needs operational information, put it in `SKILL.md` or
 `references/`, not in `README.md`.
 
-## 8. Recommended Internal Skill Manifests
+## 9. Recommended Internal Skill Manifests
 
 ### skill-youtrack
 
@@ -330,7 +347,7 @@ If the agent needs operational information, put it in `SKILL.md` or
 }
 ```
 
-## 9. Global and Project Installation
+## 10. Global and Project Installation
 
 Skill authors do not need a separate manifest for global use. The same
 `SKILL.md` and `csk-skill.json` are valid when the skill is installed:
@@ -353,7 +370,7 @@ checkout.
 Do not make a skill depend on being global. Project `Skillfile.json`
 declarations remain the source of truth for project behavior.
 
-## 10. Release Checklist
+## 11. Release Checklist
 
 Before tagging a skill release:
 
@@ -369,7 +386,7 @@ Before tagging a skill release:
 8. Update consuming project `Skillfile.json` to the new tag.
 9. Run `csk install` and `csk status`.
 
-## 11. Migration Notes
+## 12. Migration Notes
 
 For existing skills with `agents/runtime.json`:
 
