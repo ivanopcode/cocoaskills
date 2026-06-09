@@ -21,3 +21,29 @@ def test_branch_without_remote_is_supported(skills_root):
     commit = git_ops.resolve_ref(repo, "branch", "local-only").commit
     assert len(commit) == 40
 
+
+
+def test_clone_repo_rejects_option_like_url(tmp_path):
+    import pytest
+
+    with pytest.raises(git_ops.GitError, match="suspicious"):
+        git_ops.clone_repo("--upload-pack=touch pwned", tmp_path / "dst")
+    with pytest.raises(git_ops.GitError, match="suspicious"):
+        git_ops.clone_repo("  ", tmp_path / "dst")
+    assert not (tmp_path / "dst").exists()
+
+
+def test_clone_repo_blocks_ext_transport(tmp_path):
+    import pytest
+
+    marker = tmp_path / "pwned"
+    with pytest.raises(git_ops.GitError, match="clone failed"):
+        git_ops.clone_repo(f"ext::sh -c 'touch {marker}'", tmp_path / "dst")
+    assert not marker.exists()
+
+
+def test_clone_repo_clones_local_repo(skills_root, tmp_path):
+    repo, _ = make_skill_repo(skills_root, "skill-a", tag="v1")
+    destination = tmp_path / "cloned"
+    git_ops.clone_repo(str(repo), destination)
+    assert (destination / ".git").exists()

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import shutil
 import tarfile
 from io import BytesIO
 from dataclasses import dataclass
 from pathlib import Path
+
+
+# Skillfile 'git' URLs reach git clone as untrusted input. Restricting the
+# transport protocols blocks remote-helper URLs such as ext::sh -c ... which
+# would otherwise execute arbitrary commands during csk install.
+ALLOWED_GIT_PROTOCOLS = "file:git:http:https:ssh"
 
 
 class GitError(Exception):
@@ -31,11 +38,15 @@ def git(repo: Path, args: list[str], *, check: bool = True) -> subprocess.Comple
 def clone_repo(remote_url: str, destination: Path) -> None:
     if destination.exists():
         raise GitError(f"Clone destination already exists: {destination}")
+    if not remote_url.strip() or remote_url.startswith("-"):
+        raise GitError(f"Refusing to clone suspicious git URL: {remote_url!r}")
     destination.parent.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "GIT_ALLOW_PROTOCOL": ALLOWED_GIT_PROTOCOLS}
     proc = subprocess.run(
-        ["git", "clone", remote_url, str(destination)],
+        ["git", "clone", "--", remote_url, str(destination)],
         text=True,
         capture_output=True,
+        env=env,
     )
     if proc.returncode != 0:
         if destination.exists():
