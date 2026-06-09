@@ -665,3 +665,64 @@ def test_cli_lock_contention_returns_lock_exit(tmp_path, csk_home, skills_root):
 
     assert proc.returncode == cli.EXIT_LOCK
     assert "another csk process holds lock" in proc.stderr
+
+
+def _register_project(monkeypatch, csk_home, skills_root, project):
+    cfg_path = csk_home / "config.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "projects": {"app": {"path": str(project), "agents": ["codex_cli"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+    return cfg_path
+
+
+def test_cli_install_explicit_target_fails_when_skipped(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    project = make_project(tmp_path)  # no Skillfile
+    _register_project(monkeypatch, csk_home, skills_root, project)
+
+    code = cli.main(["install", "app"])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "skipped; nothing installed" in captured.err
+
+
+def test_cli_status_check_exit_codes(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    project = make_project(tmp_path)
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    _register_project(monkeypatch, csk_home, skills_root, project)
+
+    assert cli.main(["status", "app", "--check"]) == 1  # not installed yet
+    capsys.readouterr()
+    assert cli.main(["install", "app"]) == 0
+    capsys.readouterr()
+    assert cli.main(["status", "app", "--check"]) == 0
+    capsys.readouterr()
+
+
+def test_cli_update_reports_missing_git_actionably(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    from csk import git_ops
+
+    project = make_project(tmp_path)
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    write_skillfile(project, {"schema_version": 1, "skills": []})
+    _register_project(monkeypatch, csk_home, skills_root, project)
+
+    def boom(cmd, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(git_ops.subprocess, "run", boom)
+
+    code = cli.main(["update"])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "install git" in captured.err

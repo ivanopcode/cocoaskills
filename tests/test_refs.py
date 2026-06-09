@@ -47,3 +47,14 @@ def test_clone_repo_clones_local_repo(skills_root, tmp_path):
     destination = tmp_path / "cloned"
     git_ops.clone_repo(str(repo), destination)
     assert (destination / ".git").exists()
+
+
+def test_missing_git_yields_actionable_error(monkeypatch, tmp_path):
+    import pytest
+
+    def boom(cmd, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(git_ops.subprocess, "run", boom)
+    with pytest.raises(git_ops.GitError, match="install git"):
+        git_ops.clone_repo("https://example.com/x.git", tmp_path / "dst")

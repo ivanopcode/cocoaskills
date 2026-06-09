@@ -18,12 +18,58 @@ class SkillStatus:
     label: str
 
 
+@dataclass(frozen=True)
+class ProjectStatus:
+    alias: str
+    path: Path
+    skillfile_present: bool
+    skills: list[SkillStatus]
+
+    @property
+    def clean(self) -> bool:
+        return self.skillfile_present and all(skill.label == "up-to-date" for skill in self.skills)
+
+
+def collect_status(config: GlobalConfig, *, alias: str | None = None) -> list[ProjectStatus]:
+    statuses: list[ProjectStatus] = []
+    for project in _selected_projects(config, alias):
+        project_manifest = manifest.load_manifest(project.path)
+        if project_manifest is None:
+            statuses.append(ProjectStatus(project.alias, project.path, False, []))
+            continue
+        skills = [_skill_status(config, project.path, decl) for decl in project_manifest.skills]
+        statuses.append(ProjectStatus(project.alias, project.path, True, skills))
+    return statuses
+
+
 def render_status(config: GlobalConfig, *, alias: str | None = None) -> str:
-    projects = _selected_projects(config, alias)
+    return render_collected(collect_status(config, alias=alias))
+
+
+def render_collected(statuses: list[ProjectStatus]) -> str:
     blocks: list[str] = []
-    for project in projects:
-        blocks.append(_render_project(config, project))
+    for project in statuses:
+        blocks.append(_render_project_status(project))
     return "\n".join(blocks)
+
+
+def _render_project_status(project: ProjectStatus) -> str:
+    lines = [f"Project {project.alias} ({project.path})"]
+    if not project.skillfile_present:
+        lines.append("  Skillfile.json missing")
+        return "\n".join(lines)
+    if not project.skills:
+        lines.append("  no skills declared")
+        return "\n".join(lines)
+    for status in project.skills:
+        commit = (status.installed_commit or "")[:7]
+        suffix = ""
+        if status.label == "update-available" and status.resolved_commit:
+            suffix = f" -> {status.resolved_commit[:7]}"
+        lines.append(
+            f"  {status.name:<20} {status.ref_kind:<8} {status.ref:<12} {commit:<7}  {status.label}{suffix}"
+        )
+    return "\n".join(lines)
 
 
 def _selected_projects(config: GlobalConfig, alias: str | None) -> list[ProjectConfig]:
@@ -34,26 +80,6 @@ def _selected_projects(config: GlobalConfig, alias: str | None) -> list[ProjectC
         raise ValueError(f"Unknown project alias: {alias}")
     return [project]
 
-
-def _render_project(config: GlobalConfig, project: ProjectConfig) -> str:
-    lines = [f"Project {project.alias} ({project.path})"]
-    project_manifest = manifest.load_manifest(project.path)
-    if project_manifest is None:
-        lines.append("  Skillfile.json missing")
-        return "\n".join(lines)
-    if not project_manifest.skills:
-        lines.append("  no skills declared")
-        return "\n".join(lines)
-    for decl in project_manifest.skills:
-        status = _skill_status(config, project.path, decl)
-        commit = (status.installed_commit or "")[:7]
-        suffix = ""
-        if status.label == "update-available" and status.resolved_commit:
-            suffix = f" -> {status.resolved_commit[:7]}"
-        lines.append(
-            f"  {status.name:<20} {status.ref_kind:<8} {status.ref:<12} {commit:<7}  {status.label}{suffix}"
-        )
-    return "\n".join(lines)
 
 
 def _skill_status(config: GlobalConfig, project_root: Path, decl: manifest.SkillDecl) -> SkillStatus:

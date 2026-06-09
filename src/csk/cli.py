@@ -36,6 +36,7 @@ def main(argv: list[str] | None = None) -> int:
         project_resolver.ProjectResolutionError,
         global_install.GlobalInstallError,
         installer.InstallError,
+        git_ops.GitError,
         ValueError,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -98,6 +99,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status_parser.add_argument("target", nargs="?", help="project alias, '.', or project path")
     status_parser.add_argument("--all", action="store_true", help="show all registered projects")
+    status_parser.add_argument(
+        "--check",
+        action="store_true",
+        help="exit non-zero unless every skill is up-to-date",
+    )
     list_parser = sub.add_parser(
         "list",
         help="List configured projects and declared skills.",
@@ -290,7 +296,10 @@ def _dispatch(args: argparse.Namespace) -> int:
         return EXIT_OK
     if args.command == "status":
         cfg, alias = _cfg_and_alias_for_target(cfg, args)
-        print(status.render_status(cfg, alias=alias))
+        statuses = status.collect_status(cfg, alias=alias)
+        print(status.render_collected(statuses))
+        if args.check and not all(project.clean for project in statuses):
+            return EXIT_PARTIAL_FAIL
         return EXIT_OK
 
     if args.command in {"install", "update", "upgrade"}:
@@ -481,6 +490,11 @@ def _cmd_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
         for error in result.errors:
             failed = True
             print(f"{result.alias}: {error}", file=sys.stderr)
+        if args.alias is not None and result.status == "skipped":
+            # An explicitly requested project that was refused must not look
+            # like a successful install to scripts and CI.
+            failed = True
+            print(f"{result.alias}: skipped; nothing installed", file=sys.stderr)
     return EXIT_PARTIAL_FAIL if failed else EXIT_OK
 
 

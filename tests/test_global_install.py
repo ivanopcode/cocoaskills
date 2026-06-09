@@ -313,6 +313,7 @@ def test_global_upgrade_fetches_remote_branch_then_installs(monkeypatch, tmp_pat
 
 def test_runtime_gc_keeps_global_only_runtime(monkeypatch, tmp_path, skills_root, csk_home):
     project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": []})
     cfg = make_config(csk_home, skills_root, project)
     _save_config(monkeypatch, cfg)
     _, commit = make_skill_repo(

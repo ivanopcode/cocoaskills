@@ -19,6 +19,13 @@ class GitError(Exception):
     pass
 
 
+def _run(cmd: list[str], **kwargs):
+    try:
+        return subprocess.run(cmd, **kwargs)
+    except FileNotFoundError as exc:
+        raise GitError("git executable not found; install git and ensure it is on PATH") from exc
+
+
 @dataclass(frozen=True)
 class ResolvedRef:
     kind: str
@@ -28,7 +35,7 @@ class ResolvedRef:
 
 def git(repo: Path, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     cmd = ["git", "-C", str(repo), *args]
-    proc = subprocess.run(cmd, text=True, capture_output=True)
+    proc = _run(cmd, text=True, capture_output=True)
     if check and proc.returncode != 0:
         stderr = proc.stderr.strip() or proc.stdout.strip()
         raise GitError(f"git {' '.join(args)} failed in {repo}: {stderr}")
@@ -42,7 +49,7 @@ def clone_repo(remote_url: str, destination: Path) -> None:
         raise GitError(f"Refusing to clone suspicious git URL: {remote_url!r}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "GIT_ALLOW_PROTOCOL": ALLOWED_GIT_PROTOCOLS}
-    proc = subprocess.run(
+    proc = _run(
         ["git", "clone", "--", remote_url, str(destination)],
         text=True,
         capture_output=True,
@@ -80,7 +87,7 @@ def resolve_ref(repo: Path, kind: str, value: str) -> ResolvedRef:
 def archive(repo: Path, commit: str, destination: Path) -> None:
     ensure_git_repo(repo)
     destination.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(
+    proc = _run(
         ["git", "-C", str(repo), "archive", "--format=tar", commit],
         capture_output=True,
     )
