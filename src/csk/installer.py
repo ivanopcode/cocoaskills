@@ -104,7 +104,7 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
             installed_names: list[str] = []
             expected_commands: set[str] = set()
             for plan in plans:
-                command_names = _install_runtime_commands(config.path.parent, project.path, plan)
+                command_names = install_runtime_commands(config.path.parent, project.path / ".agents" / "bin", plan)
                 expected_commands.update(command_names)
                 installed = _install_skill_context(project.path, plan, effective_locale, agents)
                 installed_names.append(plan.decl.name)
@@ -230,7 +230,7 @@ def _moved_tag_warnings(project_root: Path, plans: list[SkillPlan]) -> list[str]
     return warnings
 
 
-def _install_runtime_commands(csk_home: Path, project_root: Path, plan: SkillPlan) -> set[str]:
+def install_runtime_commands(csk_home: Path, bin_dir: Path, plan: SkillPlan) -> set[str]:
     commands: set[str] = set()
     if plan.spec.runtime_roots:
         shims.install_runtime_roots(
@@ -258,7 +258,7 @@ def _install_runtime_commands(csk_home: Path, project_root: Path, plan: SkillPla
                 snapshot=plan.snapshot,
                 command=command,
             )
-        shims.write_project_shim(project_root, command.name, runtime_path)
+        shims.write_bin_shim(bin_dir, command.name, runtime_path)
         commands.add(command.name)
     return commands
 

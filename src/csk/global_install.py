@@ -154,7 +154,7 @@ def install(config: GlobalConfig, *, options: installer.InstallOptions | None = 
             installed_names: list[str] = []
             expected_commands: set[str] = set()
             for plan in plans:
-                command_names = _install_runtime_commands(csk_home, plan)
+                command_names = installer.install_runtime_commands(csk_home, csk_home / "global" / "bin", plan)
                 expected_commands.update(command_names)
                 installed = installer._install_skill_context_to_root(
                     global_skills_root(csk_home),
@@ -227,38 +227,6 @@ def render_status(config: GlobalConfig) -> str:
         )
     return "\n".join(lines)
 
-
-def _install_runtime_commands(csk_home: Path, plan: installer.SkillPlan) -> set[str]:
-    commands: set[str] = set()
-    if plan.spec.runtime_roots:
-        shims.install_runtime_roots(
-            csk_home=csk_home,
-            skill_name=plan.decl.name,
-            commit=plan.resolved.commit,
-            snapshot=plan.snapshot,
-            runtime_roots=plan.spec.runtime_roots,
-        )
-    for command in plan.spec.commands.values():
-        if command.type != "script":
-            continue
-        if plan.spec.runtime_roots:
-            runtime_path = shims.runtime_root_command_path(
-                csk_home=csk_home,
-                skill_name=plan.decl.name,
-                commit=plan.resolved.commit,
-                command=command,
-            )
-        else:
-            runtime_path = shims.install_runtime_command(
-                csk_home=csk_home,
-                skill_name=plan.decl.name,
-                commit=plan.resolved.commit,
-                snapshot=plan.snapshot,
-                command=command,
-            )
-        shims.write_global_shim(csk_home, command.name, runtime_path)
-        commands.add(command.name)
-    return commands
 
 
 def _build_plans(
