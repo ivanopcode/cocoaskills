@@ -27,6 +27,8 @@ class GlobalLock:
                 self.acquired = True
                 return self
             except FileExistsError as exc:
+                if self._break_stale_lock():
+                    continue
                 if time.monotonic() - start >= self.timeout:
                     raise LockError(_timeout_message(self.path)) from exc
                 time.sleep(0.1)
@@ -37,6 +39,72 @@ class GlobalLock:
                 self.path.unlink()
             except FileNotFoundError:
                 pass
+
+    def _break_stale_lock(self) -> bool:
+        """Remove the lock if its holder is provably dead.
+
+        The break is done by renaming the lock to a unique name first: rename
+        is atomic, so when several waiters race only one wins, and re-reading
+        after the rename guards against stealing a lock that a new live
+        process created in between.
+        """
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        pid = data.get("pid")
+        if not isinstance(pid, int) or isinstance(pid, bool) or _pid_alive(pid):
+            return False
+        stale = self.path.with_name(f".lock.stale-{os.getpid()}")
+        try:
+            self.path.rename(stale)
+        except OSError:
+            return False
+        try:
+            current = json.loads(stale.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            current = None
+        if current != data:
+            try:
+                stale.rename(self.path)
+            except OSError:
+                pass
+            return False
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+        return True
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return exit_code.value == STILL_ACTIVE
+            return True
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
 
 
 def _timeout_message(path: Path) -> str:
