@@ -185,19 +185,26 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_bootstrap(sub) -> None:
-    sub.add_parser(
+    parser = sub.add_parser(
         "bootstrap",
-        help="Interactively create global config.",
+        help="Create global config (interactive, or scripted with flags).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
-            "Interactively asks for machine-level settings: skills_root, preferred_locale, "
-            "default_agents, and shell hook instructions."
+            "Asks for machine-level settings: skills_root, preferred_locale, "
+            "default_agents, and shell hook instructions. Flags override the prompts; "
+            "--non-interactive disables prompting entirely."
         ),
         epilog=(
             "Files written:\n  ~/.cocoaskills/config.json.\n\n"
-            "Example:\n  csk bootstrap"
+            "Examples:\n  csk bootstrap\n"
+            "  csk bootstrap --non-interactive --skills-root ~/skills --default-agents codex_cli,claude_code"
         ),
     )
+    parser.add_argument("--skills-root", help="directory containing skill git repositories")
+    parser.add_argument("--preferred-locale", help="preferred install locale, e.g. ru")
+    parser.add_argument("--default-agents", help="comma-separated agent ids, e.g. codex_cli,claude_code")
+    parser.add_argument("--non-interactive", action="store_true", help="never prompt; fail instead")
+    parser.add_argument("--force", action="store_true", help="overwrite an existing config without asking")
 
 
 def _add_init(sub) -> None:
@@ -284,17 +291,17 @@ def _add_global(sub) -> None:
     install = global_sub.add_parser("install", help="install global skills")
     install.add_argument("--dry-run", action="store_true", help="validate without modifying files")
     install.add_argument("--verbose", action="store_true", help="print detailed progress")
-    install.add_argument("--strict-tags", action="store_true", help="accepted for symmetry; currently unused")
+    install.add_argument("--strict-tags", action="store_true", help="fail if a tag was locally moved to another commit")
     global_sub.add_parser("update", help="fetch global skill source repositories")
     upgrade = global_sub.add_parser("upgrade", help="fetch global skill sources, then install")
     upgrade.add_argument("--dry-run", action="store_true", help="validate install without modifying installed files")
     upgrade.add_argument("--verbose", action="store_true", help="print detailed progress")
-    upgrade.add_argument("--strict-tags", action="store_true", help="accepted for symmetry; currently unused")
+    upgrade.add_argument("--strict-tags", action="store_true", help="fail if a tag was locally moved to another commit")
 
 
 def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "bootstrap":
-        return _cmd_bootstrap()
+        return _cmd_bootstrap(args)
     if args.command == "init":
         return _cmd_init(args)
     if args.command == "config" and args.config_command == "show":
@@ -356,7 +363,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     if args.command in {"install", "update", "upgrade"}:
-        config.validate_skills_root_for_work(cfg)
+        if not getattr(args, "dry_run", False):
+            config.validate_skills_root_for_work(cfg)
         with GlobalLock(cfg.path.parent):
             if args.command == "update":
                 return _cmd_update(cfg)
@@ -434,17 +442,32 @@ def _global_ref_from_args(args: argparse.Namespace) -> tuple[str, str]:
     raise ValueError("global add requires one of --tag, --branch, or --revision")
 
 
-def _cmd_bootstrap() -> int:
+def _cmd_bootstrap(args: argparse.Namespace) -> int:
     path = config.config_path()
+    non_interactive = getattr(args, "non_interactive", False)
     if path.exists():
-        answer = input(f"Config exists at {path}. Overwrite? [y/N] ").strip().lower()
-        if answer != "y":
-            print(f"Kept existing config: {path}")
-            return EXIT_OK
-    skills_root = input("skills_root: ").strip()
-    preferred_locale = input("preferred_locale [none]: ").strip() or None
-    default_agents_raw = input("default_agents comma-separated [codex_cli]: ").strip()
-    default_agents = [item.strip() for item in default_agents_raw.split(",") if item.strip()] or ["codex_cli"]
+        if non_interactive:
+            if not getattr(args, "force", False):
+                print(f"error: config exists at {path}; pass --force to overwrite", file=sys.stderr)
+                return EXIT_CONFIG
+        elif not getattr(args, "force", False):
+            answer = input(f"Config exists at {path}. Overwrite? [y/N] ").strip().lower()
+            if answer != "y":
+                print(f"Kept existing config: {path}")
+                return EXIT_OK
+    skills_root = (getattr(args, "skills_root", None) or "").strip()
+    if not skills_root and not non_interactive:
+        skills_root = input("skills_root: ").strip()
+    if not skills_root:
+        print("error: skills_root must not be empty", file=sys.stderr)
+        return EXIT_CONFIG
+    preferred_locale = getattr(args, "preferred_locale", None)
+    if preferred_locale is None and not non_interactive:
+        preferred_locale = input("preferred_locale [none]: ").strip() or None
+    default_agents_raw = getattr(args, "default_agents", None)
+    if default_agents_raw is None and not non_interactive:
+        default_agents_raw = input("default_agents comma-separated [codex_cli]: ").strip()
+    default_agents = [item.strip() for item in (default_agents_raw or "").split(",") if item.strip()] or ["codex_cli"]
     cfg = config.GlobalConfig(
         path=path,
         skills_root=Path(skills_root).expanduser(),

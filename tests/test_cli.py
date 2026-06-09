@@ -791,3 +791,63 @@ def test_cli_add_via_project_alias(monkeypatch, tmp_path, csk_home, skills_root,
     assert cli.main(["add", "skill-a", "--tag", "v1", "--project", "app"]) == 0
     data = json.loads((project / "Skillfile.json").read_text(encoding="utf-8"))
     assert data["skills"][0]["name"] == "skill-a"
+
+
+def test_cli_bootstrap_non_interactive(monkeypatch, tmp_path, capsys):
+    cfg_path = tmp_path / "cfg" / "config.json"
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+
+    assert cli.main([
+        "bootstrap", "--non-interactive",
+        "--skills-root", str(tmp_path / "skills"),
+        "--default-agents", "codex_cli,claude_code",
+    ]) == 0
+    loaded = config.load_config(cfg_path)
+    assert loaded.default_agents == ["codex_cli", "claude_code"]
+    capsys.readouterr()
+
+    # Existing config without --force is an error in non-interactive mode.
+    assert cli.main(["bootstrap", "--non-interactive", "--skills-root", str(tmp_path / "skills")]) == 2
+    assert "--force" in capsys.readouterr().err
+
+    # Empty skills_root is rejected.
+    monkeypatch.setenv("CSK_CONFIG", str(tmp_path / "cfg2" / "config.json"))
+    assert cli.main(["bootstrap", "--non-interactive"]) == 2
+    assert "skills_root" in capsys.readouterr().err
+
+
+def test_cli_install_dry_run_does_not_create_skills_root(monkeypatch, tmp_path, csk_home, capsys):
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": []})
+    missing_root = tmp_path / "missing-skills-root"
+    _register_project(monkeypatch, csk_home, missing_root, project)
+
+    assert cli.main(["install", "app", "--dry-run"]) == 0
+    assert not missing_root.exists()
+
+
+def test_cli_status_error_label_includes_reason(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-gone", "tag": "v1"}]})
+    _register_project(monkeypatch, csk_home, skills_root, project)
+
+    assert cli.main(["status", "app"]) == 0
+    out = capsys.readouterr().out
+    assert "error" in out
+    assert "Not a git repository" in out
+
+    assert cli.main(["status", "app", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload[0]["skills"][0]["label"] == "error"
+    assert "Not a git repository" in payload[0]["skills"][0]["detail"]
+
+
+def test_unknown_agent_names_warn(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "agents": ["codex", "codex_cli"], "skills": []})
+    _register_project(monkeypatch, csk_home, skills_root, project)
+
+    assert cli.main(["install", "app"]) == 0
+    err = capsys.readouterr().err
+    assert "unknown agent(s) ignored: codex" in err
+    assert "codex_cli" in err  # known list mentioned

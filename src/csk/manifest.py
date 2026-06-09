@@ -155,9 +155,13 @@ def parse_manifest(data: dict[str, Any], path: Path) -> ProjectManifest:
     if not isinstance(data, dict):
         raise ManifestError(f"{path} must contain a JSON object")
     schema = data.get("schema_version")
+    if schema is None:
+        raise ManifestError(f"{path} is missing required field 'schema_version'")
+    if not isinstance(schema, int) or isinstance(schema, bool):
+        raise ManifestError(f"{path} field 'schema_version' must be an integer, got {schema!r}")
     if schema != SCHEMA_VERSION:
         raise ManifestError(
-            f"Unsupported Skillfile schema_version {schema!r}; this Skillfile requires a newer csk"
+            f"Unsupported Skillfile schema_version {schema}; this Skillfile requires a newer csk"
         )
 
     project_alias = _parse_project_alias(data, path)

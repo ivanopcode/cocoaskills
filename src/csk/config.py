@@ -61,9 +61,13 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
     if not isinstance(data, dict):
         raise ConfigError("Global config must be a JSON object")
     schema = data.get("schema_version")
+    if schema is None:
+        raise ConfigError("Global config is missing required field 'schema_version'")
+    if not isinstance(schema, int) or isinstance(schema, bool):
+        raise ConfigError(f"Global config field 'schema_version' must be an integer, got {schema!r}")
     if schema != SCHEMA_VERSION:
         raise ConfigError(
-            f"Unsupported config schema_version {schema!r}; this config requires a newer csk"
+            f"Unsupported config schema_version {schema}; this config requires a newer csk"
         )
 
     skills_root_raw = data.get("skills_root")

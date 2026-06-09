@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import shutil
+import sys
 from pathlib import Path
 
 
@@ -35,7 +36,20 @@ def all_gitignore_entries() -> list[str]:
     return required_gitignore_entries(sorted(AGENT_PATHS))
 
 
+def warn_unknown_agents(agents: list[str]) -> None:
+    unknown = sorted({agent for agent in agents if agent not in AGENT_PATHS})
+    if unknown:
+        print(
+            "warning: unknown agent(s) ignored: "
+            + ", ".join(unknown)
+            + "; known agents: "
+            + ", ".join(sorted(AGENT_PATHS)),
+            file=sys.stderr,
+        )
+
+
 def refresh_adapters(project_root: Path, agents: list[str], skill_names: list[str], mode: str) -> None:
+    warn_unknown_agents(agents)
     canonical_root = project_root / ".agents" / "skills"
     adapter_roots = {
         agent: project_root / rel

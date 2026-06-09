@@ -16,6 +16,7 @@ class SkillStatus:
     installed_commit: str | None
     resolved_commit: str | None
     label: str
+    detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ def statuses_to_payload(statuses: list[ProjectStatus]) -> list[dict]:
                         "installed_commit": skill.installed_commit,
                         "resolved_commit": skill.resolved_commit,
                         "label": skill.label,
+                        "detail": skill.detail,
                     }
                     for skill in project.skills
                 ],
@@ -91,6 +93,8 @@ def _render_project_status(project: ProjectStatus) -> str:
         suffix = ""
         if status.label == "update-available" and status.resolved_commit:
             suffix = f" -> {status.resolved_commit[:7]}"
+        if status.label == "error" and status.detail:
+            suffix = f" ({status.detail})"
         lines.append(
             f"  {status.name:<20} {status.ref_kind:<8} {status.ref:<12} {commit:<7}  {status.label}{suffix}"
         )
@@ -112,24 +116,30 @@ def _skill_status(config: GlobalConfig, project_root: Path, decl: manifest.Skill
     try:
         resolved = git_ops.resolve_ref(config.skills_root / decl.source, decl.ref.kind, decl.ref.value)
         resolved_commit = resolved.commit
-    except Exception:
-        return SkillStatus(decl.name, decl.ref.kind, decl.ref.value, None, None, "error")
+    except Exception as exc:
+        return SkillStatus(decl.name, decl.ref.kind, decl.ref.value, None, None, "error", detail=str(exc))
 
     marker_path = project_root / ".agents" / "skills" / decl.name / ".csk-install.json"
     if not marker_path.exists():
         return SkillStatus(decl.name, decl.ref.kind, decl.ref.value, None, resolved_commit, "missing")
     try:
         marker = json.loads(marker_path.read_text(encoding="utf-8"))
-    except Exception:
-        return SkillStatus(decl.name, decl.ref.kind, decl.ref.value, None, resolved_commit, "error")
+    except Exception as exc:
+        return SkillStatus(
+            decl.name, decl.ref.kind, decl.ref.value, None, resolved_commit, "error",
+            detail=f"unreadable install marker {marker_path}: {exc}",
+        )
     installed_commit = marker.get("commit") if isinstance(marker.get("commit"), str) else None
     if installed_commit != resolved_commit:
         return SkillStatus(decl.name, decl.ref.kind, decl.ref.value, installed_commit, resolved_commit, "update-available")
     installed_dir = marker_path.parent
     try:
         actual_hash = hashing.content_sha256(installed_dir)
-    except Exception:
-        return SkillStatus(decl.name, decl.ref.kind, decl.ref.value, installed_commit, resolved_commit, "error")
+    except Exception as exc:
+        return SkillStatus(
+            decl.name, decl.ref.kind, decl.ref.value, installed_commit, resolved_commit, "error",
+            detail=f"could not hash {installed_dir}: {exc}",
+        )
     if marker.get("content_sha256") != actual_hash:
         return SkillStatus(decl.name, decl.ref.kind, decl.ref.value, installed_commit, resolved_commit, "content-drift")
     return SkillStatus(decl.name, decl.ref.kind, decl.ref.value, installed_commit, resolved_commit, "up-to-date")

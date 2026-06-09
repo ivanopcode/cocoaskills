@@ -85,3 +85,16 @@ def test_manifest_accepts_typical_identifiers(tmp_path):
     )
     assert [skill.name for skill in parsed.skills] == ["skill-bi", "skill_x.v2", "skill-grafana"]
     assert parsed.skills[2].source == "internal/skill-grafana"
+
+
+@pytest.mark.parametrize(
+    ("payload", "fragment"),
+    [
+        ({"skills": []}, "missing required field 'schema_version'"),
+        ({"schema_version": "1", "skills": []}, "must be an integer"),
+        ({"schema_version": 99, "skills": []}, "requires a newer csk"),
+    ],
+)
+def test_manifest_schema_version_errors_are_specific(tmp_path, payload, fragment):
+    with pytest.raises(manifest.ManifestError, match=fragment):
+        manifest.parse_manifest(payload, tmp_path / "Skillfile.json")
