@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .identifiers import IDENTIFIER_RULE, is_valid_identifier
+
 
 SCHEMA_VERSION = 1
 SUPPORTED_SCHEMA_VERSIONS = {1, 2}
@@ -73,6 +75,8 @@ def _load_csk_skill(path: Path) -> SkillSpec:
     for name, raw in commands_raw.items():
         if not isinstance(name, str) or not name:
             raise SkillSpecError("Command names must be non-empty strings")
+        if not is_valid_identifier(name):
+            raise SkillSpecError(f"Command name {name!r} {IDENTIFIER_RULE}")
         if not isinstance(raw, dict):
             raise SkillSpecError(f"Command {name!r} must be an object")
         command_type = raw.get("type")
@@ -144,6 +148,8 @@ def _load_runtime_fallback(path: Path) -> SkillSpec:
     for name, rel_path in commands_raw.items():
         if not isinstance(name, str) or not name:
             raise SkillSpecError("Runtime command names must be non-empty strings")
+        if not is_valid_identifier(name):
+            raise SkillSpecError(f"Runtime command name {name!r} {IDENTIFIER_RULE}")
         if not isinstance(rel_path, str) or not rel_path:
             raise SkillSpecError(f"Runtime command {name!r} path must be a non-empty string")
         _validate_relative_path(rel_path, field=f"commands.{name}")

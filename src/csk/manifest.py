@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .identifiers import IDENTIFIER_RULE, is_valid_identifier
+
 
 SCHEMA_VERSION = 1
 MANIFEST_NAME = "Skillfile.json"
@@ -117,6 +119,8 @@ def parse_manifest(data: dict[str, Any], path: Path) -> ProjectManifest:
         name = raw.get("name")
         if not isinstance(name, str) or not name:
             raise ManifestError(f"Skill declaration at index {index} requires non-empty string 'name'")
+        if not is_valid_identifier(name):
+            raise ManifestError(f"Skill name {name!r} {IDENTIFIER_RULE}")
         if name in seen_names:
             raise ManifestError(f"Duplicate skill name in Skillfile: {name}")
         seen_names.add(name)
@@ -124,6 +128,8 @@ def parse_manifest(data: dict[str, Any], path: Path) -> ProjectManifest:
         source = raw.get("source", name)
         if not isinstance(source, str) or not source:
             raise ManifestError(f"Skill {name!r} field 'source' must be a non-empty string")
+        if not is_valid_identifier(source):
+            raise ManifestError(f"Skill {name!r} field 'source' {IDENTIFIER_RULE}")
 
         git_url = raw.get("git")
         if git_url is not None and (not isinstance(git_url, str) or not git_url):

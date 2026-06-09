@@ -152,3 +152,37 @@ def test_csk_skill_schema_must_be_integer(tmp_path):
     )
     with pytest.raises(skillspec.SkillSpecError, match="schema_version"):
         skillspec.load_skill_spec(tmp_path)
+
+
+@pytest.mark.parametrize("name", ["../evil", "a/b", "a\\b", "-flag", ".hidden"])
+def test_csk_skill_rejects_unsafe_command_names(tmp_path, name):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps({"schema_version": 1, "commands": {name: {"type": "script", "unix_path": "scripts/tool"}}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(skillspec.SkillSpecError, match="Command name"):
+        skillspec.load_skill_spec(tmp_path)
+
+
+@pytest.mark.parametrize("name", ["../evil", "a/b", "-flag"])
+def test_runtime_fallback_rejects_unsafe_command_names(tmp_path, name):
+    (tmp_path / "agents").mkdir()
+    (tmp_path / "agents" / "runtime.json").write_text(
+        json.dumps({"commands": {name: "scripts/tool"}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(skillspec.SkillSpecError, match="command name"):
+        skillspec.load_skill_spec(tmp_path)
+
+
+def test_command_name_with_cmd_suffix_is_allowed(tmp_path):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "tool.cmd").write_text("@echo off\n", encoding="utf-8")
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps({"schema_version": 1, "commands": {"tool.cmd": {"type": "script", "win_path": "scripts/tool.cmd"}}}),
+        encoding="utf-8",
+    )
+    spec = skillspec.load_skill_spec(tmp_path)
+    assert "tool.cmd" in spec.commands

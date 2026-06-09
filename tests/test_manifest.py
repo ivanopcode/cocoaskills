@@ -51,3 +51,35 @@ def test_manifest_rejects_empty_git_url(tmp_path):
             {"schema_version": 1, "skills": [{"name": "bad", "git": "", "tag": "v1"}]},
             tmp_path / "Skillfile.json",
         )
+
+
+@pytest.mark.parametrize("name", ["../escape", "a/b", "a\\b", "-flag", ".hidden", ".."])
+def test_manifest_rejects_unsafe_skill_names(tmp_path, name):
+    with pytest.raises(manifest.ManifestError, match="name"):
+        manifest.parse_manifest(
+            {"schema_version": 1, "skills": [{"name": name, "tag": "v1"}]},
+            tmp_path / "Skillfile.json",
+        )
+
+
+@pytest.mark.parametrize("source", ["../other", "a/b", "-flag"])
+def test_manifest_rejects_unsafe_source(tmp_path, source):
+    with pytest.raises(manifest.ManifestError, match="source"):
+        manifest.parse_manifest(
+            {"schema_version": 1, "skills": [{"name": "ok", "source": source, "tag": "v1"}]},
+            tmp_path / "Skillfile.json",
+        )
+
+
+def test_manifest_accepts_typical_identifiers(tmp_path):
+    parsed = manifest.parse_manifest(
+        {
+            "schema_version": 1,
+            "skills": [
+                {"name": "skill-bi", "tag": "v1"},
+                {"name": "skill_x.v2", "source": "repo.v2", "tag": "v1"},
+            ],
+        },
+        tmp_path / "Skillfile.json",
+    )
+    assert [skill.name for skill in parsed.skills] == ["skill-bi", "skill_x.v2"]
