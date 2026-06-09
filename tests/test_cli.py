@@ -649,7 +649,8 @@ def test_cli_lock_contention_returns_lock_exit(tmp_path, csk_home, skills_root):
         encoding="utf-8",
     )
     lock_path = csk_home / ".lock"
-    lock_path.write_text(json.dumps({"pid": 12345, "created_at": time.time()}), encoding="utf-8")
+    # The holder must be alive, otherwise the stale-lock breaker removes it.
+    lock_path.write_text(json.dumps({"pid": os.getpid(), "created_at": time.time()}), encoding="utf-8")
     env = os.environ.copy()
     env["CSK_CONFIG"] = str(cfg_path)
     env["CSK_LOCK_TIMEOUT"] = "0.1"
