@@ -10,7 +10,7 @@ packages from local git repositories into your project repositories with
 reproducible, content-hashed installs and multi-agent adapter support
 (Claude Code, Codex CLI, Cursor, Gemini).
 
-The MVP design contract is frozen in [docs/mvp-design.md](docs/mvp-design.md).
+The original MVP design lives in [docs/mvp-design.md](docs/mvp-design.md); later RFCs supersede parts of it.
 
 ## Why
 
@@ -194,7 +194,7 @@ install system tools.
 
 | Command | Behavior |
 |---|---|
-| `csk bootstrap` | Interactively create machine-level global config. |
+| `csk bootstrap` | Create machine-level global config; interactive or scripted via `--skills-root`, `--default-agents`, `--non-interactive`, `--force`. |
 | `csk init [path]` | Create project `Skillfile.json` and the managed `.gitignore` block. Supports `--alias`, `--agents`, and `--no-interactive` for scripted setup. |
 | `csk install [target]` | Apply `Skillfile.json` using current git refs. Missing `git` URL sources are cloned into `skills_root`; existing local repositories are not fetched. No target means current project; `target` may be an alias, `.`, or a project path. |
 | `csk install --all` | Install every project explicitly registered in global config. |
@@ -203,6 +203,9 @@ install system tools.
 | `csk upgrade --all` | Run `update`, then install every registered project. |
 | `csk status [target]` | Show manifest vs installed state. No target means current project. `--check` exits non-zero unless everything is up-to-date; `--json` prints machine-readable output. |
 | `csk status --all` | Show status for every registered project. |
+| `csk add <name> --tag/--branch/--revision ...` | Add or replace a skill declaration in the project Skillfile; apply with `csk install`. |
+| `csk remove <name>` | Remove a skill declaration from the project Skillfile; the next install cleans generated files. |
+| `csk gc` | Remove unreferenced runtime entries, snapshot cache entries, and dead consumer registry entries. |
 | `csk list [--paths]` | List configured projects and declared skills. |
 | `csk project add <alias> <path>` | Register a project for `--all` and create a manifest if missing. |
 | `csk project resolve [target]` | Show resolved project alias, checkout alias, Skillfile, and install paths. |
@@ -257,7 +260,7 @@ from git tags; the generated `src/csk/_version.py` is not committed.
   authoring CocoaSkills-compatible skill repositories, including
   `csk-skill.json` schema v2, `runtime_roots`, system dependencies, and release
   checklist.
-- [MVP design specification](docs/mvp-design.md) — frozen contract for v0.1
+- [MVP design specification](docs/mvp-design.md) — v0.1 contract, partially superseded by the RFCs below
   covering manifests, refs, install pipeline, locking, adapters, security
   boundary, and test surface.
 - [CHANGELOG](CHANGELOG.md) — release history in Keep a Changelog format.

@@ -1,6 +1,14 @@
 # CocoaSkill MVP Design
 
-Status: accepted for MVP implementation
+Status: accepted for MVP implementation; partially superseded by later RFCs
+
+> Historical document. Where this design conflicts with the accepted RFCs,
+> the RFCs win. Known divergences: project registration is explicit-only via
+> `csk project add`, and `csk install .` / path installs no longer register
+> checkouts (RFC 0001, docs/v0.3-design.md); `git` URLs auto-clone missing
+> sources (RFC 0002, docs/v0.4-design.md); `csk-skill.json` schema v2 adds
+> `runtime_roots` (RFC 0003, docs/v0.5-design.md); global skills live under
+> `~/.cocoaskills/global/` (RFC 0004, docs/v0.6-design.md).
 
 This document defines the first implementation scope for `csk`, a local skill
 manager for already cloned git repositories containing agent skills.

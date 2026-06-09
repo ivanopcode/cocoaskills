@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `csk status --check`, exiting non-zero unless every skill of every
   selected project is up-to-date, and `csk status --json` for machine-readable
   output.
+- Added project-scope `csk add <name>` and `csk remove <name>` for editing
+  `Skillfile.json` declarations, mirroring `csk global add/remove`.
+- Added `csk gc` for explicit garbage collection. The snapshot cache under
+  `~/.cocoaskills/cache/` is now collected: entries not referenced by any
+  install marker are removed.
+- `csk bootstrap` supports scripted setup via `--skills-root`,
+  `--preferred-locale`, `--default-agents`, `--non-interactive`, and
+  `--force`, and rejects an empty skills_root.
 - Runtime GC now tracks unregistered checkouts ('csk install .') through a
   consumer registry at `~/.cocoaskills/consumers.json`, so it no longer
   deletes runtime still referenced by worktree installs. Dead registry entries
@@ -42,6 +50,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zsh; previously it fell back to the caller's working directory.
 - A missing `git` binary now produces an actionable error instead of a raw
   Python traceback.
+- A stale global lock left by a crashed process is now detected via the
+  recorded pid and broken safely instead of blocking every command until the
+  file is removed by hand.
+- Orphaned `.tmp-<pid>` and `.backup-<pid>` directories from interrupted
+  installs are swept by GC once the owning process is gone.
+- The `status` error label now reports its cause in the table and in
+  `--json`; unknown agent names warn instead of being silently ignored;
+  project `install --dry-run` no longer creates `skills_root`;
+  `schema_version` errors distinguish missing and wrong-type values from
+  genuinely newer files.
 
 ## [0.6.0] - 2026-05-27
 

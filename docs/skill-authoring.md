@@ -265,6 +265,11 @@ Agent-facing files should be placed in prompt context roots:
 
 Runtime-only code should be placed under `runtime_roots`, usually `scripts/`.
 
+One legacy exception: a skill that declares no commands at all gets its
+`scripts/` directory copied into prompt context, because nothing marks those
+files as runtime-only. Declare commands (or schema v2 `runtime_roots`) to keep
+scripts out of the agent's context window.
+
 Do not assume these are copied into prompt context:
 
 - `README*`
