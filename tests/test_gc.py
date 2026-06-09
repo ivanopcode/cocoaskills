@@ -154,3 +154,36 @@ def test_runtime_gc_prunes_consumer_without_markers(tmp_path, skills_root, csk_h
     persisted = _two_project_config(csk_home, skills_root, project1)
     assert not installer.install(persisted)[0].errors
     assert all(path.name != "p2" for path in consumers.load_consumers(csk_home))
+
+
+def test_gc_sweeps_orphan_tmp_dirs_of_dead_processes(tmp_path, skills_root, csk_home):
+    import os
+    import subprocess
+    import sys
+
+    project1 = make_project(tmp_path, "p1")
+    _make_tool_repo(skills_root)
+    write_skillfile(project1, {"schema_version": 1, "skills": [{"name": "skill-tool", "tag": "v1"}]})
+    cfg = _two_project_config(csk_home, skills_root, project1)
+    assert not installer.install(cfg)[0].errors
+
+    proc = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+    dead_pid = int(proc.stdout.strip())
+    skills_dir = project1 / ".agents" / "skills"
+    dead_tmp = skills_dir / f".skill-tool.tmp-{dead_pid}"
+    dead_backup = skills_dir / f".skill-tool.backup-{dead_pid}"
+    live_tmp = skills_dir / f".skill-tool.tmp-{os.getpid()}"
+    for orphan in (dead_tmp, dead_backup, live_tmp):
+        orphan.mkdir()
+        (orphan / "junk.txt").write_text("x", encoding="utf-8")
+    runtime_skill_dir = csk_home / "runtime" / "skill-tool"
+    runtime_orphan = runtime_skill_dir / f".deadbeef.tmp-{dead_pid}"
+    runtime_orphan.mkdir(parents=True)
+
+    assert not installer.install(cfg)[0].errors
+
+    assert not dead_tmp.exists()
+    assert not dead_backup.exists()
+    assert not runtime_orphan.exists()
+    assert live_tmp.exists()  # owner is alive; not ours to delete
+    assert (skills_dir / "skill-tool").exists()
