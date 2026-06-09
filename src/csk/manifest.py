@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .identifiers import IDENTIFIER_RULE, is_valid_identifier
+from .identifiers import IDENTIFIER_RULE, SOURCE_RULE, is_valid_identifier, is_valid_source_path
 
 
 SCHEMA_VERSION = 1
@@ -128,8 +128,8 @@ def parse_manifest(data: dict[str, Any], path: Path) -> ProjectManifest:
         source = raw.get("source", name)
         if not isinstance(source, str) or not source:
             raise ManifestError(f"Skill {name!r} field 'source' must be a non-empty string")
-        if not is_valid_identifier(source):
-            raise ManifestError(f"Skill {name!r} field 'source' {IDENTIFIER_RULE}")
+        if not is_valid_source_path(source):
+            raise ManifestError(f"Skill {name!r} field 'source' {SOURCE_RULE}")
 
         git_url = raw.get("git")
         if git_url is not None and (not isinstance(git_url, str) or not git_url):

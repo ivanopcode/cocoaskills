@@ -62,7 +62,7 @@ def test_manifest_rejects_unsafe_skill_names(tmp_path, name):
         )
 
 
-@pytest.mark.parametrize("source", ["../other", "a/b", "-flag"])
+@pytest.mark.parametrize("source", ["../other", "a/../b", "/abs", "a\\b", "-flag", "a//b"])
 def test_manifest_rejects_unsafe_source(tmp_path, source):
     with pytest.raises(manifest.ManifestError, match="source"):
         manifest.parse_manifest(
@@ -78,8 +78,10 @@ def test_manifest_accepts_typical_identifiers(tmp_path):
             "skills": [
                 {"name": "skill-bi", "tag": "v1"},
                 {"name": "skill_x.v2", "source": "repo.v2", "tag": "v1"},
+                {"name": "skill-grafana", "source": "internal/skill-grafana", "tag": "v1"},
             ],
         },
         tmp_path / "Skillfile.json",
     )
-    assert [skill.name for skill in parsed.skills] == ["skill-bi", "skill_x.v2"]
+    assert [skill.name for skill in parsed.skills] == ["skill-bi", "skill_x.v2", "skill-grafana"]
+    assert parsed.skills[2].source == "internal/skill-grafana"
