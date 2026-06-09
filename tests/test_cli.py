@@ -744,3 +744,50 @@ def test_cli_status_json_is_machine_readable(monkeypatch, tmp_path, csk_home, sk
     assert payload[0]["clean"] is True
     assert payload[0]["skills"][0]["name"] == "skill-a"
     assert payload[0]["skills"][0]["label"] == "up-to-date"
+
+
+def test_cli_add_and_remove_edit_project_skillfile(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": []})
+    _register_project(monkeypatch, csk_home, skills_root, project)
+    monkeypatch.chdir(project)
+
+    assert cli.main(["add", "skill-a", "--tag", "v1", "--git", "git@example.com:skills/skill-a.git"]) == 0
+    data = json.loads((project / "Skillfile.json").read_text(encoding="utf-8"))
+    assert data["skills"] == [{"name": "skill-a", "tag": "v1", "git": "git@example.com:skills/skill-a.git"}]
+
+    # Replaces an existing declaration instead of duplicating it.
+    assert cli.main(["add", "skill-a", "--branch", "main"]) == 0
+    data = json.loads((project / "Skillfile.json").read_text(encoding="utf-8"))
+    assert data["skills"] == [{"name": "skill-a", "branch": "main"}]
+
+    assert cli.main(["remove", "skill-a"]) == 0
+    data = json.loads((project / "Skillfile.json").read_text(encoding="utf-8"))
+    assert data["skills"] == []
+    capsys.readouterr()
+
+    # Removing an undeclared skill is a config error.
+    assert cli.main(["remove", "skill-a"]) == 2
+    assert "not declared" in capsys.readouterr().err
+
+
+def test_cli_add_rejects_invalid_name_without_writing(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": []})
+    _register_project(monkeypatch, csk_home, skills_root, project)
+    monkeypatch.chdir(project)
+
+    assert cli.main(["add", "../evil", "--tag", "v1"]) == 2
+    data = json.loads((project / "Skillfile.json").read_text(encoding="utf-8"))
+    assert data["skills"] == []
+
+
+def test_cli_add_via_project_alias(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": []})
+    _register_project(monkeypatch, csk_home, skills_root, project)
+    monkeypatch.chdir(tmp_path)  # not inside the project
+
+    assert cli.main(["add", "skill-a", "--tag", "v1", "--project", "app"]) == 0
+    data = json.loads((project / "Skillfile.json").read_text(encoding="utf-8"))
+    assert data["skills"][0]["name"] == "skill-a"

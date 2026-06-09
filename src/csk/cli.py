@@ -113,6 +113,18 @@ def build_parser() -> argparse.ArgumentParser:
         "gc",
         help="Remove unreferenced runtime entries, snapshot cache entries, and dead consumer registry entries.",
     )
+    add_parser = sub.add_parser("add", help="Add or replace a skill declaration in the project Skillfile.")
+    add_parser.add_argument("name")
+    add_parser.add_argument("--git", help="git clone URL")
+    add_parser.add_argument("--source", help="local source directory under skills_root")
+    add_refs = add_parser.add_mutually_exclusive_group(required=True)
+    add_refs.add_argument("--tag")
+    add_refs.add_argument("--branch")
+    add_refs.add_argument("--revision")
+    add_parser.add_argument("--project", help="project alias, '.', or path (default: current project)")
+    remove_parser = sub.add_parser("remove", help="Remove a skill declaration from the project Skillfile.")
+    remove_parser.add_argument("name")
+    remove_parser.add_argument("--project", help="project alias, '.', or path (default: current project)")
     list_parser = sub.add_parser(
         "list",
         help="List configured projects and declared skills.",
@@ -312,6 +324,25 @@ def _dispatch(args: argparse.Namespace) -> int:
             print(status.render_collected(statuses))
         if args.check and not all(project.clean for project in statuses):
             return EXIT_PARTIAL_FAIL
+        return EXIT_OK
+
+    if args.command in {"add", "remove"}:
+        project_root = _resolve_project_root(cfg, args.project)
+        if args.command == "add":
+            ref_kind, ref = _global_ref_from_args(args)
+            manifest.add_skill_decl(
+                project_root,
+                name=args.name,
+                ref_kind=ref_kind,
+                ref=ref,
+                git=args.git,
+                source=args.source,
+            )
+            print(f"Added skill {args.name}: {ref_kind} {ref} ({project_root / 'Skillfile.json'})")
+        else:
+            manifest.remove_skill_decl(project_root, args.name)
+            print(f"Removed skill {args.name} ({project_root / 'Skillfile.json'})")
+        print("Run 'csk install' to apply.")
         return EXIT_OK
 
     if args.command == "gc":
@@ -610,6 +641,14 @@ def _cfg_and_alias_for_target(
         checkout_alias=resolved.checkout_alias,
     )
     return updated, resolved.checkout_alias
+
+
+def _resolve_project_root(cfg: config.GlobalConfig, target: str | None) -> Path:
+    if target and not _looks_like_path(target) and target in cfg.projects:
+        return cfg.projects[target].path
+    start = Path(target).expanduser() if target else Path.cwd()
+    resolved = project_resolver.resolve(start, worktree_alias_pattern=cfg.worktree_alias_pattern)
+    return resolved.root
 
 
 def _path_target_from_args(args: argparse.Namespace) -> Path | None:

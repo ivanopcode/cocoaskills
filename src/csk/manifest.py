@@ -77,6 +77,69 @@ def ensure_project_manifest(project_root: Path, *, alias: str, agents: list[str]
     return path
 
 
+def add_skill_decl(
+    project_root: Path,
+    *,
+    name: str,
+    ref_kind: str,
+    ref: str,
+    git: str | None = None,
+    source: str | None = None,
+) -> Path:
+    path = manifest_path(project_root)
+    data = _read_payload(path)
+    skills = data.setdefault("skills", [])
+    if not isinstance(skills, list):
+        raise ManifestError("Skillfile field 'skills' must be a list")
+    decl: dict[str, str] = {"name": name, ref_kind: ref}
+    if git:
+        decl["git"] = git
+    if source:
+        decl["source"] = source
+    replaced = False
+    for index, existing in enumerate(skills):
+        if isinstance(existing, dict) and existing.get("name") == name:
+            skills[index] = decl
+            replaced = True
+            break
+    if not replaced:
+        skills.append(decl)
+    parse_manifest(data, path)
+    _write_payload(path, data)
+    return path
+
+
+def remove_skill_decl(project_root: Path, name: str) -> Path:
+    path = manifest_path(project_root)
+    data = _read_payload(path)
+    skills = data.get("skills")
+    if not isinstance(skills, list):
+        raise ManifestError("Skillfile field 'skills' must be a list")
+    kept = [entry for entry in skills if not (isinstance(entry, dict) and entry.get("name") == name)]
+    if len(kept) == len(skills):
+        raise ManifestError(f"Skill not declared in Skillfile: {name}")
+    data["skills"] = kept
+    parse_manifest(data, path)
+    _write_payload(path, data)
+    return path
+
+
+def _read_payload(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        raise ManifestError(f"Skillfile.json not found at {path}; run 'csk init' first")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ManifestError(f"Malformed JSON in {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ManifestError(f"{path} must contain a JSON object")
+    return data
+
+
+def _write_payload(path: Path, data: dict[str, Any]) -> None:
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 def load_manifest(project_root: Path) -> ProjectManifest | None:
     path = manifest_path(project_root)
     if not path.exists():
