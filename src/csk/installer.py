@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import adapters, env_files, gc, git_ops, gitignore_gate, hashing, locale, manifest, shims, skillspec, snapshot, whitelist
+from . import adapters, consumers, env_files, gc, git_ops, gitignore_gate, hashing, locale, manifest, shims, skillspec, snapshot, whitelist
 from .config import GlobalConfig, ProjectConfig
 from .skillspec import CommandSpec
 
@@ -100,6 +100,7 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                 result.messages.append(f"{project.alias}: dry-run; no files modified")
                 return result
 
+            consumers.record_consumer(config.path.parent, project.path)
             installed_names: list[str] = []
             expected_commands: set[str] = set()
             for plan in plans:
