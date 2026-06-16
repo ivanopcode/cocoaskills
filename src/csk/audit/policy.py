@@ -18,7 +18,7 @@ def decide(findings: tuple[Finding, ...], *, mode: str, fail_on: str) -> Decisio
     if mode != "strict" or fail_on == "off":
         return Decision.WARN
     threshold = _threshold_rank(fail_on)
-    if any(_SEVERITY_RANK[finding.severity] >= threshold for finding in findings):
+    if any(_SEVERITY_RANK[finding.severity] >= threshold for finding in findings if finding.verifiable):
         return Decision.BLOCK
     return Decision.WARN
 

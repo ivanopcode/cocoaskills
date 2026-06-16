@@ -8,7 +8,7 @@ from typing import Any
 from .. import hashing, installer
 from ..config import GlobalConfig
 
-from . import canary, detectors, policy, redaction, trust
+from . import backend_config, canary, detectors, policy, redaction, trust
 from .backends.base import AuditBackendError, AuditCanaryError, AuditRequest
 from .backends.null_backend import NullBackend
 from .model import Decision, Finding, TrustRecord, Verdict
@@ -61,12 +61,13 @@ def audit_plans(
         content_sha256 = hashing.content_sha256(plan.snapshot)
         trust_record = trust.load_trust_record(config.path.parent, content_sha256)
         revocation = _revocation_reason(config, content_sha256, plan.decl.source, plan.decl.git)
+        resolved_backend = _backend_config_for_config(config)
         backend = _backend_for_config(config)
         cached = trust.load_cached_verdict(
             config.path.parent,
             content_sha256,
             backend.name,
-            config.audit.model,
+            resolved_backend.model,
             trust.PROMPT_VERSION,
             trust.RULESET_VERSION,
         )
@@ -96,7 +97,7 @@ def audit_plans(
             raise AuditCanaryError(f"Audit backend failed canary check: {backend.name}")
         backend_findings = backend.extract(
             _build_request(plan, static_findings, backend.cloud),
-            timeout=30,
+            timeout=resolved_backend.timeout_seconds,
         )
         findings = tuple(static_findings) + tuple(backend_findings)
         decision = _decide(plan, config, findings, trust_record, content_sha256, revocation)
@@ -107,7 +108,7 @@ def audit_plans(
             source=plan.decl.source,
             commit=plan.resolved.commit,
             backend=backend.name,
-            model=config.audit.model,
+            model=resolved_backend.model,
             cloud=backend.cloud,
             prompt_version=trust.PROMPT_VERSION,
             ruleset_version=trust.RULESET_VERSION,
@@ -251,10 +252,23 @@ def _finding_to_payload(finding: Finding) -> dict[str, Any]:
     return payload
 
 
+def _backend_config_for_config(config: GlobalConfig) -> backend_config.BackendConfig:
+    try:
+        return backend_config.resolve_backend_config(
+            config.audit.backend,
+            config.audit.backends,
+            global_model=config.audit.model,
+            allow_cloud=config.audit.allow_cloud,
+        )
+    except backend_config.BackendConfigError as exc:
+        raise AuditBackendError(str(exc)) from exc
+
+
 def _backend_for_config(config: GlobalConfig) -> NullBackend:
-    if config.audit.backend != "null":
-        raise AuditBackendError(f"Unsupported audit backend: {config.audit.backend}")
-    return NullBackend()
+    resolved = _backend_config_for_config(config)
+    if isinstance(resolved, backend_config.NullBackendConfig):
+        return NullBackend()
+    raise AuditBackendError(f"Unsupported audit backend: {config.audit.backend}")
 
 
 def _build_request(plan: installer.SkillPlan, static_findings: tuple[Finding, ...], cloud: bool) -> AuditRequest:

@@ -52,7 +52,8 @@ def test_config_parses_and_round_trips_audit_settings(tmp_path):
                 "backend": "codex",
                 "model": "gpt-5",
                 "allow_cloud": True,
-                "backends": {"codex": {"timeout_seconds": 30}},
+                "max_request_bytes": 2048,
+                "backends": {"codex": {"kind": "codex", "timeout_seconds": 30, "cloud": True}},
                 "grants": [{"skill": "skill-gitlab", "content_sha256": "abc"}],
                 "revocations": [
                     "sha256:" + "d" * 64,
@@ -73,6 +74,7 @@ def test_config_parses_and_round_trips_audit_settings(tmp_path):
     assert cfg.audit.backend == "codex"
     assert cfg.audit.model == "gpt-5"
     assert cfg.audit.allow_cloud
+    assert cfg.audit.max_request_bytes == 2048
     assert cfg.audit.source_policy.classify(None, "git@github.com:ivanopcode/cocoaskills.git") == "public"
 
     config.save_config(cfg)
@@ -84,7 +86,8 @@ def test_config_parses_and_round_trips_audit_settings(tmp_path):
     assert loaded.audit.backend == "codex"
     assert loaded.audit.model == "gpt-5"
     assert loaded.audit.allow_cloud
-    assert loaded.audit.backends == {"codex": {"timeout_seconds": 30}}
+    assert loaded.audit.max_request_bytes == 2048
+    assert loaded.audit.backends == {"codex": {"kind": "codex", "timeout_seconds": 30, "cloud": True}}
     assert loaded.audit.grants == [{"skill": "skill-gitlab", "content_sha256": "abc"}]
     assert loaded.audit.revocations == ["sha256:" + "d" * 64, "source:gitlab.wildberries.ru"]
     assert loaded.audit.source_policy.classify(None, "git@github.com:ivanopcode/cocoaskills.git") == "public"
@@ -160,6 +163,111 @@ def test_config_rejects_invalid_audit_revocation(tmp_path):
                 "skills_root": str(tmp_path / "skills"),
                 "projects": {},
                 "audit": {"revocations": ["deadbeef"]},
+            },
+            tmp_path / "config.json",
+        )
+
+
+def test_config_rejects_unknown_audit_backend_reference(tmp_path):
+    with pytest.raises(config.ConfigError, match="Unsupported audit backend"):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "projects": {},
+                "audit": {"backend": "codex"},
+            },
+            tmp_path / "config.json",
+        )
+
+
+def test_config_rejects_cloud_backend_without_allow_cloud(tmp_path):
+    with pytest.raises(config.ConfigError, match="allow_cloud"):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "projects": {},
+                "audit": {
+                    "backend": "codex",
+                    "backends": {"codex": {"kind": "codex", "cloud": True}},
+                },
+            },
+            tmp_path / "config.json",
+        )
+
+
+def test_config_rejects_codex_local_without_local_provider(tmp_path):
+    with pytest.raises(config.ConfigError, match="oss=true and local_provider"):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "projects": {},
+                "audit": {
+                    "backend": "codex",
+                    "backends": {"codex": {"kind": "codex", "oss": True}},
+                },
+            },
+            tmp_path / "config.json",
+        )
+
+
+def test_config_rejects_codex_cloud_with_local_provider(tmp_path):
+    with pytest.raises(config.ConfigError, match="must not set oss or local_provider"):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "projects": {},
+                "audit": {
+                    "backend": "codex",
+                    "allow_cloud": True,
+                    "backends": {
+                        "codex": {
+                            "kind": "codex",
+                            "cloud": True,
+                            "oss": True,
+                            "local_provider": "ollama",
+                        }
+                    },
+                },
+            },
+            tmp_path / "config.json",
+        )
+
+
+def test_config_rejects_unsafe_codex_extra_args(tmp_path):
+    with pytest.raises(config.ConfigError, match="unsafe Codex option"):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "projects": {},
+                "audit": {
+                    "backend": "codex",
+                    "backends": {
+                        "codex": {
+                            "kind": "codex",
+                            "oss": True,
+                            "local_provider": "ollama",
+                            "extra_args": ["--sandbox=danger-full-access"],
+                        }
+                    },
+                },
+            },
+            tmp_path / "config.json",
+        )
+
+
+def test_config_rejects_invalid_max_request_bytes(tmp_path):
+    with pytest.raises(config.ConfigError, match="audit.max_request_bytes"):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "projects": {},
+                "audit": {"max_request_bytes": 0},
             },
             tmp_path / "config.json",
         )

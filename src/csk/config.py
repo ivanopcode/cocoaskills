@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .audit import backend_config
 from .audit.source_policy import SourcePolicy, SourcePolicyError, parse_source_policy
 
 
@@ -38,6 +39,7 @@ class AuditConfig:
     backend: str = "null"
     model: str | None = None
     allow_cloud: bool = False
+    max_request_bytes: int = backend_config.DEFAULT_MAX_REQUEST_BYTES
     backends: dict[str, Any] = field(default_factory=dict)
     grants: list[dict[str, Any]] = field(default_factory=list)
     revocations: list[str] = field(default_factory=list)
@@ -238,6 +240,7 @@ def _parse_audit_config(raw: Any) -> AuditConfig:
             "backend",
             "model",
             "allow_cloud",
+            "max_request_bytes",
             "backends",
             "grants",
             "revocations",
@@ -270,9 +273,26 @@ def _parse_audit_config(raw: Any) -> AuditConfig:
     if not isinstance(allow_cloud, bool):
         raise ConfigError("Global config field 'audit.allow_cloud' must be a boolean")
 
+    max_request_bytes = raw.get("max_request_bytes", backend_config.DEFAULT_MAX_REQUEST_BYTES)
+    if (
+        isinstance(max_request_bytes, bool)
+        or not isinstance(max_request_bytes, int)
+        or max_request_bytes < 1
+        or max_request_bytes > backend_config.MAX_MAX_REQUEST_BYTES
+    ):
+        raise ConfigError(
+            "Global config field 'audit.max_request_bytes' must be an integer "
+            f"between 1 and {backend_config.MAX_MAX_REQUEST_BYTES}"
+        )
+
     backends = raw.get("backends", {})
     if not isinstance(backends, dict):
         raise ConfigError("Global config field 'audit.backends' must be an object")
+    try:
+        backend_config.parse_backend_configs(backends, global_model=model, allow_cloud=allow_cloud)
+        backend_config.resolve_backend_config(backend, backends, global_model=model, allow_cloud=allow_cloud)
+    except backend_config.BackendConfigError as exc:
+        raise ConfigError(str(exc)) from exc
 
     grants = raw.get("grants", [])
     if not isinstance(grants, list) or not all(isinstance(item, dict) for item in grants):
@@ -296,6 +316,7 @@ def _parse_audit_config(raw: Any) -> AuditConfig:
         backend=backend,
         model=model,
         allow_cloud=allow_cloud,
+        max_request_bytes=max_request_bytes,
         backends=dict(backends),
         grants=list(grants),
         revocations=list(revocations),
@@ -317,6 +338,8 @@ def _serialize_audit_config(audit: AuditConfig) -> dict[str, Any]:
         data["model"] = audit.model
     if audit.allow_cloud:
         data["allow_cloud"] = audit.allow_cloud
+    if audit.max_request_bytes != backend_config.DEFAULT_MAX_REQUEST_BYTES:
+        data["max_request_bytes"] = audit.max_request_bytes
     if audit.backends:
         data["backends"] = audit.backends
     if audit.grants:
