@@ -4,6 +4,7 @@ import argparse
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from . import __version__, adapters, config, deprecation, gc, git_ops, gitignore_gate, global_install, installer, manifest, project_resolver, shell_init, status
@@ -265,6 +266,13 @@ def _add_install(sub, name: str, description: str) -> None:
     parser.add_argument("--verbose", action="store_true", help="print detailed progress")
     parser.add_argument("--fix-gitignore", action="store_true", help="deprecated; prefer csk init")
     parser.add_argument("--strict-tags", action="store_true", help="fail if an installed tag moved to another commit")
+    parser.add_argument(
+        "--audit",
+        nargs="?",
+        const="advisory",
+        choices=["advisory", "strict"],
+        help="run audit gate for this install (default mode: advisory)",
+    )
 
 
 def _add_global(sub) -> None:
@@ -300,11 +308,25 @@ def _add_global(sub) -> None:
     install.add_argument("--dry-run", action="store_true", help="validate without modifying files")
     install.add_argument("--verbose", action="store_true", help="print detailed progress")
     install.add_argument("--strict-tags", action="store_true", help="fail if a tag was locally moved to another commit")
+    install.add_argument(
+        "--audit",
+        nargs="?",
+        const="advisory",
+        choices=["advisory", "strict"],
+        help="run audit gate for this install (default mode: advisory)",
+    )
     global_sub.add_parser("update", help="fetch global skill source repositories")
     upgrade = global_sub.add_parser("upgrade", help="fetch global skill sources, then install")
     upgrade.add_argument("--dry-run", action="store_true", help="validate install without modifying installed files")
     upgrade.add_argument("--verbose", action="store_true", help="print detailed progress")
     upgrade.add_argument("--strict-tags", action="store_true", help="fail if a tag was locally moved to another commit")
+    upgrade.add_argument(
+        "--audit",
+        nargs="?",
+        const="advisory",
+        choices=["advisory", "strict"],
+        help="run audit gate for this install (default mode: advisory)",
+    )
 
 
 def _add_audit(sub) -> None:
@@ -591,6 +613,7 @@ def _cmd_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
         strict_tags=args.strict_tags,
         verbose=args.verbose,
     )
+    cfg = _cfg_with_audit_override(cfg, args)
     results = installer.install(cfg, alias=args.alias, options=options)
     failed = False
     for result in results:
@@ -622,6 +645,7 @@ def _cmd_global_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> i
         strict_tags=getattr(args, "strict_tags", False),
         verbose=getattr(args, "verbose", False),
     )
+    cfg = _cfg_with_audit_override(cfg, args)
     result = global_install.install(cfg, options=options)
     for message in result.messages:
         print(message)
@@ -647,6 +671,13 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     else:
         print(audit_pipeline.render_reports(reports))
     return EXIT_PARTIAL_FAIL if any(report.decision == Decision.BLOCK for report in reports) else EXIT_OK
+
+
+def _cfg_with_audit_override(cfg: config.GlobalConfig, args: argparse.Namespace) -> config.GlobalConfig:
+    audit_mode = getattr(args, "audit", None)
+    if audit_mode is None:
+        return cfg
+    return replace(cfg, audit=replace(cfg.audit, enabled=True, mode=audit_mode))
 
 
 def _render_list(cfg: config.GlobalConfig, *, show_paths: bool = False) -> str:
