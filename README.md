@@ -164,15 +164,24 @@ skills with the same name. Global skills do not replace committed project
 
 ## Skill command manifests
 
-Skills can declare project-local commands through `csk-skill.json`. Schema v2
-supports multi-file runtimes: `runtime_roots` are copied into
+Skills can declare commands and audit capabilities through `csk-skill.json`.
+Schema v2 supports multi-file runtimes: `runtime_roots` are copied into
 `~/.cocoaskills/runtime/<skill>/<commit>/` and excluded from agent prompt
-context.
+context. Schema v3 adds the `capabilities` envelope used by `csk audit` and
+strict install gates.
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "runtime_roots": ["scripts"],
+  "capabilities": {
+    "network": ["gitlab.example.com"],
+    "filesystem": "repo",
+    "exec": ["review-cli"],
+    "secrets": "none",
+    "env_read": ["HOME"],
+    "prompt_scope": "Review merge request metadata and produce local advice."
+  },
   "commands": {
     "mr": {
       "type": "script",
@@ -190,6 +199,31 @@ context.
 `system` commands are only checked with `shutil.which`; CocoaSkills does not
 install system tools.
 
+## Skill audit
+
+`csk audit` runs deterministic security checks against the same committed skill
+snapshot that `csk install` would use. It reports findings as text or JSON and
+does not modify project files.
+
+```bash
+csk audit
+csk audit . --json
+csk audit --global
+```
+
+Install gates are opt-in per command or through config:
+
+```bash
+csk install --audit
+csk install --audit strict
+csk global install --audit
+```
+
+Advisory audit prints warnings and continues. Strict audit blocks findings at
+or above the configured threshold. Schema v1/v2 skills do not declare
+capabilities; strict audit requires migrating them to schema v3 or pinning the
+content hash through the trust workflow when that workflow is enabled.
+
 ## CLI
 
 | Command | Behavior |
@@ -197,6 +231,7 @@ install system tools.
 | `csk bootstrap` | Create machine-level global config; interactive or scripted via `--skills-root`, `--default-agents`, `--non-interactive`, `--force`. |
 | `csk init [path]` | Create project `Skillfile.json` and the managed `.gitignore` block. Supports `--alias`, `--agents`, and `--no-interactive` for scripted setup. |
 | `csk install [target]` | Apply `Skillfile.json` using current git refs. Missing `git` URL sources are cloned into `skills_root`; existing local repositories are not fetched. No target means current project; `target` may be an alias, `.`, or a project path. |
+| `csk install --audit [strict]` | Run the audit gate for this install only. Without `strict`, audit is advisory and does not change config. |
 | `csk install --all` | Install every project explicitly registered in global config. |
 | `csk update` | Fetch all git repositories under `skills_root`. Does not modify projects. |
 | `csk upgrade [target]` | Run `update`, then `install`. |
@@ -206,6 +241,7 @@ install system tools.
 | `csk add <name> --tag/--branch/--revision ...` | Add or replace a skill declaration in the project Skillfile; apply with `csk install`. |
 | `csk remove <name>` | Remove a skill declaration from the project Skillfile; the next install cleans generated files. |
 | `csk gc` | Remove unreferenced runtime entries, snapshot cache entries, and dead consumer registry entries. |
+| `csk audit [target]` | Run deterministic static audit for the current project, an alias, `.`, or a project path. Supports `--all`, `--global`, and `--json`. |
 | `csk list [--paths]` | List configured projects and declared skills. |
 | `csk project add <alias> <path>` | Register a project for `--all` and create a manifest if missing. |
 | `csk project resolve [target]` | Show resolved project alias, checkout alias, Skillfile, and install paths. |
@@ -258,8 +294,11 @@ from git tags; the generated `src/csk/_version.py` is not committed.
 
 - [Skill authoring guide](docs/skill-authoring.md) — practical contract for
   authoring CocoaSkills-compatible skill repositories, including
-  `csk-skill.json` schema v2, `runtime_roots`, system dependencies, and release
-  checklist.
+  `csk-skill.json` schema v3 capabilities, `runtime_roots`, system
+  dependencies, audit behavior, and release checklist.
+- [Skill security audit RFC](docs/audit-design.md) — design for schema v3
+  capabilities, deterministic audit gates, verdict cache, and future backend
+  expansion.
 - [MVP design specification](docs/mvp-design.md) — v0.1 contract, partially superseded by the RFCs below
   covering manifests, refs, install pipeline, locking, adapters, security
   boundary, and test surface.

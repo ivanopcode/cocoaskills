@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Added the RFC 0005 audit foundation: `csk-skill.json` schema v3 capability
+  manifests, deterministic static audit findings, `csk audit`, install-time
+  audit gates, strict `require_pin` handling for undeclared schema v1/v2 skills,
+  and a content-addressed verdict cache.
 - Skill names, source directory names, and command names are now validated as
   safe identifiers. Previously a command key like `../../x` in a third-party
   `csk-skill.json` could write a shim outside the designated bin directory.
@@ -19,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added `csk install --audit`, `csk install --audit strict`, and matching
+  global install/upgrade flags for one-shot audit gating without changing
+  global config.
 - Added `csk status --check`, exiting non-zero unless every skill of every
   selected project is up-to-date, and `csk status --json` for machine-readable
   output.

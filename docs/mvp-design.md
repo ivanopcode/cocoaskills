@@ -954,29 +954,27 @@ MVP safety rules:
 - Source repositories are not checked out or modified.
 - Only committed git content can be installed.
 
-## Future Audit Command
+## Audit Command
 
-Reserve the command:
+This MVP section is superseded by [RFC 0005](audit-design.md). Audit is now
+implemented as an opt-in security layer:
 
 ```text
 csk audit
+csk install --audit
+csk install --audit strict
 ```
 
-This command is not implemented in MVP.
+Current behavior:
 
-Future intended behavior:
+- Inspect committed skill snapshots through deterministic static detectors.
+- Read schema v3 `capabilities` from `csk-skill.json`.
+- Produce text or JSON reports through `csk audit`.
+- Gate project and global installs through `--audit` or config.
+- Cache verdicts by content hash under `~/.cocoaskills/audit/`.
 
-- Fetch or refresh skill repositories.
-- Inspect executable scripts and command manifests.
-- Ask an agent or audit engine to analyze scripts for suspicious behavior,
-  unsafe dependency usage, credential exfiltration, path traversal, hidden
-  network calls, or other risky patterns.
-- Produce a structured report with pass/warn/fail findings per skill and per
-  project.
-
-The MVP implementation should not build partial audit behavior into `install`.
-The command is reserved so the CLI surface can grow without changing the core
-install semantics.
+The foundation uses the `null` backend, which means static-only analysis. LLM
+or command backends are reserved for later RFC follow-ups.
 
 ## Test Strategy
 

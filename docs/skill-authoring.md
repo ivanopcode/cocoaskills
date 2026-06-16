@@ -82,7 +82,7 @@ CocoaSkills copies each script command as one file into:
 
 ### Schema v2
 
-Schema v2 is the preferred format for internal skills:
+Schema v2 is the runtime format for multi-file command skills:
 
 ```json
 {
@@ -99,6 +99,46 @@ Schema v2 is the preferred format for internal skills:
 
 Use schema v2 when a command depends on sibling files, libraries, Python
 modules, shell helpers, or other runtime assets.
+
+### Schema v3
+
+Schema v3 adds an explicit capability envelope for audit:
+
+```json
+{
+  "schema_version": 3,
+  "runtime_roots": ["scripts"],
+  "capabilities": {
+    "network": ["gitlab.example.com"],
+    "filesystem": "repo",
+    "exec": ["glab"],
+    "secrets": "none",
+    "env_read": ["HOME"],
+    "prompt_scope": "Read merge request metadata and prepare local review output."
+  },
+  "commands": {
+    "review": {
+      "type": "script",
+      "unix_path": "scripts/review"
+    }
+  }
+}
+```
+
+Use schema v3 for skills that should pass strict audit. Schema v1 and v2 remain
+installable, but strict audit treats them as undeclared: the skill must either
+move to schema v3 or be explicitly pinned by content hash when the trust
+workflow is used.
+
+Capability fields:
+
+- `network`: `"none"` or host globs the skill code may contact.
+- `filesystem`: `"repo"`, `"home-config"`, or explicit paths.
+- `exec`: `"none"` or executable names the skill may call.
+- `secrets`: `"none"` or secret/keyring names the skill may read.
+- `env_read`: environment variables the skill may read.
+- `prompt_scope`: one sentence describing what the prompt is allowed to ask the
+  agent to do.
 
 ## 4. Runtime Roots
 
