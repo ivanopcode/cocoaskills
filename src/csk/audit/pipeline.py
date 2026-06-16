@@ -4,11 +4,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from .. import installer
+from .. import hashing, installer
 from ..config import GlobalConfig
 
-from . import detectors, policy
-from .model import Decision, Finding
+from . import detectors, policy, trust
+from .backends.base import AuditBackendError, AuditRequest
+from .backends.null_backend import NullBackend
+from .model import Decision, Finding, TrustRecord, Verdict
 
 
 @dataclass(frozen=True)
@@ -22,9 +24,11 @@ class AuditReport:
     schema_version: int
     source_file: str | None
     runtime_roots: tuple[str, ...]
+    content_sha256: str
     findings: tuple[Finding, ...]
     decision: Decision
     ran_at: str
+    cache_hit: bool = False
 
 
 @dataclass(frozen=True)
@@ -38,12 +42,61 @@ class GateResult:
         return bool(self.errors)
 
 
-def audit_plans(plans: list[installer.SkillPlan], config: GlobalConfig, *, scope: str) -> tuple[AuditReport, ...]:
+def audit_plans(
+    plans: list[installer.SkillPlan],
+    config: GlobalConfig,
+    *,
+    scope: str,
+    record: bool = True,
+) -> tuple[AuditReport, ...]:
     reports: list[AuditReport] = []
     ran_at = datetime.now(timezone.utc).isoformat()
     for plan in plans:
-        findings = detectors.detect_snapshot(plan.snapshot, plan.spec.capabilities)
+        content_sha256 = hashing.content_sha256(plan.snapshot)
+        backend = _backend_for_config(config)
+        cached = trust.load_cached_verdict(
+            config.path.parent,
+            content_sha256,
+            backend.name,
+            config.audit.model,
+            trust.PROMPT_VERSION,
+            trust.RULESET_VERSION,
+        )
+        if cached is not None:
+            reports.append(_report_from_verdict(plan, cached, config, scope=scope, cache_hit=True))
+            continue
+
+        static_findings = detectors.detect_snapshot(plan.snapshot, plan.spec.capabilities)
+        if not backend.is_available():
+            raise AuditBackendError(f"Audit backend is unavailable: {backend.name}")
+        canary_passed = backend.run_canary()
+        if not canary_passed:
+            raise AuditBackendError(f"Audit backend failed canary check: {backend.name}")
+        backend_findings = backend.extract(
+            _build_request(plan, static_findings, backend.cloud),
+            timeout=30,
+        )
+        findings = tuple(static_findings) + tuple(backend_findings)
         decision = policy.decide(findings, mode=config.audit.mode, fail_on=config.audit.fail_on)
+        verdict = Verdict(
+            schema_version=trust.SCHEMA_VERSION,
+            content_sha256=content_sha256,
+            skill=plan.decl.name,
+            source=plan.decl.source,
+            commit=plan.resolved.commit,
+            backend=backend.name,
+            model=config.audit.model,
+            cloud=backend.cloud,
+            prompt_version=trust.PROMPT_VERSION,
+            ruleset_version=trust.RULESET_VERSION,
+            canary_passed=canary_passed,
+            findings=findings,
+            decision=decision,
+            ran_at=ran_at,
+            trust=TrustRecord(),
+        )
+        if record:
+            trust.store_verdict(config.path.parent, verdict)
         reports.append(
             AuditReport(
                 scope=scope,
@@ -55,18 +108,26 @@ def audit_plans(plans: list[installer.SkillPlan], config: GlobalConfig, *, scope
                 schema_version=plan.spec.schema_version,
                 source_file=plan.spec.source_file,
                 runtime_roots=plan.spec.runtime_roots,
+                content_sha256=content_sha256,
                 findings=findings,
                 decision=decision,
                 ran_at=ran_at,
+                cache_hit=False,
             )
         )
     return tuple(reports)
 
 
-def gate_plans(plans: list[installer.SkillPlan], config: GlobalConfig, *, scope: str) -> GateResult:
+def gate_plans(
+    plans: list[installer.SkillPlan],
+    config: GlobalConfig,
+    *,
+    scope: str,
+    record: bool = True,
+) -> GateResult:
     if not config.audit.enabled:
         return GateResult(reports=())
-    reports = audit_plans(plans, config, scope=scope)
+    reports = audit_plans(plans, config, scope=scope, record=record)
     warnings: list[str] = []
     errors: list[str] = []
     for report in reports:
@@ -116,8 +177,10 @@ def _report_to_payload(report: AuditReport) -> dict[str, Any]:
         "schema_version": report.schema_version,
         "source_file": report.source_file,
         "runtime_roots": list(report.runtime_roots),
+        "content_sha256": report.content_sha256,
         "decision": report.decision.value,
         "ran_at": report.ran_at,
+        "cache_hit": report.cache_hit,
         "findings": [_finding_to_payload(finding) for finding in report.findings],
     }
 
@@ -145,6 +208,50 @@ def _finding_to_payload(finding: Finding) -> dict[str, Any]:
             "observed": finding.capability_violation.observed,
         }
     return payload
+
+
+def _backend_for_config(config: GlobalConfig) -> NullBackend:
+    if config.audit.backend != "null":
+        raise AuditBackendError(f"Unsupported audit backend: {config.audit.backend}")
+    return NullBackend()
+
+
+def _build_request(plan: installer.SkillPlan, static_findings: tuple[Finding, ...], cloud: bool) -> AuditRequest:
+    return AuditRequest(
+        files={},
+        capabilities=plan.spec.capabilities,
+        contract_reference="",
+        response_schema={},
+        static_findings=static_findings,
+        redacted=cloud,
+    )
+
+
+def _report_from_verdict(
+    plan: installer.SkillPlan,
+    verdict: Verdict,
+    config: GlobalConfig,
+    *,
+    scope: str,
+    cache_hit: bool,
+) -> AuditReport:
+    decision = policy.decide(verdict.findings, mode=config.audit.mode, fail_on=config.audit.fail_on)
+    return AuditReport(
+        scope=scope,
+        skill=plan.decl.name,
+        source=plan.decl.source,
+        ref_kind=plan.resolved.kind,
+        ref=plan.resolved.ref,
+        commit=plan.resolved.commit,
+        schema_version=plan.spec.schema_version,
+        source_file=plan.spec.source_file,
+        runtime_roots=plan.spec.runtime_roots,
+        content_sha256=verdict.content_sha256,
+        findings=verdict.findings,
+        decision=decision,
+        ran_at=verdict.ran_at,
+        cache_hit=cache_hit,
+    )
 
 
 def _gate_messages(report: AuditReport) -> list[str]:

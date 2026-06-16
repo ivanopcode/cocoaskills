@@ -144,7 +144,7 @@ def install(config: GlobalConfig, *, options: installer.InstallOptions | None = 
                 result.errors.append(str(exc))
                 return result
             plans = _plans_with_available_system_commands(plans, result)
-            audit_gate = audit_pipeline.gate_plans(plans, config, scope="global")
+            audit_gate = audit_pipeline.gate_plans(plans, config, scope="global", record=not options.dry_run)
             result.messages.extend(audit_gate.warnings)
             if audit_gate.blocked:
                 result.status = "failed"

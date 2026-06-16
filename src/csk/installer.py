@@ -92,7 +92,7 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
             plans = _build_plans(config, project_manifest, use_cache=not options.dry_run, stack=stack)
             _detect_command_collisions(plans)
             _check_system_commands(plans)
-            audit_gate = audit_pipeline.gate_plans(plans, config, scope=project.alias)
+            audit_gate = audit_pipeline.gate_plans(plans, config, scope=project.alias, record=not options.dry_run)
             result.messages.extend(audit_gate.warnings)
             if audit_gate.blocked:
                 raise InstallError("; ".join(audit_gate.errors))

@@ -9,6 +9,7 @@ from pathlib import Path
 from . import __version__, adapters, config, deprecation, gc, git_ops, gitignore_gate, global_install, installer, manifest, project_resolver, shell_init, status
 from .audit import pipeline as audit_pipeline
 from .audit import runner as audit_runner
+from .audit.backends import AuditBackendError
 from .audit.model import Decision
 from .locking import GlobalLock, LockError
 
@@ -40,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
         global_install.GlobalInstallError,
         installer.InstallError,
         audit_runner.AuditError,
+        AuditBackendError,
         git_ops.GitError,
         ValueError,
     ) as exc:
