@@ -353,7 +353,11 @@ def _add_audit(sub) -> None:
     parser.add_argument("--all", action="store_true", help="audit all registered projects and global skills")
     parser.add_argument("--global", dest="global_scope", action="store_true", help="audit global skills")
     parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
-    parser.add_argument("--allow", metavar="CONTENT_SHA256", help="pin a content hash as explicitly trusted")
+    parser.add_argument(
+        "--allow",
+        metavar="CONTENT_SHA256",
+        help="pin a legacy content hash to satisfy strict schema v1/v2 capability declaration checks",
+    )
     parser.add_argument("--reason", help="required reason for --allow")
 
 

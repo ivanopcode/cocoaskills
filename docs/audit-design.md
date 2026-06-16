@@ -140,10 +140,12 @@ with no actionable path:
   proceeds.
 - Under `strict`, an undeclared skill is not blindly blocked. It requires either
   (a) migration to schema v3 with an explicit capability manifest, or (b) an
-  explicit trust pin (`csk audit --allow <hash> --reason …`). The decision for
-  such a skill is `REQUIRE_PIN`, and the message is actionable: it names the
-  skill, its schema version, and both paths (declare capabilities, or pin this
-  content hash).
+  explicit legacy trust pin (`csk audit --allow <hash> --reason …`). The pin
+  only clears the schema v1/v2 capability-declaration requirement. Real findings
+  still pass through strict policy and may block the install. The decision for
+  an unpinned legacy skill is `REQUIRE_PIN`, and the message is actionable: it
+  names the skill, its schema version, and both paths (declare capabilities, or
+  pin this content hash).
 
 This gives existing skills a defined runway: advisory now, then declare-or-pin
 before any team flips `strict` on.
@@ -427,8 +429,9 @@ Audit establishes trust, not just lint output.
 - Per-skill grants: a legitimate skill that must read `~/.aws` (a cloud skill) or
   run git declares it in `capabilities`; a human reviews and pins the grant. A
   grant is `(skill, capability, content_sha256, who, when, reason)`.
-- Override: `csk audit --allow <hash> --reason "..."` clears a block and records
-  the override with provenance.
+- Legacy pin: `csk audit --allow <hash> --reason "..."` clears only the
+  schema v1/v2 capability-declaration requirement and records the decision with
+  provenance. It does not override strict finding-level blocks.
 - Revocation: a blocklist of `(source | content_hash)` blocks installs even when
   an old pass verdict exists.
 - Shared verdict cache: keyed by `(content_sha256, backend, model,
@@ -490,7 +493,7 @@ csk install --audit                 # advisory: run, warn, confirm on findings (
 csk install --audit=strict          # block on findings >= fail_on, fail-closed
 csk install --no-audit              # explicit opt-out when config enables audit
 csk audit [skill | --all] [--json]  # standalone audit without installing
-csk audit --allow <hash> --reason … # override pin
+csk audit --allow <hash> --reason … # legacy capability-declaration pin
 csk audit --revoke <hash | source>  # revocation
 --audit-backend codex|claude-code|command   --audit-model <id>
 ```
