@@ -7,7 +7,7 @@ from typing import Any
 from .. import hashing, installer
 from ..config import GlobalConfig
 
-from . import canary, detectors, policy, trust
+from . import canary, detectors, policy, redaction, trust
 from .backends.base import AuditBackendError, AuditCanaryError, AuditRequest
 from .backends.null_backend import NullBackend
 from .model import Decision, Finding, TrustRecord, Verdict
@@ -188,7 +188,8 @@ def render_reports(reports: tuple[AuditReport, ...]) -> str:
             if finding.location is not None:
                 line = finding.location.span[0] if finding.location.span else 1
                 location = f" {finding.location.file}:{line}"
-            lines.append(f"  {finding.severity.value:<8} {finding.id}{location} - {finding.evidence}")
+            evidence = redaction.scrub_text(finding.evidence)
+            lines.append(f"  {finding.severity.value:<8} {finding.id}{location} - {evidence}")
     return "\n".join(lines)
 
 
@@ -223,7 +224,7 @@ def _finding_to_payload(finding: Finding) -> dict[str, Any]:
         "surface": finding.surface.value,
         "category": finding.category,
         "severity": finding.severity.value,
-        "evidence": finding.evidence,
+        "evidence": redaction.scrub_text(finding.evidence),
         "detector": finding.detector,
         "confidence": finding.confidence,
         "verifiable": finding.verifiable,
@@ -308,7 +309,8 @@ def _gate_messages(report: AuditReport) -> list[str]:
             line = finding.location.span[0] if finding.location.span else 1
             location = f" {finding.location.file}:{line}"
         messages.append(
-            f"{prefix}: {report.skill}: {finding.severity.value} {finding.id}{location} - {finding.evidence}"
+            f"{prefix}: {report.skill}: {finding.severity.value} {finding.id}{location} - "
+            f"{redaction.scrub_text(finding.evidence)}"
         )
     return messages
 

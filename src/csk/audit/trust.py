@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from . import redaction
 from .model import CapabilityViolation, Decision, Finding, Location, Severity, Surface, TrustRecord, Verdict
 
 
@@ -164,7 +165,7 @@ def _finding_to_payload(finding: Finding) -> dict[str, Any]:
         "category": finding.category,
         "severity": finding.severity.value,
         "location": None,
-        "evidence": finding.evidence,
+        "evidence": redaction.scrub_text(finding.evidence),
         "detector": finding.detector,
         "confidence": finding.confidence,
         "verifiable": finding.verifiable,
