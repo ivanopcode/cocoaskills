@@ -8,7 +8,7 @@ from dataclasses import replace
 import pytest
 
 from conftest import commit_all, make_config, make_project, make_skill_repo, run, write_files, write_skillfile
-from csk import config, installer, snapshot
+from csk import config, hashing, installer, manifest, snapshot
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Asserts POSIX symlink shim in .agents/bin")
@@ -229,6 +229,38 @@ def test_audit_strict_requires_pin_for_schema_v1_skill(tmp_path, skills_root, cs
 
     assert result.errors
     assert "audit requires pin: skill-a: schema v1 has no capabilities" in result.errors[0]
+    assert not (project / ".agents" / "skills" / "skill-a").exists()
+
+
+def test_audit_revocation_blocks_install_before_project_writes(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-a",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 3,
+                    "capabilities": {"network": "none", "exec": "none"},
+                    "commands": {},
+                }
+            ),
+        },
+        tag="v1",
+    )
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+    project_manifest = manifest.load_manifest(project)
+    assert project_manifest is not None
+    plan = installer._build_plans(cfg, project_manifest, use_cache=True)[0]
+    content_sha256 = hashing.content_sha256(plan.snapshot)
+    cfg = replace(cfg, audit=config.AuditConfig(enabled=True, revocations=[content_sha256]))
+
+    result = installer.install(cfg)[0]
+
+    assert result.errors
+    assert "content hash" in result.errors[0]
+    assert "is revoked" in result.errors[0]
     assert not (project / ".agents" / "skills" / "skill-a").exists()
 
 

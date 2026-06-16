@@ -29,6 +29,8 @@ class AuditReport:
     decision: Decision
     ran_at: str
     cache_hit: bool = False
+    trust: TrustRecord = TrustRecord()
+    revoked: bool = False
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,8 @@ def audit_plans(
     ran_at = datetime.now(timezone.utc).isoformat()
     for plan in plans:
         content_sha256 = hashing.content_sha256(plan.snapshot)
+        trust_record = trust.load_trust_record(config.path.parent, content_sha256)
+        revoked = _is_revoked(config, content_sha256)
         backend = _backend_for_config(config)
         cached = trust.load_cached_verdict(
             config.path.parent,
@@ -63,7 +67,17 @@ def audit_plans(
             trust.RULESET_VERSION,
         )
         if cached is not None:
-            reports.append(_report_from_verdict(plan, cached, config, scope=scope, cache_hit=True))
+            reports.append(
+                _report_from_verdict(
+                    plan,
+                    cached,
+                    config,
+                    trust_record,
+                    revoked=revoked,
+                    scope=scope,
+                    cache_hit=True,
+                )
+            )
             continue
 
         static_findings = detectors.detect_snapshot(plan.snapshot, plan.spec.capabilities)
@@ -77,7 +91,7 @@ def audit_plans(
             timeout=30,
         )
         findings = tuple(static_findings) + tuple(backend_findings)
-        decision = _decide(plan, config, findings)
+        decision = _decide(plan, config, findings, trust_record, content_sha256)
         verdict = Verdict(
             schema_version=trust.SCHEMA_VERSION,
             content_sha256=content_sha256,
@@ -93,7 +107,7 @@ def audit_plans(
             findings=findings,
             decision=decision,
             ran_at=ran_at,
-            trust=TrustRecord(),
+            trust=trust_record,
         )
         if record:
             trust.store_verdict(config.path.parent, verdict)
@@ -113,6 +127,8 @@ def audit_plans(
                 decision=decision,
                 ran_at=ran_at,
                 cache_hit=False,
+                trust=trust_record,
+                revoked=revoked,
             )
         )
     return tuple(reports)
@@ -181,6 +197,12 @@ def _report_to_payload(report: AuditReport) -> dict[str, Any]:
         "decision": report.decision.value,
         "ran_at": report.ran_at,
         "cache_hit": report.cache_hit,
+        "revoked": report.revoked,
+        "trust": {
+            "pinned": report.trust.pinned,
+            "pinned_by": report.trust.pinned_by,
+            "reason": report.trust.reason,
+        },
         "findings": [_finding_to_payload(finding) for finding in report.findings],
     }
 
@@ -231,11 +253,13 @@ def _report_from_verdict(
     plan: installer.SkillPlan,
     verdict: Verdict,
     config: GlobalConfig,
+    trust_record: TrustRecord,
+    revoked: bool,
     *,
     scope: str,
     cache_hit: bool,
 ) -> AuditReport:
-    decision = _decide(plan, config, verdict.findings)
+    decision = _decide(plan, config, verdict.findings, trust_record, verdict.content_sha256)
     return AuditReport(
         scope=scope,
         skill=plan.decl.name,
@@ -251,14 +275,18 @@ def _report_from_verdict(
         decision=decision,
         ran_at=verdict.ran_at,
         cache_hit=cache_hit,
+        trust=trust_record,
+        revoked=revoked,
     )
 
 
 def _gate_messages(report: AuditReport) -> list[str]:
+    if report.revoked:
+        return [f"audit blocked: {report.skill}: content hash {report.content_sha256} is revoked"]
     if report.decision == Decision.REQUIRE_PIN:
         return [
             f"audit requires pin: {report.skill}: schema v{report.schema_version} has no capabilities; "
-            f"migrate to csk-skill.json schema v3 or pin content hash {report.content_sha256}"
+            f"migrate to csk-skill.json schema v3 or run 'csk audit --allow {report.content_sha256} --reason <reason>'"
         ]
     prefix = "audit blocked" if report.decision == Decision.BLOCK else "audit warning"
     if not report.findings:
@@ -275,7 +303,26 @@ def _gate_messages(report: AuditReport) -> list[str]:
     return messages
 
 
-def _decide(plan: installer.SkillPlan, config: GlobalConfig, findings: tuple[Finding, ...]) -> Decision:
-    if config.audit.mode == "strict" and plan.spec.schema_version < 3:
+def _decide(
+    plan: installer.SkillPlan,
+    config: GlobalConfig,
+    findings: tuple[Finding, ...],
+    trust_record: TrustRecord,
+    content_sha256: str,
+) -> Decision:
+    if _is_revoked(config, content_sha256):
+        return Decision.BLOCK
+    if config.audit.mode == "strict" and plan.spec.schema_version < 3 and not trust_record.pinned:
         return Decision.REQUIRE_PIN
     return policy.decide(findings, mode=config.audit.mode, fail_on=config.audit.fail_on)
+
+
+def _is_revoked(config: GlobalConfig, content_sha256: str) -> bool:
+    normalized = trust.normalize_content_sha256(content_sha256)
+    for item in config.audit.revocations:
+        try:
+            if trust.normalize_content_sha256(item) == normalized:
+                return True
+        except ValueError:
+            continue
+    return False

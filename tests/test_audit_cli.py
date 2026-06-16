@@ -204,3 +204,85 @@ def test_cli_audit_strict_reports_require_pin_for_schema_v1(monkeypatch, tmp_pat
 
     assert code == 1
     assert payload["reports"][0]["decision"] == "require_pin"
+
+
+def test_cli_audit_allow_pins_schema_v1_hash_for_strict_mode(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg_path = csk_home / "config.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "projects": {"app": {"path": str(project), "agents": ["codex_cli"]}},
+                "audit": {"mode": "strict", "fail_on": "high"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+
+    assert cli.main(["audit", "app", "--json"]) == 1
+    content_hash = json.loads(capsys.readouterr().out)["reports"][0]["content_sha256"]
+    assert cli.main(["audit", "--allow", content_hash, "--reason", "reviewed legacy skill"]) == 0
+    pinned = capsys.readouterr().out
+    assert content_hash in pinned
+
+    assert cli.main(["audit", "app", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["reports"][0]["cache_hit"]
+    assert payload["reports"][0]["trust"]["pinned"]
+    assert payload["reports"][0]["decision"] == "allow"
+
+
+def test_cli_audit_revocation_blocks_cached_hash(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    make_skill_repo(
+        skills_root,
+        "skill-a",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 3,
+                    "capabilities": {"network": "none", "exec": "none"},
+                    "commands": {},
+                }
+            ),
+        },
+        tag="v1",
+    )
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg_path = csk_home / "config.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "projects": {"app": {"path": str(project), "agents": ["codex_cli"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+
+    assert cli.main(["audit", "app", "--json"]) == 0
+    content_hash = json.loads(capsys.readouterr().out)["reports"][0]["content_sha256"]
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "projects": {"app": {"path": str(project), "agents": ["codex_cli"]}},
+                "audit": {"revocations": [content_hash]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert cli.main(["audit", "app", "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["reports"][0]["cache_hit"]
+    assert payload["reports"][0]["revoked"]
+    assert payload["reports"][0]["decision"] == "block"

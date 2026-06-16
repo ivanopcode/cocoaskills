@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import subprocess
 import sys
@@ -10,6 +11,7 @@ from pathlib import Path
 from . import __version__, adapters, config, deprecation, gc, git_ops, gitignore_gate, global_install, installer, manifest, project_resolver, shell_init, status
 from .audit import pipeline as audit_pipeline
 from .audit import runner as audit_runner
+from .audit import trust as audit_trust
 from .audit.backends import AuditBackendError
 from .audit.model import Decision
 from .locking import GlobalLock, LockError
@@ -350,6 +352,8 @@ def _add_audit(sub) -> None:
     parser.add_argument("--all", action="store_true", help="audit all registered projects")
     parser.add_argument("--global", dest="global_scope", action="store_true", help="audit global skills")
     parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    parser.add_argument("--allow", metavar="CONTENT_SHA256", help="pin a content hash as explicitly trusted")
+    parser.add_argument("--reason", help="required reason for --allow")
 
 
 def _dispatch(args: argparse.Namespace) -> int:
@@ -658,6 +662,17 @@ def _cmd_global_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> i
 
 def _cmd_audit(args: argparse.Namespace) -> int:
     cfg = config.load_config()
+    if args.allow:
+        if args.target is not None or args.all or args.global_scope or args.json:
+            raise ValueError("--allow cannot be combined with targets, --all, --global, or --json")
+        path = audit_trust.pin_content_hash(
+            cfg.path.parent,
+            args.allow,
+            reason=args.reason or "",
+            pinned_by=getpass.getuser(),
+        )
+        print(f"Pinned audit trust for {args.allow.lower()}: {path}")
+        return EXIT_OK
     if args.global_scope:
         if getattr(args, "target", None) is not None or getattr(args, "all", False):
             raise ValueError("--global cannot be combined with a project target or --all")

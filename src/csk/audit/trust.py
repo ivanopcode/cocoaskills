@@ -11,6 +11,7 @@ from .model import CapabilityViolation, Decision, Finding, Location, Severity, S
 SCHEMA_VERSION = 1
 PROMPT_VERSION = 1
 RULESET_VERSION = 1
+HASH_RE = re.compile(r"^(?:sha256:)?([A-Fa-f0-9]{64})$")
 
 
 def load_cached_verdict(
@@ -48,6 +49,51 @@ def store_verdict(csk_home: Path, verdict: Verdict) -> Path:
     return path
 
 
+def load_trust_record(csk_home: Path, content_sha256: str) -> TrustRecord:
+    path = trust_path(csk_home, content_sha256)
+    if not path.exists():
+        return TrustRecord()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return TrustRecord()
+    if payload.get("schema_version") != SCHEMA_VERSION:
+        return TrustRecord()
+    return TrustRecord(
+        pinned=bool(payload.get("pinned", False)),
+        pinned_by=payload.get("pinned_by") if isinstance(payload.get("pinned_by"), str) else None,
+        reason=payload.get("reason") if isinstance(payload.get("reason"), str) else None,
+    )
+
+
+def pin_content_hash(
+    csk_home: Path,
+    content_sha256: str,
+    *,
+    reason: str,
+    pinned_by: str | None = None,
+) -> Path:
+    content_sha256 = normalize_content_sha256(content_sha256)
+    reason = reason.strip()
+    if not reason:
+        raise ValueError("audit trust pin requires a non-empty reason")
+    path = trust_path(csk_home, content_sha256)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "content_sha256": content_sha256.lower(),
+        "pinned": True,
+        "pinned_by": pinned_by,
+        "reason": reason,
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def trust_path(csk_home: Path, content_sha256: str) -> Path:
+    return csk_home / "audit" / content_sha256.lower() / "trust.json"
+
+
 def verdict_path(
     csk_home: Path,
     content_sha256: str,
@@ -57,7 +103,7 @@ def verdict_path(
     ruleset_version: int,
 ) -> Path:
     filename = f"{_safe_component(backend)}-{_safe_component(model or 'none')}-p{prompt_version}-r{ruleset_version}.json"
-    return csk_home / "audit" / content_sha256 / filename
+    return csk_home / "audit" / content_sha256.lower() / filename
 
 
 def _verdict_to_payload(verdict: Verdict) -> dict[str, Any]:
@@ -170,3 +216,10 @@ def _finding_from_payload(payload: dict[str, Any]) -> Finding:
 def _safe_component(value: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip())
     return normalized.strip("-") or "none"
+
+
+def normalize_content_sha256(value: str) -> str:
+    match = HASH_RE.fullmatch(value.strip())
+    if not match:
+        raise ValueError("content hash must be 'sha256:<64 hex chars>' or a 64-character SHA256 hex string")
+    return "sha256:" + match.group(1).lower()
