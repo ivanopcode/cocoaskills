@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Added v0.8 audit backend hardening for LLM-assisted extraction: backend
+  findings with `verifiable=false` are report-only and cannot block strict
+  installs; Codex local backends must declare `oss=true` and a
+  `local_provider`; unsafe Codex argument overrides are rejected.
+- Cloud audit backend requests now redact file contents before process
+  invocation. Oversized backend requests produce an auditable
+  `audit.request.too-large` finding instead of silently truncating skill
+  content.
 - Added the RFC 0005 audit foundation: `csk-skill.json` schema v3 capability
   manifests, deterministic static audit findings, `csk audit`, install-time
   audit gates, strict `require_pin` handling for undeclared schema v1/v2 skills,
@@ -23,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added typed `audit.backends` config with `null`, `command`, and `codex`
+  backends, per-backend timeout plumbing, backend canaries, and request-size
+  limits.
+- Added a generic `command` audit backend using a stable JSON stdin/stdout
+  protocol for local auditor processes.
+- Added a first-party `codex` audit backend over `codex exec` with an empty
+  working directory, stdin prompt input, JSON schema output, `--ephemeral`,
+  `--ignore-rules`, and no web search.
 - Added `csk install --audit`, `csk install --audit strict`, and matching
   global install/upgrade flags for one-shot audit gating without changing
   global config.

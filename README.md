@@ -201,9 +201,10 @@ install system tools.
 
 ## Skill audit
 
-`csk audit` runs deterministic security checks against the same committed skill
-snapshot that `csk install` would use. It reports findings as text or JSON and
-does not modify project files.
+`csk audit` runs security checks against the same committed skill snapshot that
+`csk install` would use. Static detectors always run. Optional `command` and
+`codex` backends can add structured findings, but they do not decide whether a
+skill installs; the gate stays deterministic inside CocoaSkills.
 
 ```bash
 csk audit
@@ -224,6 +225,17 @@ or above the configured threshold. Schema v1/v2 skills do not declare
 capabilities; strict audit requires migrating them to schema v3 or pinning the
 content hash through the trust workflow when that workflow is enabled.
 
+Backend safety rules:
+
+- Local `command` backends receive raw skill files and are treated as trusted
+  local tools.
+- Local `codex` backends require `oss=true` and an explicit `local_provider`.
+- Cloud backends require `audit.allow_cloud=true` and a public source policy
+  match. File contents are redacted before they are sent to a cloud-capable
+  backend.
+- Unverifiable backend findings are shown in reports but cannot block strict
+  installs.
+
 ## CLI
 
 | Command | Behavior |
@@ -241,7 +253,7 @@ content hash through the trust workflow when that workflow is enabled.
 | `csk add <name> --tag/--branch/--revision ...` | Add or replace a skill declaration in the project Skillfile; apply with `csk install`. |
 | `csk remove <name>` | Remove a skill declaration from the project Skillfile; the next install cleans generated files. |
 | `csk gc` | Remove unreferenced runtime entries, snapshot cache entries, and dead consumer registry entries. |
-| `csk audit [target]` | Run deterministic static audit for the current project, an alias, `.`, or a project path. Supports `--all`, `--global`, and `--json`. |
+| `csk audit [target]` | Run skill security audit for the current project, an alias, `.`, or a project path. Supports `--all`, `--global`, and `--json`. |
 | `csk list [--paths]` | List configured projects and declared skills. |
 | `csk project add <alias> <path>` | Register a project for `--all` and create a manifest if missing. |
 | `csk project resolve [target]` | Show resolved project alias, checkout alias, Skillfile, and install paths. |
@@ -299,6 +311,9 @@ from git tags; the generated `src/csk/_version.py` is not committed.
 - [Skill security audit RFC](docs/audit-design.md) — design for schema v3
   capabilities, deterministic audit gates, verdict cache, and future backend
   expansion.
+- [Audit LLM backends RFC](docs/v0.8-design.md) — design for the `command` and
+  `codex` audit backends, file-content redaction, timeout plumbing, and
+  fail-open/fail-closed behavior.
 - [MVP design specification](docs/mvp-design.md) — v0.1 contract, partially superseded by the RFCs below
   covering manifests, refs, install pipeline, locking, adapters, security
   boundary, and test surface.
