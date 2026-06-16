@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .audit.source_policy import SourcePolicy, SourcePolicyError, parse_source_policy
+
 
 SCHEMA_VERSION = 1
 DEFAULT_CONFIG_PATH = Path.home() / ".cocoaskills" / "config.json"
@@ -28,6 +30,20 @@ class ProjectConfig:
 
 
 @dataclass(frozen=True)
+class AuditConfig:
+    enabled: bool = False
+    mode: str = "advisory"
+    fail_on: str = "high"
+    backend: str = "null"
+    model: str | None = None
+    allow_cloud: bool = False
+    backends: dict[str, Any] = field(default_factory=dict)
+    grants: list[dict[str, Any]] = field(default_factory=list)
+    revocations: list[str] = field(default_factory=list)
+    source_policy: SourcePolicy = field(default_factory=SourcePolicy)
+
+
+@dataclass(frozen=True)
 class GlobalConfig:
     path: Path
     skills_root: Path
@@ -36,6 +52,7 @@ class GlobalConfig:
     adapter_mode: str
     worktree_alias_pattern: str
     projects: dict[str, ProjectConfig]
+    audit: AuditConfig = field(default_factory=AuditConfig)
 
 
 def config_path() -> Path:
@@ -94,6 +111,8 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
     except re.error as exc:
         raise ConfigError(f"Global config field 'worktree_alias_pattern' is not a valid regex: {exc}") from exc
 
+    audit = _parse_audit_config(data.get("audit"))
+
     if "projects" not in data:
         raise ConfigError("Global config requires field 'projects'")
     projects_raw = data.get("projects")
@@ -134,6 +153,7 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
         adapter_mode=adapter_mode,
         worktree_alias_pattern=worktree_alias_pattern,
         projects=projects,
+        audit=audit,
     )
 
 
@@ -156,6 +176,9 @@ def save_config(config: GlobalConfig) -> None:
             for alias, project in config.projects.items()
         },
     }
+    audit = _serialize_audit_config(config.audit)
+    if audit:
+        data["audit"] = audit
     config.path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -186,6 +209,7 @@ def add_project(
         adapter_mode=config.adapter_mode,
         worktree_alias_pattern=config.worktree_alias_pattern,
         projects=projects,
+        audit=config.audit,
     )
 
 
@@ -197,3 +221,125 @@ def validate_skills_root_for_work(config: GlobalConfig) -> None:
 
 def _is_str_list(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _parse_audit_config(raw: Any) -> AuditConfig:
+    if raw is None:
+        return AuditConfig()
+    if not isinstance(raw, dict):
+        raise ConfigError("Global config field 'audit' must be an object")
+    _reject_unknown_fields(
+        raw,
+        {
+            "enabled",
+            "mode",
+            "fail_on",
+            "backend",
+            "model",
+            "allow_cloud",
+            "backends",
+            "grants",
+            "revocations",
+            "source_policy",
+        },
+        "audit",
+    )
+
+    enabled = raw.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ConfigError("Global config field 'audit.enabled' must be a boolean")
+
+    mode = raw.get("mode", "advisory")
+    if mode not in {"advisory", "strict"}:
+        raise ConfigError("Global config field 'audit.mode' must be advisory or strict")
+
+    fail_on = raw.get("fail_on", "high")
+    if fail_on not in {"off", "low", "medium", "high", "critical"}:
+        raise ConfigError("Global config field 'audit.fail_on' must be off, low, medium, high, or critical")
+
+    backend = raw.get("backend", "null")
+    if not isinstance(backend, str) or not backend:
+        raise ConfigError("Global config field 'audit.backend' must be a non-empty string")
+
+    model = raw.get("model")
+    if model is not None and (not isinstance(model, str) or not model):
+        raise ConfigError("Global config field 'audit.model' must be a non-empty string when present")
+
+    allow_cloud = raw.get("allow_cloud", False)
+    if not isinstance(allow_cloud, bool):
+        raise ConfigError("Global config field 'audit.allow_cloud' must be a boolean")
+
+    backends = raw.get("backends", {})
+    if not isinstance(backends, dict):
+        raise ConfigError("Global config field 'audit.backends' must be an object")
+
+    grants = raw.get("grants", [])
+    if not isinstance(grants, list) or not all(isinstance(item, dict) for item in grants):
+        raise ConfigError("Global config field 'audit.grants' must be a list of objects")
+
+    revocations = raw.get("revocations", [])
+    if not _is_str_list(revocations):
+        raise ConfigError("Global config field 'audit.revocations' must be a list of strings")
+
+    try:
+        source_policy = parse_source_policy(raw.get("source_policy"))
+    except SourcePolicyError as exc:
+        raise ConfigError(str(exc)) from exc
+
+    return AuditConfig(
+        enabled=enabled,
+        mode=mode,
+        fail_on=fail_on,
+        backend=backend,
+        model=model,
+        allow_cloud=allow_cloud,
+        backends=dict(backends),
+        grants=list(grants),
+        revocations=list(revocations),
+        source_policy=source_policy,
+    )
+
+
+def _serialize_audit_config(audit: AuditConfig) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    if audit.enabled:
+        data["enabled"] = audit.enabled
+    if audit.mode != "advisory":
+        data["mode"] = audit.mode
+    if audit.fail_on != "high":
+        data["fail_on"] = audit.fail_on
+    if audit.backend != "null":
+        data["backend"] = audit.backend
+    if audit.model is not None:
+        data["model"] = audit.model
+    if audit.allow_cloud:
+        data["allow_cloud"] = audit.allow_cloud
+    if audit.backends:
+        data["backends"] = audit.backends
+    if audit.grants:
+        data["grants"] = audit.grants
+    if audit.revocations:
+        data["revocations"] = audit.revocations
+    source_policy = _serialize_source_policy(audit.source_policy)
+    if source_policy:
+        data["source_policy"] = source_policy
+    return data
+
+
+def _serialize_source_policy(source_policy: SourcePolicy) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    if source_policy.default_class != "internal":
+        data["default_class"] = source_policy.default_class
+    if source_policy.rules:
+        data["rules"] = [
+            {"pattern": rule.pattern, "class": rule.source_class}
+            for rule in source_policy.rules
+        ]
+    return data
+
+
+def _reject_unknown_fields(data: dict[str, Any], allowed: set[str], label: str) -> None:
+    unknown = sorted(set(data) - allowed)
+    if unknown:
+        joined = ", ".join(repr(item) for item in unknown)
+        raise ConfigError(f"Global config field '{label}' has unsupported field(s): {joined}")

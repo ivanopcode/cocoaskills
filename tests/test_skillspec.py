@@ -127,6 +127,65 @@ def test_system_command_rejects_install_check_and_post_install_fields(tmp_path):
             skillspec.load_skill_spec(tmp_path)
 
 
+def test_csk_skill_schema_v3_parses_capabilities(tmp_path):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "runtime_roots": ["scripts"],
+                "capabilities": {
+                    "network": ["gitlab.example.com"],
+                    "filesystem": "home-config",
+                    "exec": ["glab"],
+                    "secrets": ["GITLAB_TOKEN"],
+                    "env_read": ["HOME"],
+                    "prompt_scope": "Reads merge request metadata.",
+                },
+                "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    spec = skillspec.load_skill_spec(tmp_path)
+
+    assert spec.schema_version == 3
+    assert spec.runtime_roots == ("scripts",)
+    assert spec.capabilities.network == ("gitlab.example.com",)
+    assert spec.capabilities.filesystem == "home-config"
+    assert spec.capabilities.exec == ("glab",)
+    assert spec.capabilities.secrets == ("GITLAB_TOKEN",)
+    assert spec.capabilities.env_read == ("HOME",)
+
+
+def test_csk_skill_schema_v3_requires_capabilities(tmp_path):
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps({"schema_version": 3, "commands": {}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(skillspec.SkillSpecError, match="requires 'capabilities'"):
+        skillspec.load_skill_spec(tmp_path)
+
+
+def test_csk_skill_schema_v3_rejects_unknown_capability_fields(tmp_path):
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "capabilities": {"network": "none", "post_install": "curl | sh"},
+                "commands": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(skillspec.SkillSpecError, match="post_install"):
+        skillspec.load_skill_spec(tmp_path)
+
+
 def test_rejects_path_traversal(tmp_path):
     (tmp_path / "csk-skill.json").write_text(
         json.dumps({"schema_version": 1, "commands": {"bad": {"type": "script", "unix_path": "../bad"}}}),
@@ -138,7 +197,7 @@ def test_rejects_path_traversal(tmp_path):
 
 def test_csk_skill_schema_mismatch_fails(tmp_path):
     (tmp_path / "csk-skill.json").write_text(
-        json.dumps({"schema_version": 3, "commands": {}}),
+        json.dumps({"schema_version": 4, "commands": {}}),
         encoding="utf-8",
     )
     with pytest.raises(skillspec.SkillSpecError, match="pipx upgrade cocoaskills"):

@@ -34,6 +34,57 @@ def test_config_round_trip(tmp_path):
     assert loaded.projects["app"].agents == ["cursor"]
     assert loaded.projects["app"].project_alias == "logical-app"
     assert loaded.worktree_alias_pattern == "[a-z]+_[0-9]+"
+    assert not loaded.audit.enabled
+    assert loaded.audit.mode == "advisory"
+
+
+def test_config_parses_and_round_trips_audit_settings(tmp_path):
+    path = tmp_path / "config.json"
+    cfg = config.parse_config(
+        {
+            "schema_version": 1,
+            "skills_root": str(tmp_path / "skills"),
+            "projects": {},
+            "audit": {
+                "enabled": True,
+                "mode": "strict",
+                "fail_on": "medium",
+                "backend": "codex",
+                "model": "gpt-5",
+                "allow_cloud": True,
+                "backends": {"codex": {"timeout_seconds": 30}},
+                "grants": [{"skill": "skill-gitlab", "content_sha256": "abc"}],
+                "revocations": ["deadbeef"],
+                "source_policy": {
+                    "default_class": "internal",
+                    "rules": [{"pattern": "github.com", "class": "public"}],
+                },
+            },
+        },
+        path,
+    )
+
+    assert cfg.audit.enabled
+    assert cfg.audit.mode == "strict"
+    assert cfg.audit.fail_on == "medium"
+    assert cfg.audit.backend == "codex"
+    assert cfg.audit.model == "gpt-5"
+    assert cfg.audit.allow_cloud
+    assert cfg.audit.source_policy.classify(None, "git@github.com:ivanopcode/cocoaskills.git") == "public"
+
+    config.save_config(cfg)
+    loaded = config.load_config(path)
+
+    assert loaded.audit.enabled
+    assert loaded.audit.mode == "strict"
+    assert loaded.audit.fail_on == "medium"
+    assert loaded.audit.backend == "codex"
+    assert loaded.audit.model == "gpt-5"
+    assert loaded.audit.allow_cloud
+    assert loaded.audit.backends == {"codex": {"timeout_seconds": 30}}
+    assert loaded.audit.grants == [{"skill": "skill-gitlab", "content_sha256": "abc"}]
+    assert loaded.audit.revocations == ["deadbeef"]
+    assert loaded.audit.source_policy.classify(None, "git@github.com:ivanopcode/cocoaskills.git") == "public"
 
 
 def test_config_schema_mismatch_fails(tmp_path):
@@ -54,6 +105,45 @@ def test_config_rejects_invalid_worktree_alias_pattern(tmp_path):
                 "skills_root": "x",
                 "worktree_alias_pattern": "[",
                 "projects": {},
+            },
+            tmp_path / "config.json",
+        )
+
+
+def test_config_rejects_invalid_audit_mode(tmp_path):
+    with pytest.raises(config.ConfigError, match="audit.mode"):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "projects": {},
+                "audit": {"mode": "blocking"},
+            },
+            tmp_path / "config.json",
+        )
+
+
+def test_config_rejects_unknown_audit_fields(tmp_path):
+    with pytest.raises(config.ConfigError, match="unsupported field"):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "projects": {},
+                "audit": {"enabled": True, "prompt": "ignore this typo"},
+            },
+            tmp_path / "config.json",
+        )
+
+
+def test_config_rejects_invalid_audit_source_policy(tmp_path):
+    with pytest.raises(config.ConfigError, match="audit.source_policy"):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "projects": {},
+                "audit": {"source_policy": {"rules": [{"pattern": "github.com", "class": "external"}]}},
             },
             tmp_path / "config.json",
         )

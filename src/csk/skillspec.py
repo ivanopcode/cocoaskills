@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .audit.capabilities import CapabilityManifest, CapabilityParseError, parse_capabilities
 from .identifiers import IDENTIFIER_RULE, is_valid_identifier
 
 
 SCHEMA_VERSION = 1
-SUPPORTED_SCHEMA_VERSIONS = {1, 2}
+SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3}
 UPGRADE_HINT = (
     "Upgrade with: pipx upgrade cocoaskills, brew upgrade cocoaskills, "
     "or mise upgrade pipx:cocoaskills."
@@ -37,6 +38,7 @@ class SkillSpec:
     source_file: str | None
     schema_version: int = SCHEMA_VERSION
     runtime_roots: tuple[str, ...] = ()
+    capabilities: CapabilityManifest = field(default_factory=CapabilityManifest.implicit_none)
 
 
 def load_skill_spec(snapshot: Path) -> SkillSpec:
@@ -64,10 +66,21 @@ def _load_csk_skill(path: Path) -> SkillSpec:
             f"Unsupported csk-skill.json schema_version {schema!r}; this skill requires a newer csk. "
             f"{UPGRADE_HINT}"
         )
-    if schema == 2:
-        _reject_unknown_fields(data, {"schema_version", "runtime_roots", "commands"}, "csk-skill.json")
-    runtime_roots_raw = data["runtime_roots"] if schema == 2 and "runtime_roots" in data else []
-    runtime_roots = _parse_runtime_roots(runtime_roots_raw, snapshot=path.parent) if schema == 2 else ()
+    if schema in {2, 3}:
+        allowed_fields = {"schema_version", "runtime_roots", "commands"}
+        if schema == 3:
+            allowed_fields.add("capabilities")
+        _reject_unknown_fields(data, allowed_fields, "csk-skill.json")
+    if schema == 3 and "capabilities" not in data:
+        raise SkillSpecError("csk-skill.json schema v3 requires 'capabilities'")
+    try:
+        capabilities = (
+            parse_capabilities(data.get("capabilities")) if schema == 3 else CapabilityManifest.implicit_none()
+        )
+    except CapabilityParseError as exc:
+        raise SkillSpecError(str(exc)) from exc
+    runtime_roots_raw = data["runtime_roots"] if schema in {2, 3} and "runtime_roots" in data else []
+    runtime_roots = _parse_runtime_roots(runtime_roots_raw, snapshot=path.parent) if schema in {2, 3} else ()
     commands_raw = data.get("commands", {})
     if not isinstance(commands_raw, dict):
         raise SkillSpecError("csk-skill.json field 'commands' must be an object")
@@ -81,27 +94,27 @@ def _load_csk_skill(path: Path) -> SkillSpec:
             raise SkillSpecError(f"Command {name!r} must be an object")
         command_type = raw.get("type")
         if command_type == "script":
-            if schema == 2:
+            if schema in {2, 3}:
                 _reject_unknown_fields(raw, {"type", "unix_path", "win_path"}, f"commands.{name}")
             unix_path = raw.get("unix_path")
             win_path = raw.get("win_path")
-            if schema == 2 and unix_path is None and win_path is None:
+            if schema in {2, 3} and unix_path is None and win_path is None:
                 raise SkillSpecError(f"Script command {name!r} requires 'unix_path' or 'win_path'")
             if unix_path is not None:
                 unix_path = _validate_relative_path(
                     unix_path,
                     field=f"commands.{name}.unix_path",
-                    strict_posix=schema == 2,
+                    strict_posix=schema in {2, 3},
                 )
-                if schema == 2:
+                if schema in {2, 3}:
                     _validate_v2_script_path(path.parent, unix_path, runtime_roots, field=f"commands.{name}.unix_path")
             if win_path is not None:
                 win_path = _validate_relative_path(
                     win_path,
                     field=f"commands.{name}.win_path",
-                    strict_posix=schema == 2,
+                    strict_posix=schema in {2, 3},
                 )
-                if schema == 2:
+                if schema in {2, 3}:
                     _validate_v2_script_path(path.parent, win_path, runtime_roots, field=f"commands.{name}.win_path")
             commands[name] = CommandSpec(
                 name=name,
@@ -111,7 +124,7 @@ def _load_csk_skill(path: Path) -> SkillSpec:
                 source="csk-skill.json",
             )
         elif command_type == "system":
-            if schema == 2:
+            if schema in {2, 3}:
                 _reject_unknown_fields(raw, {"type", "command", "hint"}, f"commands.{name}")
             command = raw.get("command")
             if not isinstance(command, str) or not command:
@@ -133,6 +146,7 @@ def _load_csk_skill(path: Path) -> SkillSpec:
         source_file="csk-skill.json",
         schema_version=schema,
         runtime_roots=runtime_roots,
+        capabilities=capabilities,
     )
 
 
