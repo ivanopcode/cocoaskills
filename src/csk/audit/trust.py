@@ -11,6 +11,8 @@ from .model import CapabilityViolation, Decision, Finding, Location, Severity, S
 
 SCHEMA_VERSION = 1
 PROMPT_VERSION = 1
+# Bump RULESET_VERSION whenever detector semantics or severity classification
+# changes. Cache hits intentionally skip canary and detector execution.
 RULESET_VERSION = 1
 HASH_RE = re.compile(r"^(?:sha256:)?([A-Fa-f0-9]{64})$")
 

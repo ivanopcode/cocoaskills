@@ -6,7 +6,7 @@ from dataclasses import replace
 import pytest
 
 from conftest import make_config, make_project, make_skill_repo, write_skillfile
-from csk.audit import detectors, runner
+from csk.audit import canary, detectors, runner
 from csk.audit.backends import AuditBackendError
 from csk import config
 
@@ -149,3 +149,45 @@ def test_audit_static_canary_failure_fails_closed(monkeypatch, tmp_path, csk_hom
 
     with pytest.raises(AuditBackendError, match="Static audit canary failed"):
         runner.audit_projects(cfg, alias="app")
+
+
+def test_audit_static_canary_runs_once_per_audit_call(monkeypatch, tmp_path, csk_home, skills_root):
+    for name in ("skill-a", "skill-b"):
+        make_skill_repo(
+            skills_root,
+            name,
+            {
+                "csk-skill.json": json.dumps(
+                    {
+                        "schema_version": 3,
+                        "capabilities": {"network": "none", "exec": "none"},
+                        "commands": {},
+                    }
+                ),
+            },
+            tag="v1",
+        )
+    project = make_project(tmp_path)
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [
+                {"name": "skill-a", "tag": "v1"},
+                {"name": "skill-b", "tag": "v1"},
+            ],
+        },
+    )
+    cfg = make_config(csk_home, skills_root, project)
+    calls = 0
+
+    def canary_passes():
+        nonlocal calls
+        calls += 1
+        return True
+
+    monkeypatch.setattr(canary, "run_static_canary", canary_passes)
+
+    runner.audit_projects(cfg, alias="app")
+
+    assert calls == 1

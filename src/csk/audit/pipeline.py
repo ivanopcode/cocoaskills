@@ -56,6 +56,7 @@ def audit_plans(
 ) -> tuple[AuditReport, ...]:
     reports: list[AuditReport] = []
     ran_at = datetime.now(timezone.utc).isoformat()
+    static_canary_passed: bool | None = None
     for plan in plans:
         content_sha256 = hashing.content_sha256(plan.snapshot)
         trust_record = trust.load_trust_record(config.path.parent, content_sha256)
@@ -83,7 +84,9 @@ def audit_plans(
             )
             continue
 
-        if not canary.run_static_canary():
+        if static_canary_passed is None:
+            static_canary_passed = canary.run_static_canary()
+        if not static_canary_passed:
             raise AuditCanaryError("Static audit canary failed; audit detectors are not producing expected findings")
         static_findings = detectors.detect_snapshot(plan.snapshot, plan.spec.capabilities)
         if not backend.is_available():
