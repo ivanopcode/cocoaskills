@@ -8,7 +8,7 @@ from .. import hashing, installer
 from ..config import GlobalConfig
 
 from . import canary, detectors, policy, trust
-from .backends.base import AuditBackendError, AuditRequest
+from .backends.base import AuditBackendError, AuditCanaryError, AuditRequest
 from .backends.null_backend import NullBackend
 from .model import Decision, Finding, TrustRecord, Verdict
 
@@ -81,13 +81,13 @@ def audit_plans(
             continue
 
         if not canary.run_static_canary():
-            raise AuditBackendError("Static audit canary failed; audit detectors are not producing expected findings")
+            raise AuditCanaryError("Static audit canary failed; audit detectors are not producing expected findings")
         static_findings = detectors.detect_snapshot(plan.snapshot, plan.spec.capabilities)
         if not backend.is_available():
             raise AuditBackendError(f"Audit backend is unavailable: {backend.name}")
         backend_canary_passed = backend.run_canary()
         if not backend_canary_passed:
-            raise AuditBackendError(f"Audit backend failed canary check: {backend.name}")
+            raise AuditCanaryError(f"Audit backend failed canary check: {backend.name}")
         backend_findings = backend.extract(
             _build_request(plan, static_findings, backend.cloud),
             timeout=30,
@@ -145,7 +145,15 @@ def gate_plans(
 ) -> GateResult:
     if not config.audit.enabled:
         return GateResult(reports=())
-    reports = audit_plans(plans, config, scope=scope, record=record)
+    try:
+        reports = audit_plans(plans, config, scope=scope, record=record)
+    except AuditCanaryError as exc:
+        return GateResult(reports=(), errors=(f"audit blocked: audit canary failed: {exc}",))
+    except AuditBackendError as exc:
+        message = f"audit backend failed: {exc}"
+        if config.audit.mode == "strict":
+            return GateResult(reports=(), errors=(f"audit blocked: {message}",))
+        return GateResult(reports=(), warnings=(f"audit warning: {message}; proceeding without audit",))
     warnings: list[str] = []
     errors: list[str] = []
     for report in reports:

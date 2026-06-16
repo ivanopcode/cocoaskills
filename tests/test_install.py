@@ -9,6 +9,8 @@ import pytest
 
 from conftest import commit_all, make_config, make_project, make_skill_repo, run, write_files, write_skillfile
 from csk import config, hashing, installer, manifest, snapshot
+from csk.audit import pipeline as audit_pipeline
+from csk.audit.backends import AuditBackendError
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Asserts POSIX symlink shim in .agents/bin")
@@ -261,6 +263,118 @@ def test_audit_revocation_blocks_install_before_project_writes(tmp_path, skills_
     assert result.errors
     assert "content hash" in result.errors[0]
     assert "is revoked" in result.errors[0]
+    assert not (project / ".agents" / "skills" / "skill-a").exists()
+
+
+def test_audit_backend_failure_warns_and_allows_install_in_advisory(monkeypatch, tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-a",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 3,
+                    "capabilities": {"network": "none", "exec": "none"},
+                    "commands": {},
+                }
+            ),
+        },
+        tag="v1",
+    )
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+    cfg = replace(cfg, audit=config.AuditConfig(enabled=True, mode="advisory"))
+
+    class FailingBackend:
+        name = "fake"
+        cloud = False
+
+        def is_available(self):
+            return True
+
+        def run_canary(self):
+            return True
+
+        def extract(self, request, *, timeout):  # noqa: ANN001
+            raise AuditBackendError("fake backend failed")
+
+    monkeypatch.setattr(audit_pipeline, "_backend_for_config", lambda cfg: FailingBackend())
+
+    result = installer.install(cfg)[0]
+
+    assert not result.errors
+    assert any("audit warning: audit backend failed: fake backend failed; proceeding without audit" in msg for msg in result.messages)
+    assert (project / ".agents" / "skills" / "skill-a").exists()
+
+
+def test_audit_backend_failure_blocks_install_in_strict(monkeypatch, tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-a",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 3,
+                    "capabilities": {"network": "none", "exec": "none"},
+                    "commands": {},
+                }
+            ),
+        },
+        tag="v1",
+    )
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+    cfg = replace(cfg, audit=config.AuditConfig(enabled=True, mode="strict"))
+
+    class FailingBackend:
+        name = "fake"
+        cloud = False
+
+        def is_available(self):
+            return False
+
+        def run_canary(self):
+            return True
+
+        def extract(self, request, *, timeout):  # noqa: ANN001
+            return ()
+
+    monkeypatch.setattr(audit_pipeline, "_backend_for_config", lambda cfg: FailingBackend())
+
+    result = installer.install(cfg)[0]
+
+    assert result.errors
+    assert "audit blocked: audit backend failed: Audit backend is unavailable: fake" in result.errors[0]
+    assert not (project / ".agents" / "skills" / "skill-a").exists()
+
+
+def test_audit_canary_failure_blocks_advisory_install(monkeypatch, tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-a",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 3,
+                    "capabilities": {"network": "none", "exec": "none"},
+                    "commands": {},
+                }
+            ),
+        },
+        tag="v1",
+    )
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+    cfg = replace(cfg, audit=config.AuditConfig(enabled=True, mode="advisory"))
+    monkeypatch.setattr(audit_pipeline.canary, "run_static_canary", lambda: False)
+
+    result = installer.install(cfg)[0]
+
+    assert result.errors
+    assert "audit blocked: audit canary failed" in result.errors[0]
     assert not (project / ".agents" / "skills" / "skill-a").exists()
 
 

@@ -11,6 +11,10 @@ class AuditBackendError(Exception):
     pass
 
 
+class AuditCanaryError(AuditBackendError):
+    pass
+
+
 @dataclass(frozen=True)
 class AuditRequest:
     files: dict[str, bytes]
