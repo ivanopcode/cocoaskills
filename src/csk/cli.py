@@ -338,7 +338,8 @@ def _add_audit(sub) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Scope:\n"
-            "  By default audits the current project. Use a target, --all, or --global for other scopes.\n\n"
+            "  By default audits the current project. Use a target, --all, or --global for other scopes.\n"
+            "  --all audits registered projects and global skills.\n\n"
             "Side effects:\n"
             "  Read-only. Missing git URL sources may be cloned into temporary directories only.\n\n"
             "Examples:\n"
@@ -349,7 +350,7 @@ def _add_audit(sub) -> None:
         ),
     )
     parser.add_argument("target", nargs="?", help="project alias, '.', or project path")
-    parser.add_argument("--all", action="store_true", help="audit all registered projects")
+    parser.add_argument("--all", action="store_true", help="audit all registered projects and global skills")
     parser.add_argument("--global", dest="global_scope", action="store_true", help="audit global skills")
     parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
     parser.add_argument("--allow", metavar="CONTENT_SHA256", help="pin a content hash as explicitly trusted")
@@ -673,7 +674,11 @@ def _cmd_audit(args: argparse.Namespace) -> int:
         )
         print(f"Pinned audit trust for {args.allow.lower()}: {path}")
         return EXIT_OK
-    if args.global_scope:
+    if args.all:
+        if args.target is not None or args.global_scope:
+            raise ValueError("--all cannot be combined with a project target or --global")
+        reports = audit_runner.audit_projects(cfg, alias=None) + audit_runner.audit_global(cfg)
+    elif args.global_scope:
         if getattr(args, "target", None) is not None or getattr(args, "all", False):
             raise ValueError("--global cannot be combined with a project target or --all")
         reports = audit_runner.audit_global(cfg)

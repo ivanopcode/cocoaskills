@@ -154,6 +154,64 @@ def test_cli_audit_global_scope(monkeypatch, tmp_path, csk_home, skills_root, ca
     assert payload["reports"][0]["decision"] == "allow"
 
 
+def test_cli_audit_all_includes_registered_projects_and_global(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    make_skill_repo(
+        skills_root,
+        "skill-a",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 3,
+                    "capabilities": {"network": "none", "exec": "none"},
+                    "commands": {},
+                }
+            ),
+        },
+        tag="v1",
+    )
+    make_skill_repo(
+        skills_root,
+        "skill-b",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 3,
+                    "capabilities": {"network": "none", "exec": "none"},
+                    "commands": {},
+                }
+            ),
+        },
+        tag="v1",
+    )
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg_path = csk_home / "config.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "projects": {"app": {"path": str(project), "agents": ["codex_cli"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    global_install.add_decl(
+        csk_home,
+        name="skill-b",
+        ref_kind="tag",
+        ref="v1",
+        default_agents=["codex_cli"],
+    )
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+
+    assert cli.main(["audit", "--all", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert {report["scope"] for report in payload["reports"]} == {"app", "global"}
+    assert {report["skill"] for report in payload["reports"]} == {"skill-a", "skill-b"}
+
+
 def test_cli_install_audit_flag_warns_without_persisting_config(monkeypatch, tmp_path, csk_home, skills_root, capsys):
     make_skill_repo(
         skills_root,
