@@ -179,3 +179,28 @@ def test_cli_install_audit_strict_blocks(monkeypatch, tmp_path, csk_home, skills
     assert code == 1
     assert "audit blocked: skill-a" in captured.err
     assert not (project / ".agents" / "skills" / "skill-a").exists()
+
+
+def test_cli_audit_strict_reports_require_pin_for_schema_v1(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg_path = csk_home / "config.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "projects": {"app": {"path": str(project), "agents": ["codex_cli"]}},
+                "audit": {"mode": "strict", "fail_on": "high"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+
+    code = cli.main(["audit", "app", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert code == 1
+    assert payload["reports"][0]["decision"] == "require_pin"

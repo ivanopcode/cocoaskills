@@ -77,7 +77,7 @@ def audit_plans(
             timeout=30,
         )
         findings = tuple(static_findings) + tuple(backend_findings)
-        decision = policy.decide(findings, mode=config.audit.mode, fail_on=config.audit.fail_on)
+        decision = _decide(plan, config, findings)
         verdict = Verdict(
             schema_version=trust.SCHEMA_VERSION,
             content_sha256=content_sha256,
@@ -134,7 +134,7 @@ def gate_plans(
         if report.decision == Decision.ALLOW:
             continue
         messages = _gate_messages(report)
-        if report.decision == Decision.BLOCK:
+        if report.decision in {Decision.BLOCK, Decision.REQUIRE_PIN}:
             errors.extend(messages)
         else:
             warnings.extend(messages)
@@ -235,7 +235,7 @@ def _report_from_verdict(
     scope: str,
     cache_hit: bool,
 ) -> AuditReport:
-    decision = policy.decide(verdict.findings, mode=config.audit.mode, fail_on=config.audit.fail_on)
+    decision = _decide(plan, config, verdict.findings)
     return AuditReport(
         scope=scope,
         skill=plan.decl.name,
@@ -255,6 +255,11 @@ def _report_from_verdict(
 
 
 def _gate_messages(report: AuditReport) -> list[str]:
+    if report.decision == Decision.REQUIRE_PIN:
+        return [
+            f"audit requires pin: {report.skill}: schema v{report.schema_version} has no capabilities; "
+            f"migrate to csk-skill.json schema v3 or pin content hash {report.content_sha256}"
+        ]
     prefix = "audit blocked" if report.decision == Decision.BLOCK else "audit warning"
     if not report.findings:
         return [f"{prefix}: {report.skill}: {report.decision.value}"]
@@ -268,3 +273,9 @@ def _gate_messages(report: AuditReport) -> list[str]:
             f"{prefix}: {report.skill}: {finding.severity.value} {finding.id}{location} - {finding.evidence}"
         )
     return messages
+
+
+def _decide(plan: installer.SkillPlan, config: GlobalConfig, findings: tuple[Finding, ...]) -> Decision:
+    if config.audit.mode == "strict" and plan.spec.schema_version < 3:
+        return Decision.REQUIRE_PIN
+    return policy.decide(findings, mode=config.audit.mode, fail_on=config.audit.fail_on)

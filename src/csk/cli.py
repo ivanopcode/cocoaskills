@@ -670,7 +670,7 @@ def _cmd_audit(args: argparse.Namespace) -> int:
         print(json.dumps(audit_pipeline.reports_to_payload(reports), indent=2, sort_keys=True))
     else:
         print(audit_pipeline.render_reports(reports))
-    return EXIT_PARTIAL_FAIL if any(report.decision == Decision.BLOCK for report in reports) else EXIT_OK
+    return EXIT_PARTIAL_FAIL if any(report.decision in {Decision.BLOCK, Decision.REQUIRE_PIN} for report in reports) else EXIT_OK
 
 
 def _cfg_with_audit_override(cfg: config.GlobalConfig, args: argparse.Namespace) -> config.GlobalConfig:

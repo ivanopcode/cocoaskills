@@ -216,6 +216,22 @@ def test_audit_strict_blocks_before_project_writes(tmp_path, skills_root, csk_ho
     assert not (project / ".agents" / "skills" / "skill-a").exists()
 
 
+def test_audit_strict_requires_pin_for_schema_v1_skill(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg = replace(
+        make_config(csk_home, skills_root, project),
+        audit=config.AuditConfig(enabled=True, mode="strict", fail_on="high"),
+    )
+
+    result = installer.install(cfg)[0]
+
+    assert result.errors
+    assert "audit requires pin: skill-a: schema v1 has no capabilities" in result.errors[0]
+    assert not (project / ".agents" / "skills" / "skill-a").exists()
+
+
 def test_audit_dry_run_does_not_write_verdict_cache(tmp_path, skills_root, csk_home):
     project = make_project(tmp_path)
     make_skill_repo(
