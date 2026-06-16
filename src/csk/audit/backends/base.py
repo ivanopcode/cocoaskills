@@ -15,8 +15,16 @@ class AuditCanaryError(AuditBackendError):
     pass
 
 
+class AuditEgressError(AuditBackendError):
+    pass
+
+
 @dataclass(frozen=True)
 class AuditRequest:
+    skill: str
+    source: str
+    commit: str
+    content_sha256: str
     files: dict[str, bytes]
     capabilities: CapabilityManifest
     contract_reference: str

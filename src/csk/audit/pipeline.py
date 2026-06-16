@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -8,10 +9,11 @@ from typing import Any
 from .. import hashing, installer
 from ..config import GlobalConfig
 
-from . import backend_config, canary, detectors, policy, redaction, trust
-from .backends.base import AuditBackendError, AuditCanaryError, AuditRequest
+from . import backend_config, canary, detectors, policy, redaction, serialization, trust
+from .backends.base import AuditBackendError, AuditCanaryError, AuditEgressError, AuditRequest
+from .backends.command_backend import CommandBackend
 from .backends.null_backend import NullBackend
-from .model import Decision, Finding, TrustRecord, Verdict
+from .model import Decision, Finding, Location, Severity, Surface, TrustRecord, Verdict
 from .source_policy import normalize_source
 
 
@@ -57,6 +59,7 @@ def audit_plans(
     reports: list[AuditReport] = []
     ran_at = datetime.now(timezone.utc).isoformat()
     static_canary_passed: bool | None = None
+    backend_canary_passed: bool | None = None
     for plan in plans:
         content_sha256 = hashing.content_sha256(plan.snapshot)
         trust_record = trust.load_trust_record(config.path.parent, content_sha256)
@@ -90,16 +93,26 @@ def audit_plans(
         if not static_canary_passed:
             raise AuditCanaryError("Static audit canary failed; audit detectors are not producing expected findings")
         static_findings = detectors.detect_snapshot(plan.snapshot, plan.spec.capabilities)
-        if not backend.is_available():
-            raise AuditBackendError(f"Audit backend is unavailable: {backend.name}")
-        backend_canary_passed = backend.run_canary()
-        if not backend_canary_passed:
-            raise AuditCanaryError(f"Audit backend failed canary check: {backend.name}")
-        backend_findings = backend.extract(
-            _build_request(plan, static_findings, backend.cloud),
-            timeout=resolved_backend.timeout_seconds,
-        )
-        findings = tuple(static_findings) + tuple(backend_findings)
+        _check_cloud_egress(config, resolved_backend, plan)
+        request = _build_request(plan, static_findings, backend.cloud, content_sha256)
+        request_size = _request_size(request)
+        if request_size > config.audit.max_request_bytes:
+            backend_findings = ()
+            findings = request.static_findings + (
+                _too_large_finding(request_size, config.audit.max_request_bytes),
+            )
+        else:
+            if not backend.is_available():
+                raise AuditBackendError(f"Audit backend is unavailable: {backend.name}")
+            if backend_canary_passed is None:
+                backend_canary_passed = backend.run_canary()
+            if not backend_canary_passed:
+                raise AuditCanaryError(f"Audit backend failed canary check: {backend.name}")
+            backend_findings = backend.extract(
+                request,
+                timeout=resolved_backend.timeout_seconds,
+            )
+            findings = request.static_findings + tuple(backend_findings)
         decision = _decide(plan, config, findings, trust_record, content_sha256, revocation)
         verdict = Verdict(
             schema_version=trust.SCHEMA_VERSION,
@@ -157,6 +170,8 @@ def gate_plans(
         reports = audit_plans(plans, config, scope=scope, record=record)
     except AuditCanaryError as exc:
         return GateResult(reports=(), errors=(f"audit blocked: audit canary failed: {exc}",))
+    except AuditEgressError as exc:
+        return GateResult(reports=(), errors=(f"audit blocked: {exc}",))
     except AuditBackendError as exc:
         message = f"audit backend failed: {exc}"
         if config.audit.mode == "strict":
@@ -264,22 +279,95 @@ def _backend_config_for_config(config: GlobalConfig) -> backend_config.BackendCo
         raise AuditBackendError(str(exc)) from exc
 
 
-def _backend_for_config(config: GlobalConfig) -> NullBackend:
+def _backend_for_config(config: GlobalConfig):
     resolved = _backend_config_for_config(config)
     if isinstance(resolved, backend_config.NullBackendConfig):
         return NullBackend()
+    if isinstance(resolved, backend_config.CommandBackendConfig):
+        return CommandBackend(resolved)
     raise AuditBackendError(f"Unsupported audit backend: {config.audit.backend}")
 
 
-def _build_request(plan: installer.SkillPlan, static_findings: tuple[Finding, ...], cloud: bool) -> AuditRequest:
+def _build_request(
+    plan: installer.SkillPlan,
+    static_findings: tuple[Finding, ...],
+    cloud: bool,
+    content_sha256: str,
+) -> AuditRequest:
+    files: dict[str, bytes] = {}
+    redacted = False
+    for path in sorted(plan.snapshot.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(plan.snapshot).as_posix()
+        content = path.read_bytes()
+        if cloud:
+            scrubbed = redaction.scrub_bytes(content)
+            if scrubbed != content:
+                redacted = True
+            content = scrubbed
+        files[rel] = content
+    findings = static_findings
+    if redacted:
+        findings = static_findings + (
+            Finding(
+                id="audit.redaction.applied",
+                surface=Surface.MANIFEST,
+                category="hygiene",
+                severity=Severity.INFO,
+                location=None,
+                evidence="File contents redacted before cloud backend request",
+                detector="audit.redaction",
+                confidence="high",
+                verifiable=True,
+            ),
+        )
     return AuditRequest(
-        files={},
+        skill=plan.decl.name,
+        source=plan.decl.source,
+        commit=plan.resolved.commit,
+        content_sha256=content_sha256,
+        files=files,
         capabilities=plan.spec.capabilities,
         contract_reference="",
         response_schema={},
-        static_findings=static_findings,
-        redacted=cloud,
+        static_findings=findings,
+        redacted=redacted,
     )
+
+
+def _request_size(request: AuditRequest) -> int:
+    payload = serialization.request_to_payload(request)
+    return len(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+
+
+def _too_large_finding(size: int, limit: int) -> Finding:
+    return Finding(
+        id="audit.request.too-large",
+        surface=Surface.MANIFEST,
+        category="audit-incomplete",
+        severity=Severity.HIGH,
+        location=None,
+        evidence=f"Audit request is {size} bytes, limit is {limit} bytes",
+        detector="audit.request",
+        confidence="high",
+        verifiable=True,
+    )
+
+
+def _check_cloud_egress(
+    config: GlobalConfig,
+    resolved_backend: backend_config.BackendConfig,
+    plan: installer.SkillPlan,
+) -> None:
+    if not resolved_backend.cloud:
+        return
+    source_class = config.audit.source_policy.classify(plan.decl.source, plan.decl.git)
+    if source_class != "public":
+        raise AuditEgressError(
+            f"cloud audit backend {resolved_backend.name} is not allowed for {plan.decl.name}: "
+            f"source class is {source_class}"
+        )
 
 
 def _report_from_verdict(
