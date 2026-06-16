@@ -27,6 +27,17 @@ class AuditReport:
     ran_at: str
 
 
+@dataclass(frozen=True)
+class GateResult:
+    reports: tuple[AuditReport, ...]
+    warnings: tuple[str, ...] = ()
+    errors: tuple[str, ...] = ()
+
+    @property
+    def blocked(self) -> bool:
+        return bool(self.errors)
+
+
 def audit_plans(plans: list[installer.SkillPlan], config: GlobalConfig, *, scope: str) -> tuple[AuditReport, ...]:
     reports: list[AuditReport] = []
     ran_at = datetime.now(timezone.utc).isoformat()
@@ -50,6 +61,23 @@ def audit_plans(plans: list[installer.SkillPlan], config: GlobalConfig, *, scope
             )
         )
     return tuple(reports)
+
+
+def gate_plans(plans: list[installer.SkillPlan], config: GlobalConfig, *, scope: str) -> GateResult:
+    if not config.audit.enabled:
+        return GateResult(reports=())
+    reports = audit_plans(plans, config, scope=scope)
+    warnings: list[str] = []
+    errors: list[str] = []
+    for report in reports:
+        if report.decision == Decision.ALLOW:
+            continue
+        messages = _gate_messages(report)
+        if report.decision == Decision.BLOCK:
+            errors.extend(messages)
+        else:
+            warnings.extend(messages)
+    return GateResult(reports=reports, warnings=tuple(warnings), errors=tuple(errors))
 
 
 def reports_to_payload(reports: tuple[AuditReport, ...]) -> dict[str, Any]:
@@ -117,3 +145,19 @@ def _finding_to_payload(finding: Finding) -> dict[str, Any]:
             "observed": finding.capability_violation.observed,
         }
     return payload
+
+
+def _gate_messages(report: AuditReport) -> list[str]:
+    prefix = "audit blocked" if report.decision == Decision.BLOCK else "audit warning"
+    if not report.findings:
+        return [f"{prefix}: {report.skill}: {report.decision.value}"]
+    messages: list[str] = []
+    for finding in report.findings:
+        location = ""
+        if finding.location is not None:
+            line = finding.location.span[0] if finding.location.span else 1
+            location = f" {finding.location.file}:{line}"
+        messages.append(
+            f"{prefix}: {report.skill}: {finding.severity.value} {finding.id}{location} - {finding.evidence}"
+        )
+    return messages

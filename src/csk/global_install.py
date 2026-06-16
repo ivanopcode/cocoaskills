@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from . import adapters, env_files, git_ops, hashing, installer, manifest, shims
+from .audit import pipeline as audit_pipeline
 from .config import DEFAULT_AGENTS, GlobalConfig
 
 
@@ -143,6 +144,12 @@ def install(config: GlobalConfig, *, options: installer.InstallOptions | None = 
                 result.errors.append(str(exc))
                 return result
             plans = _plans_with_available_system_commands(plans, result)
+            audit_gate = audit_pipeline.gate_plans(plans, config, scope="global")
+            result.messages.extend(audit_gate.warnings)
+            if audit_gate.blocked:
+                result.status = "failed"
+                result.errors.extend(audit_gate.errors)
+                return result
             if options.strict_tags:
                 installer._check_moved_tags_strict(global_skills_root(csk_home), plans)
             else:

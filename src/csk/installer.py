@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import adapters, consumers, env_files, gc, git_ops, gitignore_gate, hashing, locale, manifest, shims, skillspec, snapshot, whitelist
+from .audit import pipeline as audit_pipeline
 from .config import GlobalConfig, ProjectConfig
 from .skillspec import CommandSpec
 
@@ -91,6 +92,10 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
             plans = _build_plans(config, project_manifest, use_cache=not options.dry_run, stack=stack)
             _detect_command_collisions(plans)
             _check_system_commands(plans)
+            audit_gate = audit_pipeline.gate_plans(plans, config, scope=project.alias)
+            result.messages.extend(audit_gate.warnings)
+            if audit_gate.blocked:
+                raise InstallError("; ".join(audit_gate.errors))
             if options.strict_tags:
                 _check_moved_tags_strict(project.path / ".agents" / "skills", plans)
             else:
