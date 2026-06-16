@@ -10,6 +10,7 @@ from .capabilities import CapabilityManifest
 EXPECTED_STATIC_FINDINGS = {
     "static.env.undeclared-secret",
     "static.network.undeclared-host",
+    "static.opaque.unanalyzable-artifact",
     "static.python.shell-true",
     "static.shell.curl-pipe",
     "static.shell.dangerous-rm",
@@ -31,6 +32,7 @@ def run_static_canary() -> bool:
             "print(os.environ.get('SECRET_TOKEN'))\n",
             encoding="utf-8",
         )
+        (scripts / "payload.bin").write_bytes(b"\x00opaque")
         findings = detectors.detect_snapshot(root, CapabilityManifest.implicit_none())
     observed = {finding.id for finding in findings}
     return EXPECTED_STATIC_FINDINGS <= observed

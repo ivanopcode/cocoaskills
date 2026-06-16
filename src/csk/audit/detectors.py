@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
+import json
 import re
+import shlex
 from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import urlparse
@@ -36,6 +39,22 @@ _ENV_RE = re.compile(
     r"|\$([A-Z_][A-Z0-9_]*)"
 )
 _DANGEROUS_RM_RE = re.compile(r"\brm\s+-rf\s+(?:/|\$HOME|~)(?:\s|$)")
+COMMON_SYSTEM_COMMANDS = {
+    "bash",
+    "brew",
+    "curl",
+    "git",
+    "make",
+    "pip",
+    "python",
+    "python3",
+    "rm",
+    "sh",
+    "ssh",
+    "sudo",
+    "zsh",
+}
+OPAQUE_PREFIXES = ("agents/", "references/", "scripts/")
 
 
 def detect_snapshot(snapshot: Path, capabilities: CapabilityManifest) -> tuple[Finding, ...]:
@@ -46,6 +65,11 @@ def detect_snapshot(snapshot: Path, capabilities: CapabilityManifest) -> tuple[F
         findings.extend(_detect_network_urls(rel_path, text, capabilities))
         findings.extend(_detect_secret_env(rel_path, text, capabilities))
         findings.extend(_detect_dangerous_rm(rel_path, text))
+        if rel_path.endswith(".py"):
+            findings.extend(_detect_python_ast(rel_path, text, capabilities))
+        findings.extend(_detect_minified_text(rel_path, text))
+    findings.extend(_detect_manifest(snapshot))
+    findings.extend(_detect_opaque_files(snapshot))
     return tuple(findings)
 
 
@@ -166,6 +190,384 @@ def _detect_dangerous_rm(rel_path: str, text: str) -> list[Finding]:
         )
         for match in _DANGEROUS_RM_RE.finditer(text)
     ]
+
+
+def _detect_python_ast(rel_path: str, text: str, capabilities: CapabilityManifest) -> list[Finding]:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as exc:
+        return [
+            _ast_finding(
+                finding_id="static.opaque.python-parse-error",
+                category="opaque",
+                severity=Severity.HIGH,
+                rel_path=rel_path,
+                node=exc,
+                evidence=str(exc),
+            )
+        ]
+    aliases = _python_aliases(tree)
+    findings: list[Finding] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript):
+            findings.extend(_detect_python_env_subscript(rel_path, node, aliases, capabilities))
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = _call_name(node.func, aliases)
+        findings.extend(_detect_python_exec_call(rel_path, node, call_name, capabilities))
+        findings.extend(_detect_python_network_call(rel_path, node, call_name, capabilities))
+        findings.extend(_detect_python_filesystem_call(rel_path, node, call_name, capabilities))
+        findings.extend(_detect_python_env_call(rel_path, node, call_name, capabilities))
+        if call_name in {"eval", "exec", "compile"}:
+            findings.append(
+                _ast_finding(
+                    finding_id="static.python.dynamic-exec",
+                    category="opaque",
+                    severity=Severity.HIGH,
+                    rel_path=rel_path,
+                    node=node,
+                    evidence=call_name,
+                )
+            )
+        if call_name in {"__import__", "importlib.import_module"} and not _first_arg_constant_string(node):
+            findings.append(
+                _ast_finding(
+                    finding_id="static.python.dynamic-import",
+                    category="opaque",
+                    severity=Severity.HIGH,
+                    rel_path=rel_path,
+                    node=node,
+                    evidence=call_name,
+                )
+            )
+    return findings
+
+
+def _detect_python_exec_call(
+    rel_path: str,
+    node: ast.Call,
+    call_name: str,
+    capabilities: CapabilityManifest,
+) -> list[Finding]:
+    if call_name not in {"os.system", "subprocess.call", "subprocess.check_call", "subprocess.check_output", "subprocess.Popen", "subprocess.run"}:
+        return []
+    observed = _observed_executable(node)
+    if observed is None:
+        observed = "shell" if _keyword_is_true(node, "shell") else "<dynamic>"
+    if observed in capabilities.exec:
+        return []
+    return [
+        _ast_finding(
+            finding_id="static.python.undeclared-exec",
+            category="capability-escalation",
+            severity=Severity.HIGH,
+            rel_path=rel_path,
+            node=node,
+            evidence=f"{call_name} -> {observed}",
+            violation=CapabilityViolation(
+                capability="exec",
+                declared=", ".join(capabilities.exec) or "none",
+                observed=observed,
+            ),
+        )
+    ]
+
+
+def _detect_python_network_call(
+    rel_path: str,
+    node: ast.Call,
+    call_name: str,
+    capabilities: CapabilityManifest,
+) -> list[Finding]:
+    if call_name not in {
+        "requests.delete",
+        "requests.get",
+        "requests.patch",
+        "requests.post",
+        "requests.put",
+        "urllib.request.urlopen",
+        "urllib.request.Request",
+    }:
+        return []
+    url = _first_arg_constant_string(node)
+    if url is None:
+        observed = "<dynamic-url>"
+    else:
+        observed = urlparse(url).hostname or "<dynamic-url>"
+    if observed != "<dynamic-url>" and _host_allowed(observed, capabilities.network):
+        return []
+    return [
+        _ast_finding(
+            finding_id="static.python.undeclared-network",
+            category="capability-escalation",
+            severity=Severity.MEDIUM,
+            rel_path=rel_path,
+            node=node,
+            evidence=f"{call_name} -> {observed}",
+            violation=CapabilityViolation(
+                capability="network",
+                declared=", ".join(capabilities.network) or "none",
+                observed=observed,
+            ),
+        )
+    ]
+
+
+def _detect_python_filesystem_call(
+    rel_path: str,
+    node: ast.Call,
+    call_name: str,
+    capabilities: CapabilityManifest,
+) -> list[Finding]:
+    if call_name not in {"open", "Path", "pathlib.Path", "os.remove", "os.unlink", "shutil.rmtree"}:
+        return []
+    path = _first_arg_constant_string(node)
+    if path is None or _filesystem_allowed(path, capabilities.filesystem):
+        return []
+    return [
+        _ast_finding(
+            finding_id="static.python.filesystem-outside-envelope",
+            category="capability-escalation",
+            severity=Severity.MEDIUM,
+            rel_path=rel_path,
+            node=node,
+            evidence=f"{call_name} -> {path}",
+            violation=CapabilityViolation(
+                capability="filesystem",
+                declared=_format_filesystem(capabilities.filesystem),
+                observed=path,
+            ),
+        )
+    ]
+
+
+def _detect_python_env_call(
+    rel_path: str,
+    node: ast.Call,
+    call_name: str,
+    capabilities: CapabilityManifest,
+) -> list[Finding]:
+    if call_name not in {"os.environ.get", "os.getenv"}:
+        return []
+    name = _first_arg_constant_string(node)
+    declared = set(capabilities.secrets) | set(capabilities.env_read)
+    if name is None or name in declared or not any(marker in name for marker in SECRET_MARKERS):
+        return []
+    return [
+        _ast_finding(
+            finding_id="static.python.undeclared-secret",
+            category="secret-env",
+            severity=Severity.MEDIUM,
+            rel_path=rel_path,
+            node=node,
+            evidence=name,
+            violation=CapabilityViolation(
+                capability="secrets",
+                declared=", ".join(capabilities.secrets) or "none",
+                observed=name,
+            ),
+        )
+    ]
+
+
+def _detect_python_env_subscript(
+    rel_path: str,
+    node: ast.Subscript,
+    aliases: dict[str, str],
+    capabilities: CapabilityManifest,
+) -> list[Finding]:
+    if _call_name(node.value, aliases) != "os.environ":
+        return []
+    name = _constant_string_slice(node.slice)
+    declared = set(capabilities.secrets) | set(capabilities.env_read)
+    if name is None or name in declared or not any(marker in name for marker in SECRET_MARKERS):
+        return []
+    return [
+        _ast_finding(
+            finding_id="static.python.undeclared-secret",
+            category="secret-env",
+            severity=Severity.MEDIUM,
+            rel_path=rel_path,
+            node=node,
+            evidence=name,
+            violation=CapabilityViolation(
+                capability="secrets",
+                declared=", ".join(capabilities.secrets) or "none",
+                observed=name,
+            ),
+        )
+    ]
+
+
+def _python_aliases(tree: ast.AST) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    aliases[alias.asname] = alias.name
+                else:
+                    root = alias.name.split(".", 1)[0]
+                    aliases[root] = root
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                name = alias.asname or alias.name
+                aliases[name] = f"{node.module}.{alias.name}"
+    return aliases
+
+
+def _call_name(node: ast.AST, aliases: dict[str, str]) -> str:
+    if isinstance(node, ast.Name):
+        return aliases.get(node.id, node.id)
+    if isinstance(node, ast.Attribute):
+        parent = _call_name(node.value, aliases)
+        return f"{parent}.{node.attr}" if parent else node.attr
+    return ""
+
+
+def _observed_executable(node: ast.Call) -> str | None:
+    if not node.args:
+        return None
+    first = node.args[0]
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        try:
+            parts = shlex.split(first.value)
+        except ValueError:
+            parts = first.value.split()
+        return Path(parts[0]).name if parts else None
+    if isinstance(first, (ast.List, ast.Tuple)) and first.elts:
+        head = first.elts[0]
+        if isinstance(head, ast.Constant) and isinstance(head.value, str):
+            return Path(head.value).name
+    return None
+
+
+def _first_arg_constant_string(node: ast.Call) -> str | None:
+    if not node.args:
+        return None
+    first = node.args[0]
+    return first.value if isinstance(first, ast.Constant) and isinstance(first.value, str) else None
+
+
+def _keyword_is_true(node: ast.Call, name: str) -> bool:
+    return any(keyword.arg == name and isinstance(keyword.value, ast.Constant) and keyword.value.value is True for keyword in node.keywords)
+
+
+def _constant_string_slice(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _filesystem_allowed(path: str, allowed: str | tuple[str, ...]) -> bool:
+    if not path.startswith(("/", "~/")):
+        return True
+    if allowed == "home-config":
+        return path.startswith("~/") or path.startswith(str(Path.home()))
+    if allowed == "repo":
+        return False
+    return any(path == prefix or path.startswith(prefix.rstrip("/") + "/") for prefix in allowed)
+
+
+def _format_filesystem(value: str | tuple[str, ...]) -> str:
+    return value if isinstance(value, str) else ", ".join(value)
+
+
+def _ast_finding(
+    *,
+    finding_id: str,
+    category: str,
+    severity: Severity,
+    rel_path: str,
+    node: ast.AST | SyntaxError,
+    evidence: str,
+    violation: CapabilityViolation | None = None,
+) -> Finding:
+    line = getattr(node, "lineno", 1) or 1
+    return Finding(
+        id=finding_id,
+        surface=Surface.CODE,
+        category=category,
+        severity=severity,
+        location=Location(rel_path, (line, line)),
+        evidence=_short_evidence(evidence),
+        detector="static.python",
+        confidence="medium",
+        verifiable=True,
+        capability_violation=violation,
+    )
+
+
+def _detect_manifest(snapshot: Path) -> list[Finding]:
+    path = snapshot / "csk-skill.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    commands = data.get("commands", {}) if isinstance(data, dict) else {}
+    if not isinstance(commands, dict):
+        return []
+    findings: list[Finding] = []
+    for name in sorted(commands):
+        if name in COMMON_SYSTEM_COMMANDS:
+            findings.append(
+                Finding(
+                    id="static.manifest.command-shadows-system",
+                    surface=Surface.MANIFEST,
+                    category="hygiene",
+                    severity=Severity.MEDIUM,
+                    location=Location("csk-skill.json"),
+                    evidence=name,
+                    detector="static.manifest",
+                    confidence="high",
+                    verifiable=True,
+                )
+            )
+    return findings
+
+
+def _detect_opaque_files(snapshot: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in sorted(snapshot.rglob("*")):
+        if not path.is_file():
+            continue
+        rel_path = path.relative_to(snapshot).as_posix()
+        if not rel_path.startswith(OPAQUE_PREFIXES):
+            continue
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            continue
+        if b"\x00" in raw:
+            findings.append(_opaque_finding(rel_path, "binary content"))
+    return findings
+
+
+def _detect_minified_text(rel_path: str, text: str) -> list[Finding]:
+    if not rel_path.startswith(OPAQUE_PREFIXES):
+        return []
+    if len(text) < 10_000:
+        return []
+    lines = text.splitlines() or [text]
+    if len(lines) <= 3 or max(len(line) for line in lines) > 5_000:
+        return [_opaque_finding(rel_path, "minified or bundled text")]
+    return []
+
+
+def _opaque_finding(rel_path: str, evidence: str) -> Finding:
+    return Finding(
+        id="static.opaque.unanalyzable-artifact",
+        surface=Surface.CODE,
+        category="opaque",
+        severity=Severity.HIGH,
+        location=Location(rel_path),
+        evidence=evidence,
+        detector="static.opaque",
+        confidence="high",
+        verifiable=True,
+    )
 
 
 def _host_allowed(host: str, allowed: tuple[str, ...]) -> bool:
