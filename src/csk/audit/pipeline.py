@@ -7,7 +7,7 @@ from typing import Any
 from .. import hashing, installer
 from ..config import GlobalConfig
 
-from . import detectors, policy, trust
+from . import canary, detectors, policy, trust
 from .backends.base import AuditBackendError, AuditRequest
 from .backends.null_backend import NullBackend
 from .model import Decision, Finding, TrustRecord, Verdict
@@ -80,11 +80,13 @@ def audit_plans(
             )
             continue
 
+        if not canary.run_static_canary():
+            raise AuditBackendError("Static audit canary failed; audit detectors are not producing expected findings")
         static_findings = detectors.detect_snapshot(plan.snapshot, plan.spec.capabilities)
         if not backend.is_available():
             raise AuditBackendError(f"Audit backend is unavailable: {backend.name}")
-        canary_passed = backend.run_canary()
-        if not canary_passed:
+        backend_canary_passed = backend.run_canary()
+        if not backend_canary_passed:
             raise AuditBackendError(f"Audit backend failed canary check: {backend.name}")
         backend_findings = backend.extract(
             _build_request(plan, static_findings, backend.cloud),
@@ -103,7 +105,7 @@ def audit_plans(
             cloud=backend.cloud,
             prompt_version=trust.PROMPT_VERSION,
             ruleset_version=trust.RULESET_VERSION,
-            canary_passed=canary_passed,
+            canary_passed=True,
             findings=findings,
             decision=decision,
             ran_at=ran_at,

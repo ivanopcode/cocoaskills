@@ -125,3 +125,27 @@ def test_audit_cache_rejects_unknown_backend(tmp_path, csk_home, skills_root):
 
     with pytest.raises(AuditBackendError, match="Unsupported audit backend"):
         runner.audit_projects(cfg, alias="app")
+
+
+def test_audit_static_canary_failure_fails_closed(monkeypatch, tmp_path, csk_home, skills_root):
+    make_skill_repo(
+        skills_root,
+        "skill-a",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 3,
+                    "capabilities": {"network": "none", "exec": "none"},
+                    "commands": {},
+                }
+            ),
+        },
+        tag="v1",
+    )
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+    monkeypatch.setattr(detectors, "detect_snapshot", lambda *args, **kwargs: ())
+
+    with pytest.raises(AuditBackendError, match="Static audit canary failed"):
+        runner.audit_projects(cfg, alias="app")
