@@ -7,6 +7,9 @@ import sys
 from pathlib import Path
 
 from . import __version__, adapters, config, deprecation, gc, git_ops, gitignore_gate, global_install, installer, manifest, project_resolver, shell_init, status
+from .audit import pipeline as audit_pipeline
+from .audit import runner as audit_runner
+from .audit.model import Decision
 from .locking import GlobalLock, LockError
 
 
@@ -36,6 +39,7 @@ def main(argv: list[str] | None = None) -> int:
         project_resolver.ProjectResolutionError,
         global_install.GlobalInstallError,
         installer.InstallError,
+        audit_runner.AuditError,
         git_ops.GitError,
         ValueError,
     ) as exc:
@@ -60,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  csk upgrade [target]   update, then install\n"
             "  csk status [target]    show manifest vs installed state\n"
             "  csk global <command>   manage user-wide global skills\n"
+            "  csk audit [target]     run deterministic security audit\n"
             "  csk list               list configured projects and skills\n"
             "  csk project add        add a configured project\n"
             "  csk project resolve    show current checkout resolution\n"
@@ -87,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_install(sub, "upgrade", "Fetch skill repositories, then install.")
     _add_global(sub)
+    _add_audit(sub)
     status_parser = sub.add_parser(
         "status",
         help="Show manifest vs installed state.",
@@ -299,6 +305,29 @@ def _add_global(sub) -> None:
     upgrade.add_argument("--strict-tags", action="store_true", help="fail if a tag was locally moved to another commit")
 
 
+def _add_audit(sub) -> None:
+    parser = sub.add_parser(
+        "audit",
+        help="Run deterministic static security audit for declared skills.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Scope:\n"
+            "  By default audits the current project. Use a target, --all, or --global for other scopes.\n\n"
+            "Side effects:\n"
+            "  Read-only. Missing git URL sources may be cloned into temporary directories only.\n\n"
+            "Examples:\n"
+            "  csk audit\n"
+            "  csk audit . --json\n"
+            "  csk audit --all\n"
+            "  csk audit --global\n"
+        ),
+    )
+    parser.add_argument("target", nargs="?", help="project alias, '.', or project path")
+    parser.add_argument("--all", action="store_true", help="audit all registered projects")
+    parser.add_argument("--global", dest="global_scope", action="store_true", help="audit global skills")
+    parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+
 def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "bootstrap":
         return _cmd_bootstrap(args)
@@ -317,6 +346,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return EXIT_OK
     if args.command == "global":
         return _dispatch_global(args)
+    if args.command == "audit":
+        return _cmd_audit(args)
 
     cfg = config.load_config()
     if args.command == "list":
@@ -597,6 +628,23 @@ def _cmd_global_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> i
     if not options.dry_run:
         gc.collect_runtime(cfg, cfg.path.parent)
     return EXIT_PARTIAL_FAIL if result.failed else EXIT_OK
+
+
+def _cmd_audit(args: argparse.Namespace) -> int:
+    cfg = config.load_config()
+    if args.global_scope:
+        if getattr(args, "target", None) is not None or getattr(args, "all", False):
+            raise ValueError("--global cannot be combined with a project target or --all")
+        reports = audit_runner.audit_global(cfg)
+    else:
+        cfg, alias = _cfg_and_alias_for_target(cfg, args)
+        reports = audit_runner.audit_projects(cfg, alias=alias)
+
+    if args.json:
+        print(json.dumps(audit_pipeline.reports_to_payload(reports), indent=2, sort_keys=True))
+    else:
+        print(audit_pipeline.render_reports(reports))
+    return EXIT_PARTIAL_FAIL if any(report.decision == Decision.BLOCK for report in reports) else EXIT_OK
 
 
 def _render_list(cfg: config.GlobalConfig, *, show_paths: bool = False) -> str:
