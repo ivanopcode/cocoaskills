@@ -1,0 +1,78 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "findings"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "surface",
+          "category",
+          "severity",
+          "location",
+          "evidence",
+          "detector",
+          "confidence",
+          "verifiable",
+          "capability_violation"
+        ],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "surface": {"enum": ["code", "prompt", "manifest"]},
+          "category": {"type": "string", "minLength": 1},
+          "severity": {"enum": ["info", "low", "medium", "high", "critical"]},
+          "location": {
+            "anyOf": [
+              {"type": "null"},
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["file", "span"],
+                "properties": {
+                  "file": {"type": "string", "minLength": 1},
+                  "span": {
+                    "anyOf": [
+                      {"type": "null"},
+                      {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "minItems": 2,
+                        "maxItems": 2
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "evidence": {"type": "string", "minLength": 1},
+          "detector": {"type": "string", "minLength": 1},
+          "confidence": {"type": "string", "minLength": 1},
+          "verifiable": {"type": "boolean"},
+          "capability_violation": {
+            "anyOf": [
+              {"type": "null"},
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["capability", "declared", "observed"],
+                "properties": {
+                  "capability": {"type": "string", "minLength": 1},
+                  "declared": {"type": "string", "minLength": 1},
+                  "observed": {"type": "string", "minLength": 1}
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

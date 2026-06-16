@@ -11,6 +11,7 @@ from ..config import GlobalConfig
 
 from . import backend_config, canary, detectors, policy, redaction, serialization, trust
 from .backends.base import AuditBackendError, AuditCanaryError, AuditEgressError, AuditRequest
+from .backends.codex_backend import CodexBackend
 from .backends.command_backend import CommandBackend
 from .backends.null_backend import NullBackend
 from .model import Decision, Finding, Location, Severity, Surface, TrustRecord, Verdict
@@ -285,6 +286,8 @@ def _backend_for_config(config: GlobalConfig):
         return NullBackend()
     if isinstance(resolved, backend_config.CommandBackendConfig):
         return CommandBackend(resolved)
+    if isinstance(resolved, backend_config.CodexBackendConfig):
+        return CodexBackend(resolved)
     raise AuditBackendError(f"Unsupported audit backend: {config.audit.backend}")
 
 

@@ -62,6 +62,9 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"csk.audit" = ["prompts/*.md", "prompts/*.json"]
+
 [tool.setuptools_scm]
 version_file = "src/csk/_version.py"
 

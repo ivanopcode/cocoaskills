@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import replace
 
@@ -323,7 +324,120 @@ print(json.dumps({
     assert redaction_findings[0].severity == Severity.INFO
 
 
+def test_codex_backend_constructs_hermetic_exec_command(monkeypatch, tmp_path, csk_home, skills_root):
+    log_path = tmp_path / "codex-log.jsonl"
+    _write_fake_codex(tmp_path, monkeypatch, log_path)
+    make_skill_repo(
+        skills_root,
+        "skill-a",
+        {
+            "csk-skill.json": json.dumps(
+                {"schema_version": 3, "capabilities": {"network": "none", "exec": "none"}, "commands": {}}
+            ),
+            "references/note.md": "codex sees this as data\n",
+        },
+        tag="v1",
+    )
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg = replace(
+        make_config(csk_home, skills_root, project),
+        audit=config.AuditConfig(
+            backend="codex-local",
+            model="qwen2.5-coder:32b",
+            backends={
+                "codex-local": {
+                    "kind": "codex",
+                    "profile": "local-audit",
+                    "oss": True,
+                    "local_provider": "ollama",
+                    "extra_args": ["--quiet"],
+                }
+            },
+        ),
+    )
+
+    reports = runner.audit_projects(cfg, alias="app")
+
+    assert reports[0].decision == Decision.ALLOW
+    entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    assert len(entries) == 2
+    real = entries[-1]
+    argv = real["argv"]
+    assert argv[:2] == ["exec", "--sandbox"]
+    assert "--sandbox" in argv and argv[argv.index("--sandbox") + 1] == "read-only"
+    assert "--ask-for-approval" in argv and argv[argv.index("--ask-for-approval") + 1] == "never"
+    assert "--cd" in argv
+    assert "--ephemeral" in argv
+    assert "--ignore-rules" in argv
+    assert "--skip-git-repo-check" in argv
+    assert "--output-schema" in argv
+    assert "--output-last-message" in argv
+    assert "--model" in argv and argv[argv.index("--model") + 1] == "qwen2.5-coder:32b"
+    assert "--profile" in argv and argv[argv.index("--profile") + 1] == "local-audit"
+    assert "--oss" in argv
+    assert "--local-provider" in argv and argv[argv.index("--local-provider") + 1] == "ollama"
+    assert "--quiet" in argv
+    assert "--search" not in argv
+    assert argv[-1] == "-"
+    assert real["cwd_entries"] == []
+    assert "codex sees this as data" in real["stdin"]
+    assert "SKILL.md" in real["stdin"]
+
+
 def _write_backend_script(tmp_path, body: str):
     script = tmp_path / "backend.py"
     script.write_text(body.lstrip(), encoding="utf-8")
     return script
+
+
+def _write_fake_codex(tmp_path, monkeypatch, log_path):
+    fake = tmp_path / "fake_codex.py"
+    fake.write_text(
+        """
+import json
+import os
+import sys
+
+argv = sys.argv[1:]
+stdin = sys.stdin.read()
+response_file = argv[argv.index("--output-last-message") + 1]
+entry = {
+    "argv": argv,
+    "cwd": os.getcwd(),
+    "cwd_entries": sorted(os.listdir(os.getcwd())),
+    "stdin": stdin,
+}
+with open(os.environ["CODEX_LOG"], "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(entry, sort_keys=True) + "\\n")
+if "csk-audit-canary" in stdin:
+    findings = [
+        {
+            "id": "fixture.canary",
+            "surface": "prompt",
+            "category": "canary",
+            "severity": "high",
+            "location": {"file": "SKILL.md", "span": [1, 1]},
+            "evidence": "canary finding",
+            "detector": "fake-codex",
+            "confidence": "high",
+            "verifiable": True,
+            "capability_violation": None,
+        }
+    ]
+else:
+    findings = []
+with open(response_file, "w", encoding="utf-8") as fh:
+    json.dump({"schema_version": 1, "findings": findings}, fh)
+""".lstrip(),
+        encoding="utf-8",
+    )
+    if sys.platform == "win32":
+        wrapper = tmp_path / "codex.cmd"
+        wrapper.write_text(f'@echo off\r\n"{sys.executable}" "{fake}" %*\r\n', encoding="utf-8")
+    else:
+        wrapper = tmp_path / "codex"
+        wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{fake}" "$@"\n', encoding="utf-8")
+        wrapper.chmod(0o755)
+    monkeypatch.setenv("CODEX_LOG", str(log_path))
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))
