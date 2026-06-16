@@ -14,6 +14,7 @@ SCHEMA_VERSION = 1
 DEFAULT_CONFIG_PATH = Path.home() / ".cocoaskills" / "config.json"
 DEFAULT_AGENTS = ["codex_cli"]
 DEFAULT_WORKTREE_ALIAS_PATTERN = r"[A-Z]+-[0-9]+"
+AUDIT_REVOCATION_HASH_RE = re.compile(r"^(?:sha256:)?[A-Fa-f0-9]{64}$")
 
 
 class ConfigError(Exception):
@@ -280,6 +281,8 @@ def _parse_audit_config(raw: Any) -> AuditConfig:
     revocations = raw.get("revocations", [])
     if not _is_str_list(revocations):
         raise ConfigError("Global config field 'audit.revocations' must be a list of strings")
+    for index, item in enumerate(revocations):
+        _validate_audit_revocation(item, f"audit.revocations[{index}]")
 
     try:
         source_policy = parse_source_policy(raw.get("source_policy"))
@@ -336,6 +339,14 @@ def _serialize_source_policy(source_policy: SourcePolicy) -> dict[str, Any]:
             for rule in source_policy.rules
         ]
     return data
+
+
+def _validate_audit_revocation(value: str, field: str) -> None:
+    if AUDIT_REVOCATION_HASH_RE.fullmatch(value):
+        return
+    if value.startswith("source:") and value.removeprefix("source:").strip():
+        return
+    raise ConfigError(f"Global config field '{field}' must be a SHA256 hash or source:<pattern>")
 
 
 def _reject_unknown_fields(data: dict[str, Any], allowed: set[str], label: str) -> None:

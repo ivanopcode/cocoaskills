@@ -379,4 +379,55 @@ def test_cli_audit_revocation_blocks_cached_hash(monkeypatch, tmp_path, csk_home
     payload = json.loads(capsys.readouterr().out)
     assert payload["reports"][0]["cache_hit"]
     assert payload["reports"][0]["revoked"]
+    assert payload["reports"][0]["revocation"] == f"content hash {content_hash}"
+    assert payload["reports"][0]["decision"] == "block"
+
+
+def test_cli_audit_source_revocation_blocks_git_source(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    make_skill_repo(
+        skills_root,
+        "skill-a",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 3,
+                    "capabilities": {"network": "none", "exec": "none"},
+                    "commands": {},
+                }
+            ),
+        },
+        tag="v1",
+    )
+    project = make_project(tmp_path)
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [
+                {
+                    "name": "skill-a",
+                    "git": "git@gitlab.wildberries.ru:portals/partner-mobile/agentic-infra/skill-a.git",
+                    "tag": "v1",
+                }
+            ],
+        },
+    )
+    cfg_path = csk_home / "config.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "projects": {"app": {"path": str(project), "agents": ["codex_cli"]}},
+                "audit": {"revocations": ["source:gitlab.wildberries.ru"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+
+    assert cli.main(["audit", "app", "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["reports"][0]["revoked"]
+    assert payload["reports"][0]["revocation"] == "source gitlab.wildberries.ru"
     assert payload["reports"][0]["decision"] == "block"

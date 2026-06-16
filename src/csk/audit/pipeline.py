@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -11,6 +12,7 @@ from . import canary, detectors, policy, redaction, trust
 from .backends.base import AuditBackendError, AuditCanaryError, AuditRequest
 from .backends.null_backend import NullBackend
 from .model import Decision, Finding, TrustRecord, Verdict
+from .source_policy import normalize_source
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,7 @@ class AuditReport:
     cache_hit: bool = False
     trust: TrustRecord = TrustRecord()
     revoked: bool = False
+    revocation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -56,7 +59,7 @@ def audit_plans(
     for plan in plans:
         content_sha256 = hashing.content_sha256(plan.snapshot)
         trust_record = trust.load_trust_record(config.path.parent, content_sha256)
-        revoked = _is_revoked(config, content_sha256)
+        revocation = _revocation_reason(config, content_sha256, plan.decl.source, plan.decl.git)
         backend = _backend_for_config(config)
         cached = trust.load_cached_verdict(
             config.path.parent,
@@ -73,7 +76,7 @@ def audit_plans(
                     cached,
                     config,
                     trust_record,
-                    revoked=revoked,
+                    revocation=revocation,
                     scope=scope,
                     cache_hit=True,
                 )
@@ -93,7 +96,7 @@ def audit_plans(
             timeout=30,
         )
         findings = tuple(static_findings) + tuple(backend_findings)
-        decision = _decide(plan, config, findings, trust_record, content_sha256)
+        decision = _decide(plan, config, findings, trust_record, content_sha256, revocation)
         verdict = Verdict(
             schema_version=trust.SCHEMA_VERSION,
             content_sha256=content_sha256,
@@ -130,7 +133,8 @@ def audit_plans(
                 ran_at=ran_at,
                 cache_hit=False,
                 trust=trust_record,
-                revoked=revoked,
+                revoked=revocation is not None,
+                revocation=revocation,
             )
         )
     return tuple(reports)
@@ -209,6 +213,7 @@ def _report_to_payload(report: AuditReport) -> dict[str, Any]:
         "ran_at": report.ran_at,
         "cache_hit": report.cache_hit,
         "revoked": report.revoked,
+        "revocation": report.revocation,
         "trust": {
             "pinned": report.trust.pinned,
             "pinned_by": report.trust.pinned_by,
@@ -265,12 +270,12 @@ def _report_from_verdict(
     verdict: Verdict,
     config: GlobalConfig,
     trust_record: TrustRecord,
-    revoked: bool,
+    revocation: str | None,
     *,
     scope: str,
     cache_hit: bool,
 ) -> AuditReport:
-    decision = _decide(plan, config, verdict.findings, trust_record, verdict.content_sha256)
+    decision = _decide(plan, config, verdict.findings, trust_record, verdict.content_sha256, revocation)
     return AuditReport(
         scope=scope,
         skill=plan.decl.name,
@@ -287,13 +292,14 @@ def _report_from_verdict(
         ran_at=verdict.ran_at,
         cache_hit=cache_hit,
         trust=trust_record,
-        revoked=revoked,
+        revoked=revocation is not None,
+        revocation=revocation,
     )
 
 
 def _gate_messages(report: AuditReport) -> list[str]:
     if report.revoked:
-        return [f"audit blocked: {report.skill}: content hash {report.content_sha256} is revoked"]
+        return [f"audit blocked: {report.skill}: {report.revocation} is revoked"]
     if report.decision == Decision.REQUIRE_PIN:
         return [
             f"audit requires pin: {report.skill}: schema v{report.schema_version} has no capabilities; "
@@ -321,20 +327,41 @@ def _decide(
     findings: tuple[Finding, ...],
     trust_record: TrustRecord,
     content_sha256: str,
+    revocation: str | None,
 ) -> Decision:
-    if _is_revoked(config, content_sha256):
+    if revocation is not None:
         return Decision.BLOCK
     if config.audit.mode == "strict" and plan.spec.schema_version < 3 and not trust_record.pinned:
         return Decision.REQUIRE_PIN
     return policy.decide(findings, mode=config.audit.mode, fail_on=config.audit.fail_on)
 
 
-def _is_revoked(config: GlobalConfig, content_sha256: str) -> bool:
+def _revocation_reason(
+    config: GlobalConfig,
+    content_sha256: str,
+    source: str,
+    git: str | None,
+) -> str | None:
     normalized = trust.normalize_content_sha256(content_sha256)
     for item in config.audit.revocations:
-        try:
-            if trust.normalize_content_sha256(item) == normalized:
-                return True
-        except ValueError:
+        if item.startswith("source:"):
+            pattern = item.removeprefix("source:")
+            if _source_revocation_matches(pattern, source, git):
+                return f"source {pattern}"
             continue
-    return False
+        if trust.normalize_content_sha256(item) == normalized:
+            return f"content hash {content_sha256}"
+    return None
+
+
+def _source_revocation_matches(pattern: str, source: str, git: str | None) -> bool:
+    candidates = {source}
+    if git:
+        candidates.add(git)
+        normalized = normalize_source(git)
+        if normalized:
+            candidates.add(normalized)
+    normalized_source = normalize_source(source)
+    if normalized_source:
+        candidates.add(normalized_source)
+    return any(fnmatch.fnmatchcase(candidate, pattern) for candidate in candidates)

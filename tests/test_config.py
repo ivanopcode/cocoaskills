@@ -54,7 +54,10 @@ def test_config_parses_and_round_trips_audit_settings(tmp_path):
                 "allow_cloud": True,
                 "backends": {"codex": {"timeout_seconds": 30}},
                 "grants": [{"skill": "skill-gitlab", "content_sha256": "abc"}],
-                "revocations": ["deadbeef"],
+                "revocations": [
+                    "sha256:" + "d" * 64,
+                    "source:gitlab.wildberries.ru",
+                ],
                 "source_policy": {
                     "default_class": "internal",
                     "rules": [{"pattern": "github.com", "class": "public"}],
@@ -83,7 +86,7 @@ def test_config_parses_and_round_trips_audit_settings(tmp_path):
     assert loaded.audit.allow_cloud
     assert loaded.audit.backends == {"codex": {"timeout_seconds": 30}}
     assert loaded.audit.grants == [{"skill": "skill-gitlab", "content_sha256": "abc"}]
-    assert loaded.audit.revocations == ["deadbeef"]
+    assert loaded.audit.revocations == ["sha256:" + "d" * 64, "source:gitlab.wildberries.ru"]
     assert loaded.audit.source_policy.classify(None, "git@github.com:ivanopcode/cocoaskills.git") == "public"
 
 
@@ -144,6 +147,19 @@ def test_config_rejects_invalid_audit_source_policy(tmp_path):
                 "skills_root": "x",
                 "projects": {},
                 "audit": {"source_policy": {"rules": [{"pattern": "github.com", "class": "external"}]}},
+            },
+            tmp_path / "config.json",
+        )
+
+
+def test_config_rejects_invalid_audit_revocation(tmp_path):
+    with pytest.raises(config.ConfigError, match="audit.revocations"):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": str(tmp_path / "skills"),
+                "projects": {},
+                "audit": {"revocations": ["deadbeef"]},
             },
             tmp_path / "config.json",
         )
