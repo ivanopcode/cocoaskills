@@ -629,7 +629,8 @@ without restructuring.
    records (TOFU/pins/grants/revocation data model). Deterministic, zero egress,
    no LLM. The seam for LLM is present and exercised by `null`.
 2. v0.8.0 — LLM extractor backends: `command` (generic) and `codex` (local-first),
-   the canary integrity check, redaction in the request path.
+   backend canaries, timeout plumbing, and file-content redaction in the request
+   path. Detailed in RFC 0006 (`docs/v0.8-design.md`).
 3. v0.9.0 — `claude_code` backend, cloud policy and warnings, strict gating, the
    full trust workflow (grants/pins/revocation enforcement), N-of-M.
 4. Separate later release — Signatures and provenance (section 20).
