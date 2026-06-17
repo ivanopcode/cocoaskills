@@ -57,7 +57,7 @@ def test_config_parses_and_round_trips_audit_settings(tmp_path):
                 "grants": [{"skill": "skill-gitlab", "content_sha256": "abc"}],
                 "revocations": [
                     "sha256:" + "d" * 64,
-                    "source:gitlab.wildberries.ru",
+                    "source:gitlab.example.com",
                 ],
                 "source_policy": {
                     "default_class": "internal",
@@ -89,7 +89,7 @@ def test_config_parses_and_round_trips_audit_settings(tmp_path):
     assert loaded.audit.max_request_bytes == 2048
     assert loaded.audit.backends == {"codex": {"kind": "codex", "timeout_seconds": 30, "cloud": True}}
     assert loaded.audit.grants == [{"skill": "skill-gitlab", "content_sha256": "abc"}]
-    assert loaded.audit.revocations == ["sha256:" + "d" * 64, "source:gitlab.wildberries.ru"]
+    assert loaded.audit.revocations == ["sha256:" + "d" * 64, "source:gitlab.example.com"]
     assert loaded.audit.source_policy.classify(None, "git@github.com:ivanopcode/cocoaskills.git") == "public"
 
 

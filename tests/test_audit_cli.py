@@ -444,7 +444,7 @@ def test_cli_audit_source_revocation_blocks_git_source(monkeypatch, tmp_path, cs
             "skills": [
                 {
                     "name": "skill-a",
-                    "git": "git@gitlab.wildberries.ru:portals/partner-mobile/agentic-infra/skill-a.git",
+                    "git": "git@gitlab.example.com:skills/skill-a.git",
                     "tag": "v1",
                 }
             ],
@@ -457,7 +457,7 @@ def test_cli_audit_source_revocation_blocks_git_source(monkeypatch, tmp_path, cs
                 "schema_version": 1,
                 "skills_root": str(skills_root),
                 "projects": {"app": {"path": str(project), "agents": ["codex_cli"]}},
-                "audit": {"revocations": ["source:gitlab.wildberries.ru"]},
+                "audit": {"revocations": ["source:gitlab.example.com"]},
             }
         ),
         encoding="utf-8",
@@ -467,5 +467,5 @@ def test_cli_audit_source_revocation_blocks_git_source(monkeypatch, tmp_path, cs
     assert cli.main(["audit", "app", "--json"]) == 1
     payload = json.loads(capsys.readouterr().out)
     assert payload["reports"][0]["revoked"]
-    assert payload["reports"][0]["revocation"] == "source gitlab.wildberries.ru"
+    assert payload["reports"][0]["revocation"] == "source gitlab.example.com"
     assert payload["reports"][0]["decision"] == "block"
