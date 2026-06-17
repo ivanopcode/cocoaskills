@@ -114,3 +114,4 @@ def stable_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     deprecation.reset_for_tests()
     monkeypatch.delenv("CSK_CONFIG", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))

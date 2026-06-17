@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import stat
 
 from conftest import make_config, make_project, make_skill_repo, write_skillfile
 from csk import installer
@@ -92,6 +95,14 @@ def _make_tool_repo(skills_root):
     )
 
 
+def _rmtree(path):
+    def onerror(func, failing_path, _exc_info):  # noqa: ANN001
+        os.chmod(failing_path, stat.S_IWRITE)
+        func(failing_path)
+
+    shutil.rmtree(path, onerror=onerror)
+
+
 def test_runtime_gc_keeps_runtime_of_unregistered_consumer(tmp_path, skills_root, csk_home):
     project1 = make_project(tmp_path, "p1")
     project2 = make_project(tmp_path, "p2")
@@ -113,8 +124,6 @@ def test_runtime_gc_keeps_runtime_of_unregistered_consumer(tmp_path, skills_root
 
 
 def test_runtime_gc_prunes_dead_consumers(tmp_path, skills_root, csk_home):
-    import shutil
-
     from csk import consumers
 
     project1 = make_project(tmp_path, "p1")
@@ -127,7 +136,7 @@ def test_runtime_gc_prunes_dead_consumers(tmp_path, skills_root, csk_home):
     assert not installer.install(ephemeral, alias="p2")[0].errors
     assert [path.name for path in consumers.load_consumers(csk_home)].count("p2") == 1
 
-    shutil.rmtree(project2)
+    _rmtree(project2)
     persisted = _two_project_config(csk_home, skills_root, project1)
     assert not installer.install(persisted)[0].errors
 
@@ -137,8 +146,6 @@ def test_runtime_gc_prunes_dead_consumers(tmp_path, skills_root, csk_home):
 
 
 def test_runtime_gc_prunes_consumer_without_markers(tmp_path, skills_root, csk_home):
-    import shutil
-
     from csk import consumers
 
     project1 = make_project(tmp_path, "p1")

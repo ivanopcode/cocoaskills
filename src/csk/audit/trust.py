@@ -94,7 +94,7 @@ def pin_content_hash(
 
 
 def trust_path(csk_home: Path, content_sha256: str) -> Path:
-    return csk_home / "audit" / content_sha256.lower() / "trust.json"
+    return csk_home / "audit" / _hash_component(content_sha256) / "trust.json"
 
 
 def verdict_path(
@@ -106,7 +106,7 @@ def verdict_path(
     ruleset_version: int,
 ) -> Path:
     filename = f"{_safe_component(backend)}-{_safe_component(model or 'none')}-p{prompt_version}-r{ruleset_version}.json"
-    return csk_home / "audit" / content_sha256.lower() / filename
+    return csk_home / "audit" / _hash_component(content_sha256) / filename
 
 
 def _verdict_to_payload(verdict: Verdict) -> dict[str, Any]:
@@ -219,6 +219,10 @@ def _finding_from_payload(payload: dict[str, Any]) -> Finding:
 def _safe_component(value: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip())
     return normalized.strip("-") or "none"
+
+
+def _hash_component(content_sha256: str) -> str:
+    return normalize_content_sha256(content_sha256).replace(":", "-")
 
 
 def normalize_content_sha256(value: str) -> str:

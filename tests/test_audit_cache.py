@@ -6,7 +6,7 @@ from dataclasses import replace
 import pytest
 
 from conftest import make_config, make_project, make_skill_repo, write_skillfile
-from csk.audit import canary, detectors, runner
+from csk.audit import canary, detectors, runner, trust
 from csk.audit.backends import AuditBackendError
 from csk import config
 
@@ -33,7 +33,7 @@ def test_audit_cache_hit_skips_static_detectors(monkeypatch, tmp_path, csk_home,
     first = runner.audit_projects(cfg, alias="app")
 
     assert not first[0].cache_hit
-    assert (csk_home / "audit" / first[0].content_sha256).is_dir()
+    assert trust.trust_path(csk_home, first[0].content_sha256).parent.is_dir()
 
     def fail_if_called(*args, **kwargs):  # noqa: ANN002, ANN003
         raise AssertionError("detectors should not run on cache hit")
@@ -94,7 +94,7 @@ def test_audit_cache_ignores_malformed_cached_verdict(tmp_path, csk_home, skills
     write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
     cfg = make_config(csk_home, skills_root, project)
     first = runner.audit_projects(cfg, alias="app")
-    cache_files = list((csk_home / "audit" / first[0].content_sha256).glob("*.json"))
+    cache_files = list(trust.trust_path(csk_home, first[0].content_sha256).parent.glob("*.json"))
     assert cache_files
     cache_files[0].write_text("{not json", encoding="utf-8")
 

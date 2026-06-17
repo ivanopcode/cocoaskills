@@ -88,8 +88,9 @@ class CodexBackend:
             raise AuditBackendError(f"Audit backend response is invalid: {self.name}: {exc}") from exc
 
     def _argv(self, *, cwd: Path, schema_file: Path, response_file: Path) -> list[str]:
+        executable = shutil.which(self.executable) or self.executable
         argv = [
-            self.executable,
+            executable,
             "exec",
             "--sandbox",
             "read-only",

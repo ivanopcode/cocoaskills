@@ -90,7 +90,7 @@ print(json.dumps({
     assert reports[0].findings[-1].id == "fixture.prompt.note"
     payload = json.loads(request_log.read_text(encoding="utf-8"))
     assert payload["skill"] == "skill-a"
-    assert payload["files"]["references/note.md"]["content"] == "backend sees this file\n"
+    assert payload["files"]["references/note.md"]["content"].replace("\r\n", "\n") == "backend sees this file\n"
 
 
 def test_command_backend_timeout_warns_in_advisory_install(tmp_path, csk_home, skills_root):
@@ -318,7 +318,7 @@ print(json.dumps({
 
     payload = json.loads(request_log.read_text(encoding="utf-8"))
     assert payload["redacted"] is True
-    assert payload["files"]["references/secret.md"]["content"] == "API_TOKEN=<redacted>\n"
+    assert payload["files"]["references/secret.md"]["content"].replace("\r\n", "\n") == "API_TOKEN=<redacted>\n"
     redaction_findings = [finding for finding in reports[0].findings if finding.id == "audit.redaction.applied"]
     assert redaction_findings
     assert redaction_findings[0].severity == Severity.INFO

