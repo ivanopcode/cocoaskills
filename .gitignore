@@ -22,6 +22,7 @@ dist/
 # Editor and local files
 .idea/
 .vscode/
+.temp/
 *.swp
 *.swo
 *.log
@@ -35,4 +36,3 @@ src/csk/_version.py
 .codex/skills/
 .gemini/skills/
 .cursor/rules/
-
