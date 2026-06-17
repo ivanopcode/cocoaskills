@@ -151,16 +151,23 @@ csk global add skill-metrics \
 csk global install
 ```
 
-Global commands are exposed through `~/.cocoaskills/global/bin`. The shell hook
-activates global commands everywhere and project commands inside checkouts:
+Global commands are exposed through `~/.cocoaskills/global/bin`. During
+`csk global install`, CocoaSkills also publishes forwarding shims into a safe
+user bin that is already on `PATH`, such as `~/.local/bin`, so global commands
+work from any directory without per-project activation.
+
+If no safe user bin is available, the install succeeds and prints a warning.
+In that case, add `~/.cocoaskills/global/bin` to `PATH`, set
+`CSK_GLOBAL_USER_BIN` to a writable PATH directory, or install the shell hook:
 
 ```bash
 eval "$(csk shell-init zsh)"
 ```
 
-Inside a project, project-local skills and `.agents/bin` shims shadow global
-skills with the same name. Global skills do not replace committed project
-`Skillfile.json` declarations.
+Inside a project, the shell hook still matters for project-local command
+shadowing: `.agents/bin` shims should come before global shims. Project-local
+skills with the same name shadow global skills. Global skills do not replace
+committed project `Skillfile.json` declarations.
 
 ## Skill command manifests
 

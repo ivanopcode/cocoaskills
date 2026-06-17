@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from conftest import commit_all, init_git_repo, make_config, make_project, make_skill_repo, run, write_files, write_skillfile
-from csk import cli, config, global_install, installer
+from csk import cli, config, global_bins, global_install, installer
 
 
 def _save_config(monkeypatch: pytest.MonkeyPatch, cfg: config.GlobalConfig) -> None:
@@ -106,6 +106,248 @@ def test_global_install_writes_context_adapters_and_runtime_shims(monkeypatch, t
     assert shim.resolve() == (csk_home / "runtime" / "skill-tool" / commit / "scripts" / "tool")
     assert (Path.home() / ".codex" / "skills" / "skill-tool").exists()
     assert (Path.home() / ".claude" / "skills" / "skill-tool").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX user-bin shims use symlinks")
+def test_global_install_publishes_commands_to_path_visible_user_bin(monkeypatch, tmp_path, skills_root, csk_home):
+    user_bin = Path.home() / ".local" / "bin"
+    monkeypatch.setenv("PATH", f"{user_bin}{os.pathsep}{os.environ['PATH']}")
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    _save_config(monkeypatch, cfg)
+    make_skill_repo(
+        skills_root,
+        "skill-tool",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 2,
+                    "runtime_roots": ["scripts"],
+                    "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}},
+                }
+            ),
+            "scripts/tool": "#!/bin/sh\necho global-user-bin\n",
+        },
+        tag="v1",
+    )
+    _write_global_skillfile(
+        csk_home,
+        {"schema_version": 1, "agents": ["codex_cli"], "skills": [{"name": "skill-tool", "tag": "v1"}]},
+    )
+
+    result = global_install.install(cfg)
+
+    assert not result.errors
+    canonical = csk_home / "global" / "bin" / "tool"
+    published = user_bin / "tool"
+    assert canonical.is_symlink()
+    assert published.is_symlink()
+    assert published.resolve() == canonical.resolve()
+    assert json.loads((user_bin / ".csk-managed.json").read_text(encoding="utf-8"))["entries"] == ["tool"]
+    proc = subprocess.run(["tool"], cwd=tmp_path, check=True, text=True, capture_output=True)
+    assert proc.stdout.strip() == "global-user-bin"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX user-bin shims use symlinks")
+def test_global_install_does_not_overwrite_unmanaged_user_bin_command(monkeypatch, tmp_path, skills_root, csk_home):
+    user_bin = Path.home() / ".local" / "bin"
+    user_bin.mkdir(parents=True)
+    manual = user_bin / "tool"
+    manual.write_text("#!/bin/sh\necho manual\n", encoding="utf-8")
+    manual.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{user_bin}{os.pathsep}{os.environ['PATH']}")
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    _save_config(monkeypatch, cfg)
+    make_skill_repo(
+        skills_root,
+        "skill-tool",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 1,
+                    "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}},
+                }
+            ),
+            "scripts/tool": "#!/bin/sh\necho global\n",
+        },
+        tag="v1",
+    )
+    _write_global_skillfile(
+        csk_home,
+        {"schema_version": 1, "agents": ["codex_cli"], "skills": [{"name": "skill-tool", "tag": "v1"}]},
+    )
+
+    result = global_install.install(cfg)
+
+    assert not result.errors
+    assert any("command 'tool' not published" in message for message in result.messages)
+    assert not any("command shims published" in message for message in result.messages)
+    assert manual.read_text(encoding="utf-8") == "#!/bin/sh\necho manual\n"
+    proc = subprocess.run(["tool"], cwd=tmp_path, check=True, text=True, capture_output=True)
+    assert proc.stdout.strip() == "manual"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX user-bin shims use symlinks")
+def test_global_install_respects_explicit_global_user_bin(monkeypatch, tmp_path, skills_root, csk_home):
+    explicit_bin = tmp_path / "explicit-bin"
+    monkeypatch.setenv("CSK_GLOBAL_USER_BIN", str(explicit_bin))
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    _save_config(monkeypatch, cfg)
+    make_skill_repo(
+        skills_root,
+        "skill-tool",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 1,
+                    "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}},
+                }
+            ),
+            "scripts/tool": "#!/bin/sh\necho explicit\n",
+        },
+        tag="v1",
+    )
+    _write_global_skillfile(
+        csk_home,
+        {"schema_version": 1, "agents": ["codex_cli"], "skills": [{"name": "skill-tool", "tag": "v1"}]},
+    )
+
+    result = global_install.install(cfg)
+
+    assert not result.errors
+    published = explicit_bin / "tool"
+    assert published.is_symlink()
+    assert published.resolve() == (csk_home / "global" / "bin" / "tool").resolve()
+
+
+def test_global_install_rejects_explicit_tool_manager_user_bin(monkeypatch, tmp_path, skills_root, csk_home):
+    protected = Path.home() / ".local" / "share" / "mise" / "shims"
+    protected.mkdir(parents=True)
+    monkeypatch.setenv("CSK_GLOBAL_USER_BIN", str(protected))
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    _save_config(monkeypatch, cfg)
+    make_skill_repo(
+        skills_root,
+        "skill-tool",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 1,
+                    "commands": {
+                        "tool": {
+                            "type": "script",
+                            "unix_path": "scripts/tool",
+                            "win_path": "scripts/tool.cmd",
+                        }
+                    },
+                }
+            ),
+            "scripts/tool": "#!/bin/sh\necho global\n",
+            "scripts/tool.cmd": "@echo off\r\necho global\r\n",
+        },
+        tag="v1",
+    )
+    _write_global_skillfile(
+        csk_home,
+        {"schema_version": 1, "agents": ["codex_cli"], "skills": [{"name": "skill-tool", "tag": "v1"}]},
+    )
+
+    result = global_install.install(cfg)
+
+    assert not result.errors
+    assert any("protected tool-manager or CocoaSkills directory" in message for message in result.messages)
+    assert not (protected / "tool").exists()
+    assert not (protected / "tool.cmd").exists()
+    assert not (protected / ".csk-managed.json").exists()
+
+
+def test_global_install_warns_for_unwritable_explicit_global_user_bin(monkeypatch, tmp_path, skills_root, csk_home):
+    explicit_file = tmp_path / "not-a-directory"
+    explicit_file.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setenv("CSK_GLOBAL_USER_BIN", str(explicit_file))
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    _save_config(monkeypatch, cfg)
+    make_skill_repo(
+        skills_root,
+        "skill-tool",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 1,
+                    "commands": {
+                        "tool": {
+                            "type": "script",
+                            "unix_path": "scripts/tool",
+                            "win_path": "scripts/tool.cmd",
+                        }
+                    },
+                }
+            ),
+            "scripts/tool": "#!/bin/sh\necho global\n",
+            "scripts/tool.cmd": "@echo off\r\necho global\r\n",
+        },
+        tag="v1",
+    )
+    _write_global_skillfile(
+        csk_home,
+        {"schema_version": 1, "agents": ["codex_cli"], "skills": [{"name": "skill-tool", "tag": "v1"}]},
+    )
+
+    result = global_install.install(cfg)
+
+    assert not result.errors
+    assert any("CSK_GLOBAL_USER_BIN is not writable" in message for message in result.messages)
+
+
+def test_global_install_warns_when_no_safe_path_visible_user_bin(monkeypatch, tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    _save_config(monkeypatch, cfg)
+    make_skill_repo(
+        skills_root,
+        "skill-tool",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 1,
+                    "commands": {
+                        "tool": {
+                            "type": "script",
+                            "unix_path": "scripts/tool",
+                            "win_path": "scripts/tool.cmd",
+                        }
+                    },
+                }
+            ),
+            "scripts/tool": "#!/bin/sh\necho global\n",
+            "scripts/tool.cmd": "@echo off\r\necho global\r\n",
+        },
+        tag="v1",
+    )
+    _write_global_skillfile(
+        csk_home,
+        {"schema_version": 1, "agents": ["codex_cli"], "skills": [{"name": "skill-tool", "tag": "v1"}]},
+    )
+    monkeypatch.setattr(global_bins, "select_user_bin", lambda *args, **kwargs: None)
+
+    result = global_install.install(cfg)
+
+    assert not result.errors
+    assert any("no safe PATH-visible user bin was found" in message for message in result.messages)
+    assert any("csk shell-init" in message for message in result.messages)
+
+
+def test_global_user_bin_selection_skips_tool_manager_shims(tmp_path, csk_home):
+    mise_shims = Path.home() / ".local" / "share" / "mise" / "shims"
+    mise_shims.mkdir(parents=True)
+
+    selected = global_bins.select_user_bin(csk_home, env={"PATH": str(mise_shims)})
+
+    assert selected is None
 
 
 def test_global_install_audit_advisory_warns_but_installs(monkeypatch, tmp_path, skills_root, csk_home):

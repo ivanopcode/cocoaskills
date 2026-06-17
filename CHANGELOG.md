@@ -69,6 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `csk global install` now publishes managed forwarding shims into a safe
+  PATH-visible user bin when available, so global skill commands can work from
+  arbitrary directories without requiring `csk shell-init`.
 - Generated `.agents/env.sh` now resolves the project root correctly under
   zsh; previously it fell back to the caller's working directory.
 - A missing `git` binary now produces an actionable error instead of a raw

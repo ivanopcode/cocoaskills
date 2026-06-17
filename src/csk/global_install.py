@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import adapters, env_files, git_ops, hashing, installer, manifest, shims
+from . import adapters, env_files, git_ops, global_bins, hashing, installer, manifest, shims
 from .audit import pipeline as audit_pipeline
 from .config import DEFAULT_AGENTS, GlobalConfig
 
@@ -193,6 +193,7 @@ def install(config: GlobalConfig, *, options: installer.InstallOptions | None = 
             # of removing commands for skills that failed this install attempt.
             if not result.errors:
                 shims.remove_stale_global_shims(csk_home, expected_commands)
+                result.messages.extend(global_bins.refresh_user_bin_shims(csk_home, expected_commands))
             env_files.write_global_env_files(csk_home)
             # Refresh adapters from on-disk installs so an older installed
             # skill remains available when the current install attempt failed.
