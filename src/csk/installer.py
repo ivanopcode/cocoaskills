@@ -235,7 +235,7 @@ def _skill_validation_warnings(
     for plan, issue in issues:
         if issue.severity == "warning":
             warnings.append(
-                f"{project_alias}: {plan.decl.name}: WARNING {issue.code}: {issue.message}"
+                f"{project_alias}: {plan.decl.name}: {skillcheck.format_issue(issue)}"
             )
     return warnings
 

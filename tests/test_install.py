@@ -170,10 +170,15 @@ def test_locale_fallback_warning_surfaces_when_install_is_up_to_date(tmp_path, s
     first = installer.install(cfg)[0]
     second = installer.install(cfg)[0]
 
+    expected_warning = (
+        "app: skill-a: warning: locale.selected_unavailable locales/metadata.json: "
+        "Locale 'ru' is not fully available; using source SKILL.md without localized rendering. "
+        "Available locale catalogs: en"
+    )
     assert not first.errors
     assert not second.errors
-    assert any("locale.selected_unavailable" in message for message in first.messages)
-    assert any("locale.selected_unavailable" in message for message in second.messages)
+    assert expected_warning in first.messages
+    assert expected_warning in second.messages
     assert any("up-to-date" in message for message in second.messages)
     installed_skill = project / ".agents" / "skills" / "skill-a" / "SKILL.md"
     assert "# Source" in installed_skill.read_text(encoding="utf-8")
