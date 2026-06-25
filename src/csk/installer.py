@@ -226,12 +226,12 @@ def _check_system_commands(plans: list[SkillPlan]) -> None:
 def _check_skill_command_dependencies(plans: list[SkillPlan]) -> None:
     errors: list[str] = []
     for plan in plans:
-        errors.extend(_skill_command_dependency_errors(plan, plans))
+        errors.extend(skill_command_dependency_errors(plan, plans))
     if errors:
         raise InstallError("; ".join(errors))
 
 
-def _skill_command_dependency_errors(plan: SkillPlan, plans: list[SkillPlan]) -> list[str]:
+def skill_command_dependency_errors(plan: SkillPlan, plans: list[SkillPlan]) -> list[str]:
     by_skill = {candidate.decl.name: candidate for candidate in plans}
     errors: list[str] = []
     for dependency in plan.spec.dependencies.values():

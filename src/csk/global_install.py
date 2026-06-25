@@ -295,7 +295,7 @@ def _plans_with_available_dependencies(
         kept: list[installer.SkillPlan] = []
         removed = False
         for plan in available:
-            errors = installer._skill_command_dependency_errors(plan, available)
+            errors = installer.skill_command_dependency_errors(plan, available)
             if errors:
                 result.errors.extend(errors)
                 removed = True

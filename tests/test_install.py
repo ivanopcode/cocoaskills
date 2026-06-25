@@ -862,12 +862,45 @@ def test_system_dependencies_do_not_collide_as_exported_commands(tmp_path, skill
     assert not result.errors
 
 
+def test_system_dependency_declared_under_dependencies_commands_fails_when_missing(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-system",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 2,
+                    "commands": {},
+                    "dependencies": {
+                        "commands": {
+                            "missing-tool": {
+                                "type": "system",
+                                "command": "__csk_missing_system_dependency__",
+                            }
+                        }
+                    },
+                }
+            ),
+        },
+        tag="v1",
+    )
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-system", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+
+    result = installer.install(cfg)[0]
+
+    assert result.errors
+    assert "Missing system command '__csk_missing_system_dependency__'" in result.errors[0]
+    assert not (project / ".agents" / "skills" / "skill-system").exists()
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="Uses POSIX shell runtime command")
 def test_skill_command_dependency_uses_provider_export_without_collision(tmp_path, skills_root, csk_home):
     project = make_project(tmp_path)
     make_skill_repo(
         skills_root,
-        "skill-wiki",
+        "skill-docs",
         {
             "csk-skill.json": json.dumps(
                 {
@@ -882,7 +915,7 @@ def test_skill_command_dependency_uses_provider_export_without_collision(tmp_pat
     )
     make_skill_repo(
         skills_root,
-        "skill-wiki-memory",
+        "skill-docs-memory",
         {
             "csk-skill.json": json.dumps(
                 {
@@ -892,7 +925,7 @@ def test_skill_command_dependency_uses_provider_export_without_collision(tmp_pat
                         "commands": {
                             "wk": {
                                 "type": "skill",
-                                "skill": "skill-wiki",
+                                "skill": "skill-docs",
                                 "command": "wk",
                             }
                         }
@@ -906,7 +939,7 @@ def test_skill_command_dependency_uses_provider_export_without_collision(tmp_pat
         project,
         {
             "schema_version": 1,
-            "skills": [{"name": "skill-wiki", "tag": "v1"}, {"name": "skill-wiki-memory", "tag": "v1"}],
+            "skills": [{"name": "skill-docs", "tag": "v1"}, {"name": "skill-docs-memory", "tag": "v1"}],
         },
     )
     cfg = make_config(csk_home, skills_root, project)
@@ -915,7 +948,7 @@ def test_skill_command_dependency_uses_provider_export_without_collision(tmp_pat
 
     assert not result.errors
     assert (project / ".agents" / "bin" / "wk").is_symlink()
-    marker = json.loads((project / ".agents" / "skills" / "skill-wiki-memory" / ".csk-install.json").read_text(encoding="utf-8"))
+    marker = json.loads((project / ".agents" / "skills" / "skill-docs-memory" / ".csk-install.json").read_text(encoding="utf-8"))
     assert marker["commands"] == []
     assert marker["dependencies"] == ["wk"]
 
@@ -924,7 +957,7 @@ def test_missing_skill_command_dependency_fails(tmp_path, skills_root, csk_home)
     project = make_project(tmp_path)
     make_skill_repo(
         skills_root,
-        "skill-wiki-memory",
+        "skill-docs-memory",
         {
             "csk-skill.json": json.dumps(
                 {
@@ -934,7 +967,7 @@ def test_missing_skill_command_dependency_fails(tmp_path, skills_root, csk_home)
                         "commands": {
                             "wk": {
                                 "type": "skill",
-                                "skill": "skill-wiki",
+                                "skill": "skill-docs",
                                 "command": "wk",
                             }
                         }
@@ -944,26 +977,26 @@ def test_missing_skill_command_dependency_fails(tmp_path, skills_root, csk_home)
         },
         tag="v1",
     )
-    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-wiki-memory", "tag": "v1"}]})
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-docs-memory", "tag": "v1"}]})
     cfg = make_config(csk_home, skills_root, project)
 
     result = installer.install(cfg)[0]
 
     assert result.errors
-    assert "Missing skill dependency 'skill-wiki'" in result.errors[0]
+    assert "Missing skill dependency 'skill-docs'" in result.errors[0]
 
 
 def test_skill_command_dependency_requires_exported_script_command(tmp_path, skills_root, csk_home):
     project = make_project(tmp_path)
     make_skill_repo(
         skills_root,
-        "skill-wiki",
+        "skill-docs",
         {"csk-skill.json": json.dumps({"schema_version": 2, "commands": {}})},
         tag="v1",
     )
     make_skill_repo(
         skills_root,
-        "skill-wiki-memory",
+        "skill-docs-memory",
         {
             "csk-skill.json": json.dumps(
                 {
@@ -973,7 +1006,7 @@ def test_skill_command_dependency_requires_exported_script_command(tmp_path, ski
                         "commands": {
                             "wk": {
                                 "type": "skill",
-                                "skill": "skill-wiki",
+                                "skill": "skill-docs",
                                 "command": "wk",
                             }
                         }
@@ -987,7 +1020,64 @@ def test_skill_command_dependency_requires_exported_script_command(tmp_path, ski
         project,
         {
             "schema_version": 1,
-            "skills": [{"name": "skill-wiki", "tag": "v1"}, {"name": "skill-wiki-memory", "tag": "v1"}],
+            "skills": [{"name": "skill-docs", "tag": "v1"}, {"name": "skill-docs-memory", "tag": "v1"}],
+        },
+    )
+    cfg = make_config(csk_home, skills_root, project)
+
+    result = installer.install(cfg)[0]
+
+    assert result.errors
+    assert "does not export a script command named 'wk'" in result.errors[0]
+
+
+def test_skill_command_dependency_rejects_provider_system_command(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-docs",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 2,
+                    "commands": {
+                        "wk": {
+                            "type": "system",
+                            "command": sys.executable,
+                        }
+                    },
+                }
+            )
+        },
+        tag="v1",
+    )
+    make_skill_repo(
+        skills_root,
+        "skill-docs-memory",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 2,
+                    "commands": {},
+                    "dependencies": {
+                        "commands": {
+                            "wk": {
+                                "type": "skill",
+                                "skill": "skill-docs",
+                                "command": "wk",
+                            }
+                        }
+                    },
+                }
+            )
+        },
+        tag="v1",
+    )
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [{"name": "skill-docs", "tag": "v1"}, {"name": "skill-docs-memory", "tag": "v1"}],
         },
     )
     cfg = make_config(csk_home, skills_root, project)

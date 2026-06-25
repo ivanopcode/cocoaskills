@@ -171,9 +171,9 @@ def test_csk_skill_schema_v3_parses_command_dependencies(tmp_path):
                     "commands": {
                         "wk": {
                             "type": "skill",
-                            "skill": "skill-wiki",
+                            "skill": "skill-docs",
                             "command": "wk",
-                            "hint": "Add skill-wiki to Skillfile.json.",
+                            "hint": "Add skill-docs to Skillfile.json.",
                         },
                         "wiki": {
                             "type": "system",
@@ -190,7 +190,7 @@ def test_csk_skill_schema_v3_parses_command_dependencies(tmp_path):
     spec = skillspec.load_skill_spec(tmp_path)
 
     assert spec.dependencies["wk"].type == "skill"
-    assert spec.dependencies["wk"].skill == "skill-wiki"
+    assert spec.dependencies["wk"].skill == "skill-docs"
     assert spec.dependencies["wk"].command == "wk"
     assert spec.dependencies["wiki"].type == "system"
     assert spec.dependencies["wiki"].command == "wiki"
@@ -206,7 +206,7 @@ def test_dependency_rejects_unknown_fields(tmp_path):
                     "commands": {
                         "wk": {
                             "type": "skill",
-                            "skill": "skill-wiki",
+                            "skill": "skill-docs",
                             "command": "wk",
                             "install": "echo bad",
                         }

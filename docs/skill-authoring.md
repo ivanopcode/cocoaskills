@@ -308,9 +308,9 @@ Example:
     "commands": {
       "wk": {
         "type": "skill",
-        "skill": "skill-wiki",
+        "skill": "skill-docs",
         "command": "wk",
-        "hint": "Add skill-wiki to Skillfile.json before skill-wiki-memory."
+        "hint": "Add skill-docs to Skillfile.json before this skill."
       }
     }
   }
@@ -320,8 +320,12 @@ Example:
 Rules:
 
 - Allowed fields: `type`, `skill`, `command`, `hint`.
-- `skill` is the provider skill name from `Skillfile.json`.
+- `skill` is the provider skill name from `Skillfile.json`. Consumers must
+  declare the provider under this exact canonical name.
 - `command` is the script command exported by that provider skill.
+- The `dependencies.commands` map key is a local dependency id used in markers
+  and diagnostics. For skill command dependencies, keep it equal to `command`
+  unless a dependency needs a distinct local name.
 - `hint` is optional.
 - The provider skill must be in the same install plan.
 - The provider must export the requested command as a `script` command.
@@ -338,7 +342,7 @@ Good:
     "commands": {
       "wk": {
         "type": "skill",
-        "skill": "skill-wiki",
+        "skill": "skill-docs",
         "command": "wk"
       }
     }
