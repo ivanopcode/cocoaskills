@@ -22,6 +22,7 @@ def test_cli_help_for_commands(capsys):
     assert cli.main(["--help"]) == 0
     top = capsys.readouterr().out
     assert "install" in top
+    assert "skill check" in top
     assert cli.main(["install", "--help"]) == 0
     install_help = capsys.readouterr().out
     assert "--strict-tags" in install_help
@@ -51,6 +52,38 @@ def test_cli_project_add_creates_skillfile(monkeypatch, tmp_path, csk_home):
     data = json.loads((project / "Skillfile.json").read_text(encoding="utf-8"))
     assert data["project"]["alias"] == "app"
     assert data["agents"] == ["codex_cli"]
+
+
+def test_cli_skill_check_does_not_require_config(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("CSK_CONFIG", str(tmp_path / "missing-config.json"))
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: skill\n---\n", encoding="utf-8")
+
+    code = cli.main(["skill", "check", str(skill)])
+    captured = capsys.readouterr()
+
+    assert code == 0
+    assert captured.out.strip().endswith(": ok")
+    assert captured.err == ""
+
+
+def test_cli_skill_check_non_skill_dir_returns_error(tmp_path, capsys):
+    code = cli.main(["skill", "check", str(tmp_path)])
+    captured = capsys.readouterr()
+
+    assert code == cli.EXIT_PARTIAL_FAIL
+    assert "skill.missing_skill_md" in captured.out
+
+
+def test_cli_skill_check_json_output(tmp_path, capsys):
+    code = cli.main(["skill", "check", str(tmp_path), "--json"])
+    captured = capsys.readouterr()
+
+    assert code == cli.EXIT_PARTIAL_FAIL
+    data = json.loads(captured.out)
+    assert data[0]["severity"] == "error"
+    assert data[0]["code"] == "skill.missing_skill_md"
 
 
 def test_cli_init_creates_skillfile_and_gitignore_in_git_repo(monkeypatch, tmp_path, csk_home, skills_root, capsys):
@@ -630,6 +663,7 @@ def test_cli_missing_skills_root_returns_config_exit(monkeypatch, tmp_path, csk_
         encoding="utf-8",
     )
     monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+    monkeypatch.chdir(tmp_path)
     assert cli.main(["install"]) == cli.EXIT_CONFIG
 
 

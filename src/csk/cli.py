@@ -8,7 +8,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from . import __version__, adapters, config, deprecation, gc, git_ops, gitignore_gate, global_install, installer, manifest, project_resolver, shell_init, status
+from . import __version__, adapters, config, deprecation, gc, git_ops, gitignore_gate, global_install, installer, manifest, project_resolver, shell_init, skillcheck, status
 from .audit import pipeline as audit_pipeline
 from .audit import runner as audit_runner
 from .audit import trust as audit_trust
@@ -70,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  csk status [target]    show manifest vs installed state\n"
             "  csk global <command>   manage user-wide global skills\n"
             "  csk audit [target]     run deterministic security audit\n"
+            "  csk skill check <dir>  validate one skill directory\n"
             "  csk list               list configured projects and skills\n"
             "  csk project add        add a configured project\n"
             "  csk project resolve    show current checkout resolution\n"
@@ -83,6 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_bootstrap(sub)
     _add_init(sub)
+    _add_skill(sub)
     _add_install(sub, "install", "Apply Skillfile.json using local refs. Missing git URL sources are cloned.")
     sub.add_parser(
         "update",
@@ -238,6 +240,34 @@ def _add_init(sub) -> None:
     parser.add_argument("--no-interactive", action="store_true", help="accepted for scripting; prompts are not used")
 
 
+def _add_skill(sub) -> None:
+    parser = sub.add_parser("skill", help="Inspect and validate skill repositories.")
+    skill_sub = parser.add_subparsers(dest="skill_command", required=True)
+    check = skill_sub.add_parser(
+        "check",
+        help="Validate one skill directory without requiring csk config.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Validates intrinsic skill requirements in a working tree directory.",
+        epilog=(
+            "Files read:\n"
+            "  <skill>/SKILL.md, <skill>/csk-skill.json, <skill>/agents/runtime.json,\n"
+            "  <skill>/locales/metadata.json, <skill>/.skill_triggers.\n\n"
+            "Notes:\n"
+            "  This command reads the working tree as-is. csk install validates the committed\n"
+            "  git snapshot resolved from Skillfile.json.\n\n"
+            "Exit codes:\n"
+            "  0 no errors, 1 one or more strict errors.\n\n"
+            "Examples:\n"
+            "  csk skill check .\n"
+            "  csk skill check /path/to/skill --locale ru\n"
+            "  csk skill check . --json"
+        ),
+    )
+    check.add_argument("path", help="skill directory to validate")
+    check.add_argument("--locale", help="selected locale to validate")
+    check.add_argument("--json", action="store_true", dest="json_output", help="print machine-readable issues")
+
+
 def _add_install(sub, name: str, description: str) -> None:
     parser = sub.add_parser(
         name,
@@ -381,6 +411,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return _dispatch_global(args)
     if args.command == "audit":
         return _cmd_audit(args)
+    if args.command == "skill" and args.skill_command == "check":
+        return _cmd_skill_check(args)
 
     cfg = config.load_config()
     if args.command == "list":
@@ -599,6 +631,26 @@ def _cmd_project_add(alias: str, path: Path) -> int:
     manifest.ensure_project_manifest(path.expanduser(), alias=alias, agents=cfg.default_agents)
     print(f"Added project {alias}: {path}")
     return EXIT_OK
+
+
+def _cmd_skill_check(args: argparse.Namespace) -> int:
+    skill_dir = Path(args.path).expanduser()
+    if not skill_dir.is_absolute():
+        skill_dir = Path.cwd() / skill_dir
+    try:
+        skill_dir = skill_dir.resolve()
+    except FileNotFoundError:
+        pass
+    issues = skillcheck.validate_skill(skill_dir, locale_value=args.locale)
+    if args.json_output:
+        print(json.dumps([issue.__dict__ for issue in issues], ensure_ascii=False, indent=2))
+    else:
+        if not issues:
+            print(f"{skill_dir}: ok")
+        for issue in issues:
+            location = f" {issue.path}" if issue.path else ""
+            print(f"{issue.severity}: {issue.code}{location}: {issue.message}")
+    return EXIT_PARTIAL_FAIL if skillcheck.has_errors(issues) else EXIT_OK
 
 
 def _cmd_update(cfg: config.GlobalConfig) -> int:
