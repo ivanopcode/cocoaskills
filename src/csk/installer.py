@@ -94,7 +94,7 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
             result.messages.extend(_skill_validation_warnings(project.alias, validation_issues))
             _check_skill_validation_errors(validation_issues)
             _detect_command_collisions(plans)
-            _check_system_commands(plans)
+            _check_dependencies(plans)
             audit_gate = audit_pipeline.gate_plans(plans, config, scope=project.alias, record=not options.dry_run)
             result.messages.extend(audit_gate.warnings)
             if audit_gate.blocked:
@@ -199,23 +199,78 @@ def _ensure_skill_repo(
 def _detect_command_collisions(plans: list[SkillPlan]) -> None:
     owners: dict[str, str] = {}
     for plan in plans:
-        for command in plan.spec.commands:
-            previous = owners.get(command)
+        for command in plan.spec.commands.values():
+            if command.type != "script":
+                continue
+            previous = owners.get(command.name)
             if previous:
                 raise InstallError(
-                    f"Command collision for {command!r}: exported by {previous} and {plan.decl.name}"
+                    f"Command collision for {command.name!r}: exported by {previous} and {plan.decl.name}"
                 )
-            owners[command] = plan.decl.name
+            owners[command.name] = plan.decl.name
+
+
+def _check_dependencies(plans: list[SkillPlan]) -> None:
+    _check_system_commands(plans)
+    _check_skill_command_dependencies(plans)
 
 
 def _check_system_commands(plans: list[SkillPlan]) -> None:
     for plan in plans:
-        for command in plan.spec.commands.values():
-            if command.type != "system":
-                continue
+        for command in _system_dependencies(plan):
             if not command.command or shutil.which(command.command) is None:
                 hint = f" Hint: {command.hint}" if command.hint else ""
                 raise InstallError(f"Missing system command {command.command!r} for {plan.decl.name}.{hint}")
+
+
+def _check_skill_command_dependencies(plans: list[SkillPlan]) -> None:
+    errors: list[str] = []
+    for plan in plans:
+        errors.extend(_skill_command_dependency_errors(plan, plans))
+    if errors:
+        raise InstallError("; ".join(errors))
+
+
+def _skill_command_dependency_errors(plan: SkillPlan, plans: list[SkillPlan]) -> list[str]:
+    by_skill = {candidate.decl.name: candidate for candidate in plans}
+    errors: list[str] = []
+    for dependency in plan.spec.dependencies.values():
+        if dependency.type != "skill":
+            continue
+        if not dependency.skill or not dependency.command:
+            errors.append(f"Invalid skill dependency for {plan.decl.name}: {dependency.name}")
+            continue
+        provider = by_skill.get(dependency.skill)
+        if provider is None:
+            hint = f" Hint: {dependency.hint}" if dependency.hint else ""
+            errors.append(
+                f"Missing skill dependency {dependency.skill!r} for {plan.decl.name}; "
+                f"add {dependency.skill} to Skillfile.json.{hint}"
+            )
+            continue
+        provided = provider.spec.commands.get(dependency.command)
+        if provided is None or provided.type != "script":
+            errors.append(
+                f"Skill dependency {plan.decl.name} requires {dependency.skill}.{dependency.command}, "
+                f"but {dependency.skill} does not export a script command named {dependency.command!r}"
+            )
+    return errors
+
+
+def _system_dependencies(plan: SkillPlan) -> list[CommandSpec]:
+    legacy = [command for command in plan.spec.commands.values() if command.type == "system"]
+    explicit = [
+        CommandSpec(
+            name=dependency.name,
+            type="system",
+            command=dependency.command,
+            hint=dependency.hint,
+            source=dependency.source,
+        )
+        for dependency in plan.spec.dependencies.values()
+        if dependency.type == "system"
+    ]
+    return legacy + explicit
 
 
 def _validate_skills(
@@ -340,7 +395,8 @@ def _install_skill_context_to_root(target_root: Path, plan: SkillPlan, effective
         "content_sha256": content_hash,
         "locale": effective_locale,
         "agents": agents,
-        "commands": sorted(plan.spec.commands),
+        "commands": sorted(command.name for command in plan.spec.commands.values() if command.type == "script"),
+        "dependencies": sorted(plan.spec.dependencies),
         "skill_schema_version": plan.spec.schema_version,
         "runtime_roots": list(plan.spec.runtime_roots),
         "installed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),

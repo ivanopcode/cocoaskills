@@ -53,7 +53,7 @@ csk-skill.json
 ```
 
 `csk-skill.json` is the machine-readable runtime manifest. It declares command
-entrypoints and system dependencies.
+entrypoints exported by the skill and dependencies consumed by the skill.
 
 ## 3. `csk-skill.json` Schema Versions
 
@@ -120,6 +120,15 @@ Schema v3 adds an explicit capability envelope for audit:
     "review": {
       "type": "script",
       "unix_path": "scripts/review"
+    }
+  },
+  "dependencies": {
+    "commands": {
+      "glab": {
+        "type": "system",
+        "command": "glab",
+        "hint": "Install GitLab CLI through project bootstrap tooling"
+      }
     }
   }
 }
@@ -231,20 +240,32 @@ exec python3 "$script_dir/main.py" "$@"
 This pattern works when project `.agents/bin/<command>` is a symlink to the
 runtime store.
 
-## 6. System Dependencies
+## 6. Dependencies
 
-System dependencies are commands the skill needs but does not own.
+`commands` is only for commands exported by the current skill. Dependencies
+belong under `dependencies.commands`.
+
+Do not declare a command in `commands` merely because the skill calls it. That
+turns the command name into an exported CocoaSkills command and can collide with
+the skill that actually provides it.
+
+### System command dependencies
+
+System command dependencies are commands the skill needs but does not own and
+that are installed by the machine or project bootstrap.
 
 Example:
 
 ```json
 {
   "schema_version": 2,
-  "commands": {
-    "review-cli": {
-      "type": "system",
-      "command": "review-cli",
-      "hint": "Install the review CLI through project bootstrap tooling"
+  "dependencies": {
+    "commands": {
+      "review-cli": {
+        "type": "system",
+        "command": "review-cli",
+        "hint": "Install the review CLI through project bootstrap tooling"
+      }
     }
   }
 }
@@ -272,6 +293,76 @@ files, project context, or shims for that skill.
 
 Project bootstrap tooling owns system dependencies. In demo-ios this means
 Mise, Make, or a project bootstrap script, not the skill manager.
+
+### Skill command dependencies
+
+Skill command dependencies are commands exported by another skill in the same
+`Skillfile.json`.
+
+Example:
+
+```json
+{
+  "schema_version": 2,
+  "dependencies": {
+    "commands": {
+      "wk": {
+        "type": "skill",
+        "skill": "skill-wiki",
+        "command": "wk",
+        "hint": "Add skill-wiki to Skillfile.json before skill-wiki-memory."
+      }
+    }
+  }
+}
+```
+
+Rules:
+
+- Allowed fields: `type`, `skill`, `command`, `hint`.
+- `skill` is the provider skill name from `Skillfile.json`.
+- `command` is the script command exported by that provider skill.
+- `hint` is optional.
+- The provider skill must be in the same install plan.
+- The provider must export the requested command as a `script` command.
+- Skill command dependencies are not installed as new shims by the consuming
+  skill and do not participate in command collision detection.
+
+Good:
+
+```json
+{
+  "schema_version": 2,
+  "commands": {},
+  "dependencies": {
+    "commands": {
+      "wk": {
+        "type": "skill",
+        "skill": "skill-wiki",
+        "command": "wk"
+      }
+    }
+  }
+}
+```
+
+Bad:
+
+```json
+{
+  "schema_version": 2,
+  "commands": {
+    "review-cli": {
+      "type": "system",
+      "command": "review-cli",
+      "hint": "This is a dependency, not an export."
+    }
+  }
+}
+```
+
+Legacy manifests with `type: system` entries under `commands` remain accepted
+for compatibility, but new skills should use `dependencies.commands`.
 
 ## 7. Localization Contract
 
@@ -310,17 +401,17 @@ committed git snapshot resolved from a consuming project's `Skillfile.json`, so
 uncommitted local files can make the two commands differ.
 
 System command presence is environment-specific and remains an install-time
-check. `csk skill check` validates that a `type: system` command is declared
-correctly, but it does not require the command to exist on the author's
-machine.
+check. `csk skill check` validates that `dependencies.commands` entries are
+declared correctly, but it does not require system commands to exist on the
+author's machine.
 
 Locale catalogs are valid when at least one locale appears in both
 `locales/metadata.json` and `.skill_triggers/<locale>.md`. When a selected
 locale is missing but another locale is consistent, CocoaSkills installs the
 source `SKILL.md` with a warning instead of failing.
 
-Do not add `dependencies.json`. It is no longer copied by CocoaSkills. System
-machine dependencies belong in `csk-skill.json` as `type: system` commands.
+Do not add `dependencies.json`. It is no longer copied by CocoaSkills.
+Dependencies belong in `csk-skill.json` under `dependencies.commands`.
 
 ## 9. Prompt Context Contract
 
@@ -390,11 +481,15 @@ If the agent needs operational information, put it in `SKILL.md` or
     "mr": {
       "type": "script",
       "unix_path": "scripts/mr"
-    },
-    "review-cli": {
-      "type": "system",
-      "command": "review-cli",
-      "hint": "Install the review CLI through project bootstrap tooling"
+    }
+  },
+  "dependencies": {
+    "commands": {
+      "review-cli": {
+        "type": "system",
+        "command": "review-cli",
+        "hint": "Install the review CLI through project bootstrap tooling"
+      }
     }
   }
 }
@@ -414,11 +509,15 @@ If the agent needs operational information, put it in `SKILL.md` or
     "monitor-cli-auth": {
       "type": "script",
       "unix_path": "scripts/monitor-cli-auth"
-    },
-    "monitor-cli": {
-      "type": "system",
-      "command": "monitor-cli",
-      "hint": "Install the monitor CLI through project bootstrap tooling"
+    }
+  },
+  "dependencies": {
+    "commands": {
+      "monitor-cli": {
+        "type": "system",
+        "command": "monitor-cli",
+        "hint": "Install the monitor CLI through project bootstrap tooling"
+      }
     }
   }
 }
