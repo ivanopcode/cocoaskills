@@ -18,7 +18,6 @@ INCLUDE_ROOTS = {
     "templates",
     "examples",
     "data",
-    "dependencies.json",
 }
 
 ALWAYS_EXCLUDED = [

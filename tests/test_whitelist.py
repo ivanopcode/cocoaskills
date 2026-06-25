@@ -11,6 +11,7 @@ def test_whitelist_copies_only_allowed_and_prunes_nested_excludes(tmp_path):
         "README.md": "readme\n",
         "examples/ok.txt": "ok\n",
         "examples/tests/bad.txt": "bad\n",
+        "dependencies.json": '{"dependencies": []}\n',
         "references/ref.md": "ref\n",
         "scripts/tool": "tool\n",
     }
@@ -23,7 +24,9 @@ def test_whitelist_copies_only_allowed_and_prunes_nested_excludes(tmp_path):
     assert "SKILL.md" in copied
     assert "examples/ok.txt" in copied
     assert "examples/tests/bad.txt" not in copied
+    assert "dependencies.json" not in copied
     assert "scripts/tool" not in copied
+    assert not (tmp_path / "out" / "dependencies.json").exists()
     assert not (tmp_path / "out" / "README.md").exists()
 
 
@@ -36,4 +39,3 @@ def test_missing_skill_md_fails(tmp_path):
         assert "SKILL.md" in str(exc)
     else:
         raise AssertionError("expected WhitelistError")
-

@@ -654,7 +654,6 @@ assets/
 templates/
 examples/
 data/
-dependencies.json
 ```
 
 `SKILL.md` is required. If it is missing from the resolved snapshot, the skill
@@ -672,10 +671,9 @@ The always-excluded list wins for nested paths. For example,
 `locales/` is source metadata for rendering and is not copied into the runtime
 skill context by default.
 
-`dependencies.json` is copied as opaque legacy skill metadata. MVP does not
-parse it or enforce dependency rules from it. It is frozen legacy metadata that
-may still be consumed by skill-side bootstrap code; removal is tracked outside
-MVP compatibility work.
+`dependencies.json` is not part of the runtime whitelist. System machine
+dependencies belong in `csk-skill.json` as `type: system` commands, where
+CocoaSkills can check them during install.
 
 `scripts/` is not copied into the installed skill context when script commands
 are declared through `csk-skill.json` or `agents/runtime.json`. Declared script
@@ -1012,8 +1010,8 @@ Required areas:
 - `--fix-gitignore` appends only missing entries.
 - Runtime whitelist excludes README, tests, venv, git, and other dev artifacts.
 - Nested excluded paths are pruned even under included whitelist roots.
-- `dependencies.json` is copied but not parsed; its removal is a later
-  compatibility migration after skill-side bootstrap code stops consuming it.
+- `dependencies.json` is not copied; system dependencies are declared in
+  `csk-skill.json` as `type: system` commands.
 - Missing `SKILL.md` fails skill installation.
 - `csk-skill.json` takes precedence over `agents/runtime.json`.
 - Declared script commands are installed to global runtime, not project skill

@@ -319,10 +319,8 @@ Locale catalogs are valid when at least one locale appears in both
 locale is missing but another locale is consistent, CocoaSkills installs the
 source `SKILL.md` with a warning instead of failing.
 
-`dependencies.json` is frozen legacy metadata: it is still copied opaque and
-may be consumed by skill-side bootstrap code. New dependencies belong in
-`csk-skill.json` as `type: system`; removal of `dependencies.json` is tracked
-as a separate migration.
+Do not add `dependencies.json`. It is no longer copied by CocoaSkills. System
+machine dependencies belong in `csk-skill.json` as `type: system` commands.
 
 ## 9. Prompt Context Contract
 
@@ -473,7 +471,6 @@ For existing skills with `agents/runtime.json`:
 1. Add `csk-skill.json` schema v2.
 2. Keep `agents/runtime.json` during the first rollout.
 3. Release and consume the new tag in a real project.
-4. After observation, remove legacy `agents/runtime.json` and
-   `dependencies.json` if they are no longer needed.
+4. After observation, remove legacy `agents/runtime.json`.
 
 `csk-skill.json` takes precedence over `agents/runtime.json` when both exist.
