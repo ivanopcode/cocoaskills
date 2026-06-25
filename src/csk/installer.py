@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import adapters, consumers, env_files, gc, git_ops, gitignore_gate, hashing, locale, manifest, shims, skillspec, snapshot, whitelist
+from . import adapters, consumers, env_files, gc, git_ops, gitignore_gate, hashing, locale, manifest, shims, skillcheck, skillspec, snapshot, whitelist
 from .audit import pipeline as audit_pipeline
 from .config import GlobalConfig, ProjectConfig
 from .skillspec import CommandSpec
@@ -90,6 +90,9 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
         effective_locale = project_manifest.locale or config.preferred_locale
         with ExitStack() as stack:
             plans = _build_plans(config, project_manifest, use_cache=not options.dry_run, stack=stack)
+            validation_issues = _validate_skills(plans, effective_locale)
+            result.messages.extend(_skill_validation_warnings(project.alias, validation_issues))
+            _check_skill_validation_errors(validation_issues)
             _detect_command_collisions(plans)
             _check_system_commands(plans)
             audit_gate = audit_pipeline.gate_plans(plans, config, scope=project.alias, record=not options.dry_run)
@@ -213,6 +216,37 @@ def _check_system_commands(plans: list[SkillPlan]) -> None:
             if not command.command or shutil.which(command.command) is None:
                 hint = f" Hint: {command.hint}" if command.hint else ""
                 raise InstallError(f"Missing system command {command.command!r} for {plan.decl.name}.{hint}")
+
+
+def _validate_skills(
+    plans: list[SkillPlan], effective_locale: str | None
+) -> list[tuple[SkillPlan, skillcheck.ValidationIssue]]:
+    issues: list[tuple[SkillPlan, skillcheck.ValidationIssue]] = []
+    for plan in plans:
+        for issue in skillcheck.validate_skill(plan.snapshot, locale_value=effective_locale):
+            issues.append((plan, issue))
+    return issues
+
+
+def _skill_validation_warnings(
+    project_alias: str, issues: list[tuple[SkillPlan, skillcheck.ValidationIssue]]
+) -> list[str]:
+    warnings: list[str] = []
+    for plan, issue in issues:
+        if issue.severity == "warning":
+            warnings.append(
+                f"{project_alias}: {plan.decl.name}: WARNING {issue.code}: {issue.message}"
+            )
+    return warnings
+
+
+def _check_skill_validation_errors(issues: list[tuple[SkillPlan, skillcheck.ValidationIssue]]) -> None:
+    errors: list[str] = []
+    for plan, issue in issues:
+        if issue.severity == "error":
+            errors.append(f"{plan.decl.name}: {issue.message}")
+    if errors:
+        raise InstallError("; ".join(errors))
 
 
 def _check_moved_tags_strict(skills_dir: Path, plans: list[SkillPlan]) -> None:

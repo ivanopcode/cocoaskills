@@ -145,6 +145,40 @@ def test_install_is_idempotent_for_unchanged_inputs(tmp_path, skills_root, csk_h
     assert any("up-to-date" in message for message in second.messages)
 
 
+def test_locale_fallback_warning_surfaces_when_install_is_up_to_date(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-a",
+        {
+            "SKILL.md": "---\nname: skill-a\n---\n\n# Source\n",
+            "locales/metadata.json": json.dumps(
+                {
+                    "locales": {
+                        "ru": {"description": "Описание"},
+                        "en": {"description": "Description"},
+                    }
+                }
+            ),
+            ".skill_triggers/en.md": "- trigger\n",
+        },
+        tag="v1",
+    )
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+
+    first = installer.install(cfg)[0]
+    second = installer.install(cfg)[0]
+
+    assert not first.errors
+    assert not second.errors
+    assert any("locale.selected_unavailable" in message for message in first.messages)
+    assert any("locale.selected_unavailable" in message for message in second.messages)
+    assert any("up-to-date" in message for message in second.messages)
+    installed_skill = project / ".agents" / "skills" / "skill-a" / "SKILL.md"
+    assert "# Source" in installed_skill.read_text(encoding="utf-8")
+
+
 def test_dry_run_does_not_modify_project_or_cache(tmp_path, skills_root, csk_home):
     project = make_project(tmp_path)
     make_skill_repo(skills_root, "skill-a", tag="v1")
