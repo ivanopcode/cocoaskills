@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import locale, skillspec
@@ -59,6 +59,15 @@ def validate_skill(skill_dir: Path, *, locale_value: str | None = None) -> list[
 
 def has_errors(issues: list[ValidationIssue]) -> bool:
     return any(issue.severity == "error" for issue in issues)
+
+
+def issue_to_dict(issue: ValidationIssue) -> dict[str, str]:
+    return asdict(issue)
+
+
+def format_issue(issue: ValidationIssue) -> str:
+    location = f" {issue.path}" if issue.path else ""
+    return f"{issue.severity}: {issue.code}{location}: {issue.message}"
 
 
 def _skill_spec_path(skill_dir: Path) -> str:

@@ -637,19 +637,15 @@ def _cmd_skill_check(args: argparse.Namespace) -> int:
     skill_dir = Path(args.path).expanduser()
     if not skill_dir.is_absolute():
         skill_dir = Path.cwd() / skill_dir
-    try:
-        skill_dir = skill_dir.resolve()
-    except FileNotFoundError:
-        pass
+    skill_dir = skill_dir.resolve()
     issues = skillcheck.validate_skill(skill_dir, locale_value=args.locale)
     if args.json_output:
-        print(json.dumps([issue.__dict__ for issue in issues], ensure_ascii=False, indent=2))
+        print(json.dumps([skillcheck.issue_to_dict(issue) for issue in issues], ensure_ascii=False, indent=2))
     else:
         if not issues:
             print(f"{skill_dir}: ok")
         for issue in issues:
-            location = f" {issue.path}" if issue.path else ""
-            print(f"{issue.severity}: {issue.code}{location}: {issue.message}")
+            print(skillcheck.format_issue(issue))
     return EXIT_PARTIAL_FAIL if skillcheck.has_errors(issues) else EXIT_OK
 
 

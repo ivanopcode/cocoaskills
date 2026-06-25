@@ -8,7 +8,7 @@ from dataclasses import replace
 import pytest
 
 from conftest import commit_all, make_config, make_project, make_skill_repo, run, write_files, write_skillfile
-from csk import config, hashing, installer, manifest, snapshot
+from csk import config, hashing, installer, manifest, skillcheck, snapshot
 from csk.audit import pipeline as audit_pipeline
 from csk.audit.backends import AuditBackendError
 
@@ -665,6 +665,25 @@ def test_failed_update_preserves_previous_install(tmp_path, skills_root, csk_hom
     failed = installer.install(cfg)[0]
     assert failed.errors
     assert installed.exists()
+
+
+def test_missing_skill_md_error_matches_skill_check(tmp_path, skills_root, csk_home):
+    project = make_project(tmp_path)
+    repo, _ = make_skill_repo(skills_root, "skill-a")
+    (repo / "SKILL.md").unlink()
+    write_files(repo, {"references/ref.md": "ref\n"})
+    commit = commit_all(repo, "remove skill")
+    snap = snapshot.get_snapshot(csk_home, "skill-a", repo, commit)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "revision": commit}]})
+    cfg = make_config(csk_home, skills_root, project)
+
+    check_issues = skillcheck.validate_skill(snap)
+    result = installer.install(cfg)[0]
+
+    assert check_issues
+    assert check_issues[0].code == "skill.missing_skill_md"
+    assert result.errors
+    assert check_issues[0].message in result.errors[0]
 
 
 def test_gitignore_gate_skips_project_without_failure(tmp_path, skills_root, csk_home):

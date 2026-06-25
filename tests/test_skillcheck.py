@@ -75,6 +75,20 @@ def test_validate_locale_metadata_without_catalogs_is_error(tmp_path):
     assert issues[-1].code == "locale.no_consistent_catalog"
 
 
+def test_validate_malformed_locale_metadata_is_error(tmp_path):
+    (tmp_path / "SKILL.md").write_text("---\nname: skill\n---\n", encoding="utf-8")
+    (tmp_path / "locales").mkdir()
+    (tmp_path / ".skill_triggers").mkdir()
+    (tmp_path / "locales" / "metadata.json").write_text("{", encoding="utf-8")
+    (tmp_path / ".skill_triggers" / "ru.md").write_text("- триггер\n", encoding="utf-8")
+
+    issues = skillcheck.validate_skill(tmp_path, locale_value="ru")
+
+    assert skillcheck.has_errors(issues)
+    assert issues[-1].code == "locale.metadata_malformed"
+    assert "Malformed locale metadata" in issues[-1].message
+
+
 def test_validate_locale_catalogs_without_metadata_is_error(tmp_path):
     (tmp_path / "SKILL.md").write_text("---\nname: skill\n---\n", encoding="utf-8")
     (tmp_path / ".skill_triggers").mkdir()
