@@ -261,6 +261,7 @@ Backend safety rules:
 | `csk remove <name>` | Remove a skill declaration from the project Skillfile; the next install cleans generated files. |
 | `csk gc` | Remove unreferenced runtime entries, snapshot cache entries, and dead consumer registry entries. |
 | `csk audit [target]` | Run skill security audit for the current project, an alias, `.`, or a project path. Supports `--all`, `--global`, and `--json`. |
+| `csk skill check <dir>` | Validate one skill directory without requiring global config or project setup. |
 | `csk list [--paths]` | List configured projects and declared skills. |
 | `csk project add <alias> <path>` | Register a project for `--all` and create a manifest if missing. |
 | `csk project resolve [target]` | Show resolved project alias, checkout alias, Skillfile, and install paths. |

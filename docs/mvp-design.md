@@ -673,7 +673,9 @@ The always-excluded list wins for nested paths. For example,
 skill context by default.
 
 `dependencies.json` is copied as opaque legacy skill metadata. MVP does not
-parse it or enforce dependency rules from it.
+parse it or enforce dependency rules from it. It is frozen legacy metadata that
+may still be consumed by skill-side bootstrap code; removal is tracked outside
+MVP compatibility work.
 
 `scripts/` is not copied into the installed skill context when script commands
 are declared through `csk-skill.json` or `agents/runtime.json`. Declared script
@@ -828,15 +830,18 @@ If a skill does not have locale metadata, `SKILL.md` is copied as-is.
 
 If a skill has `locales/metadata.json` and `.skill_triggers/`, then:
 
-- the selected locale must exist;
-- `.skill_triggers/<locale>.md` must exist;
+- the selected locale is rendered when both `locales/metadata.json` and
+  `.skill_triggers/<locale>.md` contain that locale;
+- at least one locale must be consistently declared in both files;
 - `SKILL.md` frontmatter description and triggers may be rendered from the
   selected locale;
 - `agents/openai.yaml` may be rendered when it matches the existing
   skill-local-install contract.
 
-If locale metadata exists but the selected locale is unsupported, installation
-fails for that skill.
+If localization exists but the selected locale is not consistently available,
+installation falls back to the source `SKILL.md` with a warning when another
+consistent locale exists. Installation fails only when the localization shape
+has no consistent locale at all or when locale metadata is malformed.
 
 ## Installed Marker
 
@@ -1007,7 +1012,8 @@ Required areas:
 - `--fix-gitignore` appends only missing entries.
 - Runtime whitelist excludes README, tests, venv, git, and other dev artifacts.
 - Nested excluded paths are pruned even under included whitelist roots.
-- `dependencies.json` is copied but not parsed.
+- `dependencies.json` is copied but not parsed; its removal is a later
+  compatibility migration after skill-side bootstrap code stops consuming it.
 - Missing `SKILL.md` fails skill installation.
 - `csk-skill.json` takes precedence over `agents/runtime.json`.
 - Declared script commands are installed to global runtime, not project skill

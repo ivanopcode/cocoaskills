@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `csk skill check` to validate intrinsic skill requirements without
+  requiring global config or a consuming project.
+
+### Changed
+
+- Relaxed locale installation: if the selected locale is unavailable but the
+  skill has another consistent locale catalog, installation falls back to the
+  source `SKILL.md` with a warning instead of failing.
+- Locale warnings are emitted before the install marker fast-path, so they
+  remain visible for up-to-date installs and dry runs.
+
 ## [0.8.0] - 2026-06-17
 
 ### Security

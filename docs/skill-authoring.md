@@ -279,18 +279,52 @@ Localization is optional. If the skill ships no `locales/metadata.json` and no
 `.skill_triggers/` directory, installs are unaffected regardless of the
 project's `locale` setting.
 
-Once the skill ships either of them, installs with a configured `locale`
-require both:
+Once the skill ships either of them, a locale is considered consistent only
+when it appears in both:
 
 - `locales/metadata.json` with a `locales.<locale>` object (its `description`
   replaces the `SKILL.md` frontmatter description);
 - `.skill_triggers/<locale>.md` with the trigger catalog for that locale.
 
-If either file is missing for the requested locale, installation of the skill
-fails. Ship a catalog and metadata entry for every locale you intend to
-support.
+At least one consistent locale is required when localization is present. If the
+selected locale is missing but another locale is consistent, CocoaSkills
+installs the source `SKILL.md` with a warning instead of failing.
 
-## 8. Prompt Context Contract
+## 8. Validate a Skill
+
+Use `csk skill check` before tagging a skill:
+
+```bash
+csk skill check .
+csk skill check . --locale ru
+csk skill check . --json
+```
+
+The command validates intrinsic skill requirements in the working tree:
+`SKILL.md`, `csk-skill.json`, runtime roots, command shape, and locale catalog
+consistency. It does not require `~/.cocoaskills/config.json`, `Skillfile.json`,
+or project setup.
+
+`csk skill check` reads the working tree as-is. `csk install` validates the
+committed git snapshot resolved from a consuming project's `Skillfile.json`, so
+uncommitted local files can make the two commands differ.
+
+System command presence is environment-specific and remains an install-time
+check. `csk skill check` validates that a `type: system` command is declared
+correctly, but it does not require the command to exist on the author's
+machine.
+
+Locale catalogs are valid when at least one locale appears in both
+`locales/metadata.json` and `.skill_triggers/<locale>.md`. When a selected
+locale is missing but another locale is consistent, CocoaSkills installs the
+source `SKILL.md` with a warning instead of failing.
+
+`dependencies.json` is frozen legacy metadata: it is still copied opaque and
+may be consumed by skill-side bootstrap code. New dependencies belong in
+`csk-skill.json` as `type: system`; removal of `dependencies.json` is tracked
+as a separate migration.
+
+## 9. Prompt Context Contract
 
 Agent-facing files should be placed in prompt context roots:
 
@@ -327,7 +361,7 @@ Do not assume these are copied into prompt context:
 If the agent needs operational information, put it in `SKILL.md` or
 `references/`, not in `README.md`.
 
-## 9. Example Skill Manifests
+## 10. Example Skill Manifests
 
 ### skill-tracker
 
@@ -392,7 +426,7 @@ If the agent needs operational information, put it in `SKILL.md` or
 }
 ```
 
-## 10. Global and Project Installation
+## 11. Global and Project Installation
 
 Skill authors do not need a separate manifest for global use. The same
 `SKILL.md` and `csk-skill.json` are valid when the skill is installed:
@@ -415,23 +449,24 @@ checkout.
 Do not make a skill depend on being global. Project `Skillfile.json`
 declarations remain the source of truth for project behavior.
 
-## 11. Release Checklist
+## 12. Release Checklist
 
 Before tagging a skill release:
 
-1. Validate `csk-skill.json` by running `csk install` in a real project or
+1. Validate the working tree with `csk skill check . --locale <locale>`.
+2. Validate `csk-skill.json` by running `csk install` in a real project or
    disposable fixture project.
-2. Confirm runtime roots are absent from `.agents/skills/<skill>/`.
-3. Confirm runtime files are present under
+3. Confirm runtime roots are absent from `.agents/skills/<skill>/`.
+4. Confirm runtime files are present under
    `~/.cocoaskills/runtime/<skill>/<commit>/`.
-4. Confirm project commands are available through `.agents/bin`.
-5. Confirm missing system dependencies fail with a clear hint.
-6. Confirm `SKILL.md` and `references/` contain all agent-facing instructions.
-7. Tag the skill repository.
-8. Update consuming project `Skillfile.json` to the new tag.
-9. Run `csk install` and `csk status`.
+5. Confirm project commands are available through `.agents/bin`.
+6. Confirm missing system dependencies fail with a clear hint.
+7. Confirm `SKILL.md` and `references/` contain all agent-facing instructions.
+8. Tag the skill repository.
+9. Update consuming project `Skillfile.json` to the new tag.
+10. Run `csk install` and `csk status`.
 
-## 12. Migration Notes
+## 13. Migration Notes
 
 For existing skills with `agents/runtime.json`:
 
