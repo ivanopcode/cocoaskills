@@ -160,6 +160,67 @@ def test_csk_skill_schema_v3_parses_capabilities(tmp_path):
     assert spec.capabilities.env_read == ("HOME",)
 
 
+def test_csk_skill_schema_v3_parses_command_dependencies(tmp_path):
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "capabilities": {"network": "none", "exec": "none"},
+                "commands": {},
+                "dependencies": {
+                    "commands": {
+                        "wk": {
+                            "type": "skill",
+                            "skill": "skill-docs",
+                            "command": "wk",
+                            "hint": "Add skill-docs to Skillfile.json.",
+                        },
+                        "wiki": {
+                            "type": "system",
+                            "command": "wiki",
+                            "hint": "Install wb-wiki-cli.",
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    spec = skillspec.load_skill_spec(tmp_path)
+
+    assert spec.dependencies["wk"].type == "skill"
+    assert spec.dependencies["wk"].skill == "skill-docs"
+    assert spec.dependencies["wk"].command == "wk"
+    assert spec.dependencies["wiki"].type == "system"
+    assert spec.dependencies["wiki"].command == "wiki"
+
+
+def test_dependency_rejects_unknown_fields(tmp_path):
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "commands": {},
+                "dependencies": {
+                    "commands": {
+                        "wk": {
+                            "type": "skill",
+                            "skill": "skill-docs",
+                            "command": "wk",
+                            "install": "echo bad",
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(skillspec.SkillSpecError, match="install"):
+        skillspec.load_skill_spec(tmp_path)
+
+
 def test_csk_skill_schema_v3_requires_capabilities(tmp_path):
     (tmp_path / "csk-skill.json").write_text(
         json.dumps({"schema_version": 3, "commands": {}}),

@@ -33,12 +33,23 @@ class CommandSpec:
 
 
 @dataclass(frozen=True)
+class DependencySpec:
+    name: str
+    type: str
+    command: str | None = None
+    skill: str | None = None
+    hint: str | None = None
+    source: str = "csk-skill.json"
+
+
+@dataclass(frozen=True)
 class SkillSpec:
     commands: dict[str, CommandSpec]
     source_file: str | None
     schema_version: int = SCHEMA_VERSION
     runtime_roots: tuple[str, ...] = ()
     capabilities: CapabilityManifest = field(default_factory=CapabilityManifest.implicit_none)
+    dependencies: dict[str, DependencySpec] = field(default_factory=dict)
 
 
 def load_skill_spec(snapshot: Path) -> SkillSpec:
@@ -67,7 +78,7 @@ def _load_csk_skill(path: Path) -> SkillSpec:
             f"{UPGRADE_HINT}"
         )
     if schema in {2, 3}:
-        allowed_fields = {"schema_version", "runtime_roots", "commands"}
+        allowed_fields = {"schema_version", "runtime_roots", "commands", "dependencies"}
         if schema == 3:
             allowed_fields.add("capabilities")
         _reject_unknown_fields(data, allowed_fields, "csk-skill.json")
@@ -141,12 +152,14 @@ def _load_csk_skill(path: Path) -> SkillSpec:
             )
         else:
             raise SkillSpecError(f"Command {name!r} has unsupported type {command_type!r}")
+    dependencies = _parse_dependencies(data.get("dependencies"), schema=schema)
     return SkillSpec(
         commands=commands,
         source_file="csk-skill.json",
         schema_version=schema,
         runtime_roots=runtime_roots,
         capabilities=capabilities,
+        dependencies=dependencies,
     )
 
 
@@ -175,6 +188,67 @@ def _load_runtime_fallback(path: Path) -> SkillSpec:
             source="agents/runtime.json",
         )
     return SkillSpec(commands=commands, source_file="agents/runtime.json")
+
+
+def _parse_dependencies(raw: Any, *, schema: int) -> dict[str, DependencySpec]:
+    if raw is None:
+        return {}
+    if schema not in {2, 3}:
+        raise SkillSpecError("csk-skill.json field 'dependencies' requires schema_version 2 or newer")
+    if not isinstance(raw, dict):
+        raise SkillSpecError("csk-skill.json field 'dependencies' must be an object")
+    _reject_unknown_fields(raw, {"commands"}, "dependencies")
+    commands_raw = raw.get("commands", {})
+    if not isinstance(commands_raw, dict):
+        raise SkillSpecError("dependencies.commands must be an object")
+
+    dependencies: dict[str, DependencySpec] = {}
+    for name, entry in commands_raw.items():
+        if not isinstance(name, str) or not name:
+            raise SkillSpecError("Dependency command names must be non-empty strings")
+        if not is_valid_identifier(name):
+            raise SkillSpecError(f"Dependency command name {name!r} {IDENTIFIER_RULE}")
+        if not isinstance(entry, dict):
+            raise SkillSpecError(f"dependencies.commands.{name} must be an object")
+        dependency_type = entry.get("type")
+        hint = entry.get("hint")
+        if hint is not None and not isinstance(hint, str):
+            raise SkillSpecError(f"dependencies.commands.{name}.hint must be a string")
+        if dependency_type == "system":
+            _reject_unknown_fields(entry, {"type", "command", "hint"}, f"dependencies.commands.{name}")
+            command = entry.get("command")
+            if not isinstance(command, str) or not command:
+                raise SkillSpecError(f"System dependency {name!r} requires non-empty 'command'")
+            dependencies[name] = DependencySpec(
+                name=name,
+                type="system",
+                command=command,
+                hint=hint,
+                source="csk-skill.json",
+            )
+        elif dependency_type == "skill":
+            _reject_unknown_fields(entry, {"type", "skill", "command", "hint"}, f"dependencies.commands.{name}")
+            skill = entry.get("skill")
+            if not isinstance(skill, str) or not skill:
+                raise SkillSpecError(f"Skill dependency {name!r} requires non-empty 'skill'")
+            if not is_valid_identifier(skill):
+                raise SkillSpecError(f"Skill dependency name {skill!r} {IDENTIFIER_RULE}")
+            command = entry.get("command")
+            if not isinstance(command, str) or not command:
+                raise SkillSpecError(f"Skill dependency {name!r} requires non-empty 'command'")
+            if not is_valid_identifier(command):
+                raise SkillSpecError(f"Skill dependency command {command!r} {IDENTIFIER_RULE}")
+            dependencies[name] = DependencySpec(
+                name=name,
+                type="skill",
+                command=command,
+                skill=skill,
+                hint=hint,
+                source="csk-skill.json",
+            )
+        else:
+            raise SkillSpecError(f"Dependency command {name!r} has unsupported type {dependency_type!r}")
+    return dependencies
 
 
 def _validate_relative_path(value: Any, *, field: str, strict_posix: bool = False) -> str:
