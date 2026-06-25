@@ -526,6 +526,154 @@ def test_global_install_keeps_installing_available_skills_when_one_fails(
     assert not (csk_home / "global" / "skills" / "skill-missing-dep").exists()
 
 
+def test_global_install_cascades_skill_dependency_removal_when_provider_is_unavailable(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project)
+    _save_config(monkeypatch, cfg)
+    make_skill_repo(
+        skills_root,
+        "skill-provider",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 2,
+                    "runtime_roots": ["scripts"],
+                    "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}},
+                    "dependencies": {
+                        "commands": {
+                            "missing-tool": {
+                                "type": "system",
+                                "command": "__csk_missing_global_dependency__",
+                            }
+                        }
+                    },
+                }
+            ),
+            "scripts/tool": "#!/bin/sh\necho provider\n",
+        },
+        tag="v1",
+    )
+    make_skill_repo(
+        skills_root,
+        "skill-consumer",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 2,
+                    "commands": {},
+                    "dependencies": {
+                        "commands": {
+                            "tool": {
+                                "type": "skill",
+                                "skill": "skill-provider",
+                                "command": "tool",
+                            }
+                        }
+                    },
+                }
+            )
+        },
+        tag="v1",
+    )
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [
+                {"name": "skill-provider", "tag": "v1"},
+                {"name": "skill-consumer", "tag": "v1"},
+            ],
+        },
+    )
+
+    result = global_install.install(cfg)
+
+    assert result.errors
+    assert any("Missing system command '__csk_missing_global_dependency__'" in error for error in result.errors)
+    assert any("Missing skill dependency 'skill-provider'" in error for error in result.errors)
+    assert not (csk_home / "global" / "skills" / "skill-provider").exists()
+    assert not (csk_home / "global" / "skills" / "skill-consumer").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX global shims use symlinks")
+def test_global_install_checks_skill_command_dependencies(monkeypatch, tmp_path, skills_root, csk_home, capsys):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    _save_config(monkeypatch, cfg)
+    make_skill_repo(
+        skills_root,
+        "skill-docs",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 2,
+                    "runtime_roots": ["scripts"],
+                    "commands": {"wk": {"type": "script", "unix_path": "scripts/wk"}},
+                }
+            ),
+            "scripts/wk": "#!/bin/sh\necho wk\n",
+        },
+        tag="v1",
+    )
+    make_skill_repo(
+        skills_root,
+        "skill-docs-memory",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 2,
+                    "commands": {},
+                    "dependencies": {
+                        "commands": {
+                            "wk": {
+                                "type": "skill",
+                                "skill": "skill-docs",
+                                "command": "wk",
+                            }
+                        }
+                    },
+                }
+            )
+        },
+        tag="v1",
+    )
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [{"name": "skill-docs-memory", "tag": "v1"}],
+        },
+    )
+
+    assert cli.main(["global", "install"]) == cli.EXIT_PARTIAL_FAIL
+
+    captured = capsys.readouterr()
+    assert "Missing skill dependency 'skill-docs'" in captured.err
+    assert not (csk_home / "global" / "skills" / "skill-docs-memory").exists()
+
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [
+                {"name": "skill-docs", "tag": "v1"},
+                {"name": "skill-docs-memory", "tag": "v1"},
+            ],
+        },
+    )
+
+    assert cli.main(["global", "install"]) == 0
+
+    assert (csk_home / "global" / "skills" / "skill-docs" / ".csk-install.json").exists()
+    assert (csk_home / "global" / "skills" / "skill-docs-memory" / ".csk-install.json").exists()
+    assert (csk_home / "global" / "bin" / "wk").is_symlink()
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX global/project shims use symlinks")
 def test_project_command_shim_shadows_global_command(monkeypatch, tmp_path, skills_root, csk_home):
     project = make_project(tmp_path)
