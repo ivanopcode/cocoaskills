@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -8,29 +9,130 @@ class LocaleError(Exception):
     pass
 
 
-def render_locale(snapshot: Path, installed_dir: Path, locale: str | None) -> None:
+@dataclass(frozen=True)
+class LocaleIssue:
+    severity: str
+    code: str
+    path: str
+    message: str
+
+
+@dataclass(frozen=True)
+class LocaleAnalysis:
+    locale_to_render: str | None
+    issues: tuple[LocaleIssue, ...] = ()
+
+    @property
+    def failed(self) -> bool:
+        return any(issue.severity == "error" for issue in self.issues)
+
+
+def analyze_locale(snapshot: Path, locale: str | None) -> LocaleAnalysis:
     if not locale:
+        return LocaleAnalysis(locale_to_render=None)
+
+    metadata_path = snapshot / "locales" / "metadata.json"
+    triggers_root = snapshot / ".skill_triggers"
+    has_locale_metadata = metadata_path.exists() or triggers_root.exists()
+    if not has_locale_metadata:
+        return LocaleAnalysis(locale_to_render=None)
+
+    issues: list[LocaleIssue] = []
+    if triggers_root.exists() and not triggers_root.is_dir():
+        return LocaleAnalysis(
+            locale_to_render=None,
+            issues=(
+                LocaleIssue(
+                    "error",
+                    "locale.triggers_not_directory",
+                    ".skill_triggers",
+                    f"Locale trigger catalog must be a directory: {triggers_root}",
+                ),
+            ),
+        )
+
+    if not metadata_path.exists():
+        return LocaleAnalysis(
+            locale_to_render=None,
+            issues=(
+                LocaleIssue(
+                    "error",
+                    "locale.metadata_missing",
+                    "locales/metadata.json",
+                    f"Locale metadata missing: {metadata_path}",
+                ),
+            ),
+        )
+
+    metadata = _load_metadata(metadata_path)
+    locales = metadata.get("locales") if isinstance(metadata, dict) else None
+    if not isinstance(locales, dict):
+        return LocaleAnalysis(
+            locale_to_render=None,
+            issues=(
+                LocaleIssue(
+                    "error",
+                    "locale.metadata_invalid",
+                    "locales/metadata.json",
+                    f"Locale metadata {metadata_path} must contain object field 'locales'",
+                ),
+            ),
+        )
+
+    trigger_locales: set[str] = set()
+    if triggers_root.exists():
+        trigger_locales = {path.stem for path in triggers_root.glob("*.md") if path.is_file()}
+    consistent = {
+        key
+        for key, value in locales.items()
+        if isinstance(key, str) and isinstance(value, dict) and key in trigger_locales
+    }
+    if not consistent:
+        return LocaleAnalysis(
+            locale_to_render=None,
+            issues=(
+                LocaleIssue(
+                    "error",
+                    "locale.no_consistent_catalog",
+                    "locales/metadata.json",
+                    "Locale metadata and trigger catalogs have no matching supported locale",
+                ),
+            ),
+        )
+
+    if locale in consistent:
+        return LocaleAnalysis(locale_to_render=locale)
+
+    available = ", ".join(sorted(consistent))
+    issues.append(
+        LocaleIssue(
+            "warning",
+            "locale.selected_unavailable",
+            "locales/metadata.json",
+            f"Locale {locale!r} is not fully available; using source SKILL.md without localized rendering. "
+            f"Available locale catalogs: {available}",
+        )
+    )
+    return LocaleAnalysis(locale_to_render=None, issues=tuple(issues))
+
+
+def render_locale(snapshot: Path, installed_dir: Path, locale: str | None) -> None:
+    analysis = analyze_locale(snapshot, locale)
+    if analysis.failed:
+        first_error = next(issue for issue in analysis.issues if issue.severity == "error")
+        raise LocaleError(first_error.message)
+    locale_to_render = analysis.locale_to_render
+    if not locale_to_render:
         return
     metadata_path = snapshot / "locales" / "metadata.json"
-    triggers_path = snapshot / ".skill_triggers" / f"{locale}.md"
-    has_locale_metadata = metadata_path.exists() or (snapshot / ".skill_triggers").exists()
-    if not has_locale_metadata:
-        return
-    if not metadata_path.exists():
-        raise LocaleError(f"Locale metadata missing: {metadata_path}")
-    if not triggers_path.exists():
-        raise LocaleError(f"Trigger catalog for locale {locale!r} missing: {triggers_path}")
-
-    try:
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise LocaleError(f"Malformed locale metadata {metadata_path}: {exc}") from exc
+    triggers_path = snapshot / ".skill_triggers" / f"{locale_to_render}.md"
+    metadata = _load_metadata(metadata_path)
     locales = metadata.get("locales") if isinstance(metadata, dict) else None
-    if not isinstance(locales, dict) or locale not in locales:
-        raise LocaleError(f"Locale {locale!r} is not supported by {metadata_path}")
-    locale_data = locales[locale]
+    if not isinstance(locales, dict) or locale_to_render not in locales:
+        raise LocaleError(f"Locale {locale_to_render!r} is not supported by {metadata_path}")
+    locale_data = locales[locale_to_render]
     if not isinstance(locale_data, dict):
-        raise LocaleError(f"Locale {locale!r} metadata must be an object")
+        raise LocaleError(f"Locale {locale_to_render!r} metadata must be an object")
 
     description = locale_data.get("description")
     if isinstance(description, str) and description.strip():
@@ -39,6 +141,16 @@ def render_locale(snapshot: Path, installed_dir: Path, locale: str | None) -> No
     openai_path = installed_dir / "agents" / "openai.yaml"
     if openai_path.exists():
         _rewrite_openai_yaml(openai_path, locale_data)
+
+
+def _load_metadata(path: Path) -> dict[str, object]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise LocaleError(f"Malformed locale metadata {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise LocaleError(f"{path} must contain a JSON object")
+    return data
 
 
 def _parse_triggers(path: Path) -> list[str]:
@@ -102,4 +214,3 @@ def _rewrite_openai_yaml(path: Path, data: dict[str, object]) -> None:
 
 def _quote(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
-
