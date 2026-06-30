@@ -143,7 +143,7 @@ def install(config: GlobalConfig, *, options: installer.InstallOptions | None = 
                 result.status = "failed"
                 result.errors.append(str(exc))
                 return result
-            plans = _plans_with_available_system_commands(plans, result)
+            plans = _plans_with_available_dependencies(plans, result)
             audit_gate = audit_pipeline.gate_plans(plans, config, scope="global", record=not options.dry_run)
             result.messages.extend(audit_gate.warnings)
             if audit_gate.blocked:
@@ -279,7 +279,7 @@ def _build_plans(
     return plans
 
 
-def _plans_with_available_system_commands(
+def _plans_with_available_dependencies(
     plans: list[installer.SkillPlan], result: GlobalResult
 ) -> list[installer.SkillPlan]:
     available: list[installer.SkillPlan] = []
@@ -290,7 +290,20 @@ def _plans_with_available_system_commands(
             result.errors.append(str(exc))
             continue
         available.append(plan)
-    return available
+
+    while True:
+        kept: list[installer.SkillPlan] = []
+        removed = False
+        for plan in available:
+            errors = installer.skill_command_dependency_errors(plan, available)
+            if errors:
+                result.errors.extend(errors)
+                removed = True
+                continue
+            kept.append(plan)
+        available = kept
+        if not removed:
+            return available
 
 
 def _skill_status(config: GlobalConfig, decl: manifest.SkillDecl) -> dict[str, str | None]:
