@@ -9,11 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added `csk-skill.json` schema v4 with `dependencies.skills`: self-contained
+  skill-to-skill requirements (git URL, exact `tag`/`revision` ref, activation
+  mode). Branch refs and version ranges on requirements are parse errors
+  (RFC 0007, docs/v0.9-design.md).
+- Added transitive closure resolution: requirement providers are fetched,
+  unified by name to one commit and one canonical source, ordered before
+  their consumers, and audited as part of the install. Cycles, version
+  conflicts, and source conflicts fail with the requirement chains.
+- Added activation modes `full`, `runtime`, and `context`. Command shims and
+  prompt context materialize per effective surface; command collisions are
+  checked over active shims only, and install markers record the activation,
+  the requirers, and any substitution.
+- Added a machine-level source allowlist: `allowed_sources` in
+  `~/.cocoaskills/config.json` lists canonical `host/path` prefixes and is
+  checked before any clone of a declared git source. SSH and HTTPS URLs of
+  one repository normalize to one identity.
+- Added development substitutions through `Skillfile.dev.json`: a provider is
+  replaced by a local checkout path or a git source with any ref kind,
+  branches included. `csk install` and `csk status` print active
+  substitutions, `csk init` adds the file to the managed `.gitignore` block,
+  and strict audit refuses substituted installs.
 - Added `csk skill check` to validate intrinsic skill requirements without
   requiring global config or a consuming project.
 
 ### Changed
 
+- Installs of skills that declare `dependencies.commands` entries with
+  `type: "skill"` now print a migration warning pointing to schema v4
+  `dependencies.skills`.
 - Relaxed locale installation: if the selected locale is unavailable but the
   skill has another consistent locale catalog, installation falls back to the
   source `SKILL.md` with a warning instead of failing.
