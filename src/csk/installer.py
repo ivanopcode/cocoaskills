@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import adapters, consumers, env_files, gc, git_ops, gitignore_gate, hashing, locale, manifest, shims, skillcheck, skillspec, snapshot, whitelist
+from . import adapters, closure, consumers, dev_substitutions, env_files, gc, git_ops, gitignore_gate, hashing, locale, manifest, shims, skillcheck, skillspec, snapshot, whitelist
 from .audit import pipeline as audit_pipeline
 from .config import GlobalConfig, ProjectConfig
 from .skillspec import CommandSpec
@@ -87,14 +87,43 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
             result.messages.append(f"{project.alias}: {exc}; skipped")
             return result
 
+        substitutions = dev_substitutions.load_substitutions(project.path)
+        if substitutions:
+            if config.audit.enabled and config.audit.mode == "strict":
+                raise InstallError(
+                    f"Dev substitutions are active in {dev_substitutions.DEV_MANIFEST_NAME}; "
+                    "strict audit refuses substituted installs"
+                )
+            try:
+                gitignore_gate.ensure_ignored(
+                    project.path,
+                    [dev_substitutions.DEV_MANIFEST_NAME],
+                    fix=options.fix_gitignore and not options.dry_run,
+                )
+            except gitignore_gate.GitignoreError as exc:
+                result.status = "skipped"
+                result.messages.append(f"{project.alias}: {exc}; skipped")
+                return result
+            for substitution in substitutions.values():
+                result.messages.append(
+                    f"{project.alias}: SUBSTITUTION {substitution.name} -> {substitution.describe()}"
+                )
+
         effective_locale = project_manifest.locale or config.preferred_locale
         with ExitStack() as stack:
-            plans = _build_plans(config, project_manifest, use_cache=not options.dry_run, stack=stack)
+            nodes = closure.build_closure(
+                config, project_manifest, substitutions, use_cache=not options.dry_run, stack=stack
+            )
+            plans = [
+                SkillPlan(decl=node.decl, resolved=node.resolved, repo=node.repo, snapshot=node.snapshot, spec=node.spec)
+                for node in nodes
+            ]
             validation_issues = _validate_skills(plans, effective_locale)
             result.messages.extend(_skill_validation_warnings(project.alias, validation_issues))
             _check_skill_validation_errors(validation_issues)
-            _detect_command_collisions(plans)
+            closure.detect_active_command_collisions(nodes)
             _check_dependencies(plans)
+            result.messages.extend(_migration_warnings(project.alias, plans))
             audit_gate = audit_pipeline.gate_plans(plans, config, scope=project.alias, record=not options.dry_run)
             result.messages.extend(audit_gate.warnings)
             if audit_gate.blocked:
@@ -105,37 +134,83 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                 result.messages.extend(_moved_tag_warnings(project.path / ".agents" / "skills", plans))
 
             if options.dry_run:
+                for node in nodes:
+                    result.messages.append(f"{project.alias}: {_node_summary(node)} (planned)")
                 result.messages.append(f"{project.alias}: dry-run; no files modified")
                 return result
 
             consumers.record_consumer(config.path.parent, project.path)
-            installed_names: list[str] = []
+            context_names: list[str] = []
             expected_commands: set[str] = set()
-            for plan in plans:
-                command_names = install_runtime_commands(config.path.parent, project.path / ".agents" / "bin", plan)
-                expected_commands.update(command_names)
-                installed = _install_skill_context(project.path, plan, effective_locale, agents)
-                installed_names.append(plan.decl.name)
-                result.messages.append(
-                    f"{project.alias}: {plan.decl.name} {plan.resolved.kind} {plan.resolved.ref} "
-                    f"{plan.resolved.commit[:7]} {installed}"
+            nodes_by_name = {node.name: node for node in nodes}
+            for node in nodes:
+                plan = SkillPlan(
+                    decl=node.decl, resolved=node.resolved, repo=node.repo, snapshot=node.snapshot, spec=node.spec
                 )
+                active = node.active_commands()
+                command_names: set[str] = set()
+                if active:
+                    command_names = install_runtime_commands(
+                        config.path.parent, project.path / ".agents" / "bin", plan, only=active
+                    )
+                    expected_commands.update(command_names)
+                activation = {"context": node.context_active, "commands": sorted(active)}
+                requirers = node.consumers()
+                if node.context_active:
+                    installed = _install_skill_context(
+                        project.path,
+                        plan,
+                        effective_locale,
+                        agents,
+                        activation=activation,
+                        requirers=requirers,
+                        substituted=node.substituted,
+                    )
+                    context_names.append(node.name)
+                else:
+                    installed = _install_marker_only(
+                        project.path, plan, activation=activation, requirers=requirers, substituted=node.substituted
+                    )
+                result.messages.append(f"{project.alias}: {_node_summary(node)} {installed}")
                 if options.verbose:
-                    result.messages.append(f"{project.alias}: {plan.decl.name} commit {plan.resolved.commit}")
+                    result.messages.append(f"{project.alias}: {node.name} commit {node.resolved.commit}")
                     for command_name in sorted(command_names):
                         result.messages.append(
-                            f"{project.alias}: {plan.decl.name} command {command_name} -> .agents/bin/{command_name}"
+                            f"{project.alias}: {node.name} command {command_name} -> .agents/bin/{command_name}"
                         )
 
-            _cleanup_removed_skills(project.path, {plan.decl.name for plan in plans})
+            _cleanup_removed_skills(project.path, set(nodes_by_name))
             shims.remove_stale_shims(project.path, expected_commands)
             env_files.write_env_files(project.path)
-            adapters.refresh_adapters(project.path, agents, installed_names, config.adapter_mode)
+            adapters.refresh_adapters(project.path, agents, context_names, config.adapter_mode)
             return result
     except Exception as exc:
         result.status = "failed"
         result.errors.append(str(exc))
         return result
+
+
+def _node_summary(node: closure.ClosureNode) -> str:
+    active = ",".join(sorted(node.active_commands()))
+    consumers_label = ",".join(node.consumers())
+    summary = (
+        f"{node.name} {node.resolved.kind} {node.resolved.ref} {node.resolved.commit[:7]} "
+        f"context={'yes' if node.context_active else 'no'} commands=[{active}] via={consumers_label}"
+    )
+    if node.substituted:
+        summary += f" SUBSTITUTED ({node.substituted})"
+    return summary
+
+
+def _migration_warnings(project_alias: str, plans: list[SkillPlan]) -> list[str]:
+    warnings: list[str] = []
+    for plan in plans:
+        if any(dependency.type == "skill" for dependency in plan.spec.dependencies.values()):
+            warnings.append(
+                f"{project_alias}: {plan.decl.name} uses dependencies.commands with type 'skill'; "
+                "migrate to csk-skill.json schema v4 dependencies.skills"
+            )
+    return warnings
 
 
 def _build_plans(
@@ -330,7 +405,7 @@ def _moved_tag_warnings(skills_dir: Path, plans: list[SkillPlan]) -> list[str]:
     return warnings
 
 
-def install_runtime_commands(csk_home: Path, bin_dir: Path, plan: SkillPlan) -> set[str]:
+def install_runtime_commands(csk_home: Path, bin_dir: Path, plan: SkillPlan, *, only: set[str] | None = None) -> set[str]:
     commands: set[str] = set()
     if plan.spec.runtime_roots:
         shims.install_runtime_roots(
@@ -342,6 +417,8 @@ def install_runtime_commands(csk_home: Path, bin_dir: Path, plan: SkillPlan) -> 
         )
     for command in plan.spec.commands.values():
         if command.type != "script":
+            continue
+        if only is not None and command.name not in only:
             continue
         if plan.spec.runtime_roots:
             runtime_path = shims.runtime_root_command_path(
@@ -363,14 +440,40 @@ def install_runtime_commands(csk_home: Path, bin_dir: Path, plan: SkillPlan) -> 
     return commands
 
 
-def _install_skill_context(project_root: Path, plan: SkillPlan, effective_locale: str | None, agents: list[str]) -> str:
-    return _install_skill_context_to_root(project_root / ".agents" / "skills", plan, effective_locale, agents)
+def _install_skill_context(
+    project_root: Path,
+    plan: SkillPlan,
+    effective_locale: str | None,
+    agents: list[str],
+    *,
+    activation: dict[str, object] | None = None,
+    requirers: list[str] | None = None,
+    substituted: str | None = None,
+) -> str:
+    return _install_skill_context_to_root(
+        project_root / ".agents" / "skills",
+        plan,
+        effective_locale,
+        agents,
+        activation=activation,
+        requirers=requirers,
+        substituted=substituted,
+    )
 
 
-def _install_skill_context_to_root(target_root: Path, plan: SkillPlan, effective_locale: str | None, agents: list[str]) -> str:
+def _install_skill_context_to_root(
+    target_root: Path,
+    plan: SkillPlan,
+    effective_locale: str | None,
+    agents: list[str],
+    *,
+    activation: dict[str, object] | None = None,
+    requirers: list[str] | None = None,
+    substituted: str | None = None,
+) -> str:
     target = target_root / plan.decl.name
     marker = _read_marker(target / ".csk-install.json")
-    if _marker_is_current(marker, target, plan, effective_locale, agents):
+    if _marker_is_current(marker, target, plan, effective_locale, agents, activation=activation, substituted=substituted):
         return "up-to-date"
 
     tmp = target.parent / f".{plan.decl.name}.tmp-{os.getpid()}"
@@ -385,7 +488,72 @@ def _install_skill_context_to_root(target_root: Path, plan: SkillPlan, effective
     )
     locale.render_locale(plan.snapshot, tmp, effective_locale)
     content_hash = hashing.content_sha256(tmp)
-    marker_data = {
+    marker_data = _marker_payload(
+        plan,
+        effective_locale,
+        agents,
+        content_hash=content_hash,
+        files=files,
+        activation=activation,
+        requirers=requirers,
+        substituted=substituted,
+    )
+    (tmp / ".csk-install.json").write_text(json.dumps(marker_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _replace_dir(tmp, target)
+    return "installed"
+
+
+def _install_marker_only(
+    project_root: Path,
+    plan: SkillPlan,
+    *,
+    activation: dict[str, object],
+    requirers: list[str],
+    substituted: str | None,
+) -> str:
+    """Record a runtime-only or context-less node without agent prompt files.
+
+    The marker directory keeps the runtime store referenced by GC and the
+    closure auditable offline; adapters never mirror it.
+    """
+    target_root = project_root / ".agents" / "skills"
+    target = target_root / plan.decl.name
+    marker = _read_marker(target / ".csk-install.json")
+    if _marker_is_current(marker, target, plan, None, [], activation=activation, substituted=substituted):
+        return "up-to-date"
+
+    tmp = target_root / f".{plan.decl.name}.tmp-{os.getpid()}"
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True)
+    content_hash = hashing.content_sha256(tmp)
+    marker_data = _marker_payload(
+        plan,
+        None,
+        [],
+        content_hash=content_hash,
+        files=[],
+        activation=activation,
+        requirers=requirers,
+        substituted=substituted,
+    )
+    (tmp / ".csk-install.json").write_text(json.dumps(marker_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _replace_dir(tmp, target)
+    return "installed"
+
+
+def _marker_payload(
+    plan: SkillPlan,
+    effective_locale: str | None,
+    agents: list[str],
+    *,
+    content_hash: str,
+    files: list[str],
+    activation: dict[str, object] | None,
+    requirers: list[str] | None,
+    substituted: str | None,
+) -> dict[str, object]:
+    marker_data: dict[str, object] = {
         "schema_version": 1,
         "name": plan.decl.name,
         "source": plan.decl.source,
@@ -404,9 +572,15 @@ def _install_skill_context_to_root(target_root: Path, plan: SkillPlan, effective
     }
     if plan.decl.git is not None:
         marker_data["git"] = plan.decl.git
-    (tmp / ".csk-install.json").write_text(json.dumps(marker_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    _replace_dir(tmp, target)
-    return "installed"
+    if plan.spec.requirements:
+        marker_data["requirements"] = sorted(plan.spec.requirements)
+    if activation is not None:
+        marker_data["activation"] = activation
+    if requirers:
+        marker_data["requirers"] = requirers
+    if substituted is not None:
+        marker_data["substituted"] = substituted
+    return marker_data
 
 
 def _marker_is_current(
@@ -415,6 +589,9 @@ def _marker_is_current(
     plan: SkillPlan,
     locale_value: str | None,
     agents: list[str],
+    *,
+    activation: dict[str, object] | None = None,
+    substituted: str | None = None,
 ) -> bool:
     if not marker or not target.exists():
         return False
@@ -427,6 +604,10 @@ def _marker_is_current(
     if marker.get("locale") != locale_value:
         return False
     if marker.get("agents") != agents:
+        return False
+    if activation is not None and marker.get("activation") != activation:
+        return False
+    if marker.get("substituted") != substituted:
         return False
     actual_hash = hashing.content_sha256(target)
     return marker.get("content_sha256") == actual_hash
