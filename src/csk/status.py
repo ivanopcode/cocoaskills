@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import git_ops, hashing, manifest
+from . import dev_substitutions, git_ops, hashing, manifest
 from .config import GlobalConfig, ProjectConfig
 
 
@@ -25,6 +25,7 @@ class ProjectStatus:
     path: Path
     skillfile_present: bool
     skills: list[SkillStatus]
+    substitutions: tuple[str, ...] = ()
 
     @property
     def clean(self) -> bool:
@@ -34,13 +35,24 @@ class ProjectStatus:
 def collect_status(config: GlobalConfig, *, alias: str | None = None) -> list[ProjectStatus]:
     statuses: list[ProjectStatus] = []
     for project in _selected_projects(config, alias):
+        substitutions = _substitution_lines(project.path)
         project_manifest = manifest.load_manifest(project.path)
         if project_manifest is None:
-            statuses.append(ProjectStatus(project.alias, project.path, False, []))
+            statuses.append(ProjectStatus(project.alias, project.path, False, [], substitutions))
             continue
         skills = [_skill_status(config, project.path, decl) for decl in project_manifest.skills]
-        statuses.append(ProjectStatus(project.alias, project.path, True, skills))
+        statuses.append(ProjectStatus(project.alias, project.path, True, skills, substitutions))
     return statuses
+
+
+def _substitution_lines(project_root: Path) -> tuple[str, ...]:
+    try:
+        substitutions = dev_substitutions.load_substitutions(project_root)
+    except dev_substitutions.DevSubstitutionError as exc:
+        return (f"error: {exc}",)
+    return tuple(
+        f"{substitution.name} -> {substitution.describe()}" for substitution in substitutions.values()
+    )
 
 
 def statuses_to_payload(statuses: list[ProjectStatus]) -> list[dict]:
@@ -52,6 +64,7 @@ def statuses_to_payload(statuses: list[ProjectStatus]) -> list[dict]:
                 "path": str(project.path),
                 "skillfile_present": project.skillfile_present,
                 "clean": project.clean,
+                "substitutions": list(project.substitutions),
                 "skills": [
                     {
                         "name": skill.name,
@@ -82,6 +95,8 @@ def render_collected(statuses: list[ProjectStatus]) -> str:
 
 def _render_project_status(project: ProjectStatus) -> str:
     lines = [f"Project {project.alias} ({project.path})"]
+    for substitution in project.substitutions:
+        lines.append(f"  SUBSTITUTION {substitution}")
     if not project.skillfile_present:
         lines.append("  Skillfile.json missing")
         return "\n".join(lines)

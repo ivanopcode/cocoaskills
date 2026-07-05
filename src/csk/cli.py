@@ -8,7 +8,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from . import __version__, adapters, config, deprecation, gc, git_ops, gitignore_gate, global_install, installer, manifest, project_resolver, shell_init, skillcheck, status
+from . import __version__, adapters, config, deprecation, dev_substitutions, gc, git_ops, gitignore_gate, global_install, installer, manifest, project_resolver, shell_init, skillcheck, status
 from .audit import pipeline as audit_pipeline
 from .audit import runner as audit_runner
 from .audit import trust as audit_trust
@@ -601,7 +601,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
         raise manifest.ManifestError("--alias must contain at least one alphanumeric character")
 
     manifest.ensure_project_manifest(root, alias=alias, agents=agents)
-    gitignore_gate.append_entries(root / ".gitignore", adapters.all_gitignore_entries())
+    gitignore_gate.append_entries(
+        root / ".gitignore",
+        adapters.all_gitignore_entries() + [dev_substitutions.DEV_MANIFEST_NAME],
+    )
     if not _is_inside_git_worktree(root):
         print(
             "csk init: WARNING - target is not inside a git repository\n"

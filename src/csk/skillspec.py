@@ -10,11 +10,15 @@ from .identifiers import IDENTIFIER_RULE, is_valid_identifier
 
 
 SCHEMA_VERSION = 1
-SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3}
+SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4}
 UPGRADE_HINT = (
     "Upgrade with: pipx upgrade cocoaskills, brew upgrade cocoaskills, "
     "or mise upgrade pipx:cocoaskills."
 )
+
+REQUIREMENT_MODES = {"full", "runtime", "context"}
+REQUIREMENT_REF_KINDS = {"tag", "revision"}
+_RANGE_MARKERS = ("^", "~", ">", "<", "*", " ")
 
 
 class SkillSpecError(Exception):
@@ -43,6 +47,19 @@ class DependencySpec:
 
 
 @dataclass(frozen=True)
+class SkillRequirement:
+    """A self-contained skill-to-skill requirement (dependencies.skills)."""
+
+    name: str
+    git: str
+    ref_kind: str
+    ref_value: str
+    mode: str = "full"
+    commands: tuple[str, ...] = ()
+    source: str = "csk-skill.json"
+
+
+@dataclass(frozen=True)
 class SkillSpec:
     commands: dict[str, CommandSpec]
     source_file: str | None
@@ -50,6 +67,7 @@ class SkillSpec:
     runtime_roots: tuple[str, ...] = ()
     capabilities: CapabilityManifest = field(default_factory=CapabilityManifest.implicit_none)
     dependencies: dict[str, DependencySpec] = field(default_factory=dict)
+    requirements: dict[str, SkillRequirement] = field(default_factory=dict)
 
 
 def load_skill_spec(snapshot: Path) -> SkillSpec:
@@ -77,21 +95,21 @@ def _load_csk_skill(path: Path) -> SkillSpec:
             f"Unsupported csk-skill.json schema_version {schema!r}; this skill requires a newer csk. "
             f"{UPGRADE_HINT}"
         )
-    if schema in {2, 3}:
+    if schema >= 2:
         allowed_fields = {"schema_version", "runtime_roots", "commands", "dependencies"}
-        if schema == 3:
+        if schema >= 3:
             allowed_fields.add("capabilities")
         _reject_unknown_fields(data, allowed_fields, "csk-skill.json")
-    if schema == 3 and "capabilities" not in data:
-        raise SkillSpecError("csk-skill.json schema v3 requires 'capabilities'")
+    if schema >= 3 and "capabilities" not in data:
+        raise SkillSpecError(f"csk-skill.json schema v{schema} requires 'capabilities'")
     try:
         capabilities = (
-            parse_capabilities(data.get("capabilities")) if schema == 3 else CapabilityManifest.implicit_none()
+            parse_capabilities(data.get("capabilities")) if schema >= 3 else CapabilityManifest.implicit_none()
         )
     except CapabilityParseError as exc:
         raise SkillSpecError(str(exc)) from exc
-    runtime_roots_raw = data["runtime_roots"] if schema in {2, 3} and "runtime_roots" in data else []
-    runtime_roots = _parse_runtime_roots(runtime_roots_raw, snapshot=path.parent) if schema in {2, 3} else ()
+    runtime_roots_raw = data["runtime_roots"] if schema >= 2 and "runtime_roots" in data else []
+    runtime_roots = _parse_runtime_roots(runtime_roots_raw, snapshot=path.parent) if schema >= 2 else ()
     commands_raw = data.get("commands", {})
     if not isinstance(commands_raw, dict):
         raise SkillSpecError("csk-skill.json field 'commands' must be an object")
@@ -105,27 +123,27 @@ def _load_csk_skill(path: Path) -> SkillSpec:
             raise SkillSpecError(f"Command {name!r} must be an object")
         command_type = raw.get("type")
         if command_type == "script":
-            if schema in {2, 3}:
+            if schema >= 2:
                 _reject_unknown_fields(raw, {"type", "unix_path", "win_path"}, f"commands.{name}")
             unix_path = raw.get("unix_path")
             win_path = raw.get("win_path")
-            if schema in {2, 3} and unix_path is None and win_path is None:
+            if schema >= 2 and unix_path is None and win_path is None:
                 raise SkillSpecError(f"Script command {name!r} requires 'unix_path' or 'win_path'")
             if unix_path is not None:
                 unix_path = _validate_relative_path(
                     unix_path,
                     field=f"commands.{name}.unix_path",
-                    strict_posix=schema in {2, 3},
+                    strict_posix=schema >= 2,
                 )
-                if schema in {2, 3}:
+                if schema >= 2:
                     _validate_v2_script_path(path.parent, unix_path, runtime_roots, field=f"commands.{name}.unix_path")
             if win_path is not None:
                 win_path = _validate_relative_path(
                     win_path,
                     field=f"commands.{name}.win_path",
-                    strict_posix=schema in {2, 3},
+                    strict_posix=schema >= 2,
                 )
-                if schema in {2, 3}:
+                if schema >= 2:
                     _validate_v2_script_path(path.parent, win_path, runtime_roots, field=f"commands.{name}.win_path")
             commands[name] = CommandSpec(
                 name=name,
@@ -135,7 +153,7 @@ def _load_csk_skill(path: Path) -> SkillSpec:
                 source="csk-skill.json",
             )
         elif command_type == "system":
-            if schema in {2, 3}:
+            if schema >= 2:
                 _reject_unknown_fields(raw, {"type", "command", "hint"}, f"commands.{name}")
             command = raw.get("command")
             if not isinstance(command, str) or not command:
@@ -152,7 +170,7 @@ def _load_csk_skill(path: Path) -> SkillSpec:
             )
         else:
             raise SkillSpecError(f"Command {name!r} has unsupported type {command_type!r}")
-    dependencies = _parse_dependencies(data.get("dependencies"), schema=schema)
+    dependencies, requirements = _parse_dependencies(data.get("dependencies"), schema=schema)
     return SkillSpec(
         commands=commands,
         source_file="csk-skill.json",
@@ -160,6 +178,7 @@ def _load_csk_skill(path: Path) -> SkillSpec:
         runtime_roots=runtime_roots,
         capabilities=capabilities,
         dependencies=dependencies,
+        requirements=requirements,
     )
 
 
@@ -190,14 +209,18 @@ def _load_runtime_fallback(path: Path) -> SkillSpec:
     return SkillSpec(commands=commands, source_file="agents/runtime.json")
 
 
-def _parse_dependencies(raw: Any, *, schema: int) -> dict[str, DependencySpec]:
+def _parse_dependencies(raw: Any, *, schema: int) -> tuple[dict[str, DependencySpec], dict[str, SkillRequirement]]:
     if raw is None:
-        return {}
-    if schema not in {2, 3}:
+        return {}, {}
+    if schema < 2:
         raise SkillSpecError("csk-skill.json field 'dependencies' requires schema_version 2 or newer")
     if not isinstance(raw, dict):
         raise SkillSpecError("csk-skill.json field 'dependencies' must be an object")
-    _reject_unknown_fields(raw, {"commands"}, "dependencies")
+    if schema < 4 and "skills" in raw:
+        raise SkillSpecError("csk-skill.json field 'dependencies.skills' requires schema_version 4")
+    allowed = {"commands", "skills"} if schema >= 4 else {"commands"}
+    _reject_unknown_fields(raw, allowed, "dependencies")
+    requirements = _parse_requirements(raw.get("skills"), schema=schema)
     commands_raw = raw.get("commands", {})
     if not isinstance(commands_raw, dict):
         raise SkillSpecError("dependencies.commands must be an object")
@@ -248,7 +271,86 @@ def _parse_dependencies(raw: Any, *, schema: int) -> dict[str, DependencySpec]:
             )
         else:
             raise SkillSpecError(f"Dependency command {name!r} has unsupported type {dependency_type!r}")
-    return dependencies
+    return dependencies, requirements
+
+
+def _parse_requirements(raw: Any, *, schema: int) -> dict[str, SkillRequirement]:
+    if raw is None:
+        return {}
+    if schema < 4:
+        raise SkillSpecError("csk-skill.json field 'dependencies.skills' requires schema_version 4")
+    if not isinstance(raw, dict):
+        raise SkillSpecError("dependencies.skills must be an object")
+    requirements: dict[str, SkillRequirement] = {}
+    for name, entry in raw.items():
+        label = f"dependencies.skills.{name}"
+        if not isinstance(name, str) or not name:
+            raise SkillSpecError("Skill requirement names must be non-empty strings")
+        if not is_valid_identifier(name):
+            raise SkillSpecError(f"Skill requirement name {name!r} {IDENTIFIER_RULE}")
+        if not isinstance(entry, dict):
+            raise SkillSpecError(f"{label} must be an object")
+        if "version" in entry:
+            raise SkillSpecError(
+                f"{label} declares 'version'; version ranges are not supported. "
+                "Pin an exact ref: {\"kind\": \"tag\" | \"revision\", \"value\": ...}"
+            )
+        _reject_unknown_fields(entry, {"git", "ref", "mode", "commands"}, label)
+
+        git = entry.get("git")
+        if not isinstance(git, str) or not git:
+            raise SkillSpecError(f"{label} requires a non-empty 'git' source URL")
+
+        ref = entry.get("ref")
+        if not isinstance(ref, dict):
+            raise SkillSpecError(f"{label} requires a 'ref' object with 'kind' and 'value'")
+        _reject_unknown_fields(ref, {"kind", "value"}, f"{label}.ref")
+        kind = ref.get("kind")
+        if kind == "branch":
+            raise SkillSpecError(
+                f"{label}.ref pins a branch; skill requirements accept exact 'tag' or 'revision' refs only"
+            )
+        if kind not in REQUIREMENT_REF_KINDS:
+            raise SkillSpecError(f"{label}.ref.kind must be 'tag' or 'revision'")
+        value = ref.get("value")
+        if not isinstance(value, str) or not value:
+            raise SkillSpecError(f"{label}.ref.value must be a non-empty string")
+        if any(marker in value for marker in _RANGE_MARKERS):
+            raise SkillSpecError(
+                f"{label}.ref.value {value!r} looks like a version range; "
+                "skill requirements accept exact tags or revisions only"
+            )
+
+        mode = entry.get("mode", "full")
+        if mode not in REQUIREMENT_MODES:
+            raise SkillSpecError(f"{label}.mode must be one of full, runtime, or context")
+
+        commands_raw = entry.get("commands")
+        commands: tuple[str, ...] = ()
+        if commands_raw is not None:
+            if mode != "runtime":
+                raise SkillSpecError(f"{label}.commands applies to runtime requirements only")
+            if not isinstance(commands_raw, list) or not commands_raw:
+                raise SkillSpecError(f"{label}.commands must be a non-empty list of command names")
+            seen: list[str] = []
+            for item in commands_raw:
+                if not isinstance(item, str) or not item:
+                    raise SkillSpecError(f"{label}.commands entries must be non-empty strings")
+                if not is_valid_identifier(item):
+                    raise SkillSpecError(f"{label}.commands entry {item!r} {IDENTIFIER_RULE}")
+                if item not in seen:
+                    seen.append(item)
+            commands = tuple(seen)
+
+        requirements[name] = SkillRequirement(
+            name=name,
+            git=git,
+            ref_kind=kind,
+            ref_value=value,
+            mode=mode,
+            commands=commands,
+        )
+    return requirements
 
 
 def _validate_relative_path(value: Any, *, field: str, strict_posix: bool = False) -> str:
