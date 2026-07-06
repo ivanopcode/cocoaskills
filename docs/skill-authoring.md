@@ -149,6 +149,62 @@ Capability fields:
 - `prompt_scope`: one sentence describing what the prompt is allowed to ask the
   agent to do.
 
+### Schema v4
+
+Schema v4 adds skill-to-skill requirements. A skill declares the skills it
+builds on under `dependencies.skills`; csk resolves the transitive closure and
+installs the providers. The full design is
+[RFC 0007](v0.9-design.md).
+
+```json
+{
+  "schema_version": 4,
+  "runtime_roots": ["scripts"],
+  "capabilities": {
+    "exec": ["trk", "git"],
+    "network": "none"
+  },
+  "commands": {
+    "report": { "type": "script", "unix_path": "scripts/report" }
+  },
+  "dependencies": {
+    "skills": {
+      "skill-tracker": {
+        "git": "git@gitlab.example.com:skills/skill-tracker.git",
+        "ref": { "kind": "tag", "value": "v1.4.2" },
+        "mode": "runtime",
+        "commands": ["trk"]
+      }
+    },
+    "commands": {
+      "git": { "type": "system", "command": "git" }
+    }
+  }
+}
+```
+
+Requirement rules:
+
+- `git` and `ref` are required; an entry is self-contained.
+- `ref.kind` is `tag` or `revision`. Branch refs and version ranges are parse
+  errors.
+- `mode` selects what the provider contributes to the consumer:
+  `full` (default) activates the prompt context and all exported commands,
+  `runtime` activates commands only, `context` activates the prompt context
+  only. The optional `commands` list narrows a `runtime` requirement to the
+  named exports.
+- Within one install closure a skill name resolves to one commit and one
+  canonical source; disagreeing requirements fail the install.
+- A workflow is a skill that declares requirements and exports no commands.
+  Consumers install it with a single `Skillfile.json` entry.
+- For development, `Skillfile.dev.json` next to the project `Skillfile.json`
+  substitutes providers locally (a `path` to a checkout, or `git` with any ref
+  kind, branches included). The file belongs to the managed `.gitignore`
+  block; strict audit fails while substitutions are active.
+- Organizations restrict where skills may be fetched from with
+  `allowed_sources` in `~/.cocoaskills/config.json`: a list of canonical
+  `host/path` prefixes checked before any clone or fetch.
+
 ## 4. Runtime Roots
 
 `runtime_roots` lists directories that are runtime-only. CocoaSkills copies

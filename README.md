@@ -175,7 +175,9 @@ Skills can declare commands and audit capabilities through `csk-skill.json`.
 Schema v2 supports multi-file runtimes: `runtime_roots` are copied into
 `~/.cocoaskills/runtime/<skill>/<commit>/` and excluded from agent prompt
 context. Schema v3 adds the `capabilities` envelope used by `csk audit` and
-strict install gates.
+strict install gates. Schema v4 adds `dependencies.skills`: skill-to-skill
+requirements resolved as a transitive closure with `full`/`runtime`/`context`
+activation modes ([RFC 0007](docs/v0.9-design.md)).
 
 ```json
 {

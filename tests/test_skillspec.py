@@ -258,7 +258,7 @@ def test_rejects_path_traversal(tmp_path):
 
 def test_csk_skill_schema_mismatch_fails(tmp_path):
     (tmp_path / "csk-skill.json").write_text(
-        json.dumps({"schema_version": 4, "commands": {}}),
+        json.dumps({"schema_version": 5, "commands": {}}),
         encoding="utf-8",
     )
     with pytest.raises(skillspec.SkillSpecError, match="pipx upgrade cocoaskills"):

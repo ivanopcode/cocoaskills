@@ -56,6 +56,9 @@ class GlobalConfig:
     worktree_alias_pattern: str
     projects: dict[str, ProjectConfig]
     audit: AuditConfig = field(default_factory=AuditConfig)
+    # Canonical "host/path" prefixes the resolver may fetch from. An empty
+    # tuple allows every source; organizations pin the list to their hosting.
+    allowed_sources: tuple[str, ...] = ()
 
 
 def config_path() -> Path:
@@ -116,6 +119,10 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
 
     audit = _parse_audit_config(data.get("audit"))
 
+    allowed_sources_raw = data.get("allowed_sources", [])
+    if not _is_str_list(allowed_sources_raw) or any(not item.strip() for item in allowed_sources_raw):
+        raise ConfigError("Global config field 'allowed_sources' must be a list of non-empty strings")
+
     if "projects" not in data:
         raise ConfigError("Global config requires field 'projects'")
     projects_raw = data.get("projects")
@@ -157,6 +164,7 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
         worktree_alias_pattern=worktree_alias_pattern,
         projects=projects,
         audit=audit,
+        allowed_sources=tuple(allowed_sources_raw),
     )
 
 
@@ -182,6 +190,8 @@ def save_config(config: GlobalConfig) -> None:
     audit = _serialize_audit_config(config.audit)
     if audit:
         data["audit"] = audit
+    if config.allowed_sources:
+        data["allowed_sources"] = list(config.allowed_sources)
     config.path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -213,6 +223,7 @@ def add_project(
         worktree_alias_pattern=config.worktree_alias_pattern,
         projects=projects,
         audit=config.audit,
+        allowed_sources=config.allowed_sources,
     )
 
 
