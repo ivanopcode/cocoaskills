@@ -17,14 +17,27 @@ def _provider_files(*commands: str) -> dict:
         "csk-skill.json": json.dumps(
             {
                 "schema_version": 1,
-                "commands": {name: {"type": "script", "unix_path": f"scripts/{name}"} for name in commands},
+                "commands": {
+                    name: {
+                        "type": "script",
+                        "unix_path": f"scripts/{name}",
+                        "win_path": f"scripts/{name}.cmd",
+                    }
+                    for name in commands
+                },
             }
         ),
         "references/guide.md": "provider rules\n",
     }
     for name in commands:
         files[f"scripts/{name}"] = "#!/bin/sh\necho ok\n"
+        files[f"scripts/{name}.cmd"] = "@echo off\r\necho ok\r\n"
     return files
+
+
+def _shim(project, name):
+    suffix = ".cmd" if sys.platform == "win32" else ""
+    return project / ".agents" / "bin" / f"{name}{suffix}"
 
 
 def _consumer_files(requirements: dict) -> dict:
@@ -113,7 +126,7 @@ def test_context_requirement_installs_prompt_context_without_commands(tmp_path, 
     provider_dir = project / ".agents" / "skills" / "provider"
     assert (provider_dir / "SKILL.md").exists()
     assert (project / ".claude" / "skills" / "provider").exists()
-    assert not (project / ".agents" / "bin" / "tool").exists()
+    assert not _shim(project, "tool").exists()
 
 
 def test_full_requirement_is_the_default_and_activates_both_surfaces(tmp_path, skills_root, csk_home):
@@ -129,7 +142,7 @@ def test_full_requirement_is_the_default_and_activates_both_surfaces(tmp_path, s
     )
     assert not result.errors, result.errors
     assert (project / ".agents" / "skills" / "provider" / "SKILL.md").exists()
-    assert (project / ".agents" / "bin" / "tool").exists()
+    assert _shim(project, "tool").exists()
 
 
 def test_effective_surface_is_the_union_of_edges(tmp_path, skills_root, csk_home):
@@ -148,8 +161,8 @@ def test_effective_surface_is_the_union_of_edges(tmp_path, skills_root, csk_home
     )
     assert not result.errors, result.errors
     assert (project / ".agents" / "skills" / "provider" / "SKILL.md").exists()
-    assert (project / ".agents" / "bin" / "tool").exists()
-    assert not (project / ".agents" / "bin" / "extra").exists()
+    assert _shim(project, "tool").exists()
+    assert not _shim(project, "extra").exists()
     marker = json.loads(
         (project / ".agents" / "skills" / "provider" / ".csk-install.json").read_text(encoding="utf-8")
     )
@@ -175,9 +188,9 @@ def test_inactive_exports_never_collide(tmp_path, skills_root, csk_home):
         },
     )
     assert not result.errors, result.errors
-    assert (project / ".agents" / "bin" / "alpha").exists()
-    assert (project / ".agents" / "bin" / "beta").exists()
-    assert not (project / ".agents" / "bin" / "tool").exists()
+    assert _shim(project, "alpha").exists()
+    assert _shim(project, "beta").exists()
+    assert not _shim(project, "tool").exists()
 
 
 def test_active_command_collision_fails(tmp_path, skills_root, csk_home):

@@ -33,9 +33,19 @@ def _requirement(repo, *, tag="v1", mode=None, commands=None) -> dict:
 def _provider_files(command: str = "tool") -> dict:
     return {
         "csk-skill.json": json.dumps(
-            {"schema_version": 1, "commands": {command: {"type": "script", "unix_path": f"scripts/{command}"}}}
+            {
+                "schema_version": 1,
+                "commands": {
+                    command: {
+                        "type": "script",
+                        "unix_path": f"scripts/{command}",
+                        "win_path": f"scripts/{command}.cmd",
+                    }
+                },
+            }
         ),
         f"scripts/{command}": "#!/bin/sh\necho ok\n",
+        f"scripts/{command}.cmd": "@echo off\r\necho ok\r\n",
     }
 
 
