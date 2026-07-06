@@ -20,6 +20,8 @@ pipeline against temporary stores; no network access is required.
 
 ## Code conventions
 
+- The codebase type-checks under `mypy` strict mode; run `python -m mypy`
+  before pushing. Configuration lives in `pyproject.toml`.
 - The runtime package uses the standard library only. New runtime dependencies
   require a design discussion first.
 - Match the surrounding code: module layout, error types per module, dataclass

@@ -197,7 +197,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _add_bootstrap(sub) -> None:
+def _add_bootstrap(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
         "bootstrap",
         help="Create global config (interactive, or scripted with flags).",
@@ -220,7 +220,7 @@ def _add_bootstrap(sub) -> None:
     parser.add_argument("--force", action="store_true", help="overwrite an existing config without asking")
 
 
-def _add_init(sub) -> None:
+def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
         "init",
         help="Create project Skillfile.json and CocoaSkill gitignore block.",
@@ -240,7 +240,7 @@ def _add_init(sub) -> None:
     parser.add_argument("--no-interactive", action="store_true", help="accepted for scripting; prompts are not used")
 
 
-def _add_skill(sub) -> None:
+def _add_skill(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser("skill", help="Inspect and validate skill repositories.")
     skill_sub = parser.add_subparsers(dest="skill_command", required=True)
     check = skill_sub.add_parser(
@@ -268,7 +268,7 @@ def _add_skill(sub) -> None:
     check.add_argument("--json", action="store_true", dest="json_output", help="print machine-readable issues")
 
 
-def _add_install(sub, name: str, description: str) -> None:
+def _add_install(sub: argparse._SubParsersAction[argparse.ArgumentParser], name: str, description: str) -> None:
     parser = sub.add_parser(
         name,
         help=description,
@@ -307,7 +307,7 @@ def _add_install(sub, name: str, description: str) -> None:
     )
 
 
-def _add_global(sub) -> None:
+def _add_global(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
         "global",
         help="Manage user-wide global skills.",
@@ -361,7 +361,7 @@ def _add_global(sub) -> None:
     )
 
 
-def _add_audit(sub) -> None:
+def _add_audit(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
         "audit",
         help="Run deterministic static security audit for declared skills.",

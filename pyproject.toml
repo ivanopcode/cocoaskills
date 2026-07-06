@@ -44,6 +44,7 @@ dev = [
   "pytest>=9",
   "build>=1.2",
   "twine>=5",
+  "mypy>=1.14",
 ]
 
 [project.scripts]
@@ -71,3 +72,8 @@ version_file = "src/csk/_version.py"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+files = ["src/csk"]

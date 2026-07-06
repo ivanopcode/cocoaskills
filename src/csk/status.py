@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from . import dev_substitutions, git_ops, hashing, manifest
 from .config import GlobalConfig, ProjectConfig
@@ -55,7 +56,7 @@ def _substitution_lines(project_root: Path) -> tuple[str, ...]:
     )
 
 
-def statuses_to_payload(statuses: list[ProjectStatus]) -> list[dict]:
+def statuses_to_payload(statuses: list[ProjectStatus]) -> list[dict[str, Any]]:
     payload = []
     for project in statuses:
         payload.append(

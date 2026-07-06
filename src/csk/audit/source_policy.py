@@ -37,8 +37,7 @@ def parse_source_policy(raw: Any) -> SourcePolicy:
     if not isinstance(raw, dict):
         raise SourcePolicyError("audit.source_policy must be an object")
     _reject_unknown_fields(raw, {"default_class", "rules"}, "audit.source_policy")
-    default_class = raw.get("default_class", "internal")
-    _validate_source_class(default_class, "audit.source_policy.default_class")
+    default_class = _validate_source_class(raw.get("default_class", "internal"), "audit.source_policy.default_class")
     rules_raw = raw.get("rules", [])
     if not isinstance(rules_raw, list):
         raise SourcePolicyError("audit.source_policy.rules must be a list")
@@ -48,10 +47,9 @@ def parse_source_policy(raw: Any) -> SourcePolicy:
             raise SourcePolicyError(f"audit.source_policy.rules[{index}] must be an object")
         _reject_unknown_fields(item, {"pattern", "class"}, f"audit.source_policy.rules[{index}]")
         pattern = item.get("pattern")
-        source_class = item.get("class")
         if not isinstance(pattern, str) or not pattern:
             raise SourcePolicyError(f"audit.source_policy.rules[{index}].pattern must be a non-empty string")
-        _validate_source_class(source_class, f"audit.source_policy.rules[{index}].class")
+        source_class = _validate_source_class(item.get("class"), f"audit.source_policy.rules[{index}].class")
         rules.append(SourcePolicyRule(pattern=pattern, source_class=source_class))
     return SourcePolicy(default_class=default_class, rules=tuple(rules))
 
@@ -81,9 +79,10 @@ def _is_local_source(source: str) -> bool:
     return False
 
 
-def _validate_source_class(value: Any, field: str) -> None:
-    if value not in {"internal", "public"}:
+def _validate_source_class(value: Any, field: str) -> str:
+    if not isinstance(value, str) or value not in {"internal", "public"}:
         raise SourcePolicyError(f"{field} must be internal or public")
+    return value
 
 
 def _reject_unknown_fields(data: dict[str, Any], allowed: set[str], label: str) -> None:

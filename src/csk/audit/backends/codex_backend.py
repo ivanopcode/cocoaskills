@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 from importlib import resources
 from pathlib import Path
+from typing import Any
 
 from .. import redaction, serialization
 from ..backend_config import CodexBackendConfig
@@ -136,8 +137,11 @@ def _prompt_template() -> str:
         )
 
 
-def _response_schema() -> dict:
+def _response_schema() -> dict[str, Any]:
     try:
-        return json.loads((resources.files("csk.audit") / "prompts" / "response-schema-v1.json").read_text(encoding="utf-8"))
+        loaded = json.loads((resources.files("csk.audit") / "prompts" / "response-schema-v1.json").read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            return loaded
     except (FileNotFoundError, ModuleNotFoundError, json.JSONDecodeError):
-        return {"type": "object", "required": ["schema_version", "findings"]}
+        pass
+    return {"type": "object", "required": ["schema_version", "findings"]}

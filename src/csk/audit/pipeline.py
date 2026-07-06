@@ -10,7 +10,7 @@ from .. import hashing, installer
 from ..config import GlobalConfig
 
 from . import backend_config, canary, detectors, policy, redaction, serialization, trust
-from .backends.base import AuditBackendError, AuditCanaryError, AuditEgressError, AuditRequest
+from .backends.base import AuditBackend, AuditBackendError, AuditCanaryError, AuditEgressError, AuditRequest
 from .backends.codex_backend import CodexBackend
 from .backends.command_backend import CommandBackend
 from .backends.null_backend import NullBackend
@@ -97,6 +97,7 @@ def audit_plans(
         _check_cloud_egress(config, resolved_backend, plan)
         request = _build_request(plan, static_findings, backend.cloud, content_sha256)
         request_size = _request_size(request)
+        backend_findings: tuple[Finding, ...]
         if request_size > config.audit.max_request_bytes:
             backend_findings = ()
             findings = request.static_findings + (
@@ -280,7 +281,7 @@ def _backend_config_for_config(config: GlobalConfig) -> backend_config.BackendCo
         raise AuditBackendError(str(exc)) from exc
 
 
-def _backend_for_config(config: GlobalConfig):
+def _backend_for_config(config: GlobalConfig) -> AuditBackend:
     resolved = _backend_config_for_config(config)
     if isinstance(resolved, backend_config.NullBackendConfig):
         return NullBackend()

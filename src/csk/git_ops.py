@@ -7,6 +7,7 @@ import tarfile
 from io import BytesIO
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 # Skillfile 'git' URLs reach git clone as untrusted input. Restricting the
@@ -19,7 +20,7 @@ class GitError(Exception):
     pass
 
 
-def _run(cmd: list[str], **kwargs):
+def _run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
     try:
         return subprocess.run(cmd, **kwargs)
     except FileNotFoundError as exc:
