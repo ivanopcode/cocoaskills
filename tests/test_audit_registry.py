@@ -419,3 +419,79 @@ def test_attest_detects_post_install_revocation(tmp_path, skills_root, csk_home,
     tracker = [r for r in results if r.skill == "skill-tracker"]
     assert tracker and tracker[0].result == registry_mod.RESULT_REVOKED
     assert attest_mod.has_revocation(results)
+
+
+# --- snapshot verification ---
+
+
+def _snapshot_body(version: int = 1, created_at: str = "2026-07-07T00:00:00Z") -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "merkle_root": "ab" * 32,
+        "log_size": version,
+        "head": "cd" * 32,
+        "version": version,
+        "created_at": created_at,
+    }
+
+
+def test_verify_snapshot_signature():
+    priv, pinned = _make_key()
+    snap = _sign_record(priv, _snapshot_body())
+    assert audit_registry.verify_snapshot(snap, (pinned,))
+    tampered = dict(snap)
+    tampered["version"] = 999
+    assert not audit_registry.verify_snapshot(tampered, (pinned,))
+
+
+def test_check_snapshots_accepts_valid(tmp_path):
+    priv, pinned = _make_key()
+    registry = RegistryConfig(name="central", url="https://r.example", public_keys=(pinned,))
+    snap = _sign_record(priv, _snapshot_body(version=5, created_at="2026-07-07T00:00:00Z"))
+    now = audit_registry._parse_iso8601("2026-07-07T01:00:00Z")
+    unavailable, warnings = audit_registry.check_snapshots(
+        (registry,), tmp_path, fetch_snapshot=lambda url: snap, now=now
+    )
+    assert unavailable == set()
+    assert warnings == []
+
+
+def test_check_snapshots_detects_rollback(tmp_path):
+    priv, pinned = _make_key()
+    registry = RegistryConfig(name="central", url="https://r.example", public_keys=(pinned,))
+    now = audit_registry._parse_iso8601("2026-07-07T01:00:00Z")
+    # First accept version 5.
+    snap5 = _sign_record(priv, _snapshot_body(version=5))
+    audit_registry.check_snapshots((registry,), tmp_path, fetch_snapshot=lambda url: snap5, now=now)
+    # Then a version-3 snapshot is a rollback.
+    snap3 = _sign_record(priv, _snapshot_body(version=3))
+    unavailable, warnings = audit_registry.check_snapshots(
+        (registry,), tmp_path, fetch_snapshot=lambda url: snap3, now=now
+    )
+    assert "https://r.example" in unavailable
+    assert any("rollback" in w for w in warnings)
+
+
+def test_check_snapshots_detects_stale(tmp_path):
+    priv, pinned = _make_key()
+    registry = RegistryConfig(name="central", url="https://r.example", public_keys=(pinned,))
+    snap = _sign_record(priv, _snapshot_body(created_at="2026-01-01T00:00:00Z"))
+    now = audit_registry._parse_iso8601("2026-07-07T00:00:00Z")
+    unavailable, warnings = audit_registry.check_snapshots(
+        (registry,), tmp_path, fetch_snapshot=lambda url: snap, now=now, max_age_seconds=3600
+    )
+    assert "https://r.example" in unavailable
+    assert any("stale" in w for w in warnings)
+
+
+def test_check_snapshots_rejects_bad_signature(tmp_path):
+    priv, _ = _make_key()
+    _, other_pinned = _make_key()
+    registry = RegistryConfig(name="central", url="https://r.example", public_keys=(other_pinned,))
+    snap = _sign_record(priv, _snapshot_body())
+    now = audit_registry._parse_iso8601("2026-07-07T00:00:00Z")
+    unavailable, warnings = audit_registry.check_snapshots(
+        (registry,), tmp_path, fetch_snapshot=lambda url: snap, now=now
+    )
+    assert "https://r.example" in unavailable
+    assert any("signature" in w for w in warnings)

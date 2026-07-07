@@ -6,6 +6,7 @@ import shutil
 import tempfile
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -431,7 +432,20 @@ def _check_audit_registries(
     if not registries:
         return {}
     strict = config.audit.registry_policy == "strict"
-    fetch = audit_registry.make_http_fetch(config.path.parent / "cache" / "registry")
+    cache_dir = config.path.parent / "cache" / "registry"
+    unavailable, snapshot_warnings = audit_registry.check_snapshots(
+        registries,
+        cache_dir,
+        fetch_snapshot=audit_registry.http_get_snapshot,
+        now=time.time(),
+    )
+    for warning in snapshot_warnings:
+        result.messages.append(f"{alias}: registry: {warning}")
+    registries = tuple(r for r in registries if r.url not in unavailable)
+    if not registries:
+        # Every trusted registry served a tampered snapshot; refuse to proceed.
+        raise InstallError("every trusted audit registry served a tampered snapshot")
+    fetch = audit_registry.make_http_fetch(cache_dir)
     attestations: dict[str, dict[str, object]] = {}
     errors: list[str] = []
     for plan in plans:

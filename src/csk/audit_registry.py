@@ -20,6 +20,9 @@ from .config import RegistryConfig
 # while a registry is unreachable.
 DEFAULT_CACHE_TTL_SECONDS = 3600
 DEFAULT_OFFLINE_GRACE_SECONDS = 7 * 24 * 3600
+# A snapshot older than this is stale, which defends against a registry that
+# freezes its view to hide a newer revocation.
+DEFAULT_SNAPSHOT_MAX_AGE_SECONDS = 7 * 24 * 3600
 
 
 # Client side of the audit registry (RFC 0008). This module verifies signed
@@ -211,6 +214,119 @@ def resolve(
     if deprecated is not None:
         return Resolution(RESULT_DEPRECATED, deprecated, tuple(warnings))
     return Resolution(RESULT_UNKNOWN, None, tuple(warnings))
+
+
+def verify_snapshot(snapshot: dict[str, Any], pinned_keys: tuple[str, ...]) -> bool:
+    sig = snapshot.get("sig")
+    if not isinstance(sig, dict) or not isinstance(sig.get("signature"), str):
+        return False
+    try:
+        signature = base64.b64decode(sig["signature"], validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    message = canonical_bytes(snapshot)
+    for key in pinned_keys:
+        try:
+            public_key = parse_public_key(key)
+        except RegistryError:
+            continue
+        if _ed25519.verify(public_key, message, signature):
+            return True
+    return False
+
+
+def _parse_iso8601(value: Any) -> float | None:
+    if not isinstance(value, str) or not value:
+        return None
+    text = value.replace("Z", "+00:00")
+    try:
+        from datetime import datetime
+
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
+
+
+def check_snapshots(
+    registries: tuple[RegistryConfig, ...],
+    cache_dir: Path,
+    *,
+    fetch_snapshot: Callable[[str], dict[str, Any]],
+    now: float,
+    max_age_seconds: int = DEFAULT_SNAPSHOT_MAX_AGE_SECONDS,
+) -> tuple[set[str], list[str]]:
+    """Verify each registry snapshot; return the URLs to treat as tampered.
+
+    A registry is excluded when its snapshot signature does not verify, its
+    version moved backward (rollback), or its reachable snapshot is older than
+    the maximum age (freeze). An unreachable snapshot warns but does not
+    exclude the registry, because per-record signatures and deny-wins
+    revocation still protect the install. The highest accepted version is
+    persisted per registry, so a later rollback is detected across runs.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    unavailable: set[str] = set()
+    warnings: list[str] = []
+    for registry in registries:
+        if not registry.public_keys:
+            continue
+        state_file = cache_dir / f"snapshot-{hashlib.sha256(registry.url.encode()).hexdigest()[:16]}.json"
+        highest = _read_snapshot_version(state_file)
+        try:
+            snapshot = fetch_snapshot(registry.url)
+        except RegistryError as exc:
+            warnings.append(f"registry {registry.name} snapshot unavailable: {exc}")
+            continue
+        if not verify_snapshot(snapshot, registry.public_keys):
+            warnings.append(f"registry {registry.name} snapshot signature failed verification")
+            unavailable.add(registry.url)
+            continue
+        version = snapshot.get("version")
+        if not isinstance(version, int) or version < highest:
+            warnings.append(f"registry {registry.name} snapshot version moved backward; possible rollback")
+            unavailable.add(registry.url)
+            continue
+        created = _parse_iso8601(snapshot.get("created_at"))
+        if created is None or now - created > max_age_seconds:
+            warnings.append(f"registry {registry.name} snapshot is stale")
+            unavailable.add(registry.url)
+            continue
+        _write_snapshot_version(state_file, version)
+    return unavailable, warnings
+
+
+def _read_snapshot_version(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return int(data["highest_version"])
+    except (ValueError, KeyError, OSError):
+        return 0
+
+
+def _write_snapshot_version(path: Path, version: int) -> None:
+    try:
+        path.write_text(json.dumps({"highest_version": version}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def http_get_snapshot(url: str) -> dict[str, Any]:
+    endpoint = f"{url.rstrip('/')}/v1/snapshot"
+    request = urllib.request.Request(endpoint, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - https endpoint from pinned config
+            body = response.read()
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise RegistryError(str(exc)) from exc
+    try:
+        data = json.loads(body)
+    except ValueError as exc:
+        raise RegistryError(f"registry returned invalid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RegistryError("snapshot must be a JSON object")
+    return data
 
 
 def make_http_fetch(

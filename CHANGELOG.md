@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verified revocation always denies regardless of policy.
 - Added `csk status --attest`, which re-checks installed skills against the
   trusted registries so a revocation issued after install surfaces on demand.
+- Added registry snapshot verification: before resolving, csk fetches each
+  registry's signed snapshot and excludes a registry that serves a tampered
+  view (bad signature, a version that moved backward, or a stale snapshot),
+  which defends against rollback and freeze. An unreachable snapshot warns
+  but does not exclude, since per-record signatures still protect the install.
 - Added the audit registry client (RFC 0008, advisory): a machine can pin
   trusted registries in `audit_registries` (name, url, Ed25519 public keys),
   and `csk install` resolves each skill against them by source identity,
