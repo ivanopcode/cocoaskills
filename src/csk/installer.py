@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import adapters, closure, consumers, dev_substitutions, env_files, gc, git_ops, gitignore_gate, hashing, locale, manifest, shims, skillcheck, skillspec, snapshot, whitelist
+from . import adapters, closure, consumers, dev_substitutions, env_files, gc, git_ops, gitignore_gate, hashing, locale, manifest, mcp_configs, shims, skillcheck, skillspec, snapshot, whitelist
 from .audit import pipeline as audit_pipeline
 from .config import GlobalConfig, ProjectConfig
 from .skillspec import CommandSpec
@@ -123,6 +123,7 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
             _check_skill_validation_errors(validation_issues)
             closure.detect_active_command_collisions(nodes)
             _check_dependencies(plans)
+            mcp_found = _check_mcp_servers(plans, project.path, agents)
             result.messages.extend(_migration_warnings(project.alias, plans))
             audit_gate = audit_pipeline.gate_plans(plans, config, scope=project.alias, record=not options.dry_run)
             result.messages.extend(audit_gate.warnings)
@@ -165,11 +166,17 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                         activation=activation,
                         requirers=requirers,
                         substituted=node.substituted,
+                        mcp_servers=mcp_found.get(node.name),
                     )
                     context_names.append(node.name)
                 else:
                     installed = _install_marker_only(
-                        project.path, plan, activation=activation, requirers=requirers, substituted=node.substituted
+                        project.path,
+                        plan,
+                        activation=activation,
+                        requirers=requirers,
+                        substituted=node.substituted,
+                        mcp_servers=mcp_found.get(node.name),
                     )
                 result.messages.append(f"{project.alias}: {_node_summary(node)} {installed}")
                 if options.verbose:
@@ -332,6 +339,42 @@ def skill_command_dependency_errors(plan: SkillPlan, plans: list[SkillPlan]) -> 
     return errors
 
 
+def _check_mcp_servers(
+    plans: list[SkillPlan], project_root: Path, agents: list[str]
+) -> dict[str, dict[str, list[str]]]:
+    """Verify declared MCP servers against the target agent environments.
+
+    Returns, per skill, the agents where each declared server was found.
+    Raises InstallError when a requirement is not satisfied.
+    """
+    found: dict[str, dict[str, list[str]]] = {}
+    errors: list[str] = []
+    for plan in plans:
+        if not plan.spec.mcp_servers:
+            continue
+        per_skill: dict[str, list[str]] = {}
+        for requirement in plan.spec.mcp_servers.values():
+            resolution = mcp_configs.resolve_server(project_root, agents, requirement.name)
+            available = sorted(agent for agent, ok in resolution.items() if ok)
+            per_skill[requirement.name] = available
+            if requirement.required_in == "all":
+                missing = sorted(agent for agent, ok in resolution.items() if not ok)
+                if missing:
+                    errors.append(
+                        f"MCP server {requirement.name!r} required by {plan.decl.name} is not configured "
+                        f"for agent(s): {', '.join(missing)}. Hint: {requirement.hint}"
+                    )
+            elif not available:
+                errors.append(
+                    f"MCP server {requirement.name!r} required by {plan.decl.name} is not configured "
+                    f"in any target agent environment. Hint: {requirement.hint}"
+                )
+        found[plan.decl.name] = per_skill
+    if errors:
+        raise InstallError("; ".join(errors))
+    return found
+
+
 def _system_dependencies(plan: SkillPlan) -> list[CommandSpec]:
     legacy = [command for command in plan.spec.commands.values() if command.type == "system"]
     explicit = [
@@ -449,6 +492,7 @@ def _install_skill_context(
     activation: dict[str, object] | None = None,
     requirers: list[str] | None = None,
     substituted: str | None = None,
+    mcp_servers: dict[str, list[str]] | None = None,
 ) -> str:
     return _install_skill_context_to_root(
         project_root / ".agents" / "skills",
@@ -458,6 +502,7 @@ def _install_skill_context(
         activation=activation,
         requirers=requirers,
         substituted=substituted,
+        mcp_servers=mcp_servers,
     )
 
 
@@ -470,10 +515,14 @@ def _install_skill_context_to_root(
     activation: dict[str, object] | None = None,
     requirers: list[str] | None = None,
     substituted: str | None = None,
+    mcp_servers: dict[str, list[str]] | None = None,
 ) -> str:
     target = target_root / plan.decl.name
     marker = _read_marker(target / ".csk-install.json")
-    if _marker_is_current(marker, target, plan, effective_locale, agents, activation=activation, substituted=substituted):
+    if _marker_is_current(
+        marker, target, plan, effective_locale, agents,
+        activation=activation, substituted=substituted, mcp_servers=mcp_servers,
+    ):
         return "up-to-date"
 
     tmp = target.parent / f".{plan.decl.name}.tmp-{os.getpid()}"
@@ -497,6 +546,7 @@ def _install_skill_context_to_root(
         activation=activation,
         requirers=requirers,
         substituted=substituted,
+        mcp_servers=mcp_servers,
     )
     (tmp / ".csk-install.json").write_text(json.dumps(marker_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _replace_dir(tmp, target)
@@ -510,6 +560,7 @@ def _install_marker_only(
     activation: dict[str, object],
     requirers: list[str],
     substituted: str | None,
+    mcp_servers: dict[str, list[str]] | None = None,
 ) -> str:
     """Record a runtime-only or context-less node without agent prompt files.
 
@@ -519,7 +570,9 @@ def _install_marker_only(
     target_root = project_root / ".agents" / "skills"
     target = target_root / plan.decl.name
     marker = _read_marker(target / ".csk-install.json")
-    if _marker_is_current(marker, target, plan, None, [], activation=activation, substituted=substituted):
+    if _marker_is_current(
+        marker, target, plan, None, [], activation=activation, substituted=substituted, mcp_servers=mcp_servers
+    ):
         return "up-to-date"
 
     tmp = target_root / f".{plan.decl.name}.tmp-{os.getpid()}"
@@ -536,6 +589,7 @@ def _install_marker_only(
         activation=activation,
         requirers=requirers,
         substituted=substituted,
+        mcp_servers=mcp_servers,
     )
     (tmp / ".csk-install.json").write_text(json.dumps(marker_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _replace_dir(tmp, target)
@@ -552,6 +606,7 @@ def _marker_payload(
     activation: dict[str, object] | None,
     requirers: list[str] | None,
     substituted: str | None,
+    mcp_servers: dict[str, list[str]] | None = None,
 ) -> dict[str, object]:
     marker_data: dict[str, object] = {
         "schema_version": 1,
@@ -574,6 +629,8 @@ def _marker_payload(
         marker_data["git"] = plan.decl.git
     if plan.spec.requirements:
         marker_data["requirements"] = sorted(plan.spec.requirements)
+    if mcp_servers is not None:
+        marker_data["mcp_servers"] = {name: sorted(found) for name, found in sorted(mcp_servers.items())}
     if activation is not None:
         marker_data["activation"] = activation
     if requirers:
@@ -592,6 +649,7 @@ def _marker_is_current(
     *,
     activation: dict[str, object] | None = None,
     substituted: str | None = None,
+    mcp_servers: dict[str, list[str]] | None = None,
 ) -> bool:
     if not marker or not target.exists():
         return False
@@ -609,6 +667,10 @@ def _marker_is_current(
         return False
     if marker.get("substituted") != substituted:
         return False
+    if mcp_servers is not None:
+        expected_mcp = {name: sorted(found) for name, found in sorted(mcp_servers.items())}
+        if marker.get("mcp_servers") != expected_mcp:
+            return False
     actual_hash = hashing.content_sha256(target)
     return marker.get("content_sha256") == actual_hash
 
