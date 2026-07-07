@@ -430,6 +430,7 @@ def _check_audit_registries(
     registries = config.trusted_registries()
     if not registries:
         return {}
+    strict = config.audit.registry_policy == "strict"
     fetch = audit_registry.make_http_fetch(config.path.parent / "cache" / "registry")
     attestations: dict[str, dict[str, object]] = {}
     errors: list[str] = []
@@ -453,6 +454,11 @@ def _check_audit_registries(
             continue
         if resolution.result == audit_registry.RESULT_DEPRECATED:
             result.messages.append(f"{alias}: registry: {plan.decl.name} is marked deprecated")
+        if strict and resolution.result == audit_registry.RESULT_UNKNOWN:
+            errors.append(
+                f"{plan.decl.name} is not audited by any trusted registry (registry_policy is strict)"
+            )
+            continue
         if resolution.attestation is not None:
             att = resolution.attestation
             attestations[plan.decl.name] = {

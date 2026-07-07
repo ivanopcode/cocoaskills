@@ -343,3 +343,79 @@ def test_audited_skill_records_attestation(tmp_path, skills_root, csk_home, monk
     )
     assert marker["attestation"]["registry"] == "central"
     assert marker["attestation"]["status"] == "audited"
+
+
+# --- strict policy and attest ---
+
+from csk import attest as attest_mod  # noqa: E402
+from csk.config import AuditConfig  # noqa: E402
+
+
+def test_strict_policy_fails_unknown_skill(tmp_path, skills_root, csk_home, monkeypatch):
+    _, pinned = _make_key()
+    project = make_project(tmp_path)
+    make_skill_repo(skills_root, "skill-tracker", tag="v1")
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "agents": ["claude_code"],
+            "skills": [
+                {"name": "skill-tracker", "git": "git@gitlab.example.com:skills/skill-tracker.git", "tag": "v1"}
+            ],
+        },
+    )
+
+    def fake_make_fetch(cache_dir, **kwargs):
+        def fetch(url, source_identity, commit_arg, content_sha256):
+            return []
+
+        return fetch
+
+    monkeypatch.setattr(registry_mod, "make_http_fetch", fake_make_fetch)
+    cfg = make_config(csk_home, skills_root, project, agents=["claude_code"])
+    cfg = replace(
+        cfg,
+        audit=AuditConfig(registry_policy="strict"),
+        audit_registries=(RegistryConfig(name="central", url="https://r.example", public_keys=(pinned,)),),
+    )
+    result = installer.install(cfg)[0]
+    assert result.errors
+    assert "not audited by any trusted registry" in result.errors[0]
+
+
+def test_attest_detects_post_install_revocation(tmp_path, skills_root, csk_home, monkeypatch):
+    project, result = _install_with_registry(tmp_path, skills_root, csk_home, monkeypatch, status="audited")
+    assert not result.errors, result.errors
+
+    # A revocation is issued after install; attest re-checks the marker.
+    priv2, pinned2 = _make_key()
+    marker = json.loads(
+        (project / ".agents" / "skills" / "skill-tracker" / ".csk-install.json").read_text(encoding="utf-8")
+    )
+    revoked = _sign_record(
+        priv2,
+        _record_body(
+            "revoked",
+            source_identity="gitlab.example.com/skills/skill-tracker",
+            commit=marker["commit"],
+            content_sha256=marker["content_sha256"],
+        ),
+    )
+
+    def fake_make_fetch(cache_dir, **kwargs):
+        def fetch(url, source_identity, commit_arg, content_sha256):
+            return [revoked]
+
+        return fetch
+
+    monkeypatch.setattr(registry_mod, "make_http_fetch", fake_make_fetch)
+    cfg = make_config(csk_home, skills_root, project, agents=["claude_code"])
+    cfg = replace(
+        cfg,
+        audit_registries=(RegistryConfig(name="central", url="https://r.example", public_keys=(pinned2,)),),
+    )
+    results = attest_mod.attest_projects(cfg, alias="app")
+    tracker = [r for r in results if r.skill == "skill-tracker"]
+    assert tracker and tracker[0].result == registry_mod.RESULT_REVOKED
+    assert attest_mod.has_revocation(results)

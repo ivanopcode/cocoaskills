@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added an enforced system configuration layer read before the user config:
+  `/etc/cocoaskills/config.json` on Unix and `%ProgramData%\cocoaskills\config.json`
+  on Windows. Keys listed under `locked` take their value from the system
+  config and cannot be overridden from the user config, so an organization
+  distributes registry trust and source policy through device management. An
+  unlocked system key acts as a default the user config may override.
+- Added the strict registry policy: `audit.registry_policy: strict` fails an
+  install when a skill is not audited by any trusted registry, while a
+  verified revocation always denies regardless of policy.
+- Added `csk status --attest`, which re-checks installed skills against the
+  trusted registries so a revocation issued after install surfaces on demand.
 - Added the audit registry client (RFC 0008, advisory): a machine can pin
   trusted registries in `audit_registries` (name, url, Ed25519 public keys),
   and `csk install` resolves each skill against them by source identity,

@@ -353,6 +353,14 @@ is revoked, and organizations pin only their internal registry with
 `disable_builtin_registries`. Signature verification uses a standard-library
 Ed25519 implementation, so the runtime keeps no third-party dependency.
 
+For managed fleets, a system configuration at `/etc/cocoaskills/config.json`
+(or `%ProgramData%\cocoaskills\config.json` on Windows) is read before the
+user config. Keys it lists under `locked` cannot be overridden from the user
+config, so registry trust, the source allowlist, and the audit policy can be
+distributed through device management. Set `audit.registry_policy` to `strict`
+to fail any install that is not audited by a trusted registry, and run
+`csk status --attest` to re-check installed skills against the registries.
+
 ## CLI
 
 | Command | Behavior |

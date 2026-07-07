@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,17 @@ from .audit.source_policy import SourcePolicy, SourcePolicyError, parse_source_p
 
 SCHEMA_VERSION = 1
 DEFAULT_CONFIG_PATH = Path.home() / ".cocoaskills" / "config.json"
+# Enforced machine configuration read before the user config. An organization
+# distributes this file through device management; keys it lists under 'locked'
+# cannot be overridden from the user config (RFC 0008 section 10).
+if os.name == "nt":
+    DEFAULT_SYSTEM_CONFIG_PATH = Path(os.environ.get("ProgramData", "C:\\ProgramData")) / "cocoaskills" / "config.json"
+else:
+    DEFAULT_SYSTEM_CONFIG_PATH = Path("/etc/cocoaskills/config.json")
+# Top-level keys an organization may lock from the system config.
+LOCKABLE_KEYS = frozenset(
+    {"audit_registries", "disable_builtin_registries", "allowed_sources", "audit"}
+)
 DEFAULT_AGENTS = ["codex_cli"]
 DEFAULT_WORKTREE_ALIAS_PATTERN = r"[A-Z]+-[0-9]+"
 AUDIT_REVOCATION_HASH_RE = re.compile(r"^(?:sha256:)?[A-Fa-f0-9]{64}$")
@@ -58,6 +70,9 @@ class AuditConfig:
     grants: list[dict[str, Any]] = field(default_factory=list)
     revocations: list[str] = field(default_factory=list)
     source_policy: SourcePolicy = field(default_factory=SourcePolicy)
+    # How registry lookups affect the install: 'advisory' warns on an unknown
+    # or unreachable artifact, 'strict' fails it. A revocation always denies.
+    registry_policy: str = "advisory"
 
 
 @dataclass(frozen=True)
@@ -100,16 +115,73 @@ def config_path() -> Path:
     return DEFAULT_CONFIG_PATH
 
 
+def system_config_path() -> Path | None:
+    override = os.environ.get("CSK_SYSTEM_CONFIG")
+    if override:
+        return Path(override).expanduser()
+    if DEFAULT_SYSTEM_CONFIG_PATH.exists():
+        return DEFAULT_SYSTEM_CONFIG_PATH
+    return None
+
+
 def load_config(path: Path | None = None) -> GlobalConfig:
     resolved = path or config_path()
     try:
-        data = json.loads(resolved.read_text(encoding="utf-8"))
+        user_data = json.loads(resolved.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise ConfigError(f"Global config not found: {resolved}") from exc
     except json.JSONDecodeError as exc:
         raise ConfigError(f"Malformed JSON in global config {resolved}: {exc}") from exc
+    if not isinstance(user_data, dict):
+        raise ConfigError("Global config must be a JSON object")
 
-    return parse_config(data, resolved)
+    system_path = system_config_path()
+    if system_path is not None:
+        try:
+            system_data = json.loads(system_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            system_data = None
+        except json.JSONDecodeError as exc:
+            raise ConfigError(f"Malformed JSON in system config {system_path}: {exc}") from exc
+        if system_data is not None:
+            if not isinstance(system_data, dict):
+                raise ConfigError(f"System config {system_path} must be a JSON object")
+            user_data = _apply_system_config(system_data, user_data, system_path)
+
+    return parse_config(user_data, resolved)
+
+
+def _apply_system_config(
+    system_data: dict[str, Any], user_data: dict[str, Any], system_path: Path
+) -> dict[str, Any]:
+    """Overlay the system config, enforcing its locked keys over the user config.
+
+    A key listed under 'locked' takes its value from the system config, and a
+    user override of that key is ignored with a warning. Other system keys act
+    as defaults the user config may override.
+    """
+    locked_raw = system_data.get("locked", [])
+    if not _is_str_list(locked_raw):
+        raise ConfigError(f"System config {system_path} field 'locked' must be a list of strings")
+    locked = set(locked_raw)
+    merged = dict(user_data)
+    for key, value in system_data.items():
+        if key in {"locked", "schema_version"}:
+            continue
+        if key in locked:
+            if key in user_data and user_data[key] != value:
+                print(
+                    f"warning: config key {key!r} is locked by {system_path}; "
+                    "the user override is ignored",
+                    file=sys.stderr,
+                )
+            merged[key] = value
+        else:
+            merged.setdefault(key, value)
+    for key in locked:
+        if key not in system_data:
+            raise ConfigError(f"System config {system_path} locks {key!r} but does not set it")
+    return merged
 
 
 def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
@@ -338,6 +410,7 @@ def _parse_audit_config(raw: Any) -> AuditConfig:
             "grants",
             "revocations",
             "source_policy",
+            "registry_policy",
         },
         "audit",
     )
@@ -402,6 +475,10 @@ def _parse_audit_config(raw: Any) -> AuditConfig:
     except SourcePolicyError as exc:
         raise ConfigError(str(exc)) from exc
 
+    registry_policy = raw.get("registry_policy", "advisory")
+    if registry_policy not in {"advisory", "strict"}:
+        raise ConfigError("Global config field 'audit.registry_policy' must be advisory or strict")
+
     return AuditConfig(
         enabled=enabled,
         mode=mode,
@@ -414,6 +491,7 @@ def _parse_audit_config(raw: Any) -> AuditConfig:
         grants=list(grants),
         revocations=list(revocations),
         source_policy=source_policy,
+        registry_policy=registry_policy,
     )
 
 
@@ -442,6 +520,8 @@ def _serialize_audit_config(audit: AuditConfig) -> dict[str, Any]:
     source_policy = _serialize_source_policy(audit.source_policy)
     if source_policy:
         data["source_policy"] = source_policy
+    if audit.registry_policy != "advisory":
+        data["registry_policy"] = audit.registry_policy
     return data
 
 
