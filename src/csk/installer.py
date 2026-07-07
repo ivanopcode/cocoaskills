@@ -5,11 +5,11 @@ import os
 import shutil
 import tempfile
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import adapters, closure, consumers, dev_substitutions, env_files, gc, git_ops, gitignore_gate, hashing, locale, manifest, mcp_configs, shims, skillcheck, skillspec, snapshot, whitelist
+from . import adapters, closure, consumers, dev_substitutions, env_files, gc, git_ops, gitignore_gate, hashing, hybrid, locale, manifest, mcp_configs, shims, skillcheck, skillspec, snapshot, whitelist
 from .audit import pipeline as audit_pipeline
 from .config import GlobalConfig, ProjectConfig
 from .skillspec import CommandSpec
@@ -109,11 +109,38 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                     f"{project.alias}: SUBSTITUTION {substitution.name} -> {substitution.describe()}"
                 )
 
+        try:
+            hybrid_decls = hybrid.load_hybrid_decls(config.path.parent)
+        except hybrid.HybridError as exc:
+            raise InstallError(str(exc)) from exc
+        aliases = tuple(
+            value
+            for value in (project.alias, project.project_alias, project_manifest.project_alias)
+            if value
+        )
+        applicable = [
+            item
+            for item in hybrid_decls
+            if hybrid.applies_to_project(item, aliases=aliases, project_path=project.path)
+        ]
+        project_declared = {decl.name for decl in project_manifest.skills}
+        for shadowed in sorted(item.decl.name for item in applicable if item.decl.name in project_declared):
+            result.messages.append(
+                f"{project.alias}: hybrid skill {shadowed} is shadowed by the project declaration"
+            )
+        hybrid_direct = [item.decl for item in applicable if item.decl.name not in project_declared]
+        effective_manifest = (
+            replace(project_manifest, skills=list(project_manifest.skills) + hybrid_direct)
+            if hybrid_direct
+            else project_manifest
+        )
+
         effective_locale = project_manifest.locale or config.preferred_locale
         with ExitStack() as stack:
             nodes = closure.build_closure(
-                config, project_manifest, substitutions, use_cache=not options.dry_run, stack=stack
+                config, effective_manifest, substitutions, use_cache=not options.dry_run, stack=stack
             )
+            hybrid_store_names = _hybrid_store_names(nodes, project_declared)
             plans = [
                 SkillPlan(decl=node.decl, resolved=node.resolved, repo=node.repo, snapshot=node.snapshot, spec=node.spec)
                 for node in nodes
@@ -141,7 +168,9 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                 return result
 
             consumers.record_consumer(config.path.parent, project.path)
+            hybrid_store = hybrid.hybrid_skills_root(config.path.parent)
             context_names: list[str] = []
+            hybrid_context_names: list[str] = []
             expected_commands: set[str] = set()
             nodes_by_name = {node.name: node for node in nodes}
             for node in nodes:
@@ -157,7 +186,21 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                     expected_commands.update(command_names)
                 activation = {"context": node.context_active, "commands": sorted(active)}
                 requirers = node.consumers()
-                if node.context_active:
+                is_hybrid = node.name in hybrid_store_names
+                if node.context_active and is_hybrid:
+                    # Hybrid context renders once per machine with the machine
+                    # locale; per-project variance stays out of the shared marker.
+                    installed = _install_skill_context_to_root(
+                        hybrid_store,
+                        plan,
+                        config.preferred_locale,
+                        [],
+                        activation=activation,
+                        requirers=requirers,
+                        substituted=node.substituted,
+                    )
+                    hybrid_context_names.append(node.name)
+                elif node.context_active:
                     installed = _install_skill_context(
                         project.path,
                         plan,
@@ -177,8 +220,10 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                         requirers=requirers,
                         substituted=node.substituted,
                         mcp_servers=mcp_found.get(node.name),
+                        target_root=hybrid_store if is_hybrid else None,
                     )
-                result.messages.append(f"{project.alias}: {_node_summary(node)} {installed}")
+                suffix = " (hybrid)" if is_hybrid else ""
+                result.messages.append(f"{project.alias}: {_node_summary(node)}{suffix} {installed}")
                 if options.verbose:
                     result.messages.append(f"{project.alias}: {node.name} commit {node.resolved.commit}")
                     for command_name in sorted(command_names):
@@ -186,15 +231,41 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                             f"{project.alias}: {node.name} command {command_name} -> .agents/bin/{command_name}"
                         )
 
-            _cleanup_removed_skills(project.path, set(nodes_by_name))
+            _cleanup_removed_skills(project.path, set(nodes_by_name) - hybrid_store_names)
+            all_hybrid_names = {item.decl.name for item in hybrid_decls}
+            _cleanup_removed_skills_root(hybrid_store, all_hybrid_names | hybrid_store_names)
             shims.remove_stale_shims(project.path, expected_commands)
             env_files.write_env_files(project.path)
-            adapters.refresh_adapters(project.path, agents, context_names, config.adapter_mode)
+            adapters.refresh_adapter_groups(
+                project.path,
+                agents,
+                [
+                    (project.path / ".agents" / "skills", context_names),
+                    (hybrid_store, hybrid_context_names),
+                ],
+                config.adapter_mode,
+            )
             return result
     except Exception as exc:
         result.status = "failed"
         result.errors.append(str(exc))
         return result
+
+
+def _hybrid_store_names(nodes: list[closure.ClosureNode], project_declared: set[str]) -> set[str]:
+    """Names materialized in the hybrid store: unreachable from project declarations."""
+    by_name = {node.name: node for node in nodes}
+    reachable: set[str] = set()
+    stack = [name for name in project_declared if name in by_name]
+    while stack:
+        current = stack.pop()
+        if current in reachable:
+            continue
+        reachable.add(current)
+        for requirement in by_name[current].spec.requirements.values():
+            if requirement.name in by_name and requirement.name not in reachable:
+                stack.append(requirement.name)
+    return set(by_name) - reachable
 
 
 def _node_summary(node: closure.ClosureNode) -> str:
@@ -561,13 +632,15 @@ def _install_marker_only(
     requirers: list[str],
     substituted: str | None,
     mcp_servers: dict[str, list[str]] | None = None,
+    target_root: Path | None = None,
 ) -> str:
     """Record a runtime-only or context-less node without agent prompt files.
 
     The marker directory keeps the runtime store referenced by GC and the
     closure auditable offline; adapters never mirror it.
     """
-    target_root = project_root / ".agents" / "skills"
+    if target_root is None:
+        target_root = project_root / ".agents" / "skills"
     target = target_root / plan.decl.name
     marker = _read_marker(target / ".csk-install.json")
     if _marker_is_current(

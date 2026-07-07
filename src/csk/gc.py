@@ -29,6 +29,8 @@ def collect_runtime(config: GlobalConfig, csk_home: Path) -> GcStats:
     referenced_snapshots: set[tuple[str, str]] = set()
     _collect_markers(csk_home / "global" / "skills", referenced, referenced_snapshots)
     sweep_orphans(csk_home / "global" / "skills")
+    _collect_markers(csk_home / "hybrid" / "skills", referenced, referenced_snapshots)
+    sweep_orphans(csk_home / "hybrid" / "skills")
     for project in config.projects.values():
         _collect_markers(project.path / ".agents" / "skills", referenced, referenced_snapshots)
         sweep_orphans(project.path / ".agents" / "skills")
