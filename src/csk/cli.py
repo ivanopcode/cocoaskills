@@ -418,6 +418,16 @@ def _add_audit(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         help="pin a legacy content hash to satisfy strict schema v1/v2 capability declaration checks",
     )
     parser.add_argument("--reason", help="required reason for --allow")
+    parser.add_argument(
+        "--publish",
+        metavar="RECORD",
+        help="submit a signed audit record (JSON file) to a registry",
+    )
+    parser.add_argument("--registry", help="registry base URL for --publish")
+    parser.add_argument(
+        "--token",
+        help="auditor token for --publish (or set CSK_REGISTRY_TOKEN)",
+    )
 
 
 def _dispatch(args: argparse.Namespace) -> int:
@@ -796,6 +806,8 @@ def _cmd_global_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> i
 
 def _cmd_audit(args: argparse.Namespace) -> int:
     cfg = config.load_config()
+    if args.publish:
+        return _cmd_audit_publish(args)
     if args.allow:
         if args.target is not None or args.all or args.global_scope or args.json:
             raise ValueError("--allow cannot be combined with targets, --all, --global, or --json")
@@ -824,6 +836,40 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     else:
         print(audit_pipeline.render_reports(reports))
     return EXIT_PARTIAL_FAIL if any(report.decision in {Decision.BLOCK, Decision.REQUIRE_PIN} for report in reports) else EXIT_OK
+
+
+def _cmd_audit_publish(args: argparse.Namespace) -> int:
+    import os
+    import urllib.error
+    import urllib.request
+
+    if not args.registry:
+        raise ValueError("--publish requires --registry")
+    token = args.token or os.environ.get("CSK_REGISTRY_TOKEN")
+    if not token:
+        raise ValueError("--publish requires --token or the CSK_REGISTRY_TOKEN environment variable")
+    record_text = Path(args.publish).read_text(encoding="utf-8")
+    try:
+        json.loads(record_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"record is not valid JSON: {exc}") from exc
+    endpoint = f"{args.registry.rstrip('/')}/v1/records"
+    request = urllib.request.Request(
+        endpoint,
+        data=record_text.encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310 - registry URL from the operator
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise ValueError(f"registry rejected the record ({exc.code}): {detail}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ValueError(f"could not reach registry {args.registry}: {exc}") from exc
+    print(body)
+    return EXIT_OK
 
 
 def _cfg_with_audit_override(cfg: config.GlobalConfig, args: argparse.Namespace) -> config.GlobalConfig:

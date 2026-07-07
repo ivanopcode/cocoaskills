@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `csk audit --publish <record> --registry <url> --token <token>`, which
+  submits a signed audit record to a registry. The token may also come from
+  the `CSK_REGISTRY_TOKEN` environment variable.
+
 ## [0.11.0] - 2026-07-07
 
 ### Added

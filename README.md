@@ -360,6 +360,11 @@ config, so registry trust, the source allowlist, and the audit policy can be
 distributed through device management. Set `audit.registry_policy` to `strict`
 to fail any install that is not audited by a trusted registry, and run
 `csk status --attest` to re-check installed skills against the registries.
+An auditor submits a signed record with
+`csk audit --publish <record> --registry <url> --token <token>`. The reference
+registry service, including air-gapped bundle export and import for closed
+networks, lives at
+[cocoaskills-registry](https://github.com/ivanopcode/cocoaskills-registry).
 
 ## CLI
 
