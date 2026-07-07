@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added the audit registry client (RFC 0008, advisory): a machine can pin
+  trusted registries in `audit_registries` (name, url, Ed25519 public keys),
+  and `csk install` resolves each skill against them by source identity,
+  commit, and content hash. A verified `revoked` record denies the install
+  under a deny-wins federation rule; a verified `audited` record is recorded
+  as an attestation in the install marker. Signatures are verified with a
+  vendored, standard-library-only Ed25519 implementation, so the runtime
+  keeps no third-party dependency. Lookups cache with a TTL and an offline
+  grace window. `disable_builtin_registries` drops the built-in defaults for
+  closed networks.
+
 ## [0.10.0] - 2026-07-07
 
 ### Added

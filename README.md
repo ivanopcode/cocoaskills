@@ -326,6 +326,33 @@ Backend safety rules:
 - Unverifiable backend findings are shown in reports and never block strict
   installs.
 
+## Audit registry
+
+An audit registry serves signed statements that a skill, at a specific commit
+and content hash, was audited or revoked ([RFC 0008](docs/v0.11-design.md)). A
+machine pins the registries it trusts in `~/.cocoaskills/config.json`:
+
+```json
+{
+  "audit_registries": [
+    {
+      "name": "internal",
+      "url": "https://registry.example.com",
+      "public_keys": ["ed25519:base64key..."]
+    }
+  ],
+  "disable_builtin_registries": false
+}
+```
+
+`csk install` resolves each skill against the trusted registries and verifies
+every record against the pinned keys before trusting it. A verified revocation
+in any trusted registry denies the install; a verified audit is recorded as an
+attestation in the install marker. Registry lookups are advisory unless a skill
+is revoked, and organizations pin only their internal registry with
+`disable_builtin_registries`. Signature verification uses a standard-library
+Ed25519 implementation, so the runtime keeps no third-party dependency.
+
 ## CLI
 
 | Command | Behavior |

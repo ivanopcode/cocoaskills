@@ -31,6 +31,20 @@ class ProjectConfig:
     checkout_alias: str | None = None
 
 
+# Built-in trusted registries shipped with a release. Empty until the central
+# registry is deployed and its public key is generated; a real pinned key ships
+# with the release that turns this on (RFC 0008).
+BUILTIN_REGISTRIES: tuple["RegistryConfig", ...] = ()
+
+
+@dataclass(frozen=True)
+class RegistryConfig:
+    name: str
+    url: str
+    public_keys: tuple[str, ...] = ()
+    enabled: bool = True
+
+
 @dataclass(frozen=True)
 class AuditConfig:
     enabled: bool = False
@@ -59,6 +73,24 @@ class GlobalConfig:
     # Canonical "host/path" prefixes the resolver may fetch from. An empty
     # tuple allows every source; organizations pin the list to their hosting.
     allowed_sources: tuple[str, ...] = ()
+    # Trusted audit registries, built-in defaults merged with configured
+    # entries unless the defaults are disabled (RFC 0008).
+    audit_registries: tuple[RegistryConfig, ...] = ()
+    disable_builtin_registries: bool = False
+
+    def trusted_registries(self) -> tuple[RegistryConfig, ...]:
+        """Effective registries: built-in defaults plus configured entries.
+
+        A configured entry with the same url overrides a built-in one. The
+        built-in defaults are dropped when disable_builtin_registries is set.
+        """
+        by_url: dict[str, RegistryConfig] = {}
+        if not self.disable_builtin_registries:
+            for entry in BUILTIN_REGISTRIES:
+                by_url[entry.url] = entry
+        for entry in self.audit_registries:
+            by_url[entry.url] = entry
+        return tuple(entry for entry in by_url.values() if entry.enabled)
 
 
 def config_path() -> Path:
@@ -123,6 +155,11 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
     if not _is_str_list(allowed_sources_raw) or any(not item.strip() for item in allowed_sources_raw):
         raise ConfigError("Global config field 'allowed_sources' must be a list of non-empty strings")
 
+    audit_registries = _parse_audit_registries(data.get("audit_registries"))
+    disable_builtin = data.get("disable_builtin_registries", False)
+    if not isinstance(disable_builtin, bool):
+        raise ConfigError("Global config field 'disable_builtin_registries' must be a boolean")
+
     if "projects" not in data:
         raise ConfigError("Global config requires field 'projects'")
     projects_raw = data.get("projects")
@@ -165,6 +202,8 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
         projects=projects,
         audit=audit,
         allowed_sources=tuple(allowed_sources_raw),
+        audit_registries=audit_registries,
+        disable_builtin_registries=disable_builtin,
     )
 
 
@@ -192,6 +231,18 @@ def save_config(config: GlobalConfig) -> None:
         data["audit"] = audit
     if config.allowed_sources:
         data["allowed_sources"] = list(config.allowed_sources)
+    if config.audit_registries:
+        data["audit_registries"] = [
+            {
+                "name": entry.name,
+                "url": entry.url,
+                "public_keys": list(entry.public_keys),
+                "enabled": entry.enabled,
+            }
+            for entry in config.audit_registries
+        ]
+    if config.disable_builtin_registries:
+        data["disable_builtin_registries"] = True
     config.path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -224,6 +275,8 @@ def add_project(
         projects=projects,
         audit=config.audit,
         allowed_sources=config.allowed_sources,
+        audit_registries=config.audit_registries,
+        disable_builtin_registries=config.disable_builtin_registries,
     )
 
 
@@ -235,6 +288,35 @@ def validate_skills_root_for_work(config: GlobalConfig) -> None:
 
 def _is_str_list(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _parse_audit_registries(raw: Any) -> tuple[RegistryConfig, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigError("Global config field 'audit_registries' must be a list")
+    registries: list[RegistryConfig] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ConfigError(f"audit_registries[{index}] must be an object")
+        name = item.get("name")
+        if not isinstance(name, str) or not name:
+            raise ConfigError(f"audit_registries[{index}] requires a non-empty string 'name'")
+        url = item.get("url")
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            raise ConfigError(f"audit_registries[{index}] requires an http(s) 'url'")
+        if url in seen:
+            raise ConfigError(f"audit_registries[{index}] duplicates url {url!r}")
+        seen.add(url)
+        keys = item.get("public_keys", [])
+        if not _is_str_list(keys) or any(not key.strip() for key in keys):
+            raise ConfigError(f"audit_registries[{index}].public_keys must be a list of non-empty strings")
+        enabled = item.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ConfigError(f"audit_registries[{index}].enabled must be a boolean")
+        registries.append(RegistryConfig(name=name, url=url, public_keys=tuple(keys), enabled=enabled))
+    return tuple(registries)
 
 
 def _parse_audit_config(raw: Any) -> AuditConfig:

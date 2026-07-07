@@ -9,7 +9,8 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import adapters, closure, consumers, dev_substitutions, env_files, gc, git_ops, gitignore_gate, hashing, hybrid, locale, manifest, mcp_configs, shims, skillcheck, skillspec, snapshot, whitelist
+from . import adapters, audit_registry, closure, consumers, dev_substitutions, env_files, gc, git_ops, gitignore_gate, hashing, hybrid, locale, manifest, mcp_configs, shims, skillcheck, skillspec, snapshot, whitelist
+from . import source_identity as source_identity_mod
 from .audit import pipeline as audit_pipeline
 from .config import GlobalConfig, ProjectConfig
 from .skillspec import CommandSpec
@@ -156,6 +157,7 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
             result.messages.extend(audit_gate.warnings)
             if audit_gate.blocked:
                 raise InstallError("; ".join(audit_gate.errors))
+            registry_attest = _check_audit_registries(plans, config, result, alias=project.alias)
             if options.strict_tags:
                 _check_moved_tags_strict(project.path / ".agents" / "skills", plans)
             else:
@@ -210,6 +212,7 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                         requirers=requirers,
                         substituted=node.substituted,
                         mcp_servers=mcp_found.get(node.name),
+                        attestation=registry_attest.get(node.name),
                     )
                     context_names.append(node.name)
                 else:
@@ -221,6 +224,7 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                         substituted=node.substituted,
                         mcp_servers=mcp_found.get(node.name),
                         target_root=hybrid_store if is_hybrid else None,
+                        attestation=registry_attest.get(node.name),
                     )
                 suffix = " (hybrid)" if is_hybrid else ""
                 result.messages.append(f"{project.alias}: {_node_summary(node)}{suffix} {installed}")
@@ -410,6 +414,57 @@ def skill_command_dependency_errors(plan: SkillPlan, plans: list[SkillPlan]) -> 
     return errors
 
 
+def _check_audit_registries(
+    plans: list[SkillPlan],
+    config: GlobalConfig,
+    result: ProjectResult,
+    *,
+    alias: str,
+) -> dict[str, dict[str, object]]:
+    """Resolve each skill against trusted audit registries (RFC 0008).
+
+    A verified revocation denies the install. An unknown artifact is advisory
+    at this stage. Returns the authorizing attestation per skill for the
+    marker.
+    """
+    registries = config.trusted_registries()
+    if not registries:
+        return {}
+    fetch = audit_registry.make_http_fetch(config.path.parent / "cache" / "registry")
+    attestations: dict[str, dict[str, object]] = {}
+    errors: list[str] = []
+    for plan in plans:
+        identity = source_identity_mod.canonical_source_identity(plan.decl.git) if plan.decl.git else None
+        if identity is None:
+            continue
+        content_hash = hashing.content_sha256(plan.snapshot)
+        resolution = audit_registry.resolve(
+            registries,
+            source_identity=identity,
+            commit=plan.resolved.commit,
+            content_sha256=content_hash,
+            fetch=fetch,
+        )
+        for warning in resolution.warnings:
+            result.messages.append(f"{alias}: registry: {warning}")
+        if resolution.result == audit_registry.RESULT_REVOKED:
+            registry = resolution.attestation.registry if resolution.attestation else "a trusted registry"
+            errors.append(f"{plan.decl.name} is revoked by {registry}")
+            continue
+        if resolution.result == audit_registry.RESULT_DEPRECATED:
+            result.messages.append(f"{alias}: registry: {plan.decl.name} is marked deprecated")
+        if resolution.attestation is not None:
+            att = resolution.attestation
+            attestations[plan.decl.name] = {
+                "registry": att.registry,
+                "status": att.status,
+                "key_id": att.key_id,
+            }
+    if errors:
+        raise InstallError("; ".join(errors))
+    return attestations
+
+
 def _check_mcp_servers(
     plans: list[SkillPlan], project_root: Path, agents: list[str]
 ) -> dict[str, dict[str, list[str]]]:
@@ -564,6 +619,7 @@ def _install_skill_context(
     requirers: list[str] | None = None,
     substituted: str | None = None,
     mcp_servers: dict[str, list[str]] | None = None,
+    attestation: dict[str, object] | None = None,
 ) -> str:
     return _install_skill_context_to_root(
         project_root / ".agents" / "skills",
@@ -574,6 +630,7 @@ def _install_skill_context(
         requirers=requirers,
         substituted=substituted,
         mcp_servers=mcp_servers,
+        attestation=attestation,
     )
 
 
@@ -587,12 +644,13 @@ def _install_skill_context_to_root(
     requirers: list[str] | None = None,
     substituted: str | None = None,
     mcp_servers: dict[str, list[str]] | None = None,
+    attestation: dict[str, object] | None = None,
 ) -> str:
     target = target_root / plan.decl.name
     marker = _read_marker(target / ".csk-install.json")
     if _marker_is_current(
         marker, target, plan, effective_locale, agents,
-        activation=activation, substituted=substituted, mcp_servers=mcp_servers,
+        activation=activation, substituted=substituted, mcp_servers=mcp_servers, attestation=attestation,
     ):
         return "up-to-date"
 
@@ -618,6 +676,7 @@ def _install_skill_context_to_root(
         requirers=requirers,
         substituted=substituted,
         mcp_servers=mcp_servers,
+        attestation=attestation,
     )
     (tmp / ".csk-install.json").write_text(json.dumps(marker_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _replace_dir(tmp, target)
@@ -633,6 +692,7 @@ def _install_marker_only(
     substituted: str | None,
     mcp_servers: dict[str, list[str]] | None = None,
     target_root: Path | None = None,
+    attestation: dict[str, object] | None = None,
 ) -> str:
     """Record a runtime-only or context-less node without agent prompt files.
 
@@ -644,7 +704,8 @@ def _install_marker_only(
     target = target_root / plan.decl.name
     marker = _read_marker(target / ".csk-install.json")
     if _marker_is_current(
-        marker, target, plan, None, [], activation=activation, substituted=substituted, mcp_servers=mcp_servers
+        marker, target, plan, None, [], activation=activation, substituted=substituted,
+        mcp_servers=mcp_servers, attestation=attestation,
     ):
         return "up-to-date"
 
@@ -663,6 +724,7 @@ def _install_marker_only(
         requirers=requirers,
         substituted=substituted,
         mcp_servers=mcp_servers,
+        attestation=attestation,
     )
     (tmp / ".csk-install.json").write_text(json.dumps(marker_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _replace_dir(tmp, target)
@@ -680,6 +742,7 @@ def _marker_payload(
     requirers: list[str] | None,
     substituted: str | None,
     mcp_servers: dict[str, list[str]] | None = None,
+    attestation: dict[str, object] | None = None,
 ) -> dict[str, object]:
     marker_data: dict[str, object] = {
         "schema_version": 1,
@@ -704,6 +767,8 @@ def _marker_payload(
         marker_data["requirements"] = sorted(plan.spec.requirements)
     if mcp_servers is not None:
         marker_data["mcp_servers"] = {name: sorted(found) for name, found in sorted(mcp_servers.items())}
+    if attestation is not None:
+        marker_data["attestation"] = attestation
     if activation is not None:
         marker_data["activation"] = activation
     if requirers:
@@ -723,6 +788,7 @@ def _marker_is_current(
     activation: dict[str, object] | None = None,
     substituted: str | None = None,
     mcp_servers: dict[str, list[str]] | None = None,
+    attestation: dict[str, object] | None = None,
 ) -> bool:
     if not marker or not target.exists():
         return False
@@ -744,6 +810,8 @@ def _marker_is_current(
         expected_mcp = {name: sorted(found) for name, found in sorted(mcp_servers.items())}
         if marker.get("mcp_servers") != expected_mcp:
             return False
+    if marker.get("attestation") != attestation:
+        return False
     actual_hash = hashing.content_sha256(target)
     return marker.get("content_sha256") == actual_hash
 

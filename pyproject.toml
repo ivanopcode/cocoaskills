@@ -45,6 +45,7 @@ dev = [
   "build>=1.2",
   "twine>=5",
   "mypy>=1.14",
+  "cryptography>=44",
 ]
 
 [project.scripts]
