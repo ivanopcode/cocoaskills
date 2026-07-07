@@ -8,7 +8,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from . import __version__, adapters, config, deprecation, dev_substitutions, gc, git_ops, gitignore_gate, global_install, installer, manifest, project_resolver, shell_init, skillcheck, status
+from . import __version__, adapters, config, deprecation, dev_substitutions, gc, git_ops, gitignore_gate, global_install, hybrid, installer, manifest, project_resolver, shell_init, skillcheck, status
 from .audit import pipeline as audit_pipeline
 from .audit import runner as audit_runner
 from .audit import trust as audit_trust
@@ -43,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         project_resolver.ProjectResolutionError,
         global_install.GlobalInstallError,
         installer.InstallError,
+        hybrid.HybridError,
         audit_runner.AuditError,
         AuditBackendError,
         git_ops.GitError,
@@ -138,6 +139,29 @@ def build_parser() -> argparse.ArgumentParser:
     remove_parser = sub.add_parser("remove", help="Remove a skill declaration from the project Skillfile.")
     remove_parser.add_argument("name")
     remove_parser.add_argument("--project", help="project alias, '.', or path (default: current project)")
+
+    hybrid_parser = sub.add_parser(
+        "hybrid",
+        help="Manage machine-level hybrid skills activated for selected projects.",
+    )
+    hybrid_sub = hybrid_parser.add_subparsers(dest="hybrid_command", required=True)
+    hybrid_add = hybrid_sub.add_parser("add", help="add or replace a hybrid skill declaration")
+    hybrid_add.add_argument("name")
+    hybrid_add.add_argument("--git", help="git clone URL")
+    hybrid_refs = hybrid_add.add_mutually_exclusive_group(required=True)
+    hybrid_refs.add_argument("--tag")
+    hybrid_refs.add_argument("--branch")
+    hybrid_refs.add_argument("--revision")
+    hybrid_add.add_argument(
+        "--target",
+        action="append",
+        required=True,
+        help="project alias, absolute path, or path glob (repeatable)",
+    )
+    hybrid_remove = hybrid_sub.add_parser("remove", help="remove a hybrid skill declaration")
+    hybrid_remove.add_argument("name")
+    hybrid_sub.add_parser("list", help="list hybrid skill declarations")
+    hybrid_sub.add_parser("status", help="show hybrid declarations and installed store state")
     list_parser = sub.add_parser(
         "list",
         help="List configured projects and declared skills.",
@@ -448,6 +472,9 @@ def _dispatch(args: argparse.Namespace) -> int:
         print("Run 'csk install' to apply.")
         return EXIT_OK
 
+    if args.command == "hybrid":
+        return _cmd_hybrid(cfg, args)
+
     if args.command == "gc":
         with GlobalLock(cfg.path.parent):
             stats = gc.collect_runtime(cfg, cfg.path.parent)
@@ -536,6 +563,48 @@ def _global_ref_from_args(args: argparse.Namespace) -> tuple[str, str]:
         if value:
             return ref_kind, value
     raise ValueError("global add requires one of --tag, --branch, or --revision")
+
+
+def _cmd_hybrid(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
+    csk_home = cfg.path.parent
+    if args.hybrid_command == "add":
+        ref_kind, ref = _global_ref_from_args(args)
+        hybrid.add_hybrid_decl(
+            csk_home,
+            name=args.name,
+            ref_kind=ref_kind,
+            ref=ref,
+            git=args.git,
+            targets=list(args.target),
+        )
+        print(f"Added hybrid skill {args.name}: {ref_kind} {ref} -> {', '.join(args.target)}")
+        print("Apply with 'csk install' in a targeted project.")
+        return EXIT_OK
+    if args.hybrid_command == "remove":
+        hybrid.remove_hybrid_decl(csk_home, args.name)
+        print(f"Removed hybrid skill {args.name}")
+        print("Run 'csk install' in previously targeted projects to clean up.")
+        return EXIT_OK
+    decls = hybrid.load_hybrid_decls(csk_home)
+    if not decls:
+        print("no hybrid skills declared")
+        return EXIT_OK
+    store = hybrid.hybrid_skills_root(csk_home)
+    for item in decls:
+        line = f"{item.decl.name:<24} {item.decl.ref.kind:<8} {item.decl.ref.value:<12} targets: {', '.join(item.targets)}"
+        if args.hybrid_command == "status":
+            marker_path = store / item.decl.name / ".csk-install.json"
+            state = "missing"
+            if marker_path.exists():
+                try:
+                    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+                    commit = marker.get("commit")
+                    state = f"installed {str(commit)[:7]}" if isinstance(commit, str) else "installed"
+                except ValueError:
+                    state = "unreadable marker"
+            line += f"  [{state}]"
+        print(line)
+    return EXIT_OK
 
 
 def _cmd_bootstrap(args: argparse.Namespace) -> int:

@@ -225,6 +225,31 @@ shadowing: `.agents/bin` shims should come before global shims. Project-local
 skills with the same name shadow global skills. Global skills never replace
 committed project `Skillfile.json` declarations.
 
+## Hybrid skills
+
+Hybrid skills are stored once per machine and activated for selected projects
+only, with nothing committed to the target repositories. The declaration
+lives in `~/.cocoaskills/hybrid/Skillfile.json` and names its targets by
+project alias, absolute path, or path glob:
+
+```bash
+csk hybrid add skill-conventions \
+  --git git@gitlab.example.com:skills/skill-conventions.git \
+  --tag v1.0.0 \
+  --target demo-ios \
+  --target "/Users/me/work/*-service"
+csk hybrid list
+```
+
+`csk install` in a targeted project picks applicable hybrid skills up
+automatically: the prompt context materializes once under
+`~/.cocoaskills/hybrid/skills/` and reaches the project through managed
+adapter links, command shims land in the project `.agents/bin`, and the
+dependency closure and audit gates apply exactly as for project skills.
+Shadowing order is project, then hybrid, then global. This scope fits skills
+a platform team rolls out to selected repositories when committing anything
+to those repositories is undesirable.
+
 ## Skill command manifests
 
 Skills declare commands, capabilities, and dependencies through

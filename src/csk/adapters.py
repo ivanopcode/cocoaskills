@@ -49,13 +49,26 @@ def warn_unknown_agents(agents: list[str]) -> None:
 
 
 def refresh_adapters(project_root: Path, agents: list[str], skill_names: list[str], mode: str) -> None:
+    refresh_adapter_groups(project_root, agents, [(project_root / ".agents" / "skills", skill_names)], mode)
+
+
+def refresh_adapter_groups(
+    project_root: Path,
+    agents: list[str],
+    groups: list[tuple[Path, list[str]]],
+    mode: str,
+) -> None:
+    """Mirror skills from several canonical roots into the agent directories.
+
+    All groups share one managed-entries ledger per adapter root, so entries
+    that fall out of every group are removed in the same pass.
+    """
     warn_unknown_agents(agents)
-    canonical_root = project_root / ".agents" / "skills"
     adapter_roots = {
         agent: project_root / rel
         for agent, rel in AGENT_PATHS.items()
     }
-    _refresh_adapters(canonical_root, adapter_roots, agents, skill_names, mode)
+    _refresh_adapter_groups(adapter_roots, agents, groups, mode)
 
 
 def refresh_global_adapters(
@@ -82,25 +95,37 @@ def _refresh_adapters(
     skill_names: list[str],
     mode: str,
 ) -> None:
+    _refresh_adapter_groups(adapter_roots, agents, [(canonical_root, skill_names)], mode)
+
+
+def _refresh_adapter_groups(
+    adapter_roots: dict[str, Path],
+    agents: list[str],
+    groups: list[tuple[Path, list[str]]],
+    mode: str,
+) -> None:
+    expected: set[str] = set()
+    for _, names in groups:
+        expected.update(names)
     for agent in agents:
         adapter_root = adapter_roots.get(agent)
         if adapter_root is None:
             continue
         adapter_root.mkdir(parents=True, exist_ok=True)
-        expected = set(skill_names)
         managed = _read_managed(adapter_root)
         for name in managed - expected:
             child = adapter_root / name
             if child.exists() or child.is_symlink():
                 _remove_path(child)
-        for skill_name in skill_names:
-            source = canonical_root / skill_name
-            target = adapter_root / skill_name
-            if not source.exists():
-                continue
-            if _is_unmanaged_conflict(target, managed, source):
-                raise AdapterError(f"Adapter target already exists and is not managed by csk: {target}")
-            _refresh_entry(source, target, mode)
+        for canonical_root, skill_names in groups:
+            for skill_name in skill_names:
+                source = canonical_root / skill_name
+                target = adapter_root / skill_name
+                if not source.exists():
+                    continue
+                if _is_unmanaged_conflict(target, managed, source):
+                    raise AdapterError(f"Adapter target already exists and is not managed by csk: {target}")
+                _refresh_entry(source, target, mode)
         _write_managed(adapter_root, expected)
 
 
