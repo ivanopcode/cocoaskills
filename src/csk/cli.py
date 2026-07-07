@@ -8,7 +8,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from . import __version__, adapters, config, deprecation, dev_substitutions, gc, git_ops, gitignore_gate, global_install, hybrid, installer, manifest, project_resolver, shell_init, skillcheck, status
+from . import __version__, adapters, attest, config, deprecation, dev_substitutions, gc, git_ops, gitignore_gate, global_install, hybrid, installer, manifest, project_resolver, shell_init, skillcheck, status
 from .audit import pipeline as audit_pipeline
 from .audit import runner as audit_runner
 from .audit import trust as audit_trust
@@ -117,6 +117,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--check",
         action="store_true",
         help="exit non-zero unless every skill is up-to-date",
+    )
+    status_parser.add_argument(
+        "--attest",
+        action="store_true",
+        help="re-check installed skills against trusted audit registries",
     )
     status_parser.add_argument(
         "--json",
@@ -444,6 +449,10 @@ def _dispatch(args: argparse.Namespace) -> int:
         return EXIT_OK
     if args.command == "status":
         cfg, alias = _cfg_and_alias_for_target(cfg, args)
+        if getattr(args, "attest", False):
+            results = attest.attest_projects(cfg, alias=alias)
+            print(attest.render(results))
+            return EXIT_PARTIAL_FAIL if attest.has_revocation(results) else EXIT_OK
         statuses = status.collect_status(cfg, alias=alias)
         if args.json:
             print(json.dumps(status.statuses_to_payload(statuses), indent=2, sort_keys=True))

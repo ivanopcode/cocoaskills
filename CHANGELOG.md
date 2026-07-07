@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added an enforced system configuration layer read before the user config:
+  `/etc/cocoaskills/config.json` on Unix and `%ProgramData%\cocoaskills\config.json`
+  on Windows. Keys listed under `locked` take their value from the system
+  config and cannot be overridden from the user config, so an organization
+  distributes registry trust and source policy through device management. An
+  unlocked system key acts as a default the user config may override.
+- Added the strict registry policy: `audit.registry_policy: strict` fails an
+  install when a skill is not audited by any trusted registry, while a
+  verified revocation always denies regardless of policy.
+- Added `csk status --attest`, which re-checks installed skills against the
+  trusted registries so a revocation issued after install surfaces on demand.
+- Added registry snapshot verification: before resolving, csk fetches each
+  registry's signed snapshot and excludes a registry that serves a tampered
+  view (bad signature, a version that moved backward, or a stale snapshot),
+  which defends against rollback and freeze. An unreachable snapshot warns
+  but does not exclude, since per-record signatures still protect the install.
+- Added the audit registry client (RFC 0008, advisory): a machine can pin
+  trusted registries in `audit_registries` (name, url, Ed25519 public keys),
+  and `csk install` resolves each skill against them by source identity,
+  commit, and content hash. A verified `revoked` record denies the install
+  under a deny-wins federation rule; a verified `audited` record is recorded
+  as an attestation in the install marker. Signatures are verified with a
+  vendored, standard-library-only Ed25519 implementation, so the runtime
+  keeps no third-party dependency. Lookups cache with a TTL and an offline
+  grace window. `disable_builtin_registries` drops the built-in defaults for
+  closed networks.
+
 ## [0.10.0] - 2026-07-07
 
 ### Added

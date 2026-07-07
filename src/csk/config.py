@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,17 @@ from .audit.source_policy import SourcePolicy, SourcePolicyError, parse_source_p
 
 SCHEMA_VERSION = 1
 DEFAULT_CONFIG_PATH = Path.home() / ".cocoaskills" / "config.json"
+# Enforced machine configuration read before the user config. An organization
+# distributes this file through device management; keys it lists under 'locked'
+# cannot be overridden from the user config (RFC 0008 section 10).
+if os.name == "nt":
+    DEFAULT_SYSTEM_CONFIG_PATH = Path(os.environ.get("ProgramData", "C:\\ProgramData")) / "cocoaskills" / "config.json"
+else:
+    DEFAULT_SYSTEM_CONFIG_PATH = Path("/etc/cocoaskills/config.json")
+# Top-level keys an organization may lock from the system config.
+LOCKABLE_KEYS = frozenset(
+    {"audit_registries", "disable_builtin_registries", "allowed_sources", "audit"}
+)
 DEFAULT_AGENTS = ["codex_cli"]
 DEFAULT_WORKTREE_ALIAS_PATTERN = r"[A-Z]+-[0-9]+"
 AUDIT_REVOCATION_HASH_RE = re.compile(r"^(?:sha256:)?[A-Fa-f0-9]{64}$")
@@ -31,6 +43,20 @@ class ProjectConfig:
     checkout_alias: str | None = None
 
 
+# Built-in trusted registries shipped with a release. Empty until the central
+# registry is deployed and its public key is generated; a real pinned key ships
+# with the release that turns this on (RFC 0008).
+BUILTIN_REGISTRIES: tuple["RegistryConfig", ...] = ()
+
+
+@dataclass(frozen=True)
+class RegistryConfig:
+    name: str
+    url: str
+    public_keys: tuple[str, ...] = ()
+    enabled: bool = True
+
+
 @dataclass(frozen=True)
 class AuditConfig:
     enabled: bool = False
@@ -44,6 +70,9 @@ class AuditConfig:
     grants: list[dict[str, Any]] = field(default_factory=list)
     revocations: list[str] = field(default_factory=list)
     source_policy: SourcePolicy = field(default_factory=SourcePolicy)
+    # How registry lookups affect the install: 'advisory' warns on an unknown
+    # or unreachable artifact, 'strict' fails it. A revocation always denies.
+    registry_policy: str = "advisory"
 
 
 @dataclass(frozen=True)
@@ -59,6 +88,24 @@ class GlobalConfig:
     # Canonical "host/path" prefixes the resolver may fetch from. An empty
     # tuple allows every source; organizations pin the list to their hosting.
     allowed_sources: tuple[str, ...] = ()
+    # Trusted audit registries, built-in defaults merged with configured
+    # entries unless the defaults are disabled (RFC 0008).
+    audit_registries: tuple[RegistryConfig, ...] = ()
+    disable_builtin_registries: bool = False
+
+    def trusted_registries(self) -> tuple[RegistryConfig, ...]:
+        """Effective registries: built-in defaults plus configured entries.
+
+        A configured entry with the same url overrides a built-in one. The
+        built-in defaults are dropped when disable_builtin_registries is set.
+        """
+        by_url: dict[str, RegistryConfig] = {}
+        if not self.disable_builtin_registries:
+            for entry in BUILTIN_REGISTRIES:
+                by_url[entry.url] = entry
+        for entry in self.audit_registries:
+            by_url[entry.url] = entry
+        return tuple(entry for entry in by_url.values() if entry.enabled)
 
 
 def config_path() -> Path:
@@ -68,16 +115,73 @@ def config_path() -> Path:
     return DEFAULT_CONFIG_PATH
 
 
+def system_config_path() -> Path | None:
+    override = os.environ.get("CSK_SYSTEM_CONFIG")
+    if override:
+        return Path(override).expanduser()
+    if DEFAULT_SYSTEM_CONFIG_PATH.exists():
+        return DEFAULT_SYSTEM_CONFIG_PATH
+    return None
+
+
 def load_config(path: Path | None = None) -> GlobalConfig:
     resolved = path or config_path()
     try:
-        data = json.loads(resolved.read_text(encoding="utf-8"))
+        user_data = json.loads(resolved.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise ConfigError(f"Global config not found: {resolved}") from exc
     except json.JSONDecodeError as exc:
         raise ConfigError(f"Malformed JSON in global config {resolved}: {exc}") from exc
+    if not isinstance(user_data, dict):
+        raise ConfigError("Global config must be a JSON object")
 
-    return parse_config(data, resolved)
+    system_path = system_config_path()
+    if system_path is not None:
+        try:
+            system_data = json.loads(system_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            system_data = None
+        except json.JSONDecodeError as exc:
+            raise ConfigError(f"Malformed JSON in system config {system_path}: {exc}") from exc
+        if system_data is not None:
+            if not isinstance(system_data, dict):
+                raise ConfigError(f"System config {system_path} must be a JSON object")
+            user_data = _apply_system_config(system_data, user_data, system_path)
+
+    return parse_config(user_data, resolved)
+
+
+def _apply_system_config(
+    system_data: dict[str, Any], user_data: dict[str, Any], system_path: Path
+) -> dict[str, Any]:
+    """Overlay the system config, enforcing its locked keys over the user config.
+
+    A key listed under 'locked' takes its value from the system config, and a
+    user override of that key is ignored with a warning. Other system keys act
+    as defaults the user config may override.
+    """
+    locked_raw = system_data.get("locked", [])
+    if not _is_str_list(locked_raw):
+        raise ConfigError(f"System config {system_path} field 'locked' must be a list of strings")
+    locked = set(locked_raw)
+    merged = dict(user_data)
+    for key, value in system_data.items():
+        if key in {"locked", "schema_version"}:
+            continue
+        if key in locked:
+            if key in user_data and user_data[key] != value:
+                print(
+                    f"warning: config key {key!r} is locked by {system_path}; "
+                    "the user override is ignored",
+                    file=sys.stderr,
+                )
+            merged[key] = value
+        else:
+            merged.setdefault(key, value)
+    for key in locked:
+        if key not in system_data:
+            raise ConfigError(f"System config {system_path} locks {key!r} but does not set it")
+    return merged
 
 
 def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
@@ -123,6 +227,11 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
     if not _is_str_list(allowed_sources_raw) or any(not item.strip() for item in allowed_sources_raw):
         raise ConfigError("Global config field 'allowed_sources' must be a list of non-empty strings")
 
+    audit_registries = _parse_audit_registries(data.get("audit_registries"))
+    disable_builtin = data.get("disable_builtin_registries", False)
+    if not isinstance(disable_builtin, bool):
+        raise ConfigError("Global config field 'disable_builtin_registries' must be a boolean")
+
     if "projects" not in data:
         raise ConfigError("Global config requires field 'projects'")
     projects_raw = data.get("projects")
@@ -165,6 +274,8 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
         projects=projects,
         audit=audit,
         allowed_sources=tuple(allowed_sources_raw),
+        audit_registries=audit_registries,
+        disable_builtin_registries=disable_builtin,
     )
 
 
@@ -192,6 +303,18 @@ def save_config(config: GlobalConfig) -> None:
         data["audit"] = audit
     if config.allowed_sources:
         data["allowed_sources"] = list(config.allowed_sources)
+    if config.audit_registries:
+        data["audit_registries"] = [
+            {
+                "name": entry.name,
+                "url": entry.url,
+                "public_keys": list(entry.public_keys),
+                "enabled": entry.enabled,
+            }
+            for entry in config.audit_registries
+        ]
+    if config.disable_builtin_registries:
+        data["disable_builtin_registries"] = True
     config.path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -224,6 +347,8 @@ def add_project(
         projects=projects,
         audit=config.audit,
         allowed_sources=config.allowed_sources,
+        audit_registries=config.audit_registries,
+        disable_builtin_registries=config.disable_builtin_registries,
     )
 
 
@@ -235,6 +360,35 @@ def validate_skills_root_for_work(config: GlobalConfig) -> None:
 
 def _is_str_list(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _parse_audit_registries(raw: Any) -> tuple[RegistryConfig, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigError("Global config field 'audit_registries' must be a list")
+    registries: list[RegistryConfig] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ConfigError(f"audit_registries[{index}] must be an object")
+        name = item.get("name")
+        if not isinstance(name, str) or not name:
+            raise ConfigError(f"audit_registries[{index}] requires a non-empty string 'name'")
+        url = item.get("url")
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            raise ConfigError(f"audit_registries[{index}] requires an http(s) 'url'")
+        if url in seen:
+            raise ConfigError(f"audit_registries[{index}] duplicates url {url!r}")
+        seen.add(url)
+        keys = item.get("public_keys", [])
+        if not _is_str_list(keys) or any(not key.strip() for key in keys):
+            raise ConfigError(f"audit_registries[{index}].public_keys must be a list of non-empty strings")
+        enabled = item.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ConfigError(f"audit_registries[{index}].enabled must be a boolean")
+        registries.append(RegistryConfig(name=name, url=url, public_keys=tuple(keys), enabled=enabled))
+    return tuple(registries)
 
 
 def _parse_audit_config(raw: Any) -> AuditConfig:
@@ -256,6 +410,7 @@ def _parse_audit_config(raw: Any) -> AuditConfig:
             "grants",
             "revocations",
             "source_policy",
+            "registry_policy",
         },
         "audit",
     )
@@ -320,6 +475,10 @@ def _parse_audit_config(raw: Any) -> AuditConfig:
     except SourcePolicyError as exc:
         raise ConfigError(str(exc)) from exc
 
+    registry_policy = raw.get("registry_policy", "advisory")
+    if registry_policy not in {"advisory", "strict"}:
+        raise ConfigError("Global config field 'audit.registry_policy' must be advisory or strict")
+
     return AuditConfig(
         enabled=enabled,
         mode=mode,
@@ -332,6 +491,7 @@ def _parse_audit_config(raw: Any) -> AuditConfig:
         grants=list(grants),
         revocations=list(revocations),
         source_policy=source_policy,
+        registry_policy=registry_policy,
     )
 
 
@@ -360,6 +520,8 @@ def _serialize_audit_config(audit: AuditConfig) -> dict[str, Any]:
     source_policy = _serialize_source_policy(audit.source_policy)
     if source_policy:
         data["source_policy"] = source_policy
+    if audit.registry_policy != "advisory":
+        data["registry_policy"] = audit.registry_policy
     return data
 
 
