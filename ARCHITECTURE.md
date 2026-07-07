@@ -39,7 +39,8 @@ dependency can contribute commands, context, or both ([RFC 0007](docs/v0.9-desig
 2. Check the gitignore gate (`gitignore_gate.py`): generated paths must be
    ignored by git before anything is written.
 3. Load development substitutions from `Skillfile.dev.json`
-   (`dev_substitutions.py`); strict audit refuses substituted installs.
+   (`dev_substitutions.py`); strict audit refuses substituted installs. Fold in
+   the applicable hybrid-scope skills (`hybrid.py`).
 4. Build the dependency closure (`closure.py`): expand `dependencies.skills`
    transitively, gate every clone through the source allowlist
    (`source_identity.py`), resolve exact refs to commits (`git_ops.py`), take
@@ -47,7 +48,10 @@ dependency can contribute commands, context, or both ([RFC 0007](docs/v0.9-desig
    one canonical source, reject cycles, and order providers before consumers.
 5. Validate each snapshot (`skillcheck.py`, `skillspec.py`) and detect
    collisions over the commands that the closure actually activates.
-6. Run the audit gate over the whole closure (`audit/pipeline.py`).
+6. Run the audit gate over the whole closure (`audit/pipeline.py`), verify
+   declared MCP servers against the agent configuration surfaces
+   (`mcp_configs.py`), and resolve each skill against the trusted audit
+   registries (`audit_registry.py`).
 7. Materialize each node according to its effective activation: runtime roots
    and shims (`shims.py`), prompt context through the whitelist
    (`whitelist.py`, `locale.py`), and an install marker with the resolved
@@ -58,18 +62,21 @@ dependency can contribute commands, context, or both ([RFC 0007](docs/v0.9-desig
 9. Collect garbage in the shared stores (`gc.py`).
 
 `csk status` compares the install markers against freshly resolved refs and
-content hashes. `csk audit` runs stage 6 standalone.
+content hashes, and `csk status --attest` re-checks installed skills against
+the registries (`attest.py`). `csk audit` runs stage 6 standalone.
 
 ## Module map
 
 | Module | Responsibility |
 |---|---|
 | `cli.py` | Argument parsing and command dispatch. |
-| `config.py` | Machine config: `skills_root`, default agents, adapter mode, audit settings, `allowed_sources`. |
+| `config.py` | Machine config and the enforced system-config layer: `skills_root`, default agents, adapter mode, audit settings, `allowed_sources`, `audit_registries`. |
 | `manifest.py` | `Skillfile.json` parsing and editing. |
 | `skillspec.py` | `csk-skill.json` parsing: commands, runtime roots, capabilities, dependencies, requirements (schema v1 through v4). |
 | `closure.py` | Transitive requirement resolution, unification, cycle detection, activation edges, topological order. |
 | `source_identity.py` | Canonical `host/path` identity for git URLs and allowlist matching. |
+| `mcp_configs.py` | Read-only resolution of declared MCP server dependencies against agent configuration surfaces. |
+| `hybrid.py` | Hybrid-scope manifest and per-project activation targeting. |
 | `dev_substitutions.py` | `Skillfile.dev.json` parsing for local provider substitution. |
 | `git_ops.py` | Hardened git operations: clone with a protocol allowlist, ref resolution, archive extraction with path checks. |
 | `snapshot.py` | Content-addressed snapshot cache of skill commits. |
@@ -80,6 +87,9 @@ content hashes. `csk audit` runs stage 6 standalone.
 | `global_install.py`, `global_bins.py` | User-wide skill installs and global command shims. |
 | `adapters.py` | Per-agent adapter directories with managed-entry tracking. |
 | `status.py` | Manifest versus installed state reporting. |
+| `attest.py` | Re-check installed markers against trusted audit registries. |
+| `audit_registry.py` | Audit registry client: record verification, deny-wins federation, snapshot checks, lookup cache. |
+| `_ed25519.py` | Vendored standard-library Ed25519 signature verification. |
 | `gc.py` | Garbage collection for the runtime store and snapshot cache. |
 | `consumers.py` | Registry of checkouts that reference the shared stores. |
 | `locking.py` | Global install lock with stale-lock recovery. |
@@ -96,7 +106,9 @@ config.json                  machine config
 cache/<source>/<commit>/     content snapshots of skill commits
 runtime/<skill>/<commit>/    runtime files and command entrypoints
 global/                      user-wide skills, bin, and manifests
+hybrid/                      machine-stored skills activated per project
 dev/<skill>/                 clones created for git dev substitutions
+cache/registry/              audit registry lookup and snapshot cache
 consumers.json               checkouts referencing the shared stores
 ```
 
@@ -126,6 +138,10 @@ Project level, generated and gitignored:
 - The audit subsystem evaluates every node of the install closure; the
   install decision stays deterministic inside CocoaSkills
   ([RFC 0005](docs/audit-design.md), [RFC 0006](docs/v0.8-design.md)).
+- Audit registry records are verified against out-of-band pinned Ed25519 keys
+  before they are trusted, federation is deny-wins, and an enforced system
+  config layer with locked keys keeps a developer from widening the trust
+  boundary ([RFC 0008](docs/v0.11-design.md)).
 
 ## Design history
 
@@ -139,6 +155,7 @@ Project level, generated and gitignored:
 | [docs/audit-design.md](docs/audit-design.md) | RFC 0005: capability manifests and the deterministic audit gate. |
 | [docs/v0.8-design.md](docs/v0.8-design.md) | RFC 0006: audit LLM backends. |
 | [docs/v0.9-design.md](docs/v0.9-design.md) | RFC 0007: skill dependencies, activation modes, dev substitutions, source allowlist. |
+| [docs/v0.11-design.md](docs/v0.11-design.md) | RFC 0008: audit registry, chain of trust, federation, enforced system config. |
 
 ## Testing
 
