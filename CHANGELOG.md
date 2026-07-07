@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `csk-skill.json` schema v5 with `dependencies.mcp_servers`: a skill
+  declares the MCP servers it relies on (`hint` required, optional
+  `transport`, `required_in: any|all`), and `csk install` verifies each
+  server against the configuration of the target agent environments
+  (Claude Code, Codex CLI, Cursor, Gemini) before the skill lands. Install
+  markers record where each server was found.
+
 ## [0.9.0] - 2026-07-05
 
 ### Added

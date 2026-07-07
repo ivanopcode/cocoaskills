@@ -10,7 +10,7 @@ from .identifiers import IDENTIFIER_RULE, is_valid_identifier
 
 
 SCHEMA_VERSION = 1
-SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4}
+SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4, 5}
 UPGRADE_HINT = (
     "Upgrade with: pipx upgrade cocoaskills, brew upgrade cocoaskills, "
     "or mise upgrade pipx:cocoaskills."
@@ -19,6 +19,9 @@ UPGRADE_HINT = (
 REQUIREMENT_MODES = {"full", "runtime", "context"}
 REQUIREMENT_REF_KINDS = {"tag", "revision"}
 _RANGE_MARKERS = ("^", "~", ">", "<", "*", " ")
+
+MCP_TRANSPORTS = {"stdio", "http"}
+MCP_REQUIRED_IN = {"any", "all"}
 
 
 class SkillSpecError(Exception):
@@ -60,6 +63,17 @@ class SkillRequirement:
 
 
 @dataclass(frozen=True)
+class McpServerRequirement:
+    """A declared dependency on an MCP server configured in agent environments."""
+
+    name: str
+    hint: str
+    transport: str | None = None
+    required_in: str = "any"
+    source: str = "csk-skill.json"
+
+
+@dataclass(frozen=True)
 class SkillSpec:
     commands: dict[str, CommandSpec]
     source_file: str | None
@@ -68,6 +82,7 @@ class SkillSpec:
     capabilities: CapabilityManifest = field(default_factory=CapabilityManifest.implicit_none)
     dependencies: dict[str, DependencySpec] = field(default_factory=dict)
     requirements: dict[str, SkillRequirement] = field(default_factory=dict)
+    mcp_servers: dict[str, McpServerRequirement] = field(default_factory=dict)
 
 
 def load_skill_spec(snapshot: Path) -> SkillSpec:
@@ -170,7 +185,7 @@ def _load_csk_skill(path: Path) -> SkillSpec:
             )
         else:
             raise SkillSpecError(f"Command {name!r} has unsupported type {command_type!r}")
-    dependencies, requirements = _parse_dependencies(data.get("dependencies"), schema=schema)
+    dependencies, requirements, mcp_servers = _parse_dependencies(data.get("dependencies"), schema=schema)
     return SkillSpec(
         commands=commands,
         source_file="csk-skill.json",
@@ -179,6 +194,7 @@ def _load_csk_skill(path: Path) -> SkillSpec:
         capabilities=capabilities,
         dependencies=dependencies,
         requirements=requirements,
+        mcp_servers=mcp_servers,
     )
 
 
@@ -209,18 +225,27 @@ def _load_runtime_fallback(path: Path) -> SkillSpec:
     return SkillSpec(commands=commands, source_file="agents/runtime.json")
 
 
-def _parse_dependencies(raw: Any, *, schema: int) -> tuple[dict[str, DependencySpec], dict[str, SkillRequirement]]:
+def _parse_dependencies(
+    raw: Any, *, schema: int
+) -> tuple[dict[str, DependencySpec], dict[str, SkillRequirement], dict[str, McpServerRequirement]]:
     if raw is None:
-        return {}, {}
+        return {}, {}, {}
     if schema < 2:
         raise SkillSpecError("csk-skill.json field 'dependencies' requires schema_version 2 or newer")
     if not isinstance(raw, dict):
         raise SkillSpecError("csk-skill.json field 'dependencies' must be an object")
     if schema < 4 and "skills" in raw:
         raise SkillSpecError("csk-skill.json field 'dependencies.skills' requires schema_version 4")
-    allowed = {"commands", "skills"} if schema >= 4 else {"commands"}
+    if schema < 5 and "mcp_servers" in raw:
+        raise SkillSpecError("csk-skill.json field 'dependencies.mcp_servers' requires schema_version 5")
+    allowed = {"commands"}
+    if schema >= 4:
+        allowed.add("skills")
+    if schema >= 5:
+        allowed.add("mcp_servers")
     _reject_unknown_fields(raw, allowed, "dependencies")
     requirements = _parse_requirements(raw.get("skills"), schema=schema)
+    mcp_servers = _parse_mcp_servers(raw.get("mcp_servers"))
     commands_raw = raw.get("commands", {})
     if not isinstance(commands_raw, dict):
         raise SkillSpecError("dependencies.commands must be an object")
@@ -271,7 +296,40 @@ def _parse_dependencies(raw: Any, *, schema: int) -> tuple[dict[str, DependencyS
             )
         else:
             raise SkillSpecError(f"Dependency command {name!r} has unsupported type {dependency_type!r}")
-    return dependencies, requirements
+    return dependencies, requirements, mcp_servers
+
+
+def _parse_mcp_servers(raw: Any) -> dict[str, McpServerRequirement]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise SkillSpecError("dependencies.mcp_servers must be an object")
+    servers: dict[str, McpServerRequirement] = {}
+    for name, entry in raw.items():
+        label = f"dependencies.mcp_servers.{name}"
+        if not isinstance(name, str) or not name:
+            raise SkillSpecError("MCP server names must be non-empty strings")
+        if not is_valid_identifier(name):
+            raise SkillSpecError(f"MCP server name {name!r} {IDENTIFIER_RULE}")
+        if not isinstance(entry, dict):
+            raise SkillSpecError(f"{label} must be an object")
+        _reject_unknown_fields(entry, {"hint", "transport", "required_in"}, label)
+        hint = entry.get("hint")
+        if not isinstance(hint, str) or not hint:
+            raise SkillSpecError(f"{label} requires a non-empty 'hint' describing how to connect the server")
+        transport = entry.get("transport")
+        if transport is not None and transport not in MCP_TRANSPORTS:
+            raise SkillSpecError(f"{label}.transport must be 'stdio' or 'http'")
+        required_in = entry.get("required_in", "any")
+        if required_in not in MCP_REQUIRED_IN:
+            raise SkillSpecError(f"{label}.required_in must be 'any' or 'all'")
+        servers[name] = McpServerRequirement(
+            name=name,
+            hint=hint,
+            transport=transport,
+            required_in=required_in,
+        )
+    return servers
 
 
 def _parse_requirements(raw: Any, *, schema: int) -> dict[str, SkillRequirement]:
