@@ -10,7 +10,9 @@ Translations: [Русский](README.ru.md). English is the source of truth.
 `csk` is a local skill manager for AI agent skills. It installs reusable skill
 packages from git repositories into your project repositories with
 reproducible, content-hashed installs, skill-to-skill dependencies, and
-multi-agent adapter support (Claude Code, Codex CLI, Cursor, Gemini).
+multi-agent support across six environments: Claude Code, Codex CLI, Cursor,
+and Gemini via adapter mirrors, plus OpenCode and Windsurf, which discover the
+canonical `.agents/skills/` directory natively.
 
 ## Why
 
@@ -29,7 +31,8 @@ CocoaSkills makes per-project skill installation declarative and reproducible:
   non-skill content stay out of the agent's context.
 - One canonical location (`.agents/skills/`) with per-agent adapter symlinks
   or copies into `.claude/skills/`, `.codex/skills/`, `.cursor/rules/`,
-  `.gemini/skills/`.
+  `.gemini/skills/`. OpenCode and Windsurf read `.agents/skills/` natively,
+  so they need no mirror.
 - Skill-provided command shims exposed via a project-local `.agents/bin/`
   directory on `PATH`.
 - Optional global skills installed once under `~/.cocoaskills/global/` and
@@ -197,7 +200,9 @@ Two supporting mechanisms:
 
 Global skills are user-wide baseline skills. They are installed under
 `~/.cocoaskills/global/` and linked into user-level agent directories such as
-`~/.claude/skills/` and `~/.codex/skills/`.
+`~/.claude/skills/` and `~/.codex/skills/`. When OpenCode or Windsurf is among
+the target agents, global skills are also linked into `~/.agents/skills/`,
+which both discover natively.
 
 ```bash
 csk global init

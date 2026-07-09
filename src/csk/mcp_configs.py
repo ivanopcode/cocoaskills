@@ -21,6 +21,8 @@ _PROJECT_SOURCES: dict[str, tuple[str, ...]] = {
     "cursor": (".cursor/mcp.json",),
     "codex_cli": (),
     "gemini": (),
+    "windsurf": (),
+    "opencode": ("opencode.json", "opencode.jsonc"),
 }
 
 _HOME_SOURCES: dict[str, tuple[str, ...]] = {
@@ -28,7 +30,13 @@ _HOME_SOURCES: dict[str, tuple[str, ...]] = {
     "cursor": (".cursor/mcp.json",),
     "codex_cli": (".codex/config.toml",),
     "gemini": (".gemini/settings.json",),
+    "windsurf": (".codeium/windsurf/mcp_config.json",),
+    "opencode": (".config/opencode/opencode.json", ".config/opencode/opencode.jsonc"),
 }
+
+# OpenCode declares MCP servers under "mcp" instead of "mcpServers", and an
+# entry can be present but switched off with "enabled": false.
+_OPENCODE_FILES = {"opencode.json", "opencode.jsonc"}
 
 
 def known_agents() -> set[str]:
@@ -72,6 +80,15 @@ def _servers_in_file(path: Path) -> set[str]:
         if path.suffix == ".toml":
             data = tomllib.loads(path.read_text(encoding="utf-8"))
             servers = data.get("mcp_servers", {})
+        elif path.name in _OPENCODE_FILES:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            servers = loaded.get("mcp", {}) if isinstance(loaded, dict) else {}
+            if isinstance(servers, dict):
+                servers = {
+                    name: entry
+                    for name, entry in servers.items()
+                    if not (isinstance(entry, dict) and entry.get("enabled") is False)
+                }
         else:
             loaded = json.loads(path.read_text(encoding="utf-8"))
             servers = loaded.get("mcpServers", {}) if isinstance(loaded, dict) else {}

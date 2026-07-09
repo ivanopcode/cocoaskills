@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `csk audit --publish <record> --registry <url> --token <token>`, which
   submits a signed audit record to a registry. The token may also come from
   the `CSK_REGISTRY_TOKEN` environment variable.
+- Recognized `opencode` and `windsurf` as known agents. Both environments
+  discover the canonical `.agents/skills/` directory natively, so no
+  project-level mirror is created for them; global installs are additionally
+  mirrored into `~/.agents/skills/` when either agent is targeted.
+- Added MCP configuration surfaces for the new agents: OpenCode resolves
+  against the `mcp` block of `opencode.json` / `opencode.jsonc` in the project
+  and `~/.config/opencode/`, honoring `"enabled": false`; Windsurf resolves
+  against `~/.codeium/windsurf/mcp_config.json`.
 
 ## [0.11.0] - 2026-07-07
 

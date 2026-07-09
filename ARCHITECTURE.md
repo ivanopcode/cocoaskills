@@ -85,7 +85,7 @@ the registries (`attest.py`). `csk audit` runs stage 6 standalone.
 | `shims.py` | Runtime store population and command shim creation. |
 | `installer.py` | Project install orchestration and install markers. |
 | `global_install.py`, `global_bins.py` | User-wide skill installs and global command shims. |
-| `adapters.py` | Per-agent adapter directories with managed-entry tracking. |
+| `adapters.py` | Per-agent adapter directories with managed-entry tracking; native-discovery agents (OpenCode, Windsurf) read the canonical directory and skip project mirrors. |
 | `status.py` | Manifest versus installed state reporting. |
 | `attest.py` | Re-check installed markers against trusted audit registries. |
 | `audit_registry.py` | Audit registry client: record verification, deny-wins federation, snapshot checks, lookup cache. |
@@ -120,6 +120,9 @@ Project level, generated and gitignored:
 .claude/skills/, .codex/skills/, .cursor/rules/, .gemini/skills/
                              per-agent adapter mirrors
 ```
+
+OpenCode and Windsurf discover `.agents/skills/` natively and get no mirror
+directory; for global installs they are served through `~/.agents/skills/`.
 
 ## Security boundaries
 

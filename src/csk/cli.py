@@ -244,7 +244,13 @@ def _add_bootstrap(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> 
     )
     parser.add_argument("--skills-root", help="directory containing skill git repositories")
     parser.add_argument("--preferred-locale", help="preferred install locale, e.g. ru")
-    parser.add_argument("--default-agents", help="comma-separated agent ids, e.g. codex_cli,claude_code")
+    parser.add_argument(
+        "--default-agents",
+        help=(
+            "comma-separated agent ids, e.g. codex_cli,claude_code "
+            "(known: claude_code, codex_cli, cursor, gemini, opencode, windsurf)"
+        ),
+    )
     parser.add_argument("--non-interactive", action="store_true", help="never prompt; fail instead")
     parser.add_argument("--force", action="store_true", help="overwrite an existing config without asking")
 
@@ -265,7 +271,14 @@ def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     )
     parser.add_argument("path", nargs="?", default=".", help="project directory to initialize")
     parser.add_argument("--alias", help="project.alias to write into Skillfile.json")
-    parser.add_argument("--agents", help="comma-separated agents list for Skillfile.json")
+    parser.add_argument(
+        "--agents",
+        help=(
+            "comma-separated agents list for Skillfile.json "
+            "(known: claude_code, codex_cli, cursor, gemini, opencode, windsurf; "
+            "opencode and windsurf read .agents/skills natively, no mirror is created)"
+        ),
+    )
     parser.add_argument("--no-interactive", action="store_true", help="accepted for scripting; prompts are not used")
 
 
@@ -1038,6 +1051,8 @@ def _render_project_resolution(cfg: config.GlobalConfig, args: argparse.Namespac
         f"  codex_cli: {resolved.root / '.codex' / 'skills'}",
         f"  cursor: {resolved.root / '.cursor' / 'rules'}",
         f"  gemini: {resolved.root / '.gemini' / 'skills'}",
+        f"  opencode: {resolved.root / '.agents' / 'skills'} (native discovery)",
+        f"  windsurf: {resolved.root / '.agents' / 'skills'} (native discovery)",
         f"agents: {', '.join(agents or cfg.default_agents)}",
     ]
     return "\n".join(lines)
@@ -1064,6 +1079,8 @@ def _render_configured_project_resolution(project: config.ProjectConfig, worktre
             f"  codex_cli: {root / '.codex' / 'skills'}",
             f"  cursor: {root / '.cursor' / 'rules'}",
             f"  gemini: {root / '.gemini' / 'skills'}",
+            f"  opencode: {root / '.agents' / 'skills'} (native discovery)",
+            f"  windsurf: {root / '.agents' / 'skills'} (native discovery)",
             f"agents: {', '.join(project.agents)}",
         ]
     )

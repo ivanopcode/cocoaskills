@@ -193,6 +193,42 @@ def test_marker_refreshes_when_configuration_changes(tmp_path, skills_root, csk_
     assert marker["mcp_servers"] == {"sheets": ["claude_code", "cursor"]}
 
 
+def test_any_satisfied_through_project_opencode_json(tmp_path, skills_root, csk_home):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "opencode.json").write_text(
+        json.dumps({"mcp": {"sheets": {"type": "local", "command": ["sheets-mcp"]}}}),
+        encoding="utf-8",
+    )
+    project, result = _install(tmp_path, skills_root, csk_home, agents=["opencode"])
+    assert not result.errors, result.errors
+    marker = json.loads(
+        (project / ".agents" / "skills" / "skill-sheets" / ".csk-install.json").read_text(encoding="utf-8")
+    )
+    assert marker["mcp_servers"] == {"sheets": ["opencode"]}
+
+
+def test_opencode_disabled_server_counts_as_unconfigured(tmp_path, skills_root, csk_home):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "opencode.json").write_text(
+        json.dumps({"mcp": {"sheets": {"type": "local", "enabled": False}}}), encoding="utf-8"
+    )
+    _, result = _install(tmp_path, skills_root, csk_home, agents=["opencode"])
+    assert result.errors
+    assert "not configured" in result.errors[0]
+
+
+def test_any_satisfied_through_windsurf_home_config(tmp_path, skills_root, csk_home):
+    home = tmp_path / "home"
+    (home / ".codeium" / "windsurf").mkdir(parents=True)
+    (home / ".codeium" / "windsurf" / "mcp_config.json").write_text(
+        json.dumps({"mcpServers": {"sheets": {"command": "sheets-mcp"}}}), encoding="utf-8"
+    )
+    _, result = _install(tmp_path, skills_root, csk_home, agents=["windsurf"])
+    assert not result.errors, result.errors
+
+
 def test_malformed_agent_config_counts_as_no_servers(tmp_path, skills_root, csk_home):
     project_dir = tmp_path / "project"
     project_dir.mkdir()

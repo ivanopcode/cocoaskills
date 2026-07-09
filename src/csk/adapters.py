@@ -14,6 +14,16 @@ AGENT_PATHS = {
     "cursor": ".cursor/rules",
 }
 
+# Agents that discover the canonical .agents/skills/ directory natively.
+# They need no project-level mirror; global installs are mirrored into
+# ~/.agents/skills so these agents see them outside any project checkout.
+NATIVE_DISCOVERY_AGENTS = frozenset({"windsurf", "opencode"})
+NATIVE_DISCOVERY_HOME_PATH = ".agents/skills"
+
+
+def known_agents() -> set[str]:
+    return set(AGENT_PATHS) | set(NATIVE_DISCOVERY_AGENTS)
+
 
 class AdapterError(Exception):
     pass
@@ -37,13 +47,13 @@ def all_gitignore_entries() -> list[str]:
 
 
 def warn_unknown_agents(agents: list[str]) -> None:
-    unknown = sorted({agent for agent in agents if agent not in AGENT_PATHS})
+    unknown = sorted({agent for agent in agents if agent not in known_agents()})
     if unknown:
         print(
             "warning: unknown agent(s) ignored: "
             + ", ".join(unknown)
             + "; known agents: "
-            + ", ".join(sorted(AGENT_PATHS)),
+            + ", ".join(sorted(known_agents())),
             file=sys.stderr,
         )
 
@@ -85,6 +95,8 @@ def refresh_global_adapters(
         agent: user_home / rel
         for agent, rel in AGENT_PATHS.items()
     }
+    for agent in NATIVE_DISCOVERY_AGENTS:
+        adapter_roots[agent] = user_home / NATIVE_DISCOVERY_HOME_PATH
     _refresh_adapters(canonical_root, adapter_roots, agents, skill_names, mode)
 
 

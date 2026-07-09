@@ -60,3 +60,35 @@ def test_symlink_adapter_creates_link(tmp_path):
     canonical.mkdir(parents=True)
     adapters.refresh_adapters(project, ["claude_code"], ["skill-a"], "symlink")
     assert (project / ".claude" / "skills" / "skill-a").is_symlink()
+
+
+def test_native_discovery_agents_are_known_and_get_no_project_mirror(tmp_path, capsys):
+    project = tmp_path / "project"
+    canonical = project / ".agents" / "skills" / "skill-a"
+    canonical.mkdir(parents=True)
+    (canonical / "SKILL.md").write_text("v1", encoding="utf-8")
+
+    adapters.refresh_adapters(project, ["opencode", "windsurf"], ["skill-a"], "copy")
+
+    assert capsys.readouterr().err == ""
+    assert not (project / ".opencode").exists()
+    assert not (project / ".windsurf").exists()
+    assert (canonical / "SKILL.md").read_text(encoding="utf-8") == "v1"
+
+
+def test_native_discovery_agents_add_no_extra_gitignore_entries():
+    assert adapters.required_gitignore_entries(["opencode", "windsurf"]) == [".agents/"]
+
+
+def test_global_install_mirrors_to_home_agents_skills_for_native_agents(tmp_path):
+    csk_home = tmp_path / ".cocoaskills"
+    canonical = csk_home / "global" / "skills" / "skill-a"
+    canonical.mkdir(parents=True)
+    (canonical / "SKILL.md").write_text("global", encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+
+    adapters.refresh_global_adapters(csk_home, ["windsurf"], ["skill-a"], "copy", home=home)
+
+    mirrored = home / ".agents" / "skills" / "skill-a" / "SKILL.md"
+    assert mirrored.read_text(encoding="utf-8") == "global"
