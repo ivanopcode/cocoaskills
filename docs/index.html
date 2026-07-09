@@ -3,7 +3,14 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>CocoaSkill</title>
+    <title>CocoaSkills: local skill manager for AI agent skills</title>
+    <meta name="description" content="CocoaSkills (csk) installs reusable AI agent skills from git repositories with reproducible per-project installs, skill dependencies, security audit, and adapters for Claude Code, Codex CLI, Cursor, and Gemini.">
+    <link rel="canonical" href="https://cocoaskills.org/">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://cocoaskills.org/">
+    <meta property="og:site_name" content="CocoaSkills">
+    <meta property="og:title" content="CocoaSkills: local skill manager for AI agent skills">
+    <meta property="og:description" content="Reproducible per-project installs of AI agent skills, skill dependencies, security audit, and multi-agent adapters.">
     <style>
       :root {
         color-scheme: light dark;
@@ -39,7 +46,7 @@
   </head>
   <body>
     <main>
-      <h1>CocoaSkill</h1>
+      <h1>CocoaSkills</h1>
       <p>Local skill manager for AI agent skills with reproducible per-project installs.</p>
       <pre><code>curl -fsSL https://cocoaskills.org/install.sh | sh</code></pre>
       <p>Or install with mise:</p>
@@ -53,6 +60,8 @@
         <a href="skill-authoring.md">skill authoring guide</a>,
         <a href="v0.9-design.md">RFC 0007 skill dependencies</a>
         (<a href="v0.9-design.ru.md">ru</a>),
+        <a href="v0.11-design.md">RFC 0008 audit registry</a>
+        (<a href="v0.11-design.ru.md">ru</a>),
         <a href="mvp-design.md">MVP design</a>,
         <a href="v0.5-design.md">RFC 0003 runtime roots</a>.
       </p>

@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-09
+
+### Added
+
+- Added `csk audit --publish <record> --registry <url> --token <token>`, which
+  submits a signed audit record to a registry. The token may also come from
+  the `CSK_REGISTRY_TOKEN` environment variable.
+- Recognized `opencode` and `windsurf` as known agents. Both environments
+  discover the canonical `.agents/skills/` directory natively, so no
+  project-level mirror is created for them; global installs are additionally
+  mirrored into `~/.agents/skills/` when either agent is targeted.
+- Added MCP configuration surfaces for the new agents: OpenCode resolves
+  against the `mcp` block of `opencode.json` / `opencode.jsonc` in the project
+  and `~/.config/opencode/`, honoring `"enabled": false`; Windsurf resolves
+  against `~/.codeium/windsurf/mcp_config.json`.
+- Added the project-level MCP surfaces that Codex CLI and Gemini CLI read:
+  `.codex/config.toml` and `.gemini/settings.json` in the project root now
+  count toward MCP requirement resolution.
+- Added static MCP availability checks on install. A configured stdio server
+  whose command does not resolve on PATH produces a warning, and a server
+  declared only in project-level config produces a hint that agents keep such
+  servers pending until the checkout is trusted. csk never launches a server.
+
+### Changed
+
+- A server listed in `disabledMcpjsonServers` of `.claude/settings.json` or
+  `.claude/settings.local.json` no longer counts as configured for Claude
+  Code: the agent will not activate a rejected server.
+
+## [0.11.0] - 2026-07-07
+
+### Added
+
+- Added an enforced system configuration layer read before the user config:
+  `/etc/cocoaskills/config.json` on Unix and `%ProgramData%\cocoaskills\config.json`
+  on Windows. Keys listed under `locked` take their value from the system
+  config and cannot be overridden from the user config, so an organization
+  distributes registry trust and source policy through device management. An
+  unlocked system key acts as a default the user config may override.
+- Added the strict registry policy: `audit.registry_policy: strict` fails an
+  install when a skill is not audited by any trusted registry, while a
+  verified revocation always denies regardless of policy.
+- Added `csk status --attest`, which re-checks installed skills against the
+  trusted registries so a revocation issued after install surfaces on demand.
+- Added registry snapshot verification: before resolving, csk fetches each
+  registry's signed snapshot and excludes a registry that serves a tampered
+  view (bad signature, a version that moved backward, or a stale snapshot),
+  which defends against rollback and freeze. An unreachable snapshot warns
+  but does not exclude, since per-record signatures still protect the install.
+- Added the audit registry client (RFC 0008, advisory): a machine can pin
+  trusted registries in `audit_registries` (name, url, Ed25519 public keys),
+  and `csk install` resolves each skill against them by source identity,
+  commit, and content hash. A verified `revoked` record denies the install
+  under a deny-wins federation rule; a verified `audited` record is recorded
+  as an attestation in the install marker. Signatures are verified with a
+  vendored, standard-library-only Ed25519 implementation, so the runtime
+  keeps no third-party dependency. Lookups cache with a TTL and an offline
+  grace window. `disable_builtin_registries` drops the built-in defaults for
+  closed networks.
+
+## [0.10.0] - 2026-07-07
+
+### Added
+
+- Added the hybrid install scope: skills declared in
+  `~/.cocoaskills/hybrid/Skillfile.json` with per-skill `targets` (project
+  alias, absolute path, or path glob) are stored once per machine, activated
+  only for targeted projects through managed adapter links and project
+  shims, and leave nothing in the target repository. Managed through
+  `csk hybrid add/remove/list/status`; shadowing order is project, then
+  hybrid, then global; closure resolution and audit gates apply unchanged.
+- Added `csk-skill.json` schema v5 with `dependencies.mcp_servers`: a skill
+  declares the MCP servers it relies on (`hint` required, optional
+  `transport`, `required_in: any|all`), and `csk install` verifies each
+  server against the configuration of the target agent environments
+  (Claude Code, Codex CLI, Cursor, Gemini) before the skill lands. Install
+  markers record where each server was found.
+
 ## [0.9.0] - 2026-07-05
 
 ### Added
@@ -280,7 +358,10 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.6.0...v0.8.0
 [0.6.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.5.0...v0.6.0

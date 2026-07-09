@@ -4,6 +4,7 @@ import json
 import os
 import time
 from pathlib import Path
+from types import TracebackType
 
 
 class LockError(Exception):
@@ -33,7 +34,12 @@ class GlobalLock:
                     raise LockError(_timeout_message(self.path)) from exc
                 time.sleep(0.1)
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         if self.acquired:
             try:
                 self.path.unlink()

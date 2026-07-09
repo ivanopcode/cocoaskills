@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from ..capabilities import CapabilityManifest
 from ..model import Finding
@@ -28,7 +28,7 @@ class AuditRequest:
     files: dict[str, bytes]
     capabilities: CapabilityManifest
     contract_reference: str
-    response_schema: dict
+    response_schema: dict[str, Any]
     static_findings: tuple[Finding, ...]
     redacted: bool
 

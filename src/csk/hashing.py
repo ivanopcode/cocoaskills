@@ -18,8 +18,8 @@ def content_sha256(root: Path, *, exclude: set[str] | None = None) -> str:
     for index, path in enumerate(sorted(files, key=lambda item: item.relative_to(root).as_posix())):
         if index:
             payload.extend(b"\0")
-        rel = path.relative_to(root).as_posix().encode("utf-8")
-        payload.extend(rel)
+        rel_bytes = path.relative_to(root).as_posix().encode("utf-8")
+        payload.extend(rel_bytes)
         payload.extend(b"\0")
         payload.extend(path.read_bytes())
     return "sha256:" + hashlib.sha256(payload).hexdigest()

@@ -8,7 +8,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from . import __version__, adapters, config, deprecation, dev_substitutions, gc, git_ops, gitignore_gate, global_install, installer, manifest, project_resolver, shell_init, skillcheck, status
+from . import __version__, adapters, attest, config, deprecation, dev_substitutions, gc, git_ops, gitignore_gate, global_install, hybrid, installer, manifest, project_resolver, shell_init, skillcheck, status
 from .audit import pipeline as audit_pipeline
 from .audit import runner as audit_runner
 from .audit import trust as audit_trust
@@ -43,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         project_resolver.ProjectResolutionError,
         global_install.GlobalInstallError,
         installer.InstallError,
+        hybrid.HybridError,
         audit_runner.AuditError,
         AuditBackendError,
         git_ops.GitError,
@@ -118,6 +119,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="exit non-zero unless every skill is up-to-date",
     )
     status_parser.add_argument(
+        "--attest",
+        action="store_true",
+        help="re-check installed skills against trusted audit registries",
+    )
+    status_parser.add_argument(
         "--json",
         action="store_true",
         help="print machine-readable JSON instead of the table",
@@ -138,6 +144,29 @@ def build_parser() -> argparse.ArgumentParser:
     remove_parser = sub.add_parser("remove", help="Remove a skill declaration from the project Skillfile.")
     remove_parser.add_argument("name")
     remove_parser.add_argument("--project", help="project alias, '.', or path (default: current project)")
+
+    hybrid_parser = sub.add_parser(
+        "hybrid",
+        help="Manage machine-level hybrid skills activated for selected projects.",
+    )
+    hybrid_sub = hybrid_parser.add_subparsers(dest="hybrid_command", required=True)
+    hybrid_add = hybrid_sub.add_parser("add", help="add or replace a hybrid skill declaration")
+    hybrid_add.add_argument("name")
+    hybrid_add.add_argument("--git", help="git clone URL")
+    hybrid_refs = hybrid_add.add_mutually_exclusive_group(required=True)
+    hybrid_refs.add_argument("--tag")
+    hybrid_refs.add_argument("--branch")
+    hybrid_refs.add_argument("--revision")
+    hybrid_add.add_argument(
+        "--target",
+        action="append",
+        required=True,
+        help="project alias, absolute path, or path glob (repeatable)",
+    )
+    hybrid_remove = hybrid_sub.add_parser("remove", help="remove a hybrid skill declaration")
+    hybrid_remove.add_argument("name")
+    hybrid_sub.add_parser("list", help="list hybrid skill declarations")
+    hybrid_sub.add_parser("status", help="show hybrid declarations and installed store state")
     list_parser = sub.add_parser(
         "list",
         help="List configured projects and declared skills.",
@@ -197,7 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _add_bootstrap(sub) -> None:
+def _add_bootstrap(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
         "bootstrap",
         help="Create global config (interactive, or scripted with flags).",
@@ -215,12 +244,18 @@ def _add_bootstrap(sub) -> None:
     )
     parser.add_argument("--skills-root", help="directory containing skill git repositories")
     parser.add_argument("--preferred-locale", help="preferred install locale, e.g. ru")
-    parser.add_argument("--default-agents", help="comma-separated agent ids, e.g. codex_cli,claude_code")
+    parser.add_argument(
+        "--default-agents",
+        help=(
+            "comma-separated agent ids, e.g. codex_cli,claude_code "
+            "(known: claude_code, codex_cli, cursor, gemini, opencode, windsurf)"
+        ),
+    )
     parser.add_argument("--non-interactive", action="store_true", help="never prompt; fail instead")
     parser.add_argument("--force", action="store_true", help="overwrite an existing config without asking")
 
 
-def _add_init(sub) -> None:
+def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
         "init",
         help="Create project Skillfile.json and CocoaSkill gitignore block.",
@@ -236,11 +271,18 @@ def _add_init(sub) -> None:
     )
     parser.add_argument("path", nargs="?", default=".", help="project directory to initialize")
     parser.add_argument("--alias", help="project.alias to write into Skillfile.json")
-    parser.add_argument("--agents", help="comma-separated agents list for Skillfile.json")
+    parser.add_argument(
+        "--agents",
+        help=(
+            "comma-separated agents list for Skillfile.json "
+            "(known: claude_code, codex_cli, cursor, gemini, opencode, windsurf; "
+            "opencode and windsurf read .agents/skills natively, no mirror is created)"
+        ),
+    )
     parser.add_argument("--no-interactive", action="store_true", help="accepted for scripting; prompts are not used")
 
 
-def _add_skill(sub) -> None:
+def _add_skill(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser("skill", help="Inspect and validate skill repositories.")
     skill_sub = parser.add_subparsers(dest="skill_command", required=True)
     check = skill_sub.add_parser(
@@ -268,7 +310,7 @@ def _add_skill(sub) -> None:
     check.add_argument("--json", action="store_true", dest="json_output", help="print machine-readable issues")
 
 
-def _add_install(sub, name: str, description: str) -> None:
+def _add_install(sub: argparse._SubParsersAction[argparse.ArgumentParser], name: str, description: str) -> None:
     parser = sub.add_parser(
         name,
         help=description,
@@ -307,7 +349,7 @@ def _add_install(sub, name: str, description: str) -> None:
     )
 
 
-def _add_global(sub) -> None:
+def _add_global(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
         "global",
         help="Manage user-wide global skills.",
@@ -361,7 +403,7 @@ def _add_global(sub) -> None:
     )
 
 
-def _add_audit(sub) -> None:
+def _add_audit(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
         "audit",
         help="Run deterministic static security audit for declared skills.",
@@ -389,6 +431,16 @@ def _add_audit(sub) -> None:
         help="pin a legacy content hash to satisfy strict schema v1/v2 capability declaration checks",
     )
     parser.add_argument("--reason", help="required reason for --allow")
+    parser.add_argument(
+        "--publish",
+        metavar="RECORD",
+        help="submit a signed audit record (JSON file) to a registry",
+    )
+    parser.add_argument("--registry", help="registry base URL for --publish")
+    parser.add_argument(
+        "--token",
+        help="auditor token for --publish (or set CSK_REGISTRY_TOKEN)",
+    )
 
 
 def _dispatch(args: argparse.Namespace) -> int:
@@ -420,6 +472,10 @@ def _dispatch(args: argparse.Namespace) -> int:
         return EXIT_OK
     if args.command == "status":
         cfg, alias = _cfg_and_alias_for_target(cfg, args)
+        if getattr(args, "attest", False):
+            results = attest.attest_projects(cfg, alias=alias)
+            print(attest.render(results))
+            return EXIT_PARTIAL_FAIL if attest.has_revocation(results) else EXIT_OK
         statuses = status.collect_status(cfg, alias=alias)
         if args.json:
             print(json.dumps(status.statuses_to_payload(statuses), indent=2, sort_keys=True))
@@ -447,6 +503,9 @@ def _dispatch(args: argparse.Namespace) -> int:
             print(f"Removed skill {args.name} ({project_root / 'Skillfile.json'})")
         print("Run 'csk install' to apply.")
         return EXIT_OK
+
+    if args.command == "hybrid":
+        return _cmd_hybrid(cfg, args)
 
     if args.command == "gc":
         with GlobalLock(cfg.path.parent):
@@ -536,6 +595,48 @@ def _global_ref_from_args(args: argparse.Namespace) -> tuple[str, str]:
         if value:
             return ref_kind, value
     raise ValueError("global add requires one of --tag, --branch, or --revision")
+
+
+def _cmd_hybrid(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
+    csk_home = cfg.path.parent
+    if args.hybrid_command == "add":
+        ref_kind, ref = _global_ref_from_args(args)
+        hybrid.add_hybrid_decl(
+            csk_home,
+            name=args.name,
+            ref_kind=ref_kind,
+            ref=ref,
+            git=args.git,
+            targets=list(args.target),
+        )
+        print(f"Added hybrid skill {args.name}: {ref_kind} {ref} -> {', '.join(args.target)}")
+        print("Apply with 'csk install' in a targeted project.")
+        return EXIT_OK
+    if args.hybrid_command == "remove":
+        hybrid.remove_hybrid_decl(csk_home, args.name)
+        print(f"Removed hybrid skill {args.name}")
+        print("Run 'csk install' in previously targeted projects to clean up.")
+        return EXIT_OK
+    decls = hybrid.load_hybrid_decls(csk_home)
+    if not decls:
+        print("no hybrid skills declared")
+        return EXIT_OK
+    store = hybrid.hybrid_skills_root(csk_home)
+    for item in decls:
+        line = f"{item.decl.name:<24} {item.decl.ref.kind:<8} {item.decl.ref.value:<12} targets: {', '.join(item.targets)}"
+        if args.hybrid_command == "status":
+            marker_path = store / item.decl.name / ".csk-install.json"
+            state = "missing"
+            if marker_path.exists():
+                try:
+                    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+                    commit = marker.get("commit")
+                    state = f"installed {str(commit)[:7]}" if isinstance(commit, str) else "installed"
+                except ValueError:
+                    state = "unreadable marker"
+            line += f"  [{state}]"
+        print(line)
+    return EXIT_OK
 
 
 def _cmd_bootstrap(args: argparse.Namespace) -> int:
@@ -718,6 +819,8 @@ def _cmd_global_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> i
 
 def _cmd_audit(args: argparse.Namespace) -> int:
     cfg = config.load_config()
+    if args.publish:
+        return _cmd_audit_publish(args)
     if args.allow:
         if args.target is not None or args.all or args.global_scope or args.json:
             raise ValueError("--allow cannot be combined with targets, --all, --global, or --json")
@@ -746,6 +849,40 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     else:
         print(audit_pipeline.render_reports(reports))
     return EXIT_PARTIAL_FAIL if any(report.decision in {Decision.BLOCK, Decision.REQUIRE_PIN} for report in reports) else EXIT_OK
+
+
+def _cmd_audit_publish(args: argparse.Namespace) -> int:
+    import os
+    import urllib.error
+    import urllib.request
+
+    if not args.registry:
+        raise ValueError("--publish requires --registry")
+    token = args.token or os.environ.get("CSK_REGISTRY_TOKEN")
+    if not token:
+        raise ValueError("--publish requires --token or the CSK_REGISTRY_TOKEN environment variable")
+    record_text = Path(args.publish).read_text(encoding="utf-8")
+    try:
+        json.loads(record_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"record is not valid JSON: {exc}") from exc
+    endpoint = f"{args.registry.rstrip('/')}/v1/records"
+    request = urllib.request.Request(
+        endpoint,
+        data=record_text.encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310 - registry URL from the operator
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise ValueError(f"registry rejected the record ({exc.code}): {detail}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ValueError(f"could not reach registry {args.registry}: {exc}") from exc
+    print(body)
+    return EXIT_OK
 
 
 def _cfg_with_audit_override(cfg: config.GlobalConfig, args: argparse.Namespace) -> config.GlobalConfig:
@@ -914,6 +1051,8 @@ def _render_project_resolution(cfg: config.GlobalConfig, args: argparse.Namespac
         f"  codex_cli: {resolved.root / '.codex' / 'skills'}",
         f"  cursor: {resolved.root / '.cursor' / 'rules'}",
         f"  gemini: {resolved.root / '.gemini' / 'skills'}",
+        f"  opencode: {resolved.root / '.agents' / 'skills'} (native discovery)",
+        f"  windsurf: {resolved.root / '.agents' / 'skills'} (native discovery)",
         f"agents: {', '.join(agents or cfg.default_agents)}",
     ]
     return "\n".join(lines)
@@ -940,6 +1079,8 @@ def _render_configured_project_resolution(project: config.ProjectConfig, worktre
             f"  codex_cli: {root / '.codex' / 'skills'}",
             f"  cursor: {root / '.cursor' / 'rules'}",
             f"  gemini: {root / '.gemini' / 'skills'}",
+            f"  opencode: {root / '.agents' / 'skills'} (native discovery)",
+            f"  windsurf: {root / '.agents' / 'skills'} (native discovery)",
             f"agents: {', '.join(project.agents)}",
         ]
     )

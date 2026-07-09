@@ -5,11 +5,13 @@ import os
 import shutil
 import tempfile
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import adapters, closure, consumers, dev_substitutions, env_files, gc, git_ops, gitignore_gate, hashing, locale, manifest, shims, skillcheck, skillspec, snapshot, whitelist
+from . import adapters, audit_registry, closure, consumers, dev_substitutions, env_files, gc, git_ops, gitignore_gate, hashing, hybrid, locale, manifest, mcp_configs, shims, skillcheck, skillspec, snapshot, whitelist
+from . import source_identity as source_identity_mod
 from .audit import pipeline as audit_pipeline
 from .config import GlobalConfig, ProjectConfig
 from .skillspec import CommandSpec
@@ -109,11 +111,38 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                     f"{project.alias}: SUBSTITUTION {substitution.name} -> {substitution.describe()}"
                 )
 
+        try:
+            hybrid_decls = hybrid.load_hybrid_decls(config.path.parent)
+        except hybrid.HybridError as exc:
+            raise InstallError(str(exc)) from exc
+        aliases = tuple(
+            value
+            for value in (project.alias, project.project_alias, project_manifest.project_alias)
+            if value
+        )
+        applicable = [
+            item
+            for item in hybrid_decls
+            if hybrid.applies_to_project(item, aliases=aliases, project_path=project.path)
+        ]
+        project_declared = {decl.name for decl in project_manifest.skills}
+        for shadowed in sorted(item.decl.name for item in applicable if item.decl.name in project_declared):
+            result.messages.append(
+                f"{project.alias}: hybrid skill {shadowed} is shadowed by the project declaration"
+            )
+        hybrid_direct = [item.decl for item in applicable if item.decl.name not in project_declared]
+        effective_manifest = (
+            replace(project_manifest, skills=list(project_manifest.skills) + hybrid_direct)
+            if hybrid_direct
+            else project_manifest
+        )
+
         effective_locale = project_manifest.locale or config.preferred_locale
         with ExitStack() as stack:
             nodes = closure.build_closure(
-                config, project_manifest, substitutions, use_cache=not options.dry_run, stack=stack
+                config, effective_manifest, substitutions, use_cache=not options.dry_run, stack=stack
             )
+            hybrid_store_names = _hybrid_store_names(nodes, project_declared)
             plans = [
                 SkillPlan(decl=node.decl, resolved=node.resolved, repo=node.repo, snapshot=node.snapshot, spec=node.spec)
                 for node in nodes
@@ -123,11 +152,14 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
             _check_skill_validation_errors(validation_issues)
             closure.detect_active_command_collisions(nodes)
             _check_dependencies(plans)
+            mcp_found, mcp_warnings = _check_mcp_servers(plans, project.path, agents, alias=project.alias)
+            result.messages.extend(mcp_warnings)
             result.messages.extend(_migration_warnings(project.alias, plans))
             audit_gate = audit_pipeline.gate_plans(plans, config, scope=project.alias, record=not options.dry_run)
             result.messages.extend(audit_gate.warnings)
             if audit_gate.blocked:
                 raise InstallError("; ".join(audit_gate.errors))
+            registry_attest = _check_audit_registries(plans, config, result, alias=project.alias)
             if options.strict_tags:
                 _check_moved_tags_strict(project.path / ".agents" / "skills", plans)
             else:
@@ -140,7 +172,9 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                 return result
 
             consumers.record_consumer(config.path.parent, project.path)
+            hybrid_store = hybrid.hybrid_skills_root(config.path.parent)
             context_names: list[str] = []
+            hybrid_context_names: list[str] = []
             expected_commands: set[str] = set()
             nodes_by_name = {node.name: node for node in nodes}
             for node in nodes:
@@ -156,7 +190,21 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                     expected_commands.update(command_names)
                 activation = {"context": node.context_active, "commands": sorted(active)}
                 requirers = node.consumers()
-                if node.context_active:
+                is_hybrid = node.name in hybrid_store_names
+                if node.context_active and is_hybrid:
+                    # Hybrid context renders once per machine with the machine
+                    # locale; per-project variance stays out of the shared marker.
+                    installed = _install_skill_context_to_root(
+                        hybrid_store,
+                        plan,
+                        config.preferred_locale,
+                        [],
+                        activation=activation,
+                        requirers=requirers,
+                        substituted=node.substituted,
+                    )
+                    hybrid_context_names.append(node.name)
+                elif node.context_active:
                     installed = _install_skill_context(
                         project.path,
                         plan,
@@ -165,13 +213,23 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                         activation=activation,
                         requirers=requirers,
                         substituted=node.substituted,
+                        mcp_servers=mcp_found.get(node.name),
+                        attestation=registry_attest.get(node.name),
                     )
                     context_names.append(node.name)
                 else:
                     installed = _install_marker_only(
-                        project.path, plan, activation=activation, requirers=requirers, substituted=node.substituted
+                        project.path,
+                        plan,
+                        activation=activation,
+                        requirers=requirers,
+                        substituted=node.substituted,
+                        mcp_servers=mcp_found.get(node.name),
+                        target_root=hybrid_store if is_hybrid else None,
+                        attestation=registry_attest.get(node.name),
                     )
-                result.messages.append(f"{project.alias}: {_node_summary(node)} {installed}")
+                suffix = " (hybrid)" if is_hybrid else ""
+                result.messages.append(f"{project.alias}: {_node_summary(node)}{suffix} {installed}")
                 if options.verbose:
                     result.messages.append(f"{project.alias}: {node.name} commit {node.resolved.commit}")
                     for command_name in sorted(command_names):
@@ -179,15 +237,41 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                             f"{project.alias}: {node.name} command {command_name} -> .agents/bin/{command_name}"
                         )
 
-            _cleanup_removed_skills(project.path, set(nodes_by_name))
+            _cleanup_removed_skills(project.path, set(nodes_by_name) - hybrid_store_names)
+            all_hybrid_names = {item.decl.name for item in hybrid_decls}
+            _cleanup_removed_skills_root(hybrid_store, all_hybrid_names | hybrid_store_names)
             shims.remove_stale_shims(project.path, expected_commands)
             env_files.write_env_files(project.path)
-            adapters.refresh_adapters(project.path, agents, context_names, config.adapter_mode)
+            adapters.refresh_adapter_groups(
+                project.path,
+                agents,
+                [
+                    (project.path / ".agents" / "skills", context_names),
+                    (hybrid_store, hybrid_context_names),
+                ],
+                config.adapter_mode,
+            )
             return result
     except Exception as exc:
         result.status = "failed"
         result.errors.append(str(exc))
         return result
+
+
+def _hybrid_store_names(nodes: list[closure.ClosureNode], project_declared: set[str]) -> set[str]:
+    """Names materialized in the hybrid store: unreachable from project declarations."""
+    by_name = {node.name: node for node in nodes}
+    reachable: set[str] = set()
+    stack = [name for name in project_declared if name in by_name]
+    while stack:
+        current = stack.pop()
+        if current in reachable:
+            continue
+        reachable.add(current)
+        for requirement in by_name[current].spec.requirements.values():
+            if requirement.name in by_name and requirement.name not in reachable:
+                stack.append(requirement.name)
+    return set(by_name) - reachable
 
 
 def _node_summary(node: closure.ClosureNode) -> str:
@@ -332,6 +416,135 @@ def skill_command_dependency_errors(plan: SkillPlan, plans: list[SkillPlan]) -> 
     return errors
 
 
+def _check_audit_registries(
+    plans: list[SkillPlan],
+    config: GlobalConfig,
+    result: ProjectResult,
+    *,
+    alias: str,
+) -> dict[str, dict[str, object]]:
+    """Resolve each skill against trusted audit registries (RFC 0008).
+
+    A verified revocation denies the install. An unknown artifact is advisory
+    at this stage. Returns the authorizing attestation per skill for the
+    marker.
+    """
+    registries = config.trusted_registries()
+    if not registries:
+        return {}
+    strict = config.audit.registry_policy == "strict"
+    cache_dir = config.path.parent / "cache" / "registry"
+    unavailable, snapshot_warnings = audit_registry.check_snapshots(
+        registries,
+        cache_dir,
+        fetch_snapshot=audit_registry.http_get_snapshot,
+        now=time.time(),
+    )
+    for warning in snapshot_warnings:
+        result.messages.append(f"{alias}: registry: {warning}")
+    registries = tuple(r for r in registries if r.url not in unavailable)
+    if not registries:
+        # Every trusted registry served a tampered snapshot; refuse to proceed.
+        raise InstallError("every trusted audit registry served a tampered snapshot")
+    fetch = audit_registry.make_http_fetch(cache_dir)
+    attestations: dict[str, dict[str, object]] = {}
+    errors: list[str] = []
+    for plan in plans:
+        identity = source_identity_mod.canonical_source_identity(plan.decl.git) if plan.decl.git else None
+        if identity is None:
+            continue
+        content_hash = hashing.content_sha256(plan.snapshot)
+        resolution = audit_registry.resolve(
+            registries,
+            source_identity=identity,
+            commit=plan.resolved.commit,
+            content_sha256=content_hash,
+            fetch=fetch,
+        )
+        for warning in resolution.warnings:
+            result.messages.append(f"{alias}: registry: {warning}")
+        if resolution.result == audit_registry.RESULT_REVOKED:
+            registry = resolution.attestation.registry if resolution.attestation else "a trusted registry"
+            errors.append(f"{plan.decl.name} is revoked by {registry}")
+            continue
+        if resolution.result == audit_registry.RESULT_DEPRECATED:
+            result.messages.append(f"{alias}: registry: {plan.decl.name} is marked deprecated")
+        if strict and resolution.result == audit_registry.RESULT_UNKNOWN:
+            errors.append(
+                f"{plan.decl.name} is not audited by any trusted registry (registry_policy is strict)"
+            )
+            continue
+        if resolution.attestation is not None:
+            att = resolution.attestation
+            attestations[plan.decl.name] = {
+                "registry": att.registry,
+                "status": att.status,
+                "key_id": att.key_id,
+            }
+    if errors:
+        raise InstallError("; ".join(errors))
+    return attestations
+
+
+def _check_mcp_servers(
+    plans: list[SkillPlan], project_root: Path, agents: list[str], *, alias: str = ""
+) -> tuple[dict[str, dict[str, list[str]]], list[str]]:
+    """Verify declared MCP servers against the target agent environments.
+
+    Returns, per skill, the agents where each declared server was found, plus
+    warnings for servers that are configured but statically unlikely to run:
+    a stdio command missing from PATH, or a project-only declaration that the
+    agent holds pending until the checkout is trusted.
+    Raises InstallError when a requirement is not satisfied.
+    """
+    prefix = f"{alias}: " if alias else ""
+    found: dict[str, dict[str, list[str]]] = {}
+    errors: list[str] = []
+    warnings: list[str] = []
+    for plan in plans:
+        if not plan.spec.mcp_servers:
+            continue
+        per_skill: dict[str, list[str]] = {}
+        for requirement in plan.spec.mcp_servers.values():
+            resolution = mcp_configs.resolve_server(project_root, agents, requirement.name)
+            available = sorted(agent for agent, ok in resolution.items() if ok)
+            per_skill[requirement.name] = available
+            if requirement.required_in == "all":
+                missing = sorted(agent for agent, ok in resolution.items() if not ok)
+                if missing:
+                    errors.append(
+                        f"MCP server {requirement.name!r} required by {plan.decl.name} is not configured "
+                        f"for agent(s): {', '.join(missing)}. Hint: {requirement.hint}"
+                    )
+            elif not available:
+                errors.append(
+                    f"MCP server {requirement.name!r} required by {plan.decl.name} is not configured "
+                    f"in any target agent environment. Hint: {requirement.hint}"
+                )
+            for agent, command in sorted(
+                mcp_configs.missing_stdio_commands(project_root, available, requirement.name).items()
+            ):
+                warnings.append(
+                    f"{prefix}MCP server {requirement.name!r} for {agent} runs {command!r}, "
+                    "which is not on PATH"
+                )
+            trust_gated = sorted(
+                agent
+                for agent in available
+                if requirement.name in mcp_configs.project_only_servers(project_root, agent)
+            )
+            if trust_gated:
+                warnings.append(
+                    f"{prefix}MCP server {requirement.name!r} is declared only in project-level "
+                    f"config for {', '.join(trust_gated)}; agents keep project servers pending "
+                    "until the checkout is trusted"
+                )
+        found[plan.decl.name] = per_skill
+    if errors:
+        raise InstallError("; ".join(errors))
+    return found, warnings
+
+
 def _system_dependencies(plan: SkillPlan) -> list[CommandSpec]:
     legacy = [command for command in plan.spec.commands.values() if command.type == "system"]
     explicit = [
@@ -449,6 +662,8 @@ def _install_skill_context(
     activation: dict[str, object] | None = None,
     requirers: list[str] | None = None,
     substituted: str | None = None,
+    mcp_servers: dict[str, list[str]] | None = None,
+    attestation: dict[str, object] | None = None,
 ) -> str:
     return _install_skill_context_to_root(
         project_root / ".agents" / "skills",
@@ -458,6 +673,8 @@ def _install_skill_context(
         activation=activation,
         requirers=requirers,
         substituted=substituted,
+        mcp_servers=mcp_servers,
+        attestation=attestation,
     )
 
 
@@ -470,10 +687,15 @@ def _install_skill_context_to_root(
     activation: dict[str, object] | None = None,
     requirers: list[str] | None = None,
     substituted: str | None = None,
+    mcp_servers: dict[str, list[str]] | None = None,
+    attestation: dict[str, object] | None = None,
 ) -> str:
     target = target_root / plan.decl.name
     marker = _read_marker(target / ".csk-install.json")
-    if _marker_is_current(marker, target, plan, effective_locale, agents, activation=activation, substituted=substituted):
+    if _marker_is_current(
+        marker, target, plan, effective_locale, agents,
+        activation=activation, substituted=substituted, mcp_servers=mcp_servers, attestation=attestation,
+    ):
         return "up-to-date"
 
     tmp = target.parent / f".{plan.decl.name}.tmp-{os.getpid()}"
@@ -497,6 +719,8 @@ def _install_skill_context_to_root(
         activation=activation,
         requirers=requirers,
         substituted=substituted,
+        mcp_servers=mcp_servers,
+        attestation=attestation,
     )
     (tmp / ".csk-install.json").write_text(json.dumps(marker_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _replace_dir(tmp, target)
@@ -510,16 +734,23 @@ def _install_marker_only(
     activation: dict[str, object],
     requirers: list[str],
     substituted: str | None,
+    mcp_servers: dict[str, list[str]] | None = None,
+    target_root: Path | None = None,
+    attestation: dict[str, object] | None = None,
 ) -> str:
     """Record a runtime-only or context-less node without agent prompt files.
 
     The marker directory keeps the runtime store referenced by GC and the
     closure auditable offline; adapters never mirror it.
     """
-    target_root = project_root / ".agents" / "skills"
+    if target_root is None:
+        target_root = project_root / ".agents" / "skills"
     target = target_root / plan.decl.name
     marker = _read_marker(target / ".csk-install.json")
-    if _marker_is_current(marker, target, plan, None, [], activation=activation, substituted=substituted):
+    if _marker_is_current(
+        marker, target, plan, None, [], activation=activation, substituted=substituted,
+        mcp_servers=mcp_servers, attestation=attestation,
+    ):
         return "up-to-date"
 
     tmp = target_root / f".{plan.decl.name}.tmp-{os.getpid()}"
@@ -536,6 +767,8 @@ def _install_marker_only(
         activation=activation,
         requirers=requirers,
         substituted=substituted,
+        mcp_servers=mcp_servers,
+        attestation=attestation,
     )
     (tmp / ".csk-install.json").write_text(json.dumps(marker_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _replace_dir(tmp, target)
@@ -552,6 +785,8 @@ def _marker_payload(
     activation: dict[str, object] | None,
     requirers: list[str] | None,
     substituted: str | None,
+    mcp_servers: dict[str, list[str]] | None = None,
+    attestation: dict[str, object] | None = None,
 ) -> dict[str, object]:
     marker_data: dict[str, object] = {
         "schema_version": 1,
@@ -574,6 +809,10 @@ def _marker_payload(
         marker_data["git"] = plan.decl.git
     if plan.spec.requirements:
         marker_data["requirements"] = sorted(plan.spec.requirements)
+    if mcp_servers is not None:
+        marker_data["mcp_servers"] = {name: sorted(found) for name, found in sorted(mcp_servers.items())}
+    if attestation is not None:
+        marker_data["attestation"] = attestation
     if activation is not None:
         marker_data["activation"] = activation
     if requirers:
@@ -592,6 +831,8 @@ def _marker_is_current(
     *,
     activation: dict[str, object] | None = None,
     substituted: str | None = None,
+    mcp_servers: dict[str, list[str]] | None = None,
+    attestation: dict[str, object] | None = None,
 ) -> bool:
     if not marker or not target.exists():
         return False
@@ -608,6 +849,12 @@ def _marker_is_current(
     if activation is not None and marker.get("activation") != activation:
         return False
     if marker.get("substituted") != substituted:
+        return False
+    if mcp_servers is not None:
+        expected_mcp = {name: sorted(found) for name, found in sorted(mcp_servers.items())}
+        if marker.get("mcp_servers") != expected_mcp:
+            return False
+    if marker.get("attestation") != attestation:
         return False
     actual_hash = hashing.content_sha256(target)
     return marker.get("content_sha256") == actual_hash

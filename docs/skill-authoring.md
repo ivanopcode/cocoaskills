@@ -205,6 +205,44 @@ Requirement rules:
   `allowed_sources` in `~/.cocoaskills/config.json`: a list of canonical
   `host/path` prefixes checked before any clone or fetch.
 
+### Schema v5
+
+Schema v5 adds MCP server dependencies. A skill declares the MCP servers it
+relies on under `dependencies.mcp_servers`; `csk install` verifies that each
+server is configured in the target agent environments before the skill
+lands. csk never provisions MCP servers, the check is read-only.
+
+```json
+{
+  "schema_version": 5,
+  "capabilities": { "exec": "none", "network": "none" },
+  "dependencies": {
+    "mcp_servers": {
+      "sheets": {
+        "hint": "Add the sheets MCP server to your agent configuration.",
+        "transport": "http",
+        "required_in": "any"
+      }
+    }
+  }
+}
+```
+
+MCP dependency rules:
+
+- `hint` is required and tells the operator how to connect the server.
+- `transport` is optional documentation: `stdio` or `http`.
+- `required_in` selects the check semantics: `any` (default) requires the
+  server in at least one target agent environment, `all` requires it in
+  every one.
+- Configuration surfaces checked per agent: Claude Code (`<project>/.mcp.json`,
+  `~/.claude.json`), Codex CLI (`~/.codex/config.toml`), Cursor
+  (`<project>/.cursor/mcp.json`, `~/.cursor/mcp.json`), Gemini
+  (`~/.gemini/settings.json`). Missing or malformed files count as
+  configuring no servers.
+- A failed check stops the install with the hint; install markers record
+  where each server was found.
+
 ## 4. Runtime Roots
 
 `runtime_roots` lists directories that are runtime-only. CocoaSkills copies

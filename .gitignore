@@ -23,6 +23,7 @@ dist/
 .idea/
 .vscode/
 .temp/
+.session-artifacts/
 *.swp
 *.swo
 *.log
