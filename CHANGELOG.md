@@ -20,6 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against the `mcp` block of `opencode.json` / `opencode.jsonc` in the project
   and `~/.config/opencode/`, honoring `"enabled": false`; Windsurf resolves
   against `~/.codeium/windsurf/mcp_config.json`.
+- Added the project-level MCP surfaces that Codex CLI and Gemini CLI read:
+  `.codex/config.toml` and `.gemini/settings.json` in the project root now
+  count toward MCP requirement resolution.
+- Added static MCP availability checks on install. A configured stdio server
+  whose command does not resolve on PATH produces a warning, and a server
+  declared only in project-level config produces a hint that agents keep such
+  servers pending until the checkout is trusted. csk never launches a server.
+
+### Changed
+
+- A server listed in `disabledMcpjsonServers` of `.claude/settings.json` or
+  `.claude/settings.local.json` no longer counts as configured for Claude
+  Code: the agent will not activate a rejected server.
 
 ## [0.11.0] - 2026-07-07
 

@@ -229,6 +229,87 @@ def test_any_satisfied_through_windsurf_home_config(tmp_path, skills_root, csk_h
     assert not result.errors, result.errors
 
 
+def test_any_satisfied_through_project_codex_config(tmp_path, skills_root, csk_home):
+    project_dir = tmp_path / "project"
+    (project_dir / ".codex").mkdir(parents=True)
+    (project_dir / ".codex" / "config.toml").write_text(
+        '[mcp_servers.sheets]\ncommand = "sheets-mcp"\n', encoding="utf-8"
+    )
+    _, result = _install(tmp_path, skills_root, csk_home, agents=["codex_cli"])
+    assert not result.errors, result.errors
+
+
+def test_any_satisfied_through_project_gemini_settings(tmp_path, skills_root, csk_home):
+    project_dir = tmp_path / "project"
+    (project_dir / ".gemini").mkdir(parents=True)
+    (project_dir / ".gemini" / "settings.json").write_text(
+        json.dumps({"mcpServers": {"sheets": {"httpUrl": "https://example.com/mcp"}}}),
+        encoding="utf-8",
+    )
+    _, result = _install(tmp_path, skills_root, csk_home, agents=["gemini"])
+    assert not result.errors, result.errors
+
+
+def test_claude_disabled_mcpjson_server_counts_as_unconfigured(tmp_path, skills_root, csk_home):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"sheets": {"command": "sheets-mcp"}}}), encoding="utf-8"
+    )
+    (project_dir / ".claude").mkdir()
+    (project_dir / ".claude" / "settings.json").write_text(
+        json.dumps({"disabledMcpjsonServers": ["sheets"]}), encoding="utf-8"
+    )
+    _, result = _install(tmp_path, skills_root, csk_home, agents=["claude_code"])
+    assert result.errors
+    assert "not configured" in result.errors[0]
+
+
+def test_stdio_command_missing_from_path_warns(tmp_path, skills_root, csk_home):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"sheets": {"command": "definitely-not-a-real-binary-9x7"}}}),
+        encoding="utf-8",
+    )
+    _, result = _install(tmp_path, skills_root, csk_home, agents=["claude_code"])
+    assert not result.errors, result.errors
+    assert any("not on PATH" in message for message in result.messages), result.messages
+
+
+def test_resolvable_stdio_command_does_not_warn(tmp_path, skills_root, csk_home):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"sheets": {"command": "git"}}}), encoding="utf-8"
+    )
+    _, result = _install(tmp_path, skills_root, csk_home, agents=["claude_code"])
+    assert not result.errors, result.errors
+    assert not any("not on PATH" in message for message in result.messages), result.messages
+
+
+def test_project_only_declaration_emits_trust_hint(tmp_path, skills_root, csk_home):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"sheets": {"command": "git"}}}), encoding="utf-8"
+    )
+    _, result = _install(tmp_path, skills_root, csk_home, agents=["claude_code"])
+    assert not result.errors, result.errors
+    assert any("pending" in message for message in result.messages), result.messages
+
+
+def test_user_level_declaration_emits_no_trust_hint(tmp_path, skills_root, csk_home):
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / ".claude.json").write_text(
+        json.dumps({"mcpServers": {"sheets": {"command": "git"}}}), encoding="utf-8"
+    )
+    _, result = _install(tmp_path, skills_root, csk_home, agents=["claude_code"])
+    assert not result.errors, result.errors
+    assert not any("pending" in message for message in result.messages), result.messages
+
+
 def test_malformed_agent_config_counts_as_no_servers(tmp_path, skills_root, csk_home):
     project_dir = tmp_path / "project"
     project_dir.mkdir()

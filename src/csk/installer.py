@@ -152,7 +152,8 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
             _check_skill_validation_errors(validation_issues)
             closure.detect_active_command_collisions(nodes)
             _check_dependencies(plans)
-            mcp_found = _check_mcp_servers(plans, project.path, agents)
+            mcp_found, mcp_warnings = _check_mcp_servers(plans, project.path, agents, alias=project.alias)
+            result.messages.extend(mcp_warnings)
             result.messages.extend(_migration_warnings(project.alias, plans))
             audit_gate = audit_pipeline.gate_plans(plans, config, scope=project.alias, record=not options.dry_run)
             result.messages.extend(audit_gate.warnings)
@@ -486,15 +487,20 @@ def _check_audit_registries(
 
 
 def _check_mcp_servers(
-    plans: list[SkillPlan], project_root: Path, agents: list[str]
-) -> dict[str, dict[str, list[str]]]:
+    plans: list[SkillPlan], project_root: Path, agents: list[str], *, alias: str = ""
+) -> tuple[dict[str, dict[str, list[str]]], list[str]]:
     """Verify declared MCP servers against the target agent environments.
 
-    Returns, per skill, the agents where each declared server was found.
+    Returns, per skill, the agents where each declared server was found, plus
+    warnings for servers that are configured but statically unlikely to run:
+    a stdio command missing from PATH, or a project-only declaration that the
+    agent holds pending until the checkout is trusted.
     Raises InstallError when a requirement is not satisfied.
     """
+    prefix = f"{alias}: " if alias else ""
     found: dict[str, dict[str, list[str]]] = {}
     errors: list[str] = []
+    warnings: list[str] = []
     for plan in plans:
         if not plan.spec.mcp_servers:
             continue
@@ -515,10 +521,28 @@ def _check_mcp_servers(
                     f"MCP server {requirement.name!r} required by {plan.decl.name} is not configured "
                     f"in any target agent environment. Hint: {requirement.hint}"
                 )
+            for agent, command in sorted(
+                mcp_configs.missing_stdio_commands(project_root, available, requirement.name).items()
+            ):
+                warnings.append(
+                    f"{prefix}MCP server {requirement.name!r} for {agent} runs {command!r}, "
+                    "which is not on PATH"
+                )
+            trust_gated = sorted(
+                agent
+                for agent in available
+                if requirement.name in mcp_configs.project_only_servers(project_root, agent)
+            )
+            if trust_gated:
+                warnings.append(
+                    f"{prefix}MCP server {requirement.name!r} is declared only in project-level "
+                    f"config for {', '.join(trust_gated)}; agents keep project servers pending "
+                    "until the checkout is trusted"
+                )
         found[plan.decl.name] = per_skill
     if errors:
         raise InstallError("; ".join(errors))
-    return found
+    return found, warnings
 
 
 def _system_dependencies(plan: SkillPlan) -> list[CommandSpec]:

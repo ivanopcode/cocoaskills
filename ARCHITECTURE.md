@@ -75,7 +75,7 @@ the registries (`attest.py`). `csk audit` runs stage 6 standalone.
 | `skillspec.py` | `csk-skill.json` parsing: commands, runtime roots, capabilities, dependencies, requirements (schema v1 through v4). |
 | `closure.py` | Transitive requirement resolution, unification, cycle detection, activation edges, topological order. |
 | `source_identity.py` | Canonical `host/path` identity for git URLs and allowlist matching. |
-| `mcp_configs.py` | Read-only resolution of declared MCP server dependencies against agent configuration surfaces. |
+| `mcp_configs.py` | Read-only resolution of declared MCP server dependencies against agent configuration surfaces, with static availability probes: PATH resolution for stdio commands, disabled-server filtering, and trust-gating hints for project-only declarations. |
 | `hybrid.py` | Hybrid-scope manifest and per-project activation targeting. |
 | `dev_substitutions.py` | `Skillfile.dev.json` parsing for local provider substitution. |
 | `git_ops.py` | Hardened git operations: clone with a protocol allowlist, ref resolution, archive extraction with path checks. |
