@@ -389,6 +389,20 @@ is revoked, and organizations pin only their internal registry with
 `disable_builtin_registries`. Signature verification uses a standard-library
 Ed25519 implementation, so the runtime keeps no third-party dependency.
 
+Snapshot rollback and equivocation state is keyed by canonical registry URL
+under the configuration home (`~/.cocoaskills/state/registry` by default),
+outside the disposable response cache.
+It survives signing-key rotation and is written atomically before a snapshot is
+accepted. Back up this directory with the machine configuration; existing
+corruption, deletion after prior use, or an unwritable state directory disables
+the affected registry. A protected catalog distinguishes deletion from genuine
+first use.
+Record reads reject cursor cycles, oversized cursors, more than 10,000 records,
+and responses larger than 16 MiB. Network retries have three total attempts and
+finite deadlines. GET retries only network failures, `429`, and `503`; record
+publication retries only the identical idempotent request. Redirects are
+rejected.
+
 For managed fleets, a system configuration at `/etc/cocoaskills/config.json`
 (or `%ProgramData%\cocoaskills\config.json` on Windows) is read before the
 user config. Keys it lists under `locked` cannot be overridden from the user
@@ -397,10 +411,10 @@ distributed through device management. Set `audit.registry_policy` to `strict`
 to fail any install that is not audited by a trusted registry, and run
 `csk status --attest` to re-check installed skills against the registries.
 An auditor submits a signed record with
-`csk audit --publish <record> --registry <url> --token <token>`. The reference
-registry service, including air-gapped bundle export and import for closed
-networks, lives at
-[cocoaskills-registry](https://github.com/ivanopcode/cocoaskills-registry).
+`csk audit --publish <record> --registry <url> --token <token>`. The production
+service, including stable pagination, durable append, backup verification, and
+air-gapped bundle import for closed networks, is
+[Curator Skill Registry](https://github.com/relux-works/curator-skill-registry).
 
 ## CLI
 

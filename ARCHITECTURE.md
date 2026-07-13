@@ -113,7 +113,8 @@ runtime/<skill>/<commit>/    runtime files and command entrypoints
 global/                      user-wide skills, bin, and manifests
 hybrid/                      machine-stored skills activated per project
 dev/<skill>/                 clones created for git dev substitutions
-cache/registry/              audit registry lookup and snapshot cache
+cache/registry/              disposable audit registry response cache
+state/registry/              durable registry rollback and equivocation state
 consumers.json               checkouts referencing the shared stores
 ```
 
