@@ -32,6 +32,22 @@ def test_cli_shell_init_install_writes_atomic_cache(monkeypatch, tmp_path, capsy
     assert f". '{hook_path}'" in output
 
 
+def test_cli_shell_init_auto_detects_powershell(monkeypatch, tmp_path, capsys):
+    csk_home = tmp_path / "csk home"
+    monkeypatch.setenv("CSK_CONFIG", str(csk_home / "config.json"))
+    monkeypatch.delenv("SHELL", raising=False)
+    monkeypatch.setenv("PSModulePath", "modules")
+
+    code = cli.main(["shell-init", "--install"])
+
+    assert code == 0
+    hook_path = csk_home / "hooks" / "csk.ps1"
+    assert hook_path.read_text(encoding="utf-8").startswith("# CocoaSkill shell hook\n")
+    output = capsys.readouterr().out
+    assert f"Wrote {hook_path}" in output
+    assert f". '{hook_path}'" in output
+
+
 def test_cli_help_for_commands(capsys):
     assert cli.main(["--help"]) == 0
     top = capsys.readouterr().out
@@ -852,7 +868,10 @@ def test_cli_bootstrap_non_interactive(monkeypatch, tmp_path, capsys):
     ]) == 0
     loaded = config.load_config(cfg_path)
     assert loaded.default_agents == ["codex_cli", "claude_code"]
-    capsys.readouterr()
+    bootstrap_output = capsys.readouterr().out
+    assert "Shell profile changes are not required" in bootstrap_output
+    assert "csk shell-init --install" in bootstrap_output
+    assert "shell-init bash" not in bootstrap_output
 
     # Existing config without --force is an error in non-interactive mode.
     assert cli.main(["bootstrap", "--non-interactive", "--skills-root", str(tmp_path / "skills")]) == 2

@@ -255,8 +255,8 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
             if expected_commands and not _directory_is_on_path(project_bin):
                 result.messages.append(
                     f"{project.alias}: commands are installed in {project_bin}, which is not on PATH; "
-                    "invoke that directory explicitly or run 'csk shell-init <shell> --install' once "
-                    "and source the printed hook from your shell profile"
+                    "agent skills resolve that directory directly. For optional bare commands in an interactive "
+                    "shell, run 'csk shell-init --install' once and source the printed hook from your profile"
                 )
             return result
     except Exception as exc:

@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from conftest import commit_all, init_git_repo, make_config, make_project, make_skill_repo, run, write_files, write_skillfile
-from csk import cli, config, global_bins, global_install, installer
+from csk import cli, config, global_bins, global_install, installer, shims
 
 
 def _save_config(monkeypatch: pytest.MonkeyPatch, cfg: config.GlobalConfig) -> None:
@@ -146,6 +146,28 @@ def test_global_install_publishes_commands_to_path_visible_user_bin(monkeypatch,
     assert json.loads((user_bin / ".csk-managed.json").read_text(encoding="utf-8"))["entries"] == ["tool"]
     proc = subprocess.run(["tool"], cwd=tmp_path, check=True, text=True, capture_output=True)
     assert proc.stdout.strip() == "global-user-bin"
+
+
+def test_global_user_bin_publishes_windows_cmd_wrapper(tmp_path):
+    csk_home = tmp_path / "csk home"
+    runtime = csk_home / "runtime" / "skill-tool" / "abc" / "bin" / "tool.cmd"
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text("@echo off\r\necho global-windows\r\n", encoding="utf-8")
+    canonical = shims.write_global_shim(csk_home, "tool", runtime, platform_name="windows")
+    user_bin = tmp_path / "windows user bin"
+
+    messages = global_bins.refresh_user_bin_shims(
+        csk_home,
+        {"tool"},
+        platform_name="windows",
+        env={"CSK_GLOBAL_USER_BIN": str(user_bin), "PATH": ""},
+        home=tmp_path,
+    )
+
+    published = user_bin / "tool.cmd"
+    assert published.is_file()
+    assert f'"{canonical}" %*' in published.read_text(encoding="utf-8")
+    assert messages == [f"global: command shims published to {user_bin}"]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX user-bin shims use symlinks")

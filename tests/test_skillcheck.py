@@ -67,12 +67,17 @@ def test_validate_warns_when_prompt_context_references_runtime_root(tmp_path, ru
     issues = skillcheck.validate_skill(tmp_path)
 
     assert [(issue.severity, issue.code, issue.path) for issue in issues] == [
-        ("warning", "skill.runtime_root_in_prompt_context", "SKILL.md")
+        ("warning", "skill.runtime_root_in_prompt_context", "SKILL.md"),
+        ("warning", "skill.command_resolution_contract_missing", "SKILL.md"),
     ]
 
 
 def test_validate_ignores_runtime_root_reference_outside_prompt_context(tmp_path):
-    (tmp_path / "SKILL.md").write_text("---\nname: skill\n---\n", encoding="utf-8")
+    (tmp_path / "SKILL.md").write_text(
+        "---\nname: skill\n---\n\n"
+        "Resolve .agents/bin/tool, then global/bin/tool, then command -v tool or Get-Command tool.\n",
+        encoding="utf-8",
+    )
     (tmp_path / "README.md").write_text("Develop with scripts/tool.\n", encoding="utf-8")
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
@@ -120,8 +125,69 @@ def test_validate_warns_when_consumer_references_provider_source_runtime(tmp_pat
     issues = skillcheck.validate_skill(tmp_path)
 
     assert [(issue.severity, issue.code, issue.path) for issue in issues] == [
-        ("warning", "skill.provider_runtime_path_in_prompt_context", "SKILL.md")
+        ("warning", "skill.provider_runtime_path_in_prompt_context", "SKILL.md"),
+        ("warning", "skill.command_resolution_contract_missing", "SKILL.md"),
     ]
+
+
+def test_validate_warns_when_managed_command_has_no_shell_neutral_resolver(tmp_path):
+    (tmp_path / "SKILL.md").write_text("---\nname: skill\n---\n\nRun tool.\n", encoding="utf-8")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+    (tmp_path / "scripts" / "tool.cmd").write_text("@echo off\r\n", encoding="utf-8")
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "runtime_roots": ["scripts"],
+                "commands": {
+                    "tool": {
+                        "type": "script",
+                        "unix_path": "scripts/tool",
+                        "win_path": "scripts/tool.cmd",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    issues = skillcheck.validate_skill(tmp_path)
+
+    assert [(issue.severity, issue.code) for issue in issues] == [
+        ("warning", "skill.command_resolution_contract_missing")
+    ]
+    assert "Windows .cmd shim suffix" in issues[0].message
+
+
+def test_validate_accepts_cross_platform_shell_neutral_resolver(tmp_path):
+    (tmp_path / "SKILL.md").write_text(
+        "---\nname: skill\n---\n\n"
+        "Resolve .agents/bin/tool (tool.cmd on Windows), then global/bin/tool, "
+        "then command -v tool or Get-Command tool.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+    (tmp_path / "scripts" / "tool.cmd").write_text("@echo off\r\n", encoding="utf-8")
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "runtime_roots": ["scripts"],
+                "commands": {
+                    "tool": {
+                        "type": "script",
+                        "unix_path": "scripts/tool",
+                        "win_path": "scripts/tool.cmd",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert skillcheck.validate_skill(tmp_path) == []
 
 
 def test_validate_locale_falls_back_when_selected_catalog_missing_but_other_locale_is_consistent(tmp_path):

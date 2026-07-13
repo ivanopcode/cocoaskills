@@ -223,33 +223,43 @@ Global commands are exposed through `~/.cocoaskills/global/bin`. During
 user bin that is already on `PATH`, such as `~/.local/bin`, so global commands
 work from any directory without per-project activation.
 
-If no safe user bin is available, the install succeeds and prints a warning.
-In that case, add `~/.cocoaskills/global/bin` to `PATH`, set
-`CSK_GLOBAL_USER_BIN` to a writable PATH directory, or activate the shell hook
-for the current session:
+Agent execution never depends on shell profile activation. Installed skills
+resolve project shims explicitly from `<repo>/.agents/bin/<command>`
+(`<command>.cmd` on Windows), then global shims from
+`<csk-home>/global/bin`, and only then a validated bare command. This contract
+works unchanged from zsh, bash, PowerShell, Git Bash, CI, and agent processes
+that were not launched from an initialized interactive shell.
+
+On Windows, PowerShell 5.1, PowerShell 7, and `cmd.exe` can all execute the
+generated `.cmd` shims directly. Optional directory-change activation is
+available for PowerShell and Git Bash; `cmd.exe` has no profile hook and does
+not need one for agent execution.
+
+If no safe user bin is available, global install still succeeds and prints a
+warning. Agents continue to use the explicit global path. Humans can set
+`CSK_GLOBAL_USER_BIN` to a writable PATH directory or invoke the generated shim
+explicitly.
+
+Shell activation is optional human convenience for bare project commands and
+project-over-global command shadowing. `auto` detects zsh or bash from `SHELL`,
+PowerShell on Windows, and Git Bash on Windows before the platform fallback:
 
 ```bash
-eval "$(csk shell-init zsh)"
+csk shell-init --install
+# Or choose explicitly: zsh, bash, powershell
 ```
 
-For persistent setup, avoid starting the Python CLI for every new shell. Cache
-the hook atomically once, then add the source command printed by csk to
-`.zshrc`, `.bashrc`, or the PowerShell profile:
+The command atomically caches the hook and prints the correctly quoted source
+line for `.zshrc`, `.bashrc`, or the PowerShell profile. Never put
+`eval "$(csk shell-init ...)"` in a profile: that starts Python for every new
+shell. Run `--install` again after upgrading CocoaSkills so the optional cached
+hook receives fixes.
 
-```bash
-csk shell-init zsh --install
-```
-
-Run the `--install` command again after upgrading CocoaSkills so the cached
-hook receives fixes. Set `CSK_AUTO_ENV=0` before sourcing the hook to disable
-project-directory scanning on an unhealthy or blocking filesystem; global
-commands remain active, while project commands must then be invoked explicitly
-from `.agents/bin`.
-
-Inside a project, the shell hook still matters for project-local command
-shadowing: `.agents/bin` shims should come before global shims. Project-local
-skills with the same name shadow global skills. Global skills never replace
-committed project `Skillfile.json` declarations.
+Set `CSK_AUTO_ENV=0` before sourcing the optional hook to disable project
+directory scanning on an unhealthy or blocking filesystem. Global commands
+remain active; project commands remain available by explicit `.agents/bin`
+path. Global skills never replace committed project `Skillfile.json`
+declarations.
 
 ## Hybrid skills
 
@@ -423,7 +433,7 @@ networks, lives at
 | `csk global status` | Show global manifest vs installed state. |
 | `csk global list` | List global skill declarations. |
 | `csk config show` | Print resolved config path and contents. |
-| `csk shell-init [zsh\|bash\|powershell]` | Print shell hook code for global and project-local auto-`PATH` activation. `--install` atomically caches it and prints the profile source command; `--no-global` limits activation to project checkouts. |
+| `csk shell-init [auto\|zsh\|bash\|powershell]` | Optionally print shell hook code for human-facing global and project-local auto-`PATH` activation. The default `auto` detects the current environment; `--install` atomically caches it and prints the profile source command; `--no-global` limits activation to project checkouts. Agent execution does not require this hook. |
 | `csk --version` | Print version and exit. |
 
 Flags shared by `install` and `upgrade`:

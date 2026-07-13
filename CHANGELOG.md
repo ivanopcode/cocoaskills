@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-07-13
+
+### Добавлено
+
+- `csk shell-init --install` теперь автоматически выбирает zsh или bash из
+  `SHELL`, PowerShell на Windows и сохраняет Git Bash как POSIX-окружение.
+- `csk skill check` предупреждает, если скилл с управляемыми runtime-командами
+  не описывает shell-neutral резолюцию через project shim, global shim,
+  проверенный bare command и `.cmd` на Windows.
+
+### Изменено
+
+- Shell profile больше не является частью обязательного онбординга: agent
+  skills вызывают команды по явным `.agents/bin` и global shim-путям на zsh,
+  bash, PowerShell, Git Bash, CI и в неинтерактивных процессах.
+- `csk bootstrap` больше не рекомендует bash-hook всем пользователям и явно
+  помечает кэшированный hook как опциональное удобство для человека.
+
+### Исправлено
+
+- Повторное подключение POSIX-hook больше не дублирует `_csk_auto_env` в
+  `PROMPT_COMMAND` или zsh `chpwd` hooks.
+
 ## [0.12.1] - 2026-07-13
 
 ### Добавлено
@@ -397,7 +420,8 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.1...main
+[Unreleased]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.2...main
+[0.12.2]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.1...v0.12.2
 [0.12.1]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.10.0...v0.11.0

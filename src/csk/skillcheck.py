@@ -41,6 +41,7 @@ def validate_skill(skill_dir: Path, *, locale_value: str | None = None) -> list[
 
     if spec is not None:
         issues.extend(_runtime_root_reference_warnings(skill_dir, spec))
+        issues.extend(_command_resolution_warnings(skill_dir, spec))
 
     try:
         locale_analysis = locale.analyze_locale(skill_dir, locale_value)
@@ -91,16 +92,8 @@ def _runtime_root_reference_warnings(
     )
     if not spec.runtime_roots and not has_provider_runtime:
         return []
-    markdown_files: list[Path] = []
-    for root in sorted(whitelist.INCLUDE_ROOTS):
-        candidate = skill_dir / root
-        if candidate.is_file() and candidate.suffix.lower() == ".md":
-            markdown_files.append(candidate)
-        elif candidate.is_dir():
-            markdown_files.extend(path for path in candidate.rglob("*.md") if path.is_file())
-
     warnings: list[ValidationIssue] = []
-    for path in sorted(set(markdown_files)):
+    for path in _prompt_markdown_files(skill_dir):
         text = path.read_text(encoding="utf-8", errors="replace")
         for runtime_root in spec.runtime_roots:
             windows_root = runtime_root.replace("/", "\\")
@@ -130,3 +123,51 @@ def _runtime_root_reference_warnings(
                 )
             )
     return warnings
+
+
+def _command_resolution_warnings(
+    skill_dir: Path,
+    spec: skillspec.SkillSpec,
+) -> list[ValidationIssue]:
+    script_commands = [command for command in spec.commands.values() if command.type == "script"]
+    has_provider_commands = any(dependency.type == "skill" for dependency in spec.dependencies.values()) or any(
+        requirement.mode in {"full", "runtime"} for requirement in spec.requirements.values()
+    )
+    if not script_commands and not has_provider_commands:
+        return []
+
+    text = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace") for path in _prompt_markdown_files(skill_dir)
+    )
+    missing: list[str] = []
+    if ".agents/bin" not in text and ".agents\\bin" not in text:
+        missing.append("project .agents/bin lookup")
+    if "global/bin" not in text and "global\\bin" not in text:
+        missing.append("CocoaSkills global/bin fallback")
+    if "command -v" not in text or "Get-Command" not in text:
+        missing.append("validated POSIX and PowerShell bare-command fallbacks")
+    if any(command.win_path is not None for command in script_commands) and ".cmd" not in text:
+        missing.append("Windows .cmd shim suffix")
+    if not missing:
+        return []
+    return [
+        ValidationIssue(
+            "warning",
+            "skill.command_resolution_contract_missing",
+            "SKILL.md",
+            "Prompt-visible instructions export managed runtime commands but do not document a shell-neutral "
+            f"resolver ({', '.join(missing)}). Agents must resolve project shims first, then global shims, "
+            "then a validated bare command; shell profile activation is optional.",
+        )
+    ]
+
+
+def _prompt_markdown_files(skill_dir: Path) -> list[Path]:
+    markdown_files: list[Path] = []
+    for root in sorted(whitelist.INCLUDE_ROOTS):
+        candidate = skill_dir / root
+        if candidate.is_file() and candidate.suffix.lower() == ".md":
+            markdown_files.append(candidate)
+        elif candidate.is_dir():
+            markdown_files.extend(path for path in candidate.rglob("*.md") if path.is_file())
+    return sorted(set(markdown_files))

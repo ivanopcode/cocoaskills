@@ -24,14 +24,16 @@ A skill install materializes two independent layers:
   files copied into `<project>/.agents/skills/<name>/` and mirrored into agent
   adapter directories. This is what the agent reads.
 - The runtime layer: `runtime_roots` copied into the shared runtime store and
-  exposed as command shims in `<project>/.agents/bin/`. This is what the shell
-  executes. Runtime files stay out of the agent context.
+  exposed as command shims in `<project>/.agents/bin/`. Agents and humans
+  execute these shims explicitly; optional shell activation only adds bare-name
+  convenience. Runtime files stay out of the agent context.
 
 The split keeps the agent window small and makes activation modes possible: a
 dependency can contribute commands, context, or both ([RFC 0007](docs/v0.9-design.md)).
 Consequently, prompt-visible instructions resolve exported command shims by
 project/global scope and never address a `runtime_root` relative to `SKILL.md`.
-This remains true when an adapter mirrors context by copy instead of symlink.
+This remains true when an adapter mirrors context by copy instead of symlink,
+and it removes any dependency on zsh/bash/PowerShell profile initialization.
 
 ## Install pipeline
 

@@ -17,6 +17,25 @@ def _posix_shell_command(executable: str, script: str) -> list[str]:
     return [executable, "--noprofile", "--norc", "-c", script]
 
 
+@pytest.mark.parametrize(
+    ("environment", "platform_name", "expected"),
+    [
+        ({"SHELL": "/bin/zsh"}, "posix", "zsh"),
+        ({"SHELL": "/usr/local/bin/bash"}, "posix", "bash"),
+        ({"SHELL": r"C:\Program Files\Git\bin\bash.exe"}, "windows", "bash"),
+        ({}, "windows", "powershell"),
+        ({"PSModulePath": "modules"}, "posix", "powershell"),
+        ({}, "posix", "bash"),
+    ],
+)
+def test_detect_shell_is_cross_platform(
+    environment: dict[str, str],
+    platform_name: str,
+    expected: str,
+) -> None:
+    assert shell_init.detect_shell(env=environment, platform_name=platform_name) == expected
+
+
 @pytest.mark.parametrize("shell", ["bash", "zsh"])
 def test_posix_hook_activates_and_restores_project_env(tmp_path: Path, shell: str) -> None:
     executable = shutil.which(shell)
@@ -166,6 +185,28 @@ def test_posix_hook_can_disable_project_filesystem_scan(tmp_path: Path, shell: s
 
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout == f"project=unset global={csk_home / 'global'}\n"
+
+
+def test_bash_hook_does_not_duplicate_prompt_command_when_sourced_twice(tmp_path: Path) -> None:
+    executable = shutil.which("bash")
+    if executable is None:
+        pytest.skip("bash is unavailable")
+    hook_path = tmp_path / "hook.sh"
+    hook_path.write_text(shell_init.shell_init("bash", include_global=False), encoding="utf-8")
+    completed = subprocess.run(
+        _posix_shell_command(
+            executable,
+            'PROMPT_COMMAND="existing"; . "$HOOK_PATH"; . "$HOOK_PATH"; printf "%s\\n" "$PROMPT_COMMAND"',
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        env={**os.environ, "HOOK_PATH": str(hook_path), "SHELL": executable},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == "_csk_auto_env;existing\n"
 
 
 def test_powershell_hook_installs_idempotent_prompt_wrapper() -> None:

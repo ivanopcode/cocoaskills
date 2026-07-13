@@ -314,7 +314,7 @@ csk list [--paths]
 csk project add <alias> <path>
 csk project resolve [target]
 csk config show
-csk shell-init [zsh|bash|powershell]
+csk shell-init [auto|zsh|bash|powershell]
 csk --help
 csk <command> --help
 csk --version
@@ -333,7 +333,7 @@ Command behavior:
 
 | Command | Behavior |
 | --- | --- |
-| `bootstrap` | Interactively creates global config, preferred locale, default agents, focused projects, and optionally shell hook instructions. |
+| `bootstrap` | Interactively creates global config, preferred locale, default agents, and focused projects. Shell profile activation is not required. |
 | `install` | Applies `Skillfile.json` using current local git refs. It does not fetch. |
 | `install <alias>` | Installs one configured project. |
 | `install .` / `install /path/to/project` | Finds `Skillfile.json` in or above the target directory, computes a checkout alias, updates global config for that checkout, then installs that checkout. |
@@ -348,7 +348,7 @@ Command behavior:
 | `project add` | Adds a project to global config and creates an empty `Skillfile.json` if missing. |
 | `project resolve` | Shows which alias/path/Skillfile/install paths `csk` would use for a checkout. |
 | `config show` | Prints resolved config path and config content. |
-| `shell-init` | Prints shell hook code for automatic project-local `PATH` activation. |
+| `shell-init` | Optionally prints or caches shell hook code for human-facing project-local `PATH` activation; omitted shell names are auto-detected. |
 | `--help` | Prints top-level command help and local documentation index, then exits. |
 | `<command> --help` | Prints command-specific documentation, examples, side effects, and exits. |
 | `--version` | Prints the `csk` version and exits. |
@@ -442,10 +442,11 @@ user-facing documentation file in the same change.
 2. `preferred_locale`
 3. `default_agents`
 4. projects to focus on, as an alias/path loop
-5. whether to print or install shell hook instructions
 
 The command writes `~/.cocoaskills/config.json` unless `CSK_CONFIG` is set.
 It must not overwrite an existing config without explicit confirmation.
+It does not need to modify a shell profile: agent-facing command resolution is
+based on explicit project and global shim paths.
 
 ## Status Output
 
@@ -786,12 +787,22 @@ Command collision policy:
 <project>/.agents/env.ps1
 ```
 
-`env.sh` adds project `.agents/bin` to `PATH`.
+`env.sh` optionally adds project `.agents/bin` to `PATH` for an interactive
+POSIX shell.
 
-`env.ps1` adds project `.agents\bin` to `PATH`.
+`env.ps1` optionally adds project `.agents\bin` to `PATH` for PowerShell.
 
-A child process cannot mutate the parent shell environment. Therefore automatic
-activation requires a one-time shell hook.
+Agent-facing execution does not require either file to be sourced. Installed
+skills resolve the nearest project shim explicitly, with a `.cmd` suffix on
+Windows, then the CocoaSkills global shim, then a validated bare command. This
+is the default path for zsh, bash, PowerShell, Git Bash, and non-interactive
+agent processes.
+
+A child process cannot mutate the parent shell environment. Therefore humans
+who want automatic bare project commands may opt into a one-time cached hook.
+`csk shell-init --install` auto-detects zsh/bash from `SHELL`, Git Bash before
+the Windows fallback, and PowerShell on Windows. An explicit shell argument
+remains available.
 
 `csk shell-init zsh` and `csk shell-init bash` print a hook that:
 
@@ -808,10 +819,9 @@ Since v0.6.0, `csk shell-init` also activates the user-wide global scope from
 This makes global commands available outside project checkouts while preserving
 project-local shadowing inside managed projects.
 
-`csk bootstrap` should offer to install or print shell hook instructions.
-
-If shell hook is not installed, `csk install` still succeeds but warns that
-agent processes launched from the shell may not see project `.agents/bin`.
+`csk bootstrap` states that no shell profile changes are required and may point
+to the optional cached hook for human convenience. `csk install` reports an
+off-`PATH` project bin as informational: agent skills use it directly.
 
 ## Locale Policy
 

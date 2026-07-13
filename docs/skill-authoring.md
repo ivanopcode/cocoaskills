@@ -322,8 +322,9 @@ once, before its first invocation:
 1. When `.csk-install.json` is present next to `SKILL.md`, search upward from
    the current working directory, then from the physical `SKILL.md` path, for
    the nearest `<ancestor>/.agents/bin/<command>` (`.cmd` on Windows).
-2. If there is no project shim, use `<csk-home>/global/bin/<command>`, where
-   `<csk-home>` is the parent of `CSK_CONFIG` or `~/.cocoaskills` by default.
+2. If there is no project shim, use `<csk-home>/global/bin/<command>`
+   (`<command>.cmd` on Windows), where `<csk-home>` is the parent of
+   `CSK_CONFIG` or `~/.cocoaskills` by default.
 3. Use a bare command only as a final fallback after `command -v` or
    `Get-Command` confirms it exists.
 4. When `.csk-install.json` is absent, treat the skill as a source checkout:
@@ -342,6 +343,11 @@ Apply the same rule to workflow skills that consume commands from
 `dependencies.skills` or legacy `dependencies.commands` entries. Their own
 `runtime_roots` may be empty, but provider source paths are still unavailable
 after installation.
+
+Shell activation is never a prerequisite for agent execution. Authors must
+keep the explicit project/global resolver even when their own interactive shell
+already exposes the command through `PATH`; `csk skill check` warns when a
+managed command lacks this shell-neutral contract.
 
 `csk skill check` warns when prompt-visible Markdown refers to a runtime-only
 root or guesses a provider's source runtime. Human-only source development

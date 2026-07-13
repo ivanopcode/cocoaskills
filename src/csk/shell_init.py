@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 
@@ -10,6 +11,28 @@ _HOOK_FILENAMES = {
     "bash": "csk.bash",
     "powershell": "csk.ps1",
 }
+
+
+def detect_shell(
+    *,
+    env: Mapping[str, str] | None = None,
+    platform_name: str | None = None,
+) -> str:
+    """Return the best supported shell for the current process environment."""
+    values = os.environ if env is None else env
+    configured = values.get("SHELL", "").strip().replace("\\", "/")
+    name = configured.rsplit("/", 1)[-1].lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    if name in {"zsh", "bash"}:
+        # SHELL wins on Windows too so Git Bash keeps its POSIX hook.
+        return name
+
+    effective_platform = platform_name or ("windows" if os.name == "nt" else "posix")
+    if effective_platform == "windows" or values.get("PSModulePath"):
+        return "powershell"
+    # Preserve the historical, portable fallback for containers and minimal CI.
+    return "bash"
 
 
 def shell_init(shell: str, *, include_global: bool = True) -> str:
@@ -130,9 +153,16 @@ _csk_auto_env() {{
 }}
 
 case "$SHELL" in
-  *zsh*) autoload -Uz add-zsh-hook 2>/dev/null || true; add-zsh-hook chpwd _csk_auto_env 2>/dev/null || true ;;
+  *zsh*)
+    autoload -Uz add-zsh-hook 2>/dev/null || true
+    add-zsh-hook -d chpwd _csk_auto_env 2>/dev/null || true
+    add-zsh-hook chpwd _csk_auto_env 2>/dev/null || true
+    ;;
 esac
-PROMPT_COMMAND="_csk_auto_env${{PROMPT_COMMAND:+;$PROMPT_COMMAND}}"
+case ";${{PROMPT_COMMAND:-}};" in
+  *";_csk_auto_env;"*) ;;
+  *) PROMPT_COMMAND="_csk_auto_env${{PROMPT_COMMAND:+;$PROMPT_COMMAND}}" ;;
+esac
 _csk_auto_env
 '''
 

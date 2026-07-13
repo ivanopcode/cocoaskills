@@ -218,11 +218,18 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Purpose:\n  Prints shell code that activates nearest .agents/env.sh or .agents/env.ps1.\n\n"
-            "Examples:\n  eval \"$(csk shell-init bash)\"\n"
+            "Shell profiles are optional: agent skills resolve project and global shims directly.\n\n"
+            "Examples:\n  csk shell-init --install\n"
             "  csk shell-init zsh --install\n  csk shell-init powershell --install"
         ),
     )
-    shell.add_argument("shell", nargs="?", default="bash", choices=["zsh", "bash", "powershell"])
+    shell.add_argument(
+        "shell",
+        nargs="?",
+        default="auto",
+        choices=["auto", "zsh", "bash", "powershell"],
+        help="shell syntax to generate; auto detects zsh/bash from SHELL and PowerShell on Windows",
+    )
     shell.add_argument("--no-global", action="store_true", help="do not activate global CocoaSkills bin")
     shell.add_argument(
         "--install",
@@ -239,7 +246,7 @@ def _add_bootstrap(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> 
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Asks for machine-level settings: skills_root, preferred_locale, "
-            "default_agents, and shell hook instructions. Flags override the prompts; "
+            "and default_agents. Shell profile changes are not required. Flags override the prompts; "
             "--non-interactive disables prompting entirely."
         ),
         epilog=(
@@ -463,16 +470,17 @@ def _dispatch(args: argparse.Namespace) -> int:
         print(_render_project_resolution(cfg, args))
         return EXIT_OK
     if args.command == "shell-init":
+        selected_shell = shell_init.detect_shell() if args.shell == "auto" else args.shell
         if args.install:
             hook_path = shell_init.install_shell_hook(
-                args.shell,
+                selected_shell,
                 config.config_path().parent,
                 include_global=not args.no_global,
             )
             print(f"Wrote {hook_path}")
-            print(f"Add this to your shell profile: {shell_init.source_command(args.shell, hook_path)}")
+            print(f"Add this to your shell profile: {shell_init.source_command(selected_shell, hook_path)}")
         else:
-            print(shell_init.shell_init(args.shell, include_global=not args.no_global))
+            print(shell_init.shell_init(selected_shell, include_global=not args.no_global))
         return EXIT_OK
     if args.command == "global":
         return _dispatch_global(args)
@@ -691,7 +699,8 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
     )
     config.save_config(cfg)
     print(f"Wrote {path}")
-    print("Install a cached shell hook with: csk shell-init bash --install")
+    print("Shell profile changes are not required: agent skills resolve project and global command shims directly.")
+    print("Optional bare project commands for humans: csk shell-init --install")
     return EXIT_OK
 
 
