@@ -310,6 +310,43 @@ Schema v2 rules:
   those roots.
 - The path must exist and must be a file.
 
+### Agent-facing command resolution
+
+`runtime_roots` are intentionally absent from installed prompt context. A
+`SKILL.md` or prompt-visible reference must therefore never assume that a
+manifest path such as `scripts/tool` exists next to the installed skill.
+
+Define placeholders such as `<tool-command>` and resolve each exported command
+once, before its first invocation:
+
+1. When `.csk-install.json` is present next to `SKILL.md`, search upward from
+   the current working directory, then from the physical `SKILL.md` path, for
+   the nearest `<ancestor>/.agents/bin/<command>` (`.cmd` on Windows).
+2. If there is no project shim, use `<csk-home>/global/bin/<command>`, where
+   `<csk-home>` is the parent of `CSK_CONFIG` or `~/.cocoaskills` by default.
+3. Use a bare command only as a final fallback after `command -v` or
+   `Get-Command` confirms it exists.
+4. When `.csk-install.json` is absent, treat the skill as a source checkout:
+   read the platform entrypoint from `csk-skill.json` and resolve that path
+   relative to the physical skill directory.
+5. If no declared command can be found, report an incomplete installation and
+   stop. Do not guess a runtime path or execute one relative to the current
+   working directory.
+
+The search from both the working directory and the physical skill path matters:
+agent adapters can be symlinks or copies, while project-local commands must
+still shadow global commands. Do not derive the command solely as a fixed
+number of `..` components from an adapter-visible `SKILL.md` path.
+
+Apply the same rule to workflow skills that consume commands from
+`dependencies.skills` or legacy `dependencies.commands` entries. Their own
+`runtime_roots` may be empty, but provider source paths are still unavailable
+after installation.
+
+`csk skill check` warns when prompt-visible Markdown refers to a runtime-only
+root or guesses a provider's source runtime. Human-only source development
+commands belong in `README.md`, which is not copied into prompt context.
+
 Command entrypoints should resolve their own directory before loading sibling
 files. For POSIX shell scripts:
 
@@ -491,8 +528,9 @@ csk skill check . --json
 
 The command validates intrinsic skill requirements in the working tree:
 `SKILL.md`, `csk-skill.json`, runtime roots, command shape, and locale catalog
-consistency. It does not require `~/.cocoaskills/config.json`, `Skillfile.json`,
-or project setup.
+consistency. It also warns when prompt-visible Markdown points into a
+runtime-only source directory that will be absent after install. It does not
+require `~/.cocoaskills/config.json`, `Skillfile.json`, or project setup.
 
 `csk skill check` reads the working tree as-is. `csk install` validates the
 committed git snapshot resolved from a consuming project's `Skillfile.json`, so
@@ -655,11 +693,15 @@ Before tagging a skill release:
 4. Confirm runtime files are present under
    `~/.cocoaskills/runtime/<skill>/<commit>/`.
 5. Confirm project commands are available through `.agents/bin`.
-6. Confirm missing system dependencies fail with a clear hint.
-7. Confirm `SKILL.md` and `references/` contain all agent-facing instructions.
-8. Tag the skill repository.
-9. Update consuming project `Skillfile.json` to the new tag.
-10. Run `csk install` and `csk status`.
+6. Confirm command resolution still works when `.agents/bin` is not already on
+   `PATH`, including copied adapter mode.
+7. Confirm `SKILL.md` and prompt-visible references contain no executable path
+   into a runtime root.
+8. Confirm missing system dependencies fail with a clear hint.
+9. Confirm `SKILL.md` and `references/` contain all agent-facing instructions.
+10. Tag the skill repository.
+11. Update consuming project `Skillfile.json` to the new tag.
+12. Run `csk install` and `csk status`.
 
 ## 13. Migration Notes
 

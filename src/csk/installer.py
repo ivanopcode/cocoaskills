@@ -251,6 +251,13 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                 ],
                 config.adapter_mode,
             )
+            project_bin = project.path / ".agents" / "bin"
+            if expected_commands and not _directory_is_on_path(project_bin):
+                result.messages.append(
+                    f"{project.alias}: commands are installed in {project_bin}, which is not on PATH; "
+                    "invoke that directory explicitly or run 'csk shell-init <shell> --install' once "
+                    "and source the printed hook from your shell profile"
+                )
             return result
     except Exception as exc:
         result.status = "failed"
@@ -272,6 +279,16 @@ def _hybrid_store_names(nodes: list[closure.ClosureNode], project_declared: set[
             if requirement.name in by_name and requirement.name not in reachable:
                 stack.append(requirement.name)
     return set(by_name) - reachable
+
+
+def _directory_is_on_path(directory: Path, *, path_value: str | None = None) -> bool:
+    expected = os.path.normcase(os.path.abspath(directory))
+    value = os.environ.get("PATH", "") if path_value is None else path_value
+    return any(
+        os.path.normcase(os.path.abspath(Path(entry).expanduser())) == expected
+        for entry in value.split(os.pathsep)
+        if entry
+    )
 
 
 def _node_summary(node: closure.ClosureNode) -> str:

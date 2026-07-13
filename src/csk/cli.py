@@ -76,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  csk project add        add a configured project\n"
             "  csk project resolve    show current checkout resolution\n"
             "  csk config show        show config path and content\n"
-            "  csk shell-init         print shell hook code\n\n"
+            "  csk shell-init         print or install shell hook code\n\n"
             "Run 'csk <command> --help' for command-specific documentation."
         ),
     )
@@ -214,15 +214,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     shell = sub.add_parser(
         "shell-init",
-        help="Print shell hook code for PATH activation.",
+        help="Print or install shell hook code for PATH activation.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Purpose:\n  Prints shell code that activates nearest .agents/env.sh or .agents/env.ps1.\n\n"
-            "Examples:\n  eval \"$(csk shell-init bash)\"\n  csk shell-init powershell >> $PROFILE"
+            "Examples:\n  eval \"$(csk shell-init bash)\"\n"
+            "  csk shell-init zsh --install\n  csk shell-init powershell --install"
         ),
     )
     shell.add_argument("shell", nargs="?", default="bash", choices=["zsh", "bash", "powershell"])
     shell.add_argument("--no-global", action="store_true", help="do not activate global CocoaSkills bin")
+    shell.add_argument(
+        "--install",
+        action="store_true",
+        help="atomically cache the hook under the CocoaSkills home and print the profile source command",
+    )
     return parser
 
 
@@ -457,7 +463,16 @@ def _dispatch(args: argparse.Namespace) -> int:
         print(_render_project_resolution(cfg, args))
         return EXIT_OK
     if args.command == "shell-init":
-        print(shell_init.shell_init(args.shell, include_global=not args.no_global))
+        if args.install:
+            hook_path = shell_init.install_shell_hook(
+                args.shell,
+                config.config_path().parent,
+                include_global=not args.no_global,
+            )
+            print(f"Wrote {hook_path}")
+            print(f"Add this to your shell profile: {shell_init.source_command(args.shell, hook_path)}")
+        else:
+            print(shell_init.shell_init(args.shell, include_global=not args.no_global))
         return EXIT_OK
     if args.command == "global":
         return _dispatch_global(args)
@@ -676,7 +691,7 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
     )
     config.save_config(cfg)
     print(f"Wrote {path}")
-    print("Install shell hook with: eval \"$(csk shell-init bash)\"")
+    print("Install a cached shell hook with: csk shell-init bash --install")
     return EXIT_OK
 
 

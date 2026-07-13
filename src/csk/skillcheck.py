@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import locale, skillspec
+from . import locale, skillspec, whitelist
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,7 @@ class ValidationIssue:
 
 def validate_skill(skill_dir: Path, *, locale_value: str | None = None) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
+    spec: skillspec.SkillSpec | None = None
     if not (skill_dir / "SKILL.md").is_file():
         issues.append(
             ValidationIssue(
@@ -27,7 +28,7 @@ def validate_skill(skill_dir: Path, *, locale_value: str | None = None) -> list[
         )
 
     try:
-        skillspec.load_skill_spec(skill_dir)
+        spec = skillspec.load_skill_spec(skill_dir)
     except skillspec.SkillSpecError as exc:
         issues.append(
             ValidationIssue(
@@ -37,6 +38,9 @@ def validate_skill(skill_dir: Path, *, locale_value: str | None = None) -> list[
                 str(exc),
             )
         )
+
+    if spec is not None:
+        issues.extend(_runtime_root_reference_warnings(skill_dir, spec))
 
     try:
         locale_analysis = locale.analyze_locale(skill_dir, locale_value)
@@ -76,3 +80,53 @@ def _skill_spec_path(skill_dir: Path) -> str:
     if (skill_dir / "agents" / "runtime.json").exists():
         return "agents/runtime.json"
     return ""
+
+
+def _runtime_root_reference_warnings(
+    skill_dir: Path,
+    spec: skillspec.SkillSpec,
+) -> list[ValidationIssue]:
+    has_provider_runtime = any(dependency.type == "skill" for dependency in spec.dependencies.values()) or any(
+        requirement.mode in {"full", "runtime"} for requirement in spec.requirements.values()
+    )
+    if not spec.runtime_roots and not has_provider_runtime:
+        return []
+    markdown_files: list[Path] = []
+    for root in sorted(whitelist.INCLUDE_ROOTS):
+        candidate = skill_dir / root
+        if candidate.is_file() and candidate.suffix.lower() == ".md":
+            markdown_files.append(candidate)
+        elif candidate.is_dir():
+            markdown_files.extend(path for path in candidate.rglob("*.md") if path.is_file())
+
+    warnings: list[ValidationIssue] = []
+    for path in sorted(set(markdown_files)):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for runtime_root in spec.runtime_roots:
+            windows_root = runtime_root.replace("/", "\\")
+            tokens = (f"{runtime_root}/", f"{windows_root}\\")
+            matched_token = next((token for token in tokens if token in text), None)
+            if matched_token is None:
+                continue
+            warnings.append(
+                ValidationIssue(
+                    "warning",
+                    "skill.runtime_root_in_prompt_context",
+                    path.relative_to(skill_dir).as_posix(),
+                    f"Prompt-visible text references runtime-only path {matched_token!r}; CocoaSkills removes "
+                    "that root from installed skill context. Use exported command placeholders for "
+                    "installed execution and keep manifest-relative paths source-checkout-only.",
+                )
+            )
+        if has_provider_runtime and ("scripts/" in text or "scripts\\" in text):
+            warnings.append(
+                ValidationIssue(
+                    "warning",
+                    "skill.provider_runtime_path_in_prompt_context",
+                    path.relative_to(skill_dir).as_posix(),
+                    "Prompt-visible text references a source scripts path while this skill consumes "
+                    "another skill's runtime. Resolve the provider's exported command shim instead "
+                    "of guessing its source layout.",
+                )
+            )
+    return warnings

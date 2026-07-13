@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from csk import skillcheck
 
 
@@ -41,6 +43,85 @@ def test_validate_system_command_shape_without_environment_presence_check(tmp_pa
     issues = skillcheck.validate_skill(tmp_path)
 
     assert issues == []
+
+
+@pytest.mark.parametrize("runtime_path", ["scripts/tool", r"scripts\tool.cmd"])
+def test_validate_warns_when_prompt_context_references_runtime_root(tmp_path, runtime_path):
+    (tmp_path / "SKILL.md").write_text(
+        f"---\nname: skill\n---\n\nRun `<skill-dir>/{runtime_path}`.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "runtime_roots": ["scripts"],
+                "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    issues = skillcheck.validate_skill(tmp_path)
+
+    assert [(issue.severity, issue.code, issue.path) for issue in issues] == [
+        ("warning", "skill.runtime_root_in_prompt_context", "SKILL.md")
+    ]
+
+
+def test_validate_ignores_runtime_root_reference_outside_prompt_context(tmp_path):
+    (tmp_path / "SKILL.md").write_text("---\nname: skill\n---\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("Develop with scripts/tool.\n", encoding="utf-8")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "runtime_roots": ["scripts"],
+                "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    issues = skillcheck.validate_skill(tmp_path)
+
+    assert issues == []
+
+
+@pytest.mark.parametrize("runtime_path", ["scripts/tool", r"scripts\tool.cmd"])
+def test_validate_warns_when_consumer_references_provider_source_runtime(tmp_path, runtime_path):
+    (tmp_path / "SKILL.md").write_text(
+        f"---\nname: consumer\n---\n\nRun the provider at {runtime_path}.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "commands": {},
+                "dependencies": {
+                    "commands": {
+                        "tool": {
+                            "type": "skill",
+                            "skill": "skill-provider",
+                            "command": "tool",
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    issues = skillcheck.validate_skill(tmp_path)
+
+    assert [(issue.severity, issue.code, issue.path) for issue in issues] == [
+        ("warning", "skill.provider_runtime_path_in_prompt_context", "SKILL.md")
+    ]
 
 
 def test_validate_locale_falls_back_when_selected_catalog_missing_but_other_locale_is_consistent(tmp_path):

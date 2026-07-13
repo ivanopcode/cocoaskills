@@ -18,6 +18,20 @@ def test_cli_version(capsys):
     assert out.startswith("csk ")
 
 
+def test_cli_shell_init_install_writes_atomic_cache(monkeypatch, tmp_path, capsys):
+    csk_home = tmp_path / "csk home"
+    monkeypatch.setenv("CSK_CONFIG", str(csk_home / "config.json"))
+
+    code = cli.main(["shell-init", "zsh", "--install"])
+
+    assert code == 0
+    hook_path = csk_home / "hooks" / "csk.zsh"
+    assert hook_path.read_text(encoding="utf-8").startswith("# CocoaSkill shell hook\n")
+    output = capsys.readouterr().out
+    assert f"Wrote {hook_path}" in output
+    assert f". '{hook_path}'" in output
+
+
 def test_cli_help_for_commands(capsys):
     assert cli.main(["--help"]) == 0
     top = capsys.readouterr().out

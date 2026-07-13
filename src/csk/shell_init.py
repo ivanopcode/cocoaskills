@@ -1,5 +1,16 @@
 from __future__ import annotations
 
+import os
+import tempfile
+from pathlib import Path
+
+
+_HOOK_FILENAMES = {
+    "zsh": "csk.zsh",
+    "bash": "csk.bash",
+    "powershell": "csk.ps1",
+}
+
 
 def shell_init(shell: str, *, include_global: bool = True) -> str:
     if shell in {"zsh", "bash"}:
@@ -9,12 +20,48 @@ def shell_init(shell: str, *, include_global: bool = True) -> str:
     raise ValueError(f"Unsupported shell: {shell}")
 
 
+def install_shell_hook(shell: str, csk_home: Path, *, include_global: bool = True) -> Path:
+    try:
+        filename = _HOOK_FILENAMES[shell]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported shell: {shell}") from exc
+    hooks_dir = csk_home / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    target = hooks_dir / filename
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{filename}.", dir=hooks_dir)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(shell_init(shell, include_global=include_global))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return target
+
+
+def source_command(shell: str, hook_path: Path) -> str:
+    value = str(hook_path)
+    if shell == "powershell":
+        return ". '" + value.replace("'", "''") + "'"
+    if shell in {"zsh", "bash"}:
+        return ". '" + value.replace("'", "'\"'\"'") + "'"
+    raise ValueError(f"Unsupported shell: {shell}")
+
+
 def _posix_hook(*, include_global: bool) -> str:
     global_part = r'''
 _csk_global_env_file() {
   local cfg="${CSK_CONFIG:-$HOME/.cocoaskills/config.json}"
   local home_dir
-  home_dir="$(dirname "$cfg")"
+  home_dir="${cfg%/*}"
+  if [ "$home_dir" = "$cfg" ]; then
+    home_dir="."
+  elif [ -z "$home_dir" ]; then
+    home_dir="/"
+  fi
   if [ -f "$home_dir/global/env.sh" ]; then
     printf '%s/global/env.sh\n' "$home_dir"
   fi
@@ -34,19 +81,38 @@ _csk_source_global_env() {
     return f'''# CocoaSkill shell hook
 {global_part}
 _csk_find_env() {{
-  local dir="$PWD"
-  while [ "$dir" != "/" ]; do
+  local dir="${{PWD:-}}"
+  case "$dir" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  while :; do
     if [ -f "$dir/.agents/env.sh" ]; then
       printf '%s/.agents/env.sh\\n' "$dir"
       return 0
     fi
-    dir="$(dirname "$dir")"
+    if [ "$dir" = "/" ]; then
+      break
+    fi
+    dir="${{dir%/*}}"
+    if [ -z "$dir" ]; then
+      dir="/"
+    fi
   done
   return 1
 }}
 
 _csk_auto_env() {{
-{source_global}  local env_file
+  local env_file
+{source_global}  if [ "${{CSK_AUTO_ENV:-1}}" = "0" ]; then
+    if [ -n "$CSK_ACTIVE_ENV" ]; then
+      PATH="$CSK_OLD_PATH"
+      export PATH
+      unset CSK_ACTIVE_ENV
+      unset CSK_OLD_PATH
+    fi
+    return 0
+  fi
   env_file="$(_csk_find_env 2>/dev/null || true)"
   if [ -n "$CSK_ACTIVE_ENV" ] && [ "$CSK_ACTIVE_ENV" != "$env_file" ]; then
     PATH="$CSK_OLD_PATH"
@@ -93,7 +159,15 @@ function Invoke-CskGlobalEnv {
     return f'''# CocoaSkill shell hook
 {global_part}
 function Invoke-CskAutoEnv {{
-{source_global}  $dir = Get-Location
+{source_global}  if ($env:CSK_AUTO_ENV -eq "0") {{
+    if ($env:CSK_ACTIVE_ENV) {{
+      $env:PATH = $env:CSK_OLD_PATH
+      Remove-Item Env:\\CSK_ACTIVE_ENV -ErrorAction SilentlyContinue
+      Remove-Item Env:\\CSK_OLD_PATH -ErrorAction SilentlyContinue
+    }}
+    return
+  }}
+  $dir = Get-Location
   $envFile = $null
   while ($dir) {{
     $candidate = Join-Path $dir ".agents/env.ps1"
