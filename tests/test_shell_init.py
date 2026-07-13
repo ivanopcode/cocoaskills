@@ -53,7 +53,9 @@ def test_posix_hook_activates_and_restores_project_env(tmp_path: Path, shell: st
     script = r'''
 original_path="$PATH"
 cd "$NESTED"
+expected_root="$(cd .. && pwd)"
 . "$HOOK_PATH"
+printf 'expected=%s\n' "$expected_root"
 printf 'active=%s\n' "$CSK_PROJECT_ROOT"
 case ":$PATH:" in
   *":$CSK_PROJECT_ROOT/.agents/bin:"*) printf 'project-bin=present\n' ;;
@@ -84,7 +86,8 @@ printf 'left=%s\n' "${CSK_ACTIVE_ENV-unset}"
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert f"active={project}" in completed.stdout
+    output = dict(line.split("=", 1) for line in completed.stdout.splitlines() if "=" in line)
+    assert output["active"] == output["expected"]
     assert "project-bin=present" in completed.stdout
     assert "path=restored" in completed.stdout
     assert "left=unset" in completed.stdout

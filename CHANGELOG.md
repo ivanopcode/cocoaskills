@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - zsh-hook теперь помечает проектное окружение активным до загрузки `env.sh`,
   чтобы внутренний `cd` при вычислении корня проекта не запускал рекурсивный
   `chpwd`/`_csk_auto_env` на macOS и в нагруженных shell-процессах.
+- Git Bash теперь нормализует переданный через `CSK_CONFIG` Windows drive-path
+  и корректно находит глобальное окружение CocoaSkills.
 
 ## [0.12.2] - 2026-07-13
 

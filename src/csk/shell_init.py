@@ -79,6 +79,9 @@ def _posix_hook(*, include_global: bool) -> str:
 _csk_global_env_file() {
   local cfg="${CSK_CONFIG:-$HOME/.cocoaskills/config.json}"
   local home_dir
+  case "$cfg" in
+    [A-Za-z]:\\*|[A-Za-z]:/*) cfg="${cfg//\\//}" ;;
+  esac
   home_dir="${cfg%/*}"
   if [ "$home_dir" = "$cfg" ]; then
     home_dir="."
