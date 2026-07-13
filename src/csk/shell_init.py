@@ -146,9 +146,12 @@ _csk_auto_env() {{
   if [ -n "$env_file" ] && [ "$CSK_ACTIVE_ENV" != "$env_file" ]; then
     CSK_OLD_PATH="$PATH"
     export CSK_OLD_PATH
-    . "$env_file"
+    # Mark the environment active before sourcing it. zsh runs chpwd hooks for
+    # a cd inside env.sh command substitutions, so setting this afterwards can
+    # recursively source the same file.
     CSK_ACTIVE_ENV="$env_file"
     export CSK_ACTIVE_ENV
+    . "$env_file"
   fi
 }}
 

@@ -209,6 +209,45 @@ def test_bash_hook_does_not_duplicate_prompt_command_when_sourced_twice(tmp_path
     assert completed.stdout == "_csk_auto_env;existing\n"
 
 
+def test_zsh_hook_does_not_reenter_while_sourcing_project_env(tmp_path: Path) -> None:
+    executable = shutil.which("zsh")
+    if executable is None:
+        pytest.skip("zsh is unavailable")
+    project = tmp_path / "project"
+    nested = project / "nested"
+    agents_dir = project / ".agents"
+    nested.mkdir(parents=True)
+    agents_dir.mkdir()
+    (agents_dir / "env.sh").write_text(
+        'CSK_SOURCE_COUNT=$(( ${CSK_SOURCE_COUNT:-0} + 1 ))\n'
+        'if [ "$CSK_SOURCE_COUNT" -gt 3 ]; then return 0; fi\n'
+        "_csk_auto_env\n",
+        encoding="utf-8",
+    )
+    hook_path = tmp_path / "hook.sh"
+    hook_path.write_text(shell_init.shell_init("zsh", include_global=False), encoding="utf-8")
+
+    completed = subprocess.run(
+        _posix_shell_command(
+            executable,
+            'cd "$NESTED"; . "$HOOK_PATH"; printf "sources=%s\\n" "$CSK_SOURCE_COUNT"',
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        env={
+            **os.environ,
+            "HOOK_PATH": str(hook_path),
+            "NESTED": str(nested),
+            "SHELL": executable,
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == "sources=1\n"
+
+
 def test_powershell_hook_installs_idempotent_prompt_wrapper() -> None:
     hook = shell_init.shell_init("powershell", include_global=False)
     assert "function global:prompt" in hook
