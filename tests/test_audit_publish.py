@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from csk import cli, config as csk_config
+from csk import audit_registry, cli, config as csk_config
 from conftest import make_config, make_project
 
 
@@ -62,9 +62,7 @@ def test_publish_posts_record(tmp_path, skills_root, csk_home, monkeypatch, caps
         captured["data"] = request.data
         return FakeResponse()
 
-    import urllib.request
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(audit_registry, "_open_registry_request", fake_urlopen)
 
     code = cli.main(
         ["audit", "--publish", str(record), "--registry", "https://r.example", "--token", "t0ken"]
@@ -73,8 +71,6 @@ def test_publish_posts_record(tmp_path, skills_root, csk_home, monkeypatch, caps
     assert captured["url"] == "https://r.example/v1/records"
     assert captured["auth"] == "Bearer t0ken"
     assert json.loads(captured["data"])["name"] == "skill-x"
-    from csk import audit_registry
-
     assert captured["idempotency"] == hashlib.sha256(
         audit_registry.canonical_bytes(json.loads(captured["data"]))
     ).hexdigest()
@@ -106,9 +102,7 @@ def test_publish_reads_token_from_env(tmp_path, skills_root, csk_home, monkeypat
         captured["auth"] = request.headers.get("Authorization")
         return FakeResponse()
 
-    import urllib.request
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(audit_registry, "_open_registry_request", fake_urlopen)
     assert cli.main(["audit", "--publish", str(record), "--registry", "https://r.example"]) == 0
     assert captured["auth"] == "Bearer env-token"
 

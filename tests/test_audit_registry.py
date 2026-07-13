@@ -241,7 +241,7 @@ def test_http_records_follows_bounded_pagination(monkeypatch):
             return FakeResponse({"records": [second], "next_cursor": None})
         return FakeResponse({"records": [first], "next_cursor": "page-2"})
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(audit_registry, "_open_registry_request", fake_urlopen)
     records = audit_registry._http_get_records("https://r.example/v1/records?limit=1000")
     assert [record["name"] for record in records] == ["skill-tracker", "skill-other"]
     assert len(requested) == 2
@@ -653,3 +653,29 @@ def test_check_snapshots_rejects_unknown_field(tmp_path):
     )
     assert registry.url in unavailable
     assert any("malformed" in warning for warning in warnings)
+
+
+def test_snapshot_rollback_state_migrates_and_corruption_fails_closed(tmp_path):
+    private, pinned = _make_key()
+    registry = RegistryConfig(name="central", url="https://r.example", public_keys=(pinned,))
+    snapshot = _sign_record(private, _snapshot_body(version=5))
+    now = audit_registry._parse_iso8601("2026-07-07T01:00:00Z")
+    assert now is not None
+    legacy = tmp_path / "cache" / "registry"
+    unavailable, warnings = audit_registry.check_snapshots(
+        (registry,), legacy, fetch_snapshot=lambda _url: snapshot, now=now
+    )
+    assert unavailable == set()
+    assert warnings == []
+
+    state = tmp_path / "state" / "registry"
+    audit_registry.migrate_snapshot_states(legacy, state)
+    state_files = list(state.glob("snapshot-*.json"))
+    assert len(state_files) == 1
+    assert list(legacy.glob("snapshot-*.json")) == []
+    state_files[0].write_text("{broken", encoding="utf-8")
+    unavailable, warnings = audit_registry.check_snapshots(
+        (registry,), state, fetch_snapshot=lambda _url: snapshot, now=now
+    )
+    assert registry.url in unavailable
+    assert any("rollback state is unreadable" in warning for warning in warnings)

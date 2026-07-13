@@ -3,13 +3,18 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import http.client
 import json
+import os
 import re
+import stat
+import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -31,6 +36,20 @@ MAX_SAFE_INTEGER = 9_007_199_254_740_991
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_PAGE_SIZE = 1000
 MAX_RECORDS_PER_QUERY = 10_000
+MAX_HTTP_ATTEMPTS = 3
+GET_TOTAL_DEADLINE_SECONDS = 30
+POST_TOTAL_DEADLINE_SECONDS = 45
+SNAPSHOT_STATE_CATALOG = "known-registries.json"
+SNAPSHOT_STATE_NAME_RE = re.compile(r"snapshot-[0-9a-f]{16}\.json")
+
+
+class _RejectRegistryRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        return None
+
+
+_REGISTRY_OPENER = urllib.request.build_opener(_RejectRegistryRedirect())
 
 
 # Client side of the audit registry (RFC 0008). This module verifies signed
@@ -54,6 +73,15 @@ RESULT_UNKNOWN = "unknown"
 
 class RegistryError(Exception):
     pass
+
+
+def retry_permitted(method: str, outcome: str, idempotency_key: bool) -> bool:
+    """Return whether the production profile permits retrying this request."""
+    if outcome not in {"network_error", "429", "503"}:
+        return False
+    if method == "GET":
+        return True
+    return method == "POST" and idempotency_key
 
 
 def _object_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -437,14 +465,46 @@ def check_snapshots(
     revocation still protect the install. The highest accepted version is
     persisted per registry, so a later rollback is detected across runs.
     """
-    cache_dir.mkdir(parents=True, exist_ok=True)
     unavailable: set[str] = set()
     warnings: list[str] = []
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        cache_dir.chmod(0o700)
+    except OSError as exc:
+        for registry in registries:
+            if registry.public_keys:
+                unavailable.add(registry.url)
+                warnings.append(
+                    f"registry {registry.name} rollback state directory is unavailable: {exc}"
+                )
+        return unavailable, warnings
+    try:
+        known_states = _load_snapshot_state_catalog(cache_dir)
+    except RegistryError as exc:
+        for registry in registries:
+            if registry.public_keys:
+                unavailable.add(registry.url)
+                warnings.append(
+                    f"registry {registry.name} rollback state catalog is unavailable: {exc}"
+                )
+        return unavailable, warnings
     for registry in registries:
         if not registry.public_keys:
             continue
-        state_file = cache_dir / f"snapshot-{hashlib.sha256(registry.url.encode()).hexdigest()[:16]}.json"
-        state = _read_snapshot_state(state_file)
+        state_name = f"snapshot-{hashlib.sha256(registry.url.encode()).hexdigest()[:16]}.json"
+        state_file = cache_dir / state_name
+        try:
+            state, state_exists = _read_snapshot_state(state_file)
+        except RegistryError as exc:
+            warnings.append(f"registry {registry.name} rollback state is unreadable: {exc}")
+            unavailable.add(registry.url)
+            continue
+        if not state_exists and state_name in known_states:
+            warnings.append(
+                f"registry {registry.name} rollback state is missing after prior use"
+            )
+            unavailable.add(registry.url)
+            continue
         try:
             snapshot = fetch_snapshot(registry.url)
         except RegistryError as exc:
@@ -482,20 +542,37 @@ def check_snapshots(
             warnings.append(f"registry {registry.name} snapshot timestamp is too far in the future")
             unavailable.add(registry.url)
             continue
-        _write_snapshot_state(
-            state_file,
-            {"highest_version": version, "head": head, "merkle_root": merkle_root, "log_size": log_size},
-        )
+        try:
+            _write_snapshot_state(
+                state_file,
+                {"highest_version": version, "head": head, "merkle_root": merkle_root, "log_size": log_size},
+            )
+        except RegistryError as exc:
+            warnings.append(f"registry {registry.name} rollback state could not be persisted: {exc}")
+            unavailable.add(registry.url)
+            continue
+        if state_name not in known_states:
+            known_states.add(state_name)
+            try:
+                _write_snapshot_state_catalog(cache_dir, known_states)
+            except RegistryError as exc:
+                warnings.append(
+                    f"registry {registry.name} rollback state catalog could not be persisted: {exc}"
+                )
+                unavailable.add(registry.url)
     return unavailable, warnings
 
 
-def _read_snapshot_state(path: Path) -> dict[str, Any]:
-    if not path.is_file():
-        return {"highest_version": 0}
+def _read_snapshot_state(path: Path) -> tuple[dict[str, Any], bool]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        payload = _read_protected_state_file(path)
+        if payload is None:
+            return {"highest_version": 0}, False
+        data = load_protocol_json(payload)
         if not isinstance(data, dict):
             raise ValueError("invalid snapshot state")
+        if set(data) - {"highest_version", "head", "merkle_root", "log_size"}:
+            raise ValueError("unknown snapshot state field")
         highest = data["highest_version"]
         if not isinstance(highest, int) or isinstance(highest, bool) or highest < 0:
             raise ValueError("invalid highest version")
@@ -505,24 +582,198 @@ def _read_snapshot_state(path: Path) -> dict[str, Any]:
             if value is not None:
                 if not isinstance(value, str):
                     raise ValueError(f"invalid snapshot state {key}")
+                if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                    raise ValueError(f"invalid snapshot state {key}")
                 state[key] = value
         log_size = data.get("log_size")
         if log_size is not None:
             if not isinstance(log_size, int) or isinstance(log_size, bool) or log_size < 0:
                 raise ValueError("invalid snapshot state log_size")
+            if log_size > highest:
+                raise ValueError("snapshot state log_size exceeds version")
             state["log_size"] = log_size
-        return state
-    except (TypeError, ValueError, KeyError, OSError):
-        return {"highest_version": 0}
+        if ("head" in state) != ("merkle_root" in state) or (
+            "head" not in state and "log_size" in state
+        ):
+            raise ValueError("snapshot state identity is incomplete")
+        return state, True
+    except (TypeError, ValueError, KeyError, OSError, RegistryError) as exc:
+        raise RegistryError(str(exc)) from exc
 
 
 def _write_snapshot_state(path: Path, state: dict[str, Any]) -> None:
-    temporary = path.with_name(path.name + ".tmp")
+    payload = json.dumps(state, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    _write_protected_state_file(path, payload)
+
+
+def _read_protected_state_file(path: Path) -> bytes | None:
     try:
-        temporary.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
-        temporary.replace(path)
-    except OSError:
-        temporary.unlink(missing_ok=True)
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise RegistryError(str(exc)) from exc
+    if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+        raise RegistryError("security state is not a regular file")
+    if os.name != "nt" and stat.S_IMODE(metadata.st_mode) & 0o077:
+        raise RegistryError("security state permissions are too broad")
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise RegistryError(str(exc)) from exc
+
+
+def _write_protected_state_file(path: Path, payload: bytes) -> None:
+    descriptor = -1
+    temporary: Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(prefix=".registry-state-", dir=path.parent)
+        temporary = Path(temporary_name)
+        temporary.chmod(0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        _sync_directory(path.parent)
+    except OSError as exc:
+        raise RegistryError(str(exc)) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _sync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _load_snapshot_state_catalog(state_dir: Path) -> set[str]:
+    catalog_path = state_dir / SNAPSHOT_STATE_CATALOG
+    payload = _read_protected_state_file(catalog_path)
+    if payload is None:
+        try:
+            has_state = any(
+                entry.is_file() and SNAPSHOT_STATE_NAME_RE.fullmatch(entry.name)
+                for entry in state_dir.iterdir()
+            )
+        except OSError as exc:
+            raise RegistryError(str(exc)) from exc
+        if has_state:
+            raise RegistryError("catalog is missing while rollback state exists")
+        known: set[str] = set()
+        _write_snapshot_state_catalog(state_dir, known)
+        return known
+    try:
+        value = load_protocol_json(payload)
+        if not isinstance(value, dict) or set(value) != {"schema_version", "states"}:
+            raise ValueError("invalid rollback state catalog")
+        if (
+            not isinstance(value["schema_version"], int)
+            or isinstance(value["schema_version"], bool)
+            or value["schema_version"] != 1
+            or not isinstance(value["states"], list)
+        ):
+            raise ValueError("unsupported rollback state catalog schema")
+        known = set()
+        for name in value["states"]:
+            if (
+                not isinstance(name, str)
+                or SNAPSHOT_STATE_NAME_RE.fullmatch(name) is None
+                or name in known
+            ):
+                raise ValueError("rollback state catalog contains an invalid entry")
+            known.add(name)
+        return known
+    except (RegistryError, TypeError, ValueError, KeyError) as exc:
+        raise RegistryError(str(exc)) from exc
+
+
+def _write_snapshot_state_catalog(state_dir: Path, known: set[str]) -> None:
+    payload = json.dumps(
+        {"schema_version": 1, "states": sorted(known)},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    _write_protected_state_file(state_dir / SNAPSHOT_STATE_CATALOG, payload)
+
+
+def migrate_snapshot_states(legacy_dir: Path, state_dir: Path) -> None:
+    """Move legacy rollback state out of the disposable response cache."""
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        state_dir.chmod(0o700)
+        entries = list(legacy_dir.iterdir()) if legacy_dir.is_dir() else []
+    except OSError as exc:
+        raise RegistryError(str(exc)) from exc
+    for legacy in entries:
+        if (
+            legacy.is_symlink()
+            or not legacy.is_file()
+            or SNAPSHOT_STATE_NAME_RE.fullmatch(legacy.name) is None
+        ):
+            continue
+        try:
+            legacy.chmod(0o600)
+        except OSError as exc:
+            raise RegistryError(str(exc)) from exc
+        legacy_state, legacy_exists = _read_snapshot_state(legacy)
+        if not legacy_exists:
+            raise RegistryError(f"legacy rollback state {legacy.name} disappeared during migration")
+        target = state_dir / legacy.name
+        target_state, target_exists = _read_snapshot_state(target)
+        if target_exists:
+            same_version_conflict = (
+                target_state["highest_version"] == legacy_state["highest_version"]
+                and _snapshot_states_conflict(target_state, legacy_state)
+            )
+            if target_state["highest_version"] < legacy_state["highest_version"] or same_version_conflict:
+                raise RegistryError(f"rollback state {legacy.name} conflicts with legacy state")
+            try:
+                legacy.unlink()
+                _sync_directory(legacy_dir)
+            except OSError as exc:
+                raise RegistryError(str(exc)) from exc
+            continue
+        try:
+            legacy.replace(target)
+            _sync_directory(state_dir)
+            _sync_directory(legacy_dir)
+        except OSError as exc:
+            raise RegistryError(str(exc)) from exc
+    _rebuild_snapshot_state_catalog(state_dir)
+
+
+def _rebuild_snapshot_state_catalog(state_dir: Path) -> None:
+    catalog_path = state_dir / SNAPSHOT_STATE_CATALOG
+    if _read_protected_state_file(catalog_path) is None:
+        known: set[str] = set()
+    else:
+        known = _load_snapshot_state_catalog(state_dir)
+    try:
+        entries = list(state_dir.iterdir())
+    except OSError as exc:
+        raise RegistryError(str(exc)) from exc
+    for entry in entries:
+        if not entry.is_file() or SNAPSHOT_STATE_NAME_RE.fullmatch(entry.name) is None:
+            continue
+        _, exists = _read_snapshot_state(entry)
+        if not exists:
+            raise RegistryError(f"rollback state {entry.name} disappeared during migration")
+        known.add(entry.name)
+    _write_snapshot_state_catalog(state_dir, known)
+
+
+def _snapshot_states_conflict(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    return any(left.get(field) != right.get(field) for field in ("head", "merkle_root", "log_size"))
 
 
 def http_get_snapshot(url: str) -> dict[str, Any]:
@@ -627,23 +878,75 @@ def _url_with_cursor(endpoint: str, cursor: str | None) -> str:
 
 
 def _request_json(request: urllib.request.Request, *, timeout: int, label: str) -> Any:
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - operator-configured registry
-            status = getattr(response, "status", 200)
-            if not isinstance(status, int) or not 200 <= status < 300:
-                raise RegistryError(f"registry returned HTTP {status} for {label}")
-            headers = getattr(response, "headers", None)
-            content_type = headers.get("Content-Type", "") if headers is not None else ""
-            if content_type.split(";", 1)[0].strip().lower() != "application/json":
-                raise RegistryError(f"registry returned unsupported Content-Type for {label}")
-            body = response.read(MAX_RESPONSE_BYTES + 1)
-    except urllib.error.HTTPError as exc:
-        raise RegistryError(f"registry returned HTTP {exc.code} for {label}") from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise RegistryError(str(exc)) from exc
-    if len(body) > MAX_RESPONSE_BYTES:
-        raise RegistryError(f"registry {label} response exceeds 16 MiB")
-    return load_protocol_json(body)
+    method = request.get_method()
+    has_idempotency_key = any(
+        name.lower() == "idempotency-key" and bool(value) for name, value in request.header_items()
+    )
+    total_seconds = POST_TOTAL_DEADLINE_SECONDS if method == "POST" else GET_TOTAL_DEADLINE_SECONDS
+    deadline = time.monotonic() + total_seconds
+    last_error = RegistryError(f"registry request failed for {label}")
+    for attempt in range(MAX_HTTP_ATTEMPTS):
+        outcome = ""
+        retry_headers: Any = None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise last_error
+        try:
+            with _open_registry_request(request, timeout=min(float(timeout), remaining)) as response:
+                status = getattr(response, "status", 200)
+                headers = getattr(response, "headers", None)
+                if not isinstance(status, int) or not 200 <= status < 300:
+                    outcome = str(status)
+                    retry_headers = headers
+                    last_error = RegistryError(f"registry returned HTTP {status} for {label}")
+                else:
+                    content_type = headers.get("Content-Type", "") if headers is not None else ""
+                    if content_type.split(";", 1)[0].strip().lower() != "application/json":
+                        raise RegistryError(f"registry returned unsupported Content-Type for {label}")
+                    body = response.read(MAX_RESPONSE_BYTES + 1)
+                    if len(body) > MAX_RESPONSE_BYTES:
+                        raise RegistryError(f"registry {label} response exceeds 16 MiB")
+                    return load_protocol_json(body)
+        except urllib.error.HTTPError as exc:
+            outcome = str(exc.code)
+            retry_headers = exc.headers
+            last_error = RegistryError(f"registry returned HTTP {exc.code} for {label}")
+            exc.close()
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
+            outcome = "network_error"
+            last_error = RegistryError(str(exc))
+
+        if attempt + 1 >= MAX_HTTP_ATTEMPTS or not retry_permitted(
+            method, outcome, has_idempotency_key
+        ):
+            raise last_error
+        delay = _retry_delay(retry_headers, attempt)
+        if time.monotonic() + delay >= deadline:
+            raise last_error
+        time.sleep(delay)
+    raise last_error
+
+
+def _open_registry_request(request: urllib.request.Request, *, timeout: float) -> Any:
+    return _REGISTRY_OPENER.open(request, timeout=timeout)  # noqa: S310 - operator-configured registry
+
+
+def _retry_delay(headers: Any, attempt: int) -> float:
+    raw = headers.get("Retry-After", "") if headers is not None else ""
+    value = raw.strip() if isinstance(raw, str) else ""
+    if value:
+        try:
+            seconds = int(value)
+        except ValueError:
+            try:
+                when = parsedate_to_datetime(value)
+                return max(0.0, float(when.timestamp() - time.time()))
+            except (TypeError, ValueError, OverflowError):
+                pass
+        else:
+            if seconds >= 0:
+                return float(seconds)
+    return 0.1 * float(1 << attempt)
 
 
 def http_publish_record(base_url: str, token: str, record_json: bytes) -> dict[str, Any]:

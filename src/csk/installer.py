@@ -451,9 +451,14 @@ def _check_audit_registries(
         return {}
     strict = config.audit.registry_policy == "strict"
     cache_dir = config.path.parent / "cache" / "registry"
+    state_dir = config.path.parent / "state" / "registry"
+    try:
+        audit_registry.migrate_snapshot_states(cache_dir, state_dir)
+    except audit_registry.RegistryError as exc:
+        raise InstallError(f"audit registry rollback state migration failed: {exc}") from exc
     unavailable, snapshot_warnings = audit_registry.check_snapshots(
         registries,
-        cache_dir,
+        state_dir,
         fetch_snapshot=audit_registry.http_get_snapshot,
         now=time.time(),
         max_age_seconds=config.audit.snapshot_max_age_seconds,
