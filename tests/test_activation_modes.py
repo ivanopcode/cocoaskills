@@ -82,7 +82,7 @@ def test_runtime_requirement_installs_commands_without_context(tmp_path, skills_
         },
     )
     assert not result.errors, result.errors
-    assert (project / ".agents" / "bin" / "tool").is_symlink()
+    assert (project / ".agents" / "bin" / "tool").is_file()
     assert not (project / ".agents" / "bin" / "extra").exists()
     provider_dir = project / ".agents" / "skills" / "provider"
     assert (provider_dir / ".csk-install.json").exists()
@@ -106,8 +106,8 @@ def test_runtime_requirement_without_filter_activates_all_exports(tmp_path, skil
         },
     )
     assert not result.errors, result.errors
-    assert (project / ".agents" / "bin" / "tool").is_symlink()
-    assert (project / ".agents" / "bin" / "extra").is_symlink()
+    assert (project / ".agents" / "bin" / "tool").is_file()
+    assert (project / ".agents" / "bin" / "extra").is_file()
     assert not (project / ".claude" / "skills" / "provider").exists()
 
 

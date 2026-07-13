@@ -75,6 +75,32 @@ def test_transitive_requirement_installs_provider(tmp_path, skills_root, csk_hom
     assert "provider" in summary and "via=consumer" in summary
 
 
+def test_upgrade_fetches_transitive_dependency_closure(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    provider_repo, _ = make_skill_repo(skills_root, "provider", _provider_files(), tag="v1")
+    consumer_repo, _ = make_skill_repo(
+        skills_root,
+        "consumer",
+        {"csk-skill.json": _consumer_manifest({"provider": _requirement(provider_repo)})},
+        tag="v1",
+    )
+    make_skill_repo(skills_root, "unrelated", tag="v1")
+    write_skillfile(
+        project,
+        {"schema_version": 1, "agents": ["claude_code"], "skills": [{"name": "consumer", "tag": "v1"}]},
+    )
+    cfg = make_config(csk_home, skills_root, project, agents=["claude_code"])
+    fetched = []
+    monkeypatch.setattr(installer.git_ops, "fetch_repo", fetched.append)
+
+    result = installer.install(cfg, options=installer.InstallOptions(fetch=True))[0]
+
+    assert not result.errors, result.errors
+    assert fetched == [consumer_repo, provider_repo]
+
+
 def test_transitive_source_is_cloned_into_skills_root(tmp_path, skills_root, csk_home):
     project = make_project(tmp_path)
     external_repo, _ = make_skill_repo(tmp_path / "elsewhere", "provider", _provider_files(), tag="v1")

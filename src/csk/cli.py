@@ -67,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  csk init [path]        create project Skillfile.json and gitignore block\n"
             "  csk install [target]   apply Skillfile.json; clone missing URL sources\n"
             "  csk update             fetch local skill repositories\n"
-            "  csk upgrade [target]   update, then install\n"
+            "  csk upgrade [target]   fetch the target dependency closure, then install\n"
             "  csk status [target]    show manifest vs installed state\n"
             "  csk global <command>   manage user-wide global skills\n"
             "  csk audit [target]     run deterministic security audit\n"
@@ -98,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Example:\n  csk update"
         ),
     )
-    _add_install(sub, "upgrade", "Fetch skill repositories, then install.")
+    _add_install(sub, "upgrade", "Fetch the selected project dependency closure, then install.")
     _add_global(sub)
     _add_audit(sub)
     status_parser = sub.add_parser(
@@ -252,7 +252,8 @@ def _add_bootstrap(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> 
         epilog=(
             "Files written:\n  ~/.cocoaskills/config.json.\n\n"
             "Examples:\n  csk bootstrap\n"
-            "  csk bootstrap --non-interactive --skills-root ~/skills --default-agents codex_cli,claude_code"
+            "  csk bootstrap --non-interactive --skills-root ~/skills --default-agents codex_cli,claude_code\n"
+            "  csk bootstrap --if-missing --non-interactive --skills-root ~/skills"
         ),
     )
     parser.add_argument("--skills-root", help="directory containing skill git repositories")
@@ -265,7 +266,13 @@ def _add_bootstrap(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> 
         ),
     )
     parser.add_argument("--non-interactive", action="store_true", help="never prompt; fail instead")
-    parser.add_argument("--force", action="store_true", help="overwrite an existing config without asking")
+    existing = parser.add_mutually_exclusive_group()
+    existing.add_argument("--force", action="store_true", help="overwrite an existing config without asking")
+    existing.add_argument(
+        "--if-missing",
+        action="store_true",
+        help="create config only when absent; keep an existing config unchanged",
+    )
 
 
 def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -547,10 +554,8 @@ def _dispatch(args: argparse.Namespace) -> int:
             if args.command == "update":
                 return _cmd_update(cfg)
             if args.command == "upgrade":
-                update_code = _cmd_update(cfg)
                 cfg, args = _prepare_install_target(cfg, args)
-                install_code = _cmd_install(cfg, args)
-                return install_code if install_code != EXIT_OK else update_code
+                return _cmd_install(cfg, args)
             cfg, args = _prepare_install_target(cfg, args)
             return _cmd_install(cfg, args)
 
@@ -589,8 +594,8 @@ def _dispatch_global(args: argparse.Namespace) -> int:
     if args.global_command == "status":
         print(global_install.render_status(cfg))
         return EXIT_OK
-    dry_run_install = args.global_command == "install" and getattr(args, "dry_run", False)
-    if not dry_run_install:
+    dry_run_operation = args.global_command in {"install", "upgrade"} and getattr(args, "dry_run", False)
+    if not dry_run_operation:
         config.validate_skills_root_for_work(cfg)
     with GlobalLock(cfg.path.parent):
         if args.global_command == "update":
@@ -598,6 +603,8 @@ def _dispatch_global(args: argparse.Namespace) -> int:
         if args.global_command == "install":
             return _cmd_global_install(cfg, args)
         if args.global_command == "upgrade":
+            if args.dry_run:
+                return _cmd_global_install(cfg, args)
             update_code = _cmd_global_update(cfg)
             install_code = _cmd_global_install(cfg, args)
             return install_code if install_code != EXIT_OK else update_code
@@ -666,6 +673,9 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
     path = config.config_path()
     non_interactive = getattr(args, "non_interactive", False)
     if path.exists():
+        if getattr(args, "if_missing", False):
+            print(f"Kept existing config: {path}")
+            return EXIT_OK
         if non_interactive:
             if not getattr(args, "force", False):
                 print(f"error: config exists at {path}; pass --force to overwrite", file=sys.stderr)
@@ -797,6 +807,7 @@ def _cmd_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
         fix_gitignore=args.fix_gitignore,
         strict_tags=args.strict_tags,
         verbose=args.verbose,
+        fetch=args.command == "upgrade" and not args.dry_run,
     )
     cfg = _cfg_with_audit_override(cfg, args)
     results = installer.install(cfg, alias=args.alias, options=options)

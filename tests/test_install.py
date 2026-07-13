@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from dataclasses import replace
 
@@ -41,7 +42,9 @@ def test_install_declared_script_to_runtime_not_skill_context(tmp_path, skills_r
     assert not (installed / "README.md").exists()
     runtime = csk_home / "runtime" / "skill-tool" / marker["commit"] / "bin" / "tool"
     assert runtime.exists()
-    assert (project / ".agents" / "bin" / "tool").is_symlink()
+    project_shim = project / ".agents" / "bin" / "tool"
+    assert project_shim.is_file()
+    assert not project_shim.is_symlink()
     assert (project / ".claude" / "skills" / "skill-tool").exists()
     assert any("which is not on PATH" in message for message in result.messages)
     assert any("agent skills resolve that directory directly" in message for message in result.messages)
@@ -950,10 +953,131 @@ def test_skill_command_dependency_uses_provider_export_without_collision(tmp_pat
     result = installer.install(cfg)[0]
 
     assert not result.errors
-    assert (project / ".agents" / "bin" / "wk").is_symlink()
+    assert (project / ".agents" / "bin" / "wk").is_file()
     marker = json.loads((project / ".agents" / "skills" / "skill-docs-memory" / ".csk-install.json").read_text(encoding="utf-8"))
     assert marker["commands"] == []
     assert marker["dependencies"] == ["wk"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Executes POSIX runtime commands")
+def test_runtime_shim_resolves_project_skill_command_dependency_without_shell_hook(
+    tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-provider",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 2,
+                    "runtime_roots": ["scripts"],
+                    "commands": {"wk": {"type": "script", "unix_path": "scripts/wk"}},
+                }
+            ),
+            "scripts/wk": "#!/bin/sh\necho dependency-ok\n",
+        },
+        tag="v1",
+    )
+    make_skill_repo(
+        skills_root,
+        "skill-consumer",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 2,
+                    "runtime_roots": ["scripts"],
+                    "commands": {"report": {"type": "script", "unix_path": "scripts/report"}},
+                    "dependencies": {
+                        "commands": {
+                            "wk": {
+                                "type": "skill",
+                                "skill": "skill-provider",
+                                "command": "wk",
+                            }
+                        }
+                    },
+                }
+            ),
+            "scripts/report": "#!/bin/sh\nwk\n",
+        },
+        tag="v1",
+    )
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [
+                {"name": "skill-provider", "tag": "v1"},
+                {"name": "skill-consumer", "tag": "v1"},
+            ],
+        },
+    )
+    cfg = make_config(csk_home, skills_root, project)
+
+    result = installer.install(cfg)[0]
+    proc = subprocess.run(
+        [str(project / ".agents" / "bin" / "report")],
+        check=True,
+        text=True,
+        capture_output=True,
+        env={"PATH": os.defpath},
+    )
+
+    assert not result.errors, result.errors
+    assert proc.stdout.strip() == "dependency-ok"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Executes POSIX runtime commands")
+def test_runtime_shim_captures_declared_system_dependency_path(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    helper_bin = tmp_path / "toolchain bin"
+    helper_bin.mkdir()
+    helper = helper_bin / "external-helper"
+    helper.write_text("#!/bin/sh\necho system-ok\n", encoding="utf-8")
+    helper.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{helper_bin}{os.pathsep}{os.environ['PATH']}")
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-system",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 2,
+                    "runtime_roots": ["scripts"],
+                    "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}},
+                    "dependencies": {
+                        "commands": {
+                            "external-helper": {
+                                "type": "system",
+                                "command": "external-helper",
+                            }
+                        }
+                    },
+                }
+            ),
+            "scripts/tool": "#!/bin/sh\nexternal-helper\n",
+        },
+        tag="v1",
+    )
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-system", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+
+    result = installer.install(cfg)[0]
+    shim = project / ".agents" / "bin" / "tool"
+    proc = subprocess.run(
+        [str(shim)],
+        check=True,
+        text=True,
+        capture_output=True,
+        env={"PATH": os.defpath},
+    )
+
+    assert not result.errors, result.errors
+    assert os.path.dirname(os.path.realpath(sys.executable)) in shim.read_text(encoding="utf-8")
+    assert proc.stdout.strip() == "system-ok"
 
 
 def test_missing_skill_command_dependency_fails(tmp_path, skills_root, csk_home):

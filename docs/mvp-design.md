@@ -241,8 +241,8 @@ project fail because `csk` cannot safely update or clean it. Unsupported
 
 - Resolved to a commit from the local skill git repository.
 - `csk install` does not fetch.
-- `csk upgrade` may see a changed tag only after `csk update`, but mutable tags
-  are discouraged.
+- `csk upgrade` fetches repositories in the selected project dependency
+  closure before resolving the tag; mutable tags are discouraged.
 - If the same tag already appears in an installed marker but resolves locally
   to a different commit, default behavior is to warn and reinstall at the new
   commit.
@@ -333,14 +333,14 @@ Command behavior:
 
 | Command | Behavior |
 | --- | --- |
-| `bootstrap` | Interactively creates global config, preferred locale, default agents, and focused projects. Shell profile activation is not required. |
+| `bootstrap` | Interactively creates global config, preferred locale, and default agents. `--if-missing` supports idempotent repository automation without overwriting existing machine config. Shell profile activation is not required. |
 | `install` | Applies `Skillfile.json` using current local git refs. It does not fetch. |
 | `install <alias>` | Installs one configured project. |
 | `install .` / `install /path/to/project` | Finds `Skillfile.json` in or above the target directory, computes a checkout alias, updates global config for that checkout, then installs that checkout. |
 | `update` | Fetches all git repositories under `skills_root`. It does not modify projects. |
-| `upgrade` | Runs `update`, then `install`. This is the command that advances branch-based skills to newly fetched commits. |
-| `upgrade <alias>` | Runs `update`, then installs one project. |
-| `upgrade .` / `upgrade /path/to/project` | Runs `update`, then installs the resolved checkout. |
+| `upgrade` | Fetches the current project dependency closure, then installs it. This is the command that advances branch-based skills to newly fetched commits. |
+| `upgrade <alias>` | Fetches and installs one configured project's dependency closure. |
+| `upgrade .` / `upgrade /path/to/project` | Fetches and installs the resolved checkout's dependency closure. |
 | `status` | Shows manifest vs installed marker state. |
 | `status .` / `status /path/to/project` | Shows status for a resolved checkout without saving it to global config. |
 | `list` | Shows configured projects and their declared skills. |
@@ -441,10 +441,11 @@ user-facing documentation file in the same change.
 1. `skills_root`
 2. `preferred_locale`
 3. `default_agents`
-4. projects to focus on, as an alias/path loop
 
 The command writes `~/.cocoaskills/config.json` unless `CSK_CONFIG` is set.
 It must not overwrite an existing config without explicit confirmation.
+`--if-missing` returns success without parsing or rewriting an existing config;
+it is mutually exclusive with `--force`.
 It does not need to modify a shell profile: agent-facing command resolution is
 based on explicit project and global shim paths.
 
@@ -822,6 +823,11 @@ project-local shadowing inside managed projects.
 `csk bootstrap` states that no shell profile changes are required and may point
 to the optional cached hook for human convenience. `csk install` reports an
 off-`PATH` project bin as informational: agent skills use it directly.
+Project and global runtime shims prepend their own bin directory, the Python
+environment that installed them, and the resolved directories of declared
+system dependencies before preserving the inherited `PATH`. Nested skill
+commands therefore work from zsh, bash, PowerShell, Git Bash, CI, and agent
+processes without profile activation.
 
 ## Locale Policy
 
@@ -1013,7 +1019,10 @@ Required areas:
 - Branch resolution works without a remote when a local branch exists.
 - `install` does not fetch.
 - `update` fetches skill repositories and does not modify projects.
-- `upgrade` performs update then install.
+- `upgrade` fetches only the selected direct/transitive dependency closure and
+  then installs it; `--all` fetches shared repositories once.
+- `upgrade --dry-run` does not fetch persistent repositories or create
+  `skills_root`.
 - Source skill repositories are not checked out or mutated.
 - Repositories with `.gitmodules` fail as unsupported.
 - Gitignore gate blocks installation.

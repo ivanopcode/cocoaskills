@@ -102,8 +102,11 @@ def test_global_install_writes_context_adapters_and_runtime_shims(monkeypatch, t
     runtime_helper = csk_home / "runtime" / "skill-tool" / commit / "scripts" / "helper.sh"
     assert runtime_helper.exists()
     shim = csk_home / "global" / "bin" / "tool"
-    assert shim.is_symlink()
-    assert shim.resolve() == (csk_home / "runtime" / "skill-tool" / commit / "scripts" / "tool")
+    assert shim.is_file()
+    assert not shim.is_symlink()
+    assert str(csk_home / "runtime" / "skill-tool" / commit / "scripts" / "tool") in shim.read_text(
+        encoding="utf-8"
+    )
     assert (Path.home() / ".codex" / "skills" / "skill-tool").exists()
     assert (Path.home() / ".claude" / "skills" / "skill-tool").exists()
 
@@ -140,7 +143,8 @@ def test_global_install_publishes_commands_to_path_visible_user_bin(monkeypatch,
     assert not result.errors
     canonical = csk_home / "global" / "bin" / "tool"
     published = user_bin / "tool"
-    assert canonical.is_symlink()
+    assert canonical.is_file()
+    assert not canonical.is_symlink()
     assert published.is_symlink()
     assert published.resolve() == canonical.resolve()
     assert json.loads((user_bin / ".csk-managed.json").read_text(encoding="utf-8"))["entries"] == ["tool"]
@@ -484,6 +488,36 @@ def test_global_install_dry_run_does_not_write_anywhere(monkeypatch, tmp_path, s
     assert not (Path.home() / ".codex").exists()
 
 
+def test_global_upgrade_dry_run_does_not_create_or_fetch_skills_root(
+    monkeypatch, tmp_path, csk_home
+):
+    missing_root = tmp_path / "missing-skills-root"
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, missing_root, project)
+    _save_config(monkeypatch, cfg)
+    source, _ = make_skill_repo(tmp_path / "remote-skills", "skill-a", tag="v1")
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [{"name": "skill-a", "git": str(source), "tag": "v1"}],
+        },
+    )
+
+    def unexpected_fetch(_repo):
+        raise AssertionError("global dry-run must not fetch")
+
+    monkeypatch.setattr(global_install.git_ops, "fetch_repo", unexpected_fetch)
+
+    assert cli.main(["global", "upgrade", "--dry-run"]) == 0
+    assert not missing_root.exists()
+    assert not (csk_home / "global" / "skills").exists()
+    assert not (csk_home / "global" / "bin").exists()
+    assert not (csk_home / "runtime").exists()
+    assert not (csk_home / "cache").exists()
+
+
 def test_global_install_is_idempotent(monkeypatch, tmp_path, skills_root, csk_home, capsys):
     project = make_project(tmp_path)
     cfg = make_config(csk_home, skills_root, project)
@@ -693,7 +727,7 @@ def test_global_install_checks_skill_command_dependencies(monkeypatch, tmp_path,
 
     assert (csk_home / "global" / "skills" / "skill-docs" / ".csk-install.json").exists()
     assert (csk_home / "global" / "skills" / "skill-docs-memory" / ".csk-install.json").exists()
-    assert (csk_home / "global" / "bin" / "wk").is_symlink()
+    assert (csk_home / "global" / "bin" / "wk").is_file()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX global/project shims use symlinks")
