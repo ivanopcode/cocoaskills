@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import adapters, env_files, git_ops, global_bins, hashing, installer, manifest, shims
+from . import adapters, env_files, git_ops, global_bins, hashing, installer, manifest, protocol_json, shims
 from .audit import pipeline as audit_pipeline
 from .config import DEFAULT_AGENTS, GlobalConfig
 
@@ -318,7 +318,7 @@ def _skill_status(config: GlobalConfig, decl: manifest.SkillDecl) -> dict[str, s
     if not marker_path.exists():
         return {"installed_commit": None, "resolved_commit": resolved_commit, "label": "missing"}
     try:
-        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        marker = protocol_json.loads(marker_path.read_bytes())
     except Exception:
         return {"installed_commit": None, "resolved_commit": resolved_commit, "label": "error"}
     installed_commit = marker.get("commit") if isinstance(marker.get("commit"), str) else None
@@ -335,8 +335,8 @@ def _skill_status(config: GlobalConfig, decl: manifest.SkillDecl) -> dict[str, s
 
 def _read_global_payload(path: Path) -> dict[str, Any]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        data = protocol_json.loads(path.read_bytes())
+    except protocol_json.ProtocolJSONError as exc:
         raise GlobalInstallError(f"Malformed JSON in global Skillfile {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise GlobalInstallError(f"Global Skillfile must contain a JSON object: {path}")

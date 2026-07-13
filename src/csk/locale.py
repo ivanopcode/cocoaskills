@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import identifiers, protocol_json
+
 
 class LocaleError(Exception):
     pass
@@ -79,13 +81,36 @@ def analyze_locale(snapshot: Path, locale: str | None) -> LocaleAnalysis:
             ),
         )
 
+    invalid_locale = next(
+        (
+            key
+            for key, value in locales.items()
+            if not isinstance(key, str)
+            or not identifiers.is_valid_locale(key)
+            or not isinstance(value, dict)
+        ),
+        None,
+    )
+    if invalid_locale is not None:
+        return LocaleAnalysis(
+            locale_to_render=None,
+            issues=(
+                LocaleIssue(
+                    "error",
+                    "locale.metadata_invalid",
+                    "locales/metadata.json",
+                    f"Locale metadata {metadata_path} has invalid locale entry {invalid_locale!r}",
+                ),
+            ),
+        )
+
     trigger_locales: set[str] = set()
     if triggers_root.exists():
         trigger_locales = {path.stem for path in triggers_root.glob("*.md") if path.is_file()}
     consistent = {
         key
         for key, value in locales.items()
-        if isinstance(key, str) and isinstance(value, dict) and key in trigger_locales
+        if key in trigger_locales
     }
     if not consistent:
         return LocaleAnalysis(
@@ -145,8 +170,8 @@ def render_locale(snapshot: Path, installed_dir: Path, locale: str | None) -> No
 
 def _load_metadata(path: Path) -> dict[str, object]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        data = protocol_json.loads(path.read_bytes())
+    except protocol_json.ProtocolJSONError as exc:
         raise LocaleError(f"Malformed locale metadata {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise LocaleError(f"{path} must contain a JSON object")

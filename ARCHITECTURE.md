@@ -29,6 +29,9 @@ A skill install materializes two independent layers:
 
 The split keeps the agent window small and makes activation modes possible: a
 dependency can contribute commands, context, or both ([RFC 0007](docs/v0.9-design.md)).
+Consequently, prompt-visible instructions resolve exported command shims by
+project/global scope and never address a `runtime_root` relative to `SKILL.md`.
+This remains true when an adapter mirrors context by copy instead of symlink.
 
 ## Install pipeline
 

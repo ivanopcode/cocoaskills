@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import manifest
+from . import manifest, protocol_json
 
 
 # Hybrid-scope skills are stored once per machine under the csk home and
@@ -46,12 +46,12 @@ def load_hybrid_decls(csk_home: Path) -> list[HybridDecl]:
     if not path.exists():
         return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        data = protocol_json.loads(path.read_bytes())
+    except protocol_json.ProtocolJSONError as exc:
         raise HybridError(f"Malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise HybridError(f"{path} must contain a JSON object")
-    parsed = manifest.parse_manifest(data, path)
+    parsed = manifest.parse_manifest(data, path, skill_extension_fields={"targets"})
     targets_by_name = _targets_by_name(data, path)
     decls: list[HybridDecl] = []
     for decl in parsed.skills:
@@ -146,8 +146,8 @@ def _read_or_init(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"schema_version": manifest.SCHEMA_VERSION, "skills": []}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        data = protocol_json.loads(path.read_bytes())
+    except protocol_json.ProtocolJSONError as exc:
         raise HybridError(f"Malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise HybridError(f"{path} must contain a JSON object")
@@ -155,7 +155,7 @@ def _read_or_init(path: Path) -> dict[str, Any]:
 
 
 def _validate_and_write(path: Path, data: dict[str, Any]) -> None:
-    manifest.parse_manifest(data, path)
+    manifest.parse_manifest(data, path, skill_extension_fields={"targets"})
     _targets_by_name(data, path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

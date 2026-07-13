@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .identifiers import IDENTIFIER_RULE, SOURCE_RULE, is_valid_identifier, is_valid_source_path
+from . import protocol_json
+from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_locale, is_valid_portable_path
 
 
 SCHEMA_VERSION = 1
@@ -128,8 +130,8 @@ def _read_payload(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise ManifestError(f"Skillfile.json not found at {path}; run 'csk init' first")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        data = protocol_json.loads(path.read_bytes())
+    except protocol_json.ProtocolJSONError as exc:
         raise ManifestError(f"Malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ManifestError(f"{path} must contain a JSON object")
@@ -145,15 +147,20 @@ def load_manifest(project_root: Path) -> ProjectManifest | None:
     if not path.exists():
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        data = protocol_json.loads(path.read_bytes())
+    except protocol_json.ProtocolJSONError as exc:
         raise ManifestError(f"Malformed JSON in {path}: {exc}") from exc
     return parse_manifest(data, path)
 
 
-def parse_manifest(data: dict[str, Any], path: Path) -> ProjectManifest:
+def parse_manifest(
+    data: dict[str, Any], path: Path, *, skill_extension_fields: set[str] | None = None
+) -> ProjectManifest:
     if not isinstance(data, dict):
         raise ManifestError(f"{path} must contain a JSON object")
+    unknown_top = sorted(set(data) - {"schema_version", "project", "agents", "locale", "skills"})
+    if unknown_top:
+        raise ManifestError(f"Skillfile has unsupported field(s): {', '.join(unknown_top)}")
     schema = data.get("schema_version")
     if schema is None:
         raise ManifestError(f"{path} is missing required field 'schema_version'")
@@ -169,10 +176,12 @@ def parse_manifest(data: dict[str, Any], path: Path) -> ProjectManifest:
     agents = data.get("agents", [])
     if not _is_str_list(agents):
         raise ManifestError("Skillfile field 'agents' must be a list of strings")
+    if len(set(agents)) != len(agents) or any(not is_valid_identifier(agent) for agent in agents):
+        raise ManifestError("Skillfile field 'agents' must contain unique portable identifiers")
 
     locale = data.get("locale")
-    if locale is not None and not isinstance(locale, str):
-        raise ManifestError("Skillfile field 'locale' must be a string when present")
+    if locale is not None and (not isinstance(locale, str) or not is_valid_locale(locale)):
+        raise ManifestError("Skillfile field 'locale' must be a 1-64 character ASCII locale selector")
 
     raw_skills = data.get("skills")
     if not isinstance(raw_skills, list):
@@ -183,6 +192,18 @@ def parse_manifest(data: dict[str, Any], path: Path) -> ProjectManifest:
     for index, raw in enumerate(raw_skills):
         if not isinstance(raw, dict):
             raise ManifestError(f"Skill declaration at index {index} must be an object")
+        allowed_skill_fields = {
+            "name",
+            "source",
+            "git",
+            "tag",
+            "branch",
+            "revision",
+            *(skill_extension_fields or set()),
+        }
+        unknown = sorted(set(raw) - allowed_skill_fields)
+        if unknown:
+            raise ManifestError(f"Skill declaration at index {index} has unsupported field(s): {', '.join(unknown)}")
         name = raw.get("name")
         if not isinstance(name, str) or not name:
             raise ManifestError(f"Skill declaration at index {index} requires non-empty string 'name'")
@@ -195,8 +216,8 @@ def parse_manifest(data: dict[str, Any], path: Path) -> ProjectManifest:
         source = raw.get("source", name)
         if not isinstance(source, str) or not source:
             raise ManifestError(f"Skill {name!r} field 'source' must be a non-empty string")
-        if not is_valid_source_path(source):
-            raise ManifestError(f"Skill {name!r} field 'source' {SOURCE_RULE}")
+        if not is_valid_portable_path(source):
+            raise ManifestError(f"Skill {name!r} field 'source' must be a portable relative path")
 
         git_url = raw.get("git")
         if git_url is not None and (not isinstance(git_url, str) or not git_url):
@@ -227,11 +248,21 @@ def _parse_project_alias(data: dict[str, Any], path: Path) -> str | None:
         return None
     if not isinstance(project, dict):
         raise ManifestError("Skillfile field 'project' must be an object when present")
+    unknown = sorted(set(project) - {"alias"})
+    if unknown:
+        raise ManifestError(f"Skillfile field 'project' has unsupported field(s): {', '.join(unknown)}")
     alias = project.get("alias")
     if alias is None:
         return None
-    if not isinstance(alias, str) or not alias:
-        raise ManifestError(f"{path} field 'project.alias' must be a non-empty string when present")
+    if (
+        not isinstance(alias, str)
+        or not alias
+        or len(alias) > 128
+        or any(unicodedata.category(character) == "Cc" for character in alias)
+    ):
+        raise ManifestError(
+            f"{path} field 'project.alias' must be a non-empty control-free string of at most 128 characters"
+        )
     return alias
 
 

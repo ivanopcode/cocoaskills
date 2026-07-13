@@ -8,7 +8,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from . import __version__, adapters, attest, config, deprecation, dev_substitutions, gc, git_ops, gitignore_gate, global_install, hybrid, installer, manifest, project_resolver, shell_init, skillcheck, status
+from . import __version__, adapters, attest, audit_registry, config, deprecation, dev_substitutions, gc, git_ops, gitignore_gate, global_install, hybrid, installer, manifest, project_resolver, shell_init, skillcheck, status
 from .audit import pipeline as audit_pipeline
 from .audit import runner as audit_runner
 from .audit import trust as audit_trust
@@ -76,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  csk project add        add a configured project\n"
             "  csk project resolve    show current checkout resolution\n"
             "  csk config show        show config path and content\n"
-            "  csk shell-init         print shell hook code\n\n"
+            "  csk shell-init         print or install shell hook code\n\n"
             "Run 'csk <command> --help' for command-specific documentation."
         ),
     )
@@ -214,15 +214,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     shell = sub.add_parser(
         "shell-init",
-        help="Print shell hook code for PATH activation.",
+        help="Print or install shell hook code for PATH activation.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Purpose:\n  Prints shell code that activates nearest .agents/env.sh or .agents/env.ps1.\n\n"
-            "Examples:\n  eval \"$(csk shell-init bash)\"\n  csk shell-init powershell >> $PROFILE"
+            "Examples:\n  eval \"$(csk shell-init bash)\"\n"
+            "  csk shell-init zsh --install\n  csk shell-init powershell --install"
         ),
     )
     shell.add_argument("shell", nargs="?", default="bash", choices=["zsh", "bash", "powershell"])
     shell.add_argument("--no-global", action="store_true", help="do not activate global CocoaSkills bin")
+    shell.add_argument(
+        "--install",
+        action="store_true",
+        help="atomically cache the hook under the CocoaSkills home and print the profile source command",
+    )
     return parser
 
 
@@ -457,7 +463,16 @@ def _dispatch(args: argparse.Namespace) -> int:
         print(_render_project_resolution(cfg, args))
         return EXIT_OK
     if args.command == "shell-init":
-        print(shell_init.shell_init(args.shell, include_global=not args.no_global))
+        if args.install:
+            hook_path = shell_init.install_shell_hook(
+                args.shell,
+                config.config_path().parent,
+                include_global=not args.no_global,
+            )
+            print(f"Wrote {hook_path}")
+            print(f"Add this to your shell profile: {shell_init.source_command(args.shell, hook_path)}")
+        else:
+            print(shell_init.shell_init(args.shell, include_global=not args.no_global))
         return EXIT_OK
     if args.command == "global":
         return _dispatch_global(args)
@@ -676,7 +691,7 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
     )
     config.save_config(cfg)
     print(f"Wrote {path}")
-    print("Install shell hook with: eval \"$(csk shell-init bash)\"")
+    print("Install a cached shell hook with: csk shell-init bash --install")
     return EXIT_OK
 
 
@@ -853,35 +868,19 @@ def _cmd_audit(args: argparse.Namespace) -> int:
 
 def _cmd_audit_publish(args: argparse.Namespace) -> int:
     import os
-    import urllib.error
-    import urllib.request
 
     if not args.registry:
         raise ValueError("--publish requires --registry")
     token = args.token or os.environ.get("CSK_REGISTRY_TOKEN")
     if not token:
         raise ValueError("--publish requires --token or the CSK_REGISTRY_TOKEN environment variable")
-    record_text = Path(args.publish).read_text(encoding="utf-8")
+    record_json = Path(args.publish).read_bytes()
     try:
-        json.loads(record_text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"record is not valid JSON: {exc}") from exc
-    endpoint = f"{args.registry.rstrip('/')}/v1/records"
-    request = urllib.request.Request(
-        endpoint,
-        data=record_text.encode("utf-8"),
-        method="POST",
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310 - registry URL from the operator
-            body = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise ValueError(f"registry rejected the record ({exc.code}): {detail}") from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise ValueError(f"could not reach registry {args.registry}: {exc}") from exc
-    print(body)
+        registry_url = config.canonical_registry_url(args.registry, field="--registry")
+        response = audit_registry.http_publish_record(registry_url, token, record_json)
+    except audit_registry.RegistryError as exc:
+        raise ValueError(str(exc)) from exc
+    print(json.dumps(response, sort_keys=True))
     return EXIT_OK
 
 

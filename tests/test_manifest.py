@@ -37,6 +37,40 @@ def test_manifest_rejects_duplicate_skill_names(tmp_path):
         )
 
 
+@pytest.mark.parametrize("locale", ["../en", "pt_BR", "-en", "русский"])
+def test_manifest_rejects_unsafe_locale_selector(tmp_path, locale):
+    with pytest.raises(manifest.ManifestError, match="locale"):
+        manifest.parse_manifest(
+            {"schema_version": 1, "locale": locale, "skills": []},
+            tmp_path / "Skillfile.json",
+        )
+
+
+@pytest.mark.parametrize("alias", ["", "x" * 129, "bad\u0001alias"])
+def test_manifest_rejects_invalid_project_alias(tmp_path, alias):
+    with pytest.raises(manifest.ManifestError, match="project.alias"):
+        manifest.parse_manifest(
+            {"schema_version": 1, "project": {"alias": alias}, "skills": []},
+            tmp_path / "Skillfile.json",
+        )
+
+
+def test_manifest_accepts_operator_facing_project_alias(tmp_path):
+    parsed = manifest.parse_manifest(
+        {"schema_version": 1, "project": {"alias": "Demo iOS"}, "skills": []},
+        tmp_path / "Skillfile.json",
+    )
+    assert parsed.project_alias == "Demo iOS"
+
+
+def test_manifest_rejects_unknown_top_level_field(tmp_path):
+    with pytest.raises(manifest.ManifestError, match="unsupported field"):
+        manifest.parse_manifest(
+            {"schema_version": 1, "skills": [], "extension": True},
+            tmp_path / "Skillfile.json",
+        )
+
+
 def test_manifest_requires_exactly_one_ref(tmp_path):
     with pytest.raises(manifest.ManifestError):
         manifest.parse_manifest(
@@ -62,7 +96,7 @@ def test_manifest_rejects_unsafe_skill_names(tmp_path, name):
         )
 
 
-@pytest.mark.parametrize("source", ["../other", "a/../b", "/abs", "a\\b", "-flag", "a//b"])
+@pytest.mark.parametrize("source", ["../other", "a/../b", "/abs", "a\\b", "a//b"])
 def test_manifest_rejects_unsafe_source(tmp_path, source):
     with pytest.raises(manifest.ManifestError, match="source"):
         manifest.parse_manifest(

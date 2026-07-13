@@ -43,6 +43,8 @@ def test_install_declared_script_to_runtime_not_skill_context(tmp_path, skills_r
     assert runtime.exists()
     assert (project / ".agents" / "bin" / "tool").is_symlink()
     assert (project / ".claude" / "skills" / "skill-tool").exists()
+    assert any("which is not on PATH" in message for message in result.messages)
+    assert any("shell-init <shell> --install" in message for message in result.messages)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Uses POSIX shell runtime command")

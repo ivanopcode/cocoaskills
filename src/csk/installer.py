@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import adapters, audit_registry, closure, consumers, dev_substitutions, env_files, gc, git_ops, gitignore_gate, hashing, hybrid, locale, manifest, mcp_configs, shims, skillcheck, skillspec, snapshot, whitelist
+from . import adapters, audit_registry, closure, consumers, dev_substitutions, env_files, gc, git_ops, gitignore_gate, hashing, hybrid, locale, manifest, mcp_configs, protocol_json, shims, skillcheck, skillspec, snapshot, whitelist
 from . import source_identity as source_identity_mod
 from .audit import pipeline as audit_pipeline
 from .config import GlobalConfig, ProjectConfig
@@ -251,6 +251,13 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
                 ],
                 config.adapter_mode,
             )
+            project_bin = project.path / ".agents" / "bin"
+            if expected_commands and not _directory_is_on_path(project_bin):
+                result.messages.append(
+                    f"{project.alias}: commands are installed in {project_bin}, which is not on PATH; "
+                    "invoke that directory explicitly or run 'csk shell-init <shell> --install' once "
+                    "and source the printed hook from your shell profile"
+                )
             return result
     except Exception as exc:
         result.status = "failed"
@@ -272,6 +279,16 @@ def _hybrid_store_names(nodes: list[closure.ClosureNode], project_declared: set[
             if requirement.name in by_name and requirement.name not in reachable:
                 stack.append(requirement.name)
     return set(by_name) - reachable
+
+
+def _directory_is_on_path(directory: Path, *, path_value: str | None = None) -> bool:
+    expected = os.path.normcase(os.path.abspath(directory))
+    value = os.environ.get("PATH", "") if path_value is None else path_value
+    return any(
+        os.path.normcase(os.path.abspath(Path(entry).expanduser())) == expected
+        for entry in value.split(os.pathsep)
+        if entry
+    )
 
 
 def _node_summary(node: closure.ClosureNode) -> str:
@@ -439,6 +456,8 @@ def _check_audit_registries(
         cache_dir,
         fetch_snapshot=audit_registry.http_get_snapshot,
         now=time.time(),
+        max_age_seconds=config.audit.snapshot_max_age_seconds,
+        clock_skew_seconds=config.audit.snapshot_clock_skew_seconds,
     )
     for warning in snapshot_warnings:
         result.messages.append(f"{alias}: registry: {warning}")
@@ -446,7 +465,11 @@ def _check_audit_registries(
     if not registries:
         # Every trusted registry served a tampered snapshot; refuse to proceed.
         raise InstallError("every trusted audit registry served a tampered snapshot")
-    fetch = audit_registry.make_http_fetch(cache_dir)
+    fetch = audit_registry.make_http_fetch(
+        cache_dir,
+        ttl_seconds=config.audit.cache_ttl_seconds,
+        grace_seconds=config.audit.offline_grace_seconds,
+    )
     attestations: dict[str, dict[str, object]] = {}
     errors: list[str] = []
     for plan in plans:
@@ -797,26 +820,36 @@ def _marker_payload(
         "commit": plan.resolved.commit,
         "content_sha256": content_hash,
         "locale": effective_locale,
-        "agents": agents,
+        "agents": sorted(set(agents)),
         "commands": sorted(command.name for command in plan.spec.commands.values() if command.type == "script"),
         "dependencies": sorted(plan.spec.dependencies),
         "skill_schema_version": plan.spec.schema_version,
-        "runtime_roots": list(plan.spec.runtime_roots),
-        "installed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "files": files,
+        "runtime_roots": sorted(set(plan.spec.runtime_roots)),
+        "installed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "files": sorted(set(files)),
     }
     if plan.decl.git is not None:
         marker_data["git"] = plan.decl.git
     if plan.spec.requirements:
         marker_data["requirements"] = sorted(plan.spec.requirements)
     if mcp_servers is not None:
-        marker_data["mcp_servers"] = {name: sorted(found) for name, found in sorted(mcp_servers.items())}
+        marker_data["mcp_servers"] = {
+            name: sorted(set(found)) for name, found in sorted(mcp_servers.items())
+        }
     if attestation is not None:
         marker_data["attestation"] = attestation
     if activation is not None:
-        marker_data["activation"] = activation
+        activation_commands = activation.get("commands", [])
+        if not isinstance(activation_commands, list) or not all(
+            isinstance(command, str) for command in activation_commands
+        ):
+            raise InstallError("marker activation.commands must be a list of strings")
+        marker_data["activation"] = {
+            **activation,
+            "commands": sorted(set(activation_commands)),
+        }
     if requirers:
-        marker_data["requirers"] = requirers
+        marker_data["requirers"] = sorted(set(requirers))
     if substituted is not None:
         marker_data["substituted"] = substituted
     return marker_data
@@ -844,14 +877,21 @@ def _marker_is_current(
         return False
     if marker.get("locale") != locale_value:
         return False
-    if marker.get("agents") != agents:
+    if marker.get("agents") != sorted(set(agents)):
         return False
-    if activation is not None and marker.get("activation") != activation:
-        return False
+    if activation is not None:
+        activation_commands = activation.get("commands", [])
+        if not isinstance(activation_commands, list) or not all(
+            isinstance(command, str) for command in activation_commands
+        ):
+            return False
+        expected_activation = {**activation, "commands": sorted(set(activation_commands))}
+        if marker.get("activation") != expected_activation:
+            return False
     if marker.get("substituted") != substituted:
         return False
     if mcp_servers is not None:
-        expected_mcp = {name: sorted(found) for name, found in sorted(mcp_servers.items())}
+        expected_mcp = {name: sorted(set(found)) for name, found in sorted(mcp_servers.items())}
         if marker.get("mcp_servers") != expected_mcp:
             return False
     if marker.get("attestation") != attestation:
@@ -864,7 +904,7 @@ def _read_marker(path: Path) -> dict[str, object] | None:
     if not path.exists():
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = protocol_json.loads(path.read_bytes())
     except Exception:
         return None
     return data if isinstance(data, dict) else None

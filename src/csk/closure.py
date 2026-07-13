@@ -152,7 +152,7 @@ def _unify(node: ClosureNode, item: _Pending) -> None:
                 node.identity = identity
             elif node.identity != identity:
                 raise ClosureError(
-                    f"Source conflict for {node.name}: {node.identity} (via {node.chains[0]}) "
+                    f"Source conflict for {node.name}: {node.identity} (via {_best_chain(node.chains)}) "
                     f"and {identity} (via {item.chain}) name different repositories"
                 )
     if (item.ref.kind, item.ref.value) == (node.resolved.kind, node.resolved.ref):
@@ -166,10 +166,14 @@ def _unify(node: ClosureNode, item: _Pending) -> None:
     if other.commit != node.resolved.commit:
         raise ClosureError(
             f"Version conflict for {node.name}: {node.resolved.kind} {node.resolved.ref} "
-            f"-> {node.resolved.commit[:12]} (via {node.chains[0]}) and {item.ref.kind} "
+            f"-> {node.resolved.commit[:12]} (via {_best_chain(node.chains)}) and {item.ref.kind} "
             f"{item.ref.value} -> {other.commit[:12]} (via {item.chain}); "
             "align the requirement refs at their declarations"
         )
+
+
+def _best_chain(chains: list[str]) -> str:
+    return min(chains, key=lambda chain: (chain.count(" -> "), chain))
 
 
 def _resolve_node(
@@ -293,9 +297,9 @@ def _temp_repo_dir(stack: ExitStack | None, source: str) -> Path:
 
 
 def _gate_source(config: GlobalConfig, name: str, git_url: str, chain: str) -> None:
+    identity = canonical_source_identity(git_url)
     if not config.allowed_sources:
         return
-    identity = canonical_source_identity(git_url)
     if is_allowed(identity, config.allowed_sources):
         return
     allowed = ", ".join(config.allowed_sources)

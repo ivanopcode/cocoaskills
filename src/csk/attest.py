@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import audit_registry
+from . import audit_registry, protocol_json
 from .config import GlobalConfig, ProjectConfig, RegistryConfig
 from . import hybrid
 
@@ -25,7 +25,11 @@ class AttestResult:
 
 def attest_projects(config: GlobalConfig, *, alias: str | None = None) -> list[AttestResult]:
     registries = config.trusted_registries()
-    fetch = audit_registry.make_http_fetch(config.path.parent / "cache" / "registry")
+    fetch = audit_registry.make_http_fetch(
+        config.path.parent / "cache" / "registry",
+        ttl_seconds=config.audit.cache_ttl_seconds,
+        grace_seconds=config.audit.offline_grace_seconds,
+    )
     results: list[AttestResult] = []
     for project in _selected(config, alias):
         marker_dirs = [project.path / ".agents" / "skills"]
@@ -51,7 +55,7 @@ def _attest_root(
         return results
     for marker_path in sorted(skills_root.glob("*/.csk-install.json")):
         try:
-            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            marker = protocol_json.loads(marker_path.read_bytes())
         except (OSError, ValueError):
             continue
         name = marker.get("name")

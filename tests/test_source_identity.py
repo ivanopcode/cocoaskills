@@ -3,7 +3,13 @@ from __future__ import annotations
 import pytest
 
 from csk import config
-from csk.source_identity import canonical_source_identity, is_allowed, matches_prefix
+from csk.source_identity import (
+    SourceIdentityError,
+    canonical_source_identity,
+    is_allowed,
+    is_canonical_source_identity,
+    matches_prefix,
+)
 
 
 @pytest.mark.parametrize(
@@ -25,6 +31,25 @@ def test_ssh_and_https_of_one_repository_share_identity():
     ssh = canonical_source_identity("git@gitlab.example.com:skills/skill-wiki.git")
     https = canonical_source_identity("https://gitlab.example.com/skills/skill-wiki")
     assert ssh == https
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "git@gitlab.example.com:skills/a b",
+        "git@gitlab.example.com:skills/a#fragment",
+        "https://gitlab.example.com/skills/a b",
+    ],
+)
+def test_network_identity_rejects_noncanonical_repository_path(url):
+    with pytest.raises(SourceIdentityError):
+        canonical_source_identity(url)
+
+
+def test_canonical_source_identity_shape():
+    assert is_canonical_source_identity("gitlab.example.com/skills/文書")
+    assert not is_canonical_source_identity("GitLab.example.com/skills/a")
+    assert not is_canonical_source_identity("gitlab.example.com/skills/a b")
 
 
 @pytest.mark.parametrize(

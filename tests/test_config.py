@@ -53,6 +53,10 @@ def test_config_parses_and_round_trips_audit_settings(tmp_path):
                 "model": "gpt-5",
                 "allow_cloud": True,
                 "max_request_bytes": 2048,
+                "snapshot_max_age_seconds": 86400,
+                "snapshot_clock_skew_seconds": 0,
+                "cache_ttl_seconds": 0,
+                "offline_grace_seconds": 0,
                 "backends": {"codex": {"kind": "codex", "timeout_seconds": 30, "cloud": True}},
                 "grants": [{"skill": "skill-gitlab", "content_sha256": "abc"}],
                 "revocations": [
@@ -75,6 +79,10 @@ def test_config_parses_and_round_trips_audit_settings(tmp_path):
     assert cfg.audit.model == "gpt-5"
     assert cfg.audit.allow_cloud
     assert cfg.audit.max_request_bytes == 2048
+    assert cfg.audit.snapshot_max_age_seconds == 86400
+    assert cfg.audit.snapshot_clock_skew_seconds == 0
+    assert cfg.audit.cache_ttl_seconds == 0
+    assert cfg.audit.offline_grace_seconds == 0
     assert cfg.audit.source_policy.classify(None, "git@github.com:ivanopcode/cocoaskills.git") == "public"
 
     config.save_config(cfg)
@@ -87,6 +95,10 @@ def test_config_parses_and_round_trips_audit_settings(tmp_path):
     assert loaded.audit.model == "gpt-5"
     assert loaded.audit.allow_cloud
     assert loaded.audit.max_request_bytes == 2048
+    assert loaded.audit.snapshot_max_age_seconds == 86400
+    assert loaded.audit.snapshot_clock_skew_seconds == 0
+    assert loaded.audit.cache_ttl_seconds == 0
+    assert loaded.audit.offline_grace_seconds == 0
     assert loaded.audit.backends == {"codex": {"kind": "codex", "timeout_seconds": 30, "cloud": True}}
     assert loaded.audit.grants == [{"skill": "skill-gitlab", "content_sha256": "abc"}]
     assert loaded.audit.revocations == ["sha256:" + "d" * 64, "source:gitlab.example.com"]
@@ -103,6 +115,46 @@ def test_config_requires_projects_field(tmp_path):
         config.parse_config({"schema_version": 1, "skills_root": "x"}, tmp_path / "config.json")
 
 
+def test_config_rejects_unknown_top_and_project_fields(tmp_path):
+    with pytest.raises(config.ConfigError, match="unsupported field"):
+        config.parse_config(
+            {"schema_version": 1, "skills_root": "x", "projects": {}, "typo": True},
+            tmp_path / "config.json",
+        )
+    with pytest.raises(config.ConfigError, match="unsupported field"):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "projects": {"app": {"path": "x", "typo": True}},
+            },
+            tmp_path / "config.json",
+        )
+
+
+@pytest.mark.parametrize("field", ["project_alias", "checkout_alias"])
+def test_config_project_matching_aliases_are_portable_or_null(tmp_path, field):
+    parsed = config.parse_config(
+        {
+            "schema_version": 1,
+            "skills_root": "x",
+            "projects": {"app": {"path": "x", field: None}},
+        },
+        tmp_path / "config.json",
+    )
+    assert parsed.projects["app"].project_alias == "app"
+    assert parsed.projects["app"].checkout_alias == "app"
+    with pytest.raises(config.ConfigError, match="portable identifier"):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "projects": {"app": {"path": "x", field: "App Label"}},
+            },
+            tmp_path / "config.json",
+        )
+
+
 def test_config_rejects_invalid_worktree_alias_pattern(tmp_path):
     with pytest.raises(config.ConfigError):
         config.parse_config(
@@ -110,6 +162,19 @@ def test_config_rejects_invalid_worktree_alias_pattern(tmp_path):
                 "schema_version": 1,
                 "skills_root": "x",
                 "worktree_alias_pattern": "[",
+                "projects": {},
+            },
+            tmp_path / "config.json",
+        )
+
+
+def test_config_rejects_unsafe_preferred_locale(tmp_path):
+    with pytest.raises(config.ConfigError, match="preferred_locale"):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "preferred_locale": "../en",
                 "projects": {},
             },
             tmp_path / "config.json",
@@ -268,6 +333,28 @@ def test_config_rejects_invalid_max_request_bytes(tmp_path):
                 "skills_root": "x",
                 "projects": {},
                 "audit": {"max_request_bytes": 0},
+            },
+            tmp_path / "config.json",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("snapshot_max_age_seconds", 0),
+        ("snapshot_clock_skew_seconds", -1),
+        ("cache_ttl_seconds", -1),
+        ("offline_grace_seconds", -1),
+    ],
+)
+def test_config_rejects_invalid_registry_time_bounds(tmp_path, field, value):
+    with pytest.raises(config.ConfigError, match=field):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "projects": {},
+                "audit": {field: value},
             },
             tmp_path / "config.json",
         )

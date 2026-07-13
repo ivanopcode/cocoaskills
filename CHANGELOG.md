@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-07-13
+
+### Добавлено
+
+- Добавлена команда `csk shell-init <shell> --install`: она атомарно кэширует
+  сгенерированный shell-hook и печатает команду подключения для профиля.
+- Добавлена переменная `CSK_AUTO_ENV=0`, отключающая обход проектных директорий
+  на зависшей или нездоровой файловой системе без потери глобальных команд.
+- `csk skill check` теперь предупреждает, если prompt-visible Markdown ссылается
+  в runtime-only директорию или угадывает source layout команды-провайдера;
+  проверяются пути с POSIX- и Windows-разделителями.
+- В CI добавлен авторитетный conformance-набор Curator Protocol для Linux,
+  macOS и Windows: общие fixtures контекста и хэшей, нормализованные install
+  markers, байты CCJ-1, идентификаторы источников, переносимые пути, порядок
+  замыкания зависимостей и подписанные объекты registry.
+
+### Изменено
+
+- Клиент registry усилен подписями, привязанными к идентификатору ключа,
+  строгим JSON CCJ-1, ограниченной пагинацией запросов, атомарными кэшами,
+  полным состоянием rollback/equivocation снимков, стабильными ответами
+  публикации и ключами идемпотентности протокола.
+- Переносимые пути и идентификаторы теперь проверяются до распаковки и
+  хэширования, некорректные сетевые источники отклоняются до клонирования,
+  поля-множества install marker формируются детерминированно, а PowerShell
+  активирует проектное окружение для каждого приглашения с сохранением
+  исходного prompt.
+- После проектной установки csk сообщает явный путь к `.agents/bin` и способ
+  установить кэшированный hook, если проектные shim-команды отсутствуют в
+  текущем `PATH`.
+
+### Исправлено
+
+- Исправлен бесконечный поиск `.agents/env.sh` при пустом или относительном
+  `PWD`: обход теперь принимает только абсолютный путь и гарантированно
+  завершается в корне файловой системы.
+- Из POSIX-hook удалены внешние вызовы `dirname`, создававшие лишние процессы
+  при старте shell и на каждом обходе родителей.
+
 ## [0.12.0] - 2026-07-09
 
 ### Added
@@ -358,7 +397,8 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.12.0...HEAD
+[Unreleased]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.1...main
+[0.12.1]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.9.0...v0.10.0
