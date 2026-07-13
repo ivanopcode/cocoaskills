@@ -5,12 +5,14 @@ import ipaddress
 import os
 import re
 import sys
+import tempfile
+import unicodedata
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import protocol_json
+from . import identifiers, protocol_json
 from .audit import backend_config
 from .audit.source_policy import SourcePolicy, SourcePolicyError, parse_source_policy
 
@@ -31,6 +33,32 @@ LOCKABLE_KEYS = frozenset(
 DEFAULT_AGENTS = ["codex_cli"]
 DEFAULT_WORKTREE_ALIAS_PATTERN = r"[A-Z]+-[0-9]+"
 AUDIT_REVOCATION_HASH_RE = re.compile(r"^(?:sha256:)?[A-Fa-f0-9]{64}$")
+PINNED_KEY_RE = re.compile(r"^(?:ed25519:)?[A-Za-z0-9+/]{43}=$")
+REGISTRY_HOST_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
+)
+DEFAULT_SNAPSHOT_MAX_AGE_SECONDS = 604_800
+DEFAULT_SNAPSHOT_CLOCK_SKEW_SECONDS = 300
+DEFAULT_CACHE_TTL_SECONDS = 3_600
+DEFAULT_OFFLINE_GRACE_SECONDS = 604_800
+MAX_DURATION_SECONDS = 2_147_483_647
+
+MANAGER_KEYS = frozenset(
+    {
+        "schema_version",
+        "skills_root",
+        "default_agents",
+        "preferred_locale",
+        "adapter_mode",
+        "worktree_alias_pattern",
+        "projects",
+        "allowed_sources",
+        "audit",
+        "audit_registries",
+        "disable_builtin_registries",
+    }
+)
 
 
 class ConfigError(Exception):
@@ -76,6 +104,10 @@ class AuditConfig:
     # How registry lookups affect the install: 'advisory' warns on an unknown
     # or unreachable artifact, 'strict' fails it. A revocation always denies.
     registry_policy: str = "advisory"
+    snapshot_max_age_seconds: int = DEFAULT_SNAPSHOT_MAX_AGE_SECONDS
+    snapshot_clock_skew_seconds: int = DEFAULT_SNAPSHOT_CLOCK_SKEW_SECONDS
+    cache_ttl_seconds: int = DEFAULT_CACHE_TTL_SECONDS
+    offline_grace_seconds: int = DEFAULT_OFFLINE_GRACE_SECONDS
 
 
 @dataclass(frozen=True)
@@ -163,9 +195,21 @@ def _apply_system_config(
     user override of that key is ignored with a warning. Other system keys act
     as defaults the user config may override.
     """
+    schema = system_data.get("schema_version")
+    if not isinstance(schema, int) or isinstance(schema, bool) or schema != SCHEMA_VERSION:
+        raise ConfigError(f"System config {system_path} requires schema_version 1")
+    unknown = sorted(set(system_data) - MANAGER_KEYS - {"locked"})
+    if unknown:
+        joined = ", ".join(repr(item) for item in unknown)
+        raise ConfigError(f"System config {system_path} has unsupported field(s): {joined}")
     locked_raw = system_data.get("locked", [])
     if not _is_str_list(locked_raw):
         raise ConfigError(f"System config {system_path} field 'locked' must be a list of strings")
+    if len(set(locked_raw)) != len(locked_raw):
+        raise ConfigError(f"System config {system_path} field 'locked' must not contain duplicates")
+    unsupported_locks = sorted(set(locked_raw) - LOCKABLE_KEYS)
+    if unsupported_locks:
+        raise ConfigError(f"System config {system_path} cannot lock {unsupported_locks[0]!r}")
     locked = set(locked_raw)
     merged = dict(user_data)
     for key, value in system_data.items():
@@ -190,6 +234,7 @@ def _apply_system_config(
 def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
     if not isinstance(data, dict):
         raise ConfigError("Global config must be a JSON object")
+    _reject_unknown_fields(data, set(MANAGER_KEYS), "top level")
     schema = data.get("schema_version")
     if schema is None:
         raise ConfigError("Global config is missing required field 'schema_version'")
@@ -201,23 +246,30 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
         )
 
     skills_root_raw = data.get("skills_root")
-    if not isinstance(skills_root_raw, str) or not skills_root_raw:
+    if not isinstance(skills_root_raw, str) or not skills_root_raw or len(skills_root_raw) > 4096:
         raise ConfigError("Global config requires non-empty string field 'skills_root'")
 
     default_agents = data.get("default_agents", DEFAULT_AGENTS)
-    if not _is_str_list(default_agents):
-        raise ConfigError("Global config field 'default_agents' must be a list of strings")
+    default_agents = _identifier_list(default_agents, "default_agents")
 
     preferred_locale = data.get("preferred_locale")
-    if preferred_locale is not None and not isinstance(preferred_locale, str):
-        raise ConfigError("Global config field 'preferred_locale' must be a string when present")
+    if preferred_locale is not None and (
+        not isinstance(preferred_locale, str) or not identifiers.is_valid_locale(preferred_locale)
+    ):
+        raise ConfigError(
+            "Global config field 'preferred_locale' must be null or a 1-64 character ASCII locale selector"
+        )
 
     adapter_mode = data.get("adapter_mode", "auto")
     if adapter_mode not in {"auto", "symlink", "copy"}:
         raise ConfigError("Global config field 'adapter_mode' must be auto, symlink, or copy")
 
     worktree_alias_pattern = data.get("worktree_alias_pattern", DEFAULT_WORKTREE_ALIAS_PATTERN)
-    if not isinstance(worktree_alias_pattern, str) or not worktree_alias_pattern:
+    if (
+        not isinstance(worktree_alias_pattern, str)
+        or not worktree_alias_pattern
+        or len(worktree_alias_pattern) > 1024
+    ):
         raise ConfigError("Global config field 'worktree_alias_pattern' must be a non-empty string")
     try:
         re.compile(worktree_alias_pattern)
@@ -227,7 +279,11 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
     audit = _parse_audit_config(data.get("audit"))
 
     allowed_sources_raw = data.get("allowed_sources", [])
-    if not _is_str_list(allowed_sources_raw) or any(not item.strip() for item in allowed_sources_raw):
+    if (
+        not _is_str_list(allowed_sources_raw)
+        or any(not item.strip() or len(item) > 4096 for item in allowed_sources_raw)
+        or len(set(allowed_sources_raw)) != len(allowed_sources_raw)
+    ):
         raise ConfigError("Global config field 'allowed_sources' must be a list of non-empty strings")
 
     audit_registries = _parse_audit_registries(data.get("audit_registries"))
@@ -243,22 +299,30 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
 
     projects: dict[str, ProjectConfig] = {}
     for alias, raw in projects_raw.items():
-        if not isinstance(alias, str) or not alias:
-            raise ConfigError("Project alias must be a non-empty string")
+        if not isinstance(alias, str) or not identifiers.is_valid_identifier(alias):
+            raise ConfigError(f"Project alias {alias!r} must be a portable identifier")
         if not isinstance(raw, dict):
             raise ConfigError(f"Project {alias!r} config must be an object")
+        _reject_unknown_fields(
+            raw,
+            {"path", "agents", "project_alias", "checkout_alias"},
+            f"projects.{alias}",
+        )
         project_path = raw.get("path")
-        if not isinstance(project_path, str) or not project_path:
+        if not isinstance(project_path, str) or not project_path or len(project_path) > 4096:
             raise ConfigError(f"Project {alias!r} requires non-empty string field 'path'")
         agents = raw.get("agents", [])
-        if not _is_str_list(agents):
-            raise ConfigError(f"Project {alias!r} field 'agents' must be a list of strings")
+        agents = _identifier_list(agents, f"projects.{alias}.agents")
         project_alias = raw.get("project_alias", alias)
-        if project_alias is not None and (not isinstance(project_alias, str) or not project_alias):
-            raise ConfigError(f"Project {alias!r} field 'project_alias' must be a non-empty string when present")
+        if project_alias is None:
+            project_alias = alias
+        if not isinstance(project_alias, str) or not identifiers.is_valid_identifier(project_alias):
+            raise ConfigError(f"Project {alias!r} field 'project_alias' must be a portable identifier when present")
         checkout_alias = raw.get("checkout_alias", alias)
-        if checkout_alias is not None and (not isinstance(checkout_alias, str) or not checkout_alias):
-            raise ConfigError(f"Project {alias!r} field 'checkout_alias' must be a non-empty string when present")
+        if checkout_alias is None:
+            checkout_alias = alias
+        if not isinstance(checkout_alias, str) or not identifiers.is_valid_identifier(checkout_alias):
+            raise ConfigError(f"Project {alias!r} field 'checkout_alias' must be a portable identifier when present")
         projects[alias] = ProjectConfig(
             alias=alias,
             path=Path(project_path).expanduser(),
@@ -283,7 +347,6 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
 
 
 def save_config(config: GlobalConfig) -> None:
-    config.path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "schema_version": SCHEMA_VERSION,
         "skills_root": str(config.skills_root),
@@ -318,7 +381,29 @@ def save_config(config: GlobalConfig) -> None:
         ]
     if config.disable_builtin_registries:
         data["disable_builtin_registries"] = True
-    config.path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_json_atomic(config.path, data)
+
+
+def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(data, indent=2, sort_keys=True) + "\n"
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".config-", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        try:
+            os.fchmod(descriptor, 0o600)
+        except (AttributeError, OSError):
+            pass
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            descriptor = -1
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
 
 
 def add_project(
@@ -365,6 +450,29 @@ def _is_str_list(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
+def _identifier_list(value: Any, field: str) -> list[str]:
+    if (
+        not _is_str_list(value)
+        or any(not identifiers.is_valid_identifier(item) for item in value)
+        or len(set(value)) != len(value)
+    ):
+        raise ConfigError(f"Global config field '{field}' must contain unique portable identifiers")
+    return list(value)
+
+
+def _bounded_integer(value: Any, field: str, *, minimum: int, maximum: int) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < minimum
+        or value > maximum
+    ):
+        raise ConfigError(
+            f"Global config field '{field}' must be an integer between {minimum} and {maximum}"
+        )
+    return value
+
+
 def _parse_audit_registries(raw: Any) -> tuple[RegistryConfig, ...]:
     if raw is None:
         return ()
@@ -375,9 +483,14 @@ def _parse_audit_registries(raw: Any) -> tuple[RegistryConfig, ...]:
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             raise ConfigError(f"audit_registries[{index}] must be an object")
+        _reject_unknown_fields(
+            item,
+            {"name", "url", "public_keys", "enabled"},
+            f"audit_registries[{index}]",
+        )
         name = item.get("name")
-        if not isinstance(name, str) or not name:
-            raise ConfigError(f"audit_registries[{index}] requires a non-empty string 'name'")
+        if not isinstance(name, str) or not identifiers.is_valid_identifier(name):
+            raise ConfigError(f"audit_registries[{index}].name must be a portable identifier")
         raw_url = item.get("url")
         if not isinstance(raw_url, str):
             raise ConfigError(f"audit_registries[{index}] requires an http(s) 'url'")
@@ -386,8 +499,14 @@ def _parse_audit_registries(raw: Any) -> tuple[RegistryConfig, ...]:
             raise ConfigError(f"audit_registries[{index}] duplicates url {url!r}")
         seen.add(url)
         keys = item.get("public_keys", [])
-        if not _is_str_list(keys) or any(not key.strip() for key in keys):
-            raise ConfigError(f"audit_registries[{index}].public_keys must be a list of non-empty strings")
+        if (
+            not _is_str_list(keys)
+            or any(PINNED_KEY_RE.fullmatch(key) is None for key in keys)
+            or len(set(keys)) != len(keys)
+        ):
+            raise ConfigError(
+                f"audit_registries[{index}].public_keys must contain unique canonical Ed25519 public keys"
+            )
         enabled = item.get("enabled", True)
         if not isinstance(enabled, bool):
             raise ConfigError(f"audit_registries[{index}].enabled must be a boolean")
@@ -396,6 +515,8 @@ def _parse_audit_registries(raw: Any) -> tuple[RegistryConfig, ...]:
 
 
 def canonical_registry_url(value: str, *, field: str = "registry URL") -> str:
+    if not value or len(value) > 4096:
+        raise ConfigError(f"{field} must contain at most 4096 characters")
     try:
         parsed = urllib.parse.urlsplit(value)
         port = parsed.port
@@ -407,18 +528,39 @@ def canonical_registry_url(value: str, *, field: str = "registry URL") -> str:
         raise ConfigError(f"{field} requires an http(s) URL with a host")
     if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
         raise ConfigError(f"{field} must not contain credentials, a query, or a fragment")
+    if "%" in value:
+        raise ConfigError(f"{field} must not contain percent escapes")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+        if len(host) > 253 or REGISTRY_HOST_RE.fullmatch(host) is None:
+            raise ConfigError(f"{field} requires a portable ASCII DNS host or IP literal")
+    else:
+        host = str(address)
     if scheme == "http":
-        try:
-            loopback = ipaddress.ip_address(host).is_loopback
-        except ValueError:
-            loopback = host == "localhost"
+        loopback = address.is_loopback if address is not None else host == "localhost"
         if not loopback:
             raise ConfigError(f"{field} permits plain HTTP only for an explicitly configured loopback host")
     authority = f"[{host}]" if ":" in host else host
     if port is not None and not ((scheme == "https" and port == 443) or (scheme == "http" and port == 80)):
         authority = f"{authority}:{port}"
+    if "//" in parsed.path or "\\" in parsed.path:
+        raise ConfigError(f"{field} path must not contain doubled separators or backslashes")
     path = parsed.path.rstrip("/")
-    return urllib.parse.urlunsplit((scheme, authority, path, "", ""))
+    if any(
+        ord(character) > 0x7F
+        or character.isspace()
+        or unicodedata.category(character) == "Cc"
+        for character in path
+    ):
+        raise ConfigError(f"{field} path must contain only printable non-space ASCII characters")
+    if any(component in {".", ".."} for component in path.strip("/").split("/")):
+        raise ConfigError(f"{field} path must not contain dot segments")
+    canonical = urllib.parse.urlunsplit((scheme, authority, path, "", ""))
+    if len(canonical) > 4096:
+        raise ConfigError(f"{field} canonical URL exceeds 4096 characters")
+    return canonical
 
 
 def _parse_audit_config(raw: Any) -> AuditConfig:
@@ -441,6 +583,10 @@ def _parse_audit_config(raw: Any) -> AuditConfig:
             "revocations",
             "source_policy",
             "registry_policy",
+            "snapshot_max_age_seconds",
+            "snapshot_clock_skew_seconds",
+            "cache_ttl_seconds",
+            "offline_grace_seconds",
         },
         "audit",
     )
@@ -458,12 +604,14 @@ def _parse_audit_config(raw: Any) -> AuditConfig:
         raise ConfigError("Global config field 'audit.fail_on' must be off, low, medium, high, or critical")
 
     backend = raw.get("backend", "null")
-    if not isinstance(backend, str) or not backend:
-        raise ConfigError("Global config field 'audit.backend' must be a non-empty string")
+    if not isinstance(backend, str) or not backend or len(backend) > 128:
+        raise ConfigError("Global config field 'audit.backend' must be a non-empty string of at most 128 characters")
 
     model = raw.get("model")
-    if model is not None and (not isinstance(model, str) or not model):
-        raise ConfigError("Global config field 'audit.model' must be a non-empty string when present")
+    if model is not None and (not isinstance(model, str) or not model or len(model) > 1024):
+        raise ConfigError(
+            "Global config field 'audit.model' must be a non-empty string of at most 1024 characters when present"
+        )
 
     allow_cloud = raw.get("allow_cloud", False)
     if not isinstance(allow_cloud, bool):
@@ -509,6 +657,31 @@ def _parse_audit_config(raw: Any) -> AuditConfig:
     if registry_policy not in {"advisory", "strict"}:
         raise ConfigError("Global config field 'audit.registry_policy' must be advisory or strict")
 
+    snapshot_max_age_seconds = _bounded_integer(
+        raw.get("snapshot_max_age_seconds", DEFAULT_SNAPSHOT_MAX_AGE_SECONDS),
+        "audit.snapshot_max_age_seconds",
+        minimum=1,
+        maximum=MAX_DURATION_SECONDS,
+    )
+    snapshot_clock_skew_seconds = _bounded_integer(
+        raw.get("snapshot_clock_skew_seconds", DEFAULT_SNAPSHOT_CLOCK_SKEW_SECONDS),
+        "audit.snapshot_clock_skew_seconds",
+        minimum=0,
+        maximum=MAX_DURATION_SECONDS,
+    )
+    cache_ttl_seconds = _bounded_integer(
+        raw.get("cache_ttl_seconds", DEFAULT_CACHE_TTL_SECONDS),
+        "audit.cache_ttl_seconds",
+        minimum=0,
+        maximum=MAX_DURATION_SECONDS,
+    )
+    offline_grace_seconds = _bounded_integer(
+        raw.get("offline_grace_seconds", DEFAULT_OFFLINE_GRACE_SECONDS),
+        "audit.offline_grace_seconds",
+        minimum=0,
+        maximum=MAX_DURATION_SECONDS,
+    )
+
     return AuditConfig(
         enabled=enabled,
         mode=mode,
@@ -522,6 +695,10 @@ def _parse_audit_config(raw: Any) -> AuditConfig:
         revocations=list(revocations),
         source_policy=source_policy,
         registry_policy=registry_policy,
+        snapshot_max_age_seconds=snapshot_max_age_seconds,
+        snapshot_clock_skew_seconds=snapshot_clock_skew_seconds,
+        cache_ttl_seconds=cache_ttl_seconds,
+        offline_grace_seconds=offline_grace_seconds,
     )
 
 
@@ -552,6 +729,14 @@ def _serialize_audit_config(audit: AuditConfig) -> dict[str, Any]:
         data["source_policy"] = source_policy
     if audit.registry_policy != "advisory":
         data["registry_policy"] = audit.registry_policy
+    if audit.snapshot_max_age_seconds != DEFAULT_SNAPSHOT_MAX_AGE_SECONDS:
+        data["snapshot_max_age_seconds"] = audit.snapshot_max_age_seconds
+    if audit.snapshot_clock_skew_seconds != DEFAULT_SNAPSHOT_CLOCK_SKEW_SECONDS:
+        data["snapshot_clock_skew_seconds"] = audit.snapshot_clock_skew_seconds
+    if audit.cache_ttl_seconds != DEFAULT_CACHE_TTL_SECONDS:
+        data["cache_ttl_seconds"] = audit.cache_ttl_seconds
+    if audit.offline_grace_seconds != DEFAULT_OFFLINE_GRACE_SECONDS:
+        data["offline_grace_seconds"] = audit.offline_grace_seconds
     return data
 
 

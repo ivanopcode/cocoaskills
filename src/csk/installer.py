@@ -439,6 +439,8 @@ def _check_audit_registries(
         cache_dir,
         fetch_snapshot=audit_registry.http_get_snapshot,
         now=time.time(),
+        max_age_seconds=config.audit.snapshot_max_age_seconds,
+        clock_skew_seconds=config.audit.snapshot_clock_skew_seconds,
     )
     for warning in snapshot_warnings:
         result.messages.append(f"{alias}: registry: {warning}")
@@ -446,7 +448,11 @@ def _check_audit_registries(
     if not registries:
         # Every trusted registry served a tampered snapshot; refuse to proceed.
         raise InstallError("every trusted audit registry served a tampered snapshot")
-    fetch = audit_registry.make_http_fetch(cache_dir)
+    fetch = audit_registry.make_http_fetch(
+        cache_dir,
+        ttl_seconds=config.audit.cache_ttl_seconds,
+        grace_seconds=config.audit.offline_grace_seconds,
+    )
     attestations: dict[str, dict[str, object]] = {}
     errors: list[str] = []
     for plan in plans:

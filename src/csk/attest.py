@@ -25,7 +25,11 @@ class AttestResult:
 
 def attest_projects(config: GlobalConfig, *, alias: str | None = None) -> list[AttestResult]:
     registries = config.trusted_registries()
-    fetch = audit_registry.make_http_fetch(config.path.parent / "cache" / "registry")
+    fetch = audit_registry.make_http_fetch(
+        config.path.parent / "cache" / "registry",
+        ttl_seconds=config.audit.cache_ttl_seconds,
+        grace_seconds=config.audit.offline_grace_seconds,
+    )
     results: list[AttestResult] = []
     for project in _selected(config, alias):
         marker_dirs = [project.path / ".agents" / "skills"]

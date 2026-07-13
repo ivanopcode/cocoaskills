@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 # Skill names, source directory names, and command names become single
 # filesystem path components (runtime dirs, shim filenames). Restrict them to
 # a safe identifier alphabet so a third-party csk-skill.json can never write
 # outside its designated directories.
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+LOCALE_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?$")
 
 IDENTIFIER_RULE = (
     "must start with a letter or digit and contain only letters, digits, "
@@ -23,11 +25,21 @@ def is_valid_identifier(value: str) -> bool:
     return len(value) <= 128 and bool(IDENTIFIER_RE.fullmatch(value)) and is_portable_component(value)
 
 
+def is_valid_locale(value: str) -> bool:
+    """Validate the protocol's safe BCP 47-compatible locale surface."""
+    return len(value) <= 64 and LOCALE_RE.fullmatch(value) is not None
+
+
 def is_portable_component(value: str) -> bool:
     """Return whether one path component is portable across supported hosts."""
-    if not value or value in {".", ".."} or value.endswith((" ", ".")) or ":" in value:
+    if (
+        not value
+        or value in {".", ".."}
+        or value.endswith((" ", "."))
+        or any(separator in value for separator in (":", "/", "\\"))
+    ):
         return False
-    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+    if any(unicodedata.category(character) == "Cc" for character in value):
         return False
     basename = value.split(".", 1)[0].casefold()
     return basename not in _WINDOWS_RESERVED

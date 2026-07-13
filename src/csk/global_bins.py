@@ -6,7 +6,8 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import shims
+from . import protocol_json, shims
+from .identifiers import is_valid_identifier
 
 
 MANAGED_FILE = ".csk-managed.json"
@@ -211,15 +212,23 @@ def _read_managed(bin_dir: Path) -> set[str]:
     if not path.exists():
         return set()
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = protocol_json.loads(path.read_bytes())
     except Exception:
         return set()
-    if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
+    if (
+        not isinstance(data, dict)
+        or set(data) != {"schema_version", "entries"}
+        or data.get("schema_version") != SCHEMA_VERSION
+    ):
         return set()
-    entries = data.get("entries", [])
-    if not isinstance(entries, list):
+    entries = data["entries"]
+    if (
+        not isinstance(entries, list)
+        or any(not isinstance(entry, str) or not is_valid_identifier(entry) for entry in entries)
+        or len(entries) != len(set(entries))
+    ):
         return set()
-    return {entry for entry in entries if isinstance(entry, str)}
+    return set(entries)
 
 
 def _write_managed(bin_dir: Path, entries: set[str]) -> None:

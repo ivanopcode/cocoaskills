@@ -83,6 +83,22 @@ def test_verify_record_rejects_wrong_key():
     assert not audit_registry.verify_record(audit_registry.parse_record(record), (other_pinned,))
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"source_identity": "GitLab.example.com/skills/skill-tracker"},
+        {"source_identity": "gitlab.example.com/skills/a b"},
+        {"commit": "abc123"},
+        {"content_sha256": "sha256:deadbeef"},
+        {"extension": True},
+    ],
+)
+def test_parse_record_rejects_schema_violations(overrides):
+    private, _ = _make_key()
+    with pytest.raises(audit_registry.RegistryError):
+        audit_registry.parse_record(_sign_record(private, _record_body(**overrides)))
+
+
 def _fetch_from(records: list[dict[str, Any]]) -> audit_registry.FetchFn:
     def fetch(url: str, source_identity: str, commit: str, content_sha256: str) -> list[dict[str, Any]]:
         return records
@@ -140,6 +156,16 @@ def test_resolve_ignores_unverified_record_with_warning():
     resolution = audit_registry.resolve((registry,), fetch=_fetch_from([record]), **ARTIFACT)
     assert resolution.result == audit_registry.RESULT_UNKNOWN
     assert any("failed signature verification" in w for w in resolution.warnings)
+
+
+def test_resolve_ignores_one_malformed_record_without_discarding_page():
+    private, pinned = _make_key()
+    registry = RegistryConfig(name="central", url="https://r.example", public_keys=(pinned,))
+    malformed = {"name": "broken"}
+    valid = _sign_record(private, _record_body("audited"))
+    resolution = audit_registry.resolve((registry,), fetch=_fetch_from([malformed, valid]), **ARTIFACT)
+    assert resolution.result == audit_registry.RESULT_AUDITED
+    assert any("malformed record" in warning for warning in resolution.warnings)
 
 
 def test_resolve_warns_on_registry_without_pinned_keys():
@@ -260,7 +286,11 @@ def test_config_parses_audit_registries(tmp_path):
             tmp_path,
             {
                 "audit_registries": [
-                    {"name": "internal", "url": "https://r.example", "public_keys": ["ed25519:AAAA"]}
+                    {
+                        "name": "internal",
+                        "url": "https://r.example",
+                        "public_keys": ["ed25519:" + "A" * 43 + "="],
+                    }
                 ]
             },
         ),
@@ -308,12 +338,35 @@ def test_config_rejects_duplicate_registry_url(tmp_path):
         )
 
 
+def test_registry_url_canonicalization_and_rejections():
+    assert csk_config.canonical_registry_url("HTTPS://EXAMPLE.com:443/v1/") == "https://example.com/v1"
+    assert csk_config.canonical_registry_url("http://[::1]:8080/") == "http://[::1]:8080"
+    assert csk_config.canonical_registry_url("http://[0:0:0:0:0:0:0:1]/") == "http://[::1]"
+    for value in (
+        "https://registry.example/a%2Fb",
+        "https://registry.example/a/../b",
+        "https://registry.example/a//b",
+        "https://réregistry.example/a",
+        "https://registry.example/é",
+        "https://bad..example",
+        "http://registry.example/a",
+    ):
+        with pytest.raises(csk_config.ConfigError):
+            csk_config.canonical_registry_url(value)
+
+
 def test_config_roundtrips_registries(tmp_path):
     cfg = csk_config.parse_config(
         _base_config(
             tmp_path,
             {
-                "audit_registries": [{"name": "internal", "url": "https://r.example", "public_keys": ["ed25519:AAAA"]}],
+                "audit_registries": [
+                    {
+                        "name": "internal",
+                        "url": "https://r.example",
+                        "public_keys": ["ed25519:" + "A" * 43 + "="],
+                    }
+                ],
                 "disable_builtin_registries": True,
             },
         ),
@@ -331,7 +384,11 @@ def test_trusted_registries_disabled_excludes_inactive(tmp_path):
             tmp_path,
             {
                 "audit_registries": [
-                    {"name": "on", "url": "https://on.example", "public_keys": ["ed25519:AAAA"]},
+                    {
+                        "name": "on",
+                        "url": "https://on.example",
+                        "public_keys": ["ed25519:" + "A" * 43 + "="],
+                    },
                     {"name": "off", "url": "https://off.example", "enabled": False},
                 ]
             },
@@ -584,3 +641,15 @@ def test_check_snapshots_rejects_future_timestamp(tmp_path):
     )
     assert registry.url in unavailable
     assert any("future" in warning for warning in warnings)
+
+
+def test_check_snapshots_rejects_unknown_field(tmp_path):
+    private, pinned = _make_key()
+    registry = RegistryConfig(name="central", url="https://r.example", public_keys=(pinned,))
+    snapshot = _sign_record(private, {**_snapshot_body(), "extension": True})
+    now = __import__("datetime").datetime(2026, 7, 7, tzinfo=__import__("datetime").timezone.utc).timestamp()
+    unavailable, warnings = audit_registry.check_snapshots(
+        (registry,), tmp_path, fetch_snapshot=lambda url: snapshot, now=now
+    )
+    assert registry.url in unavailable
+    assert any("malformed" in warning for warning in warnings)

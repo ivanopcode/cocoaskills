@@ -415,22 +415,18 @@ def _parse_requirements(raw: Any, *, schema: int) -> dict[str, SkillRequirement]
 def _validate_relative_path(value: Any, *, field: str, strict_posix: bool = False) -> str:
     if not isinstance(value, str) or not value:
         raise SkillSpecError(f"{field} must be a non-empty string")
-    normalized = value.rstrip("/")
-    if not normalized:
-        raise SkillSpecError(f"{field} must be a non-empty string")
-    if strict_posix and ("\\" in normalized or "//" in normalized):
+    if strict_posix and ("\\" in value or "//" in value):
         raise SkillSpecError(f"{field} must be a POSIX-style relative path inside the skill repository")
-    if strict_posix and any(part in {"", "."} for part in normalized.split("/")):
+    if strict_posix and any(part in {"", "."} for part in value.split("/")):
         raise SkillSpecError(f"{field} must be a POSIX-style relative path inside the skill repository")
-    path = PurePosixPath(normalized)
+    path = PurePosixPath(value)
     if path.is_absolute() or ".." in path.parts:
         raise SkillSpecError(f"{field} must be a relative path inside the skill repository")
     if not path.parts:
         raise SkillSpecError(f"{field} must be a relative path inside the skill repository")
-    portable = path.as_posix()
-    if not is_valid_portable_path(portable):
+    if path.as_posix() != value or not is_valid_portable_path(value):
         raise SkillSpecError(f"{field} must be a portable relative path inside the skill repository")
-    return portable
+    return value
 
 
 def _parse_runtime_roots(raw: Any, *, snapshot: Path) -> tuple[str, ...]:

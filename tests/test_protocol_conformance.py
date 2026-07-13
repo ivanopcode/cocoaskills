@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from csk import audit_registry, closure, git_ops, hashing, identifiers, installer, manifest, skillspec, whitelist
+from csk import audit_registry, closure, config, git_ops, hashing, identifiers, installer, manifest, skillspec, whitelist
 from csk.config import RegistryConfig
 from csk.source_identity import SourceIdentityError, parse_source_identity
 
@@ -89,6 +89,37 @@ def test_source_identity_vectors(case: dict[str, Any]) -> None:
             parse_source_identity(case["input"])
     else:
         assert parse_source_identity(case["input"]) == case["identity"]
+
+
+@pytest.mark.parametrize("case", _json("vectors/identifiers.json") if ROOT_TEXT else [])
+def test_identifier_vectors(case: dict[str, Any]) -> None:
+    assert identifiers.is_valid_identifier(case["input"]) is case["valid"]
+
+
+@pytest.mark.parametrize("case", _json("vectors/locale-selectors.json") if ROOT_TEXT else [])
+def test_locale_selector_vectors(case: dict[str, Any]) -> None:
+    assert identifiers.is_valid_locale(case["input"]) is case["valid"]
+
+
+@pytest.mark.parametrize("case", _json("vectors/manager-config.json") if ROOT_TEXT else [])
+def test_manager_config_vectors(case: dict[str, Any], tmp_path: Path) -> None:
+    if not case["valid"]:
+        with pytest.raises(config.ConfigError):
+            config.parse_config(case["input"], tmp_path / "config.json")
+        return
+    parsed = config.parse_config(case["input"], tmp_path / "config.json")
+    expected = case["expected"]
+    assert parsed.default_agents == expected["default_agents"]
+    assert parsed.adapter_mode == expected["adapter_mode"]
+    assert [item.url for item in parsed.audit_registries] == expected["registry_urls"]
+    if "project_alias" in expected:
+        assert parsed.projects["app"].project_alias == expected["project_alias"]
+        assert parsed.projects["app"].checkout_alias == expected["checkout_alias"]
+    assert parsed.audit.snapshot_max_age_seconds == expected["snapshot_max_age_seconds"]
+    assert parsed.audit.snapshot_clock_skew_seconds == expected["snapshot_clock_skew_seconds"]
+    assert parsed.audit.cache_ttl_seconds == expected["cache_ttl_seconds"]
+    assert parsed.audit.offline_grace_seconds == expected["offline_grace_seconds"]
+    assert parsed.audit.max_request_bytes == expected["max_request_bytes"]
 
 
 @pytest.mark.parametrize("case", _json("vectors/portable-paths.json") if ROOT_TEXT else [])

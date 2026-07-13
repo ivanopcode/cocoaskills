@@ -85,9 +85,26 @@ def parse_source_identity(url: str) -> str | None:
     if path.endswith(".git"):
         path = path[: -len(".git")]
     path = path.rstrip("/")
-    if not path or not is_valid_portable_path(path):
+    if not _valid_repository_path(path):
         raise SourceIdentityError(f"network source has an invalid repository path: {url!r}")
-    return f"{host}/{path}"
+    canonical = f"{host}/{path}"
+    if len(canonical) > 4096:
+        raise SourceIdentityError(f"canonical network source identity exceeds 4096 characters: {url!r}")
+    return canonical
+
+
+def is_canonical_source_identity(value: str) -> bool:
+    """Validate the lowercase host/path form used by signed registry records."""
+    host, separator, path = value.partition("/")
+    return bool(separator and host == host.lower() and _HOST_RE.fullmatch(host) and _valid_repository_path(path))
+
+
+def _valid_repository_path(path: str) -> bool:
+    return bool(
+        path
+        and is_valid_portable_path(path)
+        and not any(character.isspace() or character in "%?#" for character in path)
+    )
 
 
 def matches_prefix(identity: str, prefix: str) -> bool:

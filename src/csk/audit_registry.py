@@ -15,7 +15,8 @@ from typing import Any, Callable
 
 from . import _ed25519
 from .config import RegistryConfig
-from .identifiers import is_valid_identifier, is_valid_portable_path
+from .identifiers import is_valid_identifier
+from .source_identity import is_canonical_source_identity
 
 
 # Advisory lookup cache lifetime and the window a stale cache stays usable
@@ -66,8 +67,8 @@ def _object_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _parse_json_integer(value: str) -> int:
     parsed = int(value)
-    if not -MAX_SAFE_INTEGER <= parsed <= MAX_SAFE_INTEGER:
-        raise RegistryError(f"JSON integer outside the safe range: {value}")
+    if value == "-0" or not -MAX_SAFE_INTEGER <= parsed <= MAX_SAFE_INTEGER:
+        raise RegistryError(f"JSON integer is not shortest-form or safe: {value}")
     return parsed
 
 
@@ -156,12 +157,7 @@ def parse_record(payload: dict[str, Any]) -> Record:
             raise RegistryError(f"audit record requires a non-empty string {key!r}")
     if not is_valid_identifier(payload["name"]):
         raise RegistryError("audit record name is not a portable identifier")
-    identity_host, separator, identity_path = payload["source_identity"].partition("/")
-    if (
-        not separator
-        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", identity_host) is None
-        or not is_valid_portable_path(identity_path)
-    ):
+    if len(payload["source_identity"]) > 4096 or not is_canonical_source_identity(payload["source_identity"]):
         raise RegistryError("audit record source_identity is not canonical")
     if re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", payload["commit"]) is None:
         raise RegistryError("audit record commit must be a full lowercase object id")
@@ -381,6 +377,36 @@ def verify_snapshot(snapshot: dict[str, Any], pinned_keys: tuple[str, ...]) -> b
     return False
 
 
+def _validate_snapshot_shape(snapshot: dict[str, Any]) -> tuple[int, int, str, str]:
+    required = {"schema_version", "merkle_root", "log_size", "head", "version", "created_at", "sig"}
+    if set(snapshot) != required:
+        raise RegistryError("snapshot fields are malformed")
+    schema_version = snapshot.get("schema_version")
+    version = snapshot.get("version")
+    log_size = snapshot.get("log_size")
+    head = snapshot.get("head")
+    merkle_root = snapshot.get("merkle_root")
+    if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version != 1:
+        raise RegistryError("snapshot schema_version must be 1")
+    if (
+        not isinstance(version, int)
+        or isinstance(version, bool)
+        or not 0 <= version <= MAX_SAFE_INTEGER
+        or not isinstance(log_size, int)
+        or isinstance(log_size, bool)
+        or not 0 <= log_size <= version
+        or not isinstance(head, str)
+        or re.fullmatch(r"[0-9a-f]{64}", head) is None
+        or not isinstance(merkle_root, str)
+        or re.fullmatch(r"[0-9a-f]{64}", merkle_root) is None
+        or _parse_iso8601(snapshot.get("created_at")) is None
+    ):
+        raise RegistryError("snapshot fields are malformed")
+    _signature_envelope(snapshot.get("sig"))
+    _validate_ccj(snapshot)
+    return version, log_size, head, merkle_root
+
+
 def _parse_iso8601(value: Any) -> float | None:
     if not isinstance(value, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value) is None:
         return None
@@ -400,6 +426,7 @@ def check_snapshots(
     fetch_snapshot: Callable[[str], dict[str, Any]],
     now: float,
     max_age_seconds: int = DEFAULT_SNAPSHOT_MAX_AGE_SECONDS,
+    clock_skew_seconds: int = DEFAULT_SNAPSHOT_CLOCK_SKEW_SECONDS,
 ) -> tuple[set[str], list[str]]:
     """Verify each registry snapshot; return the URLs to treat as tampered.
 
@@ -423,29 +450,14 @@ def check_snapshots(
         except RegistryError as exc:
             warnings.append(f"registry {registry.name} snapshot unavailable: {exc}")
             continue
-        if not verify_snapshot(snapshot, registry.public_keys):
-            warnings.append(f"registry {registry.name} snapshot signature failed verification")
+        try:
+            version, log_size, head, merkle_root = _validate_snapshot_shape(snapshot)
+        except RegistryError as exc:
+            warnings.append(f"registry {registry.name} snapshot is malformed: {exc}")
             unavailable.add(registry.url)
             continue
-        version = snapshot.get("version")
-        log_size = snapshot.get("log_size")
-        head = snapshot.get("head")
-        merkle_root = snapshot.get("merkle_root")
-        schema_version = snapshot.get("schema_version")
-        if (
-            schema_version != 1
-            or not isinstance(version, int)
-            or isinstance(version, bool)
-            or not 0 <= version <= MAX_SAFE_INTEGER
-            or not isinstance(log_size, int)
-            or isinstance(log_size, bool)
-            or not 0 <= log_size <= version
-            or not isinstance(head, str)
-            or re.fullmatch(r"[0-9a-f]{64}", head) is None
-            or not isinstance(merkle_root, str)
-            or re.fullmatch(r"[0-9a-f]{64}", merkle_root) is None
-        ):
-            warnings.append(f"registry {registry.name} snapshot is malformed")
+        if not verify_snapshot(snapshot, registry.public_keys):
+            warnings.append(f"registry {registry.name} snapshot signature failed verification")
             unavailable.add(registry.url)
             continue
         highest = state["highest_version"]
@@ -466,7 +478,7 @@ def check_snapshots(
             warnings.append(f"registry {registry.name} snapshot is stale")
             unavailable.add(registry.url)
             continue
-        if created > now + DEFAULT_SNAPSHOT_CLOCK_SKEW_SECONDS:
+        if created > now + clock_skew_seconds:
             warnings.append(f"registry {registry.name} snapshot timestamp is too far in the future")
             unavailable.add(registry.url)
             continue
@@ -595,7 +607,6 @@ def _http_get_records(endpoint: str) -> list[dict[str, Any]]:
         for item in page:
             if not isinstance(item, dict):
                 raise RegistryError("registry record page contains a non-object")
-            parse_record(item)
             records.append(item)
             if len(records) > MAX_RECORDS_PER_QUERY:
                 raise RegistryError("registry record query exceeded the 10000-record limit")
@@ -679,16 +690,9 @@ def _read_cache(path: Path) -> tuple[float, list[dict[str, Any]]] | None:
         return None
     if not isinstance(records, list):
         return None
-    validated: list[dict[str, Any]] = []
-    try:
-        for item in records:
-            if not isinstance(item, dict):
-                return None
-            parse_record(item)
-            validated.append(item)
-    except RegistryError:
+    if any(not isinstance(item, dict) for item in records):
         return None
-    return fetched_at, validated
+    return fetched_at, records
 
 
 def _write_cache(path: Path, fetched_at: float, records: list[dict[str, Any]]) -> None:

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from . import protocol_json
-from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_portable_path
+from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_locale, is_valid_portable_path
 
 
 SCHEMA_VERSION = 1
@@ -134,12 +135,6 @@ def _read_payload(path: Path) -> dict[str, Any]:
         raise ManifestError(f"Malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ManifestError(f"{path} must contain a JSON object")
-    unknown_top = sorted(set(data) - {"schema_version", "project", "agents", "locale", "skills"})
-    if unknown_top:
-        raise ManifestError(f"Skillfile has unsupported field(s): {', '.join(unknown_top)}")
-    unknown_top = sorted(set(data) - {"schema_version", "project", "agents", "locale", "skills"})
-    if unknown_top:
-        raise ManifestError(f"Skillfile has unsupported field(s): {', '.join(unknown_top)}")
     return data
 
 
@@ -163,6 +158,9 @@ def parse_manifest(
 ) -> ProjectManifest:
     if not isinstance(data, dict):
         raise ManifestError(f"{path} must contain a JSON object")
+    unknown_top = sorted(set(data) - {"schema_version", "project", "agents", "locale", "skills"})
+    if unknown_top:
+        raise ManifestError(f"Skillfile has unsupported field(s): {', '.join(unknown_top)}")
     schema = data.get("schema_version")
     if schema is None:
         raise ManifestError(f"{path} is missing required field 'schema_version'")
@@ -182,8 +180,8 @@ def parse_manifest(
         raise ManifestError("Skillfile field 'agents' must contain unique portable identifiers")
 
     locale = data.get("locale")
-    if locale is not None and (not isinstance(locale, str) or not locale or len(locale) > 64):
-        raise ManifestError("Skillfile field 'locale' must be a non-empty string of at most 64 characters")
+    if locale is not None and (not isinstance(locale, str) or not is_valid_locale(locale)):
+        raise ManifestError("Skillfile field 'locale' must be a 1-64 character ASCII locale selector")
 
     raw_skills = data.get("skills")
     if not isinstance(raw_skills, list):
@@ -256,8 +254,15 @@ def _parse_project_alias(data: dict[str, Any], path: Path) -> str | None:
     alias = project.get("alias")
     if alias is None:
         return None
-    if not isinstance(alias, str) or not alias:
-        raise ManifestError(f"{path} field 'project.alias' must be a non-empty string when present")
+    if (
+        not isinstance(alias, str)
+        or not alias
+        or len(alias) > 128
+        or any(unicodedata.category(character) == "Cc" for character in alias)
+    ):
+        raise ManifestError(
+            f"{path} field 'project.alias' must be a non-empty control-free string of at most 128 characters"
+        )
     return alias
 
 
