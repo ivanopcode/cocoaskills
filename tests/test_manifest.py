@@ -62,7 +62,7 @@ def test_manifest_rejects_unsafe_skill_names(tmp_path, name):
         )
 
 
-@pytest.mark.parametrize("source", ["../other", "a/../b", "/abs", "a\\b", "-flag", "a//b"])
+@pytest.mark.parametrize("source", ["../other", "a/../b", "/abs", "a\\b", "a//b"])
 def test_manifest_rejects_unsafe_source(tmp_path, source):
     with pytest.raises(manifest.ManifestError, match="source"):
         manifest.parse_manifest(

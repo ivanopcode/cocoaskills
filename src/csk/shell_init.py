@@ -113,6 +113,16 @@ function Invoke-CskAutoEnv {{
     $env:CSK_ACTIVE_ENV = $envFile
   }}
 }}
+if (-not $global:CskPromptWrapped) {{
+  $global:CskOriginalPrompt = (Get-Item Function:prompt -ErrorAction SilentlyContinue).ScriptBlock
+  function global:prompt {{
+    Invoke-CskAutoEnv
+    if ($global:CskOriginalPrompt) {{
+      return & $global:CskOriginalPrompt
+    }}
+    return "PS $($executionContext.SessionState.Path.CurrentLocation)> "
+  }}
+  $global:CskPromptWrapped = $true
+}}
 Invoke-CskAutoEnv
 '''
-

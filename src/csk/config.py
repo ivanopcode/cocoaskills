@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 import re
 import sys
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import protocol_json
 from .audit import backend_config
 from .audit.source_policy import SourcePolicy, SourcePolicyError, parse_source_policy
 
@@ -127,10 +130,10 @@ def system_config_path() -> Path | None:
 def load_config(path: Path | None = None) -> GlobalConfig:
     resolved = path or config_path()
     try:
-        user_data = json.loads(resolved.read_text(encoding="utf-8"))
+        user_data = protocol_json.loads(resolved.read_bytes())
     except FileNotFoundError as exc:
         raise ConfigError(f"Global config not found: {resolved}") from exc
-    except json.JSONDecodeError as exc:
+    except protocol_json.ProtocolJSONError as exc:
         raise ConfigError(f"Malformed JSON in global config {resolved}: {exc}") from exc
     if not isinstance(user_data, dict):
         raise ConfigError("Global config must be a JSON object")
@@ -138,10 +141,10 @@ def load_config(path: Path | None = None) -> GlobalConfig:
     system_path = system_config_path()
     if system_path is not None:
         try:
-            system_data = json.loads(system_path.read_text(encoding="utf-8"))
+            system_data = protocol_json.loads(system_path.read_bytes())
         except FileNotFoundError:
             system_data = None
-        except json.JSONDecodeError as exc:
+        except protocol_json.ProtocolJSONError as exc:
             raise ConfigError(f"Malformed JSON in system config {system_path}: {exc}") from exc
         if system_data is not None:
             if not isinstance(system_data, dict):
@@ -375,9 +378,10 @@ def _parse_audit_registries(raw: Any) -> tuple[RegistryConfig, ...]:
         name = item.get("name")
         if not isinstance(name, str) or not name:
             raise ConfigError(f"audit_registries[{index}] requires a non-empty string 'name'")
-        url = item.get("url")
-        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        raw_url = item.get("url")
+        if not isinstance(raw_url, str):
             raise ConfigError(f"audit_registries[{index}] requires an http(s) 'url'")
+        url = canonical_registry_url(raw_url, field=f"audit_registries[{index}].url")
         if url in seen:
             raise ConfigError(f"audit_registries[{index}] duplicates url {url!r}")
         seen.add(url)
@@ -389,6 +393,32 @@ def _parse_audit_registries(raw: Any) -> tuple[RegistryConfig, ...]:
             raise ConfigError(f"audit_registries[{index}].enabled must be a boolean")
         registries.append(RegistryConfig(name=name, url=url, public_keys=tuple(keys), enabled=enabled))
     return tuple(registries)
+
+
+def canonical_registry_url(value: str, *, field: str = "registry URL") -> str:
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise ConfigError(f"{field} is malformed") from exc
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+    if scheme not in {"http", "https"} or not host:
+        raise ConfigError(f"{field} requires an http(s) URL with a host")
+    if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+        raise ConfigError(f"{field} must not contain credentials, a query, or a fragment")
+    if scheme == "http":
+        try:
+            loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            loopback = host == "localhost"
+        if not loopback:
+            raise ConfigError(f"{field} permits plain HTTP only for an explicitly configured loopback host")
+    authority = f"[{host}]" if ":" in host else host
+    if port is not None and not ((scheme == "https" and port == 443) or (scheme == "http" and port == 80)):
+        authority = f"{authority}:{port}"
+    path = parsed.path.rstrip("/")
+    return urllib.parse.urlunsplit((scheme, authority, path, "", ""))
 
 
 def _parse_audit_config(raw: Any) -> AuditConfig:

@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import protocol_json
+
 
 class LocaleError(Exception):
     pass
@@ -145,8 +147,8 @@ def render_locale(snapshot: Path, installed_dir: Path, locale: str | None) -> No
 
 def _load_metadata(path: Path) -> dict[str, object]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        data = protocol_json.loads(path.read_bytes())
+    except protocol_json.ProtocolJSONError as exc:
         raise LocaleError(f"Malformed locale metadata {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise LocaleError(f"{path} must contain a JSON object")

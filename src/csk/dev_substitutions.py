@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import protocol_json
 from .identifiers import IDENTIFIER_RULE, is_valid_identifier
 
 
@@ -44,8 +45,8 @@ def load_substitutions(project_root: Path) -> dict[str, Substitution]:
     if not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        data = protocol_json.loads(path.read_bytes())
+    except protocol_json.ProtocolJSONError as exc:
         raise DevSubstitutionError(f"Malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise DevSubstitutionError(f"{path} must contain a JSON object")

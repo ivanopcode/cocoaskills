@@ -6,6 +6,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from . import protocol_json
+
 
 AGENT_PATHS = {
     "codex_cli": ".codex/skills",
@@ -175,7 +177,7 @@ def _read_managed(adapter_root: Path) -> set[str]:
     if not path.exists():
         return set()
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = protocol_json.loads(path.read_bytes())
     except Exception:
         return set()
     if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:

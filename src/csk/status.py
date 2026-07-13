@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import dev_substitutions, git_ops, hashing, manifest
+from . import dev_substitutions, git_ops, hashing, manifest, protocol_json
 from .config import GlobalConfig, ProjectConfig
 
 
@@ -139,7 +139,7 @@ def _skill_status(config: GlobalConfig, project_root: Path, decl: manifest.Skill
     if not marker_path.exists():
         return SkillStatus(decl.name, decl.ref.kind, decl.ref.value, None, resolved_commit, "missing")
     try:
-        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        marker = protocol_json.loads(marker_path.read_bytes())
     except Exception as exc:
         return SkillStatus(
             decl.name, decl.ref.kind, decl.ref.value, None, resolved_commit, "error",

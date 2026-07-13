@@ -10,12 +10,35 @@ IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 IDENTIFIER_RULE = (
     "must start with a letter or digit and contain only letters, digits, "
-    "dots, underscores, or hyphens"
+    "dots, underscores, or hyphens, be at most 128 characters, and be a "
+    "portable filename"
 )
+
+_WINDOWS_RESERVED = {"con", "prn", "aux", "nul"} | {
+    f"{prefix}{number}" for prefix in ("com", "lpt") for number in range(1, 10)
+}
 
 
 def is_valid_identifier(value: str) -> bool:
-    return bool(IDENTIFIER_RE.match(value))
+    return len(value) <= 128 and bool(IDENTIFIER_RE.fullmatch(value)) and is_portable_component(value)
+
+
+def is_portable_component(value: str) -> bool:
+    """Return whether one path component is portable across supported hosts."""
+    if not value or value in {".", ".."} or value.endswith((" ", ".")) or ":" in value:
+        return False
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+        return False
+    basename = value.split(".", 1)[0].casefold()
+    return basename not in _WINDOWS_RESERVED
+
+
+def is_valid_portable_path(value: str) -> bool:
+    """Validate a protocol relative path without normalizing its scalars."""
+    if not value or len(value) > 4096 or value.startswith("/") or "\\" in value:
+        return False
+    parts = value.split("/")
+    return all(is_portable_component(part) for part in parts)
 
 
 # A source may be a nested directory under skills_root (for example

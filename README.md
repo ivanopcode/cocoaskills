@@ -14,6 +14,12 @@ multi-agent support across six environments: Claude Code, Codex CLI, Cursor,
 and Gemini via adapter mirrors, plus OpenCode and Windsurf, which discover the
 canonical `.agents/skills/` directory natively.
 
+It is an independent Python implementation of the open
+[Curator Protocol](https://github.com/relux-works/curator-spec). The `csk`
+executable, package name, and existing state directories remain
+implementation-specific compatibility names; portable manifest and marker
+names follow the shared protocol.
+
 ## Why
 
 Managing agent skills across many projects by hand falls apart fast: drift
@@ -466,6 +472,10 @@ conventions, and the RFC process for design changes.
 See [SECURITY.md](SECURITY.md) for supported versions and the vulnerability
 reporting process. The audit subsystem and its guarantees are described in
 [docs/audit-design.md](docs/audit-design.md).
+
+Archive extraction rejects links, unsafe or colliding paths, more than 100,000
+entries, or more than 512 MiB of declared file data. Registry reads cap each
+response at 16 MiB and each artifact query at 10,000 records.
 
 ## License
 

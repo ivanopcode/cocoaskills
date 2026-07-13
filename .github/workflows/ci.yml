@@ -25,6 +25,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Checkout Curator Protocol conformance suite
+        uses: actions/checkout@v4
+        with:
+          repository: relux-works/curator-spec
+          ref: 6c9b1cfbfc20c3637793a44e591f5215e16914fc
+          path: protocol-spec
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -54,6 +61,8 @@ jobs:
           python -m pip install -e ".[dev]"
 
       - name: Run tests
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec/conformance/v1
         run: python -m pytest -v
 
   typecheck:

@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import adapters, audit_registry, closure, consumers, dev_substitutions, env_files, gc, git_ops, gitignore_gate, hashing, hybrid, locale, manifest, mcp_configs, shims, skillcheck, skillspec, snapshot, whitelist
+from . import adapters, audit_registry, closure, consumers, dev_substitutions, env_files, gc, git_ops, gitignore_gate, hashing, hybrid, locale, manifest, mcp_configs, protocol_json, shims, skillcheck, skillspec, snapshot, whitelist
 from . import source_identity as source_identity_mod
 from .audit import pipeline as audit_pipeline
 from .config import GlobalConfig, ProjectConfig
@@ -797,26 +797,36 @@ def _marker_payload(
         "commit": plan.resolved.commit,
         "content_sha256": content_hash,
         "locale": effective_locale,
-        "agents": agents,
+        "agents": sorted(set(agents)),
         "commands": sorted(command.name for command in plan.spec.commands.values() if command.type == "script"),
         "dependencies": sorted(plan.spec.dependencies),
         "skill_schema_version": plan.spec.schema_version,
-        "runtime_roots": list(plan.spec.runtime_roots),
-        "installed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "files": files,
+        "runtime_roots": sorted(set(plan.spec.runtime_roots)),
+        "installed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "files": sorted(set(files)),
     }
     if plan.decl.git is not None:
         marker_data["git"] = plan.decl.git
     if plan.spec.requirements:
         marker_data["requirements"] = sorted(plan.spec.requirements)
     if mcp_servers is not None:
-        marker_data["mcp_servers"] = {name: sorted(found) for name, found in sorted(mcp_servers.items())}
+        marker_data["mcp_servers"] = {
+            name: sorted(set(found)) for name, found in sorted(mcp_servers.items())
+        }
     if attestation is not None:
         marker_data["attestation"] = attestation
     if activation is not None:
-        marker_data["activation"] = activation
+        activation_commands = activation.get("commands", [])
+        if not isinstance(activation_commands, list) or not all(
+            isinstance(command, str) for command in activation_commands
+        ):
+            raise InstallError("marker activation.commands must be a list of strings")
+        marker_data["activation"] = {
+            **activation,
+            "commands": sorted(set(activation_commands)),
+        }
     if requirers:
-        marker_data["requirers"] = requirers
+        marker_data["requirers"] = sorted(set(requirers))
     if substituted is not None:
         marker_data["substituted"] = substituted
     return marker_data
@@ -844,14 +854,21 @@ def _marker_is_current(
         return False
     if marker.get("locale") != locale_value:
         return False
-    if marker.get("agents") != agents:
+    if marker.get("agents") != sorted(set(agents)):
         return False
-    if activation is not None and marker.get("activation") != activation:
-        return False
+    if activation is not None:
+        activation_commands = activation.get("commands", [])
+        if not isinstance(activation_commands, list) or not all(
+            isinstance(command, str) for command in activation_commands
+        ):
+            return False
+        expected_activation = {**activation, "commands": sorted(set(activation_commands))}
+        if marker.get("activation") != expected_activation:
+            return False
     if marker.get("substituted") != substituted:
         return False
     if mcp_servers is not None:
-        expected_mcp = {name: sorted(found) for name, found in sorted(mcp_servers.items())}
+        expected_mcp = {name: sorted(set(found)) for name, found in sorted(mcp_servers.items())}
         if marker.get("mcp_servers") != expected_mcp:
             return False
     if marker.get("attestation") != attestation:
@@ -864,7 +881,7 @@ def _read_marker(path: Path) -> dict[str, object] | None:
     if not path.exists():
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = protocol_json.loads(path.read_bytes())
     except Exception:
         return None
     return data if isinstance(data, dict) else None

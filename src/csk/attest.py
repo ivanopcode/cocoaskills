@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import audit_registry
+from . import audit_registry, protocol_json
 from .config import GlobalConfig, ProjectConfig, RegistryConfig
 from . import hybrid
 
@@ -51,7 +51,7 @@ def _attest_root(
         return results
     for marker_path in sorted(skills_root.glob("*/.csk-install.json")):
         try:
-            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            marker = protocol_json.loads(marker_path.read_bytes())
         except (OSError, ValueError):
             continue
         name = marker.get("name")

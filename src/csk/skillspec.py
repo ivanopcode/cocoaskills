@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from . import protocol_json
 from .audit.capabilities import CapabilityManifest, CapabilityParseError, parse_capabilities
-from .identifiers import IDENTIFIER_RULE, is_valid_identifier
+from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_portable_path
 
 
 SCHEMA_VERSION = 1
@@ -97,8 +98,8 @@ def load_skill_spec(snapshot: Path) -> SkillSpec:
 
 def _load_csk_skill(path: Path) -> SkillSpec:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        data = protocol_json.loads(path.read_bytes())
+    except protocol_json.ProtocolJSONError as exc:
         raise SkillSpecError(f"Malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise SkillSpecError(f"{path} must contain a JSON object")
@@ -200,8 +201,8 @@ def _load_csk_skill(path: Path) -> SkillSpec:
 
 def _load_runtime_fallback(path: Path) -> SkillSpec:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        data = protocol_json.loads(path.read_bytes())
+    except protocol_json.ProtocolJSONError as exc:
         raise SkillSpecError(f"Malformed JSON in {path}: {exc}") from exc
     commands_raw = data.get("commands", {}) if isinstance(data, dict) else {}
     if not isinstance(commands_raw, dict):
@@ -426,7 +427,10 @@ def _validate_relative_path(value: Any, *, field: str, strict_posix: bool = Fals
         raise SkillSpecError(f"{field} must be a relative path inside the skill repository")
     if not path.parts:
         raise SkillSpecError(f"{field} must be a relative path inside the skill repository")
-    return path.as_posix()
+    portable = path.as_posix()
+    if not is_valid_portable_path(portable):
+        raise SkillSpecError(f"{field} must be a portable relative path inside the skill repository")
+    return portable
 
 
 def _parse_runtime_roots(raw: Any, *, snapshot: Path) -> tuple[str, ...]:
