@@ -115,9 +115,19 @@ def test_upgrade_without_alias_updates_all_projects(monkeypatch, tmp_path, skill
     second_commit = commit_all(source, "two")
     run(["git", "push"], source)
 
+    fetched = []
+    fetch_repo = cli.git_ops.fetch_repo
+
+    def recording_fetch(repo):
+        fetched.append(repo)
+        fetch_repo(repo)
+
+    monkeypatch.setattr(cli.git_ops, "fetch_repo", recording_fetch)
+
     assert cli.main(["upgrade", "--all"]) == 0
 
     assert [json.loads(path.read_text(encoding="utf-8"))["commit"] for path in markers] == [second_commit, second_commit]
+    assert fetched == [skills_root / "skill-a"]
 
 
 def test_update_fetches_skill_cloned_from_git_url(monkeypatch, tmp_path, skills_root, csk_home):

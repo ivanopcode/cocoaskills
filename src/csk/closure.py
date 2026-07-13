@@ -79,6 +79,8 @@ def build_closure(
     substitutions: dict[str, Substitution],
     *,
     use_cache: bool = True,
+    fetch_existing: bool = False,
+    fetched_repos: set[Path] | None = None,
     stack: ExitStack | None = None,
 ) -> list[ClosureNode]:
     """Expand direct skills and their requirements into an ordered closure.
@@ -87,6 +89,7 @@ def build_closure(
     source; providers precede consumers in the returned order.
     """
     nodes: dict[str, ClosureNode] = {}
+    fetched_repos = fetched_repos if fetched_repos is not None else set()
     pending: list[_Pending] = [
         _Pending(
             name=decl.name,
@@ -103,7 +106,15 @@ def build_closure(
         item = pending.pop(0)
         node = nodes.get(item.name)
         if node is None:
-            node = _resolve_node(config, item, substitutions.get(item.name), use_cache=use_cache, stack=stack)
+            node = _resolve_node(
+                config,
+                item,
+                substitutions.get(item.name),
+                use_cache=use_cache,
+                fetch_existing=fetch_existing,
+                fetched_repos=fetched_repos,
+                stack=stack,
+            )
             nodes[item.name] = node
             for requirement in node.spec.requirements.values():
                 pending.append(
@@ -182,6 +193,8 @@ def _resolve_node(
     substitution: Substitution | None,
     *,
     use_cache: bool,
+    fetch_existing: bool,
+    fetched_repos: set[Path],
     stack: ExitStack | None,
 ) -> ClosureNode:
     substituted: str | None = None
@@ -199,7 +212,14 @@ def _resolve_node(
         resolved = git_ops.resolve_ref(repo, substitution.ref_kind or "", substitution.ref_value or "")
         substituted = substitution.describe()
     else:
-        repo = _ensure_repo(config, item, use_cache=use_cache, stack=stack)
+        repo = _ensure_repo(
+            config,
+            item,
+            use_cache=use_cache,
+            fetch_existing=fetch_existing,
+            fetched_repos=fetched_repos,
+            stack=stack,
+        )
         try:
             resolved = git_ops.resolve_ref(repo, item.ref.kind, item.ref.value)
         except git_ops.GitError as exc:
@@ -230,11 +250,26 @@ def _resolve_node(
     )
 
 
-def _ensure_repo(config: GlobalConfig, item: _Pending, *, use_cache: bool, stack: ExitStack | None) -> Path:
+def _ensure_repo(
+    config: GlobalConfig,
+    item: _Pending,
+    *,
+    use_cache: bool,
+    fetch_existing: bool,
+    fetched_repos: set[Path],
+    stack: ExitStack | None,
+) -> Path:
     repo = config.skills_root / item.source
     if repo.exists():
         if not (repo / ".git").exists():
             raise ClosureError(f"Local skill path exists but is not a git repository: {repo}")
+        repo_key = repo.resolve()
+        if fetch_existing and use_cache and repo_key not in fetched_repos:
+            try:
+                git_ops.fetch_repo(repo)
+            except git_ops.GitError as exc:
+                raise ClosureError(f"Failed to fetch {item.name} at {repo} (via {item.chain}): {exc}") from exc
+            fetched_repos.add(repo_key)
         return repo
     if not item.git:
         raise ClosureError(f"Skill repository not found for {item.name}: {repo} (via {item.chain})")
@@ -244,6 +279,8 @@ def _ensure_repo(config: GlobalConfig, item: _Pending, *, use_cache: bool, stack
         git_ops.clone_repo(item.git, destination)
     except git_ops.GitError as exc:
         raise ClosureError(f"Failed to clone {item.name} from {item.git}: {exc}") from exc
+    if use_cache and fetch_existing:
+        fetched_repos.add(destination.resolve())
     return destination
 
 

@@ -883,6 +883,55 @@ def test_cli_bootstrap_non_interactive(monkeypatch, tmp_path, capsys):
     assert "skills_root" in capsys.readouterr().err
 
 
+def test_cli_bootstrap_if_missing_keeps_existing_config(monkeypatch, tmp_path, capsys):
+    cfg_path = tmp_path / "cfg" / "config.json"
+    cfg_path.parent.mkdir(parents=True)
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(tmp_path / "existing-skills"),
+                "preferred_locale": "ru",
+                "default_agents": ["codex_cli"],
+                "projects": {},
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    original = cfg_path.read_bytes()
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+
+    assert cli.main(["bootstrap", "--if-missing", "--non-interactive"]) == 0
+
+    assert cfg_path.read_bytes() == original
+    assert f"Kept existing config: {cfg_path}" in capsys.readouterr().out
+
+
+def test_cli_bootstrap_if_missing_creates_absent_config(monkeypatch, tmp_path):
+    cfg_path = tmp_path / "cfg" / "config.json"
+    skills_root = tmp_path / "skills"
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+
+    assert cli.main(
+        [
+            "bootstrap",
+            "--if-missing",
+            "--non-interactive",
+            "--skills-root",
+            str(skills_root),
+        ]
+    ) == 0
+
+    assert config.load_config(cfg_path).skills_root == skills_root
+
+
+def test_cli_bootstrap_if_missing_and_force_are_mutually_exclusive(capsys):
+    assert cli.main(["bootstrap", "--if-missing", "--force"]) == 2
+    assert "not allowed with argument" in capsys.readouterr().err
+
+
 def test_cli_install_dry_run_does_not_create_skills_root(monkeypatch, tmp_path, csk_home, capsys):
     project = make_project(tmp_path)
     write_skillfile(project, {"schema_version": 1, "skills": []})
@@ -891,6 +940,43 @@ def test_cli_install_dry_run_does_not_create_skills_root(monkeypatch, tmp_path, 
 
     assert cli.main(["install", "app", "--dry-run"]) == 0
     assert not missing_root.exists()
+
+
+def test_cli_upgrade_dry_run_does_not_create_or_fetch_skills_root(
+    monkeypatch, tmp_path, csk_home, capsys
+):
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": []})
+    missing_root = tmp_path / "missing-skills-root"
+    _register_project(monkeypatch, csk_home, missing_root, project)
+
+    def unexpected_fetch(_repo):
+        raise AssertionError("dry-run must not fetch")
+
+    monkeypatch.setattr(cli.git_ops, "fetch_repo", unexpected_fetch)
+
+    assert cli.main(["upgrade", "app", "--dry-run"]) == 0
+    assert not missing_root.exists()
+    assert "dry-run; no files modified" in capsys.readouterr().out
+
+
+def test_cli_upgrade_fetches_only_selected_project_skill_repositories(
+    monkeypatch, tmp_path, csk_home, skills_root
+):
+    project = make_project(tmp_path)
+    selected, _ = make_skill_repo(skills_root, "skill-selected", tag="v1")
+    make_skill_repo(skills_root, "skill-unrelated", tag="v1")
+    write_skillfile(
+        project,
+        {"schema_version": 1, "skills": [{"name": "skill-selected", "tag": "v1"}]},
+    )
+    _register_project(monkeypatch, csk_home, skills_root, project)
+    fetched: list[Path] = []
+    monkeypatch.setattr(cli.git_ops, "fetch_repo", fetched.append)
+
+    assert cli.main(["upgrade", "app"]) == 0
+
+    assert fetched == [selected]
 
 
 def test_cli_status_error_label_includes_reason(monkeypatch, tmp_path, csk_home, skills_root, capsys):

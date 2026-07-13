@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import stat
 from pathlib import Path
@@ -103,32 +104,96 @@ def runtime_root_command_path(
     return runtime_path
 
 
-def write_project_shim(project_root: Path, command_name: str, runtime_path: Path, *, platform_name: str | None = None) -> Path:
-    return write_bin_shim(project_root / ".agents" / "bin", command_name, runtime_path, platform_name=platform_name)
+def write_project_shim(
+    project_root: Path,
+    command_name: str,
+    runtime_path: Path,
+    *,
+    platform_name: str | None = None,
+    path_entries: tuple[Path, ...] = (),
+) -> Path:
+    return write_bin_shim(
+        project_root / ".agents" / "bin",
+        command_name,
+        runtime_path,
+        platform_name=platform_name,
+        path_entries=path_entries,
+    )
 
 
-def write_global_shim(csk_home: Path, command_name: str, runtime_path: Path, *, platform_name: str | None = None) -> Path:
-    return write_bin_shim(csk_home / "global" / "bin", command_name, runtime_path, platform_name=platform_name)
+def write_global_shim(
+    csk_home: Path,
+    command_name: str,
+    runtime_path: Path,
+    *,
+    platform_name: str | None = None,
+    path_entries: tuple[Path, ...] = (),
+) -> Path:
+    return write_bin_shim(
+        csk_home / "global" / "bin",
+        command_name,
+        runtime_path,
+        platform_name=platform_name,
+        path_entries=path_entries,
+    )
 
 
-def write_bin_shim(bin_dir: Path, command_name: str, runtime_path: Path, *, platform_name: str | None = None) -> Path:
+def write_bin_shim(
+    bin_dir: Path,
+    command_name: str,
+    runtime_path: Path,
+    *,
+    platform_name: str | None = None,
+    path_entries: tuple[Path, ...] = (),
+) -> Path:
     platform_name = platform_name or ("windows" if os.name == "nt" else "unix")
     bin_dir.mkdir(parents=True, exist_ok=True)
     if platform_name == "windows":
         shim = bin_dir / f"{command_name}.cmd"
-        shim.write_text(
-            "@echo off\r\n"
-            f"\"{runtime_path}\" %*\r\n",
-            encoding="utf-8",
-        )
+        if path_entries:
+            prefix = ";".join(_escape_cmd_value(str(path)) for path in path_entries)
+            runtime_value = _escape_cmd_value(str(runtime_path))
+            shim.write_text(
+                "@echo off\r\n"
+                "setlocal DisableDelayedExpansion\r\n"
+                f'set "PATH={prefix};%PATH%"\r\n'
+                f'call "{runtime_value}" %*\r\n'
+                "exit /b %ERRORLEVEL%\r\n",
+                encoding="utf-8",
+            )
+        else:
+            shim.write_text(
+                "@echo off\r\n"
+                f"\"{runtime_path}\" %*\r\n",
+                encoding="utf-8",
+            )
         return shim
 
     shim = bin_dir / command_name
     if shim.exists() or shim.is_symlink():
         shim.unlink()
+    if path_entries:
+        prefix = ":".join(str(path) for path in path_entries)
+        shim.write_text(
+            "#!/bin/sh\n"
+            'if [ -n "${PATH:-}" ]; then\n'
+            f"  PATH={shlex.quote(prefix)}:\"$PATH\"\n"
+            "else\n"
+            f"  PATH={shlex.quote(prefix)}\n"
+            "fi\n"
+            "export PATH\n"
+            f"exec {shlex.quote(str(runtime_path))} \"$@\"\n",
+            encoding="utf-8",
+        )
+        shim.chmod(shim.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        return shim
     target = os.path.relpath(runtime_path, shim.parent)
     shim.symlink_to(target)
     return shim
+
+
+def _escape_cmd_value(value: str) -> str:
+    return value.replace("%", "%%")
 
 
 def remove_stale_shims(project_root: Path, expected_commands: set[str], *, platform_name: str | None = None) -> None:

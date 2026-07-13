@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import tempfile
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
@@ -27,6 +28,7 @@ class InstallOptions:
     fix_gitignore: bool = False
     strict_tags: bool = False
     verbose: bool = False
+    fetch: bool = False
 
 
 @dataclass
@@ -55,8 +57,9 @@ def install(config: GlobalConfig, *, alias: str | None = None, options: InstallO
     options = options or InstallOptions()
     selected = _selected_projects(config, alias)
     results: list[ProjectResult] = []
+    fetched_repos: set[Path] = set()
     for project in selected:
-        results.append(_install_project(config, project, options))
+        results.append(_install_project(config, project, options, fetched_repos=fetched_repos))
     if not options.dry_run:
         gc.collect_runtime(config, config.path.parent)
     return results
@@ -71,7 +74,13 @@ def _selected_projects(config: GlobalConfig, alias: str | None) -> list[ProjectC
     return [project]
 
 
-def _install_project(config: GlobalConfig, project: ProjectConfig, options: InstallOptions) -> ProjectResult:
+def _install_project(
+    config: GlobalConfig,
+    project: ProjectConfig,
+    options: InstallOptions,
+    *,
+    fetched_repos: set[Path],
+) -> ProjectResult:
     result = ProjectResult(alias=project.alias, path=project.path, status="ok")
     try:
         project_manifest = manifest.load_manifest(project.path)
@@ -139,9 +148,19 @@ def _install_project(config: GlobalConfig, project: ProjectConfig, options: Inst
 
         effective_locale = project_manifest.locale or config.preferred_locale
         with ExitStack() as stack:
+            fetched_before = set(fetched_repos)
             nodes = closure.build_closure(
-                config, effective_manifest, substitutions, use_cache=not options.dry_run, stack=stack
+                config,
+                effective_manifest,
+                substitutions,
+                use_cache=not options.dry_run,
+                fetch_existing=options.fetch,
+                fetched_repos=fetched_repos,
+                stack=stack,
             )
+            if options.fetch:
+                for repo in sorted(fetched_repos - fetched_before):
+                    result.messages.append(f"{project.alias}: fetched {repo.name}")
             hybrid_store_names = _hybrid_store_names(nodes, project_declared)
             plans = [
                 SkillPlan(decl=node.decl, resolved=node.resolved, repo=node.repo, snapshot=node.snapshot, spec=node.spec)
@@ -589,6 +608,28 @@ def _system_dependencies(plan: SkillPlan) -> list[CommandSpec]:
     return legacy + explicit
 
 
+def _runtime_path_entries(plan: SkillPlan, bin_dir: Path) -> tuple[Path, ...]:
+    candidates = [bin_dir.absolute()]
+    if sys.executable:
+        candidates.append(Path(sys.executable).resolve().parent)
+    for dependency in _system_dependencies(plan):
+        if not dependency.command:
+            continue
+        executable = shutil.which(dependency.command)
+        if executable:
+            candidates.append(Path(executable).resolve().parent)
+
+    entries: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = os.path.normcase(os.path.abspath(candidate))
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append(candidate)
+    return tuple(entries)
+
+
 def _validate_skills(
     plans: list[SkillPlan], effective_locale: str | None
 ) -> list[tuple[SkillPlan, skillcheck.ValidationIssue]]:
@@ -648,6 +689,7 @@ def _moved_tag_warnings(skills_dir: Path, plans: list[SkillPlan]) -> list[str]:
 
 def install_runtime_commands(csk_home: Path, bin_dir: Path, plan: SkillPlan, *, only: set[str] | None = None) -> set[str]:
     commands: set[str] = set()
+    path_entries = _runtime_path_entries(plan, bin_dir)
     if plan.spec.runtime_roots:
         shims.install_runtime_roots(
             csk_home=csk_home,
@@ -676,7 +718,7 @@ def install_runtime_commands(csk_home: Path, bin_dir: Path, plan: SkillPlan, *, 
                 snapshot=plan.snapshot,
                 command=command,
             )
-        shims.write_bin_shim(bin_dir, command.name, runtime_path)
+        shims.write_bin_shim(bin_dir, command.name, runtime_path, path_entries=path_entries)
         commands.add(command.name)
     return commands
 

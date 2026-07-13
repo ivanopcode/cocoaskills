@@ -105,6 +105,14 @@ python -m pip install --user cocoaskills
    This writes `~/.cocoaskills/config.json` with your `skills_root`, preferred
    locale, and default agents.
 
+   Repository automation can make this step idempotent without overwriting a
+   developer's existing machine config:
+
+   ```bash
+   csk bootstrap --if-missing --non-interactive --skills-root ~/.cocoaskills/skills
+   csk upgrade .
+   ```
+
 3. Initialize CocoaSkills in each project:
 
    ```bash
@@ -229,6 +237,12 @@ resolve project shims explicitly from `<repo>/.agents/bin/<command>`
 `<csk-home>/global/bin`, and only then a validated bare command. This contract
 works unchanged from zsh, bash, PowerShell, Git Bash, CI, and agent processes
 that were not launched from an initialized interactive shell.
+
+Generated runtime shims prepend only the paths needed by the installed skill:
+the current project/global shim directory, the Python environment running
+`csk`, and directories of declared system command dependencies. The inherited
+`PATH` remains available, but skill-to-skill calls and Python launchers do not
+depend on a shell hook.
 
 On Windows, PowerShell 5.1, PowerShell 7, and `cmd.exe` can all execute the
 generated `.cmd` shims directly. Optional directory-change activation is
@@ -420,14 +434,14 @@ air-gapped bundle import for closed networks, is
 
 | Command | Behavior |
 |---|---|
-| `csk bootstrap` | Create machine-level global config; interactive or scripted via `--skills-root`, `--default-agents`, `--non-interactive`, `--force`. |
+| `csk bootstrap` | Create machine-level global config; interactive or scripted via `--skills-root`, `--default-agents`, `--non-interactive`, `--force`. `--if-missing` is an idempotent no-op when config already exists and is mutually exclusive with `--force`. |
 | `csk init [path]` | Create project `Skillfile.json` and the managed `.gitignore` block. Supports `--alias`, `--agents`, and `--no-interactive` for scripted setup. |
 | `csk install [target]` | Apply `Skillfile.json` using current git refs. Missing `git` URL sources are cloned into `skills_root`; existing local repositories are not fetched. No target means current project; `target` may be an alias, `.`, or a project path. |
 | `csk install --audit [strict]` | Run the audit gate for this install only. Without `strict`, audit is advisory and does not change config. |
 | `csk install --all` | Install every project explicitly registered in global config. |
 | `csk update` | Fetch all git repositories under `skills_root`. Does not modify projects. |
-| `csk upgrade [target]` | Run `update`, then `install`. |
-| `csk upgrade --all` | Run `update`, then install every registered project. |
+| `csk upgrade [target]` | Fetch only the selected project's direct and transitive skill repositories, then install. `--dry-run` does not update cached repositories or persist files. |
+| `csk upgrade --all` | Fetch the union of dependency closures once, then install every registered project. |
 | `csk status [target]` | Show manifest vs installed state, including active dev substitutions. `--check` exits non-zero unless everything is up-to-date; `--json` prints machine-readable output. |
 | `csk status --all` | Show status for every registered project. |
 | `csk add <name> --tag/--branch/--revision ...` | Add or replace a skill declaration in the project Skillfile; apply with `csk install`. |
@@ -443,7 +457,7 @@ air-gapped bundle import for closed networks, is
 | `csk global remove <name>` | Remove a global declaration; the next global install cleans generated files. |
 | `csk global install` | Install all globally declared skills without fetching. |
 | `csk global update` | Fetch source repositories for globally declared skills. |
-| `csk global upgrade` | Run global update, then global install. |
+| `csk global upgrade` | Run global update, then global install. `--dry-run` skips the update and performs a non-persistent install plan. |
 | `csk global status` | Show global manifest vs installed state. |
 | `csk global list` | List global skill declarations. |
 | `csk config show` | Print resolved config path and contents. |
