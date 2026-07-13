@@ -91,6 +91,25 @@ def test_locked_key_must_be_set_in_system_config(tmp_path, monkeypatch):
         csk_config.load_config(user_path)
 
 
+@pytest.mark.parametrize(
+    "system_data",
+    [
+        {"locked": []},
+        {"schema_version": 2, "locked": []},
+        {"schema_version": 1, "locked": ["projects"]},
+        {"schema_version": 1, "locked": ["audit", "audit"], "audit": {}},
+        {"schema_version": 1, "typo": True},
+    ],
+)
+def test_malformed_system_configuration_fails_closed(tmp_path, monkeypatch, system_data):
+    system_path = tmp_path / "system.json"
+    _write(system_path, system_data)
+    user_path = _user_config(tmp_path, {})
+    monkeypatch.setenv("CSK_SYSTEM_CONFIG", str(system_path))
+    with pytest.raises(csk_config.ConfigError):
+        csk_config.load_config(user_path)
+
+
 def test_no_system_config_is_transparent(tmp_path, monkeypatch):
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
     user_path = _user_config(tmp_path, {"allowed_sources": ["mine.example/"]})

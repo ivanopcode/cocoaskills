@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added the authoritative Curator Protocol conformance suite to CI on Linux,
+  macOS, and Windows, covering shared context/hash fixtures, normalized install
+  markers, CCJ-1 bytes, source identities, portable paths, closure order, and
+  signed registry objects.
+
+### Changed
+
+- Hardened the registry client with key-id-bound signatures, strict CCJ-1 JSON,
+  bounded query pagination, atomic caches, complete snapshot rollback and
+  equivocation state, stable publication responses, and protocol idempotency
+  keys.
+- Enforced cross-platform paths and identifiers before extraction or hashing,
+  rejected malformed network sources before clone, made marker set fields
+  deterministic, and activated PowerShell project environments on every
+  prompt while preserving the original prompt.
+
 ## [0.12.0] - 2026-07-09
 
 ### Added

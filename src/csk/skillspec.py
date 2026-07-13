@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from . import protocol_json
 from .audit.capabilities import CapabilityManifest, CapabilityParseError, parse_capabilities
-from .identifiers import IDENTIFIER_RULE, is_valid_identifier
+from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_portable_path
 
 
 SCHEMA_VERSION = 1
@@ -97,8 +98,8 @@ def load_skill_spec(snapshot: Path) -> SkillSpec:
 
 def _load_csk_skill(path: Path) -> SkillSpec:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        data = protocol_json.loads(path.read_bytes())
+    except protocol_json.ProtocolJSONError as exc:
         raise SkillSpecError(f"Malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise SkillSpecError(f"{path} must contain a JSON object")
@@ -200,8 +201,8 @@ def _load_csk_skill(path: Path) -> SkillSpec:
 
 def _load_runtime_fallback(path: Path) -> SkillSpec:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        data = protocol_json.loads(path.read_bytes())
+    except protocol_json.ProtocolJSONError as exc:
         raise SkillSpecError(f"Malformed JSON in {path}: {exc}") from exc
     commands_raw = data.get("commands", {}) if isinstance(data, dict) else {}
     if not isinstance(commands_raw, dict):
@@ -414,19 +415,18 @@ def _parse_requirements(raw: Any, *, schema: int) -> dict[str, SkillRequirement]
 def _validate_relative_path(value: Any, *, field: str, strict_posix: bool = False) -> str:
     if not isinstance(value, str) or not value:
         raise SkillSpecError(f"{field} must be a non-empty string")
-    normalized = value.rstrip("/")
-    if not normalized:
-        raise SkillSpecError(f"{field} must be a non-empty string")
-    if strict_posix and ("\\" in normalized or "//" in normalized):
+    if strict_posix and ("\\" in value or "//" in value):
         raise SkillSpecError(f"{field} must be a POSIX-style relative path inside the skill repository")
-    if strict_posix and any(part in {"", "."} for part in normalized.split("/")):
+    if strict_posix and any(part in {"", "."} for part in value.split("/")):
         raise SkillSpecError(f"{field} must be a POSIX-style relative path inside the skill repository")
-    path = PurePosixPath(normalized)
+    path = PurePosixPath(value)
     if path.is_absolute() or ".." in path.parts:
         raise SkillSpecError(f"{field} must be a relative path inside the skill repository")
     if not path.parts:
         raise SkillSpecError(f"{field} must be a relative path inside the skill repository")
-    return path.as_posix()
+    if path.as_posix() != value or not is_valid_portable_path(value):
+        raise SkillSpecError(f"{field} must be a portable relative path inside the skill repository")
+    return value
 
 
 def _parse_runtime_roots(raw: Any, *, snapshot: Path) -> tuple[str, ...]:

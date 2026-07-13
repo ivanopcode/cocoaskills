@@ -39,7 +39,7 @@ def test_csk_skill_schema_v2_parses_runtime_roots(tmp_path):
         json.dumps(
             {
                 "schema_version": 2,
-                "runtime_roots": ["scripts/"],
+                "runtime_roots": ["scripts"],
                 "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}},
             }
         ),
@@ -61,6 +61,7 @@ def test_runtime_root_must_be_relative_directory(tmp_path):
         ["../scripts"],
         ["."],
         ["scripts/./lib"],
+        ["scripts/"],
         ["scripts/missing"],
         ["scripts/tool"],
         None,

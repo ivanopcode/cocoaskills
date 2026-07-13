@@ -20,12 +20,13 @@ def _make_key() -> tuple[Ed25519PrivateKey, str]:
     return priv, pinned
 
 
-def _sign_record(priv: Ed25519PrivateKey, body: dict[str, Any], key_id: str = "k1") -> dict[str, Any]:
+def _sign_record(priv: Ed25519PrivateKey, body: dict[str, Any], key_id: str | None = None) -> dict[str, Any]:
     message = audit_registry.canonical_bytes(body)
     signature = priv.sign(message)
+    public = priv.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     record = dict(body)
     record["sig"] = {
-        "key_id": key_id,
+        "key_id": key_id or __import__("hashlib").sha256(public).hexdigest()[:16],
         "algorithm": "ed25519",
         "signature": base64.b64encode(signature).decode("ascii"),
     }
@@ -38,7 +39,7 @@ def _record_body(status: str = "audited", **overrides: Any) -> dict[str, Any]:
         "name": "skill-tracker",
         "source_identity": "gitlab.example.com/skills/skill-tracker",
         "commit": "8c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d",
-        "content_sha256": "sha256:1f2e3d",
+        "content_sha256": "sha256:" + "1f" * 32,
         "status": status,
         "audit": {"ruleset_version": "csk-audit/1"},
     }
@@ -71,7 +72,7 @@ def test_verify_record_rejects_tampered_body():
     assert audit_registry.verify_record(parsed, (pinned,))
 
     tampered = dict(record)
-    tampered["content_sha256"] = "sha256:evil"
+    tampered["content_sha256"] = "sha256:" + "ee" * 32
     assert not audit_registry.verify_record(audit_registry.parse_record(tampered), (pinned,))
 
 
@@ -80,6 +81,22 @@ def test_verify_record_rejects_wrong_key():
     _, other_pinned = _make_key()
     record = _sign_record(priv, _record_body())
     assert not audit_registry.verify_record(audit_registry.parse_record(record), (other_pinned,))
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"source_identity": "GitLab.example.com/skills/skill-tracker"},
+        {"source_identity": "gitlab.example.com/skills/a b"},
+        {"commit": "abc123"},
+        {"content_sha256": "sha256:deadbeef"},
+        {"extension": True},
+    ],
+)
+def test_parse_record_rejects_schema_violations(overrides):
+    private, _ = _make_key()
+    with pytest.raises(audit_registry.RegistryError):
+        audit_registry.parse_record(_sign_record(private, _record_body(**overrides)))
 
 
 def _fetch_from(records: list[dict[str, Any]]) -> audit_registry.FetchFn:
@@ -92,7 +109,7 @@ def _fetch_from(records: list[dict[str, Any]]) -> audit_registry.FetchFn:
 ARTIFACT = {
     "source_identity": "gitlab.example.com/skills/skill-tracker",
     "commit": "8c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d",
-    "content_sha256": "sha256:1f2e3d",
+    "content_sha256": "sha256:" + "1f" * 32,
 }
 
 
@@ -141,6 +158,16 @@ def test_resolve_ignores_unverified_record_with_warning():
     assert any("failed signature verification" in w for w in resolution.warnings)
 
 
+def test_resolve_ignores_one_malformed_record_without_discarding_page():
+    private, pinned = _make_key()
+    registry = RegistryConfig(name="central", url="https://r.example", public_keys=(pinned,))
+    malformed = {"name": "broken"}
+    valid = _sign_record(private, _record_body("audited"))
+    resolution = audit_registry.resolve((registry,), fetch=_fetch_from([malformed, valid]), **ARTIFACT)
+    assert resolution.result == audit_registry.RESULT_AUDITED
+    assert any("malformed record" in warning for warning in resolution.warnings)
+
+
 def test_resolve_warns_on_registry_without_pinned_keys():
     registry = RegistryConfig(name="central", url="https://r.example", public_keys=())
     resolution = audit_registry.resolve((registry,), fetch=_fetch_from([]), **ARTIFACT)
@@ -161,13 +188,13 @@ def test_resolve_matches_by_content_hash_across_source():
 
 def test_http_fetch_caches_and_offline_grace(tmp_path):
     calls = {"n": 0}
-
-    payload = json.dumps({"records": [{"name": "x"}]}).encode()
+    private, _ = _make_key()
+    record = _sign_record(private, _record_body())
 
     def fake_get(endpoint: str) -> list[dict[str, Any]]:
         calls["n"] += 1
         if calls["n"] == 1:
-            return [{"name": "x"}]
+            return [record]
         raise audit_registry.RegistryError("offline")
 
     import csk.audit_registry as mod
@@ -177,13 +204,62 @@ def test_http_fetch_caches_and_offline_grace(tmp_path):
     try:
         fetch = mod.make_http_fetch(tmp_path, ttl_seconds=0, grace_seconds=1000, now=1000.0)
         first = fetch("https://r.example", "s", "c", "h")
-        assert first == [{"name": "x"}]
+        assert first == [record]
         # ttl=0 forces a refresh; the registry is now offline, grace serves cache.
         second = fetch("https://r.example", "s", "c", "h")
-        assert second == [{"name": "x"}]
+        assert second == [record]
         assert calls["n"] == 2
     finally:
         mod._http_get_records = original  # type: ignore[assignment]
+
+
+def test_http_records_follows_bounded_pagination(monkeypatch):
+    priv, _ = _make_key()
+    first = _sign_record(priv, _record_body("audited"))
+    second = _sign_record(priv, _record_body("deprecated", name="skill-other"))
+    requested: list[str] = []
+
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+
+        def __init__(self, payload: dict[str, Any]):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, size=-1):
+            return json.dumps(self.payload).encode("utf-8")
+
+    def fake_urlopen(request, timeout=0):
+        requested.append(request.full_url)
+        if "cursor=page-2" in request.full_url:
+            return FakeResponse({"records": [second], "next_cursor": None})
+        return FakeResponse({"records": [first], "next_cursor": "page-2"})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    records = audit_registry._http_get_records("https://r.example/v1/records?limit=1000")
+    assert [record["name"] for record in records] == ["skill-tracker", "skill-other"]
+    assert len(requested) == 2
+    assert "cursor=page-2" in requested[1]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b'{"a":1,"a":2}',
+        b'{"n":1.5}',
+        b'{"n":9007199254740992}',
+        b'{"s":"\\ud800"}',
+    ],
+)
+def test_protocol_json_rejects_ambiguous_values(payload):
+    with pytest.raises(audit_registry.RegistryError):
+        audit_registry.load_protocol_json(payload)
 
 
 # --- config parsing and merge ---
@@ -210,7 +286,11 @@ def test_config_parses_audit_registries(tmp_path):
             tmp_path,
             {
                 "audit_registries": [
-                    {"name": "internal", "url": "https://r.example", "public_keys": ["ed25519:AAAA"]}
+                    {
+                        "name": "internal",
+                        "url": "https://r.example",
+                        "public_keys": ["ed25519:" + "A" * 43 + "="],
+                    }
                 ]
             },
         ),
@@ -229,6 +309,19 @@ def test_config_rejects_registry_without_http_url(tmp_path):
         )
 
 
+def test_config_allows_plain_http_only_for_loopback(tmp_path):
+    with pytest.raises(csk_config.ConfigError, match="loopback"):
+        csk_config.parse_config(
+            _base_config(tmp_path, {"audit_registries": [{"name": "x", "url": "http://r.example"}]}),
+            tmp_path / "config.json",
+        )
+    cfg = csk_config.parse_config(
+        _base_config(tmp_path, {"audit_registries": [{"name": "x", "url": "http://127.0.0.1:8080/"}]}),
+        tmp_path / "config.json",
+    )
+    assert cfg.audit_registries[0].url == "http://127.0.0.1:8080"
+
+
 def test_config_rejects_duplicate_registry_url(tmp_path):
     with pytest.raises(csk_config.ConfigError, match="duplicate"):
         csk_config.parse_config(
@@ -245,12 +338,35 @@ def test_config_rejects_duplicate_registry_url(tmp_path):
         )
 
 
+def test_registry_url_canonicalization_and_rejections():
+    assert csk_config.canonical_registry_url("HTTPS://EXAMPLE.com:443/v1/") == "https://example.com/v1"
+    assert csk_config.canonical_registry_url("http://[::1]:8080/") == "http://[::1]:8080"
+    assert csk_config.canonical_registry_url("http://[0:0:0:0:0:0:0:1]/") == "http://[::1]"
+    for value in (
+        "https://registry.example/a%2Fb",
+        "https://registry.example/a/../b",
+        "https://registry.example/a//b",
+        "https://réregistry.example/a",
+        "https://registry.example/é",
+        "https://bad..example",
+        "http://registry.example/a",
+    ):
+        with pytest.raises(csk_config.ConfigError):
+            csk_config.canonical_registry_url(value)
+
+
 def test_config_roundtrips_registries(tmp_path):
     cfg = csk_config.parse_config(
         _base_config(
             tmp_path,
             {
-                "audit_registries": [{"name": "internal", "url": "https://r.example", "public_keys": ["ed25519:AAAA"]}],
+                "audit_registries": [
+                    {
+                        "name": "internal",
+                        "url": "https://r.example",
+                        "public_keys": ["ed25519:" + "A" * 43 + "="],
+                    }
+                ],
                 "disable_builtin_registries": True,
             },
         ),
@@ -268,7 +384,11 @@ def test_trusted_registries_disabled_excludes_inactive(tmp_path):
             tmp_path,
             {
                 "audit_registries": [
-                    {"name": "on", "url": "https://on.example", "public_keys": ["ed25519:AAAA"]},
+                    {
+                        "name": "on",
+                        "url": "https://on.example",
+                        "public_keys": ["ed25519:" + "A" * 43 + "="],
+                    },
                     {"name": "off", "url": "https://off.example", "enabled": False},
                 ]
             },
@@ -309,7 +429,7 @@ def _install_with_registry(tmp_path, skills_root, csk_home, monkeypatch, *, stat
             status,
             source_identity="gitlab.example.com/skills/skill-tracker",
             commit=commit,
-            content_sha256="sha256:ignored",
+            content_sha256="sha256:" + "00" * 32,
         ),
     )
 
@@ -495,3 +615,41 @@ def test_check_snapshots_rejects_bad_signature(tmp_path):
     )
     assert "https://r.example" in unavailable
     assert any("signature" in w for w in warnings)
+
+
+def test_check_snapshots_rejects_equal_version_equivocation(tmp_path):
+    priv, pinned = _make_key()
+    registry = RegistryConfig(name="central", url="https://r.example", public_keys=(pinned,))
+    now = audit_registry._parse_iso8601("2026-07-07T01:00:00Z")
+    first = _sign_record(priv, _snapshot_body(version=5))
+    audit_registry.check_snapshots((registry,), tmp_path, fetch_snapshot=lambda url: first, now=now)
+    second = _sign_record(priv, {**_snapshot_body(version=5), "head": "ef" * 32})
+    unavailable, warnings = audit_registry.check_snapshots(
+        (registry,), tmp_path, fetch_snapshot=lambda url: second, now=now
+    )
+    assert registry.url in unavailable
+    assert any("equivocation" in warning for warning in warnings)
+
+
+def test_check_snapshots_rejects_future_timestamp(tmp_path):
+    priv, pinned = _make_key()
+    registry = RegistryConfig(name="central", url="https://r.example", public_keys=(pinned,))
+    snapshot = _sign_record(priv, _snapshot_body(created_at="2026-07-07T01:00:01Z"))
+    now = audit_registry._parse_iso8601("2026-07-07T00:00:00Z")
+    unavailable, warnings = audit_registry.check_snapshots(
+        (registry,), tmp_path, fetch_snapshot=lambda url: snapshot, now=now
+    )
+    assert registry.url in unavailable
+    assert any("future" in warning for warning in warnings)
+
+
+def test_check_snapshots_rejects_unknown_field(tmp_path):
+    private, pinned = _make_key()
+    registry = RegistryConfig(name="central", url="https://r.example", public_keys=(pinned,))
+    snapshot = _sign_record(private, {**_snapshot_body(), "extension": True})
+    now = __import__("datetime").datetime(2026, 7, 7, tzinfo=__import__("datetime").timezone.utc).timestamp()
+    unavailable, warnings = audit_registry.check_snapshots(
+        (registry,), tmp_path, fetch_snapshot=lambda url: snapshot, now=now
+    )
+    assert registry.url in unavailable
+    assert any("malformed" in warning for warning in warnings)

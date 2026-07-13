@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import consumers
+from . import consumers, protocol_json
 from .config import GlobalConfig
 from .locking import _pid_alive
 
@@ -112,7 +112,7 @@ def _collect_markers(
     found = False
     for marker in skills_root.glob("*/.csk-install.json"):
         try:
-            data = json.loads(marker.read_text(encoding="utf-8"))
+            data = protocol_json.loads(marker.read_bytes())
         except Exception:
             continue
         name = data.get("name")

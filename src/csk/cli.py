@@ -8,7 +8,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from . import __version__, adapters, attest, config, deprecation, dev_substitutions, gc, git_ops, gitignore_gate, global_install, hybrid, installer, manifest, project_resolver, shell_init, skillcheck, status
+from . import __version__, adapters, attest, audit_registry, config, deprecation, dev_substitutions, gc, git_ops, gitignore_gate, global_install, hybrid, installer, manifest, project_resolver, shell_init, skillcheck, status
 from .audit import pipeline as audit_pipeline
 from .audit import runner as audit_runner
 from .audit import trust as audit_trust
@@ -853,35 +853,19 @@ def _cmd_audit(args: argparse.Namespace) -> int:
 
 def _cmd_audit_publish(args: argparse.Namespace) -> int:
     import os
-    import urllib.error
-    import urllib.request
 
     if not args.registry:
         raise ValueError("--publish requires --registry")
     token = args.token or os.environ.get("CSK_REGISTRY_TOKEN")
     if not token:
         raise ValueError("--publish requires --token or the CSK_REGISTRY_TOKEN environment variable")
-    record_text = Path(args.publish).read_text(encoding="utf-8")
+    record_json = Path(args.publish).read_bytes()
     try:
-        json.loads(record_text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"record is not valid JSON: {exc}") from exc
-    endpoint = f"{args.registry.rstrip('/')}/v1/records"
-    request = urllib.request.Request(
-        endpoint,
-        data=record_text.encode("utf-8"),
-        method="POST",
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310 - registry URL from the operator
-            body = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise ValueError(f"registry rejected the record ({exc.code}): {detail}") from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise ValueError(f"could not reach registry {args.registry}: {exc}") from exc
-    print(body)
+        registry_url = config.canonical_registry_url(args.registry, field="--registry")
+        response = audit_registry.http_publish_record(registry_url, token, record_json)
+    except audit_registry.RegistryError as exc:
+        raise ValueError(str(exc)) from exc
+    print(json.dumps(response, sort_keys=True))
     return EXIT_OK
 
 

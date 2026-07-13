@@ -47,8 +47,10 @@ def parse_source_policy(raw: Any) -> SourcePolicy:
             raise SourcePolicyError(f"audit.source_policy.rules[{index}] must be an object")
         _reject_unknown_fields(item, {"pattern", "class"}, f"audit.source_policy.rules[{index}]")
         pattern = item.get("pattern")
-        if not isinstance(pattern, str) or not pattern:
-            raise SourcePolicyError(f"audit.source_policy.rules[{index}].pattern must be a non-empty string")
+        if not isinstance(pattern, str) or not pattern or len(pattern) > 4096:
+            raise SourcePolicyError(
+                f"audit.source_policy.rules[{index}].pattern must be a non-empty string of at most 4096 characters"
+            )
         source_class = _validate_source_class(item.get("class"), f"audit.source_policy.rules[{index}].class")
         rules.append(SourcePolicyRule(pattern=pattern, source_class=source_class))
     return SourcePolicy(default_class=default_class, rules=tuple(rules))

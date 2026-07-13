@@ -4,6 +4,7 @@ import base64
 import binascii
 import hashlib
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -14,6 +15,8 @@ from typing import Any, Callable
 
 from . import _ed25519
 from .config import RegistryConfig
+from .identifiers import is_valid_identifier
+from .source_identity import is_canonical_source_identity
 
 
 # Advisory lookup cache lifetime and the window a stale cache stays usable
@@ -23,6 +26,11 @@ DEFAULT_OFFLINE_GRACE_SECONDS = 7 * 24 * 3600
 # A snapshot older than this is stale, which defends against a registry that
 # freezes its view to hide a newer revocation.
 DEFAULT_SNAPSHOT_MAX_AGE_SECONDS = 7 * 24 * 3600
+DEFAULT_SNAPSHOT_CLOCK_SKEW_SECONDS = 5 * 60
+MAX_SAFE_INTEGER = 9_007_199_254_740_991
+MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+MAX_PAGE_SIZE = 1000
+MAX_RECORDS_PER_QUERY = 10_000
 
 
 # Client side of the audit registry (RFC 0008). This module verifies signed
@@ -46,6 +54,48 @@ RESULT_UNKNOWN = "unknown"
 
 class RegistryError(Exception):
     pass
+
+
+def _object_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise RegistryError(f"duplicate JSON object key: {key!r}")
+        result[key] = value
+    return result
+
+
+def _parse_json_integer(value: str) -> int:
+    parsed = int(value)
+    if value == "-0" or not -MAX_SAFE_INTEGER <= parsed <= MAX_SAFE_INTEGER:
+        raise RegistryError(f"JSON integer is not shortest-form or safe: {value}")
+    return parsed
+
+
+def _reject_json_number(value: str) -> None:
+    raise RegistryError(f"protocol JSON does not allow non-integer number {value!r}")
+
+
+def load_protocol_json(raw: bytes | str) -> Any:
+    """Decode the protocol JSON subset without losing signed-value precision."""
+    if (isinstance(raw, bytes) and raw.startswith(b"\xef\xbb\xbf")) or (
+        isinstance(raw, str) and raw.startswith("\ufeff")
+    ):
+        raise RegistryError("protocol JSON must not contain a byte-order mark")
+    try:
+        value = json.loads(
+            raw,
+            object_pairs_hook=_object_without_duplicates,
+            parse_int=_parse_json_integer,
+            parse_float=_reject_json_number,
+            parse_constant=_reject_json_number,
+        )
+    except RegistryError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RegistryError(f"registry returned invalid JSON: {exc}") from exc
+    _validate_ccj(value)
+    return value
 
 
 @dataclass(frozen=True)
@@ -86,14 +136,54 @@ FetchFn = Callable[[str, str, str, str], list[dict[str, Any]]]
 def parse_record(payload: dict[str, Any]) -> Record:
     if not isinstance(payload, dict):
         raise RegistryError("audit record must be a JSON object")
+    allowed = {
+        "schema_version",
+        "name",
+        "source_identity",
+        "commit",
+        "content_sha256",
+        "status",
+        "audit",
+        "endorsements",
+        "sig",
+    }
+    unknown = set(payload) - allowed
+    if unknown:
+        raise RegistryError(f"audit record has unknown fields: {', '.join(sorted(unknown))}")
+    if payload.get("schema_version", 1) != 1:
+        raise RegistryError("audit record schema_version must be 1")
     for key in ("name", "source_identity", "commit", "content_sha256", "status"):
         if not isinstance(payload.get(key), str) or not payload[key]:
             raise RegistryError(f"audit record requires a non-empty string {key!r}")
+    if not is_valid_identifier(payload["name"]):
+        raise RegistryError("audit record name is not a portable identifier")
+    if len(payload["source_identity"]) > 4096 or not is_canonical_source_identity(payload["source_identity"]):
+        raise RegistryError("audit record source_identity is not canonical")
+    if re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", payload["commit"]) is None:
+        raise RegistryError("audit record commit must be a full lowercase object id")
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", payload["content_sha256"]) is None:
+        raise RegistryError("audit record content_sha256 is malformed")
     if payload["status"] not in _STATUSES:
         raise RegistryError(f"audit record status {payload['status']!r} is not recognized")
     audit = payload.get("audit", {})
     if not isinstance(audit, dict):
         raise RegistryError("audit record field 'audit' must be an object")
+    if not isinstance(payload.get("sig"), dict):
+        raise RegistryError("audit record requires a signature envelope")
+    _signature_envelope(payload["sig"])
+    endorsements = payload.get("endorsements", [])
+    if not isinstance(endorsements, list) or any(
+        not isinstance(item, dict)
+        or set(item) != {"endorser", "sig"}
+        or not isinstance(item.get("endorser"), str)
+        or not item["endorser"]
+        or not isinstance(item.get("sig"), dict)
+        for item in endorsements
+    ):
+        raise RegistryError("audit record endorsements are malformed")
+    for endorsement in endorsements:
+        _signature_envelope(endorsement["sig"])
+    _validate_ccj(payload)
     return Record(
         name=payload["name"],
         source_identity=payload["source_identity"],
@@ -106,13 +196,37 @@ def parse_record(payload: dict[str, Any]) -> Record:
 
 
 def canonical_bytes(record: dict[str, Any]) -> bytes:
-    """Signed form: compact sorted JSON of every field except 'sig'.
-
-    The registry service signs the same canonicalization, so both sides agree
-    on the exact bytes without a full JSON canonicalization library.
-    """
+    """Return Curator Canonical JSON 1 bytes for a signed object."""
     body = {key: value for key, value in record.items() if key != "sig"}
+    _validate_ccj(body)
     return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _validate_ccj(value: Any) -> None:
+    if value is None or isinstance(value, bool):
+        return
+    if isinstance(value, int):
+        if not -MAX_SAFE_INTEGER <= value <= MAX_SAFE_INTEGER:
+            raise RegistryError(f"CCJ-1 integer outside safe range: {value}")
+        return
+    if isinstance(value, float):
+        raise RegistryError("CCJ-1 numbers must be integers")
+    if isinstance(value, str):
+        if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+            raise RegistryError("CCJ-1 strings must not contain lone surrogates")
+        return
+    if isinstance(value, list):
+        for item in value:
+            _validate_ccj(item)
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise RegistryError("CCJ-1 object keys must be strings")
+            _validate_ccj(key)
+            _validate_ccj(item)
+        return
+    raise RegistryError(f"CCJ-1 does not support {type(value).__name__}")
 
 
 def parse_public_key(value: str) -> bytes:
@@ -126,7 +240,27 @@ def parse_public_key(value: str) -> bytes:
         raise RegistryError(f"invalid public key encoding: {value!r}") from exc
     if len(raw) != 32:
         raise RegistryError(f"ed25519 public key must be 32 bytes, got {len(raw)}")
+    if base64.b64encode(raw).decode("ascii") != text:
+        raise RegistryError("ed25519 public key must use canonical padded base64")
     return raw
+
+
+def _signature_envelope(value: Any) -> tuple[str, bytes]:
+    if not isinstance(value, dict) or set(value) != {"algorithm", "key_id", "signature"}:
+        raise RegistryError("signature envelope has invalid fields")
+    key_id = value.get("key_id")
+    encoded = value.get("signature")
+    if value.get("algorithm") != "ed25519" or not isinstance(key_id, str) or not isinstance(encoded, str):
+        raise RegistryError("signature envelope is malformed")
+    if re.fullmatch(r"[0-9a-f]{16}", key_id) is None:
+        raise RegistryError("signature key_id must be 16 lowercase hexadecimal characters")
+    try:
+        signature = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise RegistryError("signature is not canonical base64") from exc
+    if len(signature) != 64 or base64.b64encode(signature).decode("ascii") != encoded:
+        raise RegistryError("signature must be canonical padded base64 for 64 bytes")
+    return key_id, signature
 
 
 def verify_record(record: Record, pinned_keys: tuple[str, ...]) -> bool:
@@ -134,18 +268,20 @@ def verify_record(record: Record, pinned_keys: tuple[str, ...]) -> bool:
     sig = record.raw.get("sig")
     if not isinstance(sig, dict):
         return False
-    signature_b64 = sig.get("signature")
-    if not isinstance(signature_b64, str):
+    try:
+        key_id, signature = _signature_envelope(sig)
+    except RegistryError:
         return False
     try:
-        signature = base64.b64decode(signature_b64, validate=True)
-    except (binascii.Error, ValueError):
+        message = canonical_bytes(record.raw)
+    except RegistryError:
         return False
-    message = canonical_bytes(record.raw)
     for key in pinned_keys:
         try:
             public_key = parse_public_key(key)
         except RegistryError:
+            continue
+        if hashlib.sha256(public_key).hexdigest()[:16] != key_id:
             continue
         if _ed25519.verify(public_key, message, signature):
             return True
@@ -184,6 +320,9 @@ def resolve(
         except RegistryError as exc:
             warnings.append(f"registry {registry.name} unavailable: {exc}")
             continue
+        stale_urls: Any = getattr(fetch, "stale_urls", set())
+        if isinstance(stale_urls, set) and registry.url in stale_urls:
+            warnings.append(f"registry {registry.name} records came from a stale offline cache")
         for payload in payloads:
             try:
                 record = parse_record(payload)
@@ -218,25 +357,58 @@ def resolve(
 
 def verify_snapshot(snapshot: dict[str, Any], pinned_keys: tuple[str, ...]) -> bool:
     sig = snapshot.get("sig")
-    if not isinstance(sig, dict) or not isinstance(sig.get("signature"), str):
+    try:
+        key_id, signature = _signature_envelope(sig)
+    except RegistryError:
         return False
     try:
-        signature = base64.b64decode(sig["signature"], validate=True)
-    except (binascii.Error, ValueError):
+        message = canonical_bytes(snapshot)
+    except RegistryError:
         return False
-    message = canonical_bytes(snapshot)
     for key in pinned_keys:
         try:
             public_key = parse_public_key(key)
         except RegistryError:
+            continue
+        if hashlib.sha256(public_key).hexdigest()[:16] != key_id:
             continue
         if _ed25519.verify(public_key, message, signature):
             return True
     return False
 
 
+def _validate_snapshot_shape(snapshot: dict[str, Any]) -> tuple[int, int, str, str]:
+    required = {"schema_version", "merkle_root", "log_size", "head", "version", "created_at", "sig"}
+    if set(snapshot) != required:
+        raise RegistryError("snapshot fields are malformed")
+    schema_version = snapshot.get("schema_version")
+    version = snapshot.get("version")
+    log_size = snapshot.get("log_size")
+    head = snapshot.get("head")
+    merkle_root = snapshot.get("merkle_root")
+    if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version != 1:
+        raise RegistryError("snapshot schema_version must be 1")
+    if (
+        not isinstance(version, int)
+        or isinstance(version, bool)
+        or not 0 <= version <= MAX_SAFE_INTEGER
+        or not isinstance(log_size, int)
+        or isinstance(log_size, bool)
+        or not 0 <= log_size <= version
+        or not isinstance(head, str)
+        or re.fullmatch(r"[0-9a-f]{64}", head) is None
+        or not isinstance(merkle_root, str)
+        or re.fullmatch(r"[0-9a-f]{64}", merkle_root) is None
+        or _parse_iso8601(snapshot.get("created_at")) is None
+    ):
+        raise RegistryError("snapshot fields are malformed")
+    _signature_envelope(snapshot.get("sig"))
+    _validate_ccj(snapshot)
+    return version, log_size, head, merkle_root
+
+
 def _parse_iso8601(value: Any) -> float | None:
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value) is None:
         return None
     text = value.replace("Z", "+00:00")
     try:
@@ -254,6 +426,7 @@ def check_snapshots(
     fetch_snapshot: Callable[[str], dict[str, Any]],
     now: float,
     max_age_seconds: int = DEFAULT_SNAPSHOT_MAX_AGE_SECONDS,
+    clock_skew_seconds: int = DEFAULT_SNAPSHOT_CLOCK_SKEW_SECONDS,
 ) -> tuple[set[str], list[str]]:
     """Verify each registry snapshot; return the URLs to treat as tampered.
 
@@ -271,19 +444,33 @@ def check_snapshots(
         if not registry.public_keys:
             continue
         state_file = cache_dir / f"snapshot-{hashlib.sha256(registry.url.encode()).hexdigest()[:16]}.json"
-        highest = _read_snapshot_version(state_file)
+        state = _read_snapshot_state(state_file)
         try:
             snapshot = fetch_snapshot(registry.url)
         except RegistryError as exc:
             warnings.append(f"registry {registry.name} snapshot unavailable: {exc}")
             continue
+        try:
+            version, log_size, head, merkle_root = _validate_snapshot_shape(snapshot)
+        except RegistryError as exc:
+            warnings.append(f"registry {registry.name} snapshot is malformed: {exc}")
+            unavailable.add(registry.url)
+            continue
         if not verify_snapshot(snapshot, registry.public_keys):
             warnings.append(f"registry {registry.name} snapshot signature failed verification")
             unavailable.add(registry.url)
             continue
-        version = snapshot.get("version")
-        if not isinstance(version, int) or version < highest:
+        highest = state["highest_version"]
+        if version < highest:
             warnings.append(f"registry {registry.name} snapshot version moved backward; possible rollback")
+            unavailable.add(registry.url)
+            continue
+        if version == highest and state.get("head") and (
+            state["head"] != head
+            or state.get("merkle_root") != merkle_root
+            or state.get("log_size") != log_size
+        ):
+            warnings.append(f"registry {registry.name} snapshot changed without advancing version; possible equivocation")
             unavailable.add(registry.url)
             continue
         created = _parse_iso8601(snapshot.get("created_at"))
@@ -291,39 +478,57 @@ def check_snapshots(
             warnings.append(f"registry {registry.name} snapshot is stale")
             unavailable.add(registry.url)
             continue
-        _write_snapshot_version(state_file, version)
+        if created > now + clock_skew_seconds:
+            warnings.append(f"registry {registry.name} snapshot timestamp is too far in the future")
+            unavailable.add(registry.url)
+            continue
+        _write_snapshot_state(
+            state_file,
+            {"highest_version": version, "head": head, "merkle_root": merkle_root, "log_size": log_size},
+        )
     return unavailable, warnings
 
 
-def _read_snapshot_version(path: Path) -> int:
+def _read_snapshot_state(path: Path) -> dict[str, Any]:
     if not path.is_file():
-        return 0
+        return {"highest_version": 0}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return int(data["highest_version"])
-    except (ValueError, KeyError, OSError):
-        return 0
+        if not isinstance(data, dict):
+            raise ValueError("invalid snapshot state")
+        highest = data["highest_version"]
+        if not isinstance(highest, int) or isinstance(highest, bool) or highest < 0:
+            raise ValueError("invalid highest version")
+        state: dict[str, Any] = {"highest_version": highest}
+        for key in ("head", "merkle_root"):
+            value = data.get(key)
+            if value is not None:
+                if not isinstance(value, str):
+                    raise ValueError(f"invalid snapshot state {key}")
+                state[key] = value
+        log_size = data.get("log_size")
+        if log_size is not None:
+            if not isinstance(log_size, int) or isinstance(log_size, bool) or log_size < 0:
+                raise ValueError("invalid snapshot state log_size")
+            state["log_size"] = log_size
+        return state
+    except (TypeError, ValueError, KeyError, OSError):
+        return {"highest_version": 0}
 
 
-def _write_snapshot_version(path: Path, version: int) -> None:
+def _write_snapshot_state(path: Path, state: dict[str, Any]) -> None:
+    temporary = path.with_name(path.name + ".tmp")
     try:
-        path.write_text(json.dumps({"highest_version": version}), encoding="utf-8")
+        temporary.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+        temporary.replace(path)
     except OSError:
-        pass
+        temporary.unlink(missing_ok=True)
 
 
 def http_get_snapshot(url: str) -> dict[str, Any]:
     endpoint = f"{url.rstrip('/')}/v1/snapshot"
     request = urllib.request.Request(endpoint, headers={"Accept": "application/json"})
-    try:
-        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - https endpoint from pinned config
-            body = response.read()
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise RegistryError(str(exc)) from exc
-    try:
-        data = json.loads(body)
-    except ValueError as exc:
-        raise RegistryError(f"registry returned invalid JSON: {exc}") from exc
+    data = _request_json(request, timeout=10, label="snapshot")
     if not isinstance(data, dict):
         raise RegistryError("snapshot must be a JSON object")
     return data
@@ -342,48 +547,136 @@ def make_http_fetch(
     refreshed; when the registry is unreachable the stale entry is reused
     within the offline grace window, otherwise RegistryError is raised.
     """
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    clock = time.time() if now is None else now
+    return _HTTPFetch(cache_dir, ttl_seconds, grace_seconds, now)
 
-    def fetch(url: str, source_identity: str, commit: str, content_sha256: str) -> list[dict[str, Any]]:
+
+class _HTTPFetch:
+    def __init__(self, cache_dir: Path, ttl_seconds: int, grace_seconds: int, now: float | None):
+        self.cache_dir = cache_dir
+        self.ttl_seconds = ttl_seconds
+        self.grace_seconds = grace_seconds
+        self.fixed_now = now
+        self.stale_urls: set[str] = set()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def __call__(self, url: str, source_identity: str, commit: str, content_sha256: str) -> list[dict[str, Any]]:
+        clock = time.time() if self.fixed_now is None else self.fixed_now
         query = urllib.parse.urlencode(
-            {"source_identity": source_identity, "commit": commit, "content_sha256": content_sha256}
+            {
+                "source_identity": source_identity,
+                "commit": commit,
+                "content_sha256": content_sha256,
+                "limit": MAX_PAGE_SIZE,
+            }
         )
         endpoint = f"{url.rstrip('/')}/v1/records?{query}"
         digest = hashlib.sha256(endpoint.encode("utf-8")).hexdigest()[:16]
-        cache_file = cache_dir / f"records-{digest}.json"
+        cache_file = self.cache_dir / f"records-{digest}.json"
         cached = _read_cache(cache_file)
-        if cached is not None and clock - cached[0] < ttl_seconds:
+        if cached is not None and clock - cached[0] < self.ttl_seconds:
+            self.stale_urls.discard(url)
             return cached[1]
         try:
             payloads = _http_get_records(endpoint)
         except RegistryError:
-            if cached is not None and clock - cached[0] < grace_seconds:
+            if cached is not None and clock - cached[0] < self.grace_seconds:
+                self.stale_urls.add(url)
                 return cached[1]
             raise
+        self.stale_urls.discard(url)
         _write_cache(cache_file, clock, payloads)
         return payloads
 
-    return fetch
-
 
 def _http_get_records(endpoint: str) -> list[dict[str, Any]]:
-    request = urllib.request.Request(endpoint, headers={"Accept": "application/json"})
+    records: list[dict[str, Any]] = []
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
+    while True:
+        page_url = _url_with_cursor(endpoint, cursor)
+        request = urllib.request.Request(page_url, headers={"Accept": "application/json"})
+        data = _request_json(request, timeout=10, label="records")
+        if not isinstance(data, dict) or set(data) != {"records", "next_cursor"}:
+            raise RegistryError("registry records response requires only 'records' and 'next_cursor'")
+        page = data["records"]
+        next_cursor = data["next_cursor"]
+        if not isinstance(page, list) or len(page) > MAX_PAGE_SIZE:
+            raise RegistryError("registry 'records' must be a list of at most 1000 records")
+        if next_cursor is not None and (not isinstance(next_cursor, str) or not next_cursor or len(next_cursor) > 4096):
+            raise RegistryError("registry 'next_cursor' must be null or a non-empty string")
+        for item in page:
+            if not isinstance(item, dict):
+                raise RegistryError("registry record page contains a non-object")
+            records.append(item)
+            if len(records) > MAX_RECORDS_PER_QUERY:
+                raise RegistryError("registry record query exceeded the 10000-record limit")
+        if next_cursor is None:
+            return records
+        if next_cursor in seen_cursors:
+            raise RegistryError("registry repeated a pagination cursor")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+
+
+def _url_with_cursor(endpoint: str, cursor: str | None) -> str:
+    split = urllib.parse.urlsplit(endpoint)
+    query = [(key, value) for key, value in urllib.parse.parse_qsl(split.query) if key != "cursor"]
+    if cursor is not None:
+        query.append(("cursor", cursor))
+    return urllib.parse.urlunsplit((split.scheme, split.netloc, split.path, urllib.parse.urlencode(query), split.fragment))
+
+
+def _request_json(request: urllib.request.Request, *, timeout: int, label: str) -> Any:
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - https endpoint from pinned config
-            body = response.read()
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - operator-configured registry
+            status = getattr(response, "status", 200)
+            if not isinstance(status, int) or not 200 <= status < 300:
+                raise RegistryError(f"registry returned HTTP {status} for {label}")
+            headers = getattr(response, "headers", None)
+            content_type = headers.get("Content-Type", "") if headers is not None else ""
+            if content_type.split(";", 1)[0].strip().lower() != "application/json":
+                raise RegistryError(f"registry returned unsupported Content-Type for {label}")
+            body = response.read(MAX_RESPONSE_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        raise RegistryError(f"registry returned HTTP {exc.code} for {label}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise RegistryError(str(exc)) from exc
-    try:
-        data = json.loads(body)
-    except ValueError as exc:
-        raise RegistryError(f"registry returned invalid JSON: {exc}") from exc
-    records = data.get("records") if isinstance(data, dict) else None
-    if records is None:
-        return []
-    if not isinstance(records, list):
-        raise RegistryError("registry 'records' must be a list")
-    return [item for item in records if isinstance(item, dict)]
+    if len(body) > MAX_RESPONSE_BYTES:
+        raise RegistryError(f"registry {label} response exceeds 16 MiB")
+    return load_protocol_json(body)
+
+
+def http_publish_record(base_url: str, token: str, record_json: bytes) -> dict[str, Any]:
+    """Validate and submit one signed record with the protocol idempotency key."""
+    payload = load_protocol_json(record_json)
+    if not isinstance(payload, dict):
+        raise RegistryError("record must be a JSON object")
+    parse_record(payload)
+    canonical = canonical_bytes(payload)
+    endpoint = f"{base_url.rstrip('/')}/v1/records"
+    request = urllib.request.Request(
+        endpoint,
+        data=record_json,
+        method="POST",
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+            "Idempotency-Key": hashlib.sha256(canonical).hexdigest(),
+        },
+    )
+    response = _request_json(request, timeout=15, label="record submission")
+    if (
+        not isinstance(response, dict)
+        or set(response) != {"seq", "entry_hash"}
+        or not isinstance(response.get("seq"), int)
+        or isinstance(response.get("seq"), bool)
+        or not 1 <= response["seq"] <= MAX_SAFE_INTEGER
+        or not isinstance(response.get("entry_hash"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", response["entry_hash"]) is None
+    ):
+        raise RegistryError("registry returned a malformed submission response")
+    return response
 
 
 def _read_cache(path: Path) -> tuple[float, list[dict[str, Any]]] | None:
@@ -397,14 +690,18 @@ def _read_cache(path: Path) -> tuple[float, list[dict[str, Any]]] | None:
         return None
     if not isinstance(records, list):
         return None
-    return fetched_at, [item for item in records if isinstance(item, dict)]
+    if any(not isinstance(item, dict) for item in records):
+        return None
+    return fetched_at, records
 
 
 def _write_cache(path: Path, fetched_at: float, records: list[dict[str, Any]]) -> None:
+    temporary = path.with_name(path.name + ".tmp")
     try:
-        path.write_text(
+        temporary.write_text(
             json.dumps({"fetched_at": fetched_at, "records": records}, separators=(",", ":")),
             encoding="utf-8",
         )
+        temporary.replace(path)
     except OSError:
-        pass
+        temporary.unlink(missing_ok=True)
