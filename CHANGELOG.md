@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-07-13
+
 ### Добавлено
 
 - Добавлен `csk bootstrap --if-missing` для идемпотентной настройки новых
@@ -460,7 +462,9 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.2...main
+[Unreleased]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.4...main
+[0.12.4]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.3...v0.12.4
+[0.12.3]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.2...v0.12.3
 [0.12.2]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.1...v0.12.2
 [0.12.1]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.11.0...v0.12.0
