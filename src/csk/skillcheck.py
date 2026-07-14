@@ -76,11 +76,7 @@ def format_issue(issue: ValidationIssue) -> str:
 
 
 def _skill_spec_path(skill_dir: Path) -> str:
-    if (skill_dir / "csk-skill.json").exists():
-        return "csk-skill.json"
-    if (skill_dir / "agents" / "runtime.json").exists():
-        return "agents/runtime.json"
-    return ""
+    return skillspec.manifest_source_path(skill_dir)
 
 
 def _runtime_root_reference_warnings(

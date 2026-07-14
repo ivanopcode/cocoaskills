@@ -158,7 +158,7 @@ run `csk install --all` or `csk upgrade --all`.
 ## Skill dependencies
 
 Since v0.9.0 a skill can require other skills ([RFC 0007](docs/v0.9-design.md)).
-A requirement lives in `csk-skill.json` schema v4 under `dependencies.skills`,
+A requirement lives in `agent-skill.json` schema v4 under `dependencies.skills`,
 is self-contained (git URL plus an exact `tag` or `revision` ref), and carries
 an activation mode:
 
@@ -303,11 +303,16 @@ to those repositories is undesirable.
 ## Skill command manifests
 
 Skills declare commands, capabilities, and dependencies through
-`csk-skill.json`. Schema v2 supports multi-file runtimes: `runtime_roots` are
+`agent-skill.json`. Schema v2 supports multi-file runtimes: `runtime_roots` are
 copied into `~/.cocoaskills/runtime/<skill>/<commit>/` and excluded from agent
 prompt context. Schema v3 adds the `capabilities` envelope used by `csk audit`
 and strict install gates. Schema v4 adds skill requirements (see
 [Skill dependencies](#skill-dependencies)).
+
+Existing packages named `csk-skill.json` remain readable. New and updated
+packages should write only `agent-skill.json`. During a staged rename, both
+files may coexist only when their decoded JSON values are equal; conflicting
+files fail installation instead of selecting one silently.
 
 ```json
 {

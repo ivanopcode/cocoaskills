@@ -350,7 +350,7 @@ def test_legacy_command_dependency_is_satisfied_by_transitive_provider(tmp_path,
     result = installer.install(cfg)[0]
     assert not result.errors, result.errors
     summary = "\n".join(result.messages)
-    assert "migrate to csk-skill.json schema v4 dependencies.skills" in summary
+    assert "migrate to agent-skill.json schema v4 dependencies.skills" in summary
 
 
 def test_direct_and_transitive_declarations_unify(tmp_path, skills_root, csk_home):

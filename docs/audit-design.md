@@ -85,7 +85,7 @@ file:span). The gate (`assess` → `decide`) is deterministic given
 
 ## 5. Capability Manifest
 
-Declared in `csk-skill.json` under a new `capabilities` object. Introduced with
+Declared in `agent-skill.json` under a new `capabilities` object. Introduced with
 schema v3. Skills on schema v1/v2 carry no declared envelope; section 5.1
 defines how they are handled so enabling strict does not mass-block the existing
 fleet.
@@ -283,7 +283,7 @@ Static detectors (deterministic, injection-immune):
 Scope of files: prompts (`SKILL.md`, `references/*.md`,
 `.skill_triggers/<locale>.md`, `locales/metadata.json` — the description is
 rewritten into the SKILL.md frontmatter, a distinct injection channel), code
-(`scripts/`, everything under `runtime_roots`), manifest (`csk-skill.json`, the
+(`scripts/`, everything under `runtime_roots`), manifest (`agent-skill.json`, the
 legacy `agents/runtime.json`).
 
 LLM extractor (advisory facts, not judgment): the backend is prompted to extract

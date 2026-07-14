@@ -312,7 +312,8 @@ def _add_skill(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         description="Validates intrinsic skill requirements in a working tree directory.",
         epilog=(
             "Files read:\n"
-            "  <skill>/SKILL.md, <skill>/csk-skill.json, <skill>/agents/runtime.json,\n"
+            "  <skill>/SKILL.md, <skill>/agent-skill.json, <skill>/csk-skill.json (legacy),\n"
+            "  <skill>/agents/runtime.json,\n"
             "  <skill>/locales/metadata.json, <skill>/.skill_triggers.\n\n"
             "Notes:\n"
             "  This command reads the working tree as-is. csk install validates the committed\n"

@@ -412,7 +412,7 @@ def _gate_messages(report: AuditReport) -> list[str]:
     if report.decision == Decision.REQUIRE_PIN:
         return [
             f"audit requires pin: {report.skill}: schema v{report.schema_version} has no capabilities; "
-            f"migrate to csk-skill.json schema v3 or run 'csk audit --allow {report.content_sha256} --reason <reason>'"
+            f"migrate to agent-skill.json schema v3 or run 'csk audit --allow {report.content_sha256} --reason <reason>'"
         ]
     prefix = "audit blocked" if report.decision == Decision.BLOCK else "audit warning"
     if not report.findings:

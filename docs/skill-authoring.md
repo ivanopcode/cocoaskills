@@ -11,7 +11,7 @@ Recommended layout:
 ```text
 skill-example/
   SKILL.md
-  csk-skill.json
+  agent-skill.json
   agents/
   references/
   assets/
@@ -49,13 +49,13 @@ expect.
 If the skill exports commands, add:
 
 ```text
-csk-skill.json
+agent-skill.json
 ```
 
-`csk-skill.json` is the machine-readable runtime manifest. It declares command
+`agent-skill.json` is the machine-readable runtime manifest. It declares command
 entrypoints exported by the skill and dependencies consumed by the skill.
 
-## 3. `csk-skill.json` Schema Versions
+## 3. `agent-skill.json` Schema Versions
 
 ### Schema v1
 
@@ -328,7 +328,7 @@ once, before its first invocation:
 3. Use a bare command only as a final fallback after `command -v` or
    `Get-Command` confirms it exists.
 4. When `.csk-install.json` is absent, treat the skill as a source checkout:
-   read the platform entrypoint from `csk-skill.json` and resolve that path
+   read the platform entrypoint from `agent-skill.json` and resolve that path
    relative to the physical skill directory.
 5. If no declared command can be found, report an incomplete installation and
    stop. Do not guess a runtime path or execute one relative to the current
@@ -533,7 +533,7 @@ csk skill check . --json
 ```
 
 The command validates intrinsic skill requirements in the working tree:
-`SKILL.md`, `csk-skill.json`, runtime roots, command shape, and locale catalog
+`SKILL.md`, `agent-skill.json`, runtime roots, command shape, and locale catalog
 consistency. It also warns when prompt-visible Markdown points into a
 runtime-only source directory that will be absent after install. It does not
 require `~/.cocoaskills/config.json`, `Skillfile.json`, or project setup.
@@ -553,7 +553,7 @@ locale is missing but another locale is consistent, CocoaSkills installs the
 source `SKILL.md` with a warning instead of failing.
 
 Do not add `dependencies.json`. It is no longer copied by CocoaSkills.
-Dependencies belong in `csk-skill.json` under `dependencies.commands`.
+Dependencies belong in `agent-skill.json` under `dependencies.commands`.
 
 ## 9. Prompt Context Contract
 
@@ -668,7 +668,7 @@ If the agent needs operational information, put it in `SKILL.md` or
 ## 11. Global and Project Installation
 
 Skill authors do not need a separate manifest for global use. The same
-`SKILL.md` and `csk-skill.json` are valid when the skill is installed:
+`SKILL.md` and `agent-skill.json` are valid when the skill is installed:
 
 - into a project through `csk install`;
 - globally through `csk global install`.
@@ -693,7 +693,7 @@ declarations remain the source of truth for project behavior.
 Before tagging a skill release:
 
 1. Validate the working tree with `csk skill check . --locale <locale>`.
-2. Validate `csk-skill.json` by running `csk install` in a real project or
+2. Validate `agent-skill.json` by running `csk install` in a real project or
    disposable fixture project.
 3. Confirm runtime roots are absent from `.agents/skills/<skill>/`.
 4. Confirm runtime files are present under
@@ -711,11 +711,23 @@ Before tagging a skill release:
 
 ## 13. Migration Notes
 
+For existing skills with `csk-skill.json`:
+
+1. Rename it to `agent-skill.json` without changing the JSON value.
+2. Update documentation and automation to emit only `agent-skill.json`.
+3. If a staged rollout temporarily needs both files, keep their decoded JSON
+   values equal. CocoaSkills rejects a mismatch with
+   `conflicting_skill_manifests`.
+
+The legacy filename remains readable throughout protocol 1.x, so consumers do
+not need a flag day.
+
 For existing skills with `agents/runtime.json`:
 
-1. Add `csk-skill.json` schema v2.
+1. Add `agent-skill.json` schema v2.
 2. Keep `agents/runtime.json` during the first rollout.
 3. Release and consume the new tag in a real project.
 4. After observation, remove legacy `agents/runtime.json`.
 
-`csk-skill.json` takes precedence over `agents/runtime.json` when both exist.
+`agents/runtime.json` is read only when neither `agent-skill.json` nor the
+legacy `csk-skill.json` exists.

@@ -499,7 +499,13 @@ def _ast_finding(
 
 
 def _detect_manifest(snapshot: Path) -> list[Finding]:
-    path = snapshot / "csk-skill.json"
+    manifest_name = next(
+        (name for name in ("agent-skill.json", "csk-skill.json") if (snapshot / name).exists()),
+        None,
+    )
+    if manifest_name is None:
+        return []
+    path = snapshot / manifest_name
     if not path.exists():
         return []
     try:
@@ -518,7 +524,7 @@ def _detect_manifest(snapshot: Path) -> list[Finding]:
                     surface=Surface.MANIFEST,
                     category="hygiene",
                     severity=Severity.MEDIUM,
-                    location=Location("csk-skill.json"),
+                    location=Location(manifest_name),
                     evidence=name,
                     detector="static.manifest",
                     confidence="high",

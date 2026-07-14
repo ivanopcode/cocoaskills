@@ -6,7 +6,7 @@ Status: accepted for MVP implementation; partially superseded by later RFCs
 > the RFCs win. Known divergences: project registration is explicit-only via
 > `csk project add`, and `csk install .` / path installs no longer register
 > checkouts (RFC 0001, docs/v0.3-design.md); `git` URLs auto-clone missing
-> sources (RFC 0002, docs/v0.4-design.md); `csk-skill.json` schema v2 adds
+> sources (RFC 0002, docs/v0.4-design.md); `agent-skill.json` schema v2 adds
 > `runtime_roots` (RFC 0003, docs/v0.5-design.md); global skills live under
 > `~/.cocoaskills/global/` (RFC 0004, docs/v0.6-design.md).
 
@@ -69,7 +69,7 @@ Project manifest:
 Skill command manifest:
 
 ```text
-<skill-repo>/csk-skill.json
+<skill-repo>/agent-skill.json
 ```
 
 Installed skill marker:
@@ -224,7 +224,7 @@ This applies to:
 
 - global `config.json`;
 - project `Skillfile.json`;
-- skill `csk-skill.json`;
+- skill `agent-skill.json`;
 - installed `.csk-install.json`.
 
 Unsupported input schema versions fail hard with a message that the file
@@ -233,7 +233,7 @@ requires a newer `csk`.
 Unsupported global config or project manifest schemas are configuration errors
 and return exit code `2`. Unsupported installed marker schemas make the owning
 project fail because `csk` cannot safely update or clean it. Unsupported
-`csk-skill.json` schemas fail installation for that skill.
+`agent-skill.json` schemas fail installation for that skill.
 
 ## Reference Semantics
 
@@ -402,7 +402,7 @@ Public interface includes:
 - command behavior, side effects, and exit codes;
 - global config path and JSON schema;
 - project `Skillfile.json` schema;
-- skill `csk-skill.json` schema;
+- skill `agent-skill.json` schema;
 - installed `.csk-install.json` marker schema;
 - supported environment variables such as `CSK_CONFIG`;
 - generated files that users or agents are expected to rely on, including
@@ -674,11 +674,11 @@ The always-excluded list wins for nested paths. For example,
 skill context by default.
 
 `dependencies.json` is not part of the runtime whitelist. System machine
-dependencies belong in `csk-skill.json` as `type: system` commands, where
+dependencies belong in `agent-skill.json` as `type: system` commands, where
 CocoaSkills can check them during install.
 
 `scripts/` is not copied into the installed skill context when script commands
-are declared through `csk-skill.json` or `agents/runtime.json`. Declared script
+are declared through `agent-skill.json` or `agents/runtime.json`. Declared script
 commands go to the runtime store instead.
 
 Paths always excluded:
@@ -707,14 +707,14 @@ requirements*.txt
 
 If a legacy skill does not declare script commands, MVP may copy `scripts/`
 only if needed for compatibility. New skills should declare commands through
-`csk-skill.json`.
+`agent-skill.json`.
 
 ## Skill Command Manifest
 
 Optional file in a source skill repository:
 
 ```text
-csk-skill.json
+agent-skill.json
 ```
 
 Example:
@@ -766,11 +766,12 @@ For `system` commands:
 
 Fallback for existing skills:
 
-- If `csk-skill.json` is absent, read `agents/runtime.json.commands` as script
-  command declarations where possible.
-- If both `csk-skill.json` and `agents/runtime.json` exist, `csk-skill.json`
-  is authoritative for command installation. `agents/runtime.json` may still be
-  copied as skill context, but it is not used to derive command shims.
+- Read `csk-skill.json` when the canonical `agent-skill.json` is absent.
+- If both modern filenames exist, validate both and require equal decoded JSON
+  values; use `agent-skill.json` when equal and fail closed when different.
+- Read `agents/runtime.json.commands` only when neither modern filename exists.
+  It may still be copied as skill context, but it is not used to derive command
+  shims when a modern manifest exists.
 
 Command collision policy:
 
@@ -987,7 +988,7 @@ csk install --audit strict
 Current behavior:
 
 - Inspect committed skill snapshots through deterministic static detectors.
-- Read schema v3 `capabilities` from `csk-skill.json`.
+- Read schema v3 `capabilities` from `agent-skill.json`.
 - Produce text or JSON reports through `csk audit`.
 - Gate project and global installs through `--audit` or config.
 - Cache verdicts by content hash under `~/.cocoaskills/audit/`.
@@ -1030,9 +1031,10 @@ Required areas:
 - Runtime whitelist excludes README, tests, venv, git, and other dev artifacts.
 - Nested excluded paths are pruned even under included whitelist roots.
 - `dependencies.json` is not copied; system dependencies are declared in
-  `csk-skill.json` as `type: system` commands.
+  `agent-skill.json` as `type: system` commands.
 - Missing `SKILL.md` fails skill installation.
-- `csk-skill.json` takes precedence over `agents/runtime.json`.
+- `agent-skill.json` is canonical, `csk-skill.json` is a read alias, and
+  `agents/runtime.json` is the last fallback.
 - Declared script commands are installed to global runtime, not project skill
   context.
 - Project `.agents/bin` shims are generated and updated.
