@@ -7,6 +7,63 @@ import pytest
 from csk import skillspec
 
 
+def test_agent_skill_json_is_canonical(tmp_path):
+    (tmp_path / "agents").mkdir()
+    (tmp_path / "agents" / "runtime.json").write_text(
+        json.dumps({"commands": {"runtime": "scripts/runtime"}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "agent-skill.json").write_text(
+        json.dumps({"schema_version": 1, "commands": {"current": {"type": "system", "command": "current"}}}),
+        encoding="utf-8",
+    )
+
+    spec = skillspec.load_skill_spec(tmp_path)
+
+    assert spec.source_file == "agent-skill.json"
+    assert list(spec.commands) == ["current"]
+    assert spec.commands["current"].source == "agent-skill.json"
+
+
+def test_equal_dual_manifests_select_canonical(tmp_path):
+    (tmp_path / "agent-skill.json").write_text(
+        '{"schema_version":1,"commands":{}}',
+        encoding="utf-8",
+    )
+    (tmp_path / "csk-skill.json").write_text(
+        '{\n  "commands": {},\n  "schema_version": 1\n}',
+        encoding="utf-8",
+    )
+
+    spec = skillspec.load_skill_spec(tmp_path)
+
+    assert spec.source_file == "agent-skill.json"
+
+
+def test_conflicting_dual_manifests_fail_closed(tmp_path):
+    (tmp_path / "agent-skill.json").write_text(
+        json.dumps({"schema_version": 1, "commands": {}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "csk-skill.json").write_text(
+        json.dumps({"schema_version": 1, "commands": {"legacy": {"type": "system", "command": "legacy"}}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(skillspec.SkillSpecError, match="conflicting_skill_manifests"):
+        skillspec.load_skill_spec(tmp_path)
+
+
+@pytest.mark.parametrize("invalid_name", ["agent-skill.json", "csk-skill.json"])
+def test_invalid_dual_manifest_peer_is_not_ignored(tmp_path, invalid_name):
+    valid = json.dumps({"schema_version": 1, "commands": {}})
+    for name in ("agent-skill.json", "csk-skill.json"):
+        (tmp_path / name).write_text("{" if name == invalid_name else valid, encoding="utf-8")
+
+    with pytest.raises(skillspec.SkillSpecError):
+        skillspec.load_skill_spec(tmp_path)
+
+
 def test_csk_skill_json_takes_precedence_over_runtime_json(tmp_path):
     (tmp_path / "agents").mkdir()
     (tmp_path / "agents" / "runtime.json").write_text(

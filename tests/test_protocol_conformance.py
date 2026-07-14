@@ -76,6 +76,28 @@ def test_shared_fixture_context_hash_and_marker(tmp_path: Path) -> None:
     assert marker == expected_marker
 
 
+@pytest.mark.parametrize(
+    "case",
+    _json("vectors/skill-manifest-resolution.json") if ROOT_TEXT else [],
+)
+def test_skill_manifest_resolution_vectors(case: dict[str, Any], tmp_path: Path) -> None:
+    for relative, content in case["files"].items():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    if "error" in case:
+        with pytest.raises(skillspec.SkillSpecError) as caught:
+            skillspec.load_skill_spec(tmp_path)
+        if case["error"] == "conflicting_skill_manifests":
+            assert case["error"] in str(caught.value)
+        return
+
+    spec = skillspec.load_skill_spec(tmp_path)
+    assert spec.source_file == case["expected_source"]
+    assert sorted(spec.commands) == case["expected_commands"]
+
+
 @pytest.mark.parametrize("case", _json("vectors/canonical-valid.json") if ROOT_TEXT else [])
 def test_ccj_positive_vectors(case: dict[str, Any]) -> None:
     assert audit_registry.canonical_bytes(case["input"]).decode("utf-8") == case["canonical_utf8"]

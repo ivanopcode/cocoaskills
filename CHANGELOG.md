@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-07-14
+
+### Добавлено
+
+- Добавлены общие conformance-векторы для canonical-only, legacy-only,
+  одинаковых и конфликтующих пар манифестов, невалидных файлов и fallback на
+  `agents/runtime.json`.
+
+### Изменено
+
+- `agent-skill.json` стал нейтральным каноническим именем манифеста скилла для
+  новых пакетов, документации и диагностик.
+- `csk-skill.json` сохранён как legacy-имя для чтения в течение protocol 1.x.
+
+### Исправлено
+
+- При одновременном наличии обоих имён CocoaSkills теперь независимо проверяет
+  оба файла, принимает только одинаковые JSON-значения и блокирует расхождение
+  ошибкой `conflicting_skill_manifests`.
+- Невалидный modern-манифест больше нельзя скрыть вторым именем или fallback на
+  `agents/runtime.json`.
+
 ## [0.12.4] - 2026-07-13
 
 ### Добавлено
@@ -462,7 +484,8 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.4...main
+[Unreleased]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.5...main
+[0.12.5]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.4...v0.12.5
 [0.12.4]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.3...v0.12.4
 [0.12.3]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.2...v0.12.3
 [0.12.2]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.1...v0.12.2

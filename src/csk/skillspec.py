@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -12,6 +11,9 @@ from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_portable
 
 SCHEMA_VERSION = 1
 SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4, 5}
+CANONICAL_MANIFEST = "agent-skill.json"
+LEGACY_MANIFEST = "csk-skill.json"
+RUNTIME_FALLBACK = "agents/runtime.json"
 UPGRADE_HINT = (
     "Upgrade with: pipx upgrade cocoaskills, brew upgrade cocoaskills, "
     "or mise upgrade pipx:cocoaskills."
@@ -37,7 +39,7 @@ class CommandSpec:
     unix_path: str | None = None
     win_path: str | None = None
     hint: str | None = None
-    source: str = "csk-skill.json"
+    source: str = CANONICAL_MANIFEST
 
 
 @dataclass(frozen=True)
@@ -47,7 +49,7 @@ class DependencySpec:
     command: str | None = None
     skill: str | None = None
     hint: str | None = None
-    source: str = "csk-skill.json"
+    source: str = CANONICAL_MANIFEST
 
 
 @dataclass(frozen=True)
@@ -60,7 +62,7 @@ class SkillRequirement:
     ref_value: str
     mode: str = "full"
     commands: tuple[str, ...] = ()
-    source: str = "csk-skill.json"
+    source: str = CANONICAL_MANIFEST
 
 
 @dataclass(frozen=True)
@@ -71,7 +73,7 @@ class McpServerRequirement:
     hint: str
     transport: str | None = None
     required_in: str = "any"
-    source: str = "csk-skill.json"
+    source: str = CANONICAL_MANIFEST
 
 
 @dataclass(frozen=True)
@@ -87,37 +89,68 @@ class SkillSpec:
 
 
 def load_skill_spec(snapshot: Path) -> SkillSpec:
-    csk_path = snapshot / "csk-skill.json"
-    if csk_path.exists():
-        return _load_csk_skill(csk_path)
-    runtime_path = snapshot / "agents" / "runtime.json"
+    canonical_path = snapshot / CANONICAL_MANIFEST
+    legacy_path = snapshot / LEGACY_MANIFEST
+    if canonical_path.exists() and legacy_path.exists():
+        canonical, canonical_data = _load_skill_manifest(canonical_path)
+        _, legacy_data = _load_skill_manifest(legacy_path)
+        if not _json_values_equal(canonical_data, legacy_data):
+            raise SkillSpecError(
+                f"conflicting_skill_manifests: {CANONICAL_MANIFEST} and "
+                f"{LEGACY_MANIFEST} contain different JSON values"
+            )
+        return canonical
+    if canonical_path.exists():
+        return _load_skill_manifest(canonical_path)[0]
+    if legacy_path.exists():
+        return _load_skill_manifest(legacy_path)[0]
+    runtime_path = snapshot / Path(RUNTIME_FALLBACK)
     if runtime_path.exists():
         return _load_runtime_fallback(runtime_path)
     return SkillSpec(commands={}, source_file=None)
 
 
-def _load_csk_skill(path: Path) -> SkillSpec:
+def manifest_source_path(snapshot: Path) -> str:
+    """Return the protocol path selected for diagnostics without parsing it."""
+    for name in (CANONICAL_MANIFEST, LEGACY_MANIFEST, RUNTIME_FALLBACK):
+        if (snapshot / Path(name)).exists():
+            return name
+    return ""
+
+
+def _json_values_equal(left: Any, right: Any) -> bool:
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(_json_values_equal(left[key], right[key]) for key in left)
+    if isinstance(left, list):
+        return len(left) == len(right) and all(_json_values_equal(a, b) for a, b in zip(left, right, strict=True))
+    return bool(left == right)
+
+
+def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
     try:
         data = protocol_json.loads(path.read_bytes())
     except protocol_json.ProtocolJSONError as exc:
         raise SkillSpecError(f"Malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise SkillSpecError(f"{path} must contain a JSON object")
+    source_file = path.name
     schema = data.get("schema_version")
     if not isinstance(schema, int) or isinstance(schema, bool):
-        raise SkillSpecError("csk-skill.json field 'schema_version' must be an integer")
+        raise SkillSpecError(f"{source_file} field 'schema_version' must be an integer")
     if schema not in SUPPORTED_SCHEMA_VERSIONS:
         raise SkillSpecError(
-            f"Unsupported csk-skill.json schema_version {schema!r}; this skill requires a newer csk. "
+            f"Unsupported {source_file} schema_version {schema!r}; this skill requires a newer csk. "
             f"{UPGRADE_HINT}"
         )
     if schema >= 2:
         allowed_fields = {"schema_version", "runtime_roots", "commands", "dependencies"}
         if schema >= 3:
             allowed_fields.add("capabilities")
-        _reject_unknown_fields(data, allowed_fields, "csk-skill.json")
+        _reject_unknown_fields(data, allowed_fields, source_file)
     if schema >= 3 and "capabilities" not in data:
-        raise SkillSpecError(f"csk-skill.json schema v{schema} requires 'capabilities'")
+        raise SkillSpecError(f"{source_file} schema v{schema} requires 'capabilities'")
     try:
         capabilities = (
             parse_capabilities(data.get("capabilities")) if schema >= 3 else CapabilityManifest.implicit_none()
@@ -125,10 +158,14 @@ def _load_csk_skill(path: Path) -> SkillSpec:
     except CapabilityParseError as exc:
         raise SkillSpecError(str(exc)) from exc
     runtime_roots_raw = data["runtime_roots"] if schema >= 2 and "runtime_roots" in data else []
-    runtime_roots = _parse_runtime_roots(runtime_roots_raw, snapshot=path.parent) if schema >= 2 else ()
+    runtime_roots = (
+        _parse_runtime_roots(runtime_roots_raw, snapshot=path.parent, source_file=source_file)
+        if schema >= 2
+        else ()
+    )
     commands_raw = data.get("commands", {})
     if not isinstance(commands_raw, dict):
-        raise SkillSpecError("csk-skill.json field 'commands' must be an object")
+        raise SkillSpecError(f"{source_file} field 'commands' must be an object")
     commands: dict[str, CommandSpec] = {}
     for name, raw in commands_raw.items():
         if not isinstance(name, str) or not name:
@@ -166,7 +203,7 @@ def _load_csk_skill(path: Path) -> SkillSpec:
                 type="script",
                 unix_path=unix_path,
                 win_path=win_path,
-                source="csk-skill.json",
+                source=source_file,
             )
         elif command_type == "system":
             if schema >= 2:
@@ -182,21 +219,23 @@ def _load_csk_skill(path: Path) -> SkillSpec:
                 type="system",
                 command=command,
                 hint=hint,
-                source="csk-skill.json",
+                source=source_file,
             )
         else:
             raise SkillSpecError(f"Command {name!r} has unsupported type {command_type!r}")
-    dependencies, requirements, mcp_servers = _parse_dependencies(data.get("dependencies"), schema=schema)
+    dependencies, requirements, mcp_servers = _parse_dependencies(
+        data.get("dependencies"), schema=schema, source_file=source_file
+    )
     return SkillSpec(
         commands=commands,
-        source_file="csk-skill.json",
+        source_file=source_file,
         schema_version=schema,
         runtime_roots=runtime_roots,
         capabilities=capabilities,
         dependencies=dependencies,
         requirements=requirements,
         mcp_servers=mcp_servers,
-    )
+    ), data
 
 
 def _load_runtime_fallback(path: Path) -> SkillSpec:
@@ -206,7 +245,7 @@ def _load_runtime_fallback(path: Path) -> SkillSpec:
         raise SkillSpecError(f"Malformed JSON in {path}: {exc}") from exc
     commands_raw = data.get("commands", {}) if isinstance(data, dict) else {}
     if not isinstance(commands_raw, dict):
-        raise SkillSpecError("agents/runtime.json field 'commands' must be an object")
+        raise SkillSpecError(f"{RUNTIME_FALLBACK} field 'commands' must be an object")
     commands: dict[str, CommandSpec] = {}
     for name, rel_path in commands_raw.items():
         if not isinstance(name, str) or not name:
@@ -221,32 +260,32 @@ def _load_runtime_fallback(path: Path) -> SkillSpec:
             type="script",
             unix_path=rel_path,
             win_path=rel_path if rel_path.endswith(".cmd") else None,
-            source="agents/runtime.json",
+            source=RUNTIME_FALLBACK,
         )
-    return SkillSpec(commands=commands, source_file="agents/runtime.json")
+    return SkillSpec(commands=commands, source_file=RUNTIME_FALLBACK)
 
 
 def _parse_dependencies(
-    raw: Any, *, schema: int
+    raw: Any, *, schema: int, source_file: str = CANONICAL_MANIFEST
 ) -> tuple[dict[str, DependencySpec], dict[str, SkillRequirement], dict[str, McpServerRequirement]]:
     if raw is None:
         return {}, {}, {}
     if schema < 2:
-        raise SkillSpecError("csk-skill.json field 'dependencies' requires schema_version 2 or newer")
+        raise SkillSpecError(f"{source_file} field 'dependencies' requires schema_version 2 or newer")
     if not isinstance(raw, dict):
-        raise SkillSpecError("csk-skill.json field 'dependencies' must be an object")
+        raise SkillSpecError(f"{source_file} field 'dependencies' must be an object")
     if schema < 4 and "skills" in raw:
-        raise SkillSpecError("csk-skill.json field 'dependencies.skills' requires schema_version 4")
+        raise SkillSpecError(f"{source_file} field 'dependencies.skills' requires schema_version 4")
     if schema < 5 and "mcp_servers" in raw:
-        raise SkillSpecError("csk-skill.json field 'dependencies.mcp_servers' requires schema_version 5")
+        raise SkillSpecError(f"{source_file} field 'dependencies.mcp_servers' requires schema_version 5")
     allowed = {"commands"}
     if schema >= 4:
         allowed.add("skills")
     if schema >= 5:
         allowed.add("mcp_servers")
     _reject_unknown_fields(raw, allowed, "dependencies")
-    requirements = _parse_requirements(raw.get("skills"), schema=schema)
-    mcp_servers = _parse_mcp_servers(raw.get("mcp_servers"))
+    requirements = _parse_requirements(raw.get("skills"), schema=schema, source_file=source_file)
+    mcp_servers = _parse_mcp_servers(raw.get("mcp_servers"), source_file=source_file)
     commands_raw = raw.get("commands", {})
     if not isinstance(commands_raw, dict):
         raise SkillSpecError("dependencies.commands must be an object")
@@ -273,7 +312,7 @@ def _parse_dependencies(
                 type="system",
                 command=command,
                 hint=hint,
-                source="csk-skill.json",
+                source=source_file,
             )
         elif dependency_type == "skill":
             _reject_unknown_fields(entry, {"type", "skill", "command", "hint"}, f"dependencies.commands.{name}")
@@ -293,14 +332,16 @@ def _parse_dependencies(
                 command=command,
                 skill=skill,
                 hint=hint,
-                source="csk-skill.json",
+                source=source_file,
             )
         else:
             raise SkillSpecError(f"Dependency command {name!r} has unsupported type {dependency_type!r}")
     return dependencies, requirements, mcp_servers
 
 
-def _parse_mcp_servers(raw: Any) -> dict[str, McpServerRequirement]:
+def _parse_mcp_servers(
+    raw: Any, *, source_file: str = CANONICAL_MANIFEST
+) -> dict[str, McpServerRequirement]:
     if raw is None:
         return {}
     if not isinstance(raw, dict):
@@ -329,15 +370,18 @@ def _parse_mcp_servers(raw: Any) -> dict[str, McpServerRequirement]:
             hint=hint,
             transport=transport,
             required_in=required_in,
+            source=source_file,
         )
     return servers
 
 
-def _parse_requirements(raw: Any, *, schema: int) -> dict[str, SkillRequirement]:
+def _parse_requirements(
+    raw: Any, *, schema: int, source_file: str = CANONICAL_MANIFEST
+) -> dict[str, SkillRequirement]:
     if raw is None:
         return {}
     if schema < 4:
-        raise SkillSpecError("csk-skill.json field 'dependencies.skills' requires schema_version 4")
+        raise SkillSpecError(f"{source_file} field 'dependencies.skills' requires schema_version 4")
     if not isinstance(raw, dict):
         raise SkillSpecError("dependencies.skills must be an object")
     requirements: dict[str, SkillRequirement] = {}
@@ -408,6 +452,7 @@ def _parse_requirements(raw: Any, *, schema: int) -> dict[str, SkillRequirement]
             ref_value=value,
             mode=mode,
             commands=commands,
+            source=source_file,
         )
     return requirements
 
@@ -429,9 +474,11 @@ def _validate_relative_path(value: Any, *, field: str, strict_posix: bool = Fals
     return value
 
 
-def _parse_runtime_roots(raw: Any, *, snapshot: Path) -> tuple[str, ...]:
+def _parse_runtime_roots(
+    raw: Any, *, snapshot: Path, source_file: str = CANONICAL_MANIFEST
+) -> tuple[str, ...]:
     if not isinstance(raw, list):
-        raise SkillSpecError("csk-skill.json field 'runtime_roots' must be a list")
+        raise SkillSpecError(f"{source_file} field 'runtime_roots' must be a list")
     roots: list[str] = []
     for index, value in enumerate(raw):
         root = _validate_relative_path(value, field=f"runtime_roots[{index}]", strict_posix=True)

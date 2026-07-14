@@ -5,7 +5,7 @@ import unicodedata
 
 # Skill names, source directory names, and command names become single
 # filesystem path components (runtime dirs, shim filenames). Restrict them to
-# a safe identifier alphabet so a third-party csk-skill.json can never write
+# a safe identifier alphabet so a third-party agent-skill.json can never write
 # outside its designated directories.
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 LOCALE_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?$")

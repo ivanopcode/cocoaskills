@@ -14,9 +14,10 @@ CocoaSkills operates on two manifests with distinct ownership:
 - `Skillfile.json` describes a project: the skills the project installs
   directly, the agent systems to adapt, and the locale. It is committed to the
   project repository.
-- `csk-skill.json` describes a skill node: the commands it exports, the
+- `agent-skill.json` describes a skill node: the commands it exports, the
   capabilities it declares, and the requirements it has on system tools and on
-  other skills. It lives in the skill repository.
+  other skills. It lives in the skill repository; `csk-skill.json` is a
+  read-only legacy filename.
 
 A skill install materializes two independent layers:
 
@@ -77,7 +78,7 @@ the registries (`attest.py`). `csk audit` runs stage 6 standalone.
 | `cli.py` | Argument parsing and command dispatch. |
 | `config.py` | Machine config and the enforced system-config layer: `skills_root`, default agents, adapter mode, audit settings, `allowed_sources`, `audit_registries`. |
 | `manifest.py` | `Skillfile.json` parsing and editing. |
-| `skillspec.py` | `csk-skill.json` parsing: commands, runtime roots, capabilities, dependencies, requirements (schema v1 through v4). |
+| `skillspec.py` | `agent-skill.json` parsing: commands, runtime roots, capabilities, dependencies, requirements (schema v1 through v4). |
 | `closure.py` | Transitive requirement resolution, unification, cycle detection, activation edges, topological order. |
 | `source_identity.py` | Canonical `host/path` identity for git URLs and allowlist matching. |
 | `mcp_configs.py` | Read-only resolution of declared MCP server dependencies against agent configuration surfaces, with static availability probes: PATH resolution for stdio commands, disabled-server filtering, and trust-gating hints for project-only declarations. |

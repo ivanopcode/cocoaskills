@@ -328,7 +328,7 @@ def _migration_warnings(project_alias: str, plans: list[SkillPlan]) -> list[str]
         if any(dependency.type == "skill" for dependency in plan.spec.dependencies.values()):
             warnings.append(
                 f"{project_alias}: {plan.decl.name} uses dependencies.commands with type 'skill'; "
-                "migrate to csk-skill.json schema v4 dependencies.skills"
+                "migrate to agent-skill.json schema v4 dependencies.skills"
             )
     return warnings
 
