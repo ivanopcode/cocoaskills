@@ -54,6 +54,7 @@ def copy_context(
     *,
     include_scripts: bool = False,
     exclude_roots: tuple[str, ...] = (),
+    build_roots: tuple[str, ...] = (),
 ) -> list[str]:
     skill_file = snapshot / "SKILL.md"
     if not skill_file.is_file():
@@ -66,6 +67,7 @@ def copy_context(
     roots = set(INCLUDE_ROOTS)
     if include_scripts:
         roots.add("scripts")
+    excluded_roots = tuple(dict.fromkeys((*exclude_roots, *build_roots)))
 
     copied: list[str] = []
     platform_paths: dict[str, str] = {}
@@ -79,7 +81,7 @@ def copy_context(
             continue
         if src.is_file():
             rel = Path(root)
-            if _is_excluded_root(rel, exclude_roots):
+            if is_below_excluded_root(rel, excluded_roots):
                 continue
             _validate_selected_path(rel, platform_paths)
             _copy_file(src, destination / rel)
@@ -92,7 +94,7 @@ def copy_context(
                 )
         for file in sorted(path for path in src.rglob("*") if path.is_file()):
             rel = file.relative_to(snapshot)
-            if _is_excluded_root(rel, exclude_roots):
+            if is_below_excluded_root(rel, excluded_roots):
                 continue
             if _is_excluded(rel):
                 continue
@@ -130,7 +132,7 @@ def _is_excluded(rel: Path) -> bool:
     return any(fnmatch.fnmatchcase(rel_posix, pattern) for pattern in ALWAYS_EXCLUDED)
 
 
-def _is_excluded_root(rel: Path, exclude_roots: tuple[str, ...]) -> bool:
+def is_below_excluded_root(rel: Path, exclude_roots: tuple[str, ...]) -> bool:
     rel_parts = rel.as_posix().split("/")
     for root in exclude_roots:
         root_parts = root.split("/")

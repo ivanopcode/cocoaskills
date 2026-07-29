@@ -204,6 +204,138 @@ def test_dry_run_does_not_modify_project_or_cache(tmp_path, skills_root, csk_hom
     assert not (csk_home / "cache").exists()
 
 
+def test_schema_v6_build_root_stays_out_of_dry_run_real_and_up_to_date_context(
+    tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-build",
+        {
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 6,
+                    "build_roots": ["assets/build-tool"],
+                    "commands": {
+                        "build-tool": {
+                            "type": "build",
+                            "driver": "go-v1",
+                            "source_dir": "assets/build-tool/cmd/tool",
+                        }
+                    },
+                    "capabilities": {},
+                }
+            ),
+            "assets/prompt.md": "visible prompt asset\n",
+            "assets/build-tool/go.mod": "module example.com/tool\n\ngo 1.23\n",
+            "assets/build-tool/cmd/tool/main.go": "package main\n\nfunc main() {}\n",
+            "assets/build-tool/internal/private.txt": "compiler input\n",
+        },
+        tag="v1",
+    )
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-build", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+
+    dry_run = installer.install(cfg, options=installer.InstallOptions(dry_run=True))[0]
+
+    assert not dry_run.errors
+    assert not (project / ".agents").exists()
+
+    first = installer.install(cfg)[0]
+    second = installer.install(cfg)[0]
+
+    assert not first.errors
+    assert not second.errors
+    assert any("up-to-date" in message for message in second.messages)
+    installed = project / ".agents" / "skills" / "skill-build"
+    assert (installed / "SKILL.md").is_file()
+    assert (installed / "assets" / "prompt.md").is_file()
+    assert not (installed / "assets" / "build-tool").exists()
+    assert not (csk_home / "runtime" / "skill-build").exists()
+
+
+@pytest.mark.parametrize(
+    ("stale_physical_root", "stale_marker_entry"),
+    [
+        (True, False),
+        (False, True),
+        (True, True),
+    ],
+    ids=["physical-root", "marker-entry", "pre-exclusion-tree"],
+)
+def test_schema_v6_stale_build_root_forces_context_reinstall(
+    tmp_path,
+    skills_root,
+    csk_home,
+    stale_physical_root,
+    stale_marker_entry,
+):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-build",
+        {
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 6,
+                    "build_roots": ["assets/build-tool"],
+                    "commands": {
+                        "build-tool": {
+                            "type": "build",
+                            "driver": "go-v1",
+                            "source_dir": "assets/build-tool/cmd/tool",
+                        }
+                    },
+                    "capabilities": {},
+                }
+            ),
+            "assets/prompt.md": "visible prompt asset\n",
+            "assets/build-tool/go.mod": "module example.com/tool\n\ngo 1.23\n",
+            "assets/build-tool/cmd/tool/main.go": "package main\n",
+        },
+        tag="v1",
+    )
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-build", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+
+    first = installer.install(cfg)[0]
+
+    assert not first.errors
+    installed = project / ".agents" / "skills" / "skill-build"
+    stale_root = installed / "assets" / "build-tool"
+    stale_file = stale_root / "go.mod"
+    stale_relative = "assets/build-tool/go.mod"
+    if stale_physical_root:
+        stale_root.mkdir(parents=True)
+        stale_file.write_text("module example.com/tool\n\ngo 1.23\n", encoding="utf-8")
+
+    marker_path = installed / ".csk-install.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    if stale_marker_entry:
+        marker["files"] = sorted([*marker["files"], stale_relative])
+    marker["content_sha256"] = hashing.content_sha256(installed)
+    marker_path.write_text(
+        json.dumps(marker, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    migrated = installer.install(cfg)[0]
+
+    assert not migrated.errors
+    assert not any("up-to-date" in message for message in migrated.messages)
+    assert not stale_root.exists()
+    sanitized_marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert all(
+        path != "assets/build-tool" and not path.startswith("assets/build-tool/")
+        for path in sanitized_marker["files"]
+    )
+
+    current = installer.install(cfg)[0]
+
+    assert not current.errors
+    assert any("up-to-date" in message for message in current.messages)
+
+
 def test_audit_advisory_warns_but_allows_install(tmp_path, skills_root, csk_home):
     project = make_project(tmp_path)
     make_skill_repo(

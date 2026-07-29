@@ -332,6 +332,72 @@ def test_validate_does_not_scan_markdown_inside_build_root(tmp_path):
     assert skillcheck.validate_skill(tmp_path) == []
 
 
+def test_validate_scans_unrelated_asset_but_not_markdown_inside_nested_build_root(tmp_path):
+    _write_build_skill(
+        tmp_path,
+        "---\nname: skill\n---\n\n"
+        "Resolve .agents/bin/build-tool (build-tool.cmd on Windows), then global/bin/build-tool, "
+        "then command -v build-tool or Get-Command build-tool.\n",
+    )
+    (tmp_path / "assets" / "build-tool" / "README.md").write_text(
+        "Build from assets/build-tool/cmd/tool.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "assets" / "prompt.md").write_text(
+        "Do not tell agents to open assets/build-tool/cmd/tool.\n",
+        encoding="utf-8",
+    )
+
+    issues = skillcheck.validate_skill(tmp_path)
+
+    assert [(issue.severity, issue.code, issue.path) for issue in issues] == [
+        ("warning", "skill.build_root_in_prompt_context", "assets/prompt.md")
+    ]
+
+
+def test_validate_does_not_consume_locale_inputs_declared_as_build_roots(tmp_path):
+    (tmp_path / "SKILL.md").write_text(
+        "---\nname: skill\n---\n\n"
+        "Resolve .agents/bin/tool-a and tool-b (tool-a.cmd and tool-b.cmd on Windows), "
+        "then global/bin/tool-a, then command -v tool-a or Get-Command tool-a.\n",
+        encoding="utf-8",
+    )
+    for root, command in (("locales", "tool-a"), (".skill_triggers", "tool-b")):
+        source_dir = tmp_path / root / "cmd" / command
+        source_dir.mkdir(parents=True)
+        (tmp_path / root / "go.mod").write_text(
+            f"module example.com/{command}\n\ngo 1.23\n",
+            encoding="utf-8",
+        )
+        (source_dir / "main.go").write_text("package main\n", encoding="utf-8")
+    (tmp_path / "locales" / "metadata.json").write_text("{", encoding="utf-8")
+    (tmp_path / ".skill_triggers" / "ru.md").write_text("- build-only trigger\n", encoding="utf-8")
+    (tmp_path / "agent-skill.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "build_roots": ["locales", ".skill_triggers"],
+                "commands": {
+                    "tool-a": {
+                        "type": "build",
+                        "driver": "go-v1",
+                        "source_dir": "locales/cmd/tool-a",
+                    },
+                    "tool-b": {
+                        "type": "build",
+                        "driver": "go-v1",
+                        "source_dir": ".skill_triggers/cmd/tool-b",
+                    },
+                },
+                "capabilities": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert skillcheck.validate_skill(tmp_path, locale_value="ru") == []
+
+
 def test_validate_build_command_requires_shell_neutral_resolver_guidance(tmp_path):
     _write_build_skill(tmp_path, "---\nname: skill\n---\n\nRun build-tool.\n")
 

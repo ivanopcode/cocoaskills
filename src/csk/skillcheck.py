@@ -44,7 +44,11 @@ def validate_skill(skill_dir: Path, *, locale_value: str | None = None) -> list[
         issues.extend(_command_resolution_warnings(skill_dir, spec))
 
     try:
-        locale_analysis = locale.analyze_locale(skill_dir, locale_value)
+        locale_analysis = locale.analyze_locale(
+            skill_dir,
+            locale_value,
+            exclude_roots=spec.build_roots if spec is not None else (),
+        )
     except locale.LocaleError as exc:
         issues.append(
             ValidationIssue(

@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import identifiers, protocol_json
+from . import identifiers, protocol_json, whitelist
 
 
 class LocaleError(Exception):
@@ -29,18 +29,35 @@ class LocaleAnalysis:
         return any(issue.severity == "error" for issue in self.issues)
 
 
-def analyze_locale(snapshot: Path, locale: str | None) -> LocaleAnalysis:
+def analyze_locale(
+    snapshot: Path,
+    locale: str | None,
+    *,
+    exclude_roots: tuple[str, ...] = (),
+) -> LocaleAnalysis:
     if not locale:
         return LocaleAnalysis(locale_to_render=None)
 
     metadata_path = snapshot / "locales" / "metadata.json"
     triggers_root = snapshot / ".skill_triggers"
-    has_locale_metadata = metadata_path.exists() or triggers_root.exists()
+    metadata_visible = not whitelist.is_below_excluded_root(
+        Path("locales/metadata.json"),
+        exclude_roots,
+    )
+    triggers_visible = not whitelist.is_below_excluded_root(
+        Path(".skill_triggers"),
+        exclude_roots,
+    )
+    has_locale_metadata = (
+        metadata_visible and metadata_path.exists()
+    ) or (
+        triggers_visible and triggers_root.exists()
+    )
     if not has_locale_metadata:
         return LocaleAnalysis(locale_to_render=None)
 
     issues: list[LocaleIssue] = []
-    if triggers_root.exists() and not triggers_root.is_dir():
+    if triggers_visible and triggers_root.exists() and not triggers_root.is_dir():
         return LocaleAnalysis(
             locale_to_render=None,
             issues=(
@@ -53,7 +70,7 @@ def analyze_locale(snapshot: Path, locale: str | None) -> LocaleAnalysis:
             ),
         )
 
-    if not metadata_path.exists():
+    if not metadata_visible or not metadata_path.exists():
         return LocaleAnalysis(
             locale_to_render=None,
             issues=(
@@ -105,8 +122,13 @@ def analyze_locale(snapshot: Path, locale: str | None) -> LocaleAnalysis:
         )
 
     trigger_locales: set[str] = set()
-    if triggers_root.exists():
-        trigger_locales = {path.stem for path in triggers_root.glob("*.md") if path.is_file()}
+    if triggers_visible and triggers_root.exists():
+        trigger_locales = {
+            path.stem
+            for path in triggers_root.glob("*.md")
+            if path.is_file()
+            and not whitelist.is_below_excluded_root(path.relative_to(snapshot), exclude_roots)
+        }
     consistent = {
         key
         for key, value in locales.items()
@@ -141,8 +163,14 @@ def analyze_locale(snapshot: Path, locale: str | None) -> LocaleAnalysis:
     return LocaleAnalysis(locale_to_render=None, issues=tuple(issues))
 
 
-def render_locale(snapshot: Path, installed_dir: Path, locale: str | None) -> None:
-    analysis = analyze_locale(snapshot, locale)
+def render_locale(
+    snapshot: Path,
+    installed_dir: Path,
+    locale: str | None,
+    *,
+    exclude_roots: tuple[str, ...] = (),
+) -> None:
+    analysis = analyze_locale(snapshot, locale, exclude_roots=exclude_roots)
     if analysis.failed:
         first_error = next(issue for issue in analysis.issues if issue.severity == "error")
         raise LocaleError(first_error.message)

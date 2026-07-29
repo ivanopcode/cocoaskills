@@ -777,8 +777,14 @@ def _install_skill_context_to_root(
         tmp,
         include_scripts=include_scripts,
         exclude_roots=plan.spec.runtime_roots,
+        build_roots=plan.spec.build_roots,
     )
-    locale.render_locale(plan.snapshot, tmp, effective_locale)
+    locale.render_locale(
+        plan.snapshot,
+        tmp,
+        effective_locale,
+        exclude_roots=plan.spec.build_roots,
+    )
     content_hash = hashing.content_sha256(tmp)
     marker_data = _marker_payload(
         plan,
@@ -943,8 +949,39 @@ def _marker_is_current(
             return False
     if marker.get("attestation") != attestation:
         return False
+    if _installed_context_exposes_build_roots(marker, target, plan.spec.build_roots):
+        return False
     actual_hash = hashing.content_sha256(target)
     return marker.get("content_sha256") == actual_hash
+
+
+def _installed_context_exposes_build_roots(
+    marker: dict[str, object],
+    target: Path,
+    build_roots: tuple[str, ...],
+) -> bool:
+    if not build_roots:
+        return False
+
+    marker_files = marker.get("files")
+    if not isinstance(marker_files, list):
+        return True
+    for relative in marker_files:
+        if not isinstance(relative, str):
+            return True
+        if whitelist.is_below_excluded_root(Path(relative), build_roots):
+            return True
+
+    for build_root in build_roots:
+        installed_root = target.joinpath(*build_root.split("/"))
+        try:
+            installed_root.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return True
+        return True
+    return False
 
 
 def _read_marker(path: Path) -> dict[str, object] | None:
