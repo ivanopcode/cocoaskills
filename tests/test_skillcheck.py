@@ -1,10 +1,39 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from csk import skillcheck
+
+
+def _write_build_skill(tmp_path: Path, skill_text: str) -> None:
+    (tmp_path / "SKILL.md").write_text(skill_text, encoding="utf-8")
+    source_dir = tmp_path / "assets" / "build-tool" / "cmd" / "tool"
+    source_dir.mkdir(parents=True)
+    (tmp_path / "assets" / "build-tool" / "go.mod").write_text(
+        "module example.com/tool\n\ngo 1.23\n",
+        encoding="utf-8",
+    )
+    (source_dir / "main.go").write_text("package main\n", encoding="utf-8")
+    (tmp_path / "agent-skill.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "build_roots": ["assets/build-tool"],
+                "capabilities": {},
+                "commands": {
+                    "build-tool": {
+                        "type": "build",
+                        "driver": "go-v1",
+                        "source_dir": "assets/build-tool/cmd/tool",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_validate_clean_skill(tmp_path):
@@ -270,3 +299,71 @@ def test_validate_locale_none_does_not_validate_localization(tmp_path):
     issues = skillcheck.validate_skill(tmp_path, locale_value=None)
 
     assert issues == []
+
+
+def test_validate_warns_when_prompt_context_references_build_root(tmp_path):
+    _write_build_skill(
+        tmp_path,
+        "---\nname: skill\n---\n\n"
+        "Sources live at assets/build-tool/cmd/tool.\n"
+        "Resolve .agents/bin/build-tool (build-tool.cmd on Windows), then global/bin/build-tool, "
+        "then command -v build-tool or Get-Command build-tool.\n",
+    )
+
+    issues = skillcheck.validate_skill(tmp_path)
+
+    assert [(issue.severity, issue.code, issue.path) for issue in issues] == [
+        ("warning", "skill.build_root_in_prompt_context", "SKILL.md")
+    ]
+
+
+def test_validate_does_not_scan_markdown_inside_build_root(tmp_path):
+    _write_build_skill(
+        tmp_path,
+        "---\nname: skill\n---\n\n"
+        "Resolve .agents/bin/build-tool (build-tool.cmd on Windows), then global/bin/build-tool, "
+        "then command -v build-tool or Get-Command build-tool.\n",
+    )
+    (tmp_path / "assets" / "build-tool" / "README.md").write_text(
+        "Build from assets/build-tool/cmd/tool.\n",
+        encoding="utf-8",
+    )
+
+    assert skillcheck.validate_skill(tmp_path) == []
+
+
+def test_validate_build_command_requires_shell_neutral_resolver_guidance(tmp_path):
+    _write_build_skill(tmp_path, "---\nname: skill\n---\n\nRun build-tool.\n")
+
+    issues = skillcheck.validate_skill(tmp_path)
+
+    assert [(issue.severity, issue.code) for issue in issues] == [
+        ("warning", "skill.command_resolution_contract_missing")
+    ]
+
+
+def test_validate_build_command_requires_windows_cmd_resolver_guidance(tmp_path):
+    _write_build_skill(
+        tmp_path,
+        "---\nname: skill\n---\n\n"
+        "Resolve .agents/bin/build-tool, then global/bin/build-tool, "
+        "then command -v build-tool or Get-Command build-tool.\n",
+    )
+
+    issues = skillcheck.validate_skill(tmp_path)
+
+    assert [(issue.severity, issue.code, issue.path) for issue in issues] == [
+        ("warning", "skill.command_resolution_contract_missing", "SKILL.md")
+    ]
+    assert "Windows .cmd shim suffix" in issues[0].message
+
+
+def test_validate_accepts_build_command_shell_neutral_resolver(tmp_path):
+    _write_build_skill(
+        tmp_path,
+        "---\nname: skill\n---\n\n"
+        "Resolve .agents/bin/build-tool (build-tool.cmd on Windows), then global/bin/build-tool, "
+        "then command -v build-tool or Get-Command build-tool.\n",
+    )
+
+    assert skillcheck.validate_skill(tmp_path) == []

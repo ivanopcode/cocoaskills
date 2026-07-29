@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import protocol_json
 from .audit.capabilities import CapabilityManifest, CapabilityParseError, parse_capabilities
+from .builds import GO_V1_DRIVER
 from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_portable_path
 
 
 SCHEMA_VERSION = 1
-SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4, 5}
+SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6}
 CANONICAL_MANIFEST = "agent-skill.json"
 LEGACY_MANIFEST = "csk-skill.json"
 RUNTIME_FALLBACK = "agents/runtime.json"
@@ -22,6 +24,7 @@ UPGRADE_HINT = (
 REQUIREMENT_MODES = {"full", "runtime", "context"}
 REQUIREMENT_REF_KINDS = {"tag", "revision"}
 _RANGE_MARKERS = ("^", "~", ">", "<", "*", " ")
+_SCHEMA_V1_RESERVED_COMMAND_FIELDS = frozenset({"driver", "source_dir"})
 
 MCP_TRANSPORTS = {"stdio", "http"}
 MCP_REQUIRED_IN = {"any", "all"}
@@ -40,6 +43,8 @@ class CommandSpec:
     win_path: str | None = None
     hint: str | None = None
     source: str = CANONICAL_MANIFEST
+    driver: str | None = None
+    source_dir: str | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,7 @@ class SkillSpec:
     dependencies: dict[str, DependencySpec] = field(default_factory=dict)
     requirements: dict[str, SkillRequirement] = field(default_factory=dict)
     mcp_servers: dict[str, McpServerRequirement] = field(default_factory=dict)
+    build_roots: tuple[str, ...] = ()
 
 
 def load_skill_spec(snapshot: Path) -> SkillSpec:
@@ -144,10 +150,14 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
             f"Unsupported {source_file} schema_version {schema!r}; this skill requires a newer csk. "
             f"{UPGRADE_HINT}"
         )
+    if schema == 1 and "build_roots" in data:
+        raise SkillSpecError(f"{source_file} has unsupported field(s): 'build_roots'")
     if schema >= 2:
         allowed_fields = {"schema_version", "runtime_roots", "commands", "dependencies"}
         if schema >= 3:
             allowed_fields.add("capabilities")
+        if schema >= 6:
+            allowed_fields.add("build_roots")
         _reject_unknown_fields(data, allowed_fields, source_file)
     if schema >= 3 and "capabilities" not in data:
         raise SkillSpecError(f"{source_file} schema v{schema} requires 'capabilities'")
@@ -163,17 +173,34 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
         if schema >= 2
         else ()
     )
+    build_roots_raw = data["build_roots"] if schema >= 6 and "build_roots" in data else []
+    build_roots = (
+        _parse_build_roots(
+            build_roots_raw,
+            snapshot=path.parent,
+            runtime_roots=runtime_roots,
+            source_file=source_file,
+        )
+        if schema >= 6
+        else ()
+    )
     commands_raw = data.get("commands", {})
     if not isinstance(commands_raw, dict):
         raise SkillSpecError(f"{source_file} field 'commands' must be an object")
     commands: dict[str, CommandSpec] = {}
-    for name, raw in commands_raw.items():
+    command_items = sorted(commands_raw.items()) if schema >= 6 else commands_raw.items()
+    for name, raw in command_items:
         if not isinstance(name, str) or not name:
             raise SkillSpecError("Command names must be non-empty strings")
         if not is_valid_identifier(name):
             raise SkillSpecError(f"Command name {name!r} {IDENTIFIER_RULE}")
         if not isinstance(raw, dict):
             raise SkillSpecError(f"Command {name!r} must be an object")
+        if schema == 1:
+            reserved_fields = sorted(raw.keys() & _SCHEMA_V1_RESERVED_COMMAND_FIELDS)
+            if reserved_fields:
+                joined = ", ".join(repr(key) for key in reserved_fields)
+                raise SkillSpecError(f"commands.{name} has unsupported field(s): {joined}")
         command_type = raw.get("type")
         if command_type == "script":
             if schema >= 2:
@@ -211,9 +238,13 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
             command = raw.get("command")
             if not isinstance(command, str) or not command:
                 raise SkillSpecError(f"System command {name!r} requires non-empty 'command'")
+            if schema >= 6 and not is_valid_identifier(command):
+                raise SkillSpecError(f"commands.{name}.command system command {command!r} {IDENTIFIER_RULE}")
             hint = raw.get("hint")
             if hint is not None and not isinstance(hint, str):
                 raise SkillSpecError(f"System command {name!r} field 'hint' must be a string")
+            if schema >= 6 and "hint" in raw and hint == "":
+                raise SkillSpecError(f"commands.{name}.hint must be a non-empty string")
             commands[name] = CommandSpec(
                 name=name,
                 type="system",
@@ -221,8 +252,27 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
                 hint=hint,
                 source=source_file,
             )
+        elif command_type == "build" and schema >= 6:
+            _reject_unknown_fields(raw, {"type", "driver", "source_dir"}, f"commands.{name}")
+            driver = raw.get("driver")
+            if driver != GO_V1_DRIVER:
+                raise SkillSpecError(f"Command {name!r} field 'driver' must be {GO_V1_DRIVER!r}")
+            source_dir = _validate_relative_path(
+                raw.get("source_dir"),
+                field=f"commands.{name}.source_dir",
+                strict_posix=True,
+            )
+            commands[name] = CommandSpec(
+                name=name,
+                type="build",
+                driver=driver,
+                source_dir=source_dir,
+                source=source_file,
+            )
         else:
             raise SkillSpecError(f"Command {name!r} has unsupported type {command_type!r}")
+    if schema >= 6:
+        _validate_build_layout(path.parent, build_roots, commands)
     dependencies, requirements, mcp_servers = _parse_dependencies(
         data.get("dependencies"), schema=schema, source_file=source_file
     )
@@ -231,6 +281,7 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
         source_file=source_file,
         schema_version=schema,
         runtime_roots=runtime_roots,
+        build_roots=build_roots,
         capabilities=capabilities,
         dependencies=dependencies,
         requirements=requirements,
@@ -499,6 +550,121 @@ def _parse_runtime_roots(
                 container, contained = (left, right) if _path_contains(left, right) else (right, left)
                 raise SkillSpecError(f"runtime roots must be disjoint: {container} contains {contained}")
     return tuple(roots)
+
+
+def _parse_build_roots(
+    raw: Any,
+    *,
+    snapshot: Path,
+    runtime_roots: tuple[str, ...],
+    source_file: str = CANONICAL_MANIFEST,
+) -> tuple[str, ...]:
+    if not isinstance(raw, list):
+        raise SkillSpecError(f"{source_file} field 'build_roots' must be a list")
+    roots: list[str] = []
+    for index, value in enumerate(raw):
+        field = f"build_roots[{index}]"
+        root = _validate_relative_path(value, field=field, strict_posix=True)
+        _validate_link_free_directory(snapshot, root, field=field, noun="build root")
+        roots.append(root)
+
+    if len(set(roots)) != len(roots):
+        raise SkillSpecError("build roots must be unique after normalization")
+
+    overlap = _overlapping_roots(roots)
+    if overlap is not None:
+        left, right = overlap
+        raise SkillSpecError(f"build roots must be disjoint: {left} overlaps {right}")
+
+    for build_root in roots:
+        for runtime_root in runtime_roots:
+            if _path_contains(build_root, runtime_root) or _path_contains(runtime_root, build_root):
+                raise SkillSpecError(
+                    f"build roots must not overlap runtime roots: {build_root} overlaps {runtime_root}"
+                )
+    return tuple(roots)
+
+
+def _overlapping_roots(roots: list[str] | tuple[str, ...]) -> tuple[str, str] | None:
+    sorted_roots = sorted(roots)
+    for index, left in enumerate(sorted_roots):
+        for right in sorted_roots[index + 1 :]:
+            if _path_contains(left, right) or _path_contains(right, left):
+                return left, right
+    return None
+
+
+def _validate_build_layout(
+    snapshot: Path,
+    build_roots: tuple[str, ...],
+    commands: dict[str, CommandSpec],
+) -> None:
+    used_roots: set[str] = set()
+    for name in sorted(commands):
+        command = commands[name]
+        if command.type != "build":
+            continue
+        source_dir = command.source_dir
+        if source_dir is None:
+            raise SkillSpecError(f"Command {name!r} field 'source_dir' must be a non-empty string")
+        containing_roots = [root for root in build_roots if _path_contains(root, source_dir)]
+        if len(containing_roots) != 1:
+            raise SkillSpecError(
+                f"commands.{name}.source_dir must be below exactly one build_roots entry"
+            )
+        build_root = containing_roots[0]
+        field = f"commands.{name}.source_dir"
+        _validate_link_free_directory(snapshot, source_dir, field=field, noun="source directory")
+        _validate_nearest_go_module(snapshot, build_root, source_dir, field=field)
+        used_roots.add(build_root)
+
+    for index, root in enumerate(build_roots):
+        if root not in used_roots:
+            raise SkillSpecError(f"build_roots[{index}] build root {root!r} is not used by any build command")
+
+
+def _validate_link_free_directory(snapshot: Path, rel_path: str, *, field: str, noun: str) -> None:
+    current = snapshot
+    for component in PurePosixPath(rel_path).parts:
+        current /= component
+        try:
+            info = current.lstat()
+        except FileNotFoundError as exc:
+            raise SkillSpecError(f"{field} {noun} does not exist: {rel_path}") from exc
+        except OSError as exc:
+            raise SkillSpecError(f"{field} cannot inspect {noun} {rel_path}: {exc}") from exc
+        if stat.S_ISLNK(info.st_mode):
+            raise SkillSpecError(f"{field} {noun} must be link-free: {rel_path}")
+        if not stat.S_ISDIR(info.st_mode):
+            raise SkillSpecError(f"{field} {noun} must be a directory: {rel_path}")
+
+
+def _validate_nearest_go_module(snapshot: Path, build_root: str, source_dir: str, *, field: str) -> None:
+    root_path = PurePosixPath(build_root)
+    current = PurePosixPath(source_dir)
+    while True:
+        module_path = snapshot.joinpath(*current.parts, "go.mod")
+        try:
+            info = module_path.lstat()
+        except FileNotFoundError:
+            info = None
+        except OSError as exc:
+            raise SkillSpecError(f"{field} cannot inspect nearest go.mod: {exc}") from exc
+        if info is not None:
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+                raise SkillSpecError(
+                    f"{field} nearest go.mod must be a real regular file in build root {build_root}"
+                )
+            if current != root_path:
+                raise SkillSpecError(
+                    f"{field} intervening module {current.as_posix()}/go.mod is below build root {build_root}"
+                )
+            return
+        if current == root_path:
+            raise SkillSpecError(
+                f"{field} build root {build_root} must contain the nearest go.mod directly"
+            )
+        current = current.parent
 
 
 def _validate_v2_script_path(snapshot: Path, rel_path: str, runtime_roots: tuple[str, ...], *, field: str) -> None:

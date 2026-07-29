@@ -86,10 +86,10 @@ def _runtime_root_reference_warnings(
     has_provider_runtime = any(dependency.type == "skill" for dependency in spec.dependencies.values()) or any(
         requirement.mode in {"full", "runtime"} for requirement in spec.requirements.values()
     )
-    if not spec.runtime_roots and not has_provider_runtime:
+    if not spec.runtime_roots and not spec.build_roots and not has_provider_runtime:
         return []
     warnings: list[ValidationIssue] = []
-    for path in _prompt_markdown_files(skill_dir):
+    for path in _prompt_markdown_files(skill_dir, exclude_roots=spec.build_roots):
         text = path.read_text(encoding="utf-8", errors="replace")
         for runtime_root in spec.runtime_roots:
             windows_root = runtime_root.replace("/", "\\")
@@ -104,6 +104,22 @@ def _runtime_root_reference_warnings(
                     path.relative_to(skill_dir).as_posix(),
                     f"Prompt-visible text references runtime-only path {matched_token!r}; CocoaSkills removes "
                     "that root from installed skill context. Use exported command placeholders for "
+                    "installed execution and keep manifest-relative paths source-checkout-only.",
+                )
+            )
+        for build_root in spec.build_roots:
+            windows_root = build_root.replace("/", "\\")
+            tokens = (f"{build_root}/", f"{windows_root}\\")
+            matched_token = next((token for token in tokens if token in text), None)
+            if matched_token is None:
+                continue
+            warnings.append(
+                ValidationIssue(
+                    "warning",
+                    "skill.build_root_in_prompt_context",
+                    path.relative_to(skill_dir).as_posix(),
+                    f"Prompt-visible text references build-only path {matched_token!r}; CocoaSkills removes "
+                    "that root from installed skill context. Use the exported command placeholder for "
                     "installed execution and keep manifest-relative paths source-checkout-only.",
                 )
             )
@@ -125,15 +141,18 @@ def _command_resolution_warnings(
     skill_dir: Path,
     spec: skillspec.SkillSpec,
 ) -> list[ValidationIssue]:
-    script_commands = [command for command in spec.commands.values() if command.type == "script"]
+    managed_commands = [
+        command for command in spec.commands.values() if command.type in {"script", "build"}
+    ]
     has_provider_commands = any(dependency.type == "skill" for dependency in spec.dependencies.values()) or any(
         requirement.mode in {"full", "runtime"} for requirement in spec.requirements.values()
     )
-    if not script_commands and not has_provider_commands:
+    if not managed_commands and not has_provider_commands:
         return []
 
     text = "\n".join(
-        path.read_text(encoding="utf-8", errors="replace") for path in _prompt_markdown_files(skill_dir)
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in _prompt_markdown_files(skill_dir, exclude_roots=spec.build_roots)
     )
     missing: list[str] = []
     if ".agents/bin" not in text and ".agents\\bin" not in text:
@@ -142,7 +161,10 @@ def _command_resolution_warnings(
         missing.append("CocoaSkills global/bin fallback")
     if "command -v" not in text or "Get-Command" not in text:
         missing.append("validated POSIX and PowerShell bare-command fallbacks")
-    if any(command.win_path is not None for command in script_commands) and ".cmd" not in text:
+    has_windows_command = any(
+        command.type == "build" or command.win_path is not None for command in managed_commands
+    )
+    if has_windows_command and ".cmd" not in text:
         missing.append("Windows .cmd shim suffix")
     if not missing:
         return []
@@ -158,12 +180,30 @@ def _command_resolution_warnings(
     ]
 
 
-def _prompt_markdown_files(skill_dir: Path) -> list[Path]:
+def _prompt_markdown_files(
+    skill_dir: Path,
+    *,
+    exclude_roots: tuple[str, ...] = (),
+) -> list[Path]:
     markdown_files: list[Path] = []
     for root in sorted(whitelist.INCLUDE_ROOTS):
         candidate = skill_dir / root
         if candidate.is_file() and candidate.suffix.lower() == ".md":
-            markdown_files.append(candidate)
+            if not _is_below_excluded_root(candidate, skill_dir, exclude_roots):
+                markdown_files.append(candidate)
         elif candidate.is_dir():
-            markdown_files.extend(path for path in candidate.rglob("*.md") if path.is_file())
+            markdown_files.extend(
+                path
+                for path in candidate.rglob("*.md")
+                if path.is_file() and not _is_below_excluded_root(path, skill_dir, exclude_roots)
+            )
     return sorted(set(markdown_files))
+
+
+def _is_below_excluded_root(path: Path, skill_dir: Path, exclude_roots: tuple[str, ...]) -> bool:
+    relative_parts = path.relative_to(skill_dir).parts
+    for root in exclude_roots:
+        root_parts = tuple(root.split("/"))
+        if relative_parts[: len(root_parts)] == root_parts:
+            return True
+    return False
