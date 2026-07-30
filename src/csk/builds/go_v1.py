@@ -3725,37 +3725,44 @@ class _IdentityMutationGuard:
     def _setup_macos(self) -> None:
         import select
 
+        # Mypy checks this module on Linux too, where the platform stubs omit
+        # Darwin-only kqueue and O_EVTONLY symbols.  This method is reachable
+        # only after the closed macOS inventory selection, so keep the native
+        # runtime behavior exact while making that platform boundary explicit
+        # to the cross-platform type checker.
+        select_api = cast(Any, select)
+        os_api = cast(Any, os)
         self._mac_previous_nofile_limit = (
             _ensure_macos_identity_descriptor_capacity(len(self.paths))
         )
-        queue_value = select.kqueue()
+        queue_value = select_api.kqueue()
         self._mac_queue = queue_value
         changes: list[Any] = []
         event_mask = (
-            select.KQ_NOTE_DELETE
-            | select.KQ_NOTE_WRITE
-            | select.KQ_NOTE_EXTEND
-            | select.KQ_NOTE_LINK
-            | select.KQ_NOTE_RENAME
-            | select.KQ_NOTE_REVOKE
+            select_api.KQ_NOTE_DELETE
+            | select_api.KQ_NOTE_WRITE
+            | select_api.KQ_NOTE_EXTEND
+            | select_api.KQ_NOTE_LINK
+            | select_api.KQ_NOTE_RENAME
+            | select_api.KQ_NOTE_REVOKE
         )
         for path in self.paths:
             info = path.lstat()
             if _is_link_or_reparse(info):
                 continue
-            flags = os.O_EVTONLY | getattr(os, "O_CLOEXEC", 0)
+            flags = os_api.O_EVTONLY | getattr(os, "O_CLOEXEC", 0)
             flags |= getattr(os, "O_NOFOLLOW", 0)
             descriptor = os.open(path, flags)
             self._mac_fds.append(descriptor)
             self._mac_paths[descriptor] = path
             changes.append(
-                select.kevent(
+                select_api.kevent(
                     descriptor,
-                    filter=select.KQ_FILTER_VNODE,
+                    filter=select_api.KQ_FILTER_VNODE,
                     flags=(
-                        select.KQ_EV_ADD
-                        | select.KQ_EV_ENABLE
-                        | select.KQ_EV_CLEAR
+                        select_api.KQ_EV_ADD
+                        | select_api.KQ_EV_ENABLE
+                        | select_api.KQ_EV_CLEAR
                     ),
                     fflags=event_mask,
                 )

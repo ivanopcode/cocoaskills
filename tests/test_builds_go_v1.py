@@ -22,6 +22,32 @@ from csk import cli
 from csk.builds import go_v1
 
 
+_NATIVE_INTERPRETER_RUNTIME_RESOLVER = go_v1._resolve_interpreter_runtime
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_manager_runtime_on_unsupported_hosts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep synthetic manager fixtures host-neutral without adding Linux support."""
+
+    if sys.platform == "darwin" or os.name == "nt":
+        return
+
+    def resolve(
+        executable: go_v1._ExecutableIdentity,
+    ) -> go_v1._InterpreterRuntimeIdentity:
+        return go_v1._InterpreterRuntimeIdentity(
+            python_home=executable.path.parent.parent,
+            configuration=None,
+            base_executable=executable,
+            process_image=executable,
+            runtime_image=executable,
+        )
+
+    monkeypatch.setattr(go_v1, "_resolve_interpreter_runtime", resolve)
+
+
 def _synthetic_probes(platform: str) -> tuple[go_v1.ControlProbe, ...]:
     records = go_v1._NATIVE_CONTROL_PLATFORMS[platform]
     return tuple(
@@ -364,6 +390,7 @@ def test_unsupported_host_fails_closed_without_probing_or_worker(
     monkeypatch: pytest.MonkeyPatch,
 ):
     calls: list[str] = []
+    monkeypatch.setattr(go_v1.os, "name", "posix")
     monkeypatch.setattr(go_v1.sys, "platform", "linux")
     with pytest.raises(go_v1.GoV1Error) as raised:
         go_v1.probe_native_controls(
@@ -374,31 +401,57 @@ def test_unsupported_host_fails_closed_without_probing_or_worker(
     assert calls == []
 
 
+def test_unsupported_host_interpreter_runtime_identity_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    interpreter = tmp_path / "python"
+    interpreter.write_bytes(b"synthetic interpreter")
+    interpreter.chmod(0o755)
+    executable = go_v1._resolve_executable_identity(interpreter)
+    monkeypatch.setattr(go_v1.os, "name", "posix")
+    monkeypatch.setattr(go_v1.sys, "platform", "linux")
+
+    with pytest.raises(go_v1.GoV1Error) as raised:
+        _NATIVE_INTERPRETER_RUNTIME_RESOLVER(executable)
+
+    assert raised.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
+
+
 def _make_manager(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    interpreter = path.parent / "python"
+    prefix = path.parent.parent
+    if os.name == "nt":
+        interpreter = prefix / "python.exe"
+        package = prefix / "Lib" / "site-packages" / "csk"
+        stdlib_json = prefix / "Lib" / "json" / "__init__.py"
+        runtime_image = prefix / "python311.dll"
+        if not runtime_image.exists():
+            runtime_image.write_bytes(b"MZsynthetic Python runtime image")
+    else:
+        interpreter = path.parent / "python"
+        package = (
+            prefix
+            / "lib"
+            / "python3.11"
+            / "site-packages"
+            / "csk"
+        )
+        stdlib_json = package.parent.parent / "json" / "__init__.py"
     if not interpreter.exists():
         interpreter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         interpreter.chmod(0o755)
-    package = (
-        path.parent.parent
-        / "lib"
-        / "python3.11"
-        / "site-packages"
-        / "csk"
-    )
     (package / "builds").mkdir(parents=True, exist_ok=True)
     for relative in ("__init__.py", "cli.py", "builds/go_v1.py"):
         target = package.joinpath(*relative.split("/"))
         if not target.exists():
             target.write_text(f"# synthetic {relative}\n", encoding="utf-8")
-    stdlib_json = package.parent.parent / "json" / "__init__.py"
     stdlib_json.parent.mkdir(parents=True, exist_ok=True)
     stdlib_json.write_text("# synthetic json\n", encoding="utf-8")
-    path.write_text(
-        f"#!{interpreter}\nfrom csk.cli import main\nmain()\n",
-        encoding="utf-8",
-    )
+    launcher = "from csk.cli import main\nmain()\n"
+    if os.name != "nt":
+        launcher = f"#!{interpreter}\n{launcher}"
+    path.write_text(launcher, encoding="utf-8")
     path.chmod(0o755)
     return path.resolve()
 
@@ -714,6 +767,10 @@ def test_manager_identity_rejects_interpreter_replacement(tmp_path: Path):
     assert raised.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="native Python runtime image layout is macOS-specific",
+)
 def test_manager_identity_binds_native_python_runtime_image(tmp_path: Path):
     manager = _make_manager(tmp_path / "manager" / "bin" / "csk")
     runtime_image = manager.parent.parent / "lib" / "libpython3.11.dylib"
@@ -1061,8 +1118,19 @@ def test_manager_identity_binds_importable_stdlib_and_python_archives(
     identity = plan.executable
     stdlib_json = identity.startup.stdlib_root / "json" / "__init__.py"
 
-    assert identity.startup.runtime_trees[0].path == identity.startup.stdlib_root
-    assert "json/__init__.py" in {
+    runtime_root = identity.startup.runtime_trees[0].path
+    expected_root = (
+        identity.interpreter.runtime.python_home
+        if os.name == "nt"
+        else identity.startup.stdlib_root
+    )
+    expected_json = (
+        "Lib/json/__init__.py"
+        if os.name == "nt"
+        else "json/__init__.py"
+    )
+    assert runtime_root == expected_root
+    assert expected_json in {
         entry.path
         for entry in identity.startup.runtime_trees[0].entries
         if entry.kind == "file"
@@ -1077,7 +1145,7 @@ def test_manager_identity_binds_importable_stdlib_and_python_archives(
     stdlib_json.write_bytes(original)
     identity.verify()
 
-    archive = identity.startup.stdlib_root.parent / "python311.zip"
+    archive = identity.startup.archive_slots[0]
     archive.write_bytes(b"PK\x05\x06" + b"\x00" * 18)
     with pytest.raises(go_v1.GoV1Error) as raised:
         identity.verify()
@@ -1391,6 +1459,10 @@ def test_worker_native_runtime_proof_selects_only_the_host_branch(
     assert calls[1][1] == "worker Python runtime image"
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="a Windows console launcher does not use a shebang",
+)
 def test_manager_identity_rejects_a_shell_wrapper_launcher(tmp_path: Path):
     plan, _, _ = _worker_fixture(tmp_path)
     launcher = plan.executable.path
@@ -1691,6 +1763,7 @@ def test_worker_environment_matches_the_fixed_darwin_vector(tmp_path: Path):
             value
             .replace(str(operation), "<operation-private>")
             .replace(str(plan.goroot), "<resolved-trusted-goroot>")
+            .replace("\\", "/")
         )
         for name, value in plan.environment.items()
     }
@@ -2043,7 +2116,7 @@ class _FakeDomainProcess:
 
     def wait(self, timeout: float | None = None) -> int:
         del timeout
-        self.returncode = -int(signal.SIGKILL)
+        self.returncode = -9
         return self.returncode
 
     def poll(self) -> int | None:
@@ -2051,7 +2124,7 @@ class _FakeDomainProcess:
 
     def kill(self) -> None:
         self.killed = True
-        self.returncode = -int(signal.SIGKILL)
+        self.returncode = -9
 
 
 def _bare_domain(platform: str) -> go_v1._NativeControlDomain:
@@ -2275,6 +2348,10 @@ def test_windows_job_success_is_terminated_closed_and_joined(
     assert process.returncode is not None
 
 
+@pytest.mark.skipif(
+    not hasattr(os, "killpg"),
+    reason="the macOS process-group API is unavailable",
+)
 def test_macos_process_group_kill_failure_rejects_teardown(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -2291,6 +2368,10 @@ def test_macos_process_group_kill_failure_rejects_teardown(
     assert not domain.terminated
 
 
+@pytest.mark.skipif(
+    not hasattr(os, "killpg"),
+    reason="the macOS process-group API is unavailable",
+)
 def test_macos_process_group_success_is_terminated_and_joined(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -2552,5 +2633,10 @@ def test_output_verification_hashes_permissions_and_never_executes(tmp_path: Pat
     assert metadata.path == "bin/tool"
     assert metadata.size == len(payload)
     assert metadata.sha256.startswith("sha256:")
-    assert stat.S_IMODE(output.stat().st_mode) == 0o700
+    mode = stat.S_IMODE(output.stat().st_mode)
+    if os.name == "nt":
+        # Windows chmod exposes only its read-only attribute through st_mode.
+        assert mode & stat.S_IWRITE
+    else:
+        assert mode == 0o700
     assert output.read_bytes() == payload
