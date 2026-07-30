@@ -23,10 +23,11 @@ import stat
 import sys
 import threading
 import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Final, Iterator
+from typing import Final
 
 from . import metadata as _metadata
 from .cache import (
@@ -40,7 +41,6 @@ from .cache import (
     CachePublicationResult,
     CachePublicationStatus,
 )
-
 
 LIVE_ROOT_NAME: Final = "builds"
 STAGING_ROOT_NAME: Final = ".builds-staging"
@@ -56,6 +56,8 @@ _ARTIFACT_MODE: Final = 0o500
 _READ_CHUNK: Final = 128 * 1024
 _RENAME_NOREPLACE_LINUX: Final = 0x1
 _RENAME_EXCL_DARWIN: Final = 0x00000004
+_AT_EMPTY_PATH_LINUX: Final = 0x1000
+_FCHMODAT2_LINUX: Final = 452
 
 
 class _MissingState(Exception):
@@ -119,7 +121,7 @@ class PosixBuildCache:
         try:
             key = _metadata.cache_key(expectation.input)
             artifact_name = _artifact_name(expectation.input)
-            with _open_manager_home(self._manager_home) as home_fd:
+            with _open_manager_home(self._manager_home) as home_fd:  # noqa: SIM117
                 with _open_private_directory_at(
                     home_fd,
                     LIVE_ROOT_NAME,
@@ -233,7 +235,7 @@ class PosixBuildCache:
 
             _require_guard(guard)
             try:
-                with _open_manager_home(self._manager_home) as home_fd:
+                with _open_manager_home(self._manager_home) as home_fd:  # noqa: SIM117
                     with _open_or_replace_auxiliary_root(
                         home_fd,
                         STAGING_ROOT_NAME,
@@ -357,54 +359,97 @@ class PosixBuildCache:
                                             )
                                         raise CacheConflictError(key)
 
+                                    published_entry_fd = _open_staged_entry(
+                                        staging_fd,
+                                        stage_name,
+                                    )
                                     try:
-                                        _rename_noreplace(
-                                            staging_fd,
-                                            stage_name,
+                                        ready = _inspect_open_entry(
+                                            published_entry_fd,
+                                            CacheExpectation(
+                                                input=publication.input,
+                                                receipt_sha256=receipt_hash,
+                                            ),
+                                            key,
+                                            artifact_name,
+                                        )
+                                        if (
+                                            ready.receipt_bytes
+                                            != publication.receipt_bytes
+                                            or ready.artifact_sha256 != source_hash
+                                            or ready.artifact_size != source_size
+                                        ):
+                                            raise _CorruptState(
+                                                "staged entry changed before publication"
+                                            )
+                                        _validate_publication_source_state(
+                                            source_fd,
+                                            source_state,
+                                        )
+                                        _require_guard(guard)
+                                        try:
+                                            _rename_noreplace(
+                                                staging_fd,
+                                                stage_name,
+                                                driver_fd,
+                                                _key_component(key),
+                                            )
+                                        except OSError as exc:
+                                            if exc.errno in {
+                                                errno.EEXIST,
+                                                errno.ENOTEMPTY,
+                                            }:
+                                                continue
+                                            raise
+                                        stage_exists = False
+                                        _seal_published_entry(
+                                            published_entry_fd,
+                                        )
+                                        os.fsync(driver_fd)
+                                        os.fsync(staging_fd)
+                                        published = _inspect_open_entry(
+                                            published_entry_fd,
+                                            CacheExpectation(
+                                                input=publication.input,
+                                                receipt_sha256=receipt_hash,
+                                            ),
+                                            key,
+                                            artifact_name,
+                                        )
+                                        if (
+                                            published.receipt_bytes
+                                            != publication.receipt_bytes
+                                            or published.artifact_sha256
+                                            != source_hash
+                                            or published.artifact_size
+                                            != source_size
+                                        ):
+                                            raise _CorruptState(
+                                                "published entry differs from staged bytes"
+                                            )
+                                        status, selected = _resolve_atomic_winner(
                                             driver_fd,
                                             _key_component(key),
-                                        )
-                                    except OSError as exc:
-                                        if exc.errno in {
-                                            errno.EEXIST,
-                                            errno.ENOTEMPTY,
-                                        }:
-                                            continue
-                                        raise
-                                    stage_exists = False
-                                    _seal_published_entry(
-                                        driver_fd,
-                                        _key_component(key),
-                                    )
-                                    os.fsync(driver_fd)
-                                    os.fsync(staging_fd)
-                                    published = _inspect_entry_at(
-                                        driver_fd,
-                                        _key_component(key),
-                                        CacheExpectation(
-                                            input=publication.input,
-                                            receipt_sha256=receipt_hash,
-                                        ),
-                                        key,
-                                        artifact_name,
-                                    )
-                                    if (
-                                        published.receipt_bytes
-                                        != publication.receipt_bytes
-                                        or published.artifact_sha256 != source_hash
-                                        or published.artifact_size != source_size
-                                    ):
-                                        raise _CorruptState(
-                                            "published winner differs from staged bytes"
-                                        )
-                                    return CachePublicationResult(
-                                        status=CachePublicationStatus.PUBLISHED,
-                                        artifact_path=self._artifact_path(
+                                            published_entry_fd,
+                                            published,
+                                            CacheExpectation(
+                                                input=publication.input,
+                                                receipt_sha256=receipt_hash,
+                                            ),
                                             key,
-                                            publication.input,
-                                        ),
-                                        receipt_sha256=published.receipt_sha256,
-                                    )
+                                            artifact_name,
+                                            guard,
+                                        )
+                                        return CachePublicationResult(
+                                            status=status,
+                                            artifact_path=self._artifact_path(
+                                                key,
+                                                publication.input,
+                                            ),
+                                            receipt_sha256=selected.receipt_sha256,
+                                        )
+                                    finally:
+                                        os.close(published_entry_fd)
                                 raise BuildCacheError(
                                     "cache_publication_race",
                                     "could not select or validate an atomic cache winner",
@@ -458,7 +503,7 @@ class PosixBuildCache:
             )
         component = _key_component(cache_key)
         try:
-            with _open_manager_home(self._manager_home) as home_fd:
+            with _open_manager_home(self._manager_home) as home_fd:  # noqa: SIM117
                 with _open_or_replace_auxiliary_root(
                     home_fd,
                     QUARANTINE_ROOT_NAME,
@@ -469,23 +514,22 @@ class PosixBuildCache:
                             LIVE_ROOT_NAME,
                             "build cache root",
                             missing=_MissingState("build cache root is absent"),
-                        ) as builds_fd:
-                            with _open_private_directory_at(
-                                builds_fd,
-                                _DRIVER_DIRECTORY,
-                                "build driver cache",
-                                missing=_MissingState(
-                                    "build driver cache is absent"
-                                ),
-                            ) as driver_fd:
-                                _require_guard(guard)
-                                moved = _move_aside(
-                                    driver_fd,
-                                    component,
-                                    quarantine_fd,
-                                    f"entry-{component}",
-                                    missing_ok=True,
-                                )
+                        ) as builds_fd, _open_private_directory_at(
+                            builds_fd,
+                            _DRIVER_DIRECTORY,
+                            "build driver cache",
+                            missing=_MissingState(
+                                "build driver cache is absent"
+                            ),
+                        ) as driver_fd:
+                            _require_guard(guard)
+                            moved = _move_aside(
+                                driver_fd,
+                                component,
+                                quarantine_fd,
+                                f"entry-{component}",
+                                missing_ok=True,
+                            )
                     except _MissingState:
                         return None
             if moved is None:
@@ -769,69 +813,82 @@ def _inspect_entry_at(
         missing=_MissingState("cache entry is absent"),
         immutable=entry_immutable,
     ) as entry_fd:
-        names = _directory_names(entry_fd, "cache entry")
-        if names != ["bin", RECEIPT_FILENAME]:
-            raise _CorruptState("cache entry has unexpected contents")
-        with _open_protected_file_at(
+        return _inspect_open_entry(
             entry_fd,
-            RECEIPT_FILENAME,
-            "cache receipt",
-            expected_mode=_RECEIPT_MODE,
-        ) as receipt_fd:
-            with _open_private_directory_at(
-                entry_fd,
-                "bin",
-                "artifact directory",
-                missing=_CorruptState("artifact directory is absent"),
-                immutable=True,
-            ) as bin_fd:
-                artifact_names = _directory_names(
-                    bin_fd,
-                    "artifact directory",
+            expectation,
+            key,
+            artifact_name,
+        )
+
+
+def _inspect_open_entry(
+    entry_fd: int,
+    expectation: CacheExpectation,
+    key: str,
+    artifact_name: str,
+) -> _VerifiedEntry:
+    names = _directory_names(entry_fd, "cache entry")
+    if names != ["bin", RECEIPT_FILENAME]:
+        raise _CorruptState("cache entry has unexpected contents")
+    with _open_protected_file_at(
+        entry_fd,
+        RECEIPT_FILENAME,
+        "cache receipt",
+        expected_mode=_RECEIPT_MODE,
+    ) as receipt_fd, _open_private_directory_at(
+        entry_fd,
+        "bin",
+        "artifact directory",
+        missing=_CorruptState("artifact directory is absent"),
+        immutable=True,
+    ) as bin_fd:
+        artifact_names = _directory_names(
+            bin_fd,
+            "artifact directory",
+        )
+        if artifact_names != [artifact_name]:
+            raise _CorruptState(
+                "artifact directory has unexpected contents"
+            )
+        with _open_protected_file_at(
+            bin_fd,
+            artifact_name,
+            "cache artifact",
+            expected_mode=_ARTIFACT_MODE,
+        ) as artifact_fd:
+            receipt_bytes = _read_bounded_file(
+                receipt_fd,
+                _MAX_RECEIPT_BYTES,
+                "cache receipt",
+            )
+            try:
+                receipt = _metadata.verify_receipt(
+                    receipt_bytes,
+                    expected_input=expectation.input,
+                    expected_cache_key=key,
+                    expected_receipt_sha256=expectation.receipt_sha256,
                 )
-                if artifact_names != [artifact_name]:
-                    raise _CorruptState(
-                        "artifact directory has unexpected contents"
-                    )
-                with _open_protected_file_at(
-                    bin_fd,
-                    artifact_name,
-                    "cache artifact",
-                    expected_mode=_ARTIFACT_MODE,
-                ) as artifact_fd:
-                    receipt_bytes = _read_bounded_file(
-                        receipt_fd,
-                        _MAX_RECEIPT_BYTES,
-                        "cache receipt",
-                    )
-                    try:
-                        receipt = _metadata.verify_receipt(
-                            receipt_bytes,
-                            expected_input=expectation.input,
-                            expected_cache_key=key,
-                            expected_receipt_sha256=expectation.receipt_sha256,
-                        )
-                    except _metadata.BuildMetadataError as exc:
-                        raise _CorruptState(
-                            f"cache receipt is invalid: {exc}"
-                        ) from exc
-                    artifact_hash, artifact_size = _hash_file(
-                        artifact_fd,
-                        expected_size=receipt.artifact.size,
-                        label="cache artifact",
-                        error_factory=_CorruptState,
-                    )
-                    if artifact_hash != receipt.artifact.sha256:
-                        raise _CorruptState("cache artifact hash does not match")
-                    return _VerifiedEntry(
-                        receipt=receipt,
-                        receipt_bytes=receipt_bytes,
-                        receipt_sha256=_metadata.receipt_sha256(
-                            receipt_bytes
-                        ),
-                        artifact_sha256=artifact_hash,
-                        artifact_size=artifact_size,
-                    )
+            except _metadata.BuildMetadataError as exc:
+                raise _CorruptState(
+                    f"cache receipt is invalid: {exc}"
+                ) from exc
+            artifact_hash, artifact_size = _hash_file(
+                artifact_fd,
+                expected_size=receipt.artifact.size,
+                label="cache artifact",
+                error_factory=_CorruptState,
+            )
+            if artifact_hash != receipt.artifact.sha256:
+                raise _CorruptState("cache artifact hash does not match")
+            return _VerifiedEntry(
+                receipt=receipt,
+                receipt_bytes=receipt_bytes,
+                receipt_sha256=_metadata.receipt_sha256(
+                    receipt_bytes
+                ),
+                artifact_sha256=artifact_hash,
+                artifact_size=artifact_size,
+            )
 
 
 def _directory_names(descriptor: int, label: str) -> list[str]:
@@ -1100,6 +1157,31 @@ def _create_stage_name(staging_fd: int) -> str:
     raise OSError(errno.EEXIST, "could not allocate unique staging directory")
 
 
+def _open_staged_entry(staging_fd: int, stage_name: str) -> int:
+    try:
+        descriptor = os.open(
+            stage_name,
+            _directory_flags(),
+            dir_fd=staging_fd,
+        )
+    except FileNotFoundError as exc:
+        raise _CorruptState("staging entry disappeared") from exc
+    except OSError as exc:
+        raise _UntrustedState(
+            f"cannot open staging entry without following links: {exc}"
+        ) from exc
+    try:
+        _validate_directory(
+            descriptor,
+            "staging entry",
+            _DIRECTORY_PRIVATE_MODE,
+        )
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
 def _write_staged_entry(
     staging_fd: int,
     stage_name: str,
@@ -1193,17 +1275,87 @@ def _write_all(descriptor: int, raw: bytes) -> None:
         view = view[written:]
 
 
-def _seal_published_entry(driver_fd: int, entry_name: str) -> None:
-    """Seal the complete renamed winner before the home lock is released."""
+def _seal_published_entry(entry_fd: int) -> None:
+    """Seal the exact staged directory that won the atomic rename."""
 
-    with _open_private_directory_at(
-        driver_fd,
-        entry_name,
+    _validate_directory(
+        entry_fd,
         "newly published cache entry",
-        missing=_CorruptState("published cache entry disappeared"),
-    ) as entry_fd:
-        os.fchmod(entry_fd, _DIRECTORY_IMMUTABLE_MODE)
-        os.fsync(entry_fd)
+        _DIRECTORY_PRIVATE_MODE,
+    )
+    os.fchmod(entry_fd, _DIRECTORY_IMMUTABLE_MODE)
+    os.fsync(entry_fd)
+    _validate_directory(
+        entry_fd,
+        "newly published cache entry",
+        _DIRECTORY_IMMUTABLE_MODE,
+    )
+
+
+def _resolve_atomic_winner(
+    driver_fd: int,
+    entry_name: str,
+    published_entry_fd: int,
+    published: _VerifiedEntry,
+    expectation: CacheExpectation,
+    key: str,
+    artifact_name: str,
+    guard: CacheMutationGuard,
+) -> tuple[CachePublicationStatus, _VerifiedEntry]:
+    """Resolve the live name without ever mutating through that name.
+
+    A competing publisher may quarantine the private-mode directory after its
+    atomic rename but before this publisher seals it. The retained descriptor
+    keeps this publisher's identity stable. If the live name now selects a
+    different complete entry, compare that pinned winner byte-for-byte.
+    """
+
+    published_state = os.fstat(published_entry_fd)
+    for attempt in range(8):
+        _require_guard(guard)
+        try:
+            with _open_private_directory_at(
+                driver_fd,
+                entry_name,
+                "selected cache winner",
+                missing=_MissingState("published cache winner is absent"),
+                immutable=True,
+            ) as selected_entry_fd:
+                selected = _inspect_open_entry(
+                    selected_entry_fd,
+                    CacheExpectation(input=expectation.input),
+                    key,
+                    artifact_name,
+                )
+                if _same_directory_identity(
+                    published_state,
+                    os.fstat(selected_entry_fd),
+                ):
+                    if (
+                        selected.receipt_bytes != published.receipt_bytes
+                        or selected.artifact_sha256
+                        != published.artifact_sha256
+                        or selected.artifact_size != published.artifact_size
+                    ):
+                        raise _CorruptState(
+                            "selected published entry changed after sealing"
+                        )
+                    return CachePublicationStatus.PUBLISHED, selected
+                if (
+                    selected.receipt_bytes == published.receipt_bytes
+                    and _artifact_open_entries_equal(
+                        published_entry_fd,
+                        selected_entry_fd,
+                        artifact_name,
+                    )
+                ):
+                    return CachePublicationStatus.REUSED_WINNER, selected
+                raise CacheConflictError(key)
+        except (_MissingState, _UntrustedState):
+            if attempt == 7:
+                raise
+            time.sleep(0.005)
+    raise AssertionError("unreachable atomic winner resolution")
 
 
 def _move_aside(
@@ -1214,82 +1366,85 @@ def _move_aside(
     *,
     missing_ok: bool = False,
 ) -> str | None:
-    for _attempt in range(16):
-        destination_name = f"{prefix}-{secrets.token_hex(16)}"
-        try:
-            source_state = os.stat(
-                source_name,
-                dir_fd=source_parent_fd,
-                follow_symlinks=False,
-            )
-        except FileNotFoundError:
-            if missing_ok:
-                return None
-            raise _MissingState(f"{source_name} disappeared before quarantine")
-        is_directory = stat.S_ISDIR(source_state.st_mode)
-        try:
-            _reserve_move_destination(
-                destination_parent_fd,
-                destination_name,
-                is_directory=is_directory,
-            )
-        except FileExistsError:
-            continue
-        try:
-            unlocked_fd, original_mode = _unlock_owned_directory_for_move(
-                source_parent_fd,
-                source_name,
-                source_state,
-            )
-        except OSError:
-            _remove_move_reservation(
-                destination_parent_fd,
-                destination_name,
-                is_directory=is_directory,
-            )
-            raise
-        try:
-            os.rename(
-                source_name,
-                destination_name,
-                src_dir_fd=source_parent_fd,
-                dst_dir_fd=destination_parent_fd,
-            )
-        except FileNotFoundError:
+    try:
+        source_state = os.stat(
+            source_name,
+            dir_fd=source_parent_fd,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        if missing_ok:
+            return None
+        raise _MissingState(f"{source_name} disappeared before quarantine")
+    is_directory = stat.S_ISDIR(source_state.st_mode)
+    try:
+        unlocked_fd, original_mode = _unlock_owned_directory_for_move(
+            source_parent_fd,
+            source_name,
+            source_state,
+        )
+    except FileNotFoundError:
+        if missing_ok:
+            return None
+        raise _MissingState(f"{source_name} disappeared before quarantine")
+
+    moved_name: str | None = None
+    try:
+        for _attempt in range(16):
+            destination_name = f"{prefix}-{secrets.token_hex(16)}"
             try:
-                _restore_moved_directory_mode(unlocked_fd, original_mode)
-            finally:
-                _remove_move_reservation(
+                _reserve_move_destination(
                     destination_parent_fd,
                     destination_name,
                     is_directory=is_directory,
                 )
-            if missing_ok:
-                return None
-            raise _MissingState(f"{source_name} disappeared before quarantine")
-        except OSError as exc:
-            try:
-                _restore_moved_directory_mode(unlocked_fd, original_mode)
-            finally:
-                _remove_move_reservation(
-                    destination_parent_fd,
-                    destination_name,
-                    is_directory=is_directory,
-                )
-            if exc.errno in {
-                errno.EEXIST,
-                errno.EISDIR,
-                errno.ENOTDIR,
-                errno.ENOTEMPTY,
-            }:
+            except FileExistsError:
                 continue
-            raise
+            reservation_exists = True
+            try:
+                os.rename(
+                    source_name,
+                    destination_name,
+                    src_dir_fd=source_parent_fd,
+                    dst_dir_fd=destination_parent_fd,
+                )
+                reservation_exists = False
+                moved_name = destination_name
+            except FileNotFoundError:
+                if missing_ok:
+                    return None
+                raise _MissingState(
+                    f"{source_name} disappeared before quarantine"
+                )
+            except OSError as exc:
+                if exc.errno in {
+                    errno.EEXIST,
+                    errno.EISDIR,
+                    errno.ENOTDIR,
+                    errno.ENOTEMPTY,
+                }:
+                    continue
+                raise
+            finally:
+                if reservation_exists:
+                    _remove_move_reservation(
+                        destination_parent_fd,
+                        destination_name,
+                        is_directory=is_directory,
+                    )
+            break
+        if moved_name is None:
+            raise OSError(
+                errno.EEXIST,
+                "could not allocate unique quarantine name",
+            )
+    finally:
         _restore_moved_directory_mode(unlocked_fd, original_mode)
-        os.fsync(source_parent_fd)
-        if source_parent_fd != destination_parent_fd:
-            os.fsync(destination_parent_fd)
-        return destination_name
-    raise OSError(errno.EEXIST, "could not allocate unique quarantine name")
+
+    os.fsync(source_parent_fd)
+    if source_parent_fd != destination_parent_fd:
+        os.fsync(destination_parent_fd)
+    return moved_name
 
 
 def _unlock_owned_directory_for_move(
@@ -1297,67 +1452,281 @@ def _unlock_owned_directory_for_move(
     name: str,
     source_state: os.stat_result,
 ) -> tuple[int | None, int | None]:
-    """Temporarily grant owner control needed by Darwin directory rename."""
+    """Temporarily grant owner rwx needed to move a verified directory."""
 
-    if sys.platform != "darwin":
-        return None, None
     if (
         not stat.S_ISDIR(source_state.st_mode)
         or source_state.st_uid != _effective_uid()
     ):
         return None, None
     original_mode = stat.S_IMODE(source_state.st_mode)
-    changed_by_path = False
-    try:
-        descriptor = os.open(
-            name,
-            _directory_flags(),
-            dir_fd=parent_fd,
-        )
-    except OSError:
-        os.chmod(
-            name,
-            original_mode | 0o700,
-            dir_fd=parent_fd,
-            follow_symlinks=False,
-        )
-        changed_by_path = True
+    if (original_mode & 0o700) == 0o700:
+        return None, None
+    for _attempt in range(16):
         try:
             descriptor = os.open(
                 name,
                 _directory_flags(),
                 dir_fd=parent_fd,
             )
-        except OSError:
+        except InterruptedError:
+            continue
+        except PermissionError as exc:
+            if exc.errno not in {errno.EACCES, errno.EPERM}:
+                raise
+            return _open_inaccessible_owned_directory_for_move(
+                parent_fd,
+                name,
+                source_state,
+            )
+        break
+    else:
+        raise OSError(
+            errno.EINTR,
+            "could not open cache candidate after repeated interruption",
+        )
+    current = os.fstat(descriptor)
+    if not _same_directory_identity(source_state, current):
+        os.close(descriptor)
+        raise OSError(errno.ESTALE, "cache candidate changed before quarantine")
+    if stat.S_IMODE(current.st_mode) != original_mode:
+        os.close(descriptor)
+        raise OSError(
+            errno.ESTALE,
+            "cache candidate mode changed before quarantine",
+        )
+    changed = False
+    try:
+        os.fchmod(descriptor, original_mode | 0o700)
+        changed = True
+        os.fsync(descriptor)
+    except BaseException:
+        try:
+            if changed:
+                os.fchmod(descriptor, original_mode)
+                os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        raise
+    return descriptor, original_mode
+
+
+def _open_inaccessible_owned_directory_for_move(
+    parent_fd: int,
+    name: str,
+    source_state: os.stat_result,
+) -> tuple[int, int]:
+    if sys.platform.startswith("linux") and hasattr(os, "O_PATH"):
+        return _open_linux_directory_for_move(
+            parent_fd,
+            name,
+            source_state,
+        )
+    if (
+        sys.platform == "darwin"
+        and os.chmod in os.supports_dir_fd
+        and os.chmod in os.supports_follow_symlinks
+    ):
+        return _open_darwin_directory_for_move(
+            parent_fd,
+            name,
+            source_state,
+        )
+    raise BuildCacheError(
+        "cache_protection_unsupported",
+        "cannot safely acquire an inaccessible cache directory for quarantine",
+    )
+
+
+def _open_linux_directory_for_move(
+    parent_fd: int,
+    name: str,
+    source_state: os.stat_result,
+) -> tuple[int, int]:
+    original_mode = stat.S_IMODE(source_state.st_mode)
+    reference_fd = os.open(
+        name,
+        _directory_reference_flags_linux(),
+        dir_fd=parent_fd,
+    )
+    changed = False
+    try:
+        current = os.fstat(reference_fd)
+        if (
+            not _same_directory_identity(source_state, current)
+            or stat.S_IMODE(current.st_mode) != original_mode
+        ):
+            raise OSError(
+                errno.ESTALE,
+                "cache candidate changed before quarantine",
+            )
+        _fchmod_opath_linux(reference_fd, original_mode | 0o700)
+        changed = True
+        try:
+            descriptor = os.open(
+                name,
+                _directory_flags(),
+                dir_fd=parent_fd,
+            )
+        except BaseException:
+            _fchmod_opath_linux(reference_fd, original_mode)
+            changed = False
+            raise
+        opened = os.fstat(descriptor)
+        if not _same_directory_identity(source_state, opened):
+            try:
+                _fchmod_opath_linux(reference_fd, original_mode)
+            finally:
+                os.close(descriptor)
+            changed = False
+            raise OSError(
+                errno.ESTALE,
+                "cache candidate changed before quarantine",
+            )
+        try:
+            os.fsync(descriptor)
+        except BaseException:
+            try:
+                os.fchmod(descriptor, original_mode)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            changed = False
+            raise
+        changed = False
+        return descriptor, original_mode
+    finally:
+        try:
+            if changed:
+                _fchmod_opath_linux(reference_fd, original_mode)
+        finally:
+            os.close(reference_fd)
+
+
+def _open_darwin_directory_for_move(
+    parent_fd: int,
+    name: str,
+    source_state: os.stat_result,
+) -> tuple[int, int]:
+    original_mode = stat.S_IMODE(source_state.st_mode)
+    before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if (
+        not _same_directory_identity(source_state, before)
+        or stat.S_IMODE(before.st_mode) != original_mode
+    ):
+        raise OSError(errno.ESTALE, "cache candidate changed before quarantine")
+    try:
+        os.chmod(
+            name,
+            original_mode | 0o700,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+    except (NotImplementedError, ValueError) as exc:
+        raise BuildCacheError(
+            "cache_protection_unsupported",
+            "rooted no-follow directory chmod is unavailable",
+        ) from exc
+    changed = True
+    try:
+        descriptor = os.open(
+            name,
+            _directory_flags(),
+            dir_fd=parent_fd,
+        )
+    except BaseException:
+        try:
             os.chmod(
                 name,
                 original_mode,
                 dir_fd=parent_fd,
                 follow_symlinks=False,
             )
-            raise
-    current = os.fstat(descriptor)
-    if (
-        not stat.S_ISDIR(current.st_mode)
-        or current.st_dev != source_state.st_dev
-        or current.st_ino != source_state.st_ino
-        or current.st_uid != source_state.st_uid
-    ):
-        os.close(descriptor)
-        raise OSError(errno.ESTALE, "cache candidate changed before quarantine")
-    if changed_by_path:
-        os.fsync(descriptor)
-        return descriptor, original_mode
-    if stat.S_IMODE(current.st_mode) & 0o200:
-        os.close(descriptor)
-        return None, None
-    try:
-        os.fchmod(descriptor, original_mode | 0o700)
-        os.fsync(descriptor)
-    except OSError:
-        os.close(descriptor)
+        except (NotImplementedError, ValueError) as restore_exc:
+            raise BuildCacheError(
+                "cache_protection_unsupported",
+                "rooted no-follow directory mode restoration is unavailable",
+            ) from restore_exc
         raise
+    try:
+        current = os.fstat(descriptor)
+        if not _same_directory_identity(source_state, current):
+            raise OSError(
+                errno.ESTALE,
+                "cache candidate changed before quarantine",
+            )
+        os.fsync(descriptor)
+        changed = False
+    finally:
+        if changed:
+            try:
+                os.fchmod(descriptor, original_mode)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
     return descriptor, original_mode
+
+
+def _same_directory_identity(
+    expected: os.stat_result,
+    actual: os.stat_result,
+) -> bool:
+    return (
+        stat.S_ISDIR(actual.st_mode)
+        and actual.st_dev == expected.st_dev
+        and actual.st_ino == expected.st_ino
+        and actual.st_uid == expected.st_uid
+    )
+
+
+def _directory_reference_flags_linux() -> int:
+    path_flag = getattr(os, "O_PATH", 0)
+    if not path_flag:
+        raise BuildCacheError(
+            "cache_protection_unsupported",
+            "Linux O_PATH directory references are unavailable",
+        )
+    return (
+        path_flag
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+
+def _fchmod_opath_linux(descriptor: int, mode: int) -> None:
+    machine = os.uname().machine.lower()
+    if machine not in {"aarch64", "arm64", "amd64", "x86_64"}:
+        raise BuildCacheError(
+            "cache_protection_unsupported",
+            f"Linux fchmodat2 is not mapped for architecture {machine!r}",
+        )
+    library = ctypes.CDLL(None, use_errno=True)
+    syscall = library.syscall
+    syscall.restype = ctypes.c_long
+    ctypes.set_errno(0)
+    result = syscall(
+        ctypes.c_long(_FCHMODAT2_LINUX),
+        ctypes.c_int(descriptor),
+        ctypes.c_char_p(b""),
+        ctypes.c_uint(mode),
+        ctypes.c_int(_AT_EMPTY_PATH_LINUX),
+    )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {
+        errno.EBADF,
+        errno.EINVAL,
+        errno.ENOSYS,
+        errno.ENOTSUP,
+        errno.EOPNOTSUPP,
+    }:
+        raise BuildCacheError(
+            "cache_protection_unsupported",
+            "Linux fchmodat2 with AT_EMPTY_PATH is unavailable",
+        )
+    raise OSError(error_number, os.strerror(error_number))
 
 
 def _restore_moved_directory_mode(
@@ -1385,8 +1754,8 @@ def _reserve_move_destination(
     POSIX rename atomically replaces an empty directory with a directory, or a
     non-directory placeholder with a non-directory source. Reserving first
     prevents any existing quarantined state from being overwritten, while
-    standard rename remains able to move read-only candidate directories on
-    Darwin.
+    standard rename moves the verified, temporarily owner-controlled candidate
+    across the auxiliary boundary.
     """
 
     if is_directory:
@@ -1463,29 +1832,47 @@ def _artifact_files_equal(
         first_entry_name,
         artifact_name,
         entry_immutable=first_entry_immutable,
-    ) as first_fd:
-        with _open_artifact_at(
-            second_parent_fd,
-            second_entry_name,
-            artifact_name,
-        ) as second_fd:
-            first_state = os.fstat(first_fd)
-            second_state = os.fstat(second_fd)
-            if first_state.st_size != second_state.st_size:
-                return False
-            os.lseek(first_fd, 0, os.SEEK_SET)
-            os.lseek(second_fd, 0, os.SEEK_SET)
-            while True:
-                first = os.read(first_fd, _READ_CHUNK)
-                second = os.read(second_fd, _READ_CHUNK)
-                if first != second:
-                    return False
-                if not first:
-                    break
-            return (
-                _stable_file_state(first_state, os.fstat(first_fd))
-                and _stable_file_state(second_state, os.fstat(second_fd))
-            )
+    ) as first_fd, _open_artifact_at(
+        second_parent_fd,
+        second_entry_name,
+        artifact_name,
+    ) as second_fd:
+        return _open_files_equal(first_fd, second_fd)
+
+
+def _artifact_open_entries_equal(
+    first_entry_fd: int,
+    second_entry_fd: int,
+    artifact_name: str,
+) -> bool:
+    with _open_artifact_in_entry(
+        first_entry_fd,
+        artifact_name,
+    ) as first_fd, _open_artifact_in_entry(
+        second_entry_fd,
+        artifact_name,
+    ) as second_fd:
+        return _open_files_equal(first_fd, second_fd)
+
+
+def _open_files_equal(first_fd: int, second_fd: int) -> bool:
+    first_state = os.fstat(first_fd)
+    second_state = os.fstat(second_fd)
+    if first_state.st_size != second_state.st_size:
+        return False
+    os.lseek(first_fd, 0, os.SEEK_SET)
+    os.lseek(second_fd, 0, os.SEEK_SET)
+    while True:
+        first = os.read(first_fd, _READ_CHUNK)
+        second = os.read(second_fd, _READ_CHUNK)
+        if first != second:
+            return False
+        if not first:
+            break
+    return (
+        _stable_file_state(first_state, os.fstat(first_fd))
+        and _stable_file_state(second_state, os.fstat(second_fd))
+    )
 
 
 @contextmanager
@@ -1502,21 +1889,31 @@ def _open_artifact_at(
         "cache entry",
         missing=_MissingState("cache entry is absent"),
         immutable=entry_immutable,
-    ) as entry_fd:
-        with _open_private_directory_at(
-            entry_fd,
-            "bin",
-            "artifact directory",
-            missing=_CorruptState("artifact directory is absent"),
-            immutable=True,
-        ) as bin_fd:
-            with _open_protected_file_at(
-                bin_fd,
-                artifact_name,
-                "cache artifact",
-                expected_mode=_ARTIFACT_MODE,
-            ) as artifact_fd:
-                yield artifact_fd
+    ) as entry_fd, _open_artifact_in_entry(
+        entry_fd,
+        artifact_name,
+    ) as artifact_fd:
+        yield artifact_fd
+
+
+@contextmanager
+def _open_artifact_in_entry(
+    entry_fd: int,
+    artifact_name: str,
+) -> Iterator[int]:
+    with _open_private_directory_at(
+        entry_fd,
+        "bin",
+        "artifact directory",
+        missing=_CorruptState("artifact directory is absent"),
+        immutable=True,
+    ) as bin_fd, _open_protected_file_at(
+        bin_fd,
+        artifact_name,
+        "cache artifact",
+        expected_mode=_ARTIFACT_MODE,
+    ) as artifact_fd:
+        yield artifact_fd
 
 
 def _rename_noreplace(
@@ -1579,8 +1976,8 @@ def _rename_noreplace(
 
 __all__ = [
     "LIVE_ROOT_NAME",
-    "PosixBuildCache",
     "QUARANTINE_ROOT_NAME",
     "RECEIPT_FILENAME",
     "STAGING_ROOT_NAME",
+    "PosixBuildCache",
 ]
