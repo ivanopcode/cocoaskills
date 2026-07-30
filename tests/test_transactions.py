@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import sys
 import threading
 from pathlib import Path
@@ -52,6 +53,27 @@ def _target(
         desired_path=desired,
         expected_preimage_digest=digest_path(live),
     )
+
+
+def _namespace_target(
+    target_class: str, identifier: str, live: Path, desired: Path | None
+) -> MutableTarget:
+    """Build a target that must be rejected without reopening its live path."""
+    return MutableTarget(
+        target_class=target_class,
+        identifier=identifier,
+        live_path=live,
+        desired_path=desired,
+        expected_preimage_digest=ABSENT_DIGEST,
+    )
+
+
+def _assert_mode_identity(path: Path, expected: int) -> None:
+    actual = stat.S_IMODE(path.stat().st_mode)
+    if os.name == "nt":
+        assert bool(actual & stat.S_IWRITE) is bool(expected & stat.S_IWRITE)
+    else:
+        assert actual == expected
 
 
 def _plan(
@@ -863,16 +885,132 @@ def test_read_only_targets_stage_commit_and_cleanup(tmp_path: Path, kind: str):
 
     if kind == "file":
         assert live.read_text(encoding="utf-8") == "read-only desired"
-        assert live.stat().st_mode & 0o777 == 0o444
+        _assert_mode_identity(live, 0o444)
     else:
         assert (live / "nested" / "payload").read_text(
             encoding="utf-8"
         ) == "read-only desired"
-        assert live.stat().st_mode & 0o777 == 0o555
-        assert (live / "nested").stat().st_mode & 0o777 == 0o555
-        assert (live / "nested" / "payload").stat().st_mode & 0o777 == 0o444
+        _assert_mode_identity(live, 0o555)
+        _assert_mode_identity(live / "nested", 0o555)
+        _assert_mode_identity(live / "nested" / "payload", 0o444)
     assert not (engine.journal_root / f"txn-read-only-{kind}.json").exists()
     assert not any(tmp_path.glob(".csk-txn-*"))
+
+
+@pytest.mark.parametrize(
+    ("kind", "read_only_mode", "writable_mode"),
+    [
+        ("file", 0o444, 0o666),
+        ("directory", 0o555, 0o777),
+    ],
+)
+def test_windows_staging_mode_identity_uses_only_the_settable_read_only_bit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    read_only_mode: int,
+    writable_mode: int,
+):
+    staged = tmp_path / "staged"
+    if kind == "file":
+        staged.write_text("payload", encoding="utf-8")
+    else:
+        staged.mkdir()
+    staged.chmod(writable_mode)
+    observed = transactions._staging_tree_entry(staged, "", staged.lstat())
+    expected = transactions.StagingTreeEntry(
+        relative_path=observed.relative_path,
+        kind=observed.kind,
+        mode=read_only_mode,
+        size=observed.size,
+        digest=observed.digest,
+        link_target=observed.link_target,
+        link_is_directory=observed.link_is_directory,
+    )
+    monkeypatch.setattr(transactions, "_is_windows", lambda: True)
+
+    construction_mode = transactions._staging_construction_mode(expected)
+    transactions._validate_staging_entry_modes(
+        staged,
+        expected,
+        {construction_mode},
+    )
+    with pytest.raises(TransactionCorruptionError, match="staging entry changed"):
+        transactions._validate_staging_entry_modes(
+            staged,
+            expected,
+            {read_only_mode},
+        )
+
+    staged.chmod(read_only_mode)
+    transactions._validate_staging_entry_modes(
+        staged,
+        expected,
+        {read_only_mode},
+    )
+    with pytest.raises(TransactionCorruptionError, match="staging entry changed"):
+        transactions._validate_staging_entry_modes(
+            staged,
+            expected,
+            {construction_mode},
+        )
+
+
+@pytest.mark.parametrize(
+    ("kind", "read_only_mode", "writable_mode"),
+    [
+        ("file", 0o444, 0o666),
+        ("directory", 0o555, 0o777),
+    ],
+)
+def test_windows_cleanup_mode_identity_detects_read_only_attribute_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    read_only_mode: int,
+    writable_mode: int,
+):
+    sidecar = tmp_path / "sidecar"
+    if kind == "file":
+        sidecar.write_text("payload", encoding="utf-8")
+    else:
+        sidecar.mkdir()
+    sidecar.chmod(writable_mode)
+    observed = transactions._cleanup_tree_entry(sidecar, "", sidecar.lstat())
+    expected = transactions.CleanupTreeEntry(
+        relative_path=observed.relative_path,
+        kind=observed.kind,
+        mode=read_only_mode,
+        digest=observed.digest,
+        link_target=observed.link_target,
+    )
+    monkeypatch.setattr(transactions, "_is_windows", lambda: True)
+
+    cleanup_mode = transactions._cleanup_writable_mode(expected)
+    transactions._validate_cleanup_entry_modes(
+        sidecar,
+        expected,
+        {cleanup_mode},
+    )
+    with pytest.raises(TransactionCorruptionError, match="changed cleanup bytes"):
+        transactions._validate_cleanup_entry_modes(
+            sidecar,
+            expected,
+            {read_only_mode},
+        )
+
+    sidecar.chmod(read_only_mode)
+    transactions._validate_cleanup_entry_modes(
+        sidecar,
+        expected,
+        {read_only_mode},
+    )
+    with pytest.raises(TransactionCorruptionError, match="changed cleanup bytes"):
+        transactions._validate_cleanup_entry_modes(
+            sidecar,
+            expected,
+            {cleanup_mode},
+        )
 
 
 def test_read_only_directory_rollback_restores_mode_and_cleans_sidecars(
@@ -906,8 +1044,8 @@ def test_read_only_directory_rollback_restores_mode_and_cleans_sidecars(
             engine.commit(lock, "txn-read-only-rollback")
 
     assert (live / "payload").read_text(encoding="utf-8") == "old"
-    assert live.stat().st_mode & 0o777 == 0o555
-    assert (live / "payload").stat().st_mode & 0o777 == 0o444
+    _assert_mode_identity(live, 0o555)
+    _assert_mode_identity(live / "payload", 0o444)
     assert not (engine.journal_root / "txn-read-only-rollback.json").exists()
     assert not any(tmp_path.glob(".csk-txn-*"))
 
@@ -998,7 +1136,7 @@ def test_recovery_rejects_foreign_mode_during_staging_finalization(
     raw = json.loads(journal_path.read_text(encoding="utf-8"))
     target = raw["targets"][0]
     staged = Path(target["staged_path"])
-    staged.chmod(0o640)
+    staged.chmod(0o440 if os.name == "nt" else 0o640)
     before_mode = staged.stat().st_mode & 0o777
 
     with (
@@ -1050,15 +1188,15 @@ def test_recovery_finishes_crash_during_read_only_committed_cleanup(
         for cleanup in raw["cleanup_sidecars"]
     )
     assert (live / "nested" / "payload").read_text(encoding="utf-8") == "new"
-    assert live.stat().st_mode & 0o777 == 0o555
+    _assert_mode_identity(live, 0o555)
 
     with ManagerHomeLock(home) as lock:
         TransactionEngine(home).recover(lock)
 
     assert (live / "nested" / "payload").read_text(encoding="utf-8") == "new"
-    assert live.stat().st_mode & 0o777 == 0o555
-    assert (live / "nested").stat().st_mode & 0o777 == 0o555
-    assert (live / "nested" / "payload").stat().st_mode & 0o777 == 0o444
+    _assert_mode_identity(live, 0o555)
+    _assert_mode_identity(live / "nested", 0o555)
+    _assert_mode_identity(live / "nested" / "payload", 0o444)
     assert not journal_path.exists()
     assert not any(tmp_path.glob(".csk-txn-*"))
 
@@ -1469,7 +1607,7 @@ def test_prepare_rejects_manager_lock_namespaces_before_mutation(
                 _plan(
                     "txn-lock-namespace",
                     tmp_path / "project",
-                    _target("10-context", relative_live, live, desired),
+                    _namespace_target("10-context", relative_live, live, desired),
                 ),
             )
         lock.assert_held()
@@ -1495,7 +1633,7 @@ def test_prepare_rejects_held_project_lock_and_preserves_both_witnesses(
                 _plan(
                     "txn-held-project-lock",
                     tmp_path / "project",
-                    _target(
+                    _namespace_target(
                         "10-context",
                         "held-project-lock",
                         project_lock.path,
@@ -1527,7 +1665,7 @@ def test_build_plan_rejects_held_build_lock_and_preserves_outer_witnesses(
                 _plan(
                     "txn-held-build-lock",
                     tmp_path / "project",
-                    _target(
+                    _namespace_target(
                         "10-context",
                         "held-build-lock",
                         build_lock.path,
