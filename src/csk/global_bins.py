@@ -59,14 +59,14 @@ def refresh_user_bin_shims(
     managed = _read_managed(target)
     next_managed: set[str] = set()
     messages: list[str] = []
-    canonical_bin = csk_home / "global" / "bin"
+    canonical_bin = shims.global_bin_dir(csk_home)
 
     for command_name in managed - expected_commands:
         _remove_managed_command(target, command_name, platform_name=platform_name)
 
     for command_name in sorted(expected_commands):
-        canonical = _shim_path(canonical_bin, command_name, platform_name=platform_name)
-        published = _shim_path(target, command_name, platform_name=platform_name)
+        canonical = shims.shim_path(canonical_bin, command_name, platform_name=platform_name)
+        published = shims.shim_path(target, command_name, platform_name=platform_name)
         if _is_unmanaged_conflict(published, command_name, managed, canonical):
             messages.append(
                 f"global: command {command_name!r} not published to {target}; "
@@ -195,14 +195,8 @@ def _is_disallowed_bin(path: Path, *, csk_home: Path) -> bool:
     return False
 
 
-def _shim_path(bin_dir: Path, command_name: str, *, platform_name: str) -> Path:
-    if platform_name == "windows" and not command_name.endswith(".cmd"):
-        return bin_dir / f"{command_name}.cmd"
-    return bin_dir / command_name
-
-
 def _remove_managed_command(bin_dir: Path, command_name: str, *, platform_name: str) -> None:
-    path = _shim_path(bin_dir, command_name, platform_name=platform_name)
+    path = shims.shim_path(bin_dir, command_name, platform_name=platform_name)
     if path.exists() or path.is_symlink():
         path.unlink()
 

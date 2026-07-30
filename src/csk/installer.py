@@ -690,6 +690,11 @@ def _moved_tag_warnings(skills_dir: Path, plans: list[SkillPlan]) -> list[str]:
 def install_runtime_commands(csk_home: Path, bin_dir: Path, plan: SkillPlan, *, only: set[str] | None = None) -> set[str]:
     commands: set[str] = set()
     path_entries = _runtime_path_entries(plan, bin_dir)
+    active_scripts = tuple(
+        command
+        for command in plan.spec.commands.values()
+        if command.type == "script" and (only is None or command.name in only)
+    )
     if plan.spec.runtime_roots:
         shims.install_runtime_roots(
             csk_home=csk_home,
@@ -697,12 +702,9 @@ def install_runtime_commands(csk_home: Path, bin_dir: Path, plan: SkillPlan, *, 
             commit=plan.resolved.commit,
             snapshot=plan.snapshot,
             runtime_roots=plan.spec.runtime_roots,
+            required_commands=active_scripts,
         )
-    for command in plan.spec.commands.values():
-        if command.type != "script":
-            continue
-        if only is not None and command.name not in only:
-            continue
+    for command in active_scripts:
         if plan.spec.runtime_roots:
             runtime_path = shims.runtime_root_command_path(
                 csk_home=csk_home,
