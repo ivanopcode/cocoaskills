@@ -18,7 +18,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from . import _ed25519
+from . import _ed25519, protocol_json
 from .config import RegistryConfig
 from .identifiers import is_valid_identifier
 from .source_identity import is_canonical_source_identity
@@ -32,7 +32,7 @@ DEFAULT_OFFLINE_GRACE_SECONDS = 7 * 24 * 3600
 # freezes its view to hide a newer revocation.
 DEFAULT_SNAPSHOT_MAX_AGE_SECONDS = 7 * 24 * 3600
 DEFAULT_SNAPSHOT_CLOCK_SKEW_SECONDS = 5 * 60
-MAX_SAFE_INTEGER = 9_007_199_254_740_991
+MAX_SAFE_INTEGER = protocol_json.MAX_SAFE_INTEGER
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_PAGE_SIZE = 1000
 MAX_RECORDS_PER_QUERY = 10_000
@@ -84,46 +84,12 @@ def retry_permitted(method: str, outcome: str, idempotency_key: bool) -> bool:
     return method == "POST" and idempotency_key
 
 
-def _object_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise RegistryError(f"duplicate JSON object key: {key!r}")
-        result[key] = value
-    return result
-
-
-def _parse_json_integer(value: str) -> int:
-    parsed = int(value)
-    if value == "-0" or not -MAX_SAFE_INTEGER <= parsed <= MAX_SAFE_INTEGER:
-        raise RegistryError(f"JSON integer is not shortest-form or safe: {value}")
-    return parsed
-
-
-def _reject_json_number(value: str) -> None:
-    raise RegistryError(f"protocol JSON does not allow non-integer number {value!r}")
-
-
 def load_protocol_json(raw: bytes | str) -> Any:
     """Decode the protocol JSON subset without losing signed-value precision."""
-    if (isinstance(raw, bytes) and raw.startswith(b"\xef\xbb\xbf")) or (
-        isinstance(raw, str) and raw.startswith("\ufeff")
-    ):
-        raise RegistryError("protocol JSON must not contain a byte-order mark")
     try:
-        value = json.loads(
-            raw,
-            object_pairs_hook=_object_without_duplicates,
-            parse_int=_parse_json_integer,
-            parse_float=_reject_json_number,
-            parse_constant=_reject_json_number,
-        )
-    except RegistryError:
-        raise
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return protocol_json.loads_canonical(raw)
+    except protocol_json.ProtocolJSONError as exc:
         raise RegistryError(f"registry returned invalid JSON: {exc}") from exc
-    _validate_ccj(value)
-    return value
 
 
 @dataclass(frozen=True)
@@ -226,35 +192,17 @@ def parse_record(payload: dict[str, Any]) -> Record:
 def canonical_bytes(record: dict[str, Any]) -> bytes:
     """Return Curator Canonical JSON 1 bytes for a signed object."""
     body = {key: value for key, value in record.items() if key != "sig"}
-    _validate_ccj(body)
-    return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    try:
+        return protocol_json.canonical_bytes(body)
+    except protocol_json.ProtocolJSONError as exc:
+        raise RegistryError(str(exc)) from exc
 
 
 def _validate_ccj(value: Any) -> None:
-    if value is None or isinstance(value, bool):
-        return
-    if isinstance(value, int):
-        if not -MAX_SAFE_INTEGER <= value <= MAX_SAFE_INTEGER:
-            raise RegistryError(f"CCJ-1 integer outside safe range: {value}")
-        return
-    if isinstance(value, float):
-        raise RegistryError("CCJ-1 numbers must be integers")
-    if isinstance(value, str):
-        if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
-            raise RegistryError("CCJ-1 strings must not contain lone surrogates")
-        return
-    if isinstance(value, list):
-        for item in value:
-            _validate_ccj(item)
-        return
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise RegistryError("CCJ-1 object keys must be strings")
-            _validate_ccj(key)
-            _validate_ccj(item)
-        return
-    raise RegistryError(f"CCJ-1 does not support {type(value).__name__}")
+    try:
+        protocol_json.validate_canonical(value)
+    except protocol_json.ProtocolJSONError as exc:
+        raise RegistryError(str(exc)) from exc
 
 
 def parse_public_key(value: str) -> bytes:

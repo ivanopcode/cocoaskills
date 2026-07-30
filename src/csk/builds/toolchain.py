@@ -543,6 +543,27 @@ def normalize_go_version(stdout: bytes) -> str:
         raise ToolchainError("malformed_go_version", "go version output is not valid UTF-8") from exc
 
 
+def parse_normalized_go_version(value: str) -> tuple[str, str, str, str]:
+    """Parse one normalized ``go version`` identity using the trusted probe grammar."""
+
+    if not isinstance(value, str):
+        raise ToolchainError("malformed_go_version", "go version identity must be text")
+    try:
+        stdout = value.encode("utf-8", errors="strict") + b"\n"
+    except UnicodeEncodeError as exc:
+        raise ToolchainError(
+            "malformed_go_version",
+            "go version identity is not valid Unicode",
+        ) from exc
+    parsed = _parse_go_version(stdout)
+    if parsed[0] != value:
+        raise ToolchainError(
+            "malformed_go_version",
+            "go version identity is not normalized",
+        )
+    return parsed
+
+
 def fingerprint_toolchain(
     goroot: Path,
     go_version_stdout: bytes,

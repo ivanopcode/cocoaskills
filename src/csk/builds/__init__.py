@@ -1,7 +1,33 @@
 """Platform-neutral identities for the declarative build domain."""
 
-from typing import Final, Literal
-
+from .metadata import (
+    BUILD_INPUT_SCHEMA_VERSION,
+    FIXED_GO_BUILD_POLICY,
+    GO_BUILD_POLICY_MEMBERS,
+    GO_V1_DRIVER,
+    PORTABLE_EXECUTION_POLICY,
+    PORTABLE_GO_BUILD_POLICY,
+    RECEIPT_SCHEMA_VERSION,
+    SUPPORTED_BUILD_DRIVERS,
+    SUPPORTED_EXECUTION_POLICIES,
+    BuildArtifact,
+    BuildDriver,
+    BuildMetadataError,
+    BuildReceipt,
+    GoBuildInput,
+    GoBuildPolicy,
+    build_receipt,
+    cache_key,
+    canonical_input_bytes,
+    canonical_receipt_bytes,
+    derived_artifact_path,
+    parse_build_input,
+    parse_go_build_policy,
+    parse_receipt,
+    read_receipt,
+    receipt_sha256,
+    verify_receipt,
+)
 from .source import (
     BuildSourceError,
     BuildSourceIdentity,
@@ -12,19 +38,37 @@ from .source import (
 )
 
 
-BuildDriver = Literal["go-v1"]
-
-GO_V1_DRIVER: Final[BuildDriver] = "go-v1"
-SUPPORTED_BUILD_DRIVERS: Final[frozenset[str]] = frozenset({GO_V1_DRIVER})
-
 __all__ = [
+    "BUILD_INPUT_SCHEMA_VERSION",
+    "BuildArtifact",
     "BuildDriver",
+    "BuildMetadataError",
+    "BuildReceipt",
     "BuildSourceError",
     "BuildSourceIdentity",
+    "FIXED_GO_BUILD_POLICY",
     "FrozenSnapshot",
+    "GO_BUILD_POLICY_MEMBERS",
     "GO_V1_DRIVER",
+    "GoBuildInput",
+    "GoBuildPolicy",
     "InvalidSnapshotError",
+    "PORTABLE_EXECUTION_POLICY",
+    "PORTABLE_GO_BUILD_POLICY",
+    "RECEIPT_SCHEMA_VERSION",
     "SUPPORTED_BUILD_DRIVERS",
+    "SUPPORTED_EXECUTION_POLICIES",
     "SnapshotMutationError",
+    "build_receipt",
+    "cache_key",
+    "canonical_input_bytes",
+    "canonical_receipt_bytes",
+    "derived_artifact_path",
     "freeze_snapshot",
+    "parse_build_input",
+    "parse_go_build_policy",
+    "parse_receipt",
+    "read_receipt",
+    "receipt_sha256",
+    "verify_receipt",
 ]
