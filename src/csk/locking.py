@@ -153,29 +153,30 @@ def _longest_existing_prefix(path: Path) -> tuple[Path, list[str]]:
 
 
 def _canonicalize_darwin_existing_path(path: Path) -> Path:
-    """Recover the stored spelling selected by macOS filesystem lookup."""
+    """Recover stored spelling without enumerating every parent directory."""
     if not path.is_absolute():
         raise ValueError("physical identity path is not absolute")
-    current = Path(path.anchor)
-    for component in path.parts[1:]:
-        requested = current / component
-        requested_info = requested.lstat()
-        matches: list[str] = []
-        with os.scandir(current) as entries:
-            for entry in entries:
-                try:
-                    entry_info = entry.stat(follow_symlinks=False)
-                except FileNotFoundError:
-                    continue
-                if os.path.samestat(requested_info, entry_info):
-                    matches.append(entry.name)
-        if not matches:
-            raise OSError(f"cannot recover stored path spelling for {requested}")
-        matches.sort(key=unsigned_utf8_key)
-        current /= matches[0]
-    if not os.path.samefile(path, current):
+
+    import fcntl
+
+    flags = getattr(os, "O_EVTONLY", os.O_RDONLY)
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        # Darwin MAXPATHLEN is 1024, also Python's maximum mutable fcntl buffer.
+        raw = fcntl.fcntl(fd, 50, b"\0" * 1024)
+    finally:
+        os.close(fd)
+    if not isinstance(raw, bytes):
+        raise OSError(f"cannot recover stored path spelling for {path}")
+    encoded = raw.split(b"\0", 1)[0]
+    if not encoded:
+        raise OSError(f"cannot recover stored path spelling for {path}")
+    canonical = Path(os.fsdecode(encoded))
+    if not canonical.is_absolute() or not os.path.samefile(path, canonical):
         raise OSError(f"physical path identity changed while resolving {path}")
-    return current
+    return canonical
 
 
 def _canonicalize_windows_identity(
@@ -300,11 +301,19 @@ class _ExclusiveFileLock:
         self._fd: int | None = None
 
     def __enter__(self) -> Self:
+        deadline = time.monotonic() + self.timeout
         self._prepare_for_acquire()
+        if self.timeout > 0 and time.monotonic() >= deadline:
+            raise LockError(
+                f"lock acquisition timed out during preparation: {self.path}"
+            )
         self._check_order_before_acquire()
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            start = time.monotonic()
+            if self.timeout > 0 and time.monotonic() >= deadline:
+                raise LockError(
+                    f"lock acquisition timed out during preparation: {self.path}"
+                )
             while True:
                 flags = os.O_CREAT | os.O_RDWR
                 flags |= getattr(os, "O_CLOEXEC", 0)
@@ -370,9 +379,10 @@ class _ExclusiveFileLock:
                                 os.close(fd)
                         else:
                             os.close(fd)
-                if time.monotonic() - start >= self.timeout:
+                now = time.monotonic()
+                if now >= deadline:
                     raise LockError(_timeout_message(self.path))
-                time.sleep(min(0.1, max(0.01, self.timeout / 10)))
+                time.sleep(min(0.1, max(0.01, self.timeout / 10), deadline - now))
         except BaseException:
             self._record_acquire_failed()
             raise

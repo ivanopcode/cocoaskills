@@ -148,6 +148,27 @@ def test_global_lock_times_out_when_held(tmp_path):
         pass
 
 
+def test_lock_timeout_includes_acquisition_preparation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    lock = ManagerHomeLock(tmp_path / "home", timeout=0.01)
+    real_prepare = lock._prepare_for_acquire
+
+    def delayed_prepare() -> None:
+        real_prepare()
+        time.sleep(0.03)
+
+    monkeypatch.setattr(lock, "_prepare_for_acquire", delayed_prepare)
+
+    with pytest.raises(LockError, match="timed out during preparation"), lock:
+        pass
+
+    assert not lock.acquired
+    with locking._PROCESS_STATE_GUARD:
+        assert lock.home_identity not in locking._PROCESS_HOMES
+
+
 def test_stable_lock_descriptor_uses_binary_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -707,6 +728,74 @@ def test_case_aliases_share_project_and_manager_home_lock_identity(
         holder.join(timeout=2)
     assert not holder.is_alive()
     assert not errors
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS F_GETPATH")
+def test_darwin_canonical_identity_does_not_scan_parent_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    stored = tmp_path / "ManagerHome"
+    stored.mkdir()
+    alias = tmp_path / "managerhome"
+    if not alias.exists() or not os.path.samefile(stored, alias):
+        pytest.skip("test filesystem is case-sensitive")
+
+    def reject_scan(_path: os.PathLike[str] | str) -> None:
+        raise AssertionError("canonical identity must not enumerate parent directories")
+
+    monkeypatch.setattr(locking.os, "scandir", reject_scan)
+
+    assert locking._canonicalize_darwin_existing_path(alias) == stored
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS F_GETPATH")
+def test_concurrent_home_preparation_avoids_canonicalization_stampede(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    worker_count = 12
+    locks = [ManagerHomeLock(home, timeout=2) for _ in range(worker_count)]
+    preparation_barrier = threading.Barrier(worker_count)
+    acquired: list[int] = []
+    errors: list[Exception] = []
+    real_prepare = locking._prepare_manager_home
+    real_scandir = os.scandir
+
+    def synchronized_prepare(candidate: Path) -> str:
+        preparation_barrier.wait(timeout=2)
+        return real_prepare(candidate)
+
+    def reject_parent_scan(
+        path: os.PathLike[str] | str,
+    ) -> os.ScandirIterator[str]:
+        if Path(path) == home:
+            return real_scandir(path)
+        raise AssertionError("concurrent preparation must not enumerate parent paths")
+
+    monkeypatch.setattr(locking, "_prepare_manager_home", synchronized_prepare)
+    monkeypatch.setattr(locking.os, "scandir", reject_parent_scan)
+
+    def consume(index: int) -> None:
+        try:
+            with locks[index]:
+                acquired.append(index)
+        except Exception as exc:  # noqa: BLE001 - surface worker failures in parent
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=consume, args=(index,)) for index in range(worker_count)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert not errors
+    assert sorted(acquired) == list(range(worker_count))
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS path lookup")

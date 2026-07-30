@@ -1111,8 +1111,10 @@ def test_recovery_rejects_foreign_mode_during_staging_finalization(
     tmp_path: Path,
 ):
     home = tmp_path / "home"
-    desired = _write(tmp_path / "desired", "read-only desired")
-    desired.chmod(0o444)
+    desired = tmp_path / "desired"
+    _write(desired / "first", "read-only desired").chmod(0o444)
+    _write(desired / "second", "read-only desired").chmod(0o444)
+    desired.chmod(0o555)
 
     def crash_before_mode(point: str, target: JournalTarget | None) -> None:
         if point == "before_staging_mode_finalize" and target is not None:
@@ -1136,8 +1138,23 @@ def test_recovery_rejects_foreign_mode_during_staging_finalization(
     raw = json.loads(journal_path.read_text(encoding="utf-8"))
     target = raw["targets"][0]
     staged = Path(target["staged_path"])
-    staged.chmod(0o440 if os.name == "nt" else 0o640)
-    before_mode = staged.stat().st_mode & 0o777
+    order = [
+        entry
+        for entry in reversed(target["staging_entries"])
+        if entry["kind"] != "link"
+    ]
+    entry = next(
+        entry
+        for index, entry in enumerate(order)
+        if index > target["staging_finalize_index"] and entry["kind"] == "file"
+    )
+    entry_path = staged.joinpath(*Path(entry["relative_path"]).parts)
+    # The active write-ahead entry may validly have either mode. A later entry
+    # has one durable identity, so this crosses Windows' writable/read-only bit.
+    _assert_mode_identity(entry_path, 0o644)
+    entry_path.chmod(0o444)
+    _assert_mode_identity(entry_path, 0o444)
+    before_mode = entry_path.stat().st_mode & 0o777
 
     with (
         ManagerHomeLock(home) as lock,
@@ -1145,7 +1162,7 @@ def test_recovery_rejects_foreign_mode_during_staging_finalization(
     ):
         TransactionEngine(home).recover(lock)
 
-    assert staged.stat().st_mode & 0o777 == before_mode
+    assert entry_path.stat().st_mode & 0o777 == before_mode
     assert journal_path.exists()
     assert not (tmp_path / "live").exists()
 
@@ -1207,16 +1224,21 @@ def test_recovery_rejects_foreign_mode_during_read_only_cleanup(
     home = tmp_path / "home"
     live = tmp_path / "live"
     desired = tmp_path / "desired"
-    _write(live / "payload", "old")
-    _write(desired / "payload", "new")
-    (live / "payload").chmod(0o444)
-    (desired / "payload").chmod(0o444)
+    _write(live / "first", "old-first").chmod(0o444)
+    _write(live / "second", "old-second").chmod(0o444)
+    _write(desired / "first", "new-first").chmod(0o444)
+    _write(desired / "second", "new-second").chmod(0o444)
     live.chmod(0o555)
     desired.chmod(0o555)
 
+    writable_events = 0
+
     def crash_before_writable(point: str, target: JournalTarget | None) -> None:
+        nonlocal writable_events
         if point == "before_sidecar_mode_writable" and target is not None:
-            raise SimulatedCrash(point)
+            writable_events += 1
+            if writable_events == 3:
+                raise SimulatedCrash(point)
 
     engine = TransactionEngine(home, fault_hook=crash_before_writable)
     with ManagerHomeLock(home) as lock:
@@ -1246,11 +1268,18 @@ def test_recovery_rejects_foreign_mode_during_read_only_cleanup(
             entry["relative_path"].encode("utf-8"),
         ),
     )
-    entry = order[active["writable_index"]]
+    assert active["writable_index"] == 2
+    entry = order[active["writable_index"] - 1]
+    assert entry["kind"] == "file"
     entry_path = Path(active["tomb_path"])
     if entry["relative_path"]:
         entry_path = entry_path.joinpath(*Path(entry["relative_path"]).parts)
-    entry_path.chmod(0o751)
+    # The active write-ahead entry may validly have either mode. This prior
+    # file is durably writable, so restoring read-only is unambiguously foreign.
+    _assert_mode_identity(entry_path, 0o644)
+    foreign_mode = 0o444
+    entry_path.chmod(foreign_mode)
+    _assert_mode_identity(entry_path, foreign_mode)
     before_mode = entry_path.stat().st_mode & 0o777
 
     with (
@@ -1261,7 +1290,7 @@ def test_recovery_rejects_foreign_mode_during_read_only_cleanup(
 
     assert entry_path.stat().st_mode & 0o777 == before_mode
     assert journal_path.exists()
-    assert (live / "payload").read_text(encoding="utf-8") == "new"
+    assert (live / "first").read_text(encoding="utf-8") == "new-first"
 
 
 def test_journal_records_complete_ordered_recovery_state_and_consumer_commits_last(
