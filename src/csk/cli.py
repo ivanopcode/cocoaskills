@@ -24,6 +24,19 @@ EXIT_LOCK = 3
 
 
 def main(argv: list[str] | None = None) -> int:
+    # This is an implementation-only re-execution boundary.  It is reachable
+    # only from the actual installed entry point with the one fixed argument;
+    # programmatic argv, manifests, environment, PATH, and the public parser
+    # cannot select it.
+    if argv is None and sys.argv[1:] == ["__csk-go-worker-v1"]:
+        from .builds import go_v1
+
+        try:
+            launch_context = go_v1._consume_worker_launch_context()
+        except go_v1.GoV1Error:
+            pass
+        else:
+            return go_v1.run_worker(_launch_context=launch_context)
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
