@@ -5,15 +5,20 @@ import os
 import shutil
 import sys
 import tempfile
+from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Protocol
 
 from . import adapters, audit_registry, closure, consumers, dev_substitutions, env_files, gc, git_ops, gitignore_gate, hashing, hybrid, locale, manifest, mcp_configs, protocol_json, shims, skillcheck, skillspec, snapshot, whitelist
 from . import source_identity as source_identity_mod
 from .audit import pipeline as audit_pipeline
+from .builds import planner as build_planner
+from .builds import source as build_source
+from .builds import toolchain as build_toolchain
 from .config import GlobalConfig, ProjectConfig
 from .skillspec import CommandSpec
 
@@ -38,6 +43,7 @@ class ProjectResult:
     status: str
     messages: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    builds: list[build_planner.BuildPlan] = field(default_factory=list)
 
     @property
     def failed(self) -> bool:
@@ -53,13 +59,30 @@ class SkillPlan:
     spec: skillspec.SkillSpec
 
 
+class _MessageResult(Protocol):
+    messages: list[str]
+
+
 def install(config: GlobalConfig, *, alias: str | None = None, options: InstallOptions | None = None) -> list[ProjectResult]:
     options = options or InstallOptions()
     selected = _selected_projects(config, alias)
     results: list[ProjectResult] = []
     fetched_repos: set[Path] = set()
+    operator_search_path = (
+        build_toolchain.capture_operator_search_path()
+        if options.dry_run
+        else None
+    )
     for project in selected:
-        results.append(_install_project(config, project, options, fetched_repos=fetched_repos))
+        results.append(
+            _install_project(
+                config,
+                project,
+                options,
+                fetched_repos=fetched_repos,
+                operator_search_path=operator_search_path,
+            )
+        )
     if not options.dry_run:
         gc.collect_runtime(config, config.path.parent)
     return results
@@ -80,6 +103,62 @@ def _install_project(
     options: InstallOptions,
     *,
     fetched_repos: set[Path],
+    operator_search_path: build_toolchain.OperatorSearchPath | None,
+) -> ProjectResult:
+    if not options.dry_run:
+        return _install_project_once(
+            config,
+            project,
+            options,
+            fetched_repos=fetched_repos,
+            operator_search_path=operator_search_path,
+            generation_probe=None,
+            expected_generation=None,
+        )
+
+    generation_probe = _project_generation_probe(config, project)
+    for attempt in range(2):
+        try:
+            expected_generation = generation_probe.capture()
+            return _install_project_once(
+                config,
+                project,
+                options,
+                fetched_repos=fetched_repos,
+                operator_search_path=operator_search_path,
+                generation_probe=generation_probe,
+                expected_generation=expected_generation,
+            )
+        except build_planner.BuildPlanningError as exc:
+            if exc.code != "concurrent_state_change":
+                result = ProjectResult(
+                    alias=project.alias,
+                    path=project.path,
+                    status="failed",
+                )
+                result.errors.append(str(exc))
+                return result
+            if attempt == 0:
+                continue
+            result = ProjectResult(
+                alias=project.alias,
+                path=project.path,
+                status="failed",
+            )
+            result.errors.append(str(exc))
+            return result
+    raise AssertionError("unreachable project planning retry state")
+
+
+def _install_project_once(
+    config: GlobalConfig,
+    project: ProjectConfig,
+    options: InstallOptions,
+    *,
+    fetched_repos: set[Path],
+    operator_search_path: build_toolchain.OperatorSearchPath | None,
+    generation_probe: build_planner.GenerationProbe | None,
+    expected_generation: Mapping[str, str] | None,
 ) -> ProjectResult:
     result = ProjectResult(alias=project.alias, path=project.path, status="ok")
     try:
@@ -169,7 +248,15 @@ def _install_project(
             validation_issues = _validate_skills(plans, effective_locale)
             result.messages.extend(_skill_validation_warnings(project.alias, validation_issues))
             _check_skill_validation_errors(validation_issues)
+            build_providers: tuple[build_planner.BuildProvider, ...] = ()
+            if options.dry_run:
+                build_providers = _freeze_build_providers(nodes, stack)
             closure.detect_active_command_collisions(nodes)
+            if options.dry_run:
+                build_planner.detect_command_collisions(
+                    build_providers,
+                    occupied=_active_script_owners(nodes),
+                )
             _check_dependencies(plans)
             mcp_found, mcp_warnings = _check_mcp_servers(plans, project.path, agents, alias=project.alias)
             result.messages.extend(mcp_warnings)
@@ -178,13 +265,45 @@ def _install_project(
             result.messages.extend(audit_gate.warnings)
             if audit_gate.blocked:
                 raise InstallError("; ".join(audit_gate.errors))
-            registry_attest = _check_audit_registries(plans, config, result, alias=project.alias)
+            registry_attest = _check_audit_registries(
+                plans,
+                config,
+                result,
+                alias=project.alias,
+                read_only=options.dry_run,
+            )
             if options.strict_tags:
                 _check_moved_tags_strict(project.path / ".agents" / "skills", plans)
             else:
                 result.messages.extend(_moved_tag_warnings(project.path / ".agents" / "skills", plans))
 
             if options.dry_run:
+                if operator_search_path is None:
+                    raise AssertionError("dry-run build planning requires an operator search path")
+                result.builds.extend(
+                    build_planner.plan_builds(
+                        build_providers,
+                        manager_home=config.path.parent,
+                        operator_search_path=operator_search_path,
+                        forbidden_roots=(
+                            project.path,
+                            config.skills_root,
+                            *(node.repo for node in nodes),
+                        ),
+                        generation_probe=generation_probe,
+                        expected_generation=expected_generation,
+                        max_generation_attempts=1,
+                    )
+                )
+                for build in result.builds:
+                    payload = json.dumps(
+                        build.to_json(),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    result.messages.append(
+                        f"{project.alias}: build {payload}"
+                    )
                 for node in nodes:
                     result.messages.append(f"{project.alias}: {_node_summary(node)} (planned)")
                 result.messages.append(f"{project.alias}: dry-run; no files modified")
@@ -278,6 +397,12 @@ def _install_project(
                     "shell, run 'csk shell-init --install' once and source the printed hook from your profile"
                 )
             return result
+    except build_planner.BuildPlanningError as exc:
+        if options.dry_run and exc.code == "concurrent_state_change":
+            raise
+        result.status = "failed"
+        result.errors.append(str(exc))
+        return result
     except Exception as exc:
         result.status = "failed"
         result.errors.append(str(exc))
@@ -320,6 +445,95 @@ def _node_summary(node: closure.ClosureNode) -> str:
     if node.substituted:
         summary += f" SUBSTITUTED ({node.substituted})"
     return summary
+
+
+def _freeze_build_providers(
+    nodes: list[closure.ClosureNode],
+    stack: ExitStack,
+) -> tuple[build_planner.BuildProvider, ...]:
+    providers: list[build_planner.BuildProvider] = []
+    for node in nodes:
+        active = _active_build_command_names(node)
+        if not active:
+            continue
+        frozen = stack.enter_context(
+            build_source.freeze_snapshot(node.snapshot)
+        )
+        providers.append(
+            build_planner.provider_from_spec(
+                node.name,
+                frozen,
+                node.spec,
+                active_commands=active,
+            )
+        )
+    return tuple(providers)
+
+
+def _active_build_command_names(node: closure.ClosureNode) -> set[str]:
+    exported = {
+        command.name
+        for command in node.spec.commands.values()
+        if command.type == "build"
+    }
+    if any(edge.mode == "full" for edge in node.edges):
+        return exported
+    active: set[str] = set()
+    for edge in node.edges:
+        if edge.mode != "runtime":
+            continue
+        active.update(
+            command
+            for command in (edge.commands or tuple(exported))
+            if command in exported
+        )
+    return active
+
+
+def _active_script_owners(
+    nodes: list[closure.ClosureNode],
+) -> dict[str, str]:
+    owners: dict[str, str] = {}
+    for node in nodes:
+        for command in node.active_commands():
+            owners[command] = node.name
+    return owners
+
+
+def _project_generation_probe(
+    config: GlobalConfig,
+    project: ProjectConfig,
+) -> build_planner.FilesystemGenerationProbe:
+    csk_home = config.path.parent
+    user_home = Path.home()
+    paths = (
+        config.path,
+        project.path / manifest.MANIFEST_NAME,
+        project.path / dev_substitutions.DEV_MANIFEST_NAME,
+        hybrid.hybrid_manifest_path(csk_home),
+        project.path / ".agents" / "skills",
+        hybrid.hybrid_skills_root(csk_home),
+        csk_home / "audit",
+        csk_home / "builds",
+        csk_home / "cache" / "registry",
+        csk_home / "state" / "registry",
+        project.path / ".mcp.json",
+        project.path / ".cursor" / "mcp.json",
+        project.path / ".codex" / "config.toml",
+        project.path / ".gemini" / "settings.json",
+        project.path / "opencode.json",
+        project.path / "opencode.jsonc",
+        project.path / ".claude" / "settings.json",
+        project.path / ".claude" / "settings.local.json",
+        user_home / ".claude.json",
+        user_home / ".cursor" / "mcp.json",
+        user_home / ".codex" / "config.toml",
+        user_home / ".gemini" / "settings.json",
+        user_home / ".codeium" / "windsurf" / "mcp_config.json",
+        user_home / ".config" / "opencode" / "opencode.json",
+        user_home / ".config" / "opencode" / "opencode.jsonc",
+    )
+    return build_planner.FilesystemGenerationProbe(paths)
 
 
 def _migration_warnings(project_alias: str, plans: list[SkillPlan]) -> list[str]:
@@ -455,9 +669,10 @@ def skill_command_dependency_errors(plan: SkillPlan, plans: list[SkillPlan]) -> 
 def _check_audit_registries(
     plans: list[SkillPlan],
     config: GlobalConfig,
-    result: ProjectResult,
+    result: _MessageResult,
     *,
     alias: str,
+    read_only: bool = False,
 ) -> dict[str, dict[str, object]]:
     """Resolve each skill against trusted audit registries (RFC 0008).
 
@@ -471,10 +686,13 @@ def _check_audit_registries(
     strict = config.audit.registry_policy == "strict"
     cache_dir = config.path.parent / "cache" / "registry"
     state_dir = config.path.parent / "state" / "registry"
-    try:
-        audit_registry.migrate_snapshot_states(cache_dir, state_dir)
-    except audit_registry.RegistryError as exc:
-        raise InstallError(f"audit registry rollback state migration failed: {exc}") from exc
+    if not read_only:
+        try:
+            audit_registry.migrate_snapshot_states(cache_dir, state_dir)
+        except audit_registry.RegistryError as exc:
+            raise InstallError(
+                f"audit registry rollback state migration failed: {exc}"
+            ) from exc
     unavailable, snapshot_warnings = audit_registry.check_snapshots(
         registries,
         state_dir,
@@ -482,6 +700,7 @@ def _check_audit_registries(
         now=time.time(),
         max_age_seconds=config.audit.snapshot_max_age_seconds,
         clock_skew_seconds=config.audit.snapshot_clock_skew_seconds,
+        read_only=read_only,
     )
     for warning in snapshot_warnings:
         result.messages.append(f"{alias}: registry: {warning}")
@@ -493,6 +712,7 @@ def _check_audit_registries(
         cache_dir,
         ttl_seconds=config.audit.cache_ttl_seconds,
         grace_seconds=config.audit.offline_grace_seconds,
+        read_only=read_only,
     )
     attestations: dict[str, dict[str, object]] = {}
     errors: list[str] = []

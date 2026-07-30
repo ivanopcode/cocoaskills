@@ -938,6 +938,11 @@ def test_cli_install_dry_run_does_not_create_skills_root(monkeypatch, tmp_path, 
     missing_root = tmp_path / "missing-skills-root"
     _register_project(monkeypatch, csk_home, missing_root, project)
 
+    class ForbiddenLock:
+        def __init__(self, _home):
+            raise AssertionError("project dry-run must not construct a mutation lock")
+
+    monkeypatch.setattr(cli, "GlobalLock", ForbiddenLock)
     assert cli.main(["install", "app", "--dry-run"]) == 0
     assert not missing_root.exists()
 
@@ -953,6 +958,11 @@ def test_cli_upgrade_dry_run_does_not_create_or_fetch_skills_root(
     def unexpected_fetch(_repo):
         raise AssertionError("dry-run must not fetch")
 
+    class ForbiddenLock:
+        def __init__(self, _home):
+            raise AssertionError("project dry-run must not construct a mutation lock")
+
+    monkeypatch.setattr(cli, "GlobalLock", ForbiddenLock)
     monkeypatch.setattr(cli.git_ops, "fetch_repo", unexpected_fetch)
 
     assert cli.main(["upgrade", "app", "--dry-run"]) == 0

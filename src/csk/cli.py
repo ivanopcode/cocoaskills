@@ -562,8 +562,14 @@ def _dispatch(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     if args.command in {"install", "update", "upgrade"}:
-        if not getattr(args, "dry_run", False):
-            config.validate_skills_root_for_work(cfg)
+        dry_run_operation = (
+            args.command in {"install", "upgrade"}
+            and getattr(args, "dry_run", False)
+        )
+        if dry_run_operation:
+            cfg, args = _prepare_install_target(cfg, args)
+            return _cmd_install(cfg, args)
+        config.validate_skills_root_for_work(cfg)
         with GlobalLock(cfg.path.parent):
             if args.command == "update":
                 return _cmd_update(cfg)
@@ -609,16 +615,15 @@ def _dispatch_global(args: argparse.Namespace) -> int:
         print(global_install.render_status(cfg))
         return EXIT_OK
     dry_run_operation = args.global_command in {"install", "upgrade"} and getattr(args, "dry_run", False)
-    if not dry_run_operation:
-        config.validate_skills_root_for_work(cfg)
+    if dry_run_operation:
+        return _cmd_global_install(cfg, args)
+    config.validate_skills_root_for_work(cfg)
     with GlobalLock(cfg.path.parent):
         if args.global_command == "update":
             return _cmd_global_update(cfg)
         if args.global_command == "install":
             return _cmd_global_install(cfg, args)
         if args.global_command == "upgrade":
-            if args.dry_run:
-                return _cmd_global_install(cfg, args)
             update_code = _cmd_global_update(cfg)
             install_code = _cmd_global_install(cfg, args)
             return install_code if install_code != EXIT_OK else update_code

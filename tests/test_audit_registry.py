@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from typing import Any
 
 import pytest
@@ -211,6 +212,77 @@ def test_http_fetch_caches_and_offline_grace(tmp_path):
         assert calls["n"] == 2
     finally:
         mod._http_get_records = original  # type: ignore[assignment]
+
+
+def test_http_fetch_read_only_uses_network_without_creating_cache(
+    tmp_path, monkeypatch
+):
+    cache_dir = tmp_path / "missing-cache"
+    private, _ = _make_key()
+    record = _sign_record(private, _record_body())
+    monkeypatch.setattr(
+        audit_registry,
+        "_http_get_records",
+        lambda _endpoint: [record],
+    )
+
+    fetch = audit_registry.make_http_fetch(
+        cache_dir,
+        ttl_seconds=0,
+        grace_seconds=1000,
+        now=1000.0,
+        read_only=True,
+    )
+
+    assert fetch("https://r.example", "s", "c", "h") == [record]
+    assert not cache_dir.exists()
+
+
+def test_http_fetch_read_only_does_not_refresh_persistent_cache(
+    tmp_path, monkeypatch
+):
+    cache_dir = tmp_path / "cache"
+    private, _ = _make_key()
+    first = _sign_record(private, _record_body("audited"))
+    second = _sign_record(private, _record_body("deprecated"))
+    monkeypatch.setattr(
+        audit_registry,
+        "_http_get_records",
+        lambda _endpoint: [first],
+    )
+    writable = audit_registry.make_http_fetch(
+        cache_dir,
+        ttl_seconds=0,
+        grace_seconds=1000,
+        now=1000.0,
+    )
+    assert writable("https://r.example", "s", "c", "h") == [first]
+    before = {
+        path.relative_to(cache_dir).as_posix(): path.read_bytes()
+        for path in cache_dir.rglob("*")
+        if path.is_file()
+    }
+    monkeypatch.setattr(
+        audit_registry,
+        "_http_get_records",
+        lambda _endpoint: [second],
+    )
+
+    read_only = audit_registry.make_http_fetch(
+        cache_dir,
+        ttl_seconds=0,
+        grace_seconds=1000,
+        now=2000.0,
+        read_only=True,
+    )
+
+    assert read_only("https://r.example", "s", "c", "h") == [second]
+    after = {
+        path.relative_to(cache_dir).as_posix(): path.read_bytes()
+        for path in cache_dir.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
 
 
 def test_http_records_follows_bounded_pagination(monkeypatch):
@@ -574,6 +646,104 @@ def test_check_snapshots_accepts_valid(tmp_path):
     )
     assert unavailable == set()
     assert warnings == []
+
+
+def test_check_snapshots_read_only_missing_state_directory_is_pure(tmp_path):
+    private, pinned = _make_key()
+    registry = RegistryConfig(
+        name="central",
+        url="https://r.example",
+        public_keys=(pinned,),
+    )
+    snapshot = _sign_record(
+        private,
+        _snapshot_body(version=5, created_at="2026-07-07T00:00:00Z"),
+    )
+    now = audit_registry._parse_iso8601("2026-07-07T01:00:00Z")
+    state_dir = tmp_path / "missing-state"
+
+    unavailable, warnings = audit_registry.check_snapshots(
+        (registry,),
+        state_dir,
+        fetch_snapshot=lambda _url: snapshot,
+        now=now,
+        read_only=True,
+    )
+
+    assert unavailable == set()
+    assert warnings == []
+    assert not state_dir.exists()
+
+
+def test_check_snapshots_read_only_preserves_existing_state_bytes(tmp_path):
+    private, pinned = _make_key()
+    registry = RegistryConfig(
+        name="central",
+        url="https://r.example",
+        public_keys=(pinned,),
+    )
+    now = audit_registry._parse_iso8601("2026-07-07T01:00:00Z")
+    state_dir = tmp_path / "state"
+    version_five = _sign_record(private, _snapshot_body(version=5))
+    unavailable, warnings = audit_registry.check_snapshots(
+        (registry,),
+        state_dir,
+        fetch_snapshot=lambda _url: version_five,
+        now=now,
+    )
+    assert unavailable == set()
+    assert warnings == []
+    before = {
+        path.relative_to(state_dir).as_posix(): (
+            path.read_bytes(),
+            path.stat().st_mode,
+            path.stat().st_mtime_ns,
+        )
+        for path in state_dir.rglob("*")
+        if path.is_file()
+    }
+    version_six = _sign_record(private, _snapshot_body(version=6))
+
+    unavailable, warnings = audit_registry.check_snapshots(
+        (registry,),
+        state_dir,
+        fetch_snapshot=lambda _url: version_six,
+        now=now,
+        read_only=True,
+    )
+
+    after = {
+        path.relative_to(state_dir).as_posix(): (
+            path.read_bytes(),
+            path.stat().st_mode,
+            path.stat().st_mtime_ns,
+        )
+        for path in state_dir.rglob("*")
+        if path.is_file()
+    }
+    assert unavailable == set()
+    assert warnings == []
+    assert after == before
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or not hasattr(os, "O_NOATIME"),
+    reason="the platform has no no-atime read flag",
+)
+def test_read_only_registry_state_uses_noatime_when_available(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text('{"highest_version":0}', encoding="utf-8")
+    path.chmod(0o600)
+    old_atime_ns = 1_000_000_000
+    old_mtime_ns = 2_000_000_000
+    os.utime(path, ns=(old_atime_ns, old_mtime_ns))
+
+    assert audit_registry._read_protected_state_file(path) == (
+        b'{"highest_version":0}'
+    )
+
+    assert path.stat().st_atime_ns == old_atime_ns
+    assert path.stat().st_mtime_ns == old_mtime_ns
 
 
 def test_check_snapshots_detects_rollback(tmp_path):

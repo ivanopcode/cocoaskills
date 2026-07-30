@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import errno
 import hashlib
 import http.client
 import json
@@ -403,6 +404,7 @@ def check_snapshots(
     now: float,
     max_age_seconds: int = DEFAULT_SNAPSHOT_MAX_AGE_SECONDS,
     clock_skew_seconds: int = DEFAULT_SNAPSHOT_CLOCK_SKEW_SECONDS,
+    read_only: bool = False,
 ) -> tuple[set[str], list[str]]:
     """Verify each registry snapshot; return the URLs to treat as tampered.
 
@@ -412,13 +414,21 @@ def check_snapshots(
     exclude the registry, because per-record signatures and deny-wins
     revocation still protect the install. The highest accepted version is
     persisted per registry, so a later rollback is detected across runs.
+    ``read_only`` validates existing state and the reachable snapshot but
+    neither creates nor advances rollback state.
     """
     unavailable: set[str] = set()
     warnings: list[str] = []
     try:
-        cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        cache_dir.chmod(0o700)
-    except OSError as exc:
+        if read_only:
+            state_directory_exists = _validate_read_only_state_directory(
+                cache_dir
+            )
+        else:
+            cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            cache_dir.chmod(0o700)
+            state_directory_exists = True
+    except (OSError, RegistryError) as exc:
         for registry in registries:
             if registry.public_keys:
                 unavailable.add(registry.url)
@@ -427,7 +437,14 @@ def check_snapshots(
                 )
         return unavailable, warnings
     try:
-        known_states = _load_snapshot_state_catalog(cache_dir)
+        known_states = (
+            _load_snapshot_state_catalog(
+                cache_dir,
+                create_if_missing=not read_only,
+            )
+            if state_directory_exists
+            else set()
+        )
     except RegistryError as exc:
         for registry in registries:
             if registry.public_keys:
@@ -489,6 +506,8 @@ def check_snapshots(
         if created > now + clock_skew_seconds:
             warnings.append(f"registry {registry.name} snapshot timestamp is too far in the future")
             unavailable.add(registry.url)
+            continue
+        if read_only:
             continue
         try:
             _write_snapshot_state(
@@ -566,7 +585,7 @@ def _read_protected_state_file(path: Path) -> bytes | None:
     if os.name != "nt" and stat.S_IMODE(metadata.st_mode) & 0o077:
         raise RegistryError("security state permissions are too broad")
     try:
-        return path.read_bytes()
+        return _read_regular_file_noatime(path, metadata)
     except OSError as exc:
         raise RegistryError(str(exc)) from exc
 
@@ -604,7 +623,11 @@ def _sync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _load_snapshot_state_catalog(state_dir: Path) -> set[str]:
+def _load_snapshot_state_catalog(
+    state_dir: Path,
+    *,
+    create_if_missing: bool = True,
+) -> set[str]:
     catalog_path = state_dir / SNAPSHOT_STATE_CATALOG
     payload = _read_protected_state_file(catalog_path)
     if payload is None:
@@ -618,7 +641,8 @@ def _load_snapshot_state_catalog(state_dir: Path) -> set[str]:
         if has_state:
             raise RegistryError("catalog is missing while rollback state exists")
         known: set[str] = set()
-        _write_snapshot_state_catalog(state_dir, known)
+        if create_if_missing:
+            _write_snapshot_state_catalog(state_dir, known)
         return known
     try:
         value = load_protocol_json(payload)
@@ -739,24 +763,43 @@ def make_http_fetch(
     ttl_seconds: int = DEFAULT_CACHE_TTL_SECONDS,
     grace_seconds: int = DEFAULT_OFFLINE_GRACE_SECONDS,
     now: float | None = None,
+    read_only: bool = False,
 ) -> FetchFn:
     """Build a fetch callable that queries /v1/records with an on-disk cache.
 
     A fresh cache entry is served without a network call. A stale entry is
     refreshed; when the registry is unreachable the stale entry is reused
     within the offline grace window, otherwise RegistryError is raised.
+    ``read_only`` may consume an existing cache but never creates or refreshes
+    it.
     """
-    return _HTTPFetch(cache_dir, ttl_seconds, grace_seconds, now)
+    return _HTTPFetch(
+        cache_dir,
+        ttl_seconds,
+        grace_seconds,
+        now,
+        read_only=read_only,
+    )
 
 
 class _HTTPFetch:
-    def __init__(self, cache_dir: Path, ttl_seconds: int, grace_seconds: int, now: float | None):
+    def __init__(
+        self,
+        cache_dir: Path,
+        ttl_seconds: int,
+        grace_seconds: int,
+        now: float | None,
+        *,
+        read_only: bool,
+    ):
         self.cache_dir = cache_dir
         self.ttl_seconds = ttl_seconds
         self.grace_seconds = grace_seconds
         self.fixed_now = now
+        self.read_only = read_only
         self.stale_urls: set[str] = set()
-        cache_dir.mkdir(parents=True, exist_ok=True)
+        if not read_only:
+            cache_dir.mkdir(parents=True, exist_ok=True)
 
     def __call__(self, url: str, source_identity: str, commit: str, content_sha256: str) -> list[dict[str, Any]]:
         clock = time.time() if self.fixed_now is None else self.fixed_now
@@ -783,7 +826,8 @@ class _HTTPFetch:
                 return cached[1]
             raise
         self.stale_urls.discard(url)
-        _write_cache(cache_file, clock, payloads)
+        if not self.read_only:
+            _write_cache(cache_file, clock, payloads)
         return payloads
 
 
@@ -931,13 +975,21 @@ def http_publish_record(base_url: str, token: str, record_json: bytes) -> dict[s
 
 
 def _read_cache(path: Path) -> tuple[float, list[dict[str, Any]]] | None:
-    if not path.is_file():
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+    if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(
+            _read_regular_file_noatime(path, metadata).decode("utf-8")
+        )
         fetched_at = float(data["fetched_at"])
         records = data["records"]
-    except (ValueError, KeyError, OSError):
+    except (UnicodeDecodeError, ValueError, KeyError, OSError):
         return None
     if not isinstance(records, list):
         return None
@@ -956,3 +1008,83 @@ def _write_cache(path: Path, fetched_at: float, records: list[dict[str, Any]]) -
         temporary.replace(path)
     except OSError:
         temporary.unlink(missing_ok=True)
+
+
+def _validate_read_only_state_directory(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    if path.is_symlink() or not stat.S_ISDIR(metadata.st_mode):
+        raise RegistryError("rollback state path is not a regular directory")
+    if os.name != "nt":
+        if stat.S_IMODE(metadata.st_mode) & 0o077:
+            raise RegistryError(
+                "rollback state directory permissions are too broad"
+            )
+        effective_uid = getattr(os, "geteuid", lambda: metadata.st_uid)()
+        if metadata.st_uid != effective_uid:
+            raise RegistryError(
+                "rollback state directory owner does not match the effective user"
+            )
+    return True
+
+
+def _read_regular_file_noatime(
+    path: Path,
+    expected: os.stat_result,
+) -> bytes:
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_NOATIME", 0)
+    )
+    descriptor = -1
+    try:
+        try:
+            descriptor = os.open(path, flags)
+        except OSError as exc:
+            noatime = getattr(os, "O_NOATIME", 0)
+            if (
+                not noatime
+                or not flags & noatime
+                or exc.errno
+                not in {errno.EPERM, errno.EACCES, errno.EINVAL, errno.ENOTSUP}
+            ):
+                raise
+            descriptor = os.open(path, flags & ~noatime)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino)
+            != (expected.st_dev, expected.st_ino)
+            or opened.st_size != expected.st_size
+        ):
+            raise OSError("file changed while opening")
+        remaining = opened.st_size
+        chunks: list[bytes] = []
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+            if not chunk:
+                raise OSError("file changed while reading")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise OSError("file changed while reading")
+        after = os.fstat(descriptor)
+        if (
+            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+            != (
+                opened.st_dev,
+                opened.st_ino,
+                opened.st_size,
+                opened.st_mtime_ns,
+            )
+        ):
+            raise OSError("file changed while reading")
+        return b"".join(chunks)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)

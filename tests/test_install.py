@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import stat
 import subprocess
 import sys
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -12,6 +15,74 @@ from conftest import commit_all, make_config, make_project, make_skill_repo, run
 from csk import config, hashing, installer, manifest, skillcheck, snapshot
 from csk.audit import pipeline as audit_pipeline
 from csk.audit.backends import AuditBackendError
+from csk.builds import go_v1, planner as build_planner, source as build_source
+from csk.builds import toolchain as build_toolchain
+from csk.builds.cache import CacheEntryStatus, CacheInspection
+
+
+def _filesystem_state(roots: tuple[Path, ...]) -> dict[str, tuple[object, ...]]:
+    state: dict[str, tuple[object, ...]] = {}
+    for root in roots:
+        root_key = str(root)
+        if not root.exists() and not root.is_symlink():
+            state[root_key] = ("missing",)
+            continue
+        paths = [root, *root.rglob("*")]
+        for path in paths:
+            info = path.lstat()
+            key = f"{root_key}:{path.relative_to(root).as_posix() or '.'}"
+            if stat.S_ISREG(info.st_mode):
+                payload: object = path.read_bytes()
+                kind = "file"
+            elif stat.S_ISLNK(info.st_mode):
+                payload = os.readlink(path)
+                kind = "link"
+            elif stat.S_ISDIR(info.st_mode):
+                payload = None
+                kind = "directory"
+            else:
+                payload = None
+                kind = "special"
+            state[key] = (
+                kind,
+                stat.S_IMODE(info.st_mode),
+                info.st_size,
+                info.st_mtime_ns,
+                payload,
+            )
+    return state
+
+
+def _stub_trusted_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeSession:
+        target = build_toolchain.NativeTarget(
+            goos="linux",
+            goarch="amd64",
+            tuning={"GOAMD64": "v1"},
+        )
+        toolchain = build_toolchain.ToolchainIdentity(
+            algorithm=build_toolchain.TOOLCHAIN_ALGORITHM,
+            content_sha256="sha256:" + "a" * 64,
+            go_relpath=build_toolchain.GO_RELPATH,
+            go_version="go version go1.25.5 linux/amd64",
+        )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    monkeypatch.setattr(
+        build_toolchain,
+        "capture_operator_search_path",
+        lambda: build_toolchain.OperatorSearchPath(("/fixture/bin",)),
+    )
+    monkeypatch.setattr(
+        build_toolchain,
+        "establish_toolchain",
+        lambda _config: FakeSession(),
+    )
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Asserts POSIX symlink shim in .agents/bin")
@@ -205,7 +276,7 @@ def test_dry_run_does_not_modify_project_or_cache(tmp_path, skills_root, csk_hom
 
 
 def test_schema_v6_build_root_stays_out_of_dry_run_real_and_up_to_date_context(
-    tmp_path, skills_root, csk_home
+    monkeypatch, tmp_path, skills_root, csk_home
 ):
     project = make_project(tmp_path)
     make_skill_repo(
@@ -235,6 +306,7 @@ def test_schema_v6_build_root_stays_out_of_dry_run_real_and_up_to_date_context(
     )
     write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-build", "tag": "v1"}]})
     cfg = make_config(csk_home, skills_root, project)
+    _stub_trusted_toolchain(monkeypatch)
 
     dry_run = installer.install(cfg, options=installer.InstallOptions(dry_run=True))[0]
 
@@ -252,6 +324,444 @@ def test_schema_v6_build_root_stays_out_of_dry_run_real_and_up_to_date_context(
     assert (installed / "assets" / "prompt.md").is_file()
     assert not (installed / "assets" / "build-tool").exists()
     assert not (csk_home / "runtime" / "skill-build").exists()
+
+
+def test_project_dry_run_missing_go_fails_whole_plan_without_mutation(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-build",
+        {
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 6,
+                    "build_roots": ["build"],
+                    "commands": {
+                        "tool": {
+                            "type": "build",
+                            "driver": "go-v1",
+                            "source_dir": "build/cmd/tool",
+                        }
+                    },
+                    "capabilities": {},
+                }
+            ),
+            "build/go.mod": "module example.com/tool\n\ngo 1.23\n",
+            "build/cmd/tool/main.go": "package main\n\nfunc main() {}\n",
+        },
+        tag="v1",
+    )
+    make_skill_repo(skills_root, "skill-plain", tag="v1")
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [
+                {"name": "skill-build", "tag": "v1"},
+                {"name": "skill-plain", "tag": "v1"},
+            ],
+        },
+    )
+    cfg = make_config(csk_home, skills_root, project)
+    monkeypatch.setattr(
+        build_toolchain,
+        "capture_operator_search_path",
+        lambda: build_toolchain.OperatorSearchPath(()),
+    )
+    watched = (project, csk_home, skills_root, Path.home())
+    before = _filesystem_state(watched)
+
+    result = installer.install(
+        cfg,
+        options=installer.InstallOptions(dry_run=True),
+    )[0]
+
+    after = _filesystem_state(watched)
+    assert result.status == "failed"
+    assert result.errors == [
+        "go-v1 go_toolchain_missing: captured operator PATH contains no "
+        "Go executable"
+    ]
+    assert result.builds == []
+    assert not any("(planned)" in message for message in result.messages)
+    assert before == after
+
+
+def test_real_install_does_not_plan_builds_or_require_go(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-build",
+        {
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 6,
+                    "build_roots": ["build"],
+                    "commands": {
+                        "tool": {
+                            "type": "build",
+                            "driver": "go-v1",
+                            "source_dir": "build/cmd/tool",
+                        }
+                    },
+                    "capabilities": {},
+                }
+            ),
+            "build/go.mod": "module example.com/tool\n\ngo 1.23\n",
+            "build/cmd/tool/main.go": "package main\n\nfunc main() {}\n",
+        },
+        tag="v1",
+    )
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [{"name": "skill-build", "tag": "v1"}],
+        },
+    )
+    cfg = make_config(csk_home, skills_root, project)
+    no_go_bin = tmp_path / "no-go-bin"
+    no_go_bin.mkdir()
+    for tool in ("git", "sh", "env", "uname"):
+        executable = shutil.which(tool)
+        if executable is not None:
+            (no_go_bin / tool).symlink_to(executable)
+    monkeypatch.setenv("PATH", str(no_go_bin))
+
+    def unexpected_plan(*args, **kwargs):
+        raise AssertionError("real install must defer build planning")
+
+    monkeypatch.setattr(build_planner, "plan_builds", unexpected_plan)
+
+    result = installer.install(cfg)[0]
+
+    assert not result.errors
+    assert result.builds == []
+    installed = project / ".agents" / "skills" / "skill-build"
+    assert (installed / "SKILL.md").is_file()
+    assert not (installed / "build").exists()
+
+
+def test_build_planning_runs_only_after_validation_and_trust_gates(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-build",
+        {
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 6,
+                    "build_roots": ["build"],
+                    "commands": {
+                        "z-tool": {
+                            "type": "build",
+                            "driver": "go-v1",
+                            "source_dir": "build/cmd/z-tool",
+                        }
+                    },
+                    "capabilities": {},
+                }
+            ),
+            "build/go.mod": "module example.com/tool\n\ngo 1.23\n",
+            "build/cmd/z-tool/main.go": "package main\n\nfunc main() {}\n",
+        },
+        tag="v1",
+    )
+    write_skillfile(
+        project,
+        {"schema_version": 1, "skills": [{"name": "skill-build", "tag": "v1"}]},
+    )
+    cfg = make_config(csk_home, skills_root, project)
+    events: list[str] = []
+    original_freeze = build_source.freeze_snapshot
+    original_collision = installer.closure.detect_active_command_collisions
+    original_dependencies = installer._check_dependencies
+    original_mcp = installer._check_mcp_servers
+    original_moved = installer._moved_tag_warnings
+
+    def freeze(path):
+        events.append("freeze")
+        return original_freeze(path)
+
+    def collisions(nodes):
+        events.append("collisions")
+        return original_collision(nodes)
+
+    def dependencies(plans):
+        events.append("system")
+        return original_dependencies(plans)
+
+    def mcp(plans, project_root, agents, *, alias=""):
+        events.append("mcp")
+        return original_mcp(plans, project_root, agents, alias=alias)
+
+    def audit(*args, **kwargs):
+        events.append("audit")
+        return audit_pipeline.GateResult(reports=())
+
+    def registry(plans, config_value, result, *, alias, read_only=False):
+        assert read_only is True
+        events.append("registry")
+        return {}
+
+    def moved(skills_dir, plans):
+        events.append("moved")
+        return original_moved(skills_dir, plans)
+
+    def plan_builds(providers, **kwargs):
+        assert [provider.name for provider in providers] == ["skill-build"]
+        events.append("toolchain-cache")
+        return ()
+
+    monkeypatch.setattr(installer.build_source, "freeze_snapshot", freeze)
+    monkeypatch.setattr(
+        installer.closure,
+        "detect_active_command_collisions",
+        collisions,
+    )
+    monkeypatch.setattr(installer, "_check_dependencies", dependencies)
+    monkeypatch.setattr(installer, "_check_mcp_servers", mcp)
+    monkeypatch.setattr(installer.audit_pipeline, "gate_plans", audit)
+    monkeypatch.setattr(installer, "_check_audit_registries", registry)
+    monkeypatch.setattr(installer, "_moved_tag_warnings", moved)
+    monkeypatch.setattr(build_planner, "plan_builds", plan_builds)
+
+    result = installer.install(
+        cfg,
+        options=installer.InstallOptions(dry_run=True),
+    )[0]
+
+    assert not result.errors
+    assert result.builds == []
+    assert events == [
+        "freeze",
+        "collisions",
+        "system",
+        "mcp",
+        "audit",
+        "registry",
+        "moved",
+        "toolchain-cache",
+    ]
+
+
+def test_compiled_dry_run_preserves_every_persistent_surface(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-build",
+        {
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 6,
+                    "build_roots": ["build"],
+                    "commands": {
+                        "tool": {
+                            "type": "build",
+                            "driver": "go-v1",
+                            "source_dir": "build/cmd/tool",
+                        }
+                    },
+                    "capabilities": {},
+                }
+            ),
+            "build/go.mod": "module example.com/tool\n\ngo 1.23\n",
+            "build/cmd/tool/main.go": "package main\n\nfunc main() {}\n",
+        },
+        tag="v1",
+    )
+    write_skillfile(
+        project,
+        {"schema_version": 1, "skills": [{"name": "skill-build", "tag": "v1"}]},
+    )
+    cfg = make_config(csk_home, skills_root, project)
+    write_files(
+        csk_home,
+        {
+            "audit/existing/trust.json": '{"pinned":true}\n',
+            "builds/go-v1/existing/receipt.json": '{"existing":true}\n',
+            "cache/registry/records-existing.json": '{"records":[]}\n',
+            "state/registry/known-registries.json": (
+                '{"schema_version":1,"states":[]}'
+            ),
+            "state/transactions/v1/existing.json": '{"journal":"existing"}\n',
+            "runtime/existing/tool": "runtime\n",
+            "consumers.json": '{"schema_version":1,"consumers":[]}\n',
+        },
+    )
+    observed_argv: list[tuple[str, ...]] = []
+
+    class FakeSession:
+        target = build_toolchain.NativeTarget(
+            goos="darwin",
+            goarch="arm64",
+            tuning={"GOARM64": "v8.0"},
+        )
+        toolchain = build_toolchain.ToolchainIdentity(
+            algorithm=build_toolchain.TOOLCHAIN_ALGORITHM,
+            content_sha256="sha256:" + "a" * 64,
+            go_relpath=build_toolchain.GO_RELPATH,
+            go_version="go version go1.25.5 darwin/arm64",
+        )
+
+        def __enter__(self):
+            observed_argv.extend(
+                [
+                    ("go", "telemetry", "off"),
+                    ("go", "version"),
+                    ("go", "env"),
+                ]
+            )
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    class ReadOnlyCache:
+        manager_home = csk_home
+
+        def inspect(self, expectation):
+            return CacheInspection(
+                status=CacheEntryStatus.MISS,
+                reason="fixture miss",
+            )
+
+        def publish(self, *args, **kwargs):
+            raise AssertionError("dry-run must not publish a cache entry")
+
+        def quarantine(self, *args, **kwargs):
+            raise AssertionError("dry-run must not quarantine a cache entry")
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("dry-run reached a persistent mutation boundary")
+
+    monkeypatch.setattr(
+        build_planner.toolchain,
+        "establish_toolchain",
+        lambda _config: FakeSession(),
+    )
+    monkeypatch.setattr(
+        build_planner.cache,
+        "cache_for_manager_home",
+        lambda _home: ReadOnlyCache(),
+    )
+    monkeypatch.setattr(go_v1, "build", unexpected)
+    monkeypatch.setattr(installer.consumers, "record_consumer", unexpected)
+    monkeypatch.setattr(installer.gc, "collect_runtime", unexpected)
+    monkeypatch.setattr(installer, "install_runtime_commands", unexpected)
+    monkeypatch.setattr(installer, "_install_skill_context", unexpected)
+    monkeypatch.setattr(installer, "_install_marker_only", unexpected)
+    monkeypatch.setattr(installer.shims, "remove_stale_shims", unexpected)
+    monkeypatch.setattr(installer.env_files, "write_env_files", unexpected)
+    monkeypatch.setattr(
+        installer.adapters,
+        "refresh_adapter_groups",
+        unexpected,
+    )
+    watched = (project, csk_home, skills_root, Path.home())
+    before = _filesystem_state(watched)
+
+    result = installer.install(
+        cfg,
+        options=installer.InstallOptions(dry_run=True),
+    )[0]
+
+    after = _filesystem_state(watched)
+    assert not result.errors
+    assert [build.result for build in result.builds] == [
+        "would-preflight-and-build"
+    ]
+    assert before == after
+    assert all(
+        argv[1] not in {"list", "build"}
+        for argv in observed_argv
+    )
+    assert observed_argv == [
+        ("go", "telemetry", "off"),
+        ("go", "version"),
+        ("go", "env"),
+    ]
+
+
+def test_project_dry_run_retries_the_complete_plan_after_generation_change(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": []})
+    cfg = make_config(csk_home, skills_root, project)
+    values = iter(
+        [
+            {"shared": "sha256:" + "0" * 64},
+            {"shared": "sha256:" + "1" * 64},
+            {"shared": "sha256:" + "1" * 64},
+            {"shared": "sha256:" + "1" * 64},
+        ]
+    )
+    audit_calls = 0
+
+    class Generation:
+        def capture(self):
+            return next(values)
+
+    def audit(*args, **kwargs):
+        nonlocal audit_calls
+        audit_calls += 1
+        return audit_pipeline.GateResult(reports=())
+
+    monkeypatch.setattr(
+        installer,
+        "_project_generation_probe",
+        lambda _config, _project: Generation(),
+    )
+    monkeypatch.setattr(installer.audit_pipeline, "gate_plans", audit)
+
+    result = installer.install(
+        cfg,
+        options=installer.InstallOptions(dry_run=True),
+    )[0]
+
+    assert not result.errors
+    assert audit_calls == 2
+
+
+def test_project_dry_run_reports_repeated_concurrent_state_change(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": []})
+    cfg = make_config(csk_home, skills_root, project)
+    generation = 0
+
+    class Generation:
+        def capture(self):
+            nonlocal generation
+            generation += 1
+            return {"shared": f"sha256:{generation:064x}"}
+
+    monkeypatch.setattr(
+        installer,
+        "_project_generation_probe",
+        lambda _config, _project: Generation(),
+    )
+
+    result = installer.install(
+        cfg,
+        options=installer.InstallOptions(dry_run=True),
+    )[0]
+
+    assert result.errors
+    assert result.errors == [
+        "concurrent_state_change: shared planning state changed during "
+        "the read-only build plan"
+    ]
 
 
 @pytest.mark.parametrize(

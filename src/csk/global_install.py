@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from . import adapters, env_files, git_ops, global_bins, hashing, installer, manifest, protocol_json, shims
+from . import adapters, closure, env_files, git_ops, global_bins, hashing, installer, manifest, protocol_json, shims
 from .audit import pipeline as audit_pipeline
+from .builds import planner as build_planner
+from .builds import toolchain as build_toolchain
 from .config import DEFAULT_AGENTS, GlobalConfig
 
 
@@ -20,6 +23,7 @@ class GlobalResult:
     status: str = "ok"
     messages: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    builds: list[build_planner.BuildPlan] = field(default_factory=list)
 
     @property
     def failed(self) -> bool:
@@ -129,6 +133,48 @@ def list_declared(csk_home: Path) -> str:
 
 def install(config: GlobalConfig, *, options: installer.InstallOptions | None = None) -> GlobalResult:
     options = options or installer.InstallOptions()
+    operator_search_path = (
+        build_toolchain.capture_operator_search_path()
+        if options.dry_run
+        else None
+    )
+    if not options.dry_run:
+        return _install_once(
+            config,
+            options=options,
+            operator_search_path=operator_search_path,
+            generation_probe=None,
+            expected_generation=None,
+        )
+
+    generation_probe = _global_generation_probe(config)
+    for attempt in range(2):
+        try:
+            expected_generation = generation_probe.capture()
+            return _install_once(
+                config,
+                options=options,
+                operator_search_path=operator_search_path,
+                generation_probe=generation_probe,
+                expected_generation=expected_generation,
+            )
+        except build_planner.BuildPlanningError as exc:
+            if exc.code != "concurrent_state_change" or attempt == 1:
+                return GlobalResult(
+                    status="failed",
+                    errors=[str(exc)],
+                )
+    raise AssertionError("unreachable global planning retry state")
+
+
+def _install_once(
+    config: GlobalConfig,
+    *,
+    options: installer.InstallOptions,
+    operator_search_path: build_toolchain.OperatorSearchPath | None,
+    generation_probe: build_planner.GenerationProbe | None,
+    expected_generation: Mapping[str, str] | None,
+) -> GlobalResult:
     result = GlobalResult()
     csk_home = config.path.parent
     try:
@@ -136,26 +182,134 @@ def install(config: GlobalConfig, *, options: installer.InstallOptions | None = 
         agents = global_manifest.agents or config.default_agents
         effective_locale = global_manifest.locale or config.preferred_locale
         with ExitStack() as stack:
-            plans = _build_plans(config, global_manifest, options=options, stack=stack, result=result)
-            try:
-                installer._detect_command_collisions(plans)
-            except Exception as exc:
-                result.status = "failed"
-                result.errors.append(str(exc))
-                return result
+            nodes: list[closure.ClosureNode] = []
+            build_providers: tuple[build_planner.BuildProvider, ...] = ()
+            if options.dry_run:
+                nodes = _build_nodes(
+                    config,
+                    global_manifest,
+                    options=options,
+                    stack=stack,
+                    result=result,
+                )
+                plans = [
+                    installer.SkillPlan(
+                        decl=node.decl,
+                        resolved=node.resolved,
+                        repo=node.repo,
+                        snapshot=node.snapshot,
+                        spec=node.spec,
+                    )
+                    for node in nodes
+                ]
+                validation_issues = installer._validate_skills(
+                    plans,
+                    effective_locale,
+                )
+                result.messages.extend(
+                    installer._skill_validation_warnings(
+                        "global",
+                        validation_issues,
+                    )
+                )
+                installer._check_skill_validation_errors(validation_issues)
+                build_providers = installer._freeze_build_providers(nodes, stack)
+                try:
+                    closure.detect_active_command_collisions(nodes)
+                    build_planner.detect_command_collisions(
+                        build_providers,
+                        occupied=installer._active_script_owners(nodes),
+                    )
+                except Exception as exc:
+                    result.status = "failed"
+                    result.errors.append(str(exc))
+                    return result
+            else:
+                plans = _build_plans(
+                    config,
+                    global_manifest,
+                    options=options,
+                    stack=stack,
+                    result=result,
+                )
+                try:
+                    installer._detect_command_collisions(plans)
+                except Exception as exc:
+                    result.status = "failed"
+                    result.errors.append(str(exc))
+                    return result
             plans = _plans_with_available_dependencies(plans, result)
-            audit_gate = audit_pipeline.gate_plans(plans, config, scope="global", record=not options.dry_run)
+            if options.dry_run:
+                available_names = {plan.decl.name for plan in plans}
+                build_providers = tuple(
+                    provider
+                    for provider in build_providers
+                    if provider.name in available_names
+                )
+                _, mcp_warnings = installer._check_mcp_servers(
+                    plans,
+                    global_root(csk_home),
+                    agents,
+                    alias="global",
+                )
+                result.messages.extend(mcp_warnings)
+            audit_gate = audit_pipeline.gate_plans(
+                plans,
+                config,
+                scope="global",
+                record=not options.dry_run,
+            )
             result.messages.extend(audit_gate.warnings)
             if audit_gate.blocked:
                 result.status = "failed"
                 result.errors.extend(audit_gate.errors)
                 return result
+            if options.dry_run:
+                installer._check_audit_registries(
+                    plans,
+                    config,
+                    result,
+                    alias="global",
+                    read_only=True,
+                )
             if options.strict_tags:
                 installer._check_moved_tags_strict(global_skills_root(csk_home), plans)
             else:
                 for warning in installer._moved_tag_warnings(global_skills_root(csk_home), plans):
                     result.messages.append(f"global: {warning}")
             if options.dry_run:
+                if result.errors:
+                    _recheck_generation(
+                        generation_probe,
+                        expected_generation,
+                    )
+                else:
+                    if operator_search_path is None:
+                        raise AssertionError(
+                            "dry-run build planning requires an operator search path"
+                        )
+                    result.builds.extend(
+                        build_planner.plan_builds(
+                            build_providers,
+                            manager_home=csk_home,
+                            operator_search_path=operator_search_path,
+                            forbidden_roots=(
+                                global_root(csk_home),
+                                config.skills_root,
+                                *(node.repo for node in nodes),
+                            ),
+                            generation_probe=generation_probe,
+                            expected_generation=expected_generation,
+                            max_generation_attempts=1,
+                        )
+                    )
+                for build in result.builds:
+                    payload = json.dumps(
+                        build.to_json(),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    result.messages.append(f"global: build {payload}")
                 result.messages.append("global: dry-run; no files modified")
                 if result.errors:
                     result.status = "failed"
@@ -185,10 +339,11 @@ def install(config: GlobalConfig, *, options: installer.InstallOptions | None = 
                         result.messages.append(
                             f"global: {plan.decl.name} command {command_name} -> global/bin/{command_name}"
                         )
-            installer._cleanup_removed_skills_root(
-                global_skills_root(csk_home),
-                {decl.name for decl in global_manifest.skills},
-            )
+            if not result.errors:
+                installer._cleanup_removed_skills_root(
+                    global_skills_root(csk_home),
+                    {plan.decl.name for plan in plans},
+                )
             # On partial failure, keep previously working command shims instead
             # of removing commands for skills that failed this install attempt.
             if not result.errors:
@@ -204,6 +359,12 @@ def install(config: GlobalConfig, *, options: installer.InstallOptions | None = 
             if result.errors:
                 result.status = "failed"
             return result
+    except build_planner.BuildPlanningError as exc:
+        if options.dry_run and exc.code == "concurrent_state_change":
+            raise
+        result.status = "failed"
+        result.errors.append(str(exc))
+        return result
     except Exception as exc:
         result.status = "failed"
         result.errors.append(str(exc))
@@ -258,18 +419,11 @@ def _build_plans(
 ) -> list[installer.SkillPlan]:
     plans: list[installer.SkillPlan] = []
     for decl in global_manifest.skills:
-        single_skill_manifest = manifest.ProjectManifest(
-            path=global_manifest.path,
-            project_alias=global_manifest.project_alias,
-            agents=global_manifest.agents,
-            locale=global_manifest.locale,
-            skills=[decl],
-        )
         try:
             plans.extend(
                 installer._build_plans(
                     config,
-                    single_skill_manifest,
+                    replace(global_manifest, skills=[decl]),
                     use_cache=not options.dry_run,
                     stack=stack,
                 )
@@ -277,6 +431,96 @@ def _build_plans(
         except Exception as exc:
             result.errors.append(f"{decl.name}: {exc}")
     return plans
+
+
+def _build_nodes(
+    config: GlobalConfig,
+    global_manifest: manifest.ProjectManifest,
+    *,
+    options: installer.InstallOptions,
+    stack: ExitStack,
+    result: GlobalResult,
+) -> list[closure.ClosureNode]:
+    def resolve(
+        decls: list[manifest.SkillDecl],
+    ) -> list[closure.ClosureNode]:
+        return closure.build_closure(
+            config,
+            replace(global_manifest, skills=decls),
+            {},
+            use_cache=not options.dry_run,
+            fetch_existing=False,
+            fetched_repos=set(),
+            stack=stack,
+        )
+
+    try:
+        return resolve(global_manifest.skills)
+    except Exception as combined_error:
+        available: list[manifest.SkillDecl] = []
+        isolated_errors: list[str] = []
+        for decl in global_manifest.skills:
+            try:
+                resolve([decl])
+            except Exception as exc:
+                isolated_errors.append(f"{decl.name}: {exc}")
+            else:
+                available.append(decl)
+        if not isolated_errors:
+            raise combined_error
+        result.errors.extend(isolated_errors)
+        if not available:
+            return []
+        return resolve(available)
+
+
+def _recheck_generation(
+    generation_probe: build_planner.GenerationProbe | None,
+    expected_generation: Mapping[str, str] | None,
+) -> None:
+    if generation_probe is None:
+        return
+    if expected_generation is None:
+        raise ValueError("expected_generation is required with a generation probe")
+    if dict(generation_probe.capture()) != dict(expected_generation):
+        raise build_planner.BuildPlanningError(
+            "concurrent_state_change",
+            "shared planning state changed during the read-only build plan",
+        )
+
+
+def _global_generation_probe(
+    config: GlobalConfig,
+) -> build_planner.FilesystemGenerationProbe:
+    csk_home = config.path.parent
+    root = global_root(csk_home)
+    user_home = Path.home()
+    return build_planner.FilesystemGenerationProbe(
+        (
+            config.path,
+            global_skillfile(csk_home),
+            global_skills_root(csk_home),
+            csk_home / "audit",
+            csk_home / "builds",
+            csk_home / "cache" / "registry",
+            csk_home / "state" / "registry",
+            root / ".mcp.json",
+            root / ".cursor" / "mcp.json",
+            root / ".codex" / "config.toml",
+            root / ".gemini" / "settings.json",
+            root / "opencode.json",
+            root / "opencode.jsonc",
+            root / ".claude" / "settings.json",
+            root / ".claude" / "settings.local.json",
+            user_home / ".claude.json",
+            user_home / ".cursor" / "mcp.json",
+            user_home / ".codex" / "config.toml",
+            user_home / ".gemini" / "settings.json",
+            user_home / ".codeium" / "windsurf" / "mcp_config.json",
+            user_home / ".config" / "opencode" / "opencode.json",
+            user_home / ".config" / "opencode" / "opencode.jsonc",
+        )
+    )
 
 
 def _plans_with_available_dependencies(

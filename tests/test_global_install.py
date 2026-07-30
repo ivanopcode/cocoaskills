@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import stat
 import subprocess
 import sys
 from dataclasses import replace
@@ -11,6 +13,8 @@ import pytest
 
 from conftest import commit_all, init_git_repo, make_config, make_project, make_skill_repo, run, write_files, write_skillfile
 from csk import cli, config, global_bins, global_install, installer, shims
+from csk.audit import pipeline as audit_pipeline
+from csk.builds import planner as build_planner, source as build_source
 
 
 def _save_config(monkeypatch: pytest.MonkeyPatch, cfg: config.GlobalConfig) -> None:
@@ -22,6 +26,99 @@ def _write_global_skillfile(csk_home: Path, data: dict) -> None:
     root = csk_home / "global"
     root.mkdir(parents=True, exist_ok=True)
     (root / "Skillfile.json").write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _filesystem_state(roots: tuple[Path, ...]) -> dict[str, tuple[object, ...]]:
+    state: dict[str, tuple[object, ...]] = {}
+    for root in roots:
+        root_key = str(root)
+        if not root.exists() and not root.is_symlink():
+            state[root_key] = ("missing",)
+            continue
+        paths = [root, *root.rglob("*")]
+        for path in paths:
+            info = path.lstat()
+            key = f"{root_key}:{path.relative_to(root).as_posix() or '.'}"
+            if stat.S_ISREG(info.st_mode):
+                payload: object = path.read_bytes()
+                kind = "file"
+            elif stat.S_ISLNK(info.st_mode):
+                payload = os.readlink(path)
+                kind = "link"
+            elif stat.S_ISDIR(info.st_mode):
+                payload = None
+                kind = "directory"
+            else:
+                payload = None
+                kind = "special"
+            state[key] = (
+                kind,
+                stat.S_IMODE(info.st_mode),
+                info.st_size,
+                info.st_mtime_ns,
+                payload,
+            )
+    return state
+
+
+def _make_context_provider(
+    skills_root: Path,
+    name: str,
+    *,
+    command_name: str,
+) -> Path:
+    repo, _ = make_skill_repo(
+        skills_root,
+        name,
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 4,
+                    "capabilities": {"exec": "none", "network": "none"},
+                    "commands": {
+                        command_name: {
+                            "type": "script",
+                            "unix_path": f"scripts/{command_name}",
+                        }
+                    },
+                }
+            ),
+            f"scripts/{command_name}": f"#!/bin/sh\necho {name}\n",
+        },
+        tag="v1",
+    )
+    return repo
+
+
+def _make_context_consumer(
+    skills_root: Path,
+    name: str,
+    *,
+    provider_name: str,
+    provider_repo: Path,
+) -> None:
+    make_skill_repo(
+        skills_root,
+        name,
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 4,
+                    "capabilities": {"exec": "none", "network": "none"},
+                    "dependencies": {
+                        "skills": {
+                            provider_name: {
+                                "git": str(provider_repo),
+                                "ref": {"kind": "tag", "value": "v1"},
+                                "mode": "context",
+                            }
+                        }
+                    },
+                }
+            )
+        },
+        tag="v1",
+    )
 
 
 def test_global_init_uses_config_default_agents(monkeypatch, tmp_path, skills_root, csk_home):
@@ -478,6 +575,11 @@ def test_global_install_dry_run_does_not_write_anywhere(monkeypatch, tmp_path, s
         },
     )
 
+    class ForbiddenLock:
+        def __init__(self, _home):
+            raise AssertionError("global dry-run must not construct a mutation lock")
+
+    monkeypatch.setattr(cli, "GlobalLock", ForbiddenLock)
     assert cli.main(["global", "install", "--dry-run"]) == 0
 
     assert not (skills_root / "skill-a").exists()
@@ -486,6 +588,493 @@ def test_global_install_dry_run_does_not_write_anywhere(monkeypatch, tmp_path, s
     assert not (csk_home / "runtime").exists()
     assert not (csk_home / "cache").exists()
     assert not (Path.home() / ".codex").exists()
+
+
+def test_global_build_planning_runs_after_all_trust_gates(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project)
+    make_skill_repo(
+        skills_root,
+        "skill-build",
+        {
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 6,
+                    "build_roots": ["build"],
+                    "commands": {
+                        "tool": {
+                            "type": "build",
+                            "driver": "go-v1",
+                            "source_dir": "build/cmd/tool",
+                        }
+                    },
+                    "capabilities": {},
+                }
+            ),
+            "build/go.mod": "module example.com/tool\n\ngo 1.23\n",
+            "build/cmd/tool/main.go": "package main\n\nfunc main() {}\n",
+        },
+        tag="v1",
+    )
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [{"name": "skill-build", "tag": "v1"}],
+        },
+    )
+    events: list[str] = []
+    original_freeze = build_source.freeze_snapshot
+    original_available = global_install._plans_with_available_dependencies
+    original_mcp = installer._check_mcp_servers
+    original_moved = installer._moved_tag_warnings
+
+    def freeze(path):
+        events.append("freeze")
+        return original_freeze(path)
+
+    def available(plans, result):
+        events.append("system")
+        return original_available(plans, result)
+
+    def mcp(plans, project_root, agents, *, alias=""):
+        events.append("mcp")
+        return original_mcp(plans, project_root, agents, alias=alias)
+
+    def audit(*args, **kwargs):
+        events.append("audit")
+        return audit_pipeline.GateResult(reports=())
+
+    def registry(plans, config_value, result, *, alias, read_only=False):
+        assert alias == "global"
+        assert read_only is True
+        events.append("registry")
+        return {}
+
+    def moved(skills_dir, plans):
+        events.append("moved")
+        return original_moved(skills_dir, plans)
+
+    def plan_builds(providers, **kwargs):
+        assert [provider.name for provider in providers] == ["skill-build"]
+        events.append("toolchain-cache")
+        return ()
+
+    monkeypatch.setattr(installer.build_source, "freeze_snapshot", freeze)
+    monkeypatch.setattr(
+        global_install,
+        "_plans_with_available_dependencies",
+        available,
+    )
+    monkeypatch.setattr(installer, "_check_mcp_servers", mcp)
+    monkeypatch.setattr(global_install.audit_pipeline, "gate_plans", audit)
+    monkeypatch.setattr(installer, "_check_audit_registries", registry)
+    monkeypatch.setattr(installer, "_moved_tag_warnings", moved)
+    monkeypatch.setattr(build_planner, "plan_builds", plan_builds)
+
+    result = global_install.install(
+        cfg,
+        options=installer.InstallOptions(dry_run=True),
+    )
+
+    assert not result.errors
+    assert result.builds == []
+    assert events == [
+        "freeze",
+        "system",
+        "mcp",
+        "audit",
+        "registry",
+        "moved",
+        "toolchain-cache",
+    ]
+
+
+def test_global_dry_run_missing_go_fails_whole_plan_without_mutation(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project)
+    make_skill_repo(
+        skills_root,
+        "skill-build",
+        {
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 6,
+                    "build_roots": ["build"],
+                    "commands": {
+                        "tool": {
+                            "type": "build",
+                            "driver": "go-v1",
+                            "source_dir": "build/cmd/tool",
+                        }
+                    },
+                    "capabilities": {},
+                }
+            ),
+            "build/go.mod": "module example.com/tool\n\ngo 1.23\n",
+            "build/cmd/tool/main.go": "package main\n\nfunc main() {}\n",
+        },
+        tag="v1",
+    )
+    make_skill_repo(skills_root, "skill-plain", tag="v1")
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [
+                {"name": "skill-build", "tag": "v1"},
+                {"name": "skill-plain", "tag": "v1"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        global_install.build_toolchain,
+        "capture_operator_search_path",
+        lambda: global_install.build_toolchain.OperatorSearchPath(()),
+    )
+    watched = (project, csk_home, skills_root, Path.home())
+    before = _filesystem_state(watched)
+
+    result = global_install.install(
+        cfg,
+        options=installer.InstallOptions(dry_run=True),
+    )
+
+    after = _filesystem_state(watched)
+    assert result.status == "failed"
+    assert result.errors == [
+        "go-v1 go_toolchain_missing: captured operator PATH contains no "
+        "Go executable"
+    ]
+    assert result.builds == []
+    assert not any("(planned)" in message for message in result.messages)
+    assert before == after
+
+
+def test_global_real_install_defers_build_planning_and_planning_only_gates(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project)
+    make_skill_repo(
+        skills_root,
+        "skill-build",
+        {
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 6,
+                    "build_roots": ["build"],
+                    "commands": {
+                        "tool": {
+                            "type": "build",
+                            "driver": "go-v1",
+                            "source_dir": "build/cmd/tool",
+                        }
+                    },
+                    "capabilities": {},
+                }
+            ),
+            "build/go.mod": "module example.com/tool\n\ngo 1.23\n",
+            "build/cmd/tool/main.go": "package main\n\nfunc main() {}\n",
+        },
+        tag="v1",
+    )
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [{"name": "skill-build", "tag": "v1"}],
+        },
+    )
+    events: list[str] = []
+
+    def unexpected_mcp(*args, **kwargs):
+        raise AssertionError("real global install must defer planning-only MCP validation")
+
+    def audit(*args, scope, record, **kwargs):
+        assert scope == "global"
+        assert record is True
+        events.append("audit")
+        return audit_pipeline.GateResult(reports=())
+
+    def unexpected_registry(*args, **kwargs):
+        raise AssertionError("real global install must defer planning-only registry validation")
+
+    def unexpected_plan(*args, **kwargs):
+        raise AssertionError("real global install must defer build planning")
+
+    monkeypatch.setattr(installer, "_check_mcp_servers", unexpected_mcp)
+    monkeypatch.setattr(global_install.audit_pipeline, "gate_plans", audit)
+    monkeypatch.setattr(installer, "_check_audit_registries", unexpected_registry)
+    monkeypatch.setattr(build_planner, "plan_builds", unexpected_plan)
+
+    result = global_install.install(cfg)
+
+    assert not result.errors
+    assert result.builds == []
+    assert events == ["audit"]
+    assert (csk_home / "global" / "skills" / "skill-build").is_dir()
+
+
+@pytest.mark.parametrize("failing_gate", ["mcp", "registry"])
+def test_global_dry_run_requirement_gate_failure_blocks_planning_and_writes(
+    monkeypatch, tmp_path, skills_root, csk_home, failing_gate
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project)
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [{"name": "skill-a", "tag": "v1"}],
+        },
+    )
+
+    def mcp(plans, project_root, agents, *, alias=""):
+        if failing_gate == "mcp":
+            raise installer.InstallError("mcp gate denied")
+        return {}, []
+
+    def audit(*args, **kwargs):
+        return audit_pipeline.GateResult(reports=())
+
+    def registry(plans, config_value, result, *, alias, read_only=False):
+        assert read_only is True
+        if failing_gate == "registry":
+            raise installer.InstallError("registry gate denied")
+        return {}
+
+    def unexpected_plan(*args, **kwargs):
+        raise AssertionError("failed requirement gate must stop build planning")
+
+    monkeypatch.setattr(installer, "_check_mcp_servers", mcp)
+    monkeypatch.setattr(global_install.audit_pipeline, "gate_plans", audit)
+    monkeypatch.setattr(installer, "_check_audit_registries", registry)
+    monkeypatch.setattr(build_planner, "plan_builds", unexpected_plan)
+
+    result = global_install.install(
+        cfg,
+        options=installer.InstallOptions(dry_run=True),
+    )
+
+    assert result.errors == [f"{failing_gate} gate denied"]
+    assert not (csk_home / "global" / "skills" / "skill-a").exists()
+
+
+def test_global_build_planning_merges_shared_closures_in_provider_first_order(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project)
+    provider_repo, _ = make_skill_repo(
+        skills_root,
+        "provider",
+        {
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 6,
+                    "build_roots": ["build"],
+                    "commands": {
+                        "provider-tool": {
+                            "type": "build",
+                            "driver": "go-v1",
+                            "source_dir": "build/cmd/provider-tool",
+                        }
+                    },
+                    "capabilities": {},
+                }
+            ),
+            "build/go.mod": "module example.com/provider\n\ngo 1.23\n",
+            "build/cmd/provider-tool/main.go": "package main\n\nfunc main() {}\n",
+        },
+        tag="v1",
+    )
+    requirement = {
+        "git": str(provider_repo),
+        "ref": {"kind": "tag", "value": "v1"},
+    }
+    for name in ("consumer-a", "consumer-b"):
+        make_skill_repo(
+            skills_root,
+            name,
+            {
+                "agent-skill.json": json.dumps(
+                    {
+                        "schema_version": 6,
+                        "build_roots": ["build"],
+                        "commands": {
+                            f"{name}-tool": {
+                                "type": "build",
+                                "driver": "go-v1",
+                                "source_dir": f"build/cmd/{name}-tool",
+                            }
+                        },
+                        "capabilities": {},
+                        "dependencies": {
+                            "skills": {
+                                "provider": requirement,
+                            }
+                        },
+                    }
+                ),
+                "build/go.mod": f"module example.com/{name}\n\ngo 1.23\n",
+                f"build/cmd/{name}-tool/main.go": "package main\n\nfunc main() {}\n",
+            },
+            tag="v1",
+        )
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [
+                {"name": "consumer-b", "tag": "v1"},
+                {"name": "consumer-a", "tag": "v1"},
+            ],
+        },
+    )
+
+    def plan_builds(providers, **kwargs):
+        assert [provider.name for provider in providers] == [
+            "provider",
+            "consumer-a",
+            "consumer-b",
+        ]
+        return ()
+
+    monkeypatch.setattr(build_planner, "plan_builds", plan_builds)
+
+    result = global_install.install(
+        cfg,
+        options=installer.InstallOptions(dry_run=True),
+    )
+
+    assert not result.errors
+
+
+def test_global_build_planning_rejects_conflicts_across_isolated_closures(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project)
+    provider_repo, _ = make_skill_repo(
+        skills_root,
+        "provider",
+        tag="v1",
+    )
+    (provider_repo / "SKILL.md").write_text(
+        "---\nname: provider\n---\n\n# Changed\n",
+        encoding="utf-8",
+    )
+    commit_all(provider_repo, "provider v2")
+    run(["git", "tag", "v2"], provider_repo)
+    for name, tag in (("consumer-a", "v1"), ("consumer-b", "v2")):
+        make_skill_repo(
+            skills_root,
+            name,
+            {
+                "csk-skill.json": json.dumps(
+                    {
+                        "schema_version": 4,
+                        "capabilities": {
+                            "exec": "none",
+                            "network": "none",
+                        },
+                        "dependencies": {
+                            "skills": {
+                                "provider": {
+                                    "git": str(provider_repo),
+                                    "ref": {
+                                        "kind": "tag",
+                                        "value": tag,
+                                    },
+                                }
+                            }
+                        },
+                    }
+                )
+            },
+            tag="v1",
+        )
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [
+                {"name": "consumer-a", "tag": "v1"},
+                {"name": "consumer-b", "tag": "v1"},
+            ],
+        },
+    )
+
+    def unexpected_plan(*args, **kwargs):
+        raise AssertionError("conflicting closures must fail before build planning")
+
+    monkeypatch.setattr(build_planner, "plan_builds", unexpected_plan)
+
+    result = global_install.install(
+        cfg,
+        options=installer.InstallOptions(dry_run=True),
+    )
+
+    assert result.errors
+    assert "Version conflict for provider" in result.errors[0]
+    assert "consumer-a" in result.errors[0]
+    assert "consumer-b" in result.errors[0]
+
+
+def test_global_dry_run_retries_all_gates_after_generation_change(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project)
+    _write_global_skillfile(
+        csk_home,
+        {"schema_version": 1, "skills": []},
+    )
+    values = iter(
+        [
+            {"shared": "sha256:" + "0" * 64},
+            {"shared": "sha256:" + "1" * 64},
+            {"shared": "sha256:" + "1" * 64},
+            {"shared": "sha256:" + "1" * 64},
+        ]
+    )
+    audit_calls = 0
+
+    class Generation:
+        def capture(self):
+            return next(values)
+
+    def audit(*args, **kwargs):
+        nonlocal audit_calls
+        audit_calls += 1
+        return audit_pipeline.GateResult(reports=())
+
+    monkeypatch.setattr(
+        global_install,
+        "_global_generation_probe",
+        lambda _config: Generation(),
+    )
+    monkeypatch.setattr(global_install.audit_pipeline, "gate_plans", audit)
+
+    result = global_install.install(
+        cfg,
+        options=installer.InstallOptions(dry_run=True),
+    )
+
+    assert not result.errors
+    assert audit_calls == 2
 
 
 def test_global_upgrade_dry_run_does_not_create_or_fetch_skills_root(
@@ -508,6 +1097,11 @@ def test_global_upgrade_dry_run_does_not_create_or_fetch_skills_root(
     def unexpected_fetch(_repo):
         raise AssertionError("global dry-run must not fetch")
 
+    class ForbiddenLock:
+        def __init__(self, _home):
+            raise AssertionError("global dry-run must not construct a mutation lock")
+
+    monkeypatch.setattr(cli, "GlobalLock", ForbiddenLock)
     monkeypatch.setattr(global_install.git_ops, "fetch_repo", unexpected_fetch)
 
     assert cli.main(["global", "upgrade", "--dry-run"]) == 0
@@ -535,6 +1129,164 @@ def test_global_install_is_idempotent(monkeypatch, tmp_path, skills_root, csk_ho
     out = capsys.readouterr().out
     assert "skill-a tag v1" in out
     assert "up-to-date" in out
+
+
+def test_global_real_install_materializes_only_declared_skills_and_commands(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    _save_config(monkeypatch, cfg)
+    provider = _make_context_provider(
+        skills_root,
+        "provider",
+        command_name="provider-tool",
+    )
+    _make_context_consumer(
+        skills_root,
+        "consumer",
+        provider_name="provider",
+        provider_repo=provider,
+    )
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [{"name": "consumer", "tag": "v1"}],
+        },
+    )
+
+    result = global_install.install(cfg)
+
+    assert not result.errors
+    skills = csk_home / "global" / "skills"
+    assert sorted(path.name for path in skills.iterdir()) == ["consumer"]
+    assert not (csk_home / "global" / "bin" / "provider-tool").exists()
+    assert not (csk_home / "runtime" / "provider").exists()
+
+
+def test_global_real_install_does_not_shadow_inactive_transitive_commands(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    _save_config(monkeypatch, cfg)
+    provider_one = _make_context_provider(
+        skills_root,
+        "provider-one",
+        command_name="tool",
+    )
+    provider_two = _make_context_provider(
+        skills_root,
+        "provider-two",
+        command_name="tool",
+    )
+    _make_context_consumer(
+        skills_root,
+        "consumer-one",
+        provider_name="provider-one",
+        provider_repo=provider_one,
+    )
+    _make_context_consumer(
+        skills_root,
+        "consumer-two",
+        provider_name="provider-two",
+        provider_repo=provider_two,
+    )
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [
+                {"name": "consumer-one", "tag": "v1"},
+                {"name": "consumer-two", "tag": "v1"},
+            ],
+        },
+    )
+
+    result = global_install.install(cfg)
+
+    assert not result.errors
+    skills = csk_home / "global" / "skills"
+    assert sorted(path.name for path in skills.iterdir()) == [
+        "consumer-one",
+        "consumer-two",
+    ]
+    assert not (csk_home / "global" / "bin" / "tool").exists()
+    assert not (csk_home / "runtime" / "provider-one").exists()
+    assert not (csk_home / "runtime" / "provider-two").exists()
+
+
+def test_global_real_install_does_not_plan_builds_or_require_go(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    _save_config(monkeypatch, cfg)
+    make_skill_repo(
+        skills_root,
+        "skill-build",
+        {
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 6,
+                    "build_roots": ["build"],
+                    "commands": {
+                        "tool": {
+                            "type": "build",
+                            "driver": "go-v1",
+                            "source_dir": "build/cmd/tool",
+                        }
+                    },
+                    "capabilities": {},
+                }
+            ),
+            "build/go.mod": "module example.com/tool\n\ngo 1.23\n",
+            "build/cmd/tool/main.go": "package main\n\nfunc main() {}\n",
+        },
+        tag="v1",
+    )
+    make_skill_repo(
+        skills_root,
+        "skill-plain",
+        {"csk-skill.json": json.dumps({"schema_version": 2})},
+        tag="v1",
+    )
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [
+                {"name": "skill-build", "tag": "v1"},
+                {"name": "skill-plain", "tag": "v1"},
+            ],
+        },
+    )
+    no_go_bin = tmp_path / "no-go-bin"
+    no_go_bin.mkdir()
+    for tool in ("git", "sh", "env", "uname"):
+        executable = shutil.which(tool)
+        if executable is not None:
+            (no_go_bin / tool).symlink_to(executable)
+    monkeypatch.setenv("PATH", str(no_go_bin))
+
+    def unexpected_plan(*args, **kwargs):
+        raise AssertionError("real global install must defer build planning")
+
+    monkeypatch.setattr(build_planner, "plan_builds", unexpected_plan)
+
+    result = global_install.install(cfg)
+
+    assert not result.errors
+    assert result.builds == []
+    skills = csk_home / "global" / "skills"
+    assert sorted(path.name for path in skills.iterdir()) == [
+        "skill-build",
+        "skill-plain",
+    ]
 
 
 def test_global_install_keeps_installing_available_skills_when_one_fails(
@@ -580,6 +1332,128 @@ def test_global_install_keeps_installing_available_skills_when_one_fails(
     assert "Missing system command '__csk_missing_system_dependency__'" in captured.err
     assert (csk_home / "global" / "skills" / "skill-good" / ".csk-install.json").exists()
     assert not (csk_home / "global" / "skills" / "skill-missing-dep").exists()
+
+
+def test_global_install_resolution_failure_preserves_existing_declared_skill(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    _save_config(monkeypatch, cfg)
+    make_skill_repo(
+        skills_root,
+        "skill-good",
+        {"csk-skill.json": json.dumps({"schema_version": 2})},
+        tag="v1",
+    )
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [{"name": "skill-good", "tag": "v1"}],
+        },
+    )
+    first = global_install.install(cfg)
+    installed = csk_home / "global" / "skills" / "skill-good"
+    assert not first.errors
+    assert installed.is_dir()
+
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [
+                {"name": "skill-good", "tag": "v1"},
+                {"name": "skill-missing", "tag": "v1"},
+            ],
+        },
+    )
+
+    second = global_install.install(cfg)
+
+    assert second.errors
+    assert any("skill-missing" in error for error in second.errors)
+    assert installed.is_dir()
+
+
+def test_global_install_never_plans_builds_and_installs_healthy_skill_on_partial_failure(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    _save_config(monkeypatch, cfg)
+    make_skill_repo(
+        skills_root,
+        "skill-build",
+        {
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 6,
+                    "build_roots": ["build"],
+                    "commands": {
+                        "tool": {
+                            "type": "build",
+                            "driver": "go-v1",
+                            "source_dir": "build/cmd/tool",
+                        }
+                    },
+                    "capabilities": {},
+                }
+            ),
+            "build/go.mod": "module example.com/tool\n\ngo 1.23\n",
+            "build/cmd/tool/main.go": "package main\n\nfunc main() {}\n",
+        },
+        tag="v1",
+    )
+    make_skill_repo(
+        skills_root,
+        "skill-bad",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 2,
+                    "commands": {},
+                    "dependencies": {
+                        "commands": {
+                            "missing-tool": {
+                                "type": "system",
+                                "command": "__csk_missing_global_dependency__",
+                            }
+                        }
+                    },
+                }
+            )
+        },
+        tag="v1",
+    )
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [
+                {"name": "skill-build", "tag": "v1"},
+                {"name": "skill-bad", "tag": "v1"},
+            ],
+        },
+    )
+
+    def unexpected_plan(*args, **kwargs):
+        raise AssertionError("real global install must defer build planning")
+
+    monkeypatch.setattr(build_planner, "plan_builds", unexpected_plan)
+
+    result = global_install.install(cfg)
+
+    assert result.errors
+    assert any(
+        "Missing system command '__csk_missing_global_dependency__'" in error
+        for error in result.errors
+    )
+    assert (csk_home / "global" / "skills" / "skill-build").is_dir()
+    assert not (csk_home / "global" / "skills" / "skill-bad").exists()
 
 
 def test_global_install_cascades_skill_dependency_removal_when_provider_is_unavailable(
