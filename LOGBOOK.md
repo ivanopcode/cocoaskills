@@ -27,3 +27,21 @@ filesystem surface. Both scopes now pin that behavior with host-independent
 tests, and the unrelated schema-v6 build-root lifecycle test uses a
 deterministic fake trusted toolchain instead of inheriting a contributor
 machine's Go installation.
+
+## 2026-07-30 — TASK-260720-2x6mjn Windows generation semantics
+
+PR #15 exposed two Windows portability assumptions. Python 3.12 and later can
+report creation time as `st_ctime` for a pathname stat while descriptor stat
+reports metadata change time, so comparing every field across `lstat()` and
+`fstat()` falsely reported `concurrent_state_change`. The generation probe now
+uses `os.path.samestat()` for cross-API file identity plus comparable type,
+size, and modification-time fields. Descriptor metadata remains checked
+before and after reading, and a full same-API pathname recheck after the read
+still rejects replacement or concurrent metadata changes.
+
+The no-Go real-install tests also created extensionless executable symlinks.
+That hid `git.exe` from Windows `PATHEXT` lookup. Their shared PATH helper now
+preserves the native Git executable name while exposing no Go executable.
+Regression tests simulate the Windows pathname/descriptor `st_ctime` split,
+prove post-read replacement is still rejected, and exercise both project and
+global real-install paths with Git available and Go absent.

@@ -317,3 +317,70 @@ def test_filesystem_generation_probe_is_deterministic_and_read_only(
     assert not (tmp_path / "missing").exists()
     payload.write_text('{"generation":2}\n', encoding="utf-8")
     assert probe.capture() != before
+
+
+def test_filesystem_generation_probe_accepts_windows_path_fd_ctime_split(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payload = tmp_path / "state.json"
+    payload.write_text('{"generation":1}\n', encoding="utf-8")
+    probe = planner.FilesystemGenerationProbe((payload,))
+    real_fstat = planner.os.fstat
+
+    class WindowsDescriptorStat:
+        def __init__(self, value: object):
+            self._value = value
+
+        def __getattr__(self, name: str) -> object:
+            if name == "st_ctime_ns":
+                return getattr(self._value, name) + 1
+            return getattr(self._value, name)
+
+    def windows_fstat(descriptor: int) -> object:
+        return WindowsDescriptorStat(real_fstat(descriptor))
+
+    monkeypatch.setattr(planner.os, "fstat", windows_fstat)
+
+    before = probe.capture()
+    after = probe.capture()
+
+    assert before == after
+
+
+def test_filesystem_generation_probe_detects_replacement_after_file_read(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payload = tmp_path / "state.json"
+    payload.write_text('{"generation":1}\n', encoding="utf-8")
+    probe = planner.FilesystemGenerationProbe((payload,))
+    real_hash = planner._hash_regular_file_noatime
+
+    def replace_after_hash(
+        path: Path,
+        expected: object,
+    ) -> bytes:
+        content = real_hash(path, expected)
+        replacement = path.with_suffix(".replacement")
+        replacement.write_bytes(path.read_bytes())
+        planner.os.utime(
+            replacement,
+            ns=(
+                getattr(expected, "st_atime_ns"),
+                getattr(expected, "st_mtime_ns"),
+            ),
+        )
+        planner.os.replace(replacement, path)
+        return content
+
+    monkeypatch.setattr(
+        planner,
+        "_hash_regular_file_noatime",
+        replace_after_hash,
+    )
+
+    with pytest.raises(planner.BuildPlanningError) as error:
+        probe.capture()
+
+    assert error.value.code == "concurrent_state_change"

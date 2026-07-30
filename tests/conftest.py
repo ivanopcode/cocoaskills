@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -92,6 +93,26 @@ def make_project(tmp_path: Path, name: str = "project", *, gitignore: bool = Tru
 
 def write_skillfile(project: Path, data: dict) -> None:
     (project / "Skillfile.json").write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def set_path_with_git_without_go(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    git_executable = shutil.which("git")
+    if git_executable is None:
+        raise AssertionError("test requires git on the original PATH")
+
+    isolated_bin = tmp_path / "no-go-bin"
+    isolated_bin.mkdir()
+    native_git_name = Path(git_executable).name
+    (isolated_bin / native_git_name).symlink_to(git_executable)
+    monkeypatch.setenv("PATH", str(isolated_bin))
+
+    if shutil.which("git") is None:
+        raise AssertionError("isolated PATH must preserve git")
+    if shutil.which("go") is not None:
+        raise AssertionError("isolated PATH must exclude Go")
 
 
 def make_config(csk_home: Path, skills_root: Path, project: Path, *, agents: list[str] | None = None) -> GlobalConfig:

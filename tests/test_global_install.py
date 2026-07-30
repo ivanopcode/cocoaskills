@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import stat
 import subprocess
 import sys
@@ -11,7 +10,17 @@ from pathlib import Path
 
 import pytest
 
-from conftest import commit_all, init_git_repo, make_config, make_project, make_skill_repo, run, write_files, write_skillfile
+from conftest import (
+    commit_all,
+    init_git_repo,
+    make_config,
+    make_project,
+    make_skill_repo,
+    run,
+    set_path_with_git_without_go,
+    write_files,
+    write_skillfile,
+)
 from csk import cli, config, global_bins, global_install, installer, shims
 from csk.audit import pipeline as audit_pipeline
 from csk.builds import planner as build_planner, source as build_source
@@ -1265,13 +1274,7 @@ def test_global_real_install_does_not_plan_builds_or_require_go(
             ],
         },
     )
-    no_go_bin = tmp_path / "no-go-bin"
-    no_go_bin.mkdir()
-    for tool in ("git", "sh", "env", "uname"):
-        executable = shutil.which(tool)
-        if executable is not None:
-            (no_go_bin / tool).symlink_to(executable)
-    monkeypatch.setenv("PATH", str(no_go_bin))
+    set_path_with_git_without_go(monkeypatch, tmp_path)
 
     def unexpected_plan(*args, **kwargs):
         raise AssertionError("real global install must defer build planning")

@@ -494,6 +494,7 @@ def _visit_generation_path(
         return
     if stat.S_ISREG(before.st_mode):
         content = _hash_regular_file_noatime(path, before)
+        _require_stable_lstat(path, before)
         _generation_record(
             digest,
             b"F",
@@ -551,7 +552,10 @@ def _hash_regular_file_noatime(
     try:
         descriptor = _open_with_noatime_fallback(path, flags)
         opened = os.fstat(descriptor)
-        if not _stable_stat(expected, opened) or not stat.S_ISREG(opened.st_mode):
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not _stable_open_stat(expected, opened)
+        ):
             raise BuildPlanningError(
                 "concurrent_state_change",
                 f"shared planning file changed while opening: {path}",
@@ -625,6 +629,24 @@ def _require_stable_lstat(path: Path, expected: os.stat_result) -> None:
 
 def _stable_stat(left: os.stat_result, right: os.stat_result) -> bool:
     return _stat_fields(left) == _stat_fields(right)
+
+
+def _stable_open_stat(
+    path_stat: os.stat_result,
+    descriptor_stat: os.stat_result,
+) -> bool:
+    """Compare path and descriptor views without platform-specific ctime."""
+
+    # Windows Python 3.12+ retains creation time in a pathname stat's
+    # st_ctime while descriptor stat exposes metadata change time.  Identity
+    # and content fields are comparable across the two APIs; full metadata is
+    # still checked within each API before/after the read.
+    return (
+        os.path.samestat(path_stat, descriptor_stat)
+        and stat.S_IFMT(path_stat.st_mode) == stat.S_IFMT(descriptor_stat.st_mode)
+        and path_stat.st_size == descriptor_stat.st_size
+        and path_stat.st_mtime_ns == descriptor_stat.st_mtime_ns
+    )
 
 
 def _stat_fields(value: os.stat_result) -> tuple[bytes, ...]:
