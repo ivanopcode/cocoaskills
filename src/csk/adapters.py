@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from . import protocol_json
 from .identifiers import is_valid_identifier
-
 
 AGENT_PATHS = {
     "codex_cli": ".codex/skills",
@@ -34,6 +36,24 @@ class AdapterError(Exception):
 
 MANAGED_FILE = ".csk-managed.json"
 SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class AdapterGroup:
+    canonical_root: Path
+    skill_names: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AdapterTarget:
+    target_class: str
+    identifier: str
+    live_path: Path
+    kind: Literal["bytes", "entry"]
+    desired_kind: str
+    skill_name: str | None = None
+    canonical_root: Path | None = None
+    expected_entries: tuple[str, ...] = ()
 
 
 def required_gitignore_entries(agents: list[str]) -> list[str]:
@@ -166,6 +186,193 @@ def _refresh_entry(source: Path, target: Path, mode: str) -> None:
         shutil.copytree(source, target, symlinks=True)
 
 
+def plan_project_adapter_targets(
+    project_root: Path,
+    agents: list[str],
+    groups: list[AdapterGroup],
+) -> tuple[AdapterTarget, ...]:
+    expected = {
+        name
+        for group in groups
+        for name in group.skill_names
+    }
+    roots = {
+        agent: project_root / relative
+        for agent, relative in AGENT_PATHS.items()
+        if agent in agents
+    }
+    targets: list[AdapterTarget] = []
+    for agent in sorted(roots):
+        adapter_root = roots[agent]
+        root_key = hashlib.sha256(
+            str(adapter_root.absolute()).encode("utf-8")
+        ).hexdigest()
+        managed = _read_managed(adapter_root)
+        for name in sorted(managed - expected):
+            live = adapter_root / name
+            if not live.exists() and not live.is_symlink():
+                continue
+            targets.append(
+                AdapterTarget(
+                    target_class="80-removal",
+                    identifier=f"adapter/{root_key}/{name}",
+                    live_path=live,
+                    kind="entry",
+                    desired_kind="remove",
+                    skill_name=name,
+                )
+            )
+        for group in groups:
+            for name in sorted(group.skill_names):
+                canonical = group.canonical_root / name
+                live = adapter_root / name
+                if _is_unmanaged_conflict(live, managed, canonical):
+                    raise AdapterError(
+                        "Adapter target already exists and is not managed by "
+                        f"csk: {live}"
+                    )
+                targets.append(
+                    AdapterTarget(
+                        target_class="60-adapter-ledger",
+                        identifier=f"{root_key}/entry/{name}",
+                        live_path=live,
+                        kind="entry",
+                        desired_kind="mirror",
+                        skill_name=name,
+                        canonical_root=group.canonical_root,
+                    )
+                )
+        targets.append(
+            AdapterTarget(
+                target_class="60-adapter-ledger",
+                identifier=f"{root_key}/ledger",
+                live_path=adapter_root / MANAGED_FILE,
+                kind="bytes",
+                desired_kind="ledger",
+                expected_entries=tuple(sorted(expected)),
+            )
+        )
+    return tuple(targets)
+
+
+def stage_project_adapter_targets(
+    stage_root: Path,
+    targets: tuple[AdapterTarget, ...],
+    *,
+    source_roots: dict[Path, Path],
+    mode: str,
+) -> dict[tuple[str, str], Path | None]:
+    desired: dict[tuple[str, str], Path | None] = {}
+    for index, target in enumerate(targets):
+        key = (target.target_class, target.identifier)
+        if target.desired_kind == "remove":
+            desired[key] = None
+            continue
+        staged = stage_root / f"{index:04d}"
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        if target.desired_kind == "ledger":
+            staged.write_text(
+                json.dumps(
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "entries": list(target.expected_entries),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            desired[key] = staged
+            continue
+        if (
+            target.desired_kind != "mirror"
+            or target.skill_name is None
+            or target.canonical_root is None
+        ):
+            raise AdapterError(
+                f"invalid staged adapter target: {target.identifier}"
+            )
+        source_root = source_roots.get(target.canonical_root)
+        if source_root is None:
+            raise AdapterError(
+                f"adapter source root was not staged: "
+                f"{target.canonical_root}"
+            )
+        source = source_root / target.skill_name
+        if not source.exists():
+            raise AdapterError(
+                f"adapter source was not staged: {source}"
+            )
+        canonical = target.canonical_root / target.skill_name
+        selected_mode = mode
+        if mode == "auto":
+            selected_mode = (
+                "symlink"
+                if _transaction_links_supported(stage_root, target.live_path)
+                else "copy"
+            )
+        if selected_mode == "symlink":
+            staged.symlink_to(
+                os.path.relpath(canonical, target.live_path.parent),
+                target_is_directory=True,
+            )
+        else:
+            shutil.copytree(source, staged, symlinks=True)
+        desired[key] = staged
+    return desired
+
+
+def _transaction_links_supported(stage_root: Path, live_path: Path) -> bool:
+    live_directory = _nearest_existing_directory(live_path.parent)
+    try:
+        same_device = _device_id(stage_root) == _device_id(live_directory)
+    except OSError:
+        return False
+    # Auto mode must not probe by writing into the live project before the
+    # transaction commits. A successful probe on the same filesystem is the
+    # capability witness; otherwise the staged adapter safely falls back to a
+    # copy. Explicit symlink mode remains explicit.
+    return same_device and _link_probe(stage_root)
+
+
+def _device_id(path: Path) -> int:
+    return path.stat().st_dev
+
+
+def _nearest_existing_directory(path: Path) -> Path:
+    current = path
+    while True:
+        try:
+            current.lstat()
+        except FileNotFoundError:
+            parent = current.parent
+            if parent == current:
+                return current
+            current = parent
+            continue
+        if current.is_symlink() or not current.is_dir():
+            return current.parent
+        return current
+
+
+def _link_probe(directory: Path) -> bool:
+    if not directory.exists() or directory.is_symlink():
+        return False
+    probe = directory / f".csk-symlink-probe-{os.getpid()}"
+    try:
+        probe.unlink(missing_ok=True)
+        probe.symlink_to(".")
+        probe.unlink()
+    except OSError:
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+    return True
+
+
 def _remove_path(path: Path) -> None:
     if path.is_symlink() or path.is_file():
         path.unlink()
@@ -179,7 +386,7 @@ def _read_managed(adapter_root: Path) -> set[str]:
         return set()
     try:
         data = protocol_json.loads(path.read_bytes())
-    except Exception:
+    except (OSError, protocol_json.ProtocolJSONError):
         return set()
     if (
         not isinstance(data, dict)

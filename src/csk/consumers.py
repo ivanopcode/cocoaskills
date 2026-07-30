@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from pathlib import Path
-
 
 # Runtime GC must not delete runtime referenced by checkouts that are not
 # registered in the global config: 'csk install .' deliberately does not
@@ -45,9 +45,19 @@ def replace_consumers(csk_home: Path, consumers: list[Path]) -> None:
     _write(csk_home, sorted({str(path) for path in consumers}))
 
 
+def encode_consumers(values: Iterable[Path]) -> bytes:
+    consumers = sorted({str(Path(path).resolve()) for path in values})
+    return (
+        json.dumps(
+            {"schema_version": SCHEMA_VERSION, "consumers": consumers},
+            indent=2,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
 def _write(csk_home: Path, consumers: list[str]) -> None:
     csk_home.mkdir(parents=True, exist_ok=True)
-    registry_path(csk_home).write_text(
-        json.dumps({"schema_version": SCHEMA_VERSION, "consumers": consumers}, indent=2) + "\n",
-        encoding="utf-8",
+    registry_path(csk_home).write_bytes(
+        encode_consumers(Path(path) for path in consumers)
     )

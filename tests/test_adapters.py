@@ -53,7 +53,9 @@ def test_adapter_cleanup_removes_only_previous_managed_entries(tmp_path):
     assert (rules / "manual" / "SKILL.md").exists()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Symlink mode requires Developer Mode on Windows")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Symlink mode requires Developer Mode on Windows"
+)
 def test_symlink_adapter_creates_link(tmp_path):
     project = tmp_path / "project"
     canonical = project / ".agents" / "skills" / "skill-a"
@@ -88,7 +90,64 @@ def test_global_install_mirrors_to_home_agents_skills_for_native_agents(tmp_path
     home = tmp_path / "home"
     home.mkdir()
 
-    adapters.refresh_global_adapters(csk_home, ["windsurf"], ["skill-a"], "copy", home=home)
+    adapters.refresh_global_adapters(
+        csk_home, ["windsurf"], ["skill-a"], "copy", home=home
+    )
 
     mirrored = home / ".agents" / "skills" / "skill-a" / "SKILL.md"
     assert mirrored.read_text(encoding="utf-8") == "global"
+
+
+def test_transaction_auto_mode_probes_only_private_staging(monkeypatch, tmp_path):
+    stage_root = tmp_path / "private-stage"
+    live_root = tmp_path / "project"
+    stage_root.mkdir()
+    live_root.mkdir()
+    probed = []
+    monkeypatch.setattr(
+        adapters,
+        "_link_probe",
+        lambda directory: probed.append(directory) or True,
+    )
+
+    supported = adapters._transaction_links_supported(
+        stage_root,
+        live_root / ".claude" / "skills" / "skill-a",
+    )
+
+    assert supported
+    assert probed == [stage_root]
+    assert list(live_root.iterdir()) == []
+
+
+def test_transaction_auto_mode_rejects_cross_device_staging_without_probe(
+    monkeypatch, tmp_path
+):
+    stage_root = tmp_path / "private-stage"
+    live_root = tmp_path / "project"
+    live_directory = live_root / ".claude" / "skills"
+    stage_root.mkdir()
+    live_directory.mkdir(parents=True)
+    probed = []
+    monkeypatch.setattr(
+        adapters,
+        "_device_id",
+        lambda path: 1 if path == stage_root else 2,
+    )
+    monkeypatch.setattr(
+        adapters,
+        "_link_probe",
+        lambda directory: probed.append(directory) or True,
+    )
+
+    supported = adapters._transaction_links_supported(
+        stage_root,
+        live_directory / "skill-a",
+    )
+
+    assert not supported
+    assert probed == []
+    assert list(live_root.rglob("*")) == [
+        live_root / ".claude",
+        live_directory,
+    ]

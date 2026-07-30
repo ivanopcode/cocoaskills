@@ -6,6 +6,7 @@ import shutil
 import stat
 
 from conftest import make_config, make_project, make_skill_repo, write_skillfile
+
 from csk import installer
 
 
@@ -96,7 +97,7 @@ def _make_tool_repo(skills_root):
 
 
 def _rmtree(path):
-    def onerror(func, failing_path, _exc_info):  # noqa: ANN001
+    def onerror(func, failing_path, _exc_info):
         os.chmod(failing_path, stat.S_IWRITE)
         func(failing_path)
 
@@ -174,7 +175,12 @@ def test_gc_sweeps_orphan_tmp_dirs_of_dead_processes(tmp_path, skills_root, csk_
     cfg = _two_project_config(csk_home, skills_root, project1)
     assert not installer.install(cfg)[0].errors
 
-    proc = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+    proc = subprocess.run(
+        [sys.executable, "-c", "import os; print(os.getpid())"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     dead_pid = int(proc.stdout.strip())
     skills_dir = project1 / ".agents" / "skills"
     dead_tmp = skills_dir / f".skill-tool.tmp-{dead_pid}"
@@ -219,6 +225,55 @@ def test_snapshot_cache_gc_removes_unreferenced_keeps_referenced(tmp_path, skill
     assert not stale.parent.exists()
     assert not (csk_home / "cache" / "internal").exists()  # empty parents removed
     assert all(path.exists() for path in referenced)
+
+
+def test_successful_install_runs_snapshot_and_remaining_orphan_gc(
+    tmp_path, skills_root, csk_home
+):
+    import subprocess
+    import sys
+
+    project = make_project(tmp_path)
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [{"name": "skill-a", "tag": "v1"}],
+        },
+    )
+    cfg = make_config(csk_home, skills_root, project)
+    assert not installer.install(cfg)[0].errors
+
+    stale_snapshot = (
+        csk_home / "cache" / "stale-source" / ("0" * 40) / "snapshot"
+    )
+    stale_snapshot.mkdir(parents=True)
+    process = subprocess.run(
+        [sys.executable, "-c", "import os; print(os.getpid())"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    dead_pid = int(process.stdout.strip())
+    global_orphan = (
+        csk_home / "global" / "skills" / f".skill.tmp-{dead_pid}"
+    )
+    runtime_orphan = (
+        csk_home
+        / "runtime"
+        / "skill-a"
+        / f".runtime.tmp-{dead_pid}"
+    )
+    global_orphan.mkdir(parents=True)
+    runtime_orphan.mkdir(parents=True)
+
+    result = installer.install(cfg)[0]
+
+    assert not result.errors
+    assert not stale_snapshot.parent.exists()
+    assert not global_orphan.exists()
+    assert not runtime_orphan.exists()
 
 
 def test_cli_gc_command_reports_summary(monkeypatch, tmp_path, skills_root, csk_home, capsys):
