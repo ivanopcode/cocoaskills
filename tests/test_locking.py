@@ -148,6 +148,40 @@ def test_global_lock_times_out_when_held(tmp_path):
         pass
 
 
+def test_stable_lock_descriptor_uses_binary_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    lock = ManagerHomeLock(home)
+    real_open = os.open
+    binary_flag = getattr(os, "O_BINARY", 0)
+    synthetic_flag = binary_flag == 0
+    if synthetic_flag:
+        binary_flag = 1 << 29
+        monkeypatch.setattr(locking.os, "O_BINARY", binary_flag, raising=False)
+    opened_flags: list[int] = []
+
+    def capture_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+    ) -> int:
+        if Path(path) == lock.path:
+            opened_flags.append(flags)
+        if synthetic_flag:
+            flags &= ~binary_flag
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(locking.os, "open", capture_open)
+
+    with lock:
+        lock.assert_held()
+
+    assert opened_flags
+    assert all(flags & binary_flag for flags in opened_flags)
+
+
 def test_stable_lock_timeout_message_forbids_removal(tmp_path: Path):
     with GlobalLock(tmp_path, timeout=0.1) as lock:
         message = locking._timeout_message(lock.path)
@@ -298,7 +332,9 @@ def test_released_lock_file_remains_and_can_be_reacquired(tmp_path: Path):
 
     with GlobalLock(tmp_path, timeout=0.5) as first:
         first.assert_held()
-        first_record = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert first._fd is not None
+        first_record = locking._read_lock_fd(first._fd)
+        assert first_record is not None
         first_token = first_record["token"]
         assert first_record["pid"] == locking._LEGACY_PID_GUARD
         assert first_record["owner_pid"] == os.getpid()
@@ -306,7 +342,10 @@ def test_released_lock_file_remains_and_can_be_reacquired(tmp_path: Path):
     assert lock_path.exists()
     with GlobalLock(tmp_path, timeout=0.5) as second:
         second.assert_held()
-        second_token = json.loads(lock_path.read_text(encoding="utf-8"))["token"]
+        assert second._fd is not None
+        second_record = locking._read_lock_fd(second._fd)
+        assert second_record is not None
+        second_token = second_record["token"]
 
     assert first_token != second_token
     assert lock_path.exists()
@@ -319,6 +358,16 @@ def test_acquire_rechecks_canonical_witness_after_publication(
     home = tmp_path / "home"
     lock = ManagerHomeLock(home)
     moved = tmp_path / "published-but-moved.lock"
+
+    if os.name == "nt":
+        with lock:
+            with pytest.raises(PermissionError):
+                lock.path.rename(moved)
+            lock.assert_held()
+        lock.path.rename(moved)
+        assert moved.exists()
+        return
+
     real_write = locking._write_lock_fd
 
     def move_after_write(fd: int, data: dict[str, object]) -> None:

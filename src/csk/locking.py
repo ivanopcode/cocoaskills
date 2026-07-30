@@ -309,6 +309,8 @@ class _ExclusiveFileLock:
                 flags = os.O_CREAT | os.O_RDWR
                 flags |= getattr(os, "O_CLOEXEC", 0)
                 flags |= getattr(os, "O_NOFOLLOW", 0)
+                # Windows text translation makes fstat and read byte counts diverge.
+                flags |= getattr(os, "O_BINARY", 0)
                 fd = os.open(str(self.path), flags, 0o600)
                 locked = False
                 retained = False
