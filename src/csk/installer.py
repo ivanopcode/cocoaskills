@@ -1,21 +1,52 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import shutil
+import stat
 import sys
 import tempfile
+import time
+import uuid
 from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
-import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-from . import adapters, audit_registry, closure, consumers, dev_substitutions, env_files, gc, git_ops, gitignore_gate, hashing, hybrid, locale, manifest, mcp_configs, protocol_json, shims, skillcheck, skillspec, snapshot, whitelist
+from . import (
+    adapters,
+    audit_registry,
+    closure,
+    consumers,
+    dev_substitutions,
+    env_files,
+    gc,
+    git_ops,
+    gitignore_gate,
+    hashing,
+    hybrid,
+    install_marker,
+    locale,
+    locking,
+    manifest,
+    mcp_configs,
+    protocol_json,
+    shims,
+    skillcheck,
+    skillspec,
+    snapshot,
+    transactions,
+    whitelist,
+)
 from . import source_identity as source_identity_mod
 from .audit import pipeline as audit_pipeline
+from .builds import cache as build_cache
+from .builds import go_v1
+from .builds import metadata as build_metadata
 from .builds import planner as build_planner
 from .builds import source as build_source
 from .builds import toolchain as build_toolchain
@@ -25,6 +56,9 @@ from .skillspec import CommandSpec
 
 class InstallError(Exception):
     pass
+
+
+_INSTALL_ORPHAN_RE = re.compile(r"^\..+\.(?:tmp|backup)-(\d+)$")
 
 
 @dataclass(frozen=True)
@@ -59,6 +93,21 @@ class SkillPlan:
     spec: skillspec.SkillSpec
 
 
+@dataclass(frozen=True)
+class _MaterializationTarget:
+    target_class: str
+    identifier: str
+    live_path: Path
+    kind: transactions.TargetKind = "bytes"
+
+
+@dataclass(frozen=True)
+class _PublishedBuild:
+    plan: build_planner.BuildPlan
+    inspection: build_cache.CacheInspection
+    marker: install_marker.InstallMarkerBuild
+
+
 class _MessageResult(Protocol):
     messages: list[str]
 
@@ -68,11 +117,7 @@ def install(config: GlobalConfig, *, alias: str | None = None, options: InstallO
     selected = _selected_projects(config, alias)
     results: list[ProjectResult] = []
     fetched_repos: set[Path] = set()
-    operator_search_path = (
-        build_toolchain.capture_operator_search_path()
-        if options.dry_run
-        else None
-    )
+    operator_search_path = build_toolchain.capture_operator_search_path()
     for project in selected:
         results.append(
             _install_project(
@@ -83,8 +128,24 @@ def install(config: GlobalConfig, *, alias: str | None = None, options: InstallO
                 operator_search_path=operator_search_path,
             )
         )
-    if not options.dry_run:
-        gc.collect_runtime(config, config.path.parent)
+    if (
+        not options.dry_run
+        and any(result.status == "ok" for result in results)
+        and not any(result.failed for result in results)
+    ):
+        try:
+            with locking.ManagerHomeLock(config.path.parent):
+                gc.collect_runtime(config, config.path.parent)
+        except locking.LockOrderError:
+            raise
+        except locking.LockError as exc:
+            successful = next(
+                result for result in results if result.status == "ok"
+            )
+            successful.messages.append(
+                f"{successful.alias}: post-install garbage collection "
+                f"skipped: {exc}"
+            )
     return results
 
 
@@ -105,32 +166,20 @@ def _install_project(
     fetched_repos: set[Path],
     operator_search_path: build_toolchain.OperatorSearchPath | None,
 ) -> ProjectResult:
-    if not options.dry_run:
-        return _install_project_once(
-            config,
-            project,
-            options,
-            fetched_repos=fetched_repos,
-            operator_search_path=operator_search_path,
-            generation_probe=None,
-            expected_generation=None,
-        )
-
     generation_probe = _project_generation_probe(config, project)
-    for attempt in range(2):
-        try:
-            expected_generation = generation_probe.capture()
-            return _install_project_once(
-                config,
-                project,
-                options,
-                fetched_repos=fetched_repos,
-                operator_search_path=operator_search_path,
-                generation_probe=generation_probe,
-                expected_generation=expected_generation,
-            )
-        except build_planner.BuildPlanningError as exc:
-            if exc.code != "concurrent_state_change":
+    attempts = 2 if options.dry_run else 3
+    csk_home = config.path.parent
+    project_lock = (
+        ExitStack()
+        if options.dry_run
+        else locking.ProjectLock(csk_home, project.path)
+    )
+    with project_lock:
+        if not options.dry_run:
+            try:
+                with locking.ManagerHomeLock(csk_home) as home_lock:
+                    _transaction_engine(csk_home).recover(home_lock)
+            except transactions.TransactionError as exc:
                 result = ProjectResult(
                     alias=project.alias,
                     path=project.path,
@@ -138,16 +187,86 @@ def _install_project(
                 )
                 result.errors.append(str(exc))
                 return result
-            if attempt == 0:
-                continue
-            result = ProjectResult(
-                alias=project.alias,
-                path=project.path,
-                status="failed",
-            )
-            result.errors.append(str(exc))
-            return result
+        for attempt in range(attempts):
+            try:
+                expected_generation = generation_probe.capture()
+                return _install_project_once(
+                    config,
+                    project,
+                    options,
+                    fetched_repos=fetched_repos,
+                    operator_search_path=operator_search_path,
+                    generation_probe=generation_probe,
+                    expected_generation=expected_generation,
+                )
+            except build_planner.BuildPlanningError as exc:
+                if exc.code != "concurrent_state_change":
+                    result = ProjectResult(
+                        alias=project.alias,
+                        path=project.path,
+                        status="failed",
+                    )
+                    result.errors.append(str(exc))
+                    return result
+                if attempt + 1 < attempts:
+                    continue
+                result = ProjectResult(
+                    alias=project.alias,
+                    path=project.path,
+                    status="failed",
+                )
+                result.errors.append(str(exc))
+                return result
     raise AssertionError("unreachable project planning retry state")
+
+
+def _transaction_engine(csk_home: Path) -> transactions.TransactionEngine:
+    return transactions.TransactionEngine(csk_home)
+
+
+def _concurrent_state_change(detail: str) -> build_planner.BuildPlanningError:
+    return build_planner.BuildPlanningError("concurrent_state_change", detail)
+
+
+def _capture_generation(
+    probe: build_planner.GenerationProbe,
+) -> dict[str, str]:
+    return dict(probe.capture())
+
+
+def _assert_generation_current(
+    probe: build_planner.GenerationProbe,
+    expected: Mapping[str, str],
+) -> None:
+    if _capture_generation(probe) != dict(expected):
+        raise _concurrent_state_change(
+            "shared planning state changed before the atomic project commit"
+        )
+
+
+def _generation_after_gate_writes(
+    config: GlobalConfig,
+    probe: build_planner.GenerationProbe,
+    expected: Mapping[str, str],
+) -> dict[str, str]:
+    current = _capture_generation(probe)
+    csk_home = Path(os.path.abspath(config.path.parent))
+    gate_owned = {
+        str(csk_home / "audit"),
+        str(csk_home / "cache" / "registry"),
+        str(csk_home / "state" / "registry"),
+    }
+    changed_inputs = sorted(
+        key
+        for key in set(expected) | set(current)
+        if expected.get(key) != current.get(key) and key not in gate_owned
+    )
+    if changed_inputs:
+        raise _concurrent_state_change(
+            "shared planning input changed while trust gates were running: "
+            + ", ".join(changed_inputs)
+        )
+    return current
 
 
 def _install_project_once(
@@ -248,15 +367,12 @@ def _install_project_once(
             validation_issues = _validate_skills(plans, effective_locale)
             result.messages.extend(_skill_validation_warnings(project.alias, validation_issues))
             _check_skill_validation_errors(validation_issues)
-            build_providers: tuple[build_planner.BuildProvider, ...] = ()
-            if options.dry_run:
-                build_providers = _freeze_build_providers(nodes, stack)
+            build_providers = _freeze_build_providers(nodes, stack)
             closure.detect_active_command_collisions(nodes)
-            if options.dry_run:
-                build_planner.detect_command_collisions(
-                    build_providers,
-                    occupied=_active_script_owners(nodes),
-                )
+            build_planner.detect_command_collisions(
+                build_providers,
+                occupied=_active_script_owners(nodes),
+            )
             _check_dependencies(plans)
             mcp_found, mcp_warnings = _check_mcp_servers(plans, project.path, agents, alias=project.alias)
             result.messages.extend(mcp_warnings)
@@ -272,29 +388,47 @@ def _install_project_once(
                 alias=project.alias,
                 read_only=options.dry_run,
             )
+            if not options.dry_run and (
+                config.audit.enabled or config.trusted_registries()
+            ):
+                if generation_probe is None or expected_generation is None:
+                    raise AssertionError(
+                        "trust gate planning requires generation state"
+                    )
+                expected_generation = _generation_after_gate_writes(
+                    config,
+                    generation_probe,
+                    expected_generation,
+                )
             if options.strict_tags:
                 _check_moved_tags_strict(project.path / ".agents" / "skills", plans)
             else:
                 result.messages.extend(_moved_tag_warnings(project.path / ".agents" / "skills", plans))
 
-            if options.dry_run:
-                if operator_search_path is None:
-                    raise AssertionError("dry-run build planning requires an operator search path")
-                result.builds.extend(
-                    build_planner.plan_builds(
-                        build_providers,
-                        manager_home=config.path.parent,
-                        operator_search_path=operator_search_path,
-                        forbidden_roots=(
-                            project.path,
-                            config.skills_root,
-                            *(node.repo for node in nodes),
-                        ),
-                        generation_probe=generation_probe,
-                        expected_generation=expected_generation,
-                        max_generation_attempts=1,
-                    )
+            if operator_search_path is None:
+                raise AssertionError("build planning requires an operator search path")
+            if generation_probe is None or expected_generation is None:
+                raise AssertionError("project build planning requires generation state")
+            cache_backend = build_cache.cache_for_manager_home(
+                config.path.parent
+            )
+            result.builds.extend(
+                build_planner.plan_builds(
+                    build_providers,
+                    manager_home=config.path.parent,
+                    operator_search_path=operator_search_path,
+                    forbidden_roots=(
+                        project.path,
+                        config.skills_root,
+                        *(node.repo for node in nodes),
+                    ),
+                    cache_backend=cache_backend,
+                    generation_probe=generation_probe,
+                    expected_generation=expected_generation,
+                    max_generation_attempts=1,
                 )
+            )
+            if options.dry_run:
                 for build in result.builds:
                     payload = json.dumps(
                         build.to_json(),
@@ -309,88 +443,74 @@ def _install_project_once(
                 result.messages.append(f"{project.alias}: dry-run; no files modified")
                 return result
 
-            consumers.record_consumer(config.path.parent, project.path)
-            hybrid_store = hybrid.hybrid_skills_root(config.path.parent)
-            context_names: list[str] = []
-            hybrid_context_names: list[str] = []
-            expected_commands: set[str] = set()
-            nodes_by_name = {node.name: node for node in nodes}
-            for node in nodes:
-                plan = SkillPlan(
-                    decl=node.decl, resolved=node.resolved, repo=node.repo, snapshot=node.snapshot, spec=node.spec
-                )
-                active = node.active_commands()
-                command_names: set[str] = set()
-                if active:
-                    command_names = install_runtime_commands(
-                        config.path.parent, project.path / ".agents" / "bin", plan, only=active
-                    )
-                    expected_commands.update(command_names)
-                activation = {"context": node.context_active, "commands": sorted(active)}
-                requirers = node.consumers()
-                is_hybrid = node.name in hybrid_store_names
-                if node.context_active and is_hybrid:
-                    # Hybrid context renders once per machine with the machine
-                    # locale; per-project variance stays out of the shared marker.
-                    installed = _install_skill_context_to_root(
-                        hybrid_store,
-                        plan,
-                        config.preferred_locale,
-                        [],
-                        activation=activation,
-                        requirers=requirers,
-                        substituted=node.substituted,
-                    )
-                    hybrid_context_names.append(node.name)
-                elif node.context_active:
-                    installed = _install_skill_context(
-                        project.path,
-                        plan,
-                        effective_locale,
-                        agents,
-                        activation=activation,
-                        requirers=requirers,
-                        substituted=node.substituted,
-                        mcp_servers=mcp_found.get(node.name),
-                        attestation=registry_attest.get(node.name),
-                    )
-                    context_names.append(node.name)
-                else:
-                    installed = _install_marker_only(
-                        project.path,
-                        plan,
-                        activation=activation,
-                        requirers=requirers,
-                        substituted=node.substituted,
-                        mcp_servers=mcp_found.get(node.name),
-                        target_root=hybrid_store if is_hybrid else None,
-                        attestation=registry_attest.get(node.name),
-                    )
-                suffix = " (hybrid)" if is_hybrid else ""
-                result.messages.append(f"{project.alias}: {_node_summary(node)}{suffix} {installed}")
-                if options.verbose:
-                    result.messages.append(f"{project.alias}: {node.name} commit {node.resolved.commit}")
-                    for command_name in sorted(command_names):
-                        result.messages.append(
-                            f"{project.alias}: {node.name} command {command_name} -> .agents/bin/{command_name}"
-                        )
-
-            _cleanup_removed_skills(project.path, set(nodes_by_name) - hybrid_store_names)
-            all_hybrid_names = {item.decl.name for item in hybrid_decls}
-            _cleanup_removed_skills_root(hybrid_store, all_hybrid_names | hybrid_store_names)
-            shims.remove_stale_shims(project.path, expected_commands)
-            env_files.write_env_files(project.path)
-            adapters.refresh_adapter_groups(
-                project.path,
+            (
+                materialization_targets,
+                adapter_targets,
+            ) = _materialization_targets(
+                config,
+                project,
+                nodes,
+                hybrid_decls,
+                hybrid_store_names,
                 agents,
-                [
-                    (project.path / ".agents" / "skills", context_names),
-                    (hybrid_store, hybrid_context_names),
-                ],
-                config.adapter_mode,
             )
+            target_preimages = _capture_target_preimages(
+                materialization_targets
+            )
+            private_builds = _build_private_misses(
+                config,
+                project,
+                nodes,
+                build_providers,
+                tuple(result.builds),
+                operator_search_path,
+                cache_backend,
+                stack,
+            )
+
+            with locking.ManagerHomeLock(config.path.parent) as home_lock:
+                engine = _transaction_engine(config.path.parent)
+                engine.recover(home_lock)
+                _assert_generation_current(
+                    generation_probe,
+                    expected_generation,
+                )
+                _assert_target_preimages_current(
+                    materialization_targets,
+                    target_preimages,
+                )
+                _revalidate_closure(nodes, build_providers)
+                published = _publish_planned_builds(
+                    config.path.parent,
+                    tuple(result.builds),
+                    private_builds,
+                    cache_backend,
+                    home_lock,
+                )
+                messages = _commit_materialization(
+                    config,
+                    project,
+                    options,
+                    nodes=nodes,
+                    hybrid_decls=hybrid_decls,
+                    hybrid_store_names=hybrid_store_names,
+                    agents=agents,
+                    effective_locale=effective_locale,
+                    mcp_found=mcp_found,
+                    registry_attest=registry_attest,
+                    published_builds=published,
+                    materialization_targets=materialization_targets,
+                    adapter_targets=adapter_targets,
+                    target_preimages=target_preimages,
+                    expected_generation=expected_generation,
+                    engine=engine,
+                    home_lock=home_lock,
+                )
+            result.messages.extend(messages)
             project_bin = project.path / ".agents" / "bin"
-            if expected_commands and not _directory_is_on_path(project_bin):
+            if _active_command_names(nodes) and not _directory_is_on_path(
+                project_bin
+            ):
                 result.messages.append(
                     f"{project.alias}: commands are installed in {project_bin}, which is not on PATH; "
                     "agent skills resolve that directory directly. For optional bare commands in an interactive "
@@ -398,12 +518,12 @@ def _install_project_once(
                 )
             return result
     except build_planner.BuildPlanningError as exc:
-        if options.dry_run and exc.code == "concurrent_state_change":
+        if exc.code == "concurrent_state_change":
             raise
         result.status = "failed"
         result.errors.append(str(exc))
         return result
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - project boundary reports stable failures
         result.status = "failed"
         result.errors.append(str(exc))
         return result
@@ -534,6 +654,1077 @@ def _project_generation_probe(
         user_home / ".config" / "opencode" / "opencode.jsonc",
     )
     return build_planner.FilesystemGenerationProbe(paths)
+
+
+def _materialization_targets(
+    config: GlobalConfig,
+    project: ProjectConfig,
+    nodes: list[closure.ClosureNode],
+    hybrid_decls: list[hybrid.HybridDecl],
+    hybrid_store_names: set[str],
+    agents: list[str],
+) -> tuple[
+    tuple[_MaterializationTarget, ...],
+    tuple[adapters.AdapterTarget, ...],
+]:
+    adapters.warn_unknown_agents(agents)
+    home = Path(os.path.abspath(config.path.parent))
+    project_root = Path(os.path.abspath(project.path))
+    project_skills = project_root / ".agents" / "skills"
+    hybrid_skills = hybrid.hybrid_skills_root(home)
+    runtime_root = home / "runtime"
+    project_bin = project_root / ".agents" / "bin"
+    targets: list[_MaterializationTarget] = []
+
+    project_names = {
+        node.name
+        for node in nodes
+        if node.name not in hybrid_store_names
+    }
+    for name in sorted(project_names):
+        targets.append(
+            _MaterializationTarget(
+                target_class="10-context",
+                identifier=f"project/{name}",
+                live_path=project_skills / name,
+                kind="entry",
+            )
+        )
+    for name in sorted(hybrid_store_names):
+        targets.append(
+            _MaterializationTarget(
+                target_class="10-context",
+                identifier=f"hybrid/{name}",
+                live_path=hybrid_skills / name,
+                kind="entry",
+            )
+        )
+
+    all_hybrid_names = {item.decl.name for item in hybrid_decls}
+    targets.extend(
+        _stale_entry_targets(
+            project_skills,
+            project_names,
+            identifier_prefix="context/project",
+        )
+    )
+    targets.extend(
+        _stale_entry_targets(
+            hybrid_skills,
+            all_hybrid_names | hybrid_store_names,
+            identifier_prefix="context/hybrid",
+        )
+    )
+
+    for node in nodes:
+        if not node.active_commands():
+            continue
+        targets.append(
+            _MaterializationTarget(
+                target_class="20-runtime",
+                identifier=f"{node.name}/{node.resolved.commit}",
+                live_path=(
+                    runtime_root
+                    / node.name
+                    / node.resolved.commit
+                ),
+                kind="entry",
+            )
+        )
+    runtime_references = _runtime_references_for_plan(
+        config,
+        project_root,
+        nodes,
+        all_hybrid_names | hybrid_store_names,
+    )
+    if runtime_root.exists():
+        for skill_dir in runtime_root.iterdir():
+            if not skill_dir.is_dir() or skill_dir.is_symlink():
+                continue
+            for commit_dir in skill_dir.iterdir():
+                if (
+                    not commit_dir.is_dir()
+                    and not commit_dir.is_symlink()
+                ):
+                    continue
+                if (
+                    skill_dir.name,
+                    commit_dir.name,
+                ) in runtime_references:
+                    continue
+                targets.append(
+                    _MaterializationTarget(
+                        target_class="80-removal",
+                        identifier=(
+                            f"runtime/{skill_dir.name}/"
+                            f"{commit_dir.name}"
+                        ),
+                        live_path=commit_dir,
+                        kind="entry",
+                    )
+                )
+
+    command_names = _active_command_names(nodes)
+    expected_shims = {
+        shims.shim_path(project_bin, name)
+        for name in command_names
+    }
+    for name in sorted(command_names):
+        targets.append(
+            _MaterializationTarget(
+                target_class="30-shim-canonical",
+                identifier=name,
+                live_path=shims.shim_path(project_bin, name),
+                kind="entry",
+            )
+        )
+    if project_bin.exists():
+        for child in project_bin.iterdir():
+            if (
+                (child.is_file() or child.is_symlink())
+                and child not in expected_shims
+            ):
+                targets.append(
+                    _MaterializationTarget(
+                        target_class="80-removal",
+                        identifier=f"shim/{child.name}",
+                        live_path=child,
+                        kind="entry",
+                    )
+                )
+
+    for name in ("env.ps1", "env.sh"):
+        targets.append(
+            _MaterializationTarget(
+                target_class="50-env-file",
+                identifier=name,
+                live_path=project_root / ".agents" / name,
+            )
+        )
+
+    project_context_names = tuple(
+        sorted(
+            node.name
+            for node in nodes
+            if (
+                node.context_active
+                and node.name not in hybrid_store_names
+            )
+        )
+    )
+    hybrid_context_names = tuple(
+        sorted(
+            node.name
+            for node in nodes
+            if node.context_active and node.name in hybrid_store_names
+        )
+    )
+    adapter_groups = [
+        adapters.AdapterGroup(
+            canonical_root=project_skills,
+            skill_names=project_context_names,
+        ),
+        adapters.AdapterGroup(
+            canonical_root=hybrid_skills,
+            skill_names=hybrid_context_names,
+        ),
+    ]
+    adapter_targets = adapters.plan_project_adapter_targets(
+        project_root,
+        agents,
+        adapter_groups,
+    )
+    targets.extend(
+        _MaterializationTarget(
+            target_class=target.target_class,
+            identifier=target.identifier,
+            live_path=target.live_path,
+            kind=target.kind,
+        )
+        for target in adapter_targets
+    )
+    targets.append(
+        _MaterializationTarget(
+            target_class="90-consumer",
+            identifier=consumers.REGISTRY_NAME,
+            live_path=consumers.registry_path(home),
+        )
+    )
+    keys = [_target_key(target) for target in targets]
+    if len(keys) != len(set(keys)):
+        raise InstallError("materialization plan contains duplicate targets")
+    return tuple(targets), adapter_targets
+
+
+def _stale_entry_targets(
+    root: Path,
+    expected: set[str],
+    *,
+    identifier_prefix: str,
+) -> list[_MaterializationTarget]:
+    targets: list[_MaterializationTarget] = []
+    if not root.exists():
+        return targets
+    for child in root.iterdir():
+        if child.name.startswith("."):
+            if _is_dead_install_orphan(child):
+                targets.append(
+                    _MaterializationTarget(
+                        target_class="80-removal",
+                        identifier=(
+                            f"{identifier_prefix}/orphan/{child.name}"
+                        ),
+                        live_path=child,
+                        kind="entry",
+                    )
+                )
+            continue
+        if child.name in expected:
+            continue
+        if not child.is_dir() and not child.is_symlink():
+            continue
+        targets.append(
+            _MaterializationTarget(
+                target_class="80-removal",
+                identifier=f"{identifier_prefix}/{child.name}",
+                live_path=child,
+                kind="entry",
+            )
+        )
+    return targets
+
+
+def _is_dead_install_orphan(path: Path) -> bool:
+    match = _INSTALL_ORPHAN_RE.fullmatch(path.name)
+    return (
+        match is not None
+        and not locking._pid_alive(int(match.group(1)))
+    )
+
+
+def _runtime_references_for_plan(
+    config: GlobalConfig,
+    project_root: Path,
+    nodes: list[closure.ClosureNode],
+    retained_hybrid_names: set[str],
+) -> set[tuple[str, str]]:
+    references = {
+        (node.name, node.resolved.commit)
+        for node in nodes
+    }
+    references.update(
+        _marker_references(
+            config.path.parent / "global" / "skills"
+        )
+    )
+    references.update(
+        _marker_references(
+            hybrid.hybrid_skills_root(config.path.parent),
+            only=retained_hybrid_names,
+        )
+    )
+    current = project_root.resolve()
+    seen = {current}
+    for configured in config.projects.values():
+        resolved = configured.path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        references.update(
+            _marker_references(
+                resolved / ".agents" / "skills"
+            )
+        )
+    for consumer in consumers.load_consumers(config.path.parent):
+        resolved = consumer.resolve()
+        if resolved in seen or not resolved.exists():
+            continue
+        seen.add(resolved)
+        references.update(
+            _marker_references(
+                resolved / ".agents" / "skills"
+            )
+        )
+    return references
+
+
+def _target_key(target: _MaterializationTarget) -> tuple[str, str]:
+    return target.target_class, target.identifier
+
+
+def _capture_target_preimages(
+    targets: tuple[_MaterializationTarget, ...],
+) -> dict[tuple[str, str], str]:
+    return {
+        _target_key(target): transactions.digest_target(
+            target.live_path,
+            kind=target.kind,
+        )
+        for target in targets
+    }
+
+
+def _assert_target_preimages_current(
+    targets: tuple[_MaterializationTarget, ...],
+    expected: Mapping[tuple[str, str], str],
+) -> None:
+    for target in targets:
+        key = _target_key(target)
+        if (
+            transactions.digest_target(
+                target.live_path,
+                kind=target.kind,
+            )
+            != expected[key]
+        ):
+            raise _concurrent_state_change(
+                f"materialization target changed before commit: "
+                f"{target.target_class}/{target.identifier}"
+            )
+
+
+def _build_private_misses(
+    config: GlobalConfig,
+    project: ProjectConfig,
+    nodes: list[closure.ClosureNode],
+    providers: tuple[build_planner.BuildProvider, ...],
+    plans: tuple[build_planner.BuildPlan, ...],
+    operator_search_path: build_toolchain.OperatorSearchPath,
+    cache_backend: build_cache.BuildCacheBackend,
+    stack: ExitStack,
+) -> dict[str, build_cache.CachePublication]:
+    candidates = [
+        plan
+        for plan in plans
+        if plan.inspection.status is not build_cache.CacheEntryStatus.HIT
+    ]
+    for plan in candidates:
+        if plan.inspection.status is build_cache.CacheEntryStatus.UNSUPPORTED:
+            raise InstallError(
+                f"{plan.driver} cache is unavailable: "
+                f"{plan.inspection.reason}"
+            )
+    if not candidates:
+        return {}
+
+    private_base = Path(
+        stack.enter_context(
+            tempfile.TemporaryDirectory(prefix="csk-build-operation-")
+        )
+    )
+    forbidden = tuple(
+        path
+        for path in (
+            config.path.parent,
+            project.path,
+            config.skills_root,
+            *(node.repo for node in nodes),
+            *(provider.snapshot.path for provider in providers),
+        )
+        if path.exists()
+    )
+    session = stack.enter_context(
+        build_toolchain.establish_toolchain(
+            build_toolchain.ToolchainConfig(
+                private_base=private_base,
+                operator_search_path=operator_search_path,
+                forbidden_roots=forbidden,
+            )
+        )
+    )
+    for plan in plans:
+        if (
+            session.target != plan.input.target
+            or session.toolchain != plan.input.toolchain
+        ):
+            raise _concurrent_state_change(
+                "the selected Go toolchain changed between planning and build"
+            )
+
+    providers_by_name = {provider.name: provider for provider in providers}
+    publications: dict[str, build_cache.CachePublication] = {}
+    for plan in candidates:
+        provider = providers_by_name.get(plan.provider)
+        if provider is None:
+            raise _concurrent_state_change(
+                f"build provider disappeared before build: {plan.provider}"
+            )
+        with locking.BuildLock(config.path.parent, plan.cache_key):
+            inspection = cache_backend.inspect(
+                build_cache.CacheExpectation(input=plan.input)
+            )
+            if inspection.status is build_cache.CacheEntryStatus.HIT:
+                continue
+            if inspection.status is build_cache.CacheEntryStatus.UNSUPPORTED:
+                raise InstallError(
+                    f"{plan.driver} cache is unavailable: "
+                    f"{inspection.reason}"
+                )
+            command = next(
+                (
+                    candidate
+                    for candidate in provider.commands
+                    if candidate.name == plan.command
+                ),
+                None,
+            )
+            if command is None:
+                raise _concurrent_state_change(
+                    f"build command disappeared before build: "
+                    f"{plan.provider}.{plan.command}"
+                )
+
+            def run_build(
+                frozen: build_source.FrozenSnapshot,
+                command_spec: build_planner.BuildCommand = command,
+            ) -> go_v1.BuildResult:
+                return go_v1.build(
+                    go_v1.BuildRequest(
+                        toolchain_session=session,
+                        source_snapshot=frozen,
+                        command_object={
+                            "type": "build",
+                            "driver": command_spec.driver,
+                            "source_dir": command_spec.source_dir,
+                        },
+                        build_root=command_spec.build_root,
+                        source_dir=command_spec.source_dir,
+                        command=command_spec.name,
+                    )
+                )
+
+            built = provider.snapshot.use(run_build)
+            artifact = built.artifact
+            if artifact.metadata.path != plan.input.artifact_path:
+                raise InstallError(
+                    f"{plan.provider}.{plan.command} produced artifact "
+                    f"{artifact.metadata.path!r}, expected "
+                    f"{plan.input.artifact_path!r}"
+                )
+            receipt = build_metadata.build_receipt(
+                plan.input,
+                build_metadata.BuildArtifact(
+                    path=artifact.metadata.path,
+                    sha256=artifact.metadata.sha256,
+                    size=artifact.metadata.size,
+                ),
+            )
+            publications[plan.cache_key] = build_cache.CachePublication(
+                input=plan.input,
+                receipt_bytes=build_metadata.canonical_receipt_bytes(
+                    receipt
+                ),
+                artifact_source=artifact.staged_path,
+            )
+    return publications
+
+
+def _revalidate_closure(
+    nodes: list[closure.ClosureNode],
+    providers: tuple[build_planner.BuildProvider, ...],
+) -> None:
+    by_name = {node.name: node for node in nodes}
+    if len(by_name) != len(nodes):
+        raise _concurrent_state_change(
+            "dependency closure ownership changed before commit"
+        )
+    for node in nodes:
+        resolved = git_ops.resolve_ref(
+            node.repo,
+            node.decl.ref.kind,
+            node.decl.ref.value,
+        )
+        if resolved.commit != node.resolved.commit:
+            raise _concurrent_state_change(
+                f"resolved source changed before commit: {node.name}"
+            )
+    for provider in providers:
+        provider_node = by_name.get(provider.name)
+        if provider_node is None:
+            raise _concurrent_state_change(
+                f"build provider disappeared before commit: {provider.name}"
+            )
+        provider.snapshot.recheck()
+        expected_commands = _active_build_command_names(provider_node)
+        if {command.name for command in provider.commands} != expected_commands:
+            raise _concurrent_state_change(
+                f"build activation changed before commit: {provider.name}"
+            )
+    closure.detect_active_command_collisions(nodes)
+    build_planner.detect_command_collisions(
+        providers,
+        occupied=_active_script_owners(nodes),
+    )
+
+
+def _publish_planned_builds(
+    csk_home: Path,
+    plans: tuple[build_planner.BuildPlan, ...],
+    publications: Mapping[str, build_cache.CachePublication],
+    cache_backend: build_cache.BuildCacheBackend,
+    home_lock: locking.ManagerHomeLock,
+) -> dict[str, dict[str, _PublishedBuild]]:
+    published: dict[str, dict[str, _PublishedBuild]] = {}
+    for plan in plans:
+        expectation = build_cache.CacheExpectation(input=plan.input)
+        inspection = cache_backend.inspect(expectation)
+        if inspection.status is not build_cache.CacheEntryStatus.HIT:
+            publication = publications.get(plan.cache_key)
+            if publication is None:
+                raise _concurrent_state_change(
+                    f"cache winner changed before commit: "
+                    f"{plan.provider}.{plan.command}"
+                )
+            cache_backend.publish(publication, guard=home_lock)
+            inspection = cache_backend.inspect(expectation)
+        if (
+            inspection.status is not build_cache.CacheEntryStatus.HIT
+            or inspection.receipt is None
+            or inspection.receipt_sha256 is None
+            or inspection.artifact_path is None
+        ):
+            raise InstallError(
+                f"{plan.driver} cache did not yield a verified winner for "
+                f"{plan.provider}.{plan.command}: {inspection.reason}"
+            )
+        receipt = inspection.receipt
+        marker = install_marker.InstallMarkerBuild(
+            driver=plan.driver,
+            cache_key=plan.cache_key,
+            receipt_sha256=inspection.receipt_sha256,
+            artifact_sha256=receipt.artifact.sha256,
+            artifact_path=receipt.artifact.path,
+        )
+        published.setdefault(plan.provider, {})[plan.command] = (
+            _PublishedBuild(
+                plan=plan,
+                inspection=inspection,
+                marker=marker,
+            )
+        )
+    return published
+
+
+def _active_command_names(nodes: list[closure.ClosureNode]) -> set[str]:
+    commands: set[str] = set()
+    for node in nodes:
+        commands.update(node.active_commands())
+        commands.update(_active_build_command_names(node))
+    return commands
+
+
+def _commit_materialization(
+    config: GlobalConfig,
+    project: ProjectConfig,
+    options: InstallOptions,
+    *,
+    nodes: list[closure.ClosureNode],
+    hybrid_decls: list[hybrid.HybridDecl],
+    hybrid_store_names: set[str],
+    agents: list[str],
+    effective_locale: str | None,
+    mcp_found: Mapping[str, dict[str, list[str]]],
+    registry_attest: Mapping[str, dict[str, object]],
+    published_builds: Mapping[str, Mapping[str, _PublishedBuild]],
+    materialization_targets: tuple[_MaterializationTarget, ...],
+    adapter_targets: tuple[adapters.AdapterTarget, ...],
+    target_preimages: Mapping[tuple[str, str], str],
+    expected_generation: Mapping[str, str],
+    engine: transactions.TransactionEngine,
+    home_lock: locking.ManagerHomeLock,
+) -> list[str]:
+    physical_project_parent = project.path.resolve(strict=False).parent
+    staging_parents = tuple(
+        dict.fromkeys((physical_project_parent, config.path.parent))
+    )
+    with ExitStack() as staging_stack:
+        staging_root: Path | None = None
+        staging_errors: list[str] = []
+        for parent in staging_parents:
+            try:
+                temporary = staging_stack.enter_context(
+                    tempfile.TemporaryDirectory(
+                        prefix=".csk-materialization-plan-",
+                        dir=parent,
+                    )
+                )
+            except OSError as exc:
+                staging_errors.append(f"{parent}: {exc}")
+                continue
+            staging_root = Path(temporary)
+            break
+        if staging_root is None:
+            raise InstallError(
+                "cannot create private materialization staging: "
+                + "; ".join(staging_errors)
+            )
+        desired, messages = _stage_materialization(
+            staging_root,
+            config,
+            project,
+            options,
+            nodes=nodes,
+            hybrid_decls=hybrid_decls,
+            hybrid_store_names=hybrid_store_names,
+            agents=agents,
+            effective_locale=effective_locale,
+            mcp_found=mcp_found,
+            registry_attest=registry_attest,
+            published_builds=published_builds,
+            materialization_targets=materialization_targets,
+            adapter_targets=adapter_targets,
+        )
+        targets: list[transactions.MutableTarget] = []
+        for target in materialization_targets:
+            key = _target_key(target)
+            wanted = desired[key]
+            expected = target_preimages[key]
+            wanted_digest = (
+                transactions.ABSENT_DIGEST
+                if wanted is None
+                else transactions.digest_target(
+                    wanted,
+                    kind=target.kind,
+                )
+            )
+            if wanted_digest == expected:
+                continue
+            targets.append(
+                transactions.MutableTarget(
+                    target_class=target.target_class,
+                    identifier=target.identifier,
+                    live_path=target.live_path,
+                    desired_path=wanted,
+                    expected_preimage_digest=expected,
+                    kind=target.kind,
+                )
+            )
+        if targets:
+            identity = locking.canonical_project_identity(project.path)
+            identity_hash = hashlib.sha256(
+                identity.encode("utf-8")
+            ).hexdigest()[:16]
+            transaction_id = (
+                f"install-{identity_hash}-{uuid.uuid4().hex}"
+            )
+            plan = transactions.TransactionPlan(
+                transaction_id=transaction_id,
+                project_identity=identity,
+                targets=tuple(targets),
+                generation_digests=dict(expected_generation),
+            )
+            created: list[Path] = []
+            committed = False
+            try:
+                for committed_target in targets:
+                    if committed_target.desired_path is None:
+                        continue
+                    created.extend(
+                        _make_missing_directories(
+                            committed_target.live_path.parent
+                        )
+                    )
+                engine.prepare(home_lock, plan)
+                engine.commit(home_lock, transaction_id)
+                committed = True
+            finally:
+                if not committed:
+                    _remove_created_directories(created)
+        return messages
+
+
+def _stage_materialization(
+    staging_root: Path,
+    config: GlobalConfig,
+    project: ProjectConfig,
+    options: InstallOptions,
+    *,
+    nodes: list[closure.ClosureNode],
+    hybrid_decls: list[hybrid.HybridDecl],
+    hybrid_store_names: set[str],
+    agents: list[str],
+    effective_locale: str | None,
+    mcp_found: Mapping[str, dict[str, list[str]]],
+    registry_attest: Mapping[str, dict[str, object]],
+    published_builds: Mapping[str, Mapping[str, _PublishedBuild]],
+    materialization_targets: tuple[_MaterializationTarget, ...],
+    adapter_targets: tuple[adapters.AdapterTarget, ...],
+) -> tuple[
+    dict[tuple[str, str], Path | None],
+    list[str],
+]:
+    staged_project = staging_root / "project"
+    staged_home = staging_root / "home"
+    staged_project.mkdir()
+    staged_home.mkdir()
+    desired: dict[tuple[str, str], Path | None] = {}
+    _copy_live_directory(
+        project.path / ".agents",
+        staged_project / ".agents",
+    )
+    _copy_live_directory(
+        config.path.parent / "hybrid",
+        staged_home / "hybrid",
+    )
+    _copy_live_directory(
+        config.path.parent / "runtime",
+        staged_home / "runtime",
+    )
+
+    staged_hybrid_store = hybrid.hybrid_skills_root(staged_home)
+    final_hybrid_store = hybrid.hybrid_skills_root(config.path.parent)
+    final_project_bin = project.path / ".agents" / "bin"
+    expected_commands: set[str] = set()
+    messages: list[str] = []
+    nodes_by_name = {node.name: node for node in nodes}
+
+    for node in nodes:
+        plan = SkillPlan(
+            decl=node.decl,
+            resolved=node.resolved,
+            repo=node.repo,
+            snapshot=node.snapshot,
+            spec=node.spec,
+        )
+        active_scripts = node.active_commands()
+        active_builds = _active_build_command_names(node)
+        active = active_scripts | active_builds
+        command_names = install_runtime_commands(
+            staged_home,
+            staged_project / ".agents" / "bin",
+            plan,
+            only=active_scripts,
+            activation_home=config.path.parent,
+            activation_bin_dir=final_project_bin,
+        )
+        provider_builds = dict(published_builds.get(node.name, {}))
+        if set(provider_builds) != active_builds:
+            raise _concurrent_state_change(
+                f"published build set changed before materialization: "
+                f"{node.name}"
+            )
+        marker_builds = {
+            name: build.marker
+            for name, build in sorted(provider_builds.items())
+        }
+        build_source_identity: build_source.BuildSourceIdentity | None = None
+        for name in sorted(provider_builds):
+            published = provider_builds[name]
+            identity = published.plan.input.build_source
+            if (
+                build_source_identity is not None
+                and identity != build_source_identity
+            ):
+                raise InstallError(
+                    f"build provider {node.name} has inconsistent source "
+                    "identities"
+                )
+            build_source_identity = identity
+            command = node.spec.commands[name]
+            activation = shims.select_build_activation(
+                csk_home=config.path.parent,
+                command=command,
+                marker_build=published.marker,
+                inspection=published.inspection,
+            )
+            shims.write_project_build_shim(
+                staged_project,
+                activation,
+                path_entries=_runtime_path_entries(
+                    plan,
+                    final_project_bin,
+                ),
+            )
+            command_names.add(name)
+        expected_commands.update(command_names)
+
+        marker_activation = {
+            "context": node.context_active,
+            "commands": sorted(active),
+        }
+        requirers = node.consumers()
+        is_hybrid = node.name in hybrid_store_names
+        if node.context_active and is_hybrid:
+            installed = _install_skill_context_to_root(
+                staged_hybrid_store,
+                plan,
+                config.preferred_locale,
+                [],
+                activation=marker_activation,
+                requirers=requirers,
+                substituted=node.substituted,
+                builds=marker_builds,
+                build_source_identity=build_source_identity,
+            )
+        elif node.context_active:
+            installed = _install_skill_context(
+                staged_project,
+                plan,
+                effective_locale,
+                agents,
+                activation=marker_activation,
+                requirers=requirers,
+                substituted=node.substituted,
+                mcp_servers=mcp_found.get(node.name),
+                attestation=registry_attest.get(node.name),
+                builds=marker_builds,
+                build_source_identity=build_source_identity,
+            )
+        else:
+            installed = _install_marker_only(
+                staged_project,
+                plan,
+                activation=marker_activation,
+                requirers=requirers,
+                substituted=node.substituted,
+                mcp_servers=mcp_found.get(node.name),
+                target_root=(
+                    staged_hybrid_store if is_hybrid else None
+                ),
+                attestation=registry_attest.get(node.name),
+                builds=marker_builds,
+                build_source_identity=build_source_identity,
+            )
+        suffix = " (hybrid)" if is_hybrid else ""
+        messages.append(
+            f"{project.alias}: {_node_summary(node)}{suffix} {installed}"
+        )
+        if options.verbose:
+            messages.append(
+                f"{project.alias}: {node.name} commit "
+                f"{node.resolved.commit}"
+            )
+            for command_name in sorted(command_names):
+                messages.append(
+                    f"{project.alias}: {node.name} command "
+                    f"{command_name} -> .agents/bin/{command_name}"
+                )
+
+    _cleanup_removed_skills(
+        staged_project,
+        set(nodes_by_name) - hybrid_store_names,
+    )
+    all_hybrid_names = {item.decl.name for item in hybrid_decls}
+    _cleanup_removed_skills_root(
+        staged_hybrid_store,
+        all_hybrid_names | hybrid_store_names,
+    )
+    shims.remove_stale_shims(staged_project, expected_commands)
+    env_files.write_env_files(staged_project)
+    _prune_staged_runtime(
+        config,
+        project.path,
+        staged_home / "runtime",
+        staged_project / ".agents" / "skills",
+        staged_hybrid_store,
+    )
+    desired.update(
+        adapters.stage_project_adapter_targets(
+            staging_root / "adapters",
+            adapter_targets,
+            source_roots={
+                project.path / ".agents" / "skills": (
+                    staged_project / ".agents" / "skills"
+                ),
+                final_hybrid_store: staged_hybrid_store,
+            },
+            mode=config.adapter_mode,
+        )
+    )
+
+    consumer_target = next(
+        target
+        for target in materialization_targets
+        if target.target_class == "90-consumer"
+    )
+    consumer_path = staged_home / consumers.REGISTRY_NAME
+    desired[_target_key(consumer_target)] = consumer_path
+    consumer_path.write_bytes(
+        consumers.encode_consumers(
+            _desired_consumers(
+                config.path.parent,
+                project.path,
+                staged_project / ".agents" / "skills",
+            )
+        )
+    )
+    for target in materialization_targets:
+        key = _target_key(target)
+        if key in desired:
+            continue
+        if target.target_class == "10-context":
+            scope, name = target.identifier.split("/", 1)
+            desired[key] = (
+                staged_project / ".agents" / "skills" / name
+                if scope == "project"
+                else staged_hybrid_store / name
+            )
+        elif target.target_class == "20-runtime":
+            name, commit = target.identifier.split("/", 1)
+            desired[key] = (
+                staged_home / "runtime" / name / commit
+            )
+        elif target.target_class == "30-shim-canonical":
+            desired[key] = shims.shim_path(
+                staged_project / ".agents" / "bin",
+                target.identifier,
+            )
+        elif target.target_class == "50-env-file":
+            desired[key] = (
+                staged_project / ".agents" / target.identifier
+            )
+        elif target.target_class == "80-removal":
+            desired[key] = None
+        else:
+            raise AssertionError(
+                "materialization target has no staged state: "
+                f"{target.target_class}/{target.identifier}"
+            )
+    return desired, messages
+
+
+def _copy_live_directory(source: Path, destination: Path) -> None:
+    try:
+        info = source.lstat()
+    except FileNotFoundError:
+        destination.mkdir(parents=True)
+        return
+    if not stat.S_ISDIR(info.st_mode) or source.is_symlink():
+        raise InstallError(
+            f"managed materialization root is not a real directory: "
+            f"{source}"
+        )
+    shutil.copytree(source, destination, symlinks=True)
+
+
+def _make_missing_directories(path: Path) -> list[Path]:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        parent = path.parent
+        created = (
+            _make_missing_directories(parent)
+            if parent != path
+            else []
+        )
+        try:
+            path.mkdir(mode=0o755)
+        except FileExistsError:
+            info = path.lstat()
+            if not stat.S_ISDIR(info.st_mode) or path.is_symlink():
+                raise InstallError(
+                    f"materialization parent is not a real directory: "
+                    f"{path}"
+                )
+            return created
+        return [*created, path]
+    if not stat.S_ISDIR(info.st_mode) or path.is_symlink():
+        raise InstallError(
+            f"materialization parent is not a real directory: {path}"
+        )
+    return []
+
+
+def _remove_created_directories(created: list[Path]) -> None:
+    for path in reversed(created):
+        try:
+            path.rmdir()
+        except OSError:
+            pass
+
+
+def _marker_references(
+    skills_root: Path,
+    *,
+    only: set[str] | None = None,
+) -> set[tuple[str, str]]:
+    references: set[tuple[str, str]] = set()
+    if not skills_root.exists():
+        return references
+    for marker_path in skills_root.glob("*/.csk-install.json"):
+        if only is not None and marker_path.parent.name not in only:
+            continue
+        marker = _read_marker(marker_path)
+        if marker is None:
+            continue
+        name = marker.get("name")
+        commit = marker.get("commit")
+        if isinstance(name, str) and isinstance(commit, str):
+            references.add((name, commit))
+    return references
+
+
+def _desired_consumers(
+    csk_home: Path,
+    project_root: Path,
+    staged_project_skills: Path,
+) -> list[Path]:
+    current = project_root.resolve()
+    desired: set[Path] = set()
+    for candidate in consumers.load_consumers(csk_home):
+        resolved = candidate.resolve()
+        if resolved == current:
+            continue
+        if (
+            resolved.exists()
+            and _marker_references(
+                resolved / ".agents" / "skills"
+            )
+        ):
+            desired.add(resolved)
+    if _marker_references(staged_project_skills):
+        desired.add(current)
+    return sorted(desired, key=lambda path: str(path).encode("utf-8"))
+
+
+def _prune_staged_runtime(
+    config: GlobalConfig,
+    project_root: Path,
+    staged_runtime: Path,
+    staged_project_skills: Path,
+    staged_hybrid_skills: Path,
+) -> None:
+    references = _marker_references(
+        config.path.parent / "global" / "skills"
+    )
+    references.update(_marker_references(staged_hybrid_skills))
+    references.update(_marker_references(staged_project_skills))
+    current = project_root.resolve()
+    seen_projects = {current}
+    for configured in config.projects.values():
+        resolved = configured.path.resolve()
+        if resolved in seen_projects:
+            continue
+        seen_projects.add(resolved)
+        references.update(
+            _marker_references(
+                resolved / ".agents" / "skills"
+            )
+        )
+    for consumer in consumers.load_consumers(config.path.parent):
+        resolved = consumer.resolve()
+        if resolved in seen_projects or not resolved.exists():
+            continue
+        seen_projects.add(resolved)
+        references.update(
+            _marker_references(
+                resolved / ".agents" / "skills"
+            )
+        )
+    if not staged_runtime.exists():
+        return
+    for skill_dir in list(staged_runtime.iterdir()):
+        if not skill_dir.is_dir() or skill_dir.is_symlink():
+            continue
+        for commit_dir in list(skill_dir.iterdir()):
+            if (
+                commit_dir.is_dir()
+                and not commit_dir.is_symlink()
+                and (skill_dir.name, commit_dir.name) not in references
+            ):
+                shutil.rmtree(commit_dir)
+        if not any(skill_dir.iterdir()):
+            skill_dir.rmdir()
 
 
 def _migration_warnings(project_alias: str, plans: list[SkillPlan]) -> list[str]:
@@ -907,9 +2098,19 @@ def _moved_tag_warnings(skills_dir: Path, plans: list[SkillPlan]) -> list[str]:
     return warnings
 
 
-def install_runtime_commands(csk_home: Path, bin_dir: Path, plan: SkillPlan, *, only: set[str] | None = None) -> set[str]:
+def install_runtime_commands(
+    csk_home: Path,
+    bin_dir: Path,
+    plan: SkillPlan,
+    *,
+    only: set[str] | None = None,
+    activation_home: Path | None = None,
+    activation_bin_dir: Path | None = None,
+) -> set[str]:
     commands: set[str] = set()
-    path_entries = _runtime_path_entries(plan, bin_dir)
+    final_home = csk_home if activation_home is None else activation_home
+    final_bin = bin_dir if activation_bin_dir is None else activation_bin_dir
+    path_entries = _runtime_path_entries(plan, final_bin)
     active_scripts = tuple(
         command
         for command in plan.spec.commands.values()
@@ -940,7 +2141,14 @@ def install_runtime_commands(csk_home: Path, bin_dir: Path, plan: SkillPlan, *, 
                 snapshot=plan.snapshot,
                 command=command,
             )
-        shims.write_bin_shim(bin_dir, command.name, runtime_path, path_entries=path_entries)
+        if activation_home is not None:
+            runtime_path = final_home / runtime_path.relative_to(csk_home)
+        shims.write_bin_shim(
+            bin_dir,
+            command.name,
+            runtime_path,
+            path_entries=path_entries,
+        )
         commands.add(command.name)
     return commands
 
@@ -956,6 +2164,8 @@ def _install_skill_context(
     substituted: str | None = None,
     mcp_servers: dict[str, list[str]] | None = None,
     attestation: dict[str, object] | None = None,
+    builds: Mapping[str, install_marker.InstallMarkerBuild] | None = None,
+    build_source_identity: build_source.BuildSourceIdentity | None = None,
 ) -> str:
     return _install_skill_context_to_root(
         project_root / ".agents" / "skills",
@@ -967,6 +2177,8 @@ def _install_skill_context(
         substituted=substituted,
         mcp_servers=mcp_servers,
         attestation=attestation,
+        builds=builds,
+        build_source_identity=build_source_identity,
     )
 
 
@@ -981,12 +2193,16 @@ def _install_skill_context_to_root(
     substituted: str | None = None,
     mcp_servers: dict[str, list[str]] | None = None,
     attestation: dict[str, object] | None = None,
+    builds: Mapping[str, install_marker.InstallMarkerBuild] | None = None,
+    build_source_identity: build_source.BuildSourceIdentity | None = None,
 ) -> str:
     target = target_root / plan.decl.name
     marker = _read_marker(target / ".csk-install.json")
     if _marker_is_current(
         marker, target, plan, effective_locale, agents,
         activation=activation, substituted=substituted, mcp_servers=mcp_servers, attestation=attestation,
+        builds=builds,
+        build_source_identity=build_source_identity,
     ):
         return "up-to-date"
 
@@ -1019,6 +2235,8 @@ def _install_skill_context_to_root(
         substituted=substituted,
         mcp_servers=mcp_servers,
         attestation=attestation,
+        builds=builds,
+        build_source_identity=build_source_identity,
     )
     (tmp / ".csk-install.json").write_text(json.dumps(marker_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _replace_dir(tmp, target)
@@ -1035,6 +2253,8 @@ def _install_marker_only(
     mcp_servers: dict[str, list[str]] | None = None,
     target_root: Path | None = None,
     attestation: dict[str, object] | None = None,
+    builds: Mapping[str, install_marker.InstallMarkerBuild] | None = None,
+    build_source_identity: build_source.BuildSourceIdentity | None = None,
 ) -> str:
     """Record a runtime-only or context-less node without agent prompt files.
 
@@ -1048,6 +2268,8 @@ def _install_marker_only(
     if _marker_is_current(
         marker, target, plan, None, [], activation=activation, substituted=substituted,
         mcp_servers=mcp_servers, attestation=attestation,
+        builds=builds,
+        build_source_identity=build_source_identity,
     ):
         return "up-to-date"
 
@@ -1067,6 +2289,8 @@ def _install_marker_only(
         substituted=substituted,
         mcp_servers=mcp_servers,
         attestation=attestation,
+        builds=builds,
+        build_source_identity=build_source_identity,
     )
     (tmp / ".csk-install.json").write_text(json.dumps(marker_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _replace_dir(tmp, target)
@@ -1085,49 +2309,86 @@ def _marker_payload(
     substituted: str | None,
     mcp_servers: dict[str, list[str]] | None = None,
     attestation: dict[str, object] | None = None,
+    builds: Mapping[str, install_marker.InstallMarkerBuild] | None = None,
+    build_source_identity: build_source.BuildSourceIdentity | None = None,
 ) -> dict[str, object]:
-    marker_data: dict[str, object] = {
-        "schema_version": 1,
-        "name": plan.decl.name,
-        "source": plan.decl.source,
-        "ref_kind": plan.resolved.kind,
-        "ref": plan.resolved.ref,
-        "commit": plan.resolved.commit,
-        "content_sha256": content_hash,
-        "locale": effective_locale,
-        "agents": sorted(set(agents)),
-        "commands": sorted(command.name for command in plan.spec.commands.values() if command.type == "script"),
-        "dependencies": sorted(plan.spec.dependencies),
-        "skill_schema_version": plan.spec.schema_version,
-        "runtime_roots": sorted(set(plan.spec.runtime_roots)),
-        "installed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        "files": sorted(set(files)),
-    }
-    if plan.decl.git is not None:
-        marker_data["git"] = plan.decl.git
-    if plan.spec.requirements:
-        marker_data["requirements"] = sorted(plan.spec.requirements)
-    if mcp_servers is not None:
-        marker_data["mcp_servers"] = {
-            name: sorted(set(found)) for name, found in sorted(mcp_servers.items())
-        }
-    if attestation is not None:
-        marker_data["attestation"] = attestation
+    marker_activation: install_marker.MarkerActivation | None = None
     if activation is not None:
         activation_commands = activation.get("commands", [])
         if not isinstance(activation_commands, list) or not all(
             isinstance(command, str) for command in activation_commands
         ):
             raise InstallError("marker activation.commands must be a list of strings")
-        marker_data["activation"] = {
-            **activation,
-            "commands": sorted(set(activation_commands)),
-        }
-    if requirers:
-        marker_data["requirers"] = sorted(set(requirers))
-    if substituted is not None:
-        marker_data["substituted"] = substituted
-    return marker_data
+        context = activation.get("context")
+        if not isinstance(context, bool):
+            raise InstallError("marker activation.context must be a boolean")
+        marker_activation = install_marker.MarkerActivation(
+            context=context,
+            commands=tuple(activation_commands),
+        )
+    marker_attestation: install_marker.MarkerAttestation | None = None
+    if attestation is not None:
+        registry = attestation.get("registry")
+        status = attestation.get("status")
+        key_id = attestation.get("key_id")
+        if (
+            not isinstance(registry, str)
+            or not isinstance(status, str)
+            or (key_id is not None and not isinstance(key_id, str))
+        ):
+            raise InstallError("marker attestation is invalid")
+        marker_attestation = install_marker.MarkerAttestation(
+            registry=registry,
+            status=status,
+            key_id=key_id,
+        )
+    marker = install_marker.InstallMarkerV2(
+        name=plan.decl.name,
+        source=plan.decl.source,
+        ref_kind=plan.resolved.kind,
+        ref=plan.resolved.ref,
+        commit=plan.resolved.commit,
+        content_sha256=content_hash,
+        locale=effective_locale,
+        agents=tuple(agents),
+        commands=tuple(
+            command.name
+            for command in plan.spec.commands.values()
+            if command.type in {"script", "build"}
+        ),
+        dependencies=tuple(plan.spec.dependencies),
+        skill_schema_version=plan.spec.schema_version,
+        runtime_roots=plan.spec.runtime_roots,
+        installed_at=(
+            datetime.now(UTC)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        ),
+        files=tuple(files),
+        git=plan.decl.git,
+        requirements=(
+            tuple(plan.spec.requirements)
+            if plan.spec.requirements
+            else None
+        ),
+        mcp_servers=(
+            {
+                name: tuple(found)
+                for name, found in mcp_servers.items()
+            }
+            if mcp_servers is not None
+            else None
+        ),
+        attestation=marker_attestation,
+        activation=marker_activation,
+        requirers=tuple(requirers) if requirers else None,
+        substituted=substituted,
+        build_roots=plan.spec.build_roots,
+        builds={} if builds is None else builds,
+        build_source=build_source_identity,
+    )
+    return marker.to_json()
 
 
 def _marker_is_current(
@@ -1141,11 +2402,31 @@ def _marker_is_current(
     substituted: str | None = None,
     mcp_servers: dict[str, list[str]] | None = None,
     attestation: dict[str, object] | None = None,
+    builds: Mapping[str, install_marker.InstallMarkerBuild] | None = None,
+    build_source_identity: build_source.BuildSourceIdentity | None = None,
 ) -> bool:
     if not marker or not target.exists():
         return False
-    if marker.get("schema_version") != 1:
-        raise InstallError(f"Unsupported installed marker schema in {target / '.csk-install.json'}")
+    schema_version = marker.get("schema_version")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version
+        not in install_marker.SUPPORTED_INSTALL_MARKER_SCHEMA_VERSIONS
+    ):
+        raise InstallError(
+            f"Unsupported installed marker schema in "
+            f"{target / '.csk-install.json'}"
+        )
+    try:
+        typed_marker = install_marker.parse_install_marker(marker)
+    except install_marker.InstallMarkerError:
+        return False
+    if not install_marker.marker_can_be_current(
+        typed_marker,
+        skill_schema_version=plan.spec.schema_version,
+    ):
+        return False
     if marker.get("ref_kind") != plan.resolved.kind or marker.get("ref") != plan.resolved.ref:
         return False
     if marker.get("commit") != plan.resolved.commit:
@@ -1153,6 +2434,15 @@ def _marker_is_current(
     if marker.get("locale") != locale_value:
         return False
     if marker.get("agents") != sorted(set(agents)):
+        return False
+    expected_commands = sorted(
+        {
+            command.name
+            for command in plan.spec.commands.values()
+            if command.type in {"script", "build"}
+        }
+    )
+    if marker.get("commands") != expected_commands:
         return False
     if activation is not None:
         activation_commands = activation.get("commands", [])
@@ -1171,6 +2461,34 @@ def _marker_is_current(
             return False
     if marker.get("attestation") != attestation:
         return False
+    expected_builds = {
+        name: build.to_json()
+        for name, build in sorted((builds or {}).items())
+    }
+    if isinstance(typed_marker, install_marker.InstallMarkerV1):
+        if (
+            plan.spec.build_roots
+            or expected_builds
+            or build_source_identity is not None
+        ):
+            return False
+    else:
+        if marker.get("build_roots") != sorted(
+            set(plan.spec.build_roots)
+        ):
+            return False
+        if marker.get("builds") != expected_builds:
+            return False
+        expected_source: dict[str, str] | None = None
+        if build_source_identity is not None:
+            expected_source = {
+                "algorithm": build_source_identity.algorithm,
+                "content_sha256": (
+                    build_source_identity.content_sha256
+                ),
+            }
+        if marker.get("build_source") != expected_source:
+            return False
     if _installed_context_exposes_build_roots(marker, target, plan.spec.build_roots):
         return False
     actual_hash = hashing.content_sha256(target)
@@ -1211,7 +2529,7 @@ def _read_marker(path: Path) -> dict[str, object] | None:
         return None
     try:
         data = protocol_json.loads(path.read_bytes())
-    except Exception:
+    except (OSError, protocol_json.ProtocolJSONError):
         return None
     return data if isinstance(data, dict) else None
 

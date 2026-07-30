@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
@@ -9,7 +10,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-
 from conftest import (
     commit_all,
     make_config,
@@ -20,10 +20,13 @@ from conftest import (
     write_files,
     write_skillfile,
 )
+
 from csk import config, hashing, installer, manifest, skillcheck, snapshot
 from csk.audit import pipeline as audit_pipeline
 from csk.audit.backends import AuditBackendError
-from csk.builds import go_v1, planner as build_planner, source as build_source
+from csk.builds import go_v1
+from csk.builds import planner as build_planner
+from csk.builds import source as build_source
 from csk.builds import toolchain as build_toolchain
 from csk.builds.cache import CacheEntryStatus, CacheInspection
 
@@ -75,6 +78,12 @@ def _stub_trusted_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
             go_version="go version go1.25.5 linux/amd64",
         )
 
+        def __init__(self, toolchain_config: build_toolchain.ToolchainConfig):
+            self.operation_root = toolchain_config.private_base / "operation"
+            self.operation_root.mkdir(mode=0o700)
+            self.executable = self.operation_root / "go"
+            self.goroot = self.operation_root / "goroot"
+
         def __enter__(self):
             return self
 
@@ -89,8 +98,39 @@ def _stub_trusted_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         build_toolchain,
         "establish_toolchain",
-        lambda _config: FakeSession(),
+        FakeSession,
     )
+
+    def fake_build(request: go_v1.BuildRequest) -> go_v1.BuildResult:
+        payload = (
+            "#!/bin/sh\n"
+            f"printf '%s\\n' {request.command}\n"
+        ).encode()
+        artifact_path = request.toolchain_session.operation_root / (
+            f"artifact-{request.command}"
+        )
+        artifact_path.write_bytes(payload)
+        artifact_path.chmod(0o700)
+        return go_v1.BuildResult(
+            artifact=go_v1.BuildArtifact(
+                staged_path=artifact_path,
+                metadata=go_v1.ArtifactMetadata(
+                    path=f"bin/{request.command}",
+                    sha256=(
+                        "sha256:" + hashlib.sha256(payload).hexdigest()
+                    ),
+                    size=len(payload),
+                ),
+            ),
+            capability_evidence=go_v1.CapabilityEvidence(
+                record_version="capability-evidence-v1",
+                execution_policy="manager-worker-v1",
+                platform="linux",
+                controls=(),
+            ),
+        )
+
+    monkeypatch.setattr(go_v1, "build", fake_build)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Asserts POSIX symlink shim in .agents/bin")
@@ -228,6 +268,175 @@ def test_install_is_idempotent_for_unchanged_inputs(tmp_path, skills_root, csk_h
     assert not first.errors
     assert not second.errors
     assert any("up-to-date" in message for message in second.messages)
+
+
+def test_materialization_staging_is_private_and_anchored_to_project_filesystem(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    process_temp = tmp_path / "simulated-other-device-tmp"
+    process_temp.mkdir()
+    monkeypatch.setattr(
+        installer.tempfile,
+        "tempdir",
+        str(process_temp),
+    )
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [{"name": "skill-a", "tag": "v1"}],
+        },
+    )
+    cfg = make_config(csk_home, skills_root, project)
+    staging_roots = []
+    stage_materialization = installer._stage_materialization
+
+    def capture_staging_root(staging_root, *args, **kwargs):
+        staging_roots.append(staging_root)
+        return stage_materialization(staging_root, *args, **kwargs)
+
+    monkeypatch.setattr(
+        installer,
+        "_stage_materialization",
+        capture_staging_root,
+    )
+
+    result = installer.install(cfg)[0]
+
+    assert not result.errors
+    assert len(staging_roots) == 1
+    staging_root = staging_roots[0]
+    physical_project = project.resolve()
+    assert staging_root.parent == physical_project.parent
+    assert staging_root != physical_project
+    assert physical_project not in staging_root.parents
+    assert process_temp not in staging_root.parents
+    assert not staging_root.exists()
+
+
+def test_post_commit_gc_runs_only_after_successful_real_install(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [{"name": "skill-a", "tag": "v1"}],
+        },
+    )
+    cfg = make_config(csk_home, skills_root, project)
+    gc_calls = []
+
+    def record_gc(called_config, called_home):
+        active_lock = installer.locking._STATE.home
+        assert active_lock is not None
+        active_lock.assert_held()
+        gc_calls.append((called_config, called_home))
+
+    monkeypatch.setattr(
+        installer.gc,
+        "collect_runtime",
+        record_gc,
+    )
+
+    installed = installer.install(cfg)[0]
+    dry_run = installer.install(
+        cfg,
+        options=installer.InstallOptions(dry_run=True),
+    )[0]
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [{"name": "missing-skill", "tag": "v1"}],
+        },
+    )
+    failed = installer.install(cfg)[0]
+
+    assert not installed.errors
+    assert not dry_run.errors
+    assert failed.errors
+    assert gc_calls == [(cfg, csk_home)]
+
+
+def test_post_commit_gc_lock_contention_does_not_fail_committed_install(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [{"name": "skill-a", "tag": "v1"}],
+        },
+    )
+    cfg = make_config(csk_home, skills_root, project)
+    marker = (
+        project
+        / ".agents"
+        / "skills"
+        / "skill-a"
+        / ".csk-install.json"
+    )
+    manager_home_lock = installer.locking.ManagerHomeLock
+
+    class PostCommitContention:
+        def __enter__(self):
+            raise installer.locking.LockError("post-commit lock contention")
+
+        def __exit__(self, *args):
+            return None
+
+    def selective_manager_home_lock(home, timeout=None):
+        if marker.exists():
+            return PostCommitContention()
+        return manager_home_lock(home, timeout=timeout)
+
+    monkeypatch.setattr(
+        installer.locking,
+        "ManagerHomeLock",
+        selective_manager_home_lock,
+    )
+
+    result = installer.install(cfg)[0]
+
+    assert not result.errors
+    assert marker.exists()
+    assert any(
+        "post-install garbage collection skipped" in message
+        and "post-commit lock contention" in message
+        for message in result.messages
+    )
+
+
+def test_initial_transaction_recovery_error_is_reported_per_project(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": []})
+    cfg = make_config(csk_home, skills_root, project)
+
+    class CorruptEngine:
+        def recover(self, _home_lock):
+            raise installer.transactions.TransactionCorruptionError(
+                "fixture corrupt journal"
+            )
+
+    monkeypatch.setattr(
+        installer,
+        "_transaction_engine",
+        lambda _home: CorruptEngine(),
+    )
+
+    result = installer.install(cfg)[0]
+
+    assert result.status == "failed"
+    assert result.errors == ["fixture corrupt journal"]
 
 
 def test_locale_fallback_warning_surfaces_when_install_is_up_to_date(tmp_path, skills_root, csk_home):
@@ -389,15 +598,17 @@ def test_project_dry_run_missing_go_fails_whole_plan_without_mutation(
     after = _filesystem_state(watched)
     assert result.status == "failed"
     assert result.errors == [
-        "go-v1 go_toolchain_missing: captured operator PATH contains no "
-        "Go executable"
+        (
+            "go-v1 go_toolchain_missing: captured operator PATH contains no "
+            "Go executable"
+        )
     ]
     assert result.builds == []
     assert not any("(planned)" in message for message in result.messages)
     assert before == after
 
 
-def test_real_install_does_not_plan_builds_or_require_go(
+def test_real_install_requires_build_toolchain_before_mutation(
     monkeypatch, tmp_path, skills_root, csk_home
 ):
     project = make_project(tmp_path)
@@ -434,18 +645,17 @@ def test_real_install_does_not_plan_builds_or_require_go(
     cfg = make_config(csk_home, skills_root, project)
     set_path_with_git_without_go(monkeypatch, tmp_path)
 
-    def unexpected_plan(*args, **kwargs):
-        raise AssertionError("real install must defer build planning")
-
-    monkeypatch.setattr(build_planner, "plan_builds", unexpected_plan)
-
     result = installer.install(cfg)[0]
 
-    assert not result.errors
+    assert result.errors == [
+        (
+            "go-v1 go_toolchain_missing: captured operator PATH contains no "
+            "Go executable"
+        )
+    ]
     assert result.builds == []
-    installed = project / ".agents" / "skills" / "skill-build"
-    assert (installed / "SKILL.md").is_file()
-    assert not (installed / "build").exists()
+    assert not (project / ".agents").exists()
+    assert not (csk_home / "build-cache").exists()
 
 
 def test_build_planning_runs_only_after_validation_and_trust_gates(
@@ -657,7 +867,6 @@ def test_compiled_dry_run_preserves_every_persistent_surface(
     )
     monkeypatch.setattr(go_v1, "build", unexpected)
     monkeypatch.setattr(installer.consumers, "record_consumer", unexpected)
-    monkeypatch.setattr(installer.gc, "collect_runtime", unexpected)
     monkeypatch.setattr(installer, "install_runtime_commands", unexpected)
     monkeypatch.setattr(installer, "_install_skill_context", unexpected)
     monkeypatch.setattr(installer, "_install_marker_only", unexpected)
@@ -761,8 +970,10 @@ def test_project_dry_run_reports_repeated_concurrent_state_change(
 
     assert result.errors
     assert result.errors == [
-        "concurrent_state_change: shared planning state changed during "
-        "the read-only build plan"
+        (
+            "concurrent_state_change: shared planning state changed during "
+            "the read-only build plan"
+        )
     ]
 
 
@@ -776,6 +987,7 @@ def test_project_dry_run_reports_repeated_concurrent_state_change(
     ids=["physical-root", "marker-entry", "pre-exclusion-tree"],
 )
 def test_schema_v6_stale_build_root_forces_context_reinstall(
+    monkeypatch,
     tmp_path,
     skills_root,
     csk_home,
@@ -809,6 +1021,7 @@ def test_schema_v6_stale_build_root_forces_context_reinstall(
     )
     write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-build", "tag": "v1"}]})
     cfg = make_config(csk_home, skills_root, project)
+    _stub_trusted_toolchain(monkeypatch)
 
     first = installer.install(cfg)[0]
 
@@ -986,7 +1199,7 @@ def test_audit_backend_failure_warns_and_allows_install_in_advisory(monkeypatch,
         def run_canary(self):
             return True
 
-        def extract(self, request, *, timeout):  # noqa: ANN001
+        def extract(self, request, *, timeout):
             raise AuditBackendError("fake backend failed")
 
     monkeypatch.setattr(audit_pipeline, "_backend_for_config", lambda cfg: FailingBackend())
@@ -1028,7 +1241,7 @@ def test_audit_backend_failure_blocks_install_in_strict(monkeypatch, tmp_path, s
         def run_canary(self):
             return True
 
-        def extract(self, request, *, timeout):  # noqa: ANN001
+        def extract(self, request, *, timeout):
             return ()
 
     monkeypatch.setattr(audit_pipeline, "_backend_for_config", lambda cfg: FailingBackend())
@@ -1247,7 +1460,7 @@ def test_marker_schema_mismatch_fails_cleanly(tmp_path, skills_root, csk_home):
 
     marker_path = project / ".agents" / "skills" / "skill-a" / ".csk-install.json"
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
-    marker["schema_version"] = 2
+    marker["schema_version"] = 3
     marker_path.write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
 
     result = installer.install(cfg)[0]

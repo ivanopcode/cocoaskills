@@ -8,14 +8,32 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from . import __version__, adapters, attest, audit_registry, config, deprecation, dev_substitutions, gc, git_ops, gitignore_gate, global_install, hybrid, installer, manifest, project_resolver, shell_init, skillcheck, status
+from . import (
+    __version__,
+    adapters,
+    attest,
+    audit_registry,
+    config,
+    deprecation,
+    dev_substitutions,
+    gc,
+    git_ops,
+    gitignore_gate,
+    global_install,
+    hybrid,
+    installer,
+    manifest,
+    project_resolver,
+    shell_init,
+    skillcheck,
+    status,
+)
 from .audit import pipeline as audit_pipeline
 from .audit import runner as audit_runner
 from .audit import trust as audit_trust
 from .audit.backends import AuditBackendError
 from .audit.model import Decision
 from .locking import GlobalLock, LockError
-
 
 EXIT_OK = 0
 EXIT_PARTIAL_FAIL = 1
@@ -570,14 +588,14 @@ def _dispatch(args: argparse.Namespace) -> int:
             cfg, args = _prepare_install_target(cfg, args)
             return _cmd_install(cfg, args)
         config.validate_skills_root_for_work(cfg)
-        with GlobalLock(cfg.path.parent):
-            if args.command == "update":
+        if args.command == "update":
+            with GlobalLock(cfg.path.parent):
                 return _cmd_update(cfg)
-            if args.command == "upgrade":
-                cfg, args = _prepare_install_target(cfg, args)
-                return _cmd_install(cfg, args)
+        if args.command == "upgrade":
             cfg, args = _prepare_install_target(cfg, args)
             return _cmd_install(cfg, args)
+        cfg, args = _prepare_install_target(cfg, args)
+        return _cmd_install(cfg, args)
 
     raise ValueError(f"Unknown command: {args.command}")
 

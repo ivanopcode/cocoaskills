@@ -1,5 +1,87 @@
 # Logbook
 
+## 2026-07-30 — TASK-260720-3t8nr3 atomic project and hybrid materialization
+
+Project and hybrid installs now use the lock order required by the build and
+transaction protocols: a project lock spans planning and private compilation,
+per-key build locks serialize cache misses, and the manager-home lock is held
+only for recovery, generation/preimage revalidation, verified cache
+publication, and the durable commit. The CLI therefore no longer wraps
+project installs in its legacy outer manager-home lock; `update` and global
+operations retain their existing lock ownership.
+
+Adapter mirrors cannot be represented as aggregate transaction byte trees
+because those trees deliberately reject symlink descendants. The integration
+uses the transaction protocol's entry targets instead: every managed adapter
+mirror is an independent entry target, its ledger is a later bytes target,
+and missing parent directories are created and unwound around the protected
+commit. This keeps symlink and copy modes transactional without weakening
+tree validation.
+
+Audit verdict and registry gates may legitimately update their own cache and
+rollback-state paths before build planning. Generation baselines are rebased
+only across those gate-owned paths; changes to manifests, configuration, MCP
+inputs, build cache, or materialization targets still force a complete plan
+restart. Dead legacy install temporaries are now explicit stale-removal
+targets rather than an unjournaled post-install GC mutation.
+
+### Review rework: concurrency liveness, GC, and portability
+
+Main CI run `30556125542` exposed a Windows Python 3.14 timing flake in
+`test_concurrent_project_transactions_preserve_both_consumers`: both workers
+reported no exception, but one outlived the test's fixed five-second join.
+The identical SHA passing a rerun does not prove the vector robust. The test
+now uses explicit events to place both project locks before the manager-home
+handoff, deterministically makes project A acquire the home lock before
+project B attempts it, and retains the terminal thread-liveness assertion.
+Its bounded coordination budget is ten seconds on POSIX and thirty seconds on
+Windows (the production lock default), with a two-lock completion margin.
+This tests the intended serialization instead of depending on a five-second
+machine-speed assumption.
+
+Install-time GC remains post-commit maintenance. It now runs only after a
+successful real-install batch, never after dry-run, build, publication, or
+target failure, and holds the manager-home lock while pruning, so failure
+atomicity and consumer-ledger serialization are preserved while stale snapshot
+cache entries and the remaining global/runtime install orphans are collected
+again. If that post-commit maintenance lock is contended, the already committed
+install remains successful and reports that garbage collection was skipped;
+lock-order violations still fail loudly. Initial journal corruption is also
+converted into the same per-project failed result as recovery errors discovered
+inside planning, avoiding an uncaught CLI traceback.
+
+The new transaction-vector module no longer has a module-wide non-POSIX skip.
+Only the five vectors that execute POSIX protected-cache artifacts retain a
+targeted skip; generation restart and consumer-last rollback isolation are
+platform-independent and run on Windows. The rollback vector now uses a
+context-only skill so it does not smuggle a POSIX shell dependency into that
+claim.
+
+Auto-mode adapter capability probing no longer creates a transient file in the
+live project or depends on the process `TMPDIR`. Materialization staging is a
+hidden operation-private sibling of the physical project, outside the checkout
+but on its destination filesystem. If that parent cannot host staging, the
+installer falls back to the manager home and conservatively chooses copies when
+the fallback is on another filesystem. The probe accepts only a same-device
+witness; explicit symlink mode is unchanged. This makes adapter output stable
+across shells whose system temporary directories live on different devices.
+
+The operation-private staging implementation still copies the complete live
+project `.agents`, shared hybrid, and runtime trees even for a no-op install.
+This is a known O(total installed state) performance tradeoff, not a
+correctness shortcut: retaining complete isolated preimages keeps transaction
+target derivation deterministic. The copy now lands beside the physical project
+(or, only when that cannot be created, under the manager home), not in a
+possibly RAM-backed system temporary directory. It should be replaced by
+target-scoped copy-on-write staging if install scale makes the cost material;
+this task does not add a second state model solely to optimize that path.
+
+Consumer-ledger encoding now resolves each project path before sorting and
+serializing it. That canonicalization is intentional: transaction digests and
+preimage checks must not vary merely because the same checkout was reached
+through a symlink. The first successful install after this change can therefore
+rewrite a legacy unresolved ledger entry to its physical path.
+
 ## 2026-07-30 — TASK-260720-2x6mjn planning boundary
 
 Independent review found that sharing the compiled-build closure with the

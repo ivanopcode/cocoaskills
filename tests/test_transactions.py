@@ -6,6 +6,7 @@ import shutil
 import stat
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -2128,46 +2129,103 @@ def test_commit_reports_home_lock_witness_loss_at_mutation_boundary(
 def test_concurrent_project_transactions_preserve_both_consumers(tmp_path: Path):
     home = tmp_path / "home"
     ledger = _write(tmp_path / "consumers.json", "[]")
-    barrier = threading.Barrier(2)
+    coordination_timeout = 30.0 if os.name == "nt" else 10.0
+    completion_timeout = (coordination_timeout * 2) + 5.0
+    projects_ready = {name: threading.Event() for name in ("project-a", "project-b")}
+    start_first_home = threading.Event()
+    first_home_acquired = threading.Event()
+    second_home_attempt = threading.Event()
+    completed = {name: threading.Event() for name in ("project-a", "project-b")}
     errors: list[Exception] = []
+    errors_lock = threading.Lock()
 
-    def install(project_name: str) -> None:
+    def commit_consumer(
+        project_name: str,
+        project: Path,
+        lock: ManagerHomeLock,
+    ) -> None:
+        current = set(json.loads(ledger.read_text(encoding="utf-8")))
+        current.add(project_name)
+        desired = _write(
+            tmp_path / f"desired-{project_name}",
+            json.dumps(sorted(current)),
+        )
+        engine = TransactionEngine(home)
+        engine.recover(lock)
+        engine.prepare(
+            lock,
+            _plan(
+                f"txn-{project_name}",
+                project,
+                _target("90-consumer", "ledger", ledger, desired),
+            ),
+        )
+        engine.commit(lock, f"txn-{project_name}")
+
+    def install_first() -> None:
+        project_name = "project-a"
         project = tmp_path / project_name
+        with ProjectLock(home, project, timeout=coordination_timeout):
+            projects_ready[project_name].set()
+            if not start_first_home.wait(timeout=coordination_timeout):
+                raise AssertionError("first home-lock handoff was not released")
+            with ManagerHomeLock(home, timeout=coordination_timeout) as lock:
+                first_home_acquired.set()
+                if not second_home_attempt.wait(timeout=coordination_timeout):
+                    raise AssertionError(
+                        "second transaction did not reach the home-lock handoff"
+                    )
+                commit_consumer(project_name, project, lock)
+
+    def install_second() -> None:
+        project_name = "project-b"
+        project = tmp_path / project_name
+        with ProjectLock(home, project, timeout=coordination_timeout):
+            projects_ready[project_name].set()
+            if not first_home_acquired.wait(timeout=coordination_timeout):
+                raise AssertionError(
+                    "first transaction did not acquire the manager-home lock"
+                )
+            second_home_attempt.set()
+            with ManagerHomeLock(home, timeout=coordination_timeout) as lock:
+                commit_consumer(project_name, project, lock)
+
+    def run_worker(project_name: str, operation) -> None:
         try:
-            with ProjectLock(home, project, timeout=3):
-                barrier.wait(timeout=3)
-                with ManagerHomeLock(home, timeout=3) as lock:
-                    consumers = set(json.loads(ledger.read_text(encoding="utf-8")))
-                    consumers.add(project_name)
-                    desired = _write(
-                        tmp_path / f"desired-{project_name}",
-                        json.dumps(sorted(consumers)),
-                    )
-                    engine = TransactionEngine(home)
-                    engine.recover(lock)
-                    engine.prepare(
-                        lock,
-                        _plan(
-                            f"txn-{project_name}",
-                            project,
-                            _target("90-consumer", "ledger", ledger, desired),
-                        ),
-                    )
-                    engine.commit(lock, f"txn-{project_name}")
+            operation()
         except Exception as exc:  # noqa: BLE001 - surface worker failures in the parent test
-            errors.append(exc)
+            with errors_lock:
+                errors.append(exc)
+        finally:
+            completed[project_name].set()
 
     threads = [
-        threading.Thread(target=install, args=(name,))
-        for name in ("project-a", "project-b")
+        threading.Thread(
+            name="consumer-project-a",
+            target=run_worker,
+            args=("project-a", install_first),
+        ),
+        threading.Thread(
+            name="consumer-project-b",
+            target=run_worker,
+            args=("project-b", install_second),
+        ),
     ]
     for thread in threads:
         thread.start()
-    for thread in threads:
-        thread.join(timeout=5)
 
+    ready = all(
+        event.wait(timeout=coordination_timeout) for event in projects_ready.values()
+    )
+    start_first_home.set()
+    deadline = time.monotonic() + completion_timeout
+    for thread in threads:
+        thread.join(timeout=max(0.0, deadline - time.monotonic()))
+
+    assert ready
     assert not errors
     assert all(not thread.is_alive() for thread in threads)
+    assert all(event.is_set() for event in completed.values())
     assert set(json.loads(ledger.read_text(encoding="utf-8"))) == {
         "project-a",
         "project-b",
