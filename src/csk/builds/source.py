@@ -107,6 +107,7 @@ class FrozenSnapshot:
             if not _same_file(self._root_stat, current_root):
                 raise SnapshotMutationError(f"build-source snapshot root was replaced: {self._path}")
             try:
+                _reject_windows_named_streams(self._path, ".")
                 current = _scan_snapshot(self._path, self._root_fd)
             except InvalidSnapshotError as exc:
                 raise SnapshotMutationError(f"build-source snapshot mutated: {exc}") from exc
@@ -199,6 +200,7 @@ def _validated_root_stat(path: Path) -> os.stat_result:
         raise InvalidSnapshotError(f"build-source snapshot root must not be a link: {path}")
     if not stat.S_ISDIR(root_stat.st_mode):
         raise InvalidSnapshotError(f"build-source snapshot root is not a directory: {path}")
+    _reject_windows_named_streams(path, ".")
     return root_stat
 
 
@@ -302,20 +304,21 @@ def _collect_path_entries(
 ) -> None:
     try:
         with os.scandir(directory) as iterator:
-            entries = list(iterator)
+            names = [entry.name for entry in iterator]
     except OSError as exc:
         raise InvalidSnapshotError(f"cannot list build-source snapshot directory: {prefix or '.'}") from exc
 
-    for entry in entries:
-        relative = f"{prefix}/{entry.name}" if prefix else entry.name
+    for name in names:
+        relative = f"{prefix}/{name}" if prefix else name
         path_bytes = paths.add(relative)
+        absolute_path = root.joinpath(*relative.split("/"))
         try:
-            entry_stat = entry.stat(follow_symlinks=False)
+            entry_stat = os.lstat(absolute_path)
         except OSError as exc:
             raise InvalidSnapshotError(f"cannot inspect build-source path: {relative}") from exc
         if _is_link_or_reparse(entry_stat):
             raise InvalidSnapshotError(f"link forbidden in build-source snapshot: {relative}")
-        absolute_path = root.joinpath(*relative.split("/"))
+        _reject_windows_named_streams(absolute_path, relative)
         if stat.S_ISDIR(entry_stat.st_mode):
             directories.append(_StateEntry(path_bytes=path_bytes, kind="D"))
             try:
@@ -524,6 +527,24 @@ def _is_link_or_reparse(value: os.stat_result) -> bool:
         return True
     attributes = getattr(value, "st_file_attributes", 0)
     return bool(attributes & _REPARSE_ATTRIBUTE)
+
+
+def _reject_windows_named_streams(path: Path, relative: str) -> None:
+    if os.name != "nt":
+        return
+    from ._windows import named_data_streams
+
+    try:
+        streams = named_data_streams(path)
+    except OSError as exc:
+        raise InvalidSnapshotError(
+            f"cannot inspect Windows data streams in build-source snapshot: {relative}"
+        ) from exc
+    if streams:
+        raise InvalidSnapshotError(
+            f"non-portable Windows data stream in build-source snapshot: "
+            f"{relative}{streams[0]}"
+        )
 
 
 class _PathRegistry:

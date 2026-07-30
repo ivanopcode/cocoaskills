@@ -1,12 +1,55 @@
 from __future__ import annotations
 
+import ctypes
 import os
+from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from csk import hashing
-from csk.builds import source
+from csk.builds import _windows, source
+
+
+class _Win32Function:
+    def __init__(self, callback: Callable[..., Any]) -> None:
+        self._callback = callback
+        self.argtypes: object = None
+        self.restype: object = None
+
+    def __call__(self, *args: object) -> Any:
+        return self._callback(*args)
+
+
+def _set_windows_stream_name(pointer: object, name: str) -> None:
+    data = ctypes.cast(
+        pointer,
+        ctypes.POINTER(_windows._Win32FindStreamData),
+    ).contents
+    data.stream_name = name
+
+
+def _install_windows_stream_api(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    find_first: Callable[..., int],
+    find_next: Callable[..., int],
+    find_close: Callable[..., int],
+) -> None:
+    kernel32 = SimpleNamespace(
+        FindFirstStreamW=_Win32Function(find_first),
+        FindNextStreamW=_Win32Function(find_next),
+        FindClose=_Win32Function(find_close),
+    )
+
+    def load_library(name: str, *, use_last_error: bool) -> object:
+        assert name == "kernel32"
+        assert use_last_error is True
+        return kernel32
+
+    monkeypatch.setattr(ctypes, "WinDLL", load_library, raising=False)
 
 
 def _write(root: Path, relative: str, content: bytes) -> None:
@@ -95,6 +138,280 @@ def test_frozen_snapshot_matches_shared_binary_vector_and_ignores_mode_and_times
         frozen.recheck()
 
 
+def test_frozen_snapshot_path_scan_does_not_use_cached_direntry_stat(tmp_path, monkeypatch):
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write(root, "nested/file", b"content")
+    original_scandir = os.scandir
+
+    class EntryWithoutPhysicalIdentity:
+        def __init__(self, name):
+            self.name = name
+
+        def stat(self, *, follow_symlinks=True):
+            del follow_symlinks
+            raise AssertionError("path scan must use os.lstat for physical identity")
+
+    class ScandirWithoutPhysicalIdentity:
+        def __init__(self, names):
+            self._entries = [EntryWithoutPhysicalIdentity(name) for name in names]
+
+        def __enter__(self):
+            return iter(self._entries)
+
+        def __exit__(self, exc_type, exc, traceback):
+            del exc_type, exc, traceback
+
+    def scandir_without_physical_identity(path):
+        with original_scandir(path) as entries:
+            names = [entry.name for entry in entries]
+        return ScandirWithoutPhysicalIdentity(names)
+
+    monkeypatch.setattr(os, "scandir", scandir_without_physical_identity)
+
+    with source.freeze_snapshot(root) as frozen:
+        assert frozen.identity.content_sha256 == hashing.build_source_sha256(
+            [("nested/file", b"content")]
+        )
+
+
+def test_windows_stream_enumerator_filters_default_stream(tmp_path, monkeypatch):
+    calls = 0
+    closed = []
+
+    def find_first(path, level, data, flags):
+        del path, level, flags
+        _set_windows_stream_name(data, "::$DATA")
+        return 42
+
+    def find_next(handle, data):
+        nonlocal calls
+        del handle
+        calls += 1
+        if calls == 1:
+            _set_windows_stream_name(data, ":hidden:$DATA")
+            return 1
+        return 0
+
+    _install_windows_stream_api(
+        monkeypatch,
+        find_first=find_first,
+        find_next=find_next,
+        find_close=lambda handle: closed.append(handle) or 1,
+    )
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 38, raising=False)
+
+    assert _windows.named_data_streams(tmp_path / "file") == (":hidden:$DATA",)
+    assert closed == [42]
+
+
+@pytest.mark.parametrize("last_error", [38, 87])
+def test_windows_stream_enumerator_accepts_documented_empty_results(
+    tmp_path, monkeypatch, last_error
+):
+    closed = []
+    _install_windows_stream_api(
+        monkeypatch,
+        find_first=lambda *_args: _windows._INVALID_HANDLE_VALUE,
+        find_next=lambda *_args: pytest.fail("FindNextStreamW must not be called"),
+        find_close=lambda handle: closed.append(handle) or 1,
+    )
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: last_error, raising=False)
+
+    assert _windows.named_data_streams(tmp_path / "file") == ()
+    assert closed == []
+
+
+def test_windows_stream_enumerator_rejects_unexpected_first_error(tmp_path, monkeypatch):
+    closed = []
+    _install_windows_stream_api(
+        monkeypatch,
+        find_first=lambda *_args: _windows._INVALID_HANDLE_VALUE,
+        find_next=lambda *_args: pytest.fail("FindNextStreamW must not be called"),
+        find_close=lambda handle: closed.append(handle) or 1,
+    )
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+
+    with pytest.raises(OSError, match="enumerate") as error:
+        _windows.named_data_streams(tmp_path / "file")
+
+    assert error.value.errno == 5
+    assert closed == []
+
+
+def test_windows_stream_enumerator_rejects_unexpected_next_error_and_closes(
+    tmp_path, monkeypatch
+):
+    last_error = 5
+    closed = []
+
+    def find_first(_path, _level, data, _flags):
+        _set_windows_stream_name(data, "::$DATA")
+        return 42
+
+    _install_windows_stream_api(
+        monkeypatch,
+        find_first=find_first,
+        find_next=lambda *_args: 0,
+        find_close=lambda handle: closed.append(handle) or 1,
+    )
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: last_error, raising=False)
+
+    with pytest.raises(OSError, match="enumerate") as error:
+        _windows.named_data_streams(tmp_path / "file")
+
+    assert error.value.errno == 5
+    assert closed == [42]
+
+
+def test_windows_stream_enumerator_rejects_find_close_failure(tmp_path, monkeypatch):
+    last_error = 38
+    closed = []
+
+    def find_first(_path, _level, data, _flags):
+        _set_windows_stream_name(data, "::$DATA")
+        return 42
+
+    def find_close(handle):
+        nonlocal last_error
+        closed.append(handle)
+        last_error = 5
+        return 0
+
+    _install_windows_stream_api(
+        monkeypatch,
+        find_first=find_first,
+        find_next=lambda *_args: 0,
+        find_close=find_close,
+    )
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: last_error, raising=False)
+
+    with pytest.raises(OSError, match="close") as error:
+        _windows.named_data_streams(tmp_path / "file")
+
+    assert error.value.errno == 5
+    assert closed == [42]
+
+
+def test_windows_stream_enumerator_preserves_enumeration_error_when_close_also_fails(
+    tmp_path, monkeypatch
+):
+    last_error = 123
+
+    def find_first(_path, _level, data, _flags):
+        _set_windows_stream_name(data, "::$DATA")
+        return 42
+
+    def find_close(_handle):
+        nonlocal last_error
+        last_error = 5
+        return 0
+
+    _install_windows_stream_api(
+        monkeypatch,
+        find_first=find_first,
+        find_next=lambda *_args: 0,
+        find_close=find_close,
+    )
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: last_error, raising=False)
+
+    with pytest.raises(OSError, match="enumerate") as error:
+        _windows.named_data_streams(tmp_path / "file")
+
+    assert error.value.errno == 123
+    assert isinstance(error.value.__cause__, OSError)
+    assert error.value.__cause__.errno == 5
+    assert "close" in str(error.value.__cause__)
+
+
+def test_frozen_snapshot_recheck_inspects_root_windows_streams(tmp_path, monkeypatch):
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write(root, "file", b"content")
+    root_stream_present = False
+    checks = []
+
+    def reject(_path, relative):
+        checks.append(relative)
+        if root_stream_present and relative == ".":
+            raise source.InvalidSnapshotError("simulated root data stream")
+
+    monkeypatch.setattr(source, "_reject_windows_named_streams", reject)
+    frozen = source.freeze_snapshot(root)
+    checks.clear()
+    root_stream_present = True
+    try:
+        with pytest.raises(source.SnapshotMutationError, match="data stream"):
+            frozen.recheck()
+    finally:
+        frozen.close()
+
+    assert checks == ["."]
+
+
+def test_frozen_snapshot_use_rechecks_root_windows_streams_after_callback(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write(root, "file", b"content")
+    root_stream_present = False
+    checks = []
+
+    def reject(_path, relative):
+        checks.append(relative)
+        if root_stream_present and relative == ".":
+            raise source.InvalidSnapshotError("simulated root data stream")
+
+    def add_root_stream(_frozen):
+        nonlocal root_stream_present
+        root_stream_present = True
+
+    monkeypatch.setattr(source, "_reject_windows_named_streams", reject)
+    frozen = source.freeze_snapshot(root)
+    checks.clear()
+    try:
+        with pytest.raises(source.SnapshotMutationError, match="data stream"):
+            frozen.use(add_root_stream)
+    finally:
+        frozen.close()
+
+    assert checks.count(".") == 2
+    assert checks[0] == "."
+    assert checks[-1] == "."
+
+
+def test_frozen_snapshot_use_rechecks_descendant_windows_streams_after_callback(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write(root, "file", b"content")
+    descendant_stream_present = False
+    checks = []
+
+    def reject(_path, relative):
+        checks.append(relative)
+        if descendant_stream_present and relative == "file":
+            raise source.InvalidSnapshotError("simulated descendant data stream")
+
+    def add_descendant_stream(_frozen):
+        nonlocal descendant_stream_present
+        descendant_stream_present = True
+
+    monkeypatch.setattr(source, "_open_root_fd", lambda _path: None)
+    monkeypatch.setattr(source, "_reject_windows_named_streams", reject)
+    frozen = source.freeze_snapshot(root)
+    checks.clear()
+    try:
+        with pytest.raises(source.SnapshotMutationError, match="data stream"):
+            frozen.use(add_descendant_stream)
+    finally:
+        frozen.close()
+
+    assert checks == [".", "file", ".", "file"]
+
+
 def test_frozen_snapshot_rejects_non_portable_descendant(tmp_path):
     root = tmp_path / "snapshot"
     root.mkdir()
@@ -102,6 +419,85 @@ def test_frozen_snapshot_rejects_non_portable_descendant(tmp_path):
 
     with pytest.raises(source.InvalidSnapshotError, match="non-portable"):
         source.freeze_snapshot(root)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows named data streams are unavailable")
+def test_frozen_snapshot_rejects_windows_named_data_stream(tmp_path):
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    file = root / "file"
+    file.write_bytes(b"default")
+    try:
+        Path(f"{file}:hidden").write_bytes(b"hidden")
+    except OSError as exc:
+        pytest.skip(f"named data streams unavailable: {exc}")
+
+    with pytest.raises(source.InvalidSnapshotError, match="data stream"):
+        source.freeze_snapshot(root)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows named data streams are unavailable")
+def test_frozen_snapshot_rejects_windows_named_data_stream_on_root(tmp_path):
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write(root, "file", b"default")
+    stream = Path(f"{root}:hidden")
+    try:
+        stream.write_bytes(b"hidden")
+    except OSError as exc:
+        pytest.skip(f"named data streams unavailable: {exc}")
+
+    with pytest.raises(source.InvalidSnapshotError, match="data stream"):
+        source.freeze_snapshot(root)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows named data streams are unavailable")
+def test_frozen_snapshot_use_rejects_windows_root_stream_added_by_callback(tmp_path):
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write(root, "file", b"default")
+    stream = Path(f"{root}:hidden")
+    try:
+        stream.write_bytes(b"probe")
+        stream.unlink()
+    except OSError as exc:
+        pytest.skip(f"named data streams unavailable: {exc}")
+
+    frozen = source.freeze_snapshot(root)
+
+    def add_root_stream(_frozen):
+        stream.write_bytes(b"hidden")
+
+    try:
+        with pytest.raises(source.SnapshotMutationError, match="data stream"):
+            frozen.use(add_root_stream)
+    finally:
+        frozen.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows named data streams are unavailable")
+def test_frozen_snapshot_use_rejects_windows_descendant_stream_added_by_callback(tmp_path):
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    file = root / "file"
+    file.write_bytes(b"default")
+    stream = Path(f"{file}:hidden")
+    try:
+        stream.write_bytes(b"probe")
+        stream.unlink()
+    except OSError as exc:
+        pytest.skip(f"named data streams unavailable: {exc}")
+
+    frozen = source.freeze_snapshot(root)
+
+    def add_descendant_stream(_frozen):
+        stream.write_bytes(b"hidden")
+
+    try:
+        with pytest.raises(source.SnapshotMutationError, match="data stream"):
+            frozen.use(add_descendant_stream)
+    finally:
+        frozen.close()
 
 
 def test_frozen_snapshot_rejects_symbolic_link_descendant_and_root(tmp_path):
