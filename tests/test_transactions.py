@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from csk import transactions
+from csk import locking, transactions
 from csk.locking import BuildLock, LockError, ManagerHomeLock, ProjectLock
 from csk.transactions import (
     ABSENT_DIGEST,
@@ -31,6 +31,15 @@ def _write(path: Path, value: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(value, encoding="utf-8")
     return path
+
+
+def _held_lock_bytes(
+    lock: ManagerHomeLock | ProjectLock | BuildLock,
+) -> bytes:
+    assert lock._fd is not None
+    payload = locking._read_lock_fd_bytes(lock._fd)
+    assert payload is not None
+    return payload
 
 
 def _target(
@@ -436,7 +445,7 @@ def test_recovery_rejects_journal_filename_id_mismatch_before_mutation(
             transaction_paths.append(Path(target.staged_path))
         before_digests = {path: digest_path(path) for path in transaction_paths}
         record_bytes = alias_record.read_bytes()
-        lock_witness = lock.path.read_bytes()
+        lock_witness = _held_lock_bytes(lock)
 
         with pytest.raises(
             TransactionCorruptionError,
@@ -445,7 +454,7 @@ def test_recovery_rejects_journal_filename_id_mismatch_before_mutation(
             TransactionEngine(home).recover(lock)
 
         lock.assert_held()
-        assert lock.path.read_bytes() == lock_witness
+        assert _held_lock_bytes(lock) == lock_witness
         assert alias_record.read_bytes() == record_bytes
         assert {path: digest_path(path) for path in transaction_paths} == before_digests
         assert not canonical_record.exists()
@@ -1453,7 +1462,7 @@ def test_prepare_rejects_manager_lock_namespaces_before_mutation(
     desired = _write(tmp_path / "desired-lock-namespace", "replacement")
 
     with ManagerHomeLock(home) as lock:
-        witness = lock.path.read_bytes()
+        witness = _held_lock_bytes(lock)
         with pytest.raises(TransactionError, match="lock.*namespace|namespace.*lock"):
             engine.prepare(
                 lock,
@@ -1464,7 +1473,7 @@ def test_prepare_rejects_manager_lock_namespaces_before_mutation(
                 ),
             )
         lock.assert_held()
-        assert lock.path.read_bytes() == witness
+        assert _held_lock_bytes(lock) == witness
         assert not engine.journal_root.exists()
         assert not any(live.parent.glob(".csk-txn-*"))
 
@@ -1478,8 +1487,8 @@ def test_prepare_rejects_held_project_lock_and_preserves_both_witnesses(
     desired = _write(tmp_path / "desired-project-lock", "replacement")
 
     with project_lock, ManagerHomeLock(home) as home_lock:
-        project_witness = project_lock.path.read_bytes()
-        home_witness = home_lock.path.read_bytes()
+        project_witness = _held_lock_bytes(project_lock)
+        home_witness = _held_lock_bytes(home_lock)
         with pytest.raises(TransactionError, match="project lock namespace"):
             engine.prepare(
                 home_lock,
@@ -1496,8 +1505,8 @@ def test_prepare_rejects_held_project_lock_and_preserves_both_witnesses(
             )
         project_lock.assert_held()
         home_lock.assert_held()
-        assert project_lock.path.read_bytes() == project_witness
-        assert home_lock.path.read_bytes() == home_witness
+        assert _held_lock_bytes(project_lock) == project_witness
+        assert _held_lock_bytes(home_lock) == home_witness
         assert not engine.journal_root.exists()
 
 
@@ -1511,8 +1520,8 @@ def test_build_plan_rejects_held_build_lock_and_preserves_outer_witnesses(
     desired = _write(tmp_path / "desired-build-lock", "replacement")
 
     with project_lock, build_lock:
-        project_witness = project_lock.path.read_bytes()
-        build_witness = build_lock.path.read_bytes()
+        project_witness = _held_lock_bytes(project_lock)
+        build_witness = _held_lock_bytes(build_lock)
         with pytest.raises(TransactionError, match="build lock namespace"):
             engine._build_journal(
                 _plan(
@@ -1528,8 +1537,8 @@ def test_build_plan_rejects_held_build_lock_and_preserves_outer_witnesses(
             )
         project_lock.assert_held()
         build_lock.assert_held()
-        assert project_lock.path.read_bytes() == project_witness
-        assert build_lock.path.read_bytes() == build_witness
+        assert _held_lock_bytes(project_lock) == project_witness
+        assert _held_lock_bytes(build_lock) == build_witness
         assert not engine.journal_root.exists()
 
 
@@ -1548,7 +1557,7 @@ def test_prepare_rejects_physical_alias_of_project_lock_namespace(
     desired = _write(tmp_path / "desired-lock-alias", "replacement")
 
     with ManagerHomeLock(home) as lock:
-        witness = lock.path.read_bytes()
+        witness = _held_lock_bytes(lock)
         with pytest.raises(TransactionError, match="project lock namespace"):
             engine.prepare(
                 lock,
@@ -1564,7 +1573,7 @@ def test_prepare_rejects_physical_alias_of_project_lock_namespace(
                 ),
             )
         lock.assert_held()
-        assert lock.path.read_bytes() == witness
+        assert _held_lock_bytes(lock) == witness
         assert not engine.journal_root.exists()
 
 
@@ -1899,7 +1908,7 @@ def test_corrupt_journal_cannot_redirect_live_target_into_home_lock(
             + "\n",
             encoding="utf-8",
         )
-        witness = lock.path.read_bytes()
+        witness = _held_lock_bytes(lock)
 
         with pytest.raises(
             TransactionCorruptionError,
@@ -1908,7 +1917,7 @@ def test_corrupt_journal_cannot_redirect_live_target_into_home_lock(
             engine.commit(lock, "txn-corrupt-lock-path")
 
         lock.assert_held()
-        assert lock.path.read_bytes() == witness
+        assert _held_lock_bytes(lock) == witness
 
     assert live.read_text(encoding="utf-8") == "old"
     assert journal_path.exists()
@@ -1924,15 +1933,14 @@ def test_commit_reports_home_lock_witness_loss_at_mutation_boundary(
 
     def corrupt_witness(point: str, target: JournalTarget | None) -> None:
         if point == "after_install" and target is not None:
-            active_lock[0].path.write_text(
-                json.dumps(
-                    {
-                        "protocol": transactions.JOURNAL_SCHEMA,
-                        "pid": os.getpid(),
-                        "token": "foreign",
-                    }
-                ),
-                encoding="utf-8",
+            assert active_lock[0]._fd is not None
+            locking._write_lock_fd(
+                active_lock[0]._fd,
+                {
+                    "protocol": transactions.JOURNAL_SCHEMA,
+                    "pid": os.getpid(),
+                    "token": "foreign",
+                },
             )
 
     engine = TransactionEngine(home, fault_hook=corrupt_witness)
