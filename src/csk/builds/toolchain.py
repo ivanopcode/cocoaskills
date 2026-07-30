@@ -1291,17 +1291,17 @@ def _collect_records(goroot: Path, *, deadline: float) -> list[_TreeRecord]:
     def descend(directory: Path, components: tuple[str, ...]) -> None:
         _check_deadline(deadline)
         try:
-            entries = list(os.scandir(directory))
+            with os.scandir(directory) as iterator:
+                names = [entry.name for entry in iterator]
         except OSError as exc:
             raise ToolchainError("toolchain_unreadable", "cannot walk GOROOT") from exc
-        for entry in entries:
+        for component in names:
             _check_deadline(deadline)
-            component = entry.name
             protocol_path = "/".join((*components, component))
             path_bytes = _protocol_path_bytes(protocol_path)
-            native_path = Path(entry.path)
+            native_path = directory / component
             try:
-                info = entry.stat(follow_symlinks=False)
+                info = os.lstat(native_path)
             except OSError as exc:
                 raise ToolchainError(
                     "toolchain_unreadable",

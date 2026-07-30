@@ -634,7 +634,8 @@ def test_default_runner_closes_stdin_and_shares_bounded_output_budget(
         timeout=2,
         output_limit=64,
     )
-    assert closed_stdin.stdout == b"True\n"
+    expected_newline = b"\r\n" if os.name == "nt" else b"\n"
+    assert closed_stdin.stdout == b"True" + expected_newline
 
     with pytest.raises(toolchain.ToolchainError) as raised:
         runner.run(
@@ -758,6 +759,49 @@ def test_file_and_directory_bytes_are_framed_and_mutate_identity(tmp_path: Path)
     third = toolchain.fingerprint_toolchain(root.resolve(), b"version\n")
     assert first.content_sha256 != second.content_sha256
     assert second.content_sha256 != third.content_sha256
+
+
+def test_tree_scan_does_not_use_cached_direntry_stat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path / "goroot"
+    (root / "nested").mkdir(parents=True)
+    (root / "nested" / "file").write_bytes(b"content")
+    original_scandir = os.scandir
+
+    class EntryWithoutPhysicalIdentity:
+        def __init__(self, name: str):
+            self.name = name
+
+        def stat(self, *, follow_symlinks: bool = True) -> os.stat_result:
+            del follow_symlinks
+            raise AssertionError("toolchain scan must use os.lstat for physical identity")
+
+    class ScandirWithoutPhysicalIdentity:
+        def __init__(self, names: list[str]):
+            self._entries = [EntryWithoutPhysicalIdentity(name) for name in names]
+
+        def __enter__(self) -> object:
+            return iter(self._entries)
+
+        def __exit__(
+            self,
+            exc_type: object,
+            exc: object,
+            traceback: object,
+        ) -> None:
+            del exc_type, exc, traceback
+
+    def scandir_without_physical_identity(path: os.PathLike[str]) -> object:
+        with original_scandir(path) as entries:
+            names = [entry.name for entry in entries]
+        return ScandirWithoutPhysicalIdentity(names)
+
+    monkeypatch.setattr(os, "scandir", scandir_without_physical_identity)
+
+    identity = toolchain.fingerprint_toolchain(root.resolve(), b"version\n")
+    assert identity.content_sha256.startswith("sha256:")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="unprivileged Windows symlinks are not portable")
