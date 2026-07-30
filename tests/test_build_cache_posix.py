@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import platform
@@ -15,6 +16,7 @@ from typing import cast
 import pytest
 
 from csk import protocol_json
+from csk.builds import cache_posix
 from csk.builds.cache import (
     BuildCacheBackend,
     BuildCacheError,
@@ -26,7 +28,6 @@ from csk.builds.cache import (
     CachePublicationStatus,
     cache_for_manager_home,
 )
-from csk.builds import cache_posix
 from csk.builds.cache_posix import PosixBuildCache
 from csk.builds.metadata import (
     BuildArtifact,
@@ -43,7 +44,6 @@ from csk.builds.toolchain import (
     NativeTarget,
     ToolchainIdentity,
 )
-
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX cache tests")
 
@@ -201,6 +201,29 @@ def _replace_immutable_file(path: Path, raw: bytes, mode: int) -> None:
     path.chmod(0o600)
     path.write_bytes(raw)
     path.chmod(mode)
+
+
+def _pause_first_seal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[threading.Event, threading.Event, list[int]]:
+    first_renamed = threading.Event()
+    release_first = threading.Event()
+    seal_identities: list[int] = []
+    seal_lock = threading.Lock()
+    original_seal = cache_posix._seal_published_entry
+
+    def pause_first(entry_fd: int) -> None:
+        with seal_lock:
+            seal_identities.append(os.fstat(entry_fd).st_ino)
+            call_number = len(seal_identities)
+        if call_number == 1:
+            first_renamed.set()
+            if not release_first.wait(timeout=5):
+                raise AssertionError("timed out waiting to resume first publisher")
+        original_seal(entry_fd)
+
+    monkeypatch.setattr(cache_posix, "_seal_published_entry", pause_first)
+    return first_renamed, release_first, seal_identities
 
 
 def test_csk_layout_publish_hit_immutability_and_identical_reuse(tmp_path: Path) -> None:
@@ -628,6 +651,116 @@ def test_atomic_different_concurrent_winner_is_conflict(tmp_path: Path) -> None:
     assert hit.artifact_path.read_bytes() in {b"first artifact", b"second artifact"}
 
 
+def test_identical_winner_replaces_publisher_paused_after_atomic_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, store = _new_store(tmp_path)
+    build_input = _build_input()
+    publication, receipt_hash = _publication(
+        tmp_path,
+        build_input,
+        b"same artifact",
+    )
+    first_renamed, release_first, seal_identities = _pause_first_seal(
+        monkeypatch
+    )
+    stores = (PosixBuildCache(home), PosixBuildCache(home))
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first_future = executor.submit(
+            stores[0].publish,
+            publication,
+            guard=_HeldGuard(),
+        )
+        reached_seal = first_renamed.wait(timeout=5)
+        if not reached_seal:
+            release_first.set()
+        assert reached_seal
+        try:
+            second = stores[1].publish(publication, guard=_HeldGuard())
+        finally:
+            release_first.set()
+        first = first_future.result(timeout=5)
+
+    assert second.status is CachePublicationStatus.PUBLISHED
+    assert first.status is CachePublicationStatus.REUSED_WINNER
+    assert len(seal_identities) == 2
+    assert seal_identities[0] != seal_identities[1]
+    assert stat.S_IMODE(_entry_path(home, build_input).stat().st_mode) == 0o500
+    quarantine = list((home / cache_posix.QUARANTINE_ROOT_NAME).iterdir())
+    assert len(quarantine) == 1
+    assert stat.S_IMODE(quarantine[0].stat().st_mode) == 0o500
+    assert list((home / cache_posix.STAGING_ROOT_NAME).iterdir()) == []
+    assert store.inspect(
+        CacheExpectation(
+            input=build_input,
+            receipt_sha256=receipt_hash,
+        )
+    ).status is CacheEntryStatus.HIT
+
+
+def test_different_winner_replaces_publisher_paused_after_atomic_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, store = _new_store(tmp_path)
+    build_input = _build_input()
+    first_publication, _ = _publication(
+        tmp_path,
+        build_input,
+        b"first artifact",
+    )
+    second_publication, second_receipt_hash = _publication(
+        tmp_path,
+        build_input,
+        b"second artifact",
+    )
+    first_renamed, release_first, seal_identities = _pause_first_seal(
+        monkeypatch
+    )
+    stores = (PosixBuildCache(home), PosixBuildCache(home))
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first_future = executor.submit(
+            stores[0].publish,
+            first_publication,
+            guard=_HeldGuard(),
+        )
+        reached_seal = first_renamed.wait(timeout=5)
+        if not reached_seal:
+            release_first.set()
+        assert reached_seal
+        try:
+            second = stores[1].publish(
+                second_publication,
+                guard=_HeldGuard(),
+            )
+        finally:
+            release_first.set()
+        with pytest.raises(CacheConflictError) as raised:
+            first_future.result(timeout=5)
+
+    assert second.status is CachePublicationStatus.PUBLISHED
+    assert raised.value.cache_key == cache_key(build_input)
+    assert len(seal_identities) == 2
+    assert seal_identities[0] != seal_identities[1]
+    assert stat.S_IMODE(_entry_path(home, build_input).stat().st_mode) == 0o500
+    quarantine = list((home / cache_posix.QUARANTINE_ROOT_NAME).iterdir())
+    assert len(quarantine) == 1
+    assert stat.S_IMODE(quarantine[0].stat().st_mode) == 0o500
+    assert list((home / cache_posix.STAGING_ROOT_NAME).iterdir()) == []
+    hit = store.inspect(
+        CacheExpectation(
+            input=build_input,
+            receipt_sha256=second_receipt_hash,
+        )
+    )
+    assert hit.status is CacheEntryStatus.HIT
+    assert hit.artifact_path is not None
+    assert hit.artifact_path.read_bytes() == b"second artifact"
+
+
 def test_publish_revalidates_input_and_stages_outside_live_namespace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -692,3 +825,253 @@ def test_locked_quarantine_can_move_immutable_entry_for_later_gc(tmp_path: Path)
     assert moved.exists()
     assert store.inspect(CacheExpectation(input=build_input)).status is CacheEntryStatus.MISS
     assert store.quarantine(key, guard=_HeldGuard()) is None
+
+
+@pytest.mark.parametrize("sealed_mode", [0o500, 0o550, 0o000])
+def test_linux_quarantine_temporarily_unlocks_and_restores_sealed_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sealed_mode: int,
+) -> None:
+    home, store = _new_store(tmp_path)
+    build_input = _build_input()
+    publication, _ = _publication(tmp_path, build_input, b"artifact")
+    store.publish(publication, guard=_HeldGuard())
+    entry = _entry_path(home, build_input)
+    key = cache_key(build_input)
+    component = key.removeprefix("sha256:")
+    original_rename = os.rename
+    observed_modes: list[int] = []
+    entry.chmod(sealed_mode)
+
+    def linux_rename(
+        source: str,
+        destination: str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        assert src_dir_fd is not None
+        if source == component:
+            mode = stat.S_IMODE(
+                os.stat(
+                    source,
+                    dir_fd=src_dir_fd,
+                    follow_symlinks=False,
+                ).st_mode
+            )
+            observed_modes.append(mode)
+            if mode & 0o700 != 0o700:
+                raise PermissionError(
+                    errno.EACCES,
+                    os.strerror(errno.EACCES),
+                    source,
+                )
+        original_rename(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    assert stat.S_IMODE(entry.stat().st_mode) == sealed_mode
+    monkeypatch.setattr(cache_posix.os, "rename", linux_rename)
+
+    moved = store.quarantine(key, guard=_HeldGuard())
+
+    assert moved is not None
+    assert observed_modes == [sealed_mode | 0o700]
+    assert stat.S_IMODE(moved.stat().st_mode) == sealed_mode
+
+
+def test_linux_quarantine_restores_sealed_mode_when_rename_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, store = _new_store(tmp_path)
+    build_input = _build_input()
+    publication, _ = _publication(tmp_path, build_input, b"artifact")
+    store.publish(publication, guard=_HeldGuard())
+    entry = _entry_path(home, build_input)
+    key = cache_key(build_input)
+    component = key.removeprefix("sha256:")
+    observed_modes: list[int] = []
+
+    def failing_linux_rename(
+        source: str,
+        destination: str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        del destination, dst_dir_fd
+        assert src_dir_fd is not None
+        if source == component:
+            observed_modes.append(
+                stat.S_IMODE(
+                    os.stat(
+                        source,
+                        dir_fd=src_dir_fd,
+                        follow_symlinks=False,
+                    ).st_mode
+                )
+            )
+        raise OSError(errno.EIO, os.strerror(errno.EIO), source)
+
+    monkeypatch.setattr(cache_posix.os, "rename", failing_linux_rename)
+
+    with pytest.raises(BuildCacheError, match="cache_quarantine_failed"):
+        store.quarantine(key, guard=_HeldGuard())
+
+    assert observed_modes == [0o700]
+    assert stat.S_IMODE(entry.stat().st_mode) == 0o500
+    assert list((home / cache_posix.QUARANTINE_ROOT_NAME).iterdir()) == []
+
+
+def test_quarantine_restores_mode_when_unlock_fsync_fails_before_reservation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, store = _new_store(tmp_path)
+    build_input = _build_input()
+    publication, _ = _publication(tmp_path, build_input, b"artifact")
+    store.publish(publication, guard=_HeldGuard())
+    entry = _entry_path(home, build_input)
+    identity = entry.stat()
+    original_fsync = os.fsync
+    entry.chmod(0o500)
+
+    def failing_unlock_fsync(descriptor: int) -> None:
+        current = os.fstat(descriptor)
+        if (
+            current.st_dev == identity.st_dev
+            and current.st_ino == identity.st_ino
+            and stat.S_IMODE(current.st_mode) == 0o700
+        ):
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(cache_posix.os, "fsync", failing_unlock_fsync)
+
+    with pytest.raises(BuildCacheError, match="cache_quarantine_failed"):
+        store.quarantine(cache_key(build_input), guard=_HeldGuard())
+
+    assert stat.S_IMODE(entry.stat().st_mode) == 0o500
+    quarantine = home / cache_posix.QUARANTINE_ROOT_NAME
+    assert quarantine.is_dir()
+    assert list(quarantine.iterdir()) == []
+
+
+@pytest.mark.skipif(
+    platform.system() != "Linux",
+    reason="Linux O_PATH and fchmodat2 recovery",
+)
+def test_linux_opath_unlock_restores_0000_when_regular_reopen_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, store = _new_store(tmp_path)
+    build_input = _build_input()
+    publication, _ = _publication(tmp_path, build_input, b"artifact")
+    store.publish(publication, guard=_HeldGuard())
+    entry = _entry_path(home, build_input)
+    component = cache_key(build_input).removeprefix("sha256:")
+    original_open = os.open
+    regular_attempts = 0
+    entry.chmod(0o000)
+
+    def fail_regular_reopen(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal regular_attempts
+        if path == component and dir_fd is not None and not (flags & os.O_PATH):
+            regular_attempts += 1
+            error_number = errno.EACCES if regular_attempts == 1 else errno.EIO
+            raise OSError(error_number, os.strerror(error_number), path)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(cache_posix.os, "open", fail_regular_reopen)
+
+    with pytest.raises(BuildCacheError, match="cache_quarantine_failed"):
+        store.quarantine(cache_key(build_input), guard=_HeldGuard())
+
+    assert regular_attempts == 2
+    assert stat.S_IMODE(entry.stat().st_mode) == 0o000
+    quarantine = home / cache_posix.QUARANTINE_ROOT_NAME
+    assert quarantine.is_dir()
+    assert list(quarantine.iterdir()) == []
+
+
+def test_quarantine_fails_closed_before_reserving_when_safe_unlock_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, store = _new_store(tmp_path)
+    build_input = _build_input()
+    publication, _ = _publication(tmp_path, build_input, b"artifact")
+    store.publish(publication, guard=_HeldGuard())
+    entry = _entry_path(home, build_input)
+    component = cache_key(build_input).removeprefix("sha256:")
+    original_open = os.open
+    original_chmod = os.chmod
+    entry.chmod(0o000)
+
+    def permission_denied_for_candidate(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        path_flag = getattr(os, "O_PATH", 0)
+        if (
+            path == component
+            and dir_fd is not None
+            and not (path_flag and flags & path_flag)
+        ):
+            raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), path)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    def unavailable_no_follow_chmod(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes] | int,
+        mode: int,
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        if path == component and dir_fd is not None and not follow_symlinks:
+            raise ValueError("chmod: cannot use dir_fd and follow_symlinks together")
+        original_chmod(
+            path,
+            mode,
+            dir_fd=dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+
+    def unavailable_descriptor_chmod(descriptor: int, mode: int) -> None:
+        del descriptor, mode
+        raise BuildCacheError(
+            "cache_protection_unsupported",
+            "forced unavailable descriptor chmod",
+        )
+
+    monkeypatch.setattr(cache_posix.os, "open", permission_denied_for_candidate)
+    monkeypatch.setattr(cache_posix.os, "chmod", unavailable_no_follow_chmod)
+    monkeypatch.setattr(
+        cache_posix,
+        "_fchmod_opath_linux",
+        unavailable_descriptor_chmod,
+    )
+
+    with pytest.raises(BuildCacheError) as raised:
+        store.quarantine(cache_key(build_input), guard=_HeldGuard())
+
+    assert raised.value.code == "cache_protection_unsupported"
+    assert stat.S_IMODE(entry.stat().st_mode) == 0o000
+    quarantine = home / cache_posix.QUARANTINE_ROOT_NAME
+    assert quarantine.is_dir()
+    assert list(quarantine.iterdir()) == []

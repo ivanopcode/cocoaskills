@@ -18,7 +18,6 @@ from typing import Protocol, runtime_checkable
 
 from .metadata import BuildReceipt, GoBuildInput
 
-
 _SHA256_IDENTITY = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
