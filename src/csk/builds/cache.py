@@ -178,6 +178,10 @@ def cache_for_manager_home(manager_home: str | os.PathLike[str]) -> BuildCacheBa
         from .cache_posix import PosixBuildCache
 
         return PosixBuildCache(manager_home)
+    if os.name == "nt":
+        from .cache_windows import WindowsBuildCache
+
+        return WindowsBuildCache(manager_home)
     raise BuildCacheError(
         "cache_protection_unsupported",
         f"no protected build-cache backend is available for os.name={os.name!r}",
