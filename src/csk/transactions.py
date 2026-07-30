@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from functools import partial
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 
 from csk.locking import canonical_manager_home_identity
 
@@ -1746,6 +1746,21 @@ def _is_windows() -> bool:
     return os.name == "nt"
 
 
+def _permission_mode_identity(mode: int) -> int:
+    if _is_windows():
+        # Windows chmod can only change the read-only attribute. The remaining
+        # POSIX permission bits reported by stat are not settable identities.
+        return stat.S_IWRITE if mode & stat.S_IWRITE else 0
+    return mode
+
+
+def _permission_mode_is_allowed(mode: int, allowed_modes: set[int]) -> bool:
+    identity = _permission_mode_identity(mode)
+    return any(
+        identity == _permission_mode_identity(allowed) for allowed in allowed_modes
+    )
+
+
 def _sync_regular(path: Path) -> None:
     if _is_windows():
         _windows_sync_regular(path)
@@ -2584,7 +2599,7 @@ def _validate_staging_entry_modes(
         or actual.size != expected.size
         or actual.digest != expected.digest
         or actual.link_target != expected.link_target
-        or actual.mode not in allowed_modes
+        or not _permission_mode_is_allowed(actual.mode, allowed_modes)
     ):
         raise TransactionCorruptionError(f"staging entry changed: {path}")
 
@@ -2715,7 +2730,13 @@ def _validate_active_staging_entry(
         if (
             not stat.S_ISDIR(info.st_mode)
             or path.is_symlink()
-            or (target.staging_created and mode != _staging_construction_mode(entry))
+            or (
+                target.staging_created
+                and not _permission_mode_is_allowed(
+                    mode,
+                    {_staging_construction_mode(entry)},
+                )
+            )
         ):
             raise TransactionCorruptionError(
                 f"preparing target contains changed active staging directory: {path}"
@@ -2731,7 +2752,10 @@ def _validate_active_staging_entry(
                 f"preparing target contains bytes before durable ownership: {path}"
             )
         return
-    if mode != _staging_construction_mode(entry):
+    if not _permission_mode_is_allowed(
+        mode,
+        {_staging_construction_mode(entry)},
+    ):
         raise TransactionCorruptionError(
             f"preparing target contains changed active staging mode: {path}"
         )
@@ -3015,7 +3039,10 @@ def _validate_cleanup_tree(
             actual.kind != expected.kind
             or actual.digest != expected.digest
             or actual.link_target != expected.link_target
-            or actual.mode not in allowed_modes[actual.relative_path]
+            or not _permission_mode_is_allowed(
+                actual.mode,
+                allowed_modes[actual.relative_path],
+            )
         ):
             raise TransactionCorruptionError(
                 f"changed cleanup bytes: {path / actual.relative_path}"
@@ -3143,7 +3170,7 @@ def _validate_cleanup_entry_modes(
         actual.kind != expected.kind
         or actual.digest != expected.digest
         or actual.link_target != expected.link_target
-        or actual.mode not in allowed_modes
+        or not _permission_mode_is_allowed(actual.mode, allowed_modes)
     ):
         raise TransactionCorruptionError(f"changed cleanup bytes: {path}")
 
@@ -3444,9 +3471,15 @@ def _require_str(value: object) -> str:
 
 
 def _require_phase(value: object) -> Phase:
-    if value not in {"preparing", "prepared", "committing", "cleanup", "rolling_back"}:
+    if not isinstance(value, str) or value not in {
+        "preparing",
+        "prepared",
+        "committing",
+        "cleanup",
+        "rolling_back",
+    }:
         raise ValueError("expected phase")
-    return value
+    return cast(Phase, value)
 
 
 def _clone_journal(journal: Journal) -> Journal:
