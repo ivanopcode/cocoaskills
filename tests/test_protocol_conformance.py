@@ -13,7 +13,19 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from csk import audit_registry, closure, config, git_ops, hashing, identifiers, installer, manifest, skillspec, whitelist
+from csk import (
+    audit_registry,
+    closure,
+    config,
+    git_ops,
+    hashing,
+    identifiers,
+    install_marker,
+    installer,
+    manifest,
+    skillspec,
+    whitelist,
+)
 from csk.config import RegistryConfig
 from csk.source_identity import SourceIdentityError, parse_source_identity
 
@@ -33,11 +45,38 @@ def _json(relative: str) -> Any:
     return json.loads((_root() / relative).read_text(encoding="utf-8"))
 
 
+def _golden_bytes(relative: str) -> bytes:
+    """Read one golden as bytes, failing closed when the suite omits it."""
+    path = _root() / relative
+    assert path.is_file(), f"conformance root {_root()} publishes no {relative}"
+    return path.read_bytes()
+
+
+def test_shared_fixture_legacy_marker_v1_stays_readable() -> None:
+    """A marker-v1 installation written before schema 6 must still be read.
+
+    `expected/marker.json` is the suite's frozen legacy-read evidence, not a
+    writer golden: a manager writes marker schema 2 for every schema 1 through
+    6 mutation, so this file may only ever be parsed, never reproduced.
+    """
+    legacy = install_marker.read_install_marker(_golden_bytes("expected/marker.json"))
+    assert isinstance(legacy, install_marker.InstallMarkerV1)
+    assert legacy.schema_version == 1
+    assert legacy.skill_schema_version == 5
+    assert legacy.to_json() == _json("expected/marker.json")
+
+
 def test_shared_fixture_context_hash_and_marker(tmp_path: Path) -> None:
     fixture = _root() / "fixtures" / "skill"
     expected_files = _json("expected/context_files.json")
     expected_hash = (_root() / "expected" / "context_sha256.txt").read_text(encoding="utf-8").strip()
-    expected_marker = _json("expected/marker.json")
+    # Writers emit marker schema 2 for skill schemas 1 through 6, so the writer
+    # golden is the separately published marker-v2 fixture. A root without it
+    # fails here rather than silently comparing schema-2 output to the frozen
+    # schema-1 legacy-read evidence.
+    expected_marker_bytes = _golden_bytes("expected/marker-v2.json")
+    expected_marker = json.loads(expected_marker_bytes.decode("utf-8"))
+    assert expected_marker["schema_version"] == 2
 
     spec = skillspec.load_skill_spec(fixture)
     destination = tmp_path / "context"
@@ -74,6 +113,13 @@ def test_shared_fixture_context_hash_and_marker(tmp_path: Path) -> None:
     )
     marker["installed_at"] = expected_marker["installed_at"]
     assert marker == expected_marker
+    # The bytes this manager would commit to `.csk-install.json` are the
+    # published golden bytes, and the suite's own bytes read back as the same
+    # marker-v2 record.
+    assert install_marker.serialize_install_marker(marker) == expected_marker_bytes
+    published = install_marker.read_install_marker(expected_marker_bytes)
+    assert isinstance(published, install_marker.InstallMarkerV2)
+    assert published.to_json() == marker
 
 
 @pytest.mark.parametrize(

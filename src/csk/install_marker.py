@@ -7,6 +7,7 @@ both models.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -422,6 +423,16 @@ class InstallMarkerV2(_InstallMarkerCommon):
 
 
 InstallMarker: TypeAlias = InstallMarkerV1 | InstallMarkerV2
+
+
+def serialize_install_marker(payload: Mapping[str, Any]) -> bytes:
+    """Render one marker payload as the exact `.csk-install.json` bytes.
+
+    The rendering is UTF-8 with LF line endings on every platform. Returning
+    bytes keeps the caller on `Path.write_bytes`, because `Path.write_text`
+    would translate each LF to `os.linesep` and commit CRLF markers on Windows.
+    """
+    return (json.dumps(dict(payload), indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
 def read_install_marker(raw: bytes | str) -> InstallMarker:
