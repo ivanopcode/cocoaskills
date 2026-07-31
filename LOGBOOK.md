@@ -69,6 +69,17 @@ Cost is part of this contract, so it is pinned by tests: one canonicalisation
 per namespace plus the manager home, and growth that tracks the namespace count
 rather than its square.
 
+Resolving once per namespace left the pairwise scan itself as the remaining
+square term — 364,635 comparisons for one install — so the pass now asks its
+question of an index instead of of every pair. Two namespaces overlap when one
+names the other, when one contains the other, or when two spellings reach one
+physical object. Naming is a dictionary keyed by the normalized parts;
+containment is a lookup of each namespace's proper prefixes, and path depth is
+bounded; physical aliasing is a dictionary keyed by `st_dev` with `st_ino`,
+which is exactly what `samestat` compares. Same predicate, same rejections,
+same message shape, and the reported pair is still a genuinely colliding pair.
+The install test that took 210 seconds now takes 5.5.
+
 ## 2026-07-30 — TASK-260720-3t8nr3 atomic project and hybrid materialization
 
 Project and hybrid installs now use the lock order required by the build and
