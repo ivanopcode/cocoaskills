@@ -362,7 +362,10 @@ def _link_probe(directory: Path) -> bool:
     probe = directory / f".csk-symlink-probe-{os.getpid()}"
     try:
         probe.unlink(missing_ok=True)
-        probe.symlink_to(".")
+        # Adapter entries are always directory links, and Windows treats a
+        # directory link as a distinct object type, so the probe has to create
+        # the same kind of link the adapter will.
+        probe.symlink_to(".", target_is_directory=True)
         probe.unlink()
     except OSError:
         try:

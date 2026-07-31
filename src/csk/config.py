@@ -385,7 +385,12 @@ def save_config(config: GlobalConfig) -> None:
 
 
 def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # Writing the global config is the other way a manager home comes into
+    # existence, and Windows only gives a home its private state when the
+    # manager stamps the directory it just created.
+    from . import locking
+
+    locking.provision_new_manager_home(path.parent)
     payload = json.dumps(data, indent=2, sort_keys=True) + "\n"
     descriptor, temporary_name = tempfile.mkstemp(prefix=".config-", suffix=".tmp", dir=path.parent)
     temporary = Path(temporary_name)

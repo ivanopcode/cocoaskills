@@ -2001,6 +2001,79 @@ def _hash_handle(
     return f"sha256:{digest.hexdigest()}", expected_size
 
 
+def provision_manager_home(path: Path) -> None:
+    """Stamp the manager profile on a manager home this process just created.
+
+    Windows takes new-object ownership from the process token's owner, so a
+    directory an elevated administrator creates belongs to the Administrators
+    group rather than to the manager principal, and it inherits the DACL of
+    whatever contains it. Provisioning gives a home the manager just created
+    the private state the protected cache requires. Only creation provisions:
+    an existing home is never repaired, so real ownership drift still fails
+    closed.
+    """
+
+    try:
+        with _open_raw_handle(path, desired_access=_FILE_ALL_ACCESS) as handle:
+            if not handle.standard.directory:
+                raise BuildCacheError(
+                    "cache_boundary_untrusted",
+                    "manager home is not a directory",
+                )
+            _apply_security_profile(handle, _MUTABLE_DIRECTORY)
+    except _UntrustedState as exc:
+        raise BuildCacheError(
+            "cache_boundary_untrusted",
+            f"cannot make the manager home private: {exc}",
+        ) from exc
+    except OSError as exc:
+        raise BuildCacheError(
+            "cache_boundary_untrusted",
+            f"cannot make the manager home private: {exc}",
+        ) from exc
+
+
+def make_publication_source_private(path: Path) -> None:
+    """Stamp manager-private ownership and DACL on a manager-built artifact.
+
+    Windows takes new-object ownership from the process token's owner, which is
+    the Administrators group for an elevated administrator, and inherits the
+    DACL of the containing directory. A freshly compiled artifact therefore
+    never starts in the owner-controlled state publication demands, even though
+    the manager itself produced it inside its own private operation root. The
+    manager applies the same mutable-file profile it applies to every file the
+    protected cache creates.
+    """
+
+    raw = os.fspath(path)
+    if not raw or not os.path.isabs(raw) or os.path.normpath(raw) != raw:
+        raise BuildCacheError(
+            "cache_publication_invalid",
+            "publication artifact source must be a clean absolute path",
+        )
+    try:
+        with _open_raw_handle(
+            path,
+            desired_access=_FILE_ALL_ACCESS,
+        ) as handle:
+            if handle.standard.directory:
+                raise BuildCacheError(
+                    "cache_publication_invalid",
+                    "publication artifact source must be a regular non-link file",
+                )
+            _apply_security_profile(handle, _MUTABLE_FILE)
+    except _UntrustedState as exc:
+        raise BuildCacheError(
+            "cache_publication_invalid",
+            f"cannot make the publication artifact source private: {exc}",
+        ) from exc
+    except OSError as exc:
+        raise BuildCacheError(
+            "cache_publication_invalid",
+            f"cannot make the publication artifact source private: {exc}",
+        ) from exc
+
+
 def _publication_error(detail: str) -> BuildCacheError:
     return BuildCacheError("cache_publication_invalid", detail)
 

@@ -2386,6 +2386,94 @@ def test_entry_kind_digests_the_link_destination_while_bytes_remain_strict(
     assert transactions.digest_target(referent, kind="entry") == digest_path(referent)
 
 
+def test_command_shim_tree_digests_and_commits_without_spurious_change(
+    tmp_path: Path,
+):
+    """Executable-looking names must not read as a change mid-digest.
+
+    Windows synthesizes the execute bits from the file name extension in
+    path-based stats only, so a ``.cmd`` shim reports one mode through
+    ``lstat`` and another through the open handle used to read its bytes.
+    """
+    home = tmp_path / "home"
+    desired = tmp_path / "staged" / "runtime"
+    for name in ("tool.cmd", "tool.exe", "tool.bat", "tool.com", "tool"):
+        _write(desired / "bin" / name, f"shim for {name}")
+    live = tmp_path / "published" / "runtime"
+    live.parent.mkdir(parents=True, exist_ok=True)
+
+    assert digest_path(desired) == digest_path(desired)
+
+    engine = TransactionEngine(home)
+    with ManagerHomeLock(home) as lock:
+        engine.prepare(
+            lock,
+            _plan(
+                "txn-command-shims",
+                tmp_path / "project",
+                _target("30-runtime", "runtime", live, desired),
+            ),
+        )
+        engine.commit(lock, "txn-command-shims")
+
+    shim = live / "bin" / "tool.cmd"
+    assert shim.read_text(encoding="utf-8") == "shim for tool.cmd"
+    assert not any(live.parent.glob(".csk-txn-*"))
+
+
+def test_shim_digest_survives_the_staging_name_that_hides_its_extension(
+    tmp_path: Path,
+):
+    """Staged bytes are digested under a sidecar name, live bytes under .cmd."""
+    shim = _write(tmp_path / "tool.cmd", "shim bytes")
+    staged = tmp_path / ".csk-txn-000.staged"
+    shutil.copyfile(shim, staged)
+
+    assert digest_path(staged) == digest_path(shim)
+
+
+def test_entry_target_commits_a_link_that_only_resolves_once_it_is_live(
+    tmp_path: Path,
+):
+    """A staged adapter link is dangling until it is renamed into the project.
+
+    Windows records the link type on the reparse point itself, so the type has
+    to come from the staged link rather than from resolving its destination. A
+    file link that lands on a directory cannot be traversed at all.
+    """
+    home = tmp_path / "home"
+    canonical = tmp_path / "project" / ".agents" / "skills" / "skill-a"
+    _write(canonical / "SKILL.md", "canonical")
+    live = tmp_path / "project" / ".claude" / "skills" / "skill-a"
+    live.parent.mkdir(parents=True, exist_ok=True)
+    desired = _symlink(
+        tmp_path / "staging" / "0000",
+        os.path.relpath(canonical, live.parent),
+        directory=True,
+    )
+    assert not desired.exists()
+
+    engine = TransactionEngine(home)
+    with ManagerHomeLock(home) as lock:
+        engine.prepare(
+            lock,
+            _plan(
+                "txn-entry-dangling",
+                tmp_path / "project",
+                _entry_target("60-adapter", "skill-a", live, desired),
+            ),
+        )
+        engine.commit(lock, "txn-entry-dangling")
+
+    assert live.is_symlink()
+    assert live.is_dir()
+    assert (live / "SKILL.md").read_text(encoding="utf-8") == "canonical"
+    if os.name == "nt":
+        attributes = live.lstat().st_file_attributes
+        assert attributes & stat.FILE_ATTRIBUTE_DIRECTORY
+    assert not any(live.parent.glob(".csk-txn-*"))
+
+
 def test_entry_target_removal_unlinks_only_the_owned_entry(
     tmp_path: Path,
 ):

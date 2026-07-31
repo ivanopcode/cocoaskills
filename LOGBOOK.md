@@ -1,5 +1,44 @@
 # Logbook
 
+## 2026-07-31 — BUG-260731-1rldqv Windows transactional install
+
+Every `windows-latest` cell of PR 16 failed while every POSIX cell stayed
+green. Four distinct Windows facts, all of them platform behaviour rather than
+transaction-engine logic:
+
+`os.stat` synthesizes the execute bits from the file name extension for
+`.bat`, `.cmd`, `.com` and `.exe`, and only from a path — `os.fstat` has no
+path and cannot. Every command shim therefore reported `0o777` through `lstat`
+and `0o666` through the handle used to read its bytes, and the digest guard
+read that as the target changing mid-digest. The digest payload had the same
+defect in latent form: it hashed the synthesized mode, so identical bytes
+digested differently under a staging sidecar name and under the live `.cmd`
+name. Digests and guards now use the permission identity that Windows can
+actually hold, which is a no-op on POSIX.
+
+Windows records a symlink's type on the reparse point, and a file link that
+lands on a directory cannot be traversed at all. A staged adapter link is
+dangling by construction — its destination is relative to the live location —
+so deriving the type by resolving the destination produced a file link. Type
+now comes from the link's own `FILE_ATTRIBUTE_DIRECTORY`, which is stable while
+the destination is missing, so it is also compared during staging validation.
+
+New Windows objects belong to the token's *owner*, which is the Administrators
+group for an elevated administrator, and inherit the containing DACL. The
+manager therefore never owned the home it created nor the artifact its own
+compiler produced, and the protected build cache correctly rejected both. POSIX
+hands the manager that state for free. The manager now establishes it: it
+provisions a manager home at creation, and makes a freshly compiled artifact
+private before offering it for publication. Neither guard was relaxed, and an
+established home is never re-provisioned, so real ownership drift still fails
+closed. A Windows home created by an elevated shell before this change stays
+Administrators-owned and will fail closed; adopting such a home would blunt the
+drift guard, so that repair is left as an explicit product decision.
+
+None of this was reachable on `main`, whose installer only plans builds. The
+regression entered with the commit that made `installer.install` compile and
+publish.
+
 ## 2026-07-30 — TASK-260720-3t8nr3 atomic project and hybrid materialization
 
 Project and hybrid installs now use the lock order required by the build and

@@ -1101,6 +1101,10 @@ def _build_private_misses(
                     f"{artifact.metadata.path!r}, expected "
                     f"{plan.input.artifact_path!r}"
                 )
+            # The artifact was produced by the compiler inside the manager's
+            # private operation root, but only POSIX gives it the private,
+            # owner-controlled state publication requires.
+            build_cache.make_publication_source_private(artifact.staged_path)
             receipt = build_metadata.build_receipt(
                 plan.input,
                 build_metadata.BuildArtifact(

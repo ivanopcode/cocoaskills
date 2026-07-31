@@ -27,6 +27,7 @@ from csk.builds.cache import (
     CachePublication,
     CachePublicationStatus,
     cache_for_manager_home,
+    make_publication_source_private,
 )
 from csk.builds.cache_posix import PosixBuildCache
 from csk.builds.metadata import (
@@ -224,6 +225,23 @@ def _pause_first_seal(
 
     monkeypatch.setattr(cache_posix, "_seal_published_entry", pause_first)
     return first_renamed, release_first, seal_identities
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX cache test")
+def test_posix_publication_privacy_removes_shared_write_without_touching_owner(
+    tmp_path: Path,
+) -> None:
+    """POSIX already owns what the manager builds; only sharing has to go."""
+    source = tmp_path / "artifact-golden-tool"
+    source.write_bytes(b"compiled executable")
+    source.chmod(0o766)
+
+    make_publication_source_private(source)
+
+    info = source.stat()
+    assert info.st_uid == os.geteuid()
+    assert stat.S_IMODE(info.st_mode) & 0o022 == 0
+    assert stat.S_IMODE(info.st_mode) & 0o700 == 0o700
 
 
 def test_csk_layout_publish_hit_immutability_and_identical_reuse(tmp_path: Path) -> None:
