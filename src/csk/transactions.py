@@ -3228,6 +3228,48 @@ def _canonical_target_path(
         raise TransactionError(f"cannot resolve transaction target: {path}") from exc
 
 
+class _NamespaceProbe:
+    """One namespace under validation, resolved at most once per pass.
+
+    The scan below compares every namespace with every other one, so deriving a
+    path per comparison repeats identical filesystem work O(n) times per
+    namespace. Windows pays the full price: ntpath.realpath opens a handle per
+    component, and one install of a few dozen targets spent minutes re-deriving
+    paths it had already derived. A probe asks the same question the same way,
+    once, and every comparison in the pass reads that one answer.
+    """
+
+    __slots__ = ("label", "path", "entry", "_parts", "_identity", "_identity_read")
+
+    def __init__(self, label: str, path: Path, *, entry: bool):
+        self.label = label
+        self.path = path
+        self.entry = entry
+        self._parts: tuple[str, ...] | None = None
+        self._identity: os.stat_result | None = None
+        self._identity_read = False
+
+    @property
+    def parts(self) -> tuple[str, ...]:
+        if self._parts is None:
+            self._parts = _namespace_parts(self.path, entry=self.entry)
+        return self._parts
+
+    def identity(self) -> os.stat_result | None:
+        """Physical identity, or None when there is nothing there to identify.
+
+        A real OSError stays uncached: it aborts the whole pass, so it can only
+        be asked once anyway, and caching it would hide it from a later reader.
+        """
+        if not self._identity_read:
+            try:
+                self._identity = self.path.lstat() if self.entry else self.path.stat()
+            except (FileNotFoundError, NotADirectoryError):
+                self._identity = None
+            self._identity_read = True
+        return self._identity
+
+
 def _validate_namespace_independence(
     manager_home: Path,
     journal_root: Path,
@@ -3236,21 +3278,31 @@ def _validate_namespace_independence(
     *,
     corruption: bool,
 ) -> None:
-    namespaces: list[tuple[str, Path, bool]] = [
-        ("manager-home lock namespace", manager_home / ".lock", False),
-        ("project lock namespace", manager_home / "locks" / "projects", False),
-        ("build lock namespace", manager_home / "locks" / "builds", False),
-        ("journal state", journal_root, False),
+    home_parts = _namespace_parts(manager_home, entry=False)
+    namespaces: list[_NamespaceProbe] = [
+        _NamespaceProbe(
+            "manager-home lock namespace", manager_home / ".lock", entry=False
+        ),
+        _NamespaceProbe(
+            "project lock namespace", manager_home / "locks" / "projects", entry=False
+        ),
+        _NamespaceProbe(
+            "build lock namespace", manager_home / "locks" / "builds", entry=False
+        ),
+        _NamespaceProbe("journal state", journal_root, entry=False),
     ]
 
     def add_mutable_namespace(label: str, path: Path, *, entry: bool) -> None:
-        if _is_legacy_home_lock_breaker_namespace(
-            manager_home,
-            path,
-            entry=entry,
-        ):
-            namespaces.append(("manager-home legacy lock namespace", path, entry))
-        namespaces.append((label, path, entry))
+        probe = _NamespaceProbe(label, path, entry=entry)
+        if _is_legacy_home_lock_breaker_namespace(home_parts, probe):
+            # Deliberately the same path twice: a legacy stale-lock breaker has
+            # to collide with itself so the pass below rejects it.
+            namespaces.append(
+                _NamespaceProbe(
+                    "manager-home legacy lock namespace", path, entry=entry
+                )
+            )
+        namespaces.append(probe)
 
     for index, target in enumerate(targets):
         prefix = f"{target.target_class}/{target.identifier}"
@@ -3289,30 +3341,19 @@ def _validate_namespace_independence(
     error_type: type[TransactionError] = (
         TransactionCorruptionError if corruption else TransactionError
     )
-    for left_index, (left_label, left_path, left_entry) in enumerate(namespaces):
-        for right_label, right_path, right_entry in namespaces[left_index + 1 :]:
-            if _namespaces_overlap(
-                left_path,
-                right_path,
-                left_entry=left_entry,
-                right_entry=right_entry,
-            ):
+    for left_index, left in enumerate(namespaces):
+        for right in namespaces[left_index + 1 :]:
+            if _namespaces_overlap(left, right):
                 raise error_type(
                     "transaction namespace overlap: "
-                    f"{left_label} ({left_path}) and "
-                    f"{right_label} ({right_path})"
+                    f"{left.label} ({left.path}) and "
+                    f"{right.label} ({right.path})"
                 )
 
 
-def _namespaces_overlap(
-    left: Path,
-    right: Path,
-    *,
-    left_entry: bool,
-    right_entry: bool,
-) -> bool:
-    left_parts = _namespace_parts(left, entry=left_entry)
-    right_parts = _namespace_parts(right, entry=right_entry)
+def _namespaces_overlap(left: _NamespaceProbe, right: _NamespaceProbe) -> bool:
+    left_parts = left.parts
+    right_parts = right.parts
     if left_parts == right_parts:
         return True
     if (
@@ -3326,25 +3367,25 @@ def _namespaces_overlap(
     ):
         return True
     try:
-        left_info = left.lstat() if left_entry else left.stat()
-        right_info = right.lstat() if right_entry else right.stat()
+        left_info = left.identity()
+        if left_info is None:
+            return False
+        right_info = right.identity()
+        if right_info is None:
+            return False
         return os.path.samestat(left_info, right_info)
-    except (FileNotFoundError, NotADirectoryError):
-        return False
     except OSError as exc:
         raise TransactionError(
-            f"cannot validate physical transaction namespaces: {left}, {right}"
+            f"cannot validate physical transaction namespaces: "
+            f"{left.path}, {right.path}"
         ) from exc
 
 
 def _is_legacy_home_lock_breaker_namespace(
-    manager_home: Path,
-    path: Path,
-    *,
-    entry: bool,
+    home_parts: tuple[str, ...],
+    probe: _NamespaceProbe,
 ) -> bool:
-    home_parts = _namespace_parts(manager_home, entry=False)
-    path_parts = _namespace_parts(path, entry=entry)
+    path_parts = probe.parts
     return (
         len(path_parts) > len(home_parts)
         and path_parts[: len(home_parts)] == home_parts
