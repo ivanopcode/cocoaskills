@@ -126,7 +126,14 @@ def provision_new_manager_home(csk_home: Path) -> None:
     try:
         csk_home.parent.mkdir(parents=True, exist_ok=True)
         csk_home.mkdir(mode=0o700)
-    except FileExistsError:
+    except FileExistsError as exc:
+        # mkdir(exist_ok=True) tolerates only an existing *directory*: CPython
+        # re-raises when the name is taken by anything else. Distinguishing a
+        # home this call created from one it found costs that condition, so it
+        # is restated here. Anything but a directory must still fail closed,
+        # and a dangling symlink is not a directory.
+        if not csk_home.is_dir():
+            raise LockError(f"cannot create manager home: {csk_home}") from exc
         return
     except OSError as exc:
         raise LockError(f"cannot create manager home: {csk_home}") from exc

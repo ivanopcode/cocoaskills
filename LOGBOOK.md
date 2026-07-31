@@ -80,6 +80,37 @@ which is exactly what `samestat` compares. Same predicate, same rejections,
 same message shape, and the reported pair is still a genuinely colliding pair.
 The install test that took 210 seconds now takes 5.5.
 
+### Review rework: a swallowed `FileExistsError` is not `exist_ok=True`
+
+Independent review found one defect the Windows work introduced. Provisioning
+a manager home has to know whether *this* call created it, because only a home
+this call creates may be stamped private; an established home must fail closed
+on ownership drift instead. `mkdir(exist_ok=True)` cannot answer that question,
+so it was rewritten as a plain `mkdir` with `except FileExistsError: return`.
+That is not what `exist_ok=True` does. CPython's implementation is `if not
+exist_ok or not self.is_dir(): raise` — it tolerates an existing *directory*
+and re-raises for anything else. Dropping the `is_dir()` condition made a
+regular file, or a symlink to a missing directory, an acceptable manager home:
+the create mode and the whole Windows ownership stamp were skipped, and the
+home materialised later at whatever the name pointed to.
+
+Latent rather than live — every current call site loads configuration first,
+which rejects a non-directory home before locking is reached — but it sat
+inside the function added to establish the home's private state, and no test
+covered it. The condition is restated explicitly, and five tests now cover all
+five shapes the path can be in, with the two adopted rows as positive controls.
+
+The other rework is a test. Memoising the probes and then indexing them were
+two commits, and only the first had its contract pinned: restoring a pairwise
+scan over memoised probes leaves both canonicalisation tests green while
+reinstating the 364,635 comparisons that were the dominant Windows term once
+the filesystem work was gone. Cost per namespace is now pinned directly, by
+counting every read of the state a namespace is compared by. Three equally
+spaced sizes grow by equal steps — 156, 296, 436 units of work for 32, 60 and
+88 namespaces — where the pairwise form grows by widening ones (3,500 → 12,446
+→ 26,880). Verified red against a restored pairwise scan, which fails this
+test alone.
+
 ## 2026-07-30 — TASK-260720-3t8nr3 atomic project and hybrid materialization
 
 Project and hybrid installs now use the lock order required by the build and

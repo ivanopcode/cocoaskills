@@ -2808,6 +2808,113 @@ def test_namespace_independence_cost_stays_linear_in_targets(
     assert large_calls - small_calls == large_probes - small_probes
 
 
+class _CountedParts(tuple[str, ...]):
+    """A parts tuple that reports every equality comparison made against it."""
+
+    __slots__ = ()
+
+    comparisons = 0
+
+    def __eq__(self, other: object) -> bool:
+        _CountedParts.comparisons += 1
+        return tuple.__eq__(self, other)
+
+    def __ne__(self, other: object) -> bool:
+        _CountedParts.comparisons += 1
+        return tuple.__ne__(self, other)
+
+    def __hash__(self) -> int:
+        return tuple.__hash__(self)
+
+
+def _count_namespace_pass_work(
+    monkeypatch: pytest.MonkeyPatch,
+    home: Path,
+    targets: list[JournalTarget],
+) -> tuple[int, int]:
+    """Return (work, namespaces) for one independence pass.
+
+    Work is every read of the state a namespace is compared by — its
+    normalized parts and its physical identity — plus every equality
+    comparison between two parts tuples. Asking the question of a pair reads
+    both of its operands, so this counter separates an index from a pairwise
+    loop even when the probes underneath are memoised and no filesystem call
+    is ever repeated.
+    """
+    _CountedParts.comparisons = 0
+    reads = 0
+    probes = 0
+
+    original_parts = transactions._namespace_parts
+    original_property = transactions._NamespaceProbe.parts
+    original_identity = transactions._NamespaceProbe.identity
+    original_init = transactions._NamespaceProbe.__init__
+
+    def counted_parts(path: Path, *, entry: bool) -> tuple[str, ...]:
+        return _CountedParts(original_parts(path, entry=entry))
+
+    def read_parts(probe: transactions._NamespaceProbe) -> tuple[str, ...]:
+        nonlocal reads
+        reads += 1
+        return original_property.fget(probe)  # type: ignore[misc, no-any-return]
+
+    def read_identity(probe: transactions._NamespaceProbe) -> os.stat_result | None:
+        nonlocal reads
+        reads += 1
+        return original_identity(probe)
+
+    def counted_init(self: object, *args: object, **kwargs: object) -> None:
+        nonlocal probes
+        probes += 1
+        original_init(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(transactions, "_namespace_parts", counted_parts)
+    monkeypatch.setattr(transactions._NamespaceProbe, "parts", property(read_parts))
+    monkeypatch.setattr(transactions._NamespaceProbe, "identity", read_identity)
+    monkeypatch.setattr(transactions._NamespaceProbe, "__init__", counted_init)
+    transactions._validate_namespace_independence(
+        home,
+        home / "transactions",
+        "txn-cost",
+        targets,
+        corruption=False,
+    )
+    return reads + _CountedParts.comparisons, probes
+
+
+def test_namespace_independence_never_walks_the_pairs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The pass indexes its namespaces; it must not walk every pair of them.
+
+    Memoising a probe made each comparison cheap. It did not remove the square
+    number of comparisons, and once the canonicalisations were gone that
+    remainder was the dominant Windows term. So the contract is work per
+    namespace, and a pairwise scan over memoised probes would leave the two
+    canonicalisation tests above green while breaking this one: equally spaced
+    sizes must grow by equal steps, and one pass must cost less than the pairs
+    it declines to enumerate.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    measured = [
+        _count_namespace_pass_work(
+            monkeypatch,
+            home,
+            [
+                _journal_target(index, tmp_path / f"live-{index}")
+                for index in range(count)
+            ],
+        )
+        for count in (4, 8, 12)
+    ]
+    (small_work, small), (medium_work, medium), (large_work, large) = measured
+
+    assert medium - small == large - medium > 0, "sizes are not equally spaced"
+    assert medium_work - small_work == large_work - medium_work
+    assert large_work < large * (large - 1) // 2
+
+
 def test_namespace_probe_reads_one_identity_for_repeated_comparisons(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
