@@ -3341,44 +3341,48 @@ def _validate_namespace_independence(
     error_type: type[TransactionError] = (
         TransactionCorruptionError if corruption else TransactionError
     )
-    for left_index, left in enumerate(namespaces):
-        for right in namespaces[left_index + 1 :]:
-            if _namespaces_overlap(left, right):
-                raise error_type(
-                    "transaction namespace overlap: "
-                    f"{left.label} ({left.path}) and "
-                    f"{right.label} ({right.path})"
-                )
 
+    def overlap(left: _NamespaceProbe, right: _NamespaceProbe) -> TransactionError:
+        return error_type(
+            "transaction namespace overlap: "
+            f"{left.label} ({left.path}) and "
+            f"{right.label} ({right.path})"
+        )
 
-def _namespaces_overlap(left: _NamespaceProbe, right: _NamespaceProbe) -> bool:
-    left_parts = left.parts
-    right_parts = right.parts
-    if left_parts == right_parts:
-        return True
-    if (
-        len(left_parts) < len(right_parts)
-        and right_parts[: len(left_parts)] == left_parts
-    ):
-        return True
-    if (
-        len(right_parts) < len(left_parts)
-        and left_parts[: len(right_parts)] == right_parts
-    ):
-        return True
-    try:
-        left_info = left.identity()
-        if left_info is None:
-            return False
-        right_info = right.identity()
-        if right_info is None:
-            return False
-        return os.path.samestat(left_info, right_info)
-    except OSError as exc:
-        raise TransactionError(
-            f"cannot validate physical transaction namespaces: "
-            f"{left.path}, {right.path}"
-        ) from exc
+    # Two namespaces overlap when one names the other, when one contains the
+    # other, or when two spellings reach one physical object. Asking that of
+    # every pair costs the square of the namespace count; asking it of an index
+    # costs the namespace count, and answers the same question. Path depth is
+    # bounded, and st_dev with st_ino is exactly what samestat compares.
+    by_parts: dict[tuple[str, ...], _NamespaceProbe] = {}
+    for probe in namespaces:
+        named = by_parts.get(probe.parts)
+        if named is not None:
+            raise overlap(named, probe)
+        by_parts[probe.parts] = probe
+
+    for probe in namespaces:
+        parts = probe.parts
+        for depth in range(1, len(parts)):
+            container = by_parts.get(parts[:depth])
+            if container is not None:
+                raise overlap(container, probe)
+
+    by_identity: dict[tuple[int, int], _NamespaceProbe] = {}
+    for probe in namespaces:
+        try:
+            info = probe.identity()
+        except OSError as exc:
+            raise TransactionError(
+                f"cannot validate physical transaction namespaces: {probe.path}"
+            ) from exc
+        if info is None:
+            continue
+        key = (info.st_dev, info.st_ino)
+        aliased = by_identity.get(key)
+        if aliased is not None:
+            raise overlap(aliased, probe)
+        by_identity[key] = probe
 
 
 def _is_legacy_home_lock_breaker_namespace(
