@@ -2238,7 +2238,7 @@ def _install_skill_context_to_root(
         builds=builds,
         build_source_identity=build_source_identity,
     )
-    (tmp / ".csk-install.json").write_text(json.dumps(marker_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (tmp / ".csk-install.json").write_bytes(install_marker.serialize_install_marker(marker_data))
     _replace_dir(tmp, target)
     return "installed"
 
@@ -2292,7 +2292,7 @@ def _install_marker_only(
         builds=builds,
         build_source_identity=build_source_identity,
     )
-    (tmp / ".csk-install.json").write_text(json.dumps(marker_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (tmp / ".csk-install.json").write_bytes(install_marker.serialize_install_marker(marker_data))
     _replace_dir(tmp, target)
     return "installed"
 

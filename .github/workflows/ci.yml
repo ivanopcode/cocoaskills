@@ -29,7 +29,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: relux-works/curator-spec
-          ref: f5d7673039226ab81de2f4f87e2155ae995c4df3
+          ref: 0c81c1f8d5321d822be2a2817b05aea03e656e15
           path: protocol-spec
 
       - name: Set up Python ${{ matrix.python-version }}

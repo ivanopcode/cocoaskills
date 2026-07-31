@@ -21,7 +21,7 @@ from conftest import (
     write_skillfile,
 )
 
-from csk import config, hashing, installer, manifest, skillcheck, snapshot
+from csk import config, hashing, install_marker, installer, manifest, skillcheck, snapshot
 from csk.audit import pipeline as audit_pipeline
 from csk.audit.backends import AuditBackendError
 from csk.builds import go_v1
@@ -168,6 +168,53 @@ def test_install_declared_script_to_runtime_not_skill_context(tmp_path, skills_r
     assert any("which is not on PATH" in message for message in result.messages)
     assert any("agent skills resolve that directory directly" in message for message in result.messages)
     assert any("shell-init --install" in message for message in result.messages)
+
+
+def test_install_writes_marker_schema_2_bytes_for_a_schema_1_skill(tmp_path, skills_root, csk_home):
+    """A schema 1 through 6 mutation records marker schema 2 on disk.
+
+    The bytes are exactly what `serialize_install_marker` renders, which is the
+    contract the shared conformance suite's marker-v2 writer golden is compared
+    against. The golden is LF-only, so the on-disk bytes must stay LF-only on
+    every platform including Windows.
+    """
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "skill-docs",
+        {"csk-skill.json": json.dumps({"schema_version": 1, "commands": {}}), "SKILL.md": "docs\n"},
+        tag="v1",
+    )
+    write_skillfile(
+        project,
+        {"schema_version": 1, "agents": ["claude_code"], "skills": [{"name": "skill-docs", "tag": "v1"}]},
+    )
+    cfg = make_config(csk_home, skills_root, project, agents=["claude_code"])
+
+    assert not installer.install(cfg)[0].errors
+    raw = (project / ".agents" / "skills" / "skill-docs" / ".csk-install.json").read_bytes()
+
+    marker = install_marker.read_install_marker(raw)
+    assert isinstance(marker, install_marker.InstallMarkerV2)
+    assert marker.schema_version == 2
+    assert marker.skill_schema_version == 1
+    assert marker.build_roots == ()
+    assert marker.builds == {}
+    assert marker.build_source is None
+    assert install_marker.serialize_install_marker(marker.to_json()) == raw
+    assert b"\r\n" not in raw
+
+
+def test_serialize_install_marker_renders_utf8_lf_bytes():
+    """The serializer is the byte boundary, so it never yields platform newlines."""
+    payload = {"schema_version": 2, "name": "skill-docs", "files": ["SKILL.md"]}
+
+    rendered = install_marker.serialize_install_marker(payload)
+
+    assert isinstance(rendered, bytes)
+    assert rendered.endswith(b"\n")
+    assert b"\r" not in rendered
+    assert json.loads(rendered.decode("utf-8")) == payload
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Uses POSIX shell runtime command")
