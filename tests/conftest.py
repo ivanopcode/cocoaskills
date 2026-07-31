@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from csk import deprecation
+from csk import deprecation, locking
 from csk.config import GlobalConfig, ProjectConfig
 
 
@@ -54,7 +54,10 @@ def skills_root(tmp_path: Path) -> Path:
 @pytest.fixture
 def csk_home(tmp_path: Path) -> Path:
     home = tmp_path / ".cocoaskills"
-    home.mkdir()
+    # Provision the way csk provisions its own home: a plain mkdir does not
+    # give the home the private state the protected build cache requires on
+    # Windows, where new objects belong to the token owner.
+    locking.provision_new_manager_home(home)
     return home
 
 

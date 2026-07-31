@@ -1618,7 +1618,7 @@ def digest_path(path: Path) -> str:
     if stat.S_ISREG(info.st_mode):
         _digest_file(digest, path, "", info)
     elif stat.S_ISDIR(info.st_mode) and not path.is_symlink():
-        _write_digest_entry(digest, b"d", "", stat.S_IMODE(info.st_mode), 0)
+        _write_digest_entry(digest, b"d", "", _permission_identity(info), 0)
         entries = sorted(
             (entry for entry in path.rglob("*")),
             key=lambda entry: _utf8_key(entry.relative_to(path).as_posix()),
@@ -1628,7 +1628,7 @@ def digest_path(path: Path) -> str:
             relative = entry.relative_to(path).as_posix()
             if stat.S_ISDIR(entry_info.st_mode) and not entry.is_symlink():
                 _write_digest_entry(
-                    digest, b"d", relative, stat.S_IMODE(entry_info.st_mode), 0
+                    digest, b"d", relative, _permission_identity(entry_info), 0
                 )
             elif stat.S_ISREG(entry_info.st_mode):
                 _digest_file(digest, entry, relative, entry_info)
@@ -1641,7 +1641,7 @@ def digest_path(path: Path) -> str:
 
 def _digest_file(digest: Any, path: Path, relative: str, info: os.stat_result) -> None:
     _write_digest_entry(
-        digest, b"f", relative, stat.S_IMODE(info.st_mode), info.st_size
+        digest, b"f", relative, _permission_identity(info), info.st_size
     )
     with path.open("rb") as handle:
         while chunk := handle.read(1024 * 1024):
@@ -1650,7 +1650,7 @@ def _digest_file(digest: Any, path: Path, relative: str, info: os.stat_result) -
     if (
         not os.path.samestat(info, after)
         or after.st_size != info.st_size
-        or stat.S_IMODE(after.st_mode) != stat.S_IMODE(info.st_mode)
+        or _permission_identity(after) != _permission_identity(info)
     ):
         raise TransactionCorruptionError(
             f"transaction target changed while digesting: {path}"
@@ -1678,7 +1678,7 @@ def _entry_content_digest(path: Path, info: os.stat_result) -> str:
         not os.path.samestat(info, after)
         or not os.path.samestat(after, current)
         or after.st_size != info.st_size
-        or stat.S_IMODE(after.st_mode) != stat.S_IMODE(info.st_mode)
+        or _permission_identity(after) != _permission_identity(info)
     ):
         raise TransactionCorruptionError(
             f"transaction entry changed while digesting: {path}"
@@ -1752,6 +1752,35 @@ def _permission_mode_identity(mode: int) -> int:
         # POSIX permission bits reported by stat are not settable identities.
         return stat.S_IWRITE if mode & stat.S_IWRITE else 0
     return mode
+
+
+def _permission_identity(info: os.stat_result) -> int:
+    """Return the permission state a stat result actually witnesses.
+
+    On Windows the executable bits are synthesized by ``os.stat`` from the
+    file name extension (``.bat``, ``.cmd``, ``.com``, ``.exe``), so the same
+    bytes report ``0o777`` through a path and ``0o666`` through ``os.fstat``,
+    and a staged copy reports a different mode than its live ``.cmd`` name.
+    Reducing to the settable identity keeps digests and change detection
+    anchored to permission state the platform can actually hold, and is a
+    no-op on POSIX.
+    """
+    return _permission_mode_identity(stat.S_IMODE(info.st_mode))
+
+
+def _link_is_directory(info: os.stat_result) -> bool:
+    """Return whether a symlink was created as a Windows directory link.
+
+    Windows encodes the link type in the reparse point itself, and a file link
+    that resolves to a directory cannot be traversed at all (``os.stat`` fails
+    with ``ERROR_ACCESS_DENIED``). The link type must therefore come from the
+    link, not from resolving its destination, which is still dangling while the
+    link is staged. POSIX links carry no type, so the answer is always False.
+    """
+    attributes = getattr(info, "st_file_attributes", None)
+    if attributes is None:
+        return False
+    return bool(attributes & stat.FILE_ATTRIBUTE_DIRECTORY)
 
 
 def _permission_mode_is_allowed(mode: int, allowed_modes: set[int]) -> bool:
@@ -2215,7 +2244,7 @@ def _staging_tree_entry(
             size=len(encoded),
             digest=None,
             link_target=destination,
-            link_is_directory=path.is_dir(),
+            link_is_directory=_link_is_directory(info),
         )
     mode = stat.S_IMODE(info.st_mode)
     if stat.S_ISREG(info.st_mode):
@@ -2599,6 +2628,7 @@ def _validate_staging_entry_modes(
         or actual.size != expected.size
         or actual.digest != expected.digest
         or actual.link_target != expected.link_target
+        or actual.link_is_directory != expected.link_is_directory
         or not _permission_mode_is_allowed(actual.mode, allowed_modes)
     ):
         raise TransactionCorruptionError(f"staging entry changed: {path}")
@@ -2831,7 +2861,7 @@ def _staging_prefix_digest(path: Path, length: int) -> str:
         not os.path.samestat(before, after)
         or not os.path.samestat(after, current)
         or after.st_size != before.st_size
-        or stat.S_IMODE(after.st_mode) != stat.S_IMODE(before.st_mode)
+        or _permission_identity(after) != _permission_identity(before)
     ):
         raise TransactionCorruptionError(
             f"partial staging entry changed while reading: {path}"

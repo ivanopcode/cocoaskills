@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform as platform_module
 import stat
 import subprocess
 import sys
@@ -25,6 +26,7 @@ from csk import config, hashing, install_marker, installer, manifest, skillcheck
 from csk.audit import pipeline as audit_pipeline
 from csk.audit.backends import AuditBackendError
 from csk.builds import go_v1
+from csk.builds import metadata as build_metadata
 from csk.builds import planner as build_planner
 from csk.builds import source as build_source
 from csk.builds import toolchain as build_toolchain
@@ -64,18 +66,37 @@ def _filesystem_state(roots: tuple[Path, ...]) -> dict[str, tuple[object, ...]]:
     return state
 
 
+def _host_native_target() -> build_toolchain.NativeTarget:
+    """The native target the manager would really select on this host.
+
+    A build receipt is bound to its target, and shim activation refuses a
+    receipt whose target does not agree with the host, so a stub that always
+    claims Linux only works on hosts that are not Windows.
+    """
+    machine = platform_module.machine().lower()
+    if machine in {"arm64", "aarch64"}:
+        goarch, tuning = "arm64", {"GOARM64": "v8.0"}
+    else:
+        goarch, tuning = "amd64", {"GOAMD64": "v1"}
+    if sys.platform == "darwin":
+        goos = "darwin"
+    elif os.name == "nt":
+        goos = "windows"
+    else:
+        goos = "linux"
+    return build_toolchain.NativeTarget(goos=goos, goarch=goarch, tuning=tuning)
+
+
 def _stub_trusted_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
+    host = _host_native_target()
+
     class FakeSession:
-        target = build_toolchain.NativeTarget(
-            goos="linux",
-            goarch="amd64",
-            tuning={"GOAMD64": "v1"},
-        )
+        target = host
         toolchain = build_toolchain.ToolchainIdentity(
             algorithm=build_toolchain.TOOLCHAIN_ALGORITHM,
             content_sha256="sha256:" + "a" * 64,
             go_relpath=build_toolchain.GO_RELPATH,
-            go_version="go version go1.25.5 linux/amd64",
+            go_version=f"go version go1.25.5 {host.goos}/{host.goarch}",
         )
 
         def __init__(self, toolchain_config: build_toolchain.ToolchainConfig):
@@ -115,7 +136,10 @@ def _stub_trusted_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
             artifact=go_v1.BuildArtifact(
                 staged_path=artifact_path,
                 metadata=go_v1.ArtifactMetadata(
-                    path=f"bin/{request.command}",
+                    path=build_metadata.derived_artifact_path(
+                        request.command,
+                        goos=host.goos,
+                    ),
                     sha256=(
                         "sha256:" + hashlib.sha256(payload).hexdigest()
                     ),
@@ -125,7 +149,7 @@ def _stub_trusted_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
             capability_evidence=go_v1.CapabilityEvidence(
                 record_version="capability-evidence-v1",
                 execution_policy="manager-worker-v1",
-                platform="linux",
+                platform=host.goos,
                 controls=(),
             ),
         )

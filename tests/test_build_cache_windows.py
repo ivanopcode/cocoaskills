@@ -21,6 +21,7 @@ from csk.builds.cache import (
     CachePublication,
     CachePublicationStatus,
     cache_for_manager_home,
+    make_publication_source_private,
 )
 from csk.builds.cache_windows import WindowsBuildCache
 from csk.builds.metadata import (
@@ -215,6 +216,60 @@ def test_windows_backend_module_is_import_safe_on_every_host(tmp_path: Path) -> 
         }
     else:
         assert result.status is CacheEntryStatus.UNSUPPORTED
+
+
+@_WINDOWS_ONLY
+def test_windows_manager_makes_its_own_build_artifact_publishable(
+    tmp_path: Path,
+) -> None:
+    """A compiler writes the artifact; Windows does not make it manager-owned.
+
+    New objects take the process token's owner, which is the Administrators
+    group for an elevated administrator, and inherit the parent DACL, so the
+    manager has to stamp its own build output before publication accepts it.
+    """
+    home, store = _new_store(tmp_path)
+    build_input = _build_input()
+    artifact_bytes = b"compiled windows executable"
+    operation_root = tmp_path / "csk-build-operation"
+    operation_root.mkdir()
+    source = operation_root / "artifact-golden-tool.exe"
+    source.write_bytes(artifact_bytes)
+
+    make_publication_source_private(source)
+
+    with cache_windows._open_raw_handle(
+        source,
+        desired_access=(
+            cache_windows._READ_CONTROL | cache_windows._FILE_READ_ATTRIBUTES
+        ),
+    ) as handle:
+        snapshot = cache_windows._security_snapshot(handle)
+    assert snapshot.owner_sid == cache_windows._current_user_sid()
+    assert snapshot.dacl_present
+    assert snapshot.dacl_protected
+
+    digest = hashlib.sha256(artifact_bytes).hexdigest()
+    raw = canonical_receipt_bytes(
+        build_receipt(
+            build_input,
+            BuildArtifact(
+                path=build_input.artifact_path,
+                sha256=f"sha256:{digest}",
+                size=len(artifact_bytes),
+            ),
+        )
+    )
+    published = store.publish(
+        CachePublication(
+            input=build_input,
+            receipt_bytes=raw,
+            artifact_source=source,
+        ),
+        guard=_HeldGuard(),
+    )
+    assert published.status is CachePublicationStatus.PUBLISHED
+    assert published.receipt_sha256 == receipt_sha256(raw)
 
 
 @_WINDOWS_ONLY

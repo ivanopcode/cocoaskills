@@ -106,11 +106,34 @@ def _configured_manager_home(csk_home: Path) -> Path:
 
 def _prepare_manager_home(csk_home: Path) -> str:
     """Create first-use state, then bind locking to its observable identity."""
+    provision_new_manager_home(csk_home)
+    return _canonical_manager_home(csk_home)
+
+
+def provision_new_manager_home(csk_home: Path) -> None:
+    """Create a manager home, if absent, in its required private state.
+
+    POSIX is finished once the create mode is applied: the effective user owns
+    what it creates. Windows assigns new-object ownership from the token owner
+    and inherits the containing DACL, so an elevated administrator does not own
+    the home it just made and the protected build cache would reject it. Only a
+    home this call creates is provisioned, so ownership drift on an established
+    home still fails closed at inspection.
+    """
+    from .builds.cache import BuildCacheError
+    from .builds.cache import provision_manager_home as _provision
+
     try:
-        csk_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+        csk_home.parent.mkdir(parents=True, exist_ok=True)
+        csk_home.mkdir(mode=0o700)
+    except FileExistsError:
+        return
     except OSError as exc:
         raise LockError(f"cannot create manager home: {csk_home}") from exc
-    return _canonical_manager_home(csk_home)
+    try:
+        _provision(csk_home)
+    except (BuildCacheError, OSError) as exc:
+        raise LockError(f"cannot make the manager home private: {csk_home}") from exc
 
 
 def _canonical_filesystem_identity(path: Path, *, label: str) -> str:

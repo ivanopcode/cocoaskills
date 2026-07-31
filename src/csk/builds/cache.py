@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -188,6 +189,64 @@ def cache_for_manager_home(manager_home: str | os.PathLike[str]) -> BuildCacheBa
     )
 
 
+def provision_manager_home(path: str | os.PathLike[str]) -> None:
+    """Give a just-created manager home the private state the backend needs.
+
+    Callers must pass only a home this process created. POSIX ownership
+    follows the creating effective user, so the create mode is the whole
+    story there; Windows withholds both ownership and the DACL and has to be
+    told. Provisioning never touches a home it did not create, so genuine
+    ownership drift still fails closed at inspection.
+    """
+
+    target = Path(path)
+    if os.name == "posix":
+        target.chmod(stat.S_IMODE(target.lstat().st_mode) & ~0o077)
+        return
+    if os.name == "nt":
+        from .cache_windows import provision_manager_home as _windows
+
+        _windows(target)
+        return
+    raise BuildCacheError(
+        "cache_protection_unsupported",
+        f"no protected build-cache backend is available for os.name={os.name!r}",
+    )
+
+
+def make_publication_source_private(path: str | os.PathLike[str]) -> None:
+    """Put a manager-produced artifact into the state publication requires.
+
+    Publication only accepts a private, singly linked, owner-controlled source.
+    POSIX hands that state to the manager for free: the creating effective user
+    owns the file. Windows does not — it takes new-object ownership from the
+    token owner, which is the Administrators group for an elevated
+    administrator, and inherits the parent DACL — so the manager has to stamp
+    the state on its own build output before offering it. This is the platform
+    step that makes the two backends agree, not a relaxation of either.
+    """
+
+    target = Path(path)
+    if os.name == "posix":
+        info = target.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            raise BuildCacheError(
+                "cache_publication_invalid",
+                "publication artifact source must be a regular non-link file",
+            )
+        target.chmod(stat.S_IMODE(info.st_mode) & ~0o022)
+        return
+    if os.name == "nt":
+        from .cache_windows import make_publication_source_private as _windows
+
+        _windows(target)
+        return
+    raise BuildCacheError(
+        "cache_protection_unsupported",
+        f"no protected build-cache backend is available for os.name={os.name!r}",
+    )
+
+
 def _require_sha256(value: str, label: str) -> None:
     if not isinstance(value, str) or _SHA256_IDENTITY.fullmatch(value) is None:
         raise ValueError(f"{label} must be sha256 followed by 64 lowercase hex digits")
@@ -205,4 +264,6 @@ __all__ = [
     "CachePublicationResult",
     "CachePublicationStatus",
     "cache_for_manager_home",
+    "make_publication_source_private",
+    "provision_manager_home",
 ]
