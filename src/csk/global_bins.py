@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from . import protocol_json, shims
 from .identifiers import is_valid_identifier
-
 
 MANAGED_FILE = ".csk-managed.json"
 SCHEMA_VERSION = 1
@@ -19,6 +20,192 @@ USER_BIN_ENV = "CSK_GLOBAL_USER_BIN"
 class UserBinSelection:
     path: Path | None
     warning: str | None = None
+
+
+@dataclass(frozen=True)
+class UserBinTarget:
+    target_class: str
+    identifier: str
+    live_path: Path
+    kind: Literal["bytes", "entry"]
+    desired_kind: Literal["forwarder", "ledger", "remove"]
+    command_name: str | None = None
+    expected_entries: tuple[str, ...] = ()
+
+
+def plan_user_bin_targets(
+    csk_home: Path,
+    expected_commands: set[str],
+    *,
+    platform_name: str | None = None,
+    env: dict[str, str] | None = None,
+    home: Path | None = None,
+) -> tuple[tuple[UserBinTarget, ...], list[str]]:
+    env = env or dict(os.environ)
+    home = home or Path.home()
+    platform_name = platform_name or (
+        "windows" if os.name == "nt" else "unix"
+    )
+    selection = select_user_bin_with_warning(
+        csk_home,
+        env=env,
+        home=home,
+    )
+    target = selection.path
+    if target is None:
+        if not expected_commands:
+            return (), []
+        return (), [
+            selection.warning
+            or (
+                "global: command shims were installed in "
+                "~/.cocoaskills/global/bin, but no safe PATH-visible user "
+                "bin was found; add that directory to PATH, set "
+                f"{USER_BIN_ENV} to a writable PATH directory, or use "
+                "csk shell-init"
+            )
+        ]
+
+    managed = _read_managed(target)
+    next_managed: set[str] = set()
+    messages: list[str] = []
+    targets: list[UserBinTarget] = []
+    canonical_bin = shims.global_bin_dir(csk_home)
+    root_key = hashlib.sha256(
+        str(target.absolute()).encode("utf-8")
+    ).hexdigest()
+
+    for command_name in sorted(managed - expected_commands):
+        published = shims.shim_path(
+            target,
+            command_name,
+            platform_name=platform_name,
+        )
+        if not published.exists() and not published.is_symlink():
+            continue
+        targets.append(
+            UserBinTarget(
+                target_class="40-user-bin",
+                identifier=f"{root_key}/entry/{command_name}",
+                live_path=published,
+                kind="entry",
+                desired_kind="remove",
+                command_name=command_name,
+            )
+        )
+
+    for command_name in sorted(expected_commands):
+        canonical = shims.shim_path(
+            canonical_bin,
+            command_name,
+            platform_name=platform_name,
+        )
+        published = shims.shim_path(
+            target,
+            command_name,
+            platform_name=platform_name,
+        )
+        if _is_unmanaged_conflict(
+            published,
+            command_name,
+            managed,
+            canonical,
+        ):
+            messages.append(
+                f"global: command {command_name!r} not published to "
+                f"{target}; target exists and is not managed by csk: "
+                f"{published}"
+            )
+            continue
+        targets.append(
+            UserBinTarget(
+                target_class="40-user-bin",
+                identifier=f"{root_key}/entry/{command_name}",
+                live_path=published,
+                kind="entry",
+                desired_kind="forwarder",
+                command_name=command_name,
+            )
+        )
+        next_managed.add(command_name)
+
+    targets.append(
+        UserBinTarget(
+            target_class="40-user-bin",
+            identifier=f"{root_key}/ledger",
+            live_path=target / MANAGED_FILE,
+            kind="bytes",
+            desired_kind="ledger",
+            expected_entries=tuple(sorted(next_managed)),
+        )
+    )
+    if next_managed:
+        messages.append(f"global: command shims published to {target}")
+    return tuple(targets), messages
+
+
+def stage_user_bin_targets(
+    stage_root: Path,
+    targets: tuple[UserBinTarget, ...],
+    *,
+    csk_home: Path,
+    platform_name: str | None = None,
+) -> dict[tuple[str, str], Path | None]:
+    platform_name = platform_name or (
+        "windows" if os.name == "nt" else "unix"
+    )
+    canonical_bin = shims.global_bin_dir(csk_home)
+    desired: dict[tuple[str, str], Path | None] = {}
+    for index, target in enumerate(targets):
+        key = (target.target_class, target.identifier)
+        if target.desired_kind == "remove":
+            desired[key] = None
+            continue
+        staged_root = stage_root / f"{index:04d}"
+        staged_root.mkdir(parents=True, exist_ok=True)
+        if target.desired_kind == "ledger":
+            staged = staged_root / MANAGED_FILE
+            staged.write_text(
+                json.dumps(
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "entries": list(target.expected_entries),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            desired[key] = staged
+            continue
+        if target.command_name is None:
+            raise ValueError(
+                f"user-bin target has no command name: {target.identifier}"
+            )
+        canonical = shims.shim_path(
+            canonical_bin,
+            target.command_name,
+            platform_name=platform_name,
+        )
+        if platform_name == "unix":
+            staged = shims.shim_path(
+                staged_root,
+                target.command_name,
+                platform_name=platform_name,
+            )
+            staged.symlink_to(
+                os.path.relpath(canonical, target.live_path.parent)
+            )
+            desired[key] = staged
+        else:
+            desired[key] = shims.write_bin_shim(
+                staged_root,
+                target.command_name,
+                canonical,
+                platform_name=platform_name,
+            )
+    return desired
 
 
 def refresh_user_bin_shims(
@@ -51,9 +238,14 @@ def refresh_user_bin_shims(
     except OSError as exc:
         if expected_commands:
             return [
-                "global: command shims were installed in ~/.cocoaskills/global/bin, "
-                f"but {target} could not be created: {exc}; add ~/.cocoaskills/global/bin to PATH, "
-                f"set {USER_BIN_ENV} to a writable PATH directory, or use csk shell-init"
+                (
+                    "global: command shims were installed in "
+                    "~/.cocoaskills/global/bin, "
+                    f"but {target} could not be created: {exc}; add "
+                    "~/.cocoaskills/global/bin to PATH, "
+                    f"set {USER_BIN_ENV} to a writable PATH directory, "
+                    "or use csk shell-init"
+                )
             ]
         return []
     managed = _read_managed(target)
@@ -190,9 +382,9 @@ def _is_disallowed_bin(path: Path, *, csk_home: Path) -> bool:
         return True
     if "mise" in parts and ("installs" in parts or "shims" in parts):
         return True
-    if path.name == "shims" and {".asdf", ".pyenv", ".rbenv"} & parts:
-        return True
-    return False
+    return path.name == "shims" and bool(
+        {".asdf", ".pyenv", ".rbenv"} & parts
+    )
 
 
 def _remove_managed_command(bin_dir: Path, command_name: str, *, platform_name: str) -> None:
@@ -207,7 +399,7 @@ def _read_managed(bin_dir: Path) -> set[str]:
         return set()
     try:
         data = protocol_json.loads(path.read_bytes())
-    except Exception:
+    except (OSError, protocol_json.ProtocolJSONError):
         return set()
     if (
         not isinstance(data, dict)

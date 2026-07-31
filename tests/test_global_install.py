@@ -9,7 +9,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-
 from conftest import (
     commit_all,
     init_git_repo,
@@ -21,9 +20,11 @@ from conftest import (
     write_files,
     write_skillfile,
 )
+
 from csk import cli, config, global_bins, global_install, installer, shims
 from csk.audit import pipeline as audit_pipeline
-from csk.builds import planner as build_planner, source as build_source
+from csk.builds import planner as build_planner
+from csk.builds import source as build_source
 
 
 def _save_config(monkeypatch: pytest.MonkeyPatch, cfg: config.GlobalConfig) -> None:
@@ -758,15 +759,17 @@ def test_global_dry_run_missing_go_fails_whole_plan_without_mutation(
     after = _filesystem_state(watched)
     assert result.status == "failed"
     assert result.errors == [
-        "go-v1 go_toolchain_missing: captured operator PATH contains no "
-        "Go executable"
+        (
+            "go-v1 go_toolchain_missing: captured operator PATH contains no "
+            "Go executable"
+        )
     ]
     assert result.builds == []
     assert not any("(planned)" in message for message in result.messages)
     assert before == after
 
 
-def test_global_real_install_defers_build_planning_and_planning_only_gates(
+def test_global_real_install_runs_all_trust_gates_before_build_planning(
     monkeypatch, tmp_path, skills_root, csk_home
 ):
     project = make_project(tmp_path)
@@ -804,8 +807,9 @@ def test_global_real_install_defers_build_planning_and_planning_only_gates(
     )
     events: list[str] = []
 
-    def unexpected_mcp(*args, **kwargs):
-        raise AssertionError("real global install must defer planning-only MCP validation")
+    def mcp(*args, **kwargs):
+        events.append("mcp")
+        return {}, []
 
     def audit(*args, scope, record, **kwargs):
         assert scope == "global"
@@ -813,23 +817,26 @@ def test_global_real_install_defers_build_planning_and_planning_only_gates(
         events.append("audit")
         return audit_pipeline.GateResult(reports=())
 
-    def unexpected_registry(*args, **kwargs):
-        raise AssertionError("real global install must defer planning-only registry validation")
+    def registry(*args, read_only, **kwargs):
+        assert read_only is False
+        events.append("registry")
+        return {}
 
-    def unexpected_plan(*args, **kwargs):
-        raise AssertionError("real global install must defer build planning")
+    def plan(*args, **kwargs):
+        events.append("plan")
+        raise RuntimeError("stop after real global build planning")
 
-    monkeypatch.setattr(installer, "_check_mcp_servers", unexpected_mcp)
+    monkeypatch.setattr(installer, "_check_mcp_servers", mcp)
     monkeypatch.setattr(global_install.audit_pipeline, "gate_plans", audit)
-    monkeypatch.setattr(installer, "_check_audit_registries", unexpected_registry)
-    monkeypatch.setattr(build_planner, "plan_builds", unexpected_plan)
+    monkeypatch.setattr(installer, "_check_audit_registries", registry)
+    monkeypatch.setattr(build_planner, "plan_builds", plan)
 
     result = global_install.install(cfg)
 
-    assert not result.errors
+    assert result.errors == ["stop after real global build planning"]
     assert result.builds == []
-    assert events == ["audit"]
-    assert (csk_home / "global" / "skills" / "skill-build").is_dir()
+    assert events == ["mcp", "audit", "registry", "plan"]
+    assert not (csk_home / "global" / "skills" / "skill-build").exists()
 
 
 @pytest.mark.parametrize("failing_gate", ["mcp", "registry"])
@@ -1140,7 +1147,7 @@ def test_global_install_is_idempotent(monkeypatch, tmp_path, skills_root, csk_ho
     assert "up-to-date" in out
 
 
-def test_global_real_install_materializes_only_declared_skills_and_commands(
+def test_global_real_install_materializes_active_context_closure_only(
     monkeypatch, tmp_path, skills_root, csk_home
 ):
     project = make_project(tmp_path)
@@ -1170,12 +1177,15 @@ def test_global_real_install_materializes_only_declared_skills_and_commands(
 
     assert not result.errors
     skills = csk_home / "global" / "skills"
-    assert sorted(path.name for path in skills.iterdir()) == ["consumer"]
+    assert sorted(path.name for path in skills.iterdir()) == [
+        "consumer",
+        "provider",
+    ]
     assert not (csk_home / "global" / "bin" / "provider-tool").exists()
     assert not (csk_home / "runtime" / "provider").exists()
 
 
-def test_global_real_install_does_not_shadow_inactive_transitive_commands(
+def test_global_real_install_materializes_context_dependencies_without_inactive_commands(
     monkeypatch, tmp_path, skills_root, csk_home
 ):
     project = make_project(tmp_path)
@@ -1222,13 +1232,15 @@ def test_global_real_install_does_not_shadow_inactive_transitive_commands(
     assert sorted(path.name for path in skills.iterdir()) == [
         "consumer-one",
         "consumer-two",
+        "provider-one",
+        "provider-two",
     ]
     assert not (csk_home / "global" / "bin" / "tool").exists()
     assert not (csk_home / "runtime" / "provider-one").exists()
     assert not (csk_home / "runtime" / "provider-two").exists()
 
 
-def test_global_real_install_does_not_plan_builds_or_require_go(
+def test_global_real_install_requires_toolchain_for_active_builds_atomically(
     monkeypatch, tmp_path, skills_root, csk_home
 ):
     project = make_project(tmp_path)
@@ -1276,23 +1288,20 @@ def test_global_real_install_does_not_plan_builds_or_require_go(
     )
     set_path_with_git_without_go(monkeypatch, tmp_path)
 
-    def unexpected_plan(*args, **kwargs):
-        raise AssertionError("real global install must defer build planning")
-
-    monkeypatch.setattr(build_planner, "plan_builds", unexpected_plan)
-
     result = global_install.install(cfg)
 
-    assert not result.errors
-    assert result.builds == []
-    skills = csk_home / "global" / "skills"
-    assert sorted(path.name for path in skills.iterdir()) == [
-        "skill-build",
-        "skill-plain",
+    assert result.errors == [
+        (
+            "go-v1 go_toolchain_missing: captured operator PATH contains no "
+            "Go executable"
+        )
     ]
+    assert result.builds == []
+    assert not (csk_home / "global" / "skills" / "skill-build").exists()
+    assert not (csk_home / "global" / "skills" / "skill-plain").exists()
 
 
-def test_global_install_keeps_installing_available_skills_when_one_fails(
+def test_global_install_diagnostics_do_not_partially_materialize_healthy_skills(
     monkeypatch, tmp_path, skills_root, csk_home, capsys
 ):
     project = make_project(tmp_path)
@@ -1333,7 +1342,7 @@ def test_global_install_keeps_installing_available_skills_when_one_fails(
 
     captured = capsys.readouterr()
     assert "Missing system command '__csk_missing_system_dependency__'" in captured.err
-    assert (csk_home / "global" / "skills" / "skill-good" / ".csk-install.json").exists()
+    assert not (csk_home / "global" / "skills" / "skill-good").exists()
     assert not (csk_home / "global" / "skills" / "skill-missing-dep").exists()
 
 
@@ -1381,7 +1390,7 @@ def test_global_install_resolution_failure_preserves_existing_declared_skill(
     assert installed.is_dir()
 
 
-def test_global_install_never_plans_builds_and_installs_healthy_skill_on_partial_failure(
+def test_global_install_stops_before_builds_and_materialization_on_partial_failure(
     monkeypatch, tmp_path, skills_root, csk_home
 ):
     project = make_project(tmp_path)
@@ -1444,7 +1453,7 @@ def test_global_install_never_plans_builds_and_installs_healthy_skill_on_partial
     )
 
     def unexpected_plan(*args, **kwargs):
-        raise AssertionError("real global install must defer build planning")
+        raise AssertionError("failed global diagnostics must stop build planning")
 
     monkeypatch.setattr(build_planner, "plan_builds", unexpected_plan)
 
@@ -1455,7 +1464,7 @@ def test_global_install_never_plans_builds_and_installs_healthy_skill_on_partial
         "Missing system command '__csk_missing_global_dependency__'" in error
         for error in result.errors
     )
-    assert (csk_home / "global" / "skills" / "skill-build").is_dir()
+    assert not (csk_home / "global" / "skills" / "skill-build").exists()
     assert not (csk_home / "global" / "skills" / "skill-bad").exists()
 
 
@@ -1701,6 +1710,58 @@ def test_global_upgrade_fetches_remote_branch_then_installs(monkeypatch, tmp_pat
     assert json.loads(marker_path.read_text(encoding="utf-8"))["commit"] == first_commit
     assert cli.main(["global", "upgrade"]) == 0
     assert json.loads(marker_path.read_text(encoding="utf-8"))["commit"] == second_commit
+
+
+def test_global_upgrade_releases_update_lock_before_install_and_preserves_options(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project)
+    _save_config(monkeypatch, cfg)
+    _write_global_skillfile(
+        csk_home,
+        {"schema_version": 1, "agents": ["codex_cli"], "skills": []},
+    )
+    lock_state = {"held": False}
+    observed: list[installer.InstallOptions] = []
+
+    class TrackingLock:
+        def __init__(self, home):
+            assert home == csk_home
+
+        def __enter__(self):
+            assert not lock_state["held"]
+            lock_state["held"] = True
+            return self
+
+        def __exit__(self, *args):
+            lock_state["held"] = False
+
+    def update(_cfg):
+        assert lock_state["held"]
+        return global_install.GlobalResult(
+            status="failed",
+            errors=["forced update failure"],
+        )
+
+    def install(_cfg, *, options):
+        assert not lock_state["held"]
+        observed.append(options)
+        return global_install.GlobalResult()
+
+    monkeypatch.setattr(cli, "GlobalLock", TrackingLock)
+    monkeypatch.setattr(global_install, "update", update)
+    monkeypatch.setattr(global_install, "install", install)
+
+    code = cli.main(
+        ["global", "upgrade", "--strict-tags", "--verbose"]
+    )
+
+    assert code == cli.EXIT_PARTIAL_FAIL
+    assert len(observed) == 1
+    assert observed[0].strict_tags is True
+    assert observed[0].verbose is True
+    assert observed[0].dry_run is False
 
 
 def test_runtime_gc_keeps_global_only_runtime(monkeypatch, tmp_path, skills_root, csk_home):
