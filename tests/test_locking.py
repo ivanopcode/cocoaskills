@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
 import threading
@@ -1421,3 +1422,84 @@ def test_corrupt_lock_is_not_broken(tmp_path):
     with pytest.raises(LockError), GlobalLock(tmp_path, timeout=0.3):
         pass
     assert lock_path.exists()
+
+
+def test_provisioning_adopts_an_established_home_directory(tmp_path: Path):
+    """The positive control: a directory already there is adopted, not remade.
+
+    This is the one case `mkdir(exist_ok=True)` tolerated, so it is the case
+    the fail-closed condition below must not break. Provisioning is skipped
+    because this call did not create the home, which is what keeps ownership
+    drift on an established home failing closed at inspection instead.
+    """
+    home = tmp_path / ".cocoaskills"
+    home.mkdir(mode=0o755)
+
+    locking.provision_new_manager_home(home)
+
+    assert home.is_dir()
+    if os.name != "nt":
+        assert stat.S_IMODE(home.stat().st_mode) == 0o755
+
+
+def test_provisioning_adopts_a_home_reached_through_a_symlink(tmp_path: Path):
+    """A symlink to a real directory resolves to a home, so it is still adopted."""
+    home = tmp_path / ".cocoaskills"
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    try:
+        home.symlink_to(destination, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    locking.provision_new_manager_home(home)
+
+    assert home.is_dir()
+
+
+def test_provisioning_rejects_a_home_path_taken_by_a_file(tmp_path: Path):
+    """A non-directory occupying the home path must fail closed.
+
+    `Path.mkdir(exist_ok=True)` is `if not exist_ok or not self.is_dir(): raise`,
+    so it never accepted this. Swallowing `FileExistsError` unconditionally
+    would, and the manager home would then be whatever is sitting there.
+    """
+    home = tmp_path / ".cocoaskills"
+    home.write_text("not a home", encoding="utf-8")
+
+    with pytest.raises(LockError, match="cannot create manager home"):
+        locking.provision_new_manager_home(home)
+
+    assert home.read_text(encoding="utf-8") == "not a home"
+
+
+def test_provisioning_rejects_a_home_symlinked_to_a_missing_directory(tmp_path: Path):
+    """A dangling symlink is not a directory, so it is not an established home.
+
+    Accepting it would materialise the home at the link destination on first
+    write: created by something other than this call, so at the default mode
+    and without the ownership stamp this function exists to apply.
+    """
+    home = tmp_path / ".cocoaskills"
+    try:
+        home.symlink_to(tmp_path / "missing", target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    with pytest.raises(LockError, match="cannot create manager home"):
+        locking.provision_new_manager_home(home)
+
+    assert not (tmp_path / "missing").exists()
+
+
+def test_locking_refuses_to_bind_to_a_home_path_taken_by_a_file(tmp_path: Path):
+    """The rejection reaches the caller as `LockError`, not a raw `OSError`.
+
+    `cli.main` catches `LockError`; anything else surfaces as a traceback.
+    """
+    home = tmp_path / ".cocoaskills"
+    home.write_text("not a home", encoding="utf-8")
+
+    with pytest.raises(LockError, match="cannot create manager home"):
+        with GlobalLock(home, timeout=0.3):
+            pass
