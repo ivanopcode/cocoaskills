@@ -237,10 +237,12 @@ def _capture_generation(
 def _assert_generation_current(
     probe: build_planner.GenerationProbe,
     expected: Mapping[str, str],
+    *,
+    scope: str = "project",
 ) -> None:
     if _capture_generation(probe) != dict(expected):
         raise _concurrent_state_change(
-            "shared planning state changed before the atomic project commit"
+            f"shared planning state changed before the atomic {scope} commit"
         )
 
 
@@ -459,13 +461,13 @@ def _install_project_once(
             )
             private_builds = _build_private_misses(
                 config,
-                project,
                 nodes,
                 build_providers,
                 tuple(result.builds),
                 operator_search_path,
                 cache_backend,
                 stack,
+                operation_roots=(project.path,),
             )
 
             with locking.ManagerHomeLock(config.path.parent) as home_lock:
@@ -985,13 +987,14 @@ def _assert_target_preimages_current(
 
 def _build_private_misses(
     config: GlobalConfig,
-    project: ProjectConfig,
     nodes: list[closure.ClosureNode],
     providers: tuple[build_planner.BuildProvider, ...],
     plans: tuple[build_planner.BuildPlan, ...],
     operator_search_path: build_toolchain.OperatorSearchPath,
     cache_backend: build_cache.BuildCacheBackend,
     stack: ExitStack,
+    *,
+    operation_roots: tuple[Path, ...],
 ) -> dict[str, build_cache.CachePublication]:
     candidates = [
         plan
@@ -1016,7 +1019,7 @@ def _build_private_misses(
         path
         for path in (
             config.path.parent,
-            project.path,
+            *operation_roots,
             config.skills_root,
             *(node.repo for node in nodes),
             *(provider.snapshot.path for provider in providers),
@@ -1278,63 +1281,88 @@ def _commit_materialization(
             materialization_targets=materialization_targets,
             adapter_targets=adapter_targets,
         )
-        targets: list[transactions.MutableTarget] = []
-        for target in materialization_targets:
-            key = _target_key(target)
-            wanted = desired[key]
-            expected = target_preimages[key]
-            wanted_digest = (
-                transactions.ABSENT_DIGEST
-                if wanted is None
-                else transactions.digest_target(
-                    wanted,
-                    kind=target.kind,
-                )
-            )
-            if wanted_digest == expected:
-                continue
-            targets.append(
-                transactions.MutableTarget(
-                    target_class=target.target_class,
-                    identifier=target.identifier,
-                    live_path=target.live_path,
-                    desired_path=wanted,
-                    expected_preimage_digest=expected,
-                    kind=target.kind,
-                )
-            )
-        if targets:
-            identity = locking.canonical_project_identity(project.path)
-            identity_hash = hashlib.sha256(
-                identity.encode("utf-8")
-            ).hexdigest()[:16]
-            transaction_id = (
-                f"install-{identity_hash}-{uuid.uuid4().hex}"
-            )
-            plan = transactions.TransactionPlan(
-                transaction_id=transaction_id,
-                project_identity=identity,
-                targets=tuple(targets),
-                generation_digests=dict(expected_generation),
-            )
-            created: list[Path] = []
-            committed = False
-            try:
-                for committed_target in targets:
-                    if committed_target.desired_path is None:
-                        continue
-                    created.extend(
-                        _make_missing_directories(
-                            committed_target.live_path.parent
-                        )
-                    )
-                engine.prepare(home_lock, plan)
-                engine.commit(home_lock, transaction_id)
-                committed = True
-            finally:
-                if not committed:
-                    _remove_created_directories(created)
+        _commit_transaction_targets(
+            transaction_prefix="install",
+            project_identity=locking.canonical_project_identity(
+                project.path
+            ),
+            materialization_targets=materialization_targets,
+            desired=desired,
+            target_preimages=target_preimages,
+            expected_generation=expected_generation,
+            engine=engine,
+            home_lock=home_lock,
+        )
         return messages
+
+
+def _commit_transaction_targets(
+    *,
+    transaction_prefix: str,
+    project_identity: str,
+    materialization_targets: tuple[_MaterializationTarget, ...],
+    desired: Mapping[tuple[str, str], Path | None],
+    target_preimages: Mapping[tuple[str, str], str],
+    expected_generation: Mapping[str, str],
+    engine: transactions.TransactionEngine,
+    home_lock: locking.ManagerHomeLock,
+) -> None:
+    targets: list[transactions.MutableTarget] = []
+    for target in materialization_targets:
+        key = _target_key(target)
+        wanted = desired[key]
+        expected = target_preimages[key]
+        wanted_digest = (
+            transactions.ABSENT_DIGEST
+            if wanted is None
+            else transactions.digest_target(
+                wanted,
+                kind=target.kind,
+            )
+        )
+        if wanted_digest == expected:
+            continue
+        targets.append(
+            transactions.MutableTarget(
+                target_class=target.target_class,
+                identifier=target.identifier,
+                live_path=target.live_path,
+                desired_path=wanted,
+                expected_preimage_digest=expected,
+                kind=target.kind,
+            )
+        )
+    if not targets:
+        return
+    identity_hash = hashlib.sha256(
+        project_identity.encode("utf-8")
+    ).hexdigest()[:16]
+    transaction_id = (
+        f"{transaction_prefix}-{identity_hash}-{uuid.uuid4().hex}"
+    )
+    plan = transactions.TransactionPlan(
+        transaction_id=transaction_id,
+        project_identity=project_identity,
+        targets=tuple(targets),
+        generation_digests=dict(expected_generation),
+    )
+    created: list[Path] = []
+    committed = False
+    try:
+        for committed_target in targets:
+            if committed_target.desired_path is None:
+                continue
+            created.extend(
+                _make_missing_directories(
+                    committed_target.live_path.parent
+                )
+            )
+        engine.prepare(home_lock, plan)
+        engine.commit(home_lock, transaction_id)
+        committed = True
+    finally:
+        if not committed:
+            _remove_created_directories(created)
 
 
 def _stage_materialization(

@@ -191,19 +191,57 @@ def plan_project_adapter_targets(
     agents: list[str],
     groups: list[AdapterGroup],
 ) -> tuple[AdapterTarget, ...]:
+    roots = {
+        agent: project_root / relative
+        for agent, relative in AGENT_PATHS.items()
+        if agent in agents
+    }
+    return _plan_adapter_targets(roots, groups)
+
+
+def plan_global_adapter_targets(
+    csk_home: Path,
+    agents: list[str],
+    skill_names: tuple[str, ...],
+    *,
+    home: Path | None = None,
+) -> tuple[AdapterTarget, ...]:
+    canonical_root = csk_home / "global" / "skills"
+    user_home = home or Path.home()
+    roots = {
+        agent: user_home / relative
+        for agent, relative in AGENT_PATHS.items()
+        if agent in agents
+    }
+    if any(agent in NATIVE_DISCOVERY_AGENTS for agent in agents):
+        roots["native"] = user_home / NATIVE_DISCOVERY_HOME_PATH
+    return _plan_adapter_targets(
+        roots,
+        [
+            AdapterGroup(
+                canonical_root=canonical_root,
+                skill_names=skill_names,
+            )
+        ],
+    )
+
+
+def _plan_adapter_targets(
+    adapter_roots: dict[str, Path],
+    groups: list[AdapterGroup],
+) -> tuple[AdapterTarget, ...]:
     expected = {
         name
         for group in groups
         for name in group.skill_names
     }
     roots = {
-        agent: project_root / relative
-        for agent, relative in AGENT_PATHS.items()
-        if agent in agents
+        str(root.absolute()): root
+        for root in adapter_roots.values()
     }
     targets: list[AdapterTarget] = []
-    for agent in sorted(roots):
-        adapter_root = roots[agent]
+    for root_identity in sorted(roots):
+        adapter_root = roots[root_identity]
         root_key = hashlib.sha256(
             str(adapter_root.absolute()).encode("utf-8")
         ).hexdigest()

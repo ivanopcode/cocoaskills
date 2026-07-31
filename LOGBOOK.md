@@ -1,5 +1,50 @@
 # Logbook
 
+## 2026-08-01 — TASK-260720-g7kgox atomic global builds
+
+Global install now follows the same planning and publication boundary as a
+project install. A global-scoped project lock spans closure resolution, trust
+gates, build planning, and private compilation; per-key build locks serialize
+cache misses; and the manager-home lock is acquired only for recovery,
+generation and target-preimage revalidation, protected cache publication, and
+the durable materialization commit. Global upgrade retains its update lock for
+fetching, releases it, and then enters this install flow, so compilation never
+runs beneath the manager-home lock.
+
+The materialization transaction covers every global install surface: closure
+contexts and marker-only nodes, script runtimes, compiled and script launchers,
+PATH-visible user-bin forwarders and their ledger, shell environment files,
+agent adapters and their ledgers, and stale contexts, runtimes, launchers, and
+adapter entries. All desired bytes are prepared in an operation-private home;
+environment files and launchers embed the final manager-home paths rather than
+their staging paths. POSIX user-bin links are staged with a destination
+relative to the eventual live user-bin directory, which keeps the link valid
+after the transaction moves it out of staging. Native global adapter planning
+also deduplicates the shared `~/.agents/skills` root used by Windsurf and
+OpenCode.
+
+Real global installs now consume the schema-6 closure and shared build planner,
+compile cache misses privately, publish verified artifacts under the home lock,
+write marker v2 build receipts, and activate build shims from the protected
+cache. Context-only transitive nodes are materialized according to their
+activation edges, while inactive commands remain absent. The old per-skill
+partial-write loop is gone: source and dependency diagnostics are still
+collected per declaration, but any error stops before builds or
+materialization and preserves the previous global install.
+
+Dry-run keeps the read-only two-attempt generation protocol and constructs no
+project, build, or manager-home lock. Its generation includes global shims and
+environment files plus hybrid, configured-project, and consumer marker roots,
+so a concurrent reference change restarts planning before runtime pruning can
+act on a stale view.
+
+Regression vectors cover provider-first build ordering, home-lock exclusion,
+marker v2 and build-root filtering, canonical and user-bin activation,
+build/publication preservation, every ordered global transaction target class,
+dry-run byte purity, Windows user-bin staging, native-adapter root
+deduplication, upgrade lock/argument/exit behavior, and the existing script and
+system-only flows.
+
 ## 2026-07-31 — BUG-260731-1rldqv Windows transactional install
 
 Every `windows-latest` cell of PR 16 failed while every POSIX cell stayed

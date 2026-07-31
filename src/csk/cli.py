@@ -636,15 +636,16 @@ def _dispatch_global(args: argparse.Namespace) -> int:
     if dry_run_operation:
         return _cmd_global_install(cfg, args)
     config.validate_skills_root_for_work(cfg)
-    with GlobalLock(cfg.path.parent):
-        if args.global_command == "update":
+    if args.global_command == "update":
+        with GlobalLock(cfg.path.parent):
             return _cmd_global_update(cfg)
-        if args.global_command == "install":
-            return _cmd_global_install(cfg, args)
-        if args.global_command == "upgrade":
+    if args.global_command == "install":
+        return _cmd_global_install(cfg, args)
+    if args.global_command == "upgrade":
+        with GlobalLock(cfg.path.parent):
             update_code = _cmd_global_update(cfg)
-            install_code = _cmd_global_install(cfg, args)
-            return install_code if install_code != EXIT_OK else update_code
+        install_code = _cmd_global_install(cfg, args)
+        return install_code if install_code != EXIT_OK else update_code
     raise ValueError(f"Unknown global command: {args.global_command}")
 
 
@@ -884,8 +885,6 @@ def _cmd_global_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> i
         print(message)
     for error in result.errors:
         print(f"global: {error}", file=sys.stderr)
-    if not options.dry_run:
-        gc.collect_runtime(cfg, cfg.path.parent)
     return EXIT_PARTIAL_FAIL if result.failed else EXIT_OK
 
 
