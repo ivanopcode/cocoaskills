@@ -2708,3 +2708,161 @@ def test_recovery_preserves_cleanup_tomb_reappearing_after_removed_state(
         assert live.read_text(encoding="utf-8") == "new"
     else:
         assert (live / "payload").read_text(encoding="utf-8") == "new"
+
+
+def _journal_target(index: int, live: Path) -> JournalTarget:
+    """One prepared bytes target, shaped the way a real journal records it."""
+    return JournalTarget(
+        target_class="10-context",
+        identifier=f"target-{index}",
+        kind="bytes",
+        live_path=str(live),
+        staged_path=str(transactions._sidecar(live, "txn-cost", index, "desired")),
+        staged_source=None,
+        staging_entries=[],
+        backup_path=str(transactions._sidecar(live, "txn-cost", index, "backup")),
+        rollback_path=str(
+            transactions._sidecar(live, "txn-cost", index, "rollback")
+        ),
+        expected_preimage_digest=ABSENT_DIGEST,
+        expected_generation=None,
+        generation_path=None,
+        desired_digest=ABSENT_DIGEST,
+    )
+
+
+def _count_namespace_canonicalisations(
+    monkeypatch: pytest.MonkeyPatch,
+    home: Path,
+    targets: list[JournalTarget],
+) -> tuple[int, int]:
+    """Return (canonicalisations, namespaces) for one independence pass."""
+    calls = 0
+    original = transactions._canonical_target_path
+
+    def counted(path: Path, **kwargs: object) -> Path:
+        nonlocal calls
+        calls += 1
+        return original(path, **kwargs)  # type: ignore[arg-type]
+
+    probes = 0
+    original_probe_init = transactions._NamespaceProbe.__init__
+
+    def counted_init(self: object, *args: object, **kwargs: object) -> None:
+        nonlocal probes
+        probes += 1
+        original_probe_init(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(transactions, "_canonical_target_path", counted)
+    monkeypatch.setattr(transactions._NamespaceProbe, "__init__", counted_init)
+    transactions._validate_namespace_independence(
+        home,
+        home / "transactions",
+        "txn-cost",
+        targets,
+        corruption=False,
+    )
+    return calls, probes
+
+
+def test_namespace_independence_canonicalises_each_namespace_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The pairwise scan must not re-derive a path it has already derived.
+
+    Every comparison used to canonicalise both of its operands, so the pass
+    cost grew with the square of the namespace count. Windows opens a handle
+    per path component to do that, which turned one ordinary install into
+    minutes of repeated work. Cost is part of the contract here, so it is
+    pinned: one canonicalisation per namespace, plus the manager home.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    targets = [_journal_target(index, tmp_path / f"live-{index}") for index in range(8)]
+
+    calls, probes = _count_namespace_canonicalisations(monkeypatch, home, targets)
+
+    assert probes > 40, "expected a namespace count worth measuring"
+    assert calls == probes + 1
+
+
+def test_namespace_independence_cost_stays_linear_in_targets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Doubling the targets must not quadruple the filesystem work."""
+    home = tmp_path / "home"
+    home.mkdir()
+    small = [_journal_target(index, tmp_path / f"live-{index}") for index in range(4)]
+    large = [_journal_target(index, tmp_path / f"live-{index}") for index in range(8)]
+
+    small_calls, small_probes = _count_namespace_canonicalisations(
+        monkeypatch, home, small
+    )
+    large_calls, large_probes = _count_namespace_canonicalisations(
+        monkeypatch, home, large
+    )
+
+    assert large_probes > small_probes
+    # Linear growth tracks the namespace count; the quadratic scan this
+    # replaces would have grown by the square of that ratio.
+    assert large_calls - small_calls == large_probes - small_probes
+
+
+def test_namespace_probe_reads_one_identity_for_repeated_comparisons(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A probe answers every comparison from a single stat of its path."""
+    live = _write(tmp_path / "live", "payload")
+    probe = transactions._NamespaceProbe("live", live, entry=False)
+
+    stats = 0
+    original = Path.stat
+
+    def counted(self: Path, **kwargs: object) -> os.stat_result:
+        nonlocal stats
+        stats += 1
+        return original(self, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "stat", counted)
+
+    first = probe.identity()
+    second = probe.identity()
+
+    assert first is not None
+    assert second is first
+    assert stats == 1
+
+
+def test_namespace_probe_reports_absence_without_raising(tmp_path: Path):
+    """A namespace that is not there yet has no identity to compare."""
+    probe = transactions._NamespaceProbe(
+        "absent", tmp_path / "absent" / "deeper", entry=False
+    )
+
+    assert probe.identity() is None
+
+
+def test_namespace_independence_still_detects_a_physical_alias(tmp_path: Path):
+    """Distinct spellings of one object must still collide.
+
+    Memoising identity per pass must not cost the guard its reach: two
+    namespaces that name the same physical object are still an overlap.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    live = _write(tmp_path / "live", "payload")
+    alias = tmp_path / "alias"
+    os.link(live, alias)
+    targets = [
+        _journal_target(0, live),
+        _journal_target(1, alias),
+    ]
+
+    with pytest.raises(TransactionError, match="namespace overlap"):
+        transactions._validate_namespace_independence(
+            home,
+            home / "transactions",
+            "txn-cost",
+            targets,
+            corruption=False,
+        )

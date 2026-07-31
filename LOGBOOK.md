@@ -39,6 +39,36 @@ None of this was reachable on `main`, whose installer only plans builds. The
 regression entered with the commit that made `installer.install` compile and
 publish.
 
+### Namespace validation cost
+
+Fixing the four correctness faults left every Windows cell passing and far too
+slow: Python 3.11 took 2h18m43s against 14 minutes for the same suite on
+`main`, individual install tests ran 76-247 seconds each, and Python 3.12 was
+still running after three hours. Two independent `windows-latest` fault-handler
+dumps landed on the same frame, so this was one hot path rather than a hang.
+
+`_validate_namespace_independence` compares every declared namespace with every
+other one, and each comparison canonicalised *both* of its operands. The pass
+therefore performed filesystem work proportional to the square of the namespace
+count, and it runs on every journal save — including twice per 32 KiB staging
+chunk. One ordinary install measured 750,620 canonicalisations, 182 of its 210
+seconds, on macOS, where `realpath` is cheap. Windows opens a handle per path
+component to answer the same question, which is why only that platform became
+unusable while POSIX merely looked slow.
+
+A namespace is now a probe that resolves its path, and reads its physical
+identity, at most once per pass; every comparison in the pass reads that one
+answer. The same install now performs 12,575 canonicalisations and takes 27.9
+seconds. No guard changed: parts comparison, prefix containment, and the
+`samestat` alias check all still run for every pair, and a real `OSError` is
+still never cached. Asking the filesystem one question once per pass is also
+more internally consistent than asking it once per comparison, which is what
+the pairwise form did.
+
+Cost is part of this contract, so it is pinned by tests: one canonicalisation
+per namespace plus the manager home, and growth that tracks the namespace count
+rather than its square.
+
 ## 2026-07-30 — TASK-260720-3t8nr3 atomic project and hybrid materialization
 
 Project and hybrid installs now use the lock order required by the build and
