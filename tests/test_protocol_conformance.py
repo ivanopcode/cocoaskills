@@ -29,6 +29,7 @@ from csk import (
     config,
     gc,
     git_ops,
+    global_install,
     hashing,
     identifiers,
     install_marker,
@@ -1192,6 +1193,32 @@ def _assert_sabotaged_lifecycle_case_differs(
         )
 
 
+def _transient_descriptor_rewrite(path: Path, marker: bytes) -> None:
+    """Mutate persistent bytes through dir-fd I/O, then restore them exactly."""
+
+    original = path.read_bytes()
+    parent_fd = os.open(
+        path.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        descriptor = os.open(
+            path.name,
+            os.O_WRONLY | os.O_APPEND,
+            dir_fd=parent_fd,
+        )
+        try:
+            os.write(descriptor, marker)
+            os.fsync(descriptor)
+            os.ftruncate(descriptor, len(original))
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(parent_fd)
+    assert path.read_bytes() == original
+
+
 def test_rc6_planning_binding_detects_omitted_skill_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2286,6 +2313,268 @@ def test_rc6_transaction_binding_detects_post_restore_corruption(
             "reverse-rollback-under-home-lock",
         )
         assert len(corruptions) == 6
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="the post-publication child sabotage targets the POSIX rename seam",
+)
+def test_rc6_publication_binding_detects_transient_live_child_corruption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from csk.builds import cache_posix
+
+    corruptions = 0
+    original = cache_posix._rename_noreplace
+
+    def corrupt_live_child_then_restore(
+        source_dir_fd: int,
+        source_name: str,
+        destination_dir_fd: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal corruptions
+        original(
+            source_dir_fd,
+            source_name,
+            destination_dir_fd,
+            destination_name,
+        )
+        if not re.fullmatch(r"[0-9a-f]{64}", destination_name):
+            return
+        entry_fd = os.open(
+            destination_name,
+            os.O_RDONLY | os.O_DIRECTORY,
+            dir_fd=destination_dir_fd,
+        )
+        try:
+            bin_fd = os.open("bin", os.O_RDONLY | os.O_DIRECTORY, dir_fd=entry_fd)
+            try:
+                artifact_name = os.listdir(bin_fd)[0]
+                read_fd = os.open(artifact_name, os.O_RDONLY, dir_fd=bin_fd)
+                try:
+                    state = os.fstat(read_fd)
+                    original_bytes = os.read(read_fd, state.st_size)
+                    original_mode = stat.S_IMODE(state.st_mode)
+                    os.fchmod(read_fd, original_mode | stat.S_IWUSR)
+                finally:
+                    os.close(read_fd)
+                write_fd = os.open(artifact_name, os.O_WRONLY, dir_fd=bin_fd)
+                try:
+                    os.write(write_fd, b"!" * len(original_bytes))
+                    os.fsync(write_fd)
+                    os.lseek(write_fd, 0, os.SEEK_SET)
+                    os.write(write_fd, original_bytes)
+                    os.ftruncate(write_fd, len(original_bytes))
+                    os.fsync(write_fd)
+                    os.fchmod(write_fd, original_mode)
+                finally:
+                    os.close(write_fd)
+                corruptions += 1
+            finally:
+                os.close(bin_fd)
+        finally:
+            os.close(entry_fd)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        cache_posix,
+        "_rename_noreplace",
+        corrupt_live_child_then_restore,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert corruptions > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_upgrade_dry_run_bindings_detect_transient_persistent_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mutations: list[str] = []
+    original_project_install = installer.install
+    original_global_install = global_install.install
+
+    def mutate_project_config_then_install(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if "/dry-run/project/" in config_value.path.as_posix():
+            _transient_descriptor_rewrite(
+                config_value.path,
+                b"\ntransient-project-upgrade-dry-run-write\n",
+            )
+            mutations.append("project")
+        return original_project_install(config_value, *args, **kwargs)
+
+    def mutate_global_config_then_install(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if "/dry-run/global/" in config_value.path.as_posix():
+            _transient_descriptor_rewrite(
+                config_value.path,
+                b"\ntransient-global-upgrade-dry-run-write\n",
+            )
+            mutations.append("global")
+        return original_global_install(config_value, *args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(installer, "install", mutate_project_config_then_install)
+    monkeypatch.setattr(global_install, "install", mutate_global_config_then_install)
+    try:
+        differences = {
+            name
+            for name in ("project-upgrade", "global-upgrade")
+            if observe_manager_lifecycle_case(
+                name,
+                MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"],
+            )
+            != _lifecycle_case("dry_run_cases", name)
+        }
+        assert differences == {"project-upgrade", "global-upgrade"}
+        assert set(mutations) == {"project", "global"}
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_planning_binding_detects_transient_persistent_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mutations = 0
+    original = installer._selected_projects
+
+    def mutate_skillfile_after_selection(
+        config_value: config.GlobalConfig,
+        alias: str | None,
+    ) -> list[config.ProjectConfig]:
+        nonlocal mutations
+        selected = original(config_value, alias)
+        if "/planning/" in config_value.path.as_posix():
+            for project in selected:
+                skillfile = project.path / "Skillfile.json"
+                if skillfile.is_file():
+                    _transient_descriptor_rewrite(
+                        skillfile,
+                        b"\ntransient-planning-gate-write\n",
+                    )
+                    mutations += 1
+        return selected
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_selected_projects",
+        mutate_skillfile_after_selection,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "planning_cases",
+            "all-source-and-trust-gates-before-build",
+        )
+        assert mutations > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_private_failure_binding_detects_transient_persistent_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mutations = 0
+    original = installer._build_private_misses
+
+    def mutate_generation_then_build(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        nonlocal mutations
+        generation = config_value.path.parent / "persistent-generation"
+        if "/private-builds/failure/" in generation.as_posix():
+            _transient_descriptor_rewrite(
+                generation,
+                b"\ntransient-private-build-failure-write\n",
+            )
+            mutations += 1
+        return original(config_value, *args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_build_private_misses",
+        mutate_generation_then_build,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "private_build_cases",
+            "second-build-failure-preserves-persistent-state",
+        )
+        assert mutations > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.parametrize("sabotage", ["zero-fetch", "duplicate-fetch"])
+def test_rc6_all_project_upgrade_binding_requires_exact_nonempty_fetch_closure(
+    monkeypatch: pytest.MonkeyPatch,
+    sabotage: str,
+) -> None:
+    sabotaged_calls = 0
+    original = closure.build_closure
+
+    def alter_all_project_fetch(
+        config_value: config.GlobalConfig,
+        project_manifest: manifest.ProjectManifest,
+        substitutions: dict[str, Any],
+        **kwargs: Any,
+    ) -> list[closure.ClosureNode]:
+        nonlocal sabotaged_calls
+        if (
+            "/upgrade/all/" not in config_value.path.as_posix()
+            or not kwargs.get("fetch_existing", False)
+        ):
+            return original(
+                config_value,
+                project_manifest,
+                substitutions,
+                **kwargs,
+            )
+        sabotaged_calls += 1
+        if sabotage == "zero-fetch":
+            kwargs = {**kwargs, "fetch_existing": False}
+            return original(
+                config_value,
+                project_manifest,
+                substitutions,
+                **kwargs,
+            )
+        nodes = original(
+            config_value,
+            project_manifest,
+            substitutions,
+            **kwargs,
+        )
+        fetched_repos = kwargs.get("fetched_repos")
+        if isinstance(fetched_repos, set) and fetched_repos:
+            git_ops.fetch_repo(sorted(fetched_repos, key=os.fspath)[0])
+        return nodes
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(closure, "build_closure", alter_all_project_fetch)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "upgrade_cases",
+            "all-projects-deduplicate",
+        )
+        assert sabotaged_calls == 2
     finally:
         clear_manager_lifecycle_observation_cache()
 

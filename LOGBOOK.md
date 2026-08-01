@@ -510,3 +510,38 @@ components, verifies that the native `readlink` result denotes the exact
 declared vector target, and exposes the declared POSIX spelling only at the
 protocol-byte boundary. CocoaSkills still performs the real tree walk,
 resolution, mutation checks, framing, and digest calculation.
+
+## 2026-08-01 — BUG-260801-1iu1ln lifecycle trace hardening
+
+Cycle-7 review found three remaining ways that a normative lifecycle answer
+could survive without its required CocoaSkills observation. A process could
+mutate and restore a published cache descendant, a dry-run/planning/private-
+failure path could transiently write and restore a persistent surface, and the
+all-project upgrade deduplication answer could be true without fetching any
+member of the dependency closure. Dedicated sabotage tests reproduced all
+three gaps through the real transaction, installer/planner, private-build, and
+upgrade seams before the observer was changed.
+
+The shared persistent-mutation observer now resolves descriptor-relative I/O
+on Darwin with `F_GETPATH` as well as the Linux `/proc/self/fd` and portable
+`/dev/fd` forms. Publication traces cover the live entry after its atomic
+rename and reject descendant writes, truncates, fsync-backed restoration, or
+permission changes while distinguishing the single legitimate cache-root
+seal. Project and global upgrade dry-runs, every planning-gate probe, and the
+private-build failure case similarly classify any observed write as an effect
+even when the final byte snapshot is identical.
+
+All-project upgrade observation now requires the exact nonempty direct and
+transitive repository closure, once per repository, and separately excludes
+the unrelated repository. Zero-fetch and duplicate-fetch probes both fail the
+normative vector. Strengthened descriptor tracing also exposed legitimate
+permission changes while repair quarantines and replaces an invalid candidate;
+the rebuild condition therefore remains based on the observed repair pipeline,
+post-repair currentness, and absence of candidate execution, while the
+chmod-and-adopt shortcut continues to reject permission mutation.
+
+The pre-fix six-case sabotage gate exited 1 with five failures and one already-
+protected duplicate-fetch pass. After the observer changes it exited 0 with
+all six probes passing. The exact 32-case scalar-leaf/classification gate
+passes all 417 cases, including the repair refinement. No release pin,
+schema-v7 surface, tag, claim, or CI configuration changed.

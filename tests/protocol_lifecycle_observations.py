@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -120,6 +121,31 @@ def _project_identity_label(actual: str, expected: Path, label: str) -> str:
     )
 
 
+def _descriptor_path(descriptor: int) -> Path | None:
+    """Resolve an open descriptor on Linux and Darwin without trusting its name."""
+
+    for descriptor_root in ("/dev/fd", "/proc/self/fd"):
+        try:
+            target = os.readlink(f"{descriptor_root}/{descriptor}")
+        except OSError:
+            continue
+        return Path(target).resolve(strict=False)
+    if sys.platform == "darwin":
+        import fcntl
+
+        command = getattr(fcntl, "F_GETPATH", None)
+        if isinstance(command, int):
+            try:
+                raw = fcntl.fcntl(descriptor, command, b"\0" * 1024)
+            except OSError:
+                return None
+            if isinstance(raw, bytes):
+                value = raw.split(b"\0", 1)[0]
+                if value:
+                    return Path(os.fsdecode(value)).resolve(strict=False)
+    return None
+
+
 def _observed_path(path: object, *, dir_fd: int | None = None) -> Path | None:
     """Resolve a mutation argument, including common descriptor-relative paths."""
 
@@ -130,11 +156,8 @@ def _observed_path(path: object, *, dir_fd: int | None = None) -> Path | None:
     if candidate.is_absolute():
         return candidate.resolve(strict=False)
     if dir_fd is not None:
-        for descriptor_root in ("/dev/fd", "/proc/self/fd"):
-            try:
-                base = Path(os.readlink(f"{descriptor_root}/{dir_fd}"))
-            except OSError:
-                continue
+        base = _descriptor_path(dir_fd)
+        if base is not None:
             return (base / candidate).resolve(strict=False)
     return (Path.cwd() / candidate).resolve(strict=False)
 
@@ -145,6 +168,7 @@ def _install_persistent_mutation_observer(
     sink: list[str],
     *,
     on_mutation: Callable[[Path], None] | None = None,
+    on_event: Callable[[str, Path], None] | None = None,
 ) -> None:
     """Trace high- and low-level mutations, including descriptor-relative ones."""
 
@@ -163,6 +187,8 @@ def _install_persistent_mutation_observer(
             candidate == root or candidate.is_relative_to(root)
             for root in protected
         ):
+            if on_event is not None:
+                on_event(operation, candidate)
             if on_mutation is not None:
                 on_mutation(candidate)
             try:
@@ -222,13 +248,9 @@ def _install_persistent_mutation_observer(
     real_os_utime = os.utime
 
     def record_descriptor(operation: str, fd: int) -> None:
-        for descriptor_root in ("/dev/fd", "/proc/self/fd"):
-            try:
-                target = os.readlink(f"{descriptor_root}/{fd}")
-            except OSError:
-                continue
+        target = _descriptor_path(fd)
+        if target is not None:
             record(operation, target)
-            return
 
     mutating_open_flags = (
         os.O_WRONLY
@@ -822,6 +844,8 @@ def _observe_cache_publication(
     )
     atomic_publish_calls: list[bool] = []
     live_destination_mutations: list[str] = []
+    live_entry_mutations: list[str] = []
+    live_entry_events: list[tuple[str, Path]] = []
 
     def destination_matches_live(path: object, dir_fd: int | None) -> bool:
         if dir_fd is None:
@@ -966,6 +990,14 @@ def _observe_cache_publication(
         monkeypatch.setattr(os, "link", observed_live_link)
         monkeypatch.setattr(os, "symlink", observed_live_symlink)
         monkeypatch.setattr(os, "open", observed_live_open)
+        _install_persistent_mutation_observer(
+            monkeypatch,
+            (live_entry,),
+            live_entry_mutations,
+            on_event=lambda operation, path: live_entry_events.append(
+                (operation, path)
+            ),
+        )
 
         if os.name == "posix":
             from csk.builds import cache_posix
@@ -1039,10 +1071,23 @@ def _observe_cache_publication(
         and hit.artifact_path is not None
         and hit.artifact_path.read_bytes() == b"observed published artifact"
     )
+    live_root = live_entry.resolve(strict=False)
+    allowed_root_seals = [
+        event
+        for event in live_entry_events
+        if event == ("os-fchmod", live_root)
+    ]
+    unexpected_live_entry_mutations = [
+        event
+        for event in live_entry_events
+        if event != ("os-fchmod", live_root)
+    ]
     publication_atomic = (
         complete
         and atomic_publish_calls == [True]
         and not live_destination_mutations
+        and len(allowed_root_seals) <= 1
+        and not unexpected_live_entry_mutations
     )
     projected_receipt_sha256 = "unexpected"
     if (
@@ -2247,6 +2292,17 @@ def _observe_upgrade_dry_run(root: Path, *, global_scope: bool) -> list[str]:
         for label, paths in effect_surfaces.items()
     }
     forbidden_calls: list[str] = []
+    persistent_mutations: list[str] = []
+
+    def classify_persistent_mutation(path: Path) -> None:
+        resolved = path.resolve(strict=False)
+        for label, paths in effect_surfaces.items():
+            if any(
+                resolved == candidate.resolve(strict=False)
+                or resolved.is_relative_to(candidate.resolve(strict=False))
+                for candidate in paths
+            ) and label not in forbidden_calls:
+                forbidden_calls.append(label)
 
     def unexpected_fetch(_repo: Path) -> None:
         forbidden_calls.append("source-fetch")
@@ -2263,6 +2319,18 @@ def _observe_upgrade_dry_run(root: Path, *, global_scope: bool) -> list[str]:
         monkeypatch.setattr(cli.git_ops, "fetch_repo", unexpected_fetch)
         monkeypatch.setattr(cli.git_ops, "clone_repo", unexpected_clone)
         monkeypatch.setattr(config_mod, "save_config", unexpected_save)
+        _install_persistent_mutation_observer(
+            monkeypatch,
+            tuple(
+                dict.fromkeys(
+                    path
+                    for paths in effect_surfaces.values()
+                    for path in paths
+                )
+            ),
+            persistent_mutations,
+            on_mutation=classify_persistent_mutation,
+        )
         if global_scope:
             exit_code, _stdout, _stderr = _run_cli(
                 ["global", "upgrade", "--dry-run"]
@@ -2928,6 +2996,7 @@ def _observe_planning_gate_failures(
 
     for label, target, attribute in _PLANNING_GATE_PROBES:
         downstream: list[str] = []
+        case_mutations: list[str] = []
 
         def fail_gate(*_args: object, **_kwargs: object) -> object:
             raise installer.InstallError(f"observed planning gate failure: {label}")
@@ -2944,6 +3013,11 @@ def _observe_planning_gate_failures(
             monkeypatch.setattr(target, attribute, fail_gate)
             monkeypatch.setattr(planner, "plan_builds", cache_lookup)
             monkeypatch.setattr(go_v1, "build", go_command)
+            _install_persistent_mutation_observer(
+                monkeypatch,
+                roots,
+                case_mutations,
+            )
             result = installer.install(
                 cfg,
                 options=installer.InstallOptions(dry_run=True),
@@ -2954,9 +3028,14 @@ def _observe_planning_gate_failures(
             cache_lookups.append(label)
         if "go-command" in downstream:
             go_commands.append(label)
-        if after != baseline:
+        if case_mutations or after != baseline:
             persistent_mutations.append(label)
-        if result.errors and not downstream and after == baseline:
+        if (
+            result.errors
+            and not downstream
+            and not case_mutations
+            and after == baseline
+        ):
             blocked.append(label)
 
     return blocked, {
@@ -3444,6 +3523,7 @@ def _observe_private_builds(
     }
     events: list[str] = []
     effect_events: list[str] = []
+    persistent_mutations: list[str] = []
     home_lock_events: list[str] = []
     operation_roots: list[Path] = []
     real_manager_home_lock = locking.ManagerHomeLock
@@ -3453,6 +3533,16 @@ def _observe_private_builds(
     def record_effect(label: str) -> None:
         if label not in effect_events:
             effect_events.append(label)
+
+    def classify_persistent_mutation(path: Path) -> None:
+        resolved = path.resolve(strict=False)
+        for label, paths in effect_surfaces.items():
+            if any(
+                resolved == candidate.resolve(strict=False)
+                or resolved.is_relative_to(candidate.resolve(strict=False))
+                for candidate in paths
+            ):
+                record_effect(label)
 
     class ObservedManagerHomeLock:
         def __init__(self, home: Path, timeout: float | None = None):
@@ -3585,6 +3675,12 @@ def _observe_private_builds(
             forbidden_call("consumer-update"),
         )
         monkeypatch.setattr(installer.gc, "collect_runtime", forbidden_call("gc"))
+        _install_persistent_mutation_observer(
+            monkeypatch,
+            watched,
+            persistent_mutations,
+            on_mutation=classify_persistent_mutation,
+        )
         result = installer.install(cfg)[0]
     after = _tree_state(watched)
     effects_after = {
@@ -3618,7 +3714,7 @@ def _observe_private_builds(
         "name": "second-build-failure-preserves-persistent-state",
         "persistent_state_after": (
             persistent_generation.read_text(encoding="utf-8")
-            if before == after
+            if before == after and not persistent_mutations
             else "changed"
         ),
         "persistent_state_before": persistent_generation_before,
@@ -4848,7 +4944,6 @@ def _observe_status_and_repair(
                 and build_status.current
                 and all(label in trace for label in _REPAIR_PIPELINE)
                 and not candidate_executions
-                and not permission_mutations
             )
             if condition_rebuilt:
                 rebuilt.append(condition)
@@ -5606,14 +5701,27 @@ def _observe_upgrade_fetch(root: Path, *, mode: str) -> JsonObject:
         monkeypatch.setattr(global_install.git_ops, "fetch_repo", fetched_paths.append)
         exit_code, _stdout, _stderr = _run_cli(argv)
     assert exit_code == cli.EXIT_OK
+    fetched_resolved = [path.resolve(strict=False) for path in fetched_paths]
+    direct_resolved = direct.resolve(strict=False)
+    transitive_resolved = transitive.resolve(strict=False)
+    unrelated_resolved = unrelated.resolve(strict=False)
+    expected_closure = {direct_resolved, transitive_resolved}
     labels = []
-    if direct in fetched_paths:
+    if direct_resolved in fetched_resolved:
         labels.append("direct")
-    if transitive in fetched_paths:
+    if transitive_resolved in fetched_resolved:
         labels.append("transitive")
     return {
-        "deduplicated": len(fetched_paths) == len(set(fetched_paths)),
-        "excluded": ["unrelated"] if unrelated not in fetched_paths else [],
+        "deduplicated": (
+            len(fetched_resolved) == len(expected_closure)
+            and set(fetched_resolved) == expected_closure
+            and unrelated_resolved not in fetched_resolved
+        ),
+        "excluded": (
+            ["unrelated"]
+            if unrelated_resolved not in fetched_resolved
+            else []
+        ),
         "fetched": labels,
     }
 
