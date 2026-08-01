@@ -37,6 +37,7 @@ from csk.source_identity import SourceIdentityError, parse_source_identity
 from protocol_conformance_adapters import (
     _BUILD_REJECTION_BINDINGS,
     _LIFECYCLE_CASE_FIELDS,
+    _project_toolchain_link_target,
     assert_build_positive_case,
     assert_build_rejection_case,
     assert_build_source_case,
@@ -821,6 +822,7 @@ def test_rc6_toolchain_fixture_materializes_targets_before_internal_links(
         target: str | Path,
         target_is_directory: bool = False,
     ) -> None:
+        assert isinstance(target, Path)
         native_target = Path(target)
         if not native_target.is_absolute():
             native_target = path.parent / native_target
@@ -843,6 +845,24 @@ def test_rc6_toolchain_fixture_materializes_targets_before_internal_links(
     assert len(observed_targets) == sum(
         entry["type"] == "symlink" for entry in case["entries"]
     )
+
+
+def test_rc6_toolchain_fixture_projects_native_link_target_to_protocol_bytes() -> None:
+    case = next(
+        item
+        for item in BUILD_DRIVER_VECTORS["toolchain_cases"]
+        if "entries" in item
+    )
+    link = next(entry for entry in case["entries"] if entry["type"] == "symlink")
+    protocol_target = link["target"]
+    native_target = protocol_target.replace("/", "\\")
+
+    assert (
+        _project_toolchain_link_target(native_target, protocol_target)
+        == protocol_target
+    )
+    with pytest.raises(AssertionError):
+        _project_toolchain_link_target(native_target + "-other", protocol_target)
 
 
 @pytest.mark.parametrize(

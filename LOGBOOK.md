@@ -414,3 +414,11 @@ real regular-file, stable-identity, native-header, and open-boundary validation
 still runs. Regression tests remove the host execute bit and require each link
 target to exist at creation time, making both Windows failures reproducible on
 POSIX without `os.name` bypasses.
+
+A subsequent Windows run showed that target-first creation alone was
+insufficient: Windows rejects a relative link whose stored target uses the
+suite's POSIX separators. The fixture now creates that target from native path
+components, verifies that the native `readlink` result denotes the exact
+declared vector target, and exposes the declared POSIX spelling only at the
+protocol-byte boundary. CocoaSkills still performs the real tree walk,
+resolution, mutation checks, framing, and digest calculation.

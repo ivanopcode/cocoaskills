@@ -16,7 +16,7 @@ import os
 import stat
 from dataclasses import replace
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any
 from unittest import mock
@@ -1006,9 +1006,25 @@ def assert_build_source_case(
     raise AssertionError(f"unimplemented build-source vector {name!r}")
 
 
-def _materialize_toolchain_entries(root: Path, entries: list[JsonObject]) -> None:
+def _native_path_key(path: str | os.PathLike[str]) -> str:
+    return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+
+def _project_toolchain_link_target(
+    native_target: str,
+    protocol_target: str,
+) -> str:
+    assert native_target.replace("\\", "/") == protocol_target
+    return protocol_target
+
+
+def _materialize_toolchain_entries(
+    root: Path,
+    entries: list[JsonObject],
+) -> dict[str, str]:
     unknown = {entry["type"] for entry in entries} - {"directory", "file", "symlink"}
     assert not unknown, f"unknown toolchain entry types {sorted(unknown)!r}"
+    protocol_link_targets: dict[str, str] = {}
 
     # The vector is intentionally unsorted.  Materialize links last because
     # Windows classifies a new link from its target and may otherwise preserve
@@ -1026,7 +1042,43 @@ def _materialize_toolchain_entries(root: Path, entries: list[JsonObject]) -> Non
                 path.write_bytes(base64.b64decode(entry["content_base64"]))
             else:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.symlink_to(entry["target"])
+                protocol_target = entry["target"]
+                native_target = Path(*PurePosixPath(protocol_target).parts)
+                path.symlink_to(native_target)
+                protocol_link_targets[_native_path_key(path)] = protocol_target
+
+    return protocol_link_targets
+
+
+def _fingerprint_vector_toolchain(
+    root: Path,
+    go_version_stdout: bytes,
+    protocol_link_targets: dict[str, str],
+) -> toolchain.ToolchainIdentity:
+    native_readlink = os.readlink
+
+    def read_vector_link(
+        path: str | os.PathLike[str],
+        *,
+        dir_fd: int | None = None,
+    ) -> str:
+        if dir_fd is None:
+            native_target = native_readlink(path)
+        else:
+            native_target = native_readlink(path, dir_fd=dir_fd)
+        protocol_target = protocol_link_targets.get(_native_path_key(path))
+        if protocol_target is None:
+            return native_target
+        return _project_toolchain_link_target(native_target, protocol_target)
+
+    # The suite records link payloads with protocol (POSIX) separators.  The
+    # native fixture must use host separators so Windows can resolve the link;
+    # expose the verified protocol spelling only at the readlink boundary.
+    with mock.patch.object(toolchain.os, "readlink", new=read_vector_link):
+        return toolchain.fingerprint_toolchain(
+            root.resolve(),
+            go_version_stdout,
+        )
 
 
 def assert_toolchain_case(
@@ -1065,10 +1117,11 @@ def assert_toolchain_case(
         assert "sha256:" + hashlib.sha256(preimage).hexdigest() == case["content_sha256"]
         root = tmp_path / "goroot"
         root.mkdir()
-        _materialize_toolchain_entries(root, case["entries"])
-        identity = toolchain.fingerprint_toolchain(
-            root.resolve(),
+        protocol_link_targets = _materialize_toolchain_entries(root, case["entries"])
+        identity = _fingerprint_vector_toolchain(
+            root,
             base64.b64decode(case["go_version_stdout_base64"]),
+            protocol_link_targets,
         )
         assert identity.content_sha256 == case["content_sha256"]
         return
@@ -1079,16 +1132,20 @@ def assert_toolchain_case(
         for index, variant in enumerate(case["variants"]):
             root = tmp_path / f"toolchain-mode-{index}"
             root.mkdir()
-            _materialize_toolchain_entries(root, canonical["entries"])
+            protocol_link_targets = _materialize_toolchain_entries(
+                root,
+                canonical["entries"],
+            )
             for path in root.rglob("*"):
                 if not path.is_symlink():
                     path.chmod(int(variant["mode"], 8))
                     timestamp = 946684800 if index == 0 else 1893456000
                     os.utime(path, (timestamp, timestamp))
             identities.append(
-                toolchain.fingerprint_toolchain(
-                    root.resolve(),
+                _fingerprint_vector_toolchain(
+                    root,
                     base64.b64decode(canonical["go_version_stdout_base64"]),
+                    protocol_link_targets,
                 ).content_sha256
             )
         assert identities == [case["content_sha256"], case["content_sha256"]]
