@@ -46,6 +46,7 @@ from csk.builds import metadata
 from csk.builds import go_v1
 from csk.config import RegistryConfig
 from csk.source_identity import SourceIdentityError, parse_source_identity
+import protocol_lifecycle_observations as lifecycle_observations
 from protocol_conformance_adapters import (
     _BUILD_REJECTION_BINDINGS,
     _LIFECYCLE_CASE_FIELDS,
@@ -924,13 +925,18 @@ def test_rc6_process_path_observer_checks_every_argv_element(
     observed: list[Path] = []
 
     _record_process_paths(
-        ["/bin/sh", os.fspath(later), os.fspath(exact)],
+        ["/bin/sh", os.fspath(later), os.fspath(exact), "./entry/bin/tool"],
         observed,
         roots=(protected,),
         exact_paths={exact},
+        cwd=protected,
     )
 
-    assert observed == [later.resolve(strict=False), exact.resolve(strict=False)]
+    assert observed == [
+        later.resolve(strict=False),
+        exact.resolve(strict=False),
+        later.resolve(strict=False),
+    ]
 
 
 def test_rc6_project_identity_label_rejects_same_basename(
@@ -1632,6 +1638,105 @@ def test_rc6_publication_binding_detects_transient_partial_live_entry(
         clear_manager_lifecycle_observation_cache()
 
 
+def test_rc6_publication_binding_detects_alternate_rename_to_live_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exposures = 0
+
+    if os.name == "posix":
+        from csk.builds import cache_posix
+
+        original = cache_posix._rename_noreplace
+
+        def expose_via_rename_then_publish(
+            source_dir_fd: int,
+            source_name: str,
+            destination_dir_fd: int,
+            destination_name: str,
+        ) -> None:
+            nonlocal exposures
+            if re.fullmatch(r"[0-9a-f]{64}", destination_name):
+                partial_name = f"partial-{destination_name}"
+                os.mkdir(partial_name, mode=0o700, dir_fd=source_dir_fd)
+                partial_fd = os.open(
+                    partial_name,
+                    os.O_RDONLY | os.O_DIRECTORY,
+                    dir_fd=source_dir_fd,
+                )
+                try:
+                    witness_fd = os.open(
+                        "partial",
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=partial_fd,
+                    )
+                    os.close(witness_fd)
+                finally:
+                    os.close(partial_fd)
+                os.rename(
+                    partial_name,
+                    destination_name,
+                    src_dir_fd=source_dir_fd,
+                    dst_dir_fd=destination_dir_fd,
+                )
+                exposures += 1
+                exposed_fd = os.open(
+                    destination_name,
+                    os.O_RDONLY | os.O_DIRECTORY,
+                    dir_fd=destination_dir_fd,
+                )
+                try:
+                    os.unlink("partial", dir_fd=exposed_fd)
+                finally:
+                    os.close(exposed_fd)
+                os.rmdir(destination_name, dir_fd=destination_dir_fd)
+            original(
+                source_dir_fd,
+                source_name,
+                destination_dir_fd,
+                destination_name,
+            )
+
+        monkeypatch.setattr(
+            cache_posix,
+            "_rename_noreplace",
+            expose_via_rename_then_publish,
+        )
+    else:
+        from csk.builds import cache_windows
+
+        original_move = cache_windows._move_no_replace
+
+        def expose_via_rename_then_move(
+            source: Path,
+            destination: Path,
+        ) -> None:
+            nonlocal exposures
+            partial = source.with_name(f"partial-{source.name}")
+            partial.mkdir()
+            (partial / "partial").write_bytes(b"partial")
+            os.rename(partial, destination)
+            exposures += 1
+            shutil.rmtree(destination)
+            original_move(source, destination)
+
+        monkeypatch.setattr(
+            cache_windows,
+            "_move_no_replace",
+            expose_via_rename_then_move,
+        )
+
+    clear_manager_lifecycle_observation_cache()
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert exposures > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
 def test_rc6_cross_project_binding_detects_globally_serialized_private_builds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1665,6 +1770,199 @@ def test_rc6_cross_project_binding_detects_globally_serialized_private_builds(
         )
         assert calls > 0
         assert maximum == 1
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_cross_project_binding_requires_successful_publish_and_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failures = 0
+    original = installer._publish_planned_builds
+
+    def fail_real_cross_project_handoff(*args: Any, **kwargs: Any) -> Any:
+        nonlocal failures
+        manager_home = Path(args[0])
+        if "cross-project/private-overlap/home" in manager_home.as_posix():
+            failures += 1
+            raise installer.InstallError("observed cross-project handoff failure")
+        return original(*args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_publish_planned_builds",
+        fail_real_cross_project_handoff,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cross_project_cases",
+            "two-project-success-preserves-both-consumers",
+        )
+        assert failures > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_identity_binding_detects_operation_side_key_and_receipt_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_changes = 0
+    receipt_changes = 0
+    original_plan_builds = installer.build_planner.plan_builds
+    original_publish = installer._publish_planned_builds
+    original_publication = lifecycle_observations._publication
+
+    def publication_with_changed_operation_identity(
+        root: Path,
+        build_input: metadata.GoBuildInput,
+        payload: bytes,
+        *,
+        suffix: str,
+    ) -> Any:
+        scoped_roots = (
+            "cache/publish",
+            "cross-project/rollback/cache",
+            "transactions/commit-order/cache",
+        )
+        if any(fragment in root.as_posix() for fragment in scoped_roots):
+            build_input = replace(
+                build_input,
+                build_source=replace(
+                    build_input.build_source,
+                    content_sha256="sha256:" + "e" * 64,
+                ),
+            )
+        return original_publication(
+            root,
+            build_input,
+            payload,
+            suffix=suffix,
+        )
+
+    def plan_with_changed_operation_identity(*args: Any, **kwargs: Any) -> Any:
+        nonlocal key_changes
+        plans = original_plan_builds(*args, **kwargs)
+        manager_home = Path(kwargs["manager_home"])
+        scoped_homes = (
+            "cross-project/private-overlap/home",
+            "dry-run/compiled/home",
+            "gc/mark-sweep/home",
+            "status-repair/current/home",
+            "status-repair/matrix/",
+            "status-repair/repair/",
+        )
+        if (
+            not plans
+            or not any(
+                fragment in manager_home.as_posix()
+                for fragment in scoped_homes
+            )
+        ):
+            return plans
+        selected = next(
+            (
+                index
+                for index, plan in enumerate(plans)
+                if plan.command == "golden-tool"
+            ),
+            None,
+        )
+        if selected is None:
+            return plans
+        changed_input = replace(
+            plans[selected].input,
+            build_source=replace(
+                plans[selected].input.build_source,
+                content_sha256="sha256:" + "e" * 64,
+            ),
+        )
+        key_changes += 1
+        changed_plans = list(plans)
+        changed_plans[selected] = replace(
+            plans[selected],
+            input=changed_input,
+            cache_key=metadata.cache_key(changed_input),
+        )
+        return tuple(changed_plans)
+
+    def publish_with_changed_receipt(*args: Any, **kwargs: Any) -> Any:
+        nonlocal receipt_changes
+        published = original_publish(*args, **kwargs)
+        manager_home = Path(args[0])
+        if "private-builds/success/home" not in manager_home.as_posix():
+            return published
+        changed: dict[str, dict[str, Any]] = {}
+        for provider, builds in published.items():
+            changed[provider] = dict(builds)
+            if "golden-tool" not in builds:
+                continue
+            selected = builds["golden-tool"]
+            changed[provider]["golden-tool"] = replace(
+                selected,
+                marker=replace(
+                    selected.marker,
+                    receipt_sha256="sha256:" + "e" * 64,
+                ),
+            )
+            receipt_changes += 1
+        return changed
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer.build_planner,
+        "plan_builds",
+        plan_with_changed_operation_identity,
+    )
+    monkeypatch.setattr(
+        installer,
+        "_publish_planned_builds",
+        publish_with_changed_receipt,
+    )
+    monkeypatch.setattr(
+        lifecycle_observations,
+        "_publication",
+        publication_with_changed_operation_identity,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "cross_project_cases",
+            "two-project-success-preserves-both-consumers",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "dry_run_cases",
+            "compiled-cache-miss-is-read-only",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "gc_cases",
+            "locked-mark-and-sweep-compiled-cache",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "private_build_cases",
+            "all-misses-stage-and-verify-before-home-lock",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "status_cases",
+            "compiled-installation-current",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "repair_cases",
+            "repair-rebuilds-invalid-compiled-entry",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "cross_project_cases",
+            "successful-project-survives-other-project-rollback",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "transaction_cases",
+            "deterministic-target-order-and-consumer-last",
+        )
+        assert key_changes > 0
+        assert receipt_changes > 0
     finally:
         clear_manager_lifecycle_observation_cache()
 
@@ -1775,6 +2073,139 @@ def test_rc6_repair_binding_detects_untrusted_artifact_execution(
         )
         assert executed
         assert all(returncode == 0 for _path, returncode in executed)
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="the relative protected-artifact execution probe uses a POSIX script",
+)
+def test_rc6_repair_binding_detects_cwd_relative_artifact_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executions = 0
+    original = installer._build_private_misses
+
+    def execute_relative_untrusted_candidate(*args: Any, **kwargs: Any) -> Any:
+        nonlocal executions
+        config_value = args[0]
+        home = config_value.path.parent
+        if "status-repair/repair/04-untrusted-boundary" in home.as_posix():
+            entries = sorted((home / "builds" / "go-v1").glob("*"))
+            for entry in entries:
+                artifact = entry / "bin" / "golden-tool"
+                if not artifact.is_file():
+                    continue
+                completed = subprocess.run(
+                    ["./bin/golden-tool"],
+                    cwd=entry,
+                    check=False,
+                    capture_output=True,
+                )
+                assert completed.returncode == 0
+                executions += 1
+        return original(*args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_build_private_misses",
+        execute_relative_untrusted_candidate,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "repair_cases",
+            "repair-rebuilds-invalid-compiled-entry",
+        )
+        assert executions > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_read_only_bindings_detect_low_level_transient_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    currentness_mutations = 0
+    dry_run_mutations = 0
+    original_collect = status_mod._collect_resolved_scope
+    original_plan = installer.build_planner.plan_builds
+
+    def write_then_remove(parent: Path, name: str) -> None:
+        parent.mkdir(parents=True, exist_ok=True)
+        parent_state = parent.stat()
+        parent_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            descriptor = os.open(
+                name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=parent_fd,
+            )
+            try:
+                os.write(descriptor, b"transient persistent mutation\n")
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.unlink(name, dir_fd=parent_fd)
+        finally:
+            os.close(parent_fd)
+        os.utime(
+            parent,
+            ns=(parent_state.st_atime_ns, parent_state.st_mtime_ns),
+            follow_symlinks=False,
+        )
+
+    def mutate_currentness_then_collect(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        nonlocal currentness_mutations
+        home = config_value.path.parent
+        if (
+            "status-repair/current/home" in home.as_posix()
+            or "status-repair/matrix/" in home.as_posix()
+        ):
+            write_then_remove(home / "builds", "transient-currentness-write")
+            currentness_mutations += 1
+        return original_collect(config_value, *args, **kwargs)
+
+    def mutate_dry_run_after_plan(*args: Any, **kwargs: Any) -> Any:
+        nonlocal dry_run_mutations
+        plans = original_plan(*args, **kwargs)
+        home = Path(kwargs["manager_home"])
+        if "dry-run/compiled/home" in home.as_posix():
+            write_then_remove(home / "builds", "transient-dry-run-write")
+            dry_run_mutations += 1
+        return plans
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        status_mod,
+        "_collect_resolved_scope",
+        mutate_currentness_then_collect,
+    )
+    monkeypatch.setattr(
+        installer.build_planner,
+        "plan_builds",
+        mutate_dry_run_after_plan,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "status_cases",
+            "compiled-installation-current",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "status_cases",
+            "compiled-currentness-failure-matrix",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "dry_run_cases",
+            "compiled-cache-miss-is-read-only",
+        )
+        assert currentness_mutations >= 15
+        assert dry_run_mutations > 0
     finally:
         clear_manager_lifecycle_observation_cache()
 

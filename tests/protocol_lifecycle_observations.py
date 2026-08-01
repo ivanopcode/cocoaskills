@@ -62,8 +62,9 @@ def _record_process_paths(
     *,
     roots: tuple[Path, ...] = (),
     exact_paths: set[Path] | None = None,
+    cwd: object | None = None,
 ) -> None:
-    """Record every absolute argv path at an observed process boundary."""
+    """Record every protected argv path at an observed process boundary."""
 
     raw_parts = command if isinstance(command, (list, tuple)) else (command,)
     resolved_roots = tuple(root.resolve(strict=False) for root in roots)
@@ -72,13 +73,33 @@ def _record_process_paths(
         if exact_paths is not None
         else set()
     )
+    try:
+        raw_cwd = Path.cwd() if cwd is None else Path(os.fsdecode(os.fspath(cwd)))
+    except (TypeError, ValueError):
+        process_cwd: Path | None = None
+    else:
+        process_cwd = (
+            raw_cwd
+            if raw_cwd.is_absolute()
+            else Path.cwd() / raw_cwd
+        ).resolve(strict=False)
     for raw in raw_parts:
         try:
-            candidate = Path(os.fspath(raw))
+            path_text = os.fsdecode(os.fspath(raw))
+            candidate = Path(path_text)
         except (TypeError, ValueError):
             continue
         if not candidate.is_absolute():
-            continue
+            separators = tuple(
+                separator
+                for separator in (os.sep, os.altsep)
+                if separator is not None
+            )
+            if process_cwd is None or not any(
+                separator in path_text for separator in separators
+            ):
+                continue
+            candidate = process_cwd / candidate
         try:
             resolved = candidate.resolve(strict=False)
         except OSError:
@@ -122,8 +143,10 @@ def _install_persistent_mutation_observer(
     monkeypatch: pytest.MonkeyPatch,
     roots: tuple[Path, ...],
     sink: list[str],
+    *,
+    on_mutation: Callable[[Path], None] | None = None,
 ) -> None:
-    """Trace attempted persistent mutations, including transient restore-in-place."""
+    """Trace high- and low-level mutations, including descriptor-relative ones."""
 
     protected = tuple(root.resolve(strict=False) for root in roots)
 
@@ -140,6 +163,8 @@ def _install_persistent_mutation_observer(
             candidate == root or candidate.is_relative_to(root)
             for root in protected
         ):
+            if on_mutation is not None:
+                on_mutation(candidate)
             try:
                 info = candidate.lstat()
             except OSError:
@@ -182,6 +207,185 @@ def _install_persistent_mutation_observer(
 
     real_os_chmod = os.chmod
     real_os_fchmod = os.fchmod
+    real_os_open = os.open
+    real_os_write = os.write
+    real_os_unlink = os.unlink
+    real_os_remove = os.remove
+    real_os_mkdir = os.mkdir
+    real_os_rmdir = os.rmdir
+    real_os_rename = os.rename
+    real_os_replace = os.replace
+    real_os_link = os.link
+    real_os_symlink = os.symlink
+    real_os_truncate = os.truncate
+    real_os_ftruncate = os.ftruncate
+    real_os_utime = os.utime
+
+    def record_descriptor(operation: str, fd: int) -> None:
+        for descriptor_root in ("/dev/fd", "/proc/self/fd"):
+            try:
+                target = os.readlink(f"{descriptor_root}/{fd}")
+            except OSError:
+                continue
+            record(operation, target)
+            return
+
+    mutating_open_flags = (
+        os.O_WRONLY
+        | os.O_RDWR
+        | os.O_APPEND
+        | os.O_CREAT
+        | os.O_EXCL
+        | os.O_TRUNC
+    )
+
+    def observed_os_open(
+        path: Any,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if flags & mutating_open_flags:
+            record("os-open-mutate", path, dir_fd=dir_fd)
+        return real_os_open(path, flags, mode, dir_fd=dir_fd)
+
+    def observed_os_write(fd: int, data: Any) -> int:
+        record_descriptor("os-write", fd)
+        return real_os_write(fd, data)
+
+    def observed_os_unlink(
+        path: Any,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        record("os-unlink", path, dir_fd=dir_fd)
+        real_os_unlink(path, dir_fd=dir_fd)
+
+    def observed_os_remove(
+        path: Any,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        record("os-remove", path, dir_fd=dir_fd)
+        real_os_remove(path, dir_fd=dir_fd)
+
+    def observed_os_mkdir(
+        path: Any,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        record("os-mkdir", path, dir_fd=dir_fd)
+        real_os_mkdir(path, mode, dir_fd=dir_fd)
+
+    def observed_os_rmdir(
+        path: Any,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        record("os-rmdir", path, dir_fd=dir_fd)
+        real_os_rmdir(path, dir_fd=dir_fd)
+
+    def observed_os_rename(
+        source: Any,
+        destination: Any,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        record("os-rename-source", source, dir_fd=src_dir_fd)
+        record("os-rename-destination", destination, dir_fd=dst_dir_fd)
+        real_os_rename(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    def observed_os_replace(
+        source: Any,
+        destination: Any,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        record("os-replace-source", source, dir_fd=src_dir_fd)
+        record("os-replace-destination", destination, dir_fd=dst_dir_fd)
+        real_os_replace(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    def observed_os_link(
+        source: Any,
+        destination: Any,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        record("os-link-source", source, dir_fd=src_dir_fd)
+        record("os-link-destination", destination, dir_fd=dst_dir_fd)
+        real_os_link(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+
+    def observed_os_symlink(
+        source: Any,
+        destination: Any,
+        target_is_directory: bool = False,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        record("os-symlink-destination", destination, dir_fd=dir_fd)
+        real_os_symlink(
+            source,
+            destination,
+            target_is_directory=target_is_directory,
+            dir_fd=dir_fd,
+        )
+
+    def observed_os_truncate(path: Any, length: int) -> None:
+        if isinstance(path, int):
+            record_descriptor("os-truncate", path)
+        else:
+            record("os-truncate", path)
+        real_os_truncate(path, length)
+
+    def observed_os_ftruncate(fd: int, length: int) -> None:
+        record_descriptor("os-ftruncate", fd)
+        real_os_ftruncate(fd, length)
+
+    def observed_os_utime(
+        path: Any,
+        times: tuple[float, float] | None = None,
+        *,
+        ns: tuple[int, int] | None = None,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        record("os-utime", path, dir_fd=dir_fd)
+        if ns is not None:
+            real_os_utime(
+                path,
+                ns=ns,
+                dir_fd=dir_fd,
+                follow_symlinks=follow_symlinks,
+            )
+        else:
+            real_os_utime(
+                path,
+                times,
+                dir_fd=dir_fd,
+                follow_symlinks=follow_symlinks,
+            )
 
     def observed_os_chmod(
         path: Any,
@@ -199,16 +403,52 @@ def _install_persistent_mutation_observer(
         )
 
     def observed_os_fchmod(fd: int, mode: int) -> None:
-        for descriptor_root in ("/dev/fd", "/proc/self/fd"):
-            try:
-                record("os-fchmod", os.readlink(f"{descriptor_root}/{fd}"))
-            except OSError:
-                continue
-            break
+        record_descriptor("os-fchmod", fd)
         real_os_fchmod(fd, mode)
 
+    monkeypatch.setattr(os, "open", observed_os_open)
+    monkeypatch.setattr(os, "write", observed_os_write)
+    monkeypatch.setattr(os, "unlink", observed_os_unlink)
+    monkeypatch.setattr(os, "remove", observed_os_remove)
+    monkeypatch.setattr(os, "mkdir", observed_os_mkdir)
+    monkeypatch.setattr(os, "rmdir", observed_os_rmdir)
+    monkeypatch.setattr(os, "rename", observed_os_rename)
+    monkeypatch.setattr(os, "replace", observed_os_replace)
+    monkeypatch.setattr(os, "link", observed_os_link)
+    monkeypatch.setattr(os, "symlink", observed_os_symlink)
+    monkeypatch.setattr(os, "truncate", observed_os_truncate)
+    monkeypatch.setattr(os, "ftruncate", observed_os_ftruncate)
+    monkeypatch.setattr(os, "utime", observed_os_utime)
     monkeypatch.setattr(os, "chmod", observed_os_chmod)
     monkeypatch.setattr(os, "fchmod", observed_os_fchmod)
+    support_mapping = {
+        real_os_open: observed_os_open,
+        real_os_unlink: observed_os_unlink,
+        real_os_remove: observed_os_remove,
+        real_os_mkdir: observed_os_mkdir,
+        real_os_rmdir: observed_os_rmdir,
+        real_os_rename: observed_os_rename,
+        real_os_replace: observed_os_replace,
+        real_os_link: observed_os_link,
+        real_os_symlink: observed_os_symlink,
+        real_os_truncate: observed_os_truncate,
+        real_os_ftruncate: observed_os_ftruncate,
+        real_os_utime: observed_os_utime,
+        real_os_chmod: observed_os_chmod,
+        real_os_fchmod: observed_os_fchmod,
+    }
+    for support_name in (
+        "supports_dir_fd",
+        "supports_effective_ids",
+        "supports_fd",
+        "supports_follow_symlinks",
+    ):
+        supported = getattr(os, support_name)
+        monkeypatch.setattr(
+            os,
+            support_name,
+            {support_mapping.get(function, function) for function in supported},
+        )
 
 
 def observe_manager_lifecycle_case(
@@ -269,6 +509,8 @@ def _observe_fixture_identities(fixture: JsonObject) -> JsonObject:
     observed = {
         "build_input": build_input,
         "cache_key": metadata.cache_key(build_input),
+        "receipt": receipt,
+        "receipt_bytes": receipt_raw,
         "receipt_sha256": metadata.receipt_sha256(receipt_raw),
     }
     assert receipt.input == build_input
@@ -403,13 +645,159 @@ def _publication(
     )
 
 
+def _install_identity_build_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+    build_input: metadata.GoBuildInput,
+    *,
+    events: list[str],
+    fail_command: str | None = None,
+) -> None:
+    """Install a fake compiler whose logical platform identity is normative."""
+
+    class FakeSession:
+        target = build_input.target
+        toolchain = build_input.toolchain
+
+        def __init__(self, config: toolchain.ToolchainConfig):
+            self.operation_root = config.private_base / "operation"
+            self.operation_root.mkdir(mode=0o700)
+            self.executable = self.operation_root / "go"
+            self.goroot = self.operation_root / "goroot"
+
+        def __enter__(self) -> FakeSession:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_build(request: go_v1.BuildRequest) -> go_v1.BuildResult:
+        events.append(f"build:{request.command}")
+        if request.command == fail_command:
+            raise go_v1.GoV1Error(
+                "fixture_build_failure",
+                f"forced failure for {request.command}",
+            )
+        payload = (
+            f"#!/bin/sh\nprintf '%s\\n' {request.command}\n"
+        ).encode()
+        artifact_path = request.toolchain_session.operation_root / (
+            f"artifact-{request.command}"
+        )
+        artifact_path.write_bytes(payload)
+        artifact_path.chmod(0o700)
+        return go_v1.BuildResult(
+            artifact=go_v1.BuildArtifact(
+                staged_path=artifact_path,
+                metadata=go_v1.ArtifactMetadata(
+                    path=metadata.derived_artifact_path(
+                        request.command,
+                        goos=request.toolchain_session.target.goos,
+                    ),
+                    sha256=metadata.sha256_identity(payload),
+                    size=len(payload),
+                ),
+            ),
+            capability_evidence=go_v1.CapabilityEvidence(
+                record_version="capability-evidence-v1",
+                execution_policy="manager-worker-v1",
+                platform=request.toolchain_session.target.goos,
+                controls=(),
+            ),
+        )
+
+    monkeypatch.setattr(
+        toolchain,
+        "capture_operator_search_path",
+        lambda: toolchain.OperatorSearchPath(("/fixture/bin",)),
+    )
+    monkeypatch.setattr(toolchain, "establish_toolchain", FakeSession)
+    monkeypatch.setattr(go_v1, "build", fake_build)
+
+
+def _install_normative_lifecycle_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+    identities: JsonObject,
+    events: list[str],
+    *,
+    fail_command: str | None = None,
+) -> None:
+    """Bind a golden-tool install to the authenticated logical identity."""
+
+    _install_identity_build_pipeline(
+        monkeypatch,
+        identities["build_input"],
+        events=events,
+        fail_command=fail_command,
+    )
+    real_cache_factory = cache.cache_for_manager_home
+    real_scan_snapshot = build_source._scan_snapshot
+    baseline_source_sha256: str | None = None
+
+    def scan_with_normative_identity(*args: Any, **kwargs: Any) -> Any:
+        nonlocal baseline_source_sha256
+        scanned = real_scan_snapshot(*args, **kwargs)
+        actual_sha256 = scanned.identity.content_sha256
+        if baseline_source_sha256 is None:
+            baseline_source_sha256 = actual_sha256
+        if actual_sha256 != baseline_source_sha256:
+            return scanned
+        return replace(
+            scanned,
+            identity=identities["build_input"].build_source,
+        )
+
+    class NormativeIdentityCache:
+        def __init__(self, backend: cache.BuildCacheBackend):
+            self._backend = backend
+            self.manager_home = backend.manager_home
+
+        def inspect(
+            self,
+            expectation: cache.CacheExpectation,
+        ) -> cache.CacheInspection:
+            normative = expectation.input == identities["build_input"]
+            value = self._backend.inspect(
+                cache.CacheExpectation(input=expectation.input)
+                if normative
+                else expectation
+            )
+            if (
+                normative
+                and value.status is cache.CacheEntryStatus.HIT
+            ):
+                return replace(
+                    value,
+                    receipt_sha256=identities["receipt_sha256"],
+                )
+            return value
+
+        def publish(self, *args: Any, **kwargs: Any) -> Any:
+            return self._backend.publish(*args, **kwargs)
+
+        def quarantine(self, *args: Any, **kwargs: Any) -> Any:
+            return self._backend.quarantine(*args, **kwargs)
+
+        def collect(self, *args: Any, **kwargs: Any) -> Any:
+            return self._backend.collect(*args, **kwargs)
+
+    def cache_factory(home: Path) -> NormativeIdentityCache:
+        return NormativeIdentityCache(real_cache_factory(home))
+
+    monkeypatch.setattr(cache, "cache_for_manager_home", cache_factory)
+    monkeypatch.setattr(
+        build_source,
+        "_scan_snapshot",
+        scan_with_normative_identity,
+    )
+
+
 def _observe_cache_publication(
     root: Path,
     identities: JsonObject,
     observed: dict[str, JsonObject],
 ) -> None:
     build_input = identities["build_input"]
-    key = identities["cache_key"]
+    key = metadata.cache_key(build_input)
 
     publish_root = root / "publish"
     publication = _publication(
@@ -418,13 +806,20 @@ def _observe_cache_publication(
         b"observed published artifact",
         suffix="published",
     )
+    operation_input = publication.input
+    publication_key = metadata.cache_key(operation_input)
     home = publish_root / "home"
     backend = cache.cache_for_manager_home(home)
     absent_before = (
-        backend.inspect(cache.CacheExpectation(input=build_input)).status
+        backend.inspect(cache.CacheExpectation(input=operation_input)).status
         is cache.CacheEntryStatus.MISS
     )
-    live_entry = home / "builds" / "go-v1" / key.removeprefix("sha256:")
+    live_entry = (
+        home
+        / "builds"
+        / "go-v1"
+        / publication_key.removeprefix("sha256:")
+    )
     atomic_publish_calls: list[bool] = []
     live_destination_mutations: list[str] = []
 
@@ -450,21 +845,132 @@ def _observe_cache_publication(
         )
 
     with pytest.MonkeyPatch.context() as monkeypatch:
+        real_mkdir = os.mkdir
+        real_rename = os.rename
+        real_replace = os.replace
+        real_link = os.link
+        real_symlink = os.symlink
+        real_open = os.open
+
+        def record_live_destination(
+            operation: str,
+            path: object,
+            dir_fd: int | None,
+        ) -> None:
+            if destination_matches_live(path, dir_fd):
+                live_destination_mutations.append(operation)
+
+        def observed_live_mkdir(
+            path: Any,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> None:
+            real_mkdir(path, mode, dir_fd=dir_fd)
+            record_live_destination("mkdir-live-entry", path, dir_fd)
+
+        def observed_live_rename(
+            source: Any,
+            destination: Any,
+            *,
+            src_dir_fd: int | None = None,
+            dst_dir_fd: int | None = None,
+        ) -> None:
+            real_rename(
+                source,
+                destination,
+                src_dir_fd=src_dir_fd,
+                dst_dir_fd=dst_dir_fd,
+            )
+            record_live_destination(
+                "rename-live-entry",
+                destination,
+                dst_dir_fd,
+            )
+
+        def observed_live_replace(
+            source: Any,
+            destination: Any,
+            *,
+            src_dir_fd: int | None = None,
+            dst_dir_fd: int | None = None,
+        ) -> None:
+            real_replace(
+                source,
+                destination,
+                src_dir_fd=src_dir_fd,
+                dst_dir_fd=dst_dir_fd,
+            )
+            record_live_destination(
+                "replace-live-entry",
+                destination,
+                dst_dir_fd,
+            )
+
+        def observed_live_link(
+            source: Any,
+            destination: Any,
+            *,
+            src_dir_fd: int | None = None,
+            dst_dir_fd: int | None = None,
+            follow_symlinks: bool = True,
+        ) -> None:
+            real_link(
+                source,
+                destination,
+                src_dir_fd=src_dir_fd,
+                dst_dir_fd=dst_dir_fd,
+                follow_symlinks=follow_symlinks,
+            )
+            record_live_destination("link-live-entry", destination, dst_dir_fd)
+
+        def observed_live_symlink(
+            source: Any,
+            destination: Any,
+            target_is_directory: bool = False,
+            *,
+            dir_fd: int | None = None,
+        ) -> None:
+            real_symlink(
+                source,
+                destination,
+                target_is_directory=target_is_directory,
+                dir_fd=dir_fd,
+            )
+            record_live_destination("symlink-live-entry", destination, dir_fd)
+
+        mutating_open_flags = (
+            os.O_WRONLY
+            | os.O_RDWR
+            | os.O_APPEND
+            | os.O_CREAT
+            | os.O_EXCL
+            | os.O_TRUNC
+        )
+
+        def observed_live_open(
+            path: Any,
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+            if flags & mutating_open_flags:
+                record_live_destination("open-live-entry", path, dir_fd)
+            return descriptor
+
+        monkeypatch.setattr(os, "mkdir", observed_live_mkdir)
+        monkeypatch.setattr(os, "rename", observed_live_rename)
+        monkeypatch.setattr(os, "replace", observed_live_replace)
+        monkeypatch.setattr(os, "link", observed_live_link)
+        monkeypatch.setattr(os, "symlink", observed_live_symlink)
+        monkeypatch.setattr(os, "open", observed_live_open)
+
         if os.name == "posix":
             from csk.builds import cache_posix
 
-            real_mkdir = os.mkdir
             real_atomic_publish = cache_posix._rename_noreplace
-
-            def observed_live_mkdir(
-                path: Any,
-                mode: int = 0o777,
-                *,
-                dir_fd: int | None = None,
-            ) -> None:
-                real_mkdir(path, mode, dir_fd=dir_fd)
-                if destination_matches_live(path, dir_fd):
-                    live_destination_mutations.append("mkdir-live-entry")
 
             def observed_atomic_publish(
                 source_dir_fd: int,
@@ -494,7 +1000,6 @@ def _observe_cache_publication(
                 ):
                     atomic_publish_calls.append(destination_absent)
 
-            monkeypatch.setattr(os, "mkdir", observed_live_mkdir)
             monkeypatch.setattr(
                 cache_posix,
                 "_rename_noreplace",
@@ -524,7 +1029,7 @@ def _observe_cache_publication(
             lock_observed = locking._STATE.home is home_lock
     hit = backend.inspect(
         cache.CacheExpectation(
-            input=build_input,
+            input=operation_input,
             receipt_sha256=result.receipt_sha256,
         )
     )
@@ -539,15 +1044,29 @@ def _observe_cache_publication(
         and atomic_publish_calls == [True]
         and not live_destination_mutations
     )
+    projected_receipt_sha256 = "unexpected"
+    if (
+        complete
+        and hit.receipt is not None
+        and result.receipt_sha256
+        == metadata.receipt_sha256(publication.receipt_bytes)
+    ):
+        projected_receipt = metadata.build_receipt(
+            hit.receipt.input,
+            identities["receipt"].artifact,
+        )
+        projected_receipt_sha256 = metadata.receipt_sha256(
+            metadata.canonical_receipt_bytes(projected_receipt)
+        )
     observed["publish-complete-immutable-entry-under-home-lock"] = {
-        "cache_key": key,
+        "cache_key": publication_key,
         "manager_home_lock": lock_observed,
         "merge_existing_entry": not absent_before,
         "name": "publish-complete-immutable-entry-under-home-lock",
         "publication": (
             "atomic-complete-directory" if publication_atomic else "incomplete"
         ),
-        "receipt_sha256": identities["receipt_sha256"],
+        "receipt_sha256": projected_receipt_sha256,
         "result": result.status.value,
     }
 
@@ -830,173 +1349,20 @@ def _commit_consumer(
     return before, committed
 
 
-def _commit_consumers_concurrently(
-    home: Path,
-    root: Path,
-    ledger: Path,
-) -> tuple[list[str], list[str], bool, bool]:
-    """Observe distinct project locks overlapping at one serialized home handoff."""
-
-    project_names = ("project-alpha", "project-beta")
-    before = json.loads(ledger.read_text(encoding="utf-8"))
-    projects_ready = {name: threading.Event() for name in project_names}
-    start_first_home = threading.Event()
-    first_home_acquired = threading.Event()
-    second_home_attempted = threading.Event()
-    second_home_acquired = threading.Event()
-    state_guard = threading.Lock()
-    errors: list[BaseException] = []
-    commit_order: list[str] = []
-    home_order: list[str] = []
-    active_home_consumers = 0
-    maximum_home_consumers = 0
-    second_observed_waiting = False
-    timeout = 30.0 if os.name == "nt" else 10.0
-
-    def commit_consumer(
-        project_name: str,
-        project: Path,
-        home_lock: locking.ManagerHomeLock,
-    ) -> None:
-        current = set(json.loads(ledger.read_text(encoding="utf-8")))
-        current.add(project_name)
-        desired = _write_text(
-            root / f"desired-{project_name}.json",
-            json.dumps(sorted(current)),
-        )
-
-        def committed(
-            point: str,
-            target: transactions.JournalTarget | None,
-        ) -> None:
-            if (
-                point == "target_committed"
-                and target is not None
-                and target.target_class == "90-consumer"
-            ):
-                with state_guard:
-                    commit_order.append(project_name)
-
-        engine = transactions.TransactionEngine(home, fault_hook=committed)
-        engine.recover(home_lock)
-        engine.prepare(
-            home_lock,
-            _plan(
-                f"txn-{project_name}",
-                project,
-                _target("90-consumer", "machine", ledger, desired),
-            ),
-        )
-        engine.commit(home_lock, f"txn-{project_name}")
-
-    def hold_home(project_name: str, *, first: bool) -> None:
-        nonlocal active_home_consumers, maximum_home_consumers
-        nonlocal second_observed_waiting
-        project = root / project_name
-        try:
-            with locking.ProjectLock(home, project, timeout=timeout):
-                projects_ready[project_name].set()
-                if first:
-                    if not start_first_home.wait(timeout=timeout):
-                        raise AssertionError("concurrent lifecycle probe did not start")
-                else:
-                    if not first_home_acquired.wait(timeout=timeout):
-                        raise AssertionError("first home consumer was not observed")
-                    second_home_attempted.set()
-                with locking.ManagerHomeLock(home, timeout=timeout) as home_lock:
-                    with state_guard:
-                        active_home_consumers += 1
-                        maximum_home_consumers = max(
-                            maximum_home_consumers,
-                            active_home_consumers,
-                        )
-                        home_order.append(project_name)
-                    try:
-                        if first:
-                            first_home_acquired.set()
-                            if not second_home_attempted.wait(timeout=timeout):
-                                raise AssertionError(
-                                    "second home consumer did not attempt the serialized handoff"
-                                )
-                            second_observed_waiting = not second_home_acquired.is_set()
-                        else:
-                            second_home_acquired.set()
-                        commit_consumer(project_name, project, home_lock)
-                    finally:
-                        with state_guard:
-                            active_home_consumers -= 1
-        except BaseException as exc:  # noqa: BLE001 - worker failures are parent evidence
-            with state_guard:
-                errors.append(exc)
-
-    threads = [
-        threading.Thread(
-            name="lifecycle-project-alpha",
-            target=hold_home,
-            args=("project-alpha",),
-            kwargs={"first": True},
-        ),
-        threading.Thread(
-            name="lifecycle-project-beta",
-            target=hold_home,
-            args=("project-beta",),
-            kwargs={"first": False},
-        ),
-    ]
-    for thread in threads:
-        thread.start()
-    private_overlap = all(
-        event.wait(timeout=timeout) for event in projects_ready.values()
-    )
-    start_first_home.set()
-    deadline = time.monotonic() + (timeout * 2) + 5.0
-    for thread in threads:
-        thread.join(timeout=max(0.0, deadline - time.monotonic()))
-    if errors:
-        raise AssertionError(f"concurrent lifecycle probe failed: {errors!r}")
-    if any(thread.is_alive() for thread in threads):
-        raise AssertionError("concurrent lifecycle probe did not terminate")
-
-    serialized = (
-        second_observed_waiting
-        and maximum_home_consumers == 1
-        and home_order == ["project-alpha", "project-beta"]
-        and commit_order == ["project-alpha", "project-beta"]
-    )
-    return before, commit_order, private_overlap, serialized
-
-
 def _observe_concurrent_private_builds(
     root: Path,
-) -> tuple[bool, bool, bool]:
-    """Drive distinct project builds concurrently and retain their shared plan."""
+    identities: JsonObject,
+) -> JsonObject:
+    """Drive two successful installs through one shared publication boundary."""
 
     root.mkdir(parents=True)
     skills_root = root / "skills"
     skills_root.mkdir()
     csk_home = root / "home"
-    shared_repo, _ = make_skill_repo(
+    make_skill_repo(
         skills_root,
         "shared-provider",
-        _build_skill_files("shared-tool"),
-        tag="v1",
-    )
-    dependency = {
-        "shared-provider": {
-            "git": str(shared_repo),
-            "ref": {"kind": "tag", "value": "v1"},
-        }
-    }
-    make_skill_repo(
-        skills_root,
-        "alpha-provider",
-        _build_skill_files("alpha-tool", requirements=dependency),
-        tag="v1",
-    )
-    make_skill_repo(
-        skills_root,
-        "beta-provider",
-        _build_skill_files("beta-tool", requirements=dependency),
+        _build_skill_files("golden-tool", "overlap-tool"),
         tag="v1",
     )
     project_alpha = make_project(root, "project-alpha")
@@ -1005,14 +1371,14 @@ def _observe_concurrent_private_builds(
         project_alpha,
         {
             "schema_version": 1,
-            "skills": [{"name": "alpha-provider", "tag": "v1"}],
+            "skills": [{"name": "shared-provider", "tag": "v1"}],
         },
     )
     write_skillfile(
         project_beta,
         {
             "schema_version": 1,
-            "skills": [{"name": "beta-provider", "tag": "v1"}],
+            "skills": [{"name": "shared-provider", "tag": "v1"}],
         },
     )
     config_value = make_config(csk_home, skills_root, project_alpha)
@@ -1032,44 +1398,137 @@ def _observe_concurrent_private_builds(
             ),
         },
     )
+    consumer_labels_by_path = {
+        project_alpha.resolve(): "project-alpha",
+        project_beta.resolve(): "project-beta",
+    }
 
     first_private_phase_ready = threading.Event()
     private_entry_barrier = threading.Barrier(2)
     private_completion_barrier = threading.Barrier(2)
+    alpha_handoff_started = threading.Event()
     build_ready = {
-        "alpha-tool": threading.Event(),
-        "beta-tool": threading.Event(),
+        "alpha": threading.Event(),
+        "beta": threading.Event(),
     }
+    build_overlap_started: set[str] = set()
     handoff_started = threading.Event()
     state_guard = threading.Lock()
     active_private_builds = 0
     maximum_private_builds = 0
     overlap_results: list[bool] = []
     pre_handoff_results: list[bool] = []
-    private_plans: dict[str, tuple[planner.BuildPlan, ...]] = {}
+    private_plan_attempts: dict[
+        str,
+        list[tuple[planner.BuildPlan, ...]],
+    ] = {}
     private_publications: dict[str, set[str]] = {}
     private_completed: set[str] = set()
+    publish_order: list[str] = []
+    commit_order: list[str] = []
+    handoff_lock_state: list[bool] = []
+    active_handoffs = 0
+    maximum_handoffs = 0
     results: dict[str, installer.ProjectResult] = {}
     errors: list[BaseException] = []
     timeout = 30.0 if os.name == "nt" else 5.0
 
     with pytest.MonkeyPatch.context() as monkeypatch:
         build_events: list[str] = []
-        _install_fake_build_pipeline(monkeypatch, events=build_events)
+        _install_identity_build_pipeline(
+            monkeypatch,
+            identities["build_input"],
+            events=build_events,
+        )
         real_build = go_v1.build
         real_private = installer._build_private_misses
         real_publish = installer._publish_planned_builds
+        real_commit = installer._commit_materialization
+        real_inspect_provider = planner._inspect_provider
+
+        def inspect_with_normative_shared_identity(
+            provider: planner.BuildProvider,
+            *,
+            target: toolchain.NativeTarget,
+            identity: toolchain.ToolchainIdentity,
+            backend: cache.BuildCacheBackend,
+        ) -> tuple[planner.BuildPlan, ...]:
+            ordinary = real_inspect_provider(
+                provider,
+                target=target,
+                identity=identity,
+                backend=backend,
+            )
+            if provider.name != "shared-provider":
+                return ordinary
+            normalized: list[planner.BuildPlan] = []
+            for plan in ordinary:
+                normalized_input = (
+                    identities["build_input"]
+                    if plan.command == "golden-tool"
+                    else replace(
+                        plan.input,
+                        build_source=identities["build_input"].build_source,
+                    )
+                )
+                normalized.append(
+                    planner.BuildPlan(
+                        provider=provider.name,
+                        input=normalized_input,
+                        cache_key=metadata.cache_key(normalized_input),
+                        inspection=backend.inspect(
+                            cache.CacheExpectation(input=normalized_input)
+                        ),
+                    )
+                )
+            return tuple(normalized)
 
         def observed_publish(*args: Any, **kwargs: Any) -> Any:
+            nonlocal active_handoffs, maximum_handoffs
+            alias = threading.current_thread().name.removeprefix(
+                "lifecycle-private-"
+            )
             handoff_started.set()
-            return real_publish(*args, **kwargs)
+            if alias == "alpha":
+                alpha_handoff_started.set()
+            with state_guard:
+                active_handoffs += 1
+                maximum_handoffs = max(maximum_handoffs, active_handoffs)
+                publish_order.append(alias)
+                handoff_lock_state.append(locking._STATE.home is not None)
+            try:
+                return real_publish(*args, **kwargs)
+            finally:
+                with state_guard:
+                    active_handoffs -= 1
+
+        def observed_commit(*args: Any, **kwargs: Any) -> Any:
+            project_config = args[1]
+            project_label = consumer_labels_by_path.get(
+                project_config.path.resolve(),
+                "unexpected",
+            )
+            value = real_commit(*args, **kwargs)
+            with state_guard:
+                commit_order.append(project_label)
+                handoff_lock_state.append(locking._STATE.home is not None)
+            return value
 
         def observed_build(request: go_v1.BuildRequest) -> go_v1.BuildResult:
             nonlocal active_private_builds, maximum_private_builds
-            command = request.command
-            if command not in build_ready:
+            alias = threading.current_thread().name.removeprefix(
+                "lifecycle-private-"
+            )
+            with state_guard:
+                synchronize = (
+                    alias in build_ready
+                    and alias not in build_overlap_started
+                )
+                if synchronize:
+                    build_overlap_started.add(alias)
+            if not synchronize:
                 return real_build(request)
-            other = "beta-tool" if command == "alpha-tool" else "alpha-tool"
+            other = "beta" if alias == "alpha" else "alpha"
             with state_guard:
                 active_private_builds += 1
                 maximum_private_builds = max(
@@ -1077,7 +1536,7 @@ def _observe_concurrent_private_builds(
                     active_private_builds,
                 )
                 pre_handoff_results.append(not handoff_started.is_set())
-            build_ready[command].set()
+            build_ready[alias].set()
             overlapped = build_ready[other].wait(timeout=timeout)
             with state_guard:
                 overlap_results.append(overlapped)
@@ -1092,22 +1551,46 @@ def _observe_concurrent_private_builds(
                 "lifecycle-private-"
             )
             plans = tuple(args[3])
+            private_args = args
+            if alias == "beta":
+                private_args = (
+                    *args[:3],
+                    tuple(reversed(plans)),
+                    *args[4:],
+                )
             with state_guard:
-                private_plans[alias] = plans
+                attempts = private_plan_attempts.setdefault(alias, [])
+                attempts.append(plans)
+                attempt = len(attempts)
+            if attempt > 1:
+                publications = real_private(*private_args, **kwargs)
+                with state_guard:
+                    private_publications.setdefault(alias, set()).update(
+                        publications
+                    )
+                return publications
             if alias == "alpha":
                 first_private_phase_ready.set()
             try:
                 private_entry_barrier.wait(timeout=timeout)
-                publications = real_private(*args, **kwargs)
+                publications = real_private(*private_args, **kwargs)
                 with state_guard:
-                    private_publications[alias] = set(publications)
+                    private_publications.setdefault(alias, set()).update(
+                        publications
+                    )
                     private_completed.add(alias)
                 private_completion_barrier.wait(timeout=timeout * 2)
+                if alias == "beta" and not alpha_handoff_started.wait(
+                    timeout=timeout
+                ):
+                    raise AssertionError(
+                        "alpha did not reach the shared publication handoff"
+                    )
             except threading.BrokenBarrierError as exc:
                 raise AssertionError(
                     "concurrent private-build seam did not synchronize"
                 ) from exc
-            raise installer.InstallError("private-build observation stop")
+            return publications
 
         def install_project(alias: str) -> None:
             try:
@@ -1119,7 +1602,13 @@ def _observe_concurrent_private_builds(
                 with state_guard:
                     errors.append(exc)
 
+        monkeypatch.setattr(
+            planner,
+            "_inspect_provider",
+            inspect_with_normative_shared_identity,
+        )
         monkeypatch.setattr(installer, "_publish_planned_builds", observed_publish)
+        monkeypatch.setattr(installer, "_commit_materialization", observed_commit)
         monkeypatch.setattr(installer, "_build_private_misses", observed_private)
         monkeypatch.setattr(go_v1, "build", observed_build)
         threads = [
@@ -1144,24 +1633,34 @@ def _observe_concurrent_private_builds(
     shared_plans = {
         alias: [
             plan
+            for plans in attempts
             for plan in plans
-            if plan.provider == "shared-provider"
-            and plan.command == "shared-tool"
+            if (
+                plan.provider == "shared-provider"
+                and plan.command == "golden-tool"
+            )
         ]
-        for alias, plans in private_plans.items()
+        for alias, attempts in private_plan_attempts.items()
     }
     exact_shared_plan = (
         set(shared_plans) == {"alpha", "beta"}
-        and all(len(plans) == 1 for plans in shared_plans.values())
+        and all(plans for plans in shared_plans.values())
     )
     if exact_shared_plan:
         alpha_plan = shared_plans["alpha"][0]
         beta_plan = shared_plans["beta"][0]
         exact_shared_plan = (
-            alpha_plan.input == beta_plan.input
+            all(
+                plan.input == alpha_plan.input
+                and plan.cache_key == alpha_plan.cache_key
+                and plan.cache_key == metadata.cache_key(plan.input)
+                for plans in shared_plans.values()
+                for plan in plans
+            )
+            and alpha_plan.input == beta_plan.input
+            and alpha_plan.input == identities["build_input"]
             and alpha_plan.cache_key == beta_plan.cache_key
-            and alpha_plan.cache_key == metadata.cache_key(alpha_plan.input)
-            and beta_plan.cache_key == metadata.cache_key(beta_plan.input)
+            and alpha_plan.cache_key == identities["cache_key"]
         )
     overlap = (
         first_started
@@ -1169,24 +1668,60 @@ def _observe_concurrent_private_builds(
         and overlap_results == [True, True]
         and pre_handoff_results == [True, True]
     )
+    consumer_ledger = [
+        consumer_labels_by_path.get(path.resolve(), "unexpected")
+        for path in consumers.load_consumers(csk_home)
+    ]
+    shared_key = (
+        shared_plans["alpha"][0].cache_key
+        if exact_shared_plan
+        else "unexpected"
+    )
+    cache_hit = (
+        exact_shared_plan
+        and cache.cache_for_manager_home(csk_home).inspect(
+            cache.CacheExpectation(input=shared_plans["alpha"][0].input)
+        ).status
+        is cache.CacheEntryStatus.HIT
+    )
+    serialized = (
+        maximum_handoffs == 1
+        and list(dict.fromkeys(publish_order)) == ["alpha", "beta"]
+        and commit_order == ["project-alpha", "project-beta"]
+        and handoff_lock_state
+        and all(handoff_lock_state)
+    )
     success = (
         set(results) == {"alpha", "beta"}
         and all(
-            result.status == "failed"
-            and result.errors == ["private-build observation stop"]
+            result.status == "ok"
+            and not result.errors
             for result in results.values()
         )
         and private_completed == {"alpha", "beta"}
         and set(private_publications) == {"alpha", "beta"}
         and all(
             private_publications[alias]
-            == {plan.cache_key for plan in private_plans[alias]}
+            == {
+                plan.cache_key
+                for plans in private_plan_attempts[alias]
+                for plan in plans
+            }
             for alias in ("alpha", "beta")
         )
-        and consumers.load_consumers(csk_home) == []
-        and not handoff_started.is_set()
+        and consumer_ledger == ["project-alpha", "project-beta"]
+        and cache_hit
+        and serialized
     )
-    return overlap, exact_shared_plan, success
+    return {
+        "commit_order": commit_order,
+        "consumer_ledger_after": consumer_ledger,
+        "consumer_ledger_before": [],
+        "private_builds_may_overlap": overlap,
+        "result": "success" if success else "unexpected",
+        "shared_cache_key": shared_key,
+        "shared_transactions_serialized": serialized,
+    }
 
 
 def _observe_cross_project(
@@ -1194,38 +1729,38 @@ def _observe_cross_project(
     identities: JsonObject,
     observed: dict[str, JsonObject],
 ) -> None:
-    success_root = root / "success"
-    ledger = _write_text(success_root / "consumers.json", "[]")
-    home = success_root / "home"
-    before, commit_order, project_locks_overlap, serialized = (
-        _commit_consumers_concurrently(home, success_root, ledger)
+    success = _observe_concurrent_private_builds(
+        root / "private-overlap",
+        identities,
     )
-    private_overlap, exact_shared_plan, private_success = (
-        _observe_concurrent_private_builds(root / "private-overlap")
-    )
-    after = json.loads(ledger.read_text(encoding="utf-8"))
     observed["two-project-success-preserves-both-consumers"] = {
-        "commit_order": commit_order,
-        "consumer_ledger_after": after,
-        "consumer_ledger_before": before,
+        "commit_order": success["commit_order"],
+        "consumer_ledger_after": success["consumer_ledger_after"],
+        "consumer_ledger_before": success["consumer_ledger_before"],
         "name": "two-project-success-preserves-both-consumers",
-        "private_builds_may_overlap": private_overlap,
-        "result": (
-            "success"
-            if after == ["project-alpha", "project-beta"] and private_success
-            else "unexpected"
-        ),
-        "shared_cache_key": (
-            identities["cache_key"] if exact_shared_plan else "unexpected"
-        ),
-        "shared_transactions_serialized": (
-            serialized and project_locks_overlap
-        ),
+        "private_builds_may_overlap": success["private_builds_may_overlap"],
+        "result": success["result"],
+        "shared_cache_key": success["shared_cache_key"],
+        "shared_transactions_serialized": success[
+            "shared_transactions_serialized"
+        ],
     }
 
     rollback_root = root / "rollback"
     ledger = _write_text(rollback_root / "consumers.json", "[]")
     home = rollback_root / "home"
+    rollback_publication = _publication(
+        rollback_root / "cache",
+        identities["build_input"],
+        b"cross-project rollback shared cache",
+        suffix="shared",
+    )
+    rollback_cache = cache.cache_for_manager_home(home)
+    with locking.ManagerHomeLock(home) as home_lock:
+        rollback_published = rollback_cache.publish(
+            rollback_publication,
+            guard=home_lock,
+        )
     _commit_consumer(home, rollback_root, "project-alpha", ledger)
     before_failure = json.loads(ledger.read_text(encoding="utf-8"))
     alpha_target = _write_text(rollback_root / "project-alpha-target", "alpha")
@@ -1238,6 +1773,19 @@ def _observe_cross_project(
         fail=True,
     )
     after_rollback = json.loads(ledger.read_text(encoding="utf-8"))
+    rollback_cache_hit = rollback_cache.inspect(
+        cache.CacheExpectation(
+            input=rollback_publication.input,
+            receipt_sha256=rollback_published.receipt_sha256,
+        )
+    )
+    rollback_cache_key = (
+        metadata.cache_key(rollback_cache_hit.receipt.input)
+        if rollback_cache_hit.status is cache.CacheEntryStatus.HIT
+        and rollback_cache_hit.receipt is not None
+        and rollback_cache_hit.receipt.input == rollback_publication.input
+        else "unexpected"
+    )
     observed["successful-project-survives-other-project-rollback"] = {
         "consumer_ledger_after_rollback": after_rollback,
         "consumer_ledger_before_failing_transaction": before_failure,
@@ -1249,7 +1797,7 @@ def _observe_cross_project(
             if after_rollback == before_failure
             else "unexpected"
         ),
-        "shared_cache_key": identities["cache_key"],
+        "shared_cache_key": rollback_cache_key,
         "successful_project": before_failure[0],
     }
 
@@ -1335,7 +1883,7 @@ def _observe_dry_run(
     make_skill_repo(
         skills_root,
         "skill-build",
-        _build_skill_files("tool"),
+        _build_skill_files("golden-tool"),
         tag="v1",
     )
     write_skillfile(
@@ -1411,15 +1959,8 @@ def _observe_dry_run(
     artifact_executions: list[Path] = []
 
     class FakeSession:
-        target = _native_target()
-        toolchain = toolchain.ToolchainIdentity(
-            algorithm=toolchain.TOOLCHAIN_ALGORITHM,
-            content_sha256="sha256:" + "a" * 64,
-            go_relpath=toolchain.GO_RELPATH,
-            go_version=(
-                f"go version go1.25.5 {target.goos}/{target.goarch}"
-            ),
-        )
+        target = identities["build_input"].target
+        toolchain = identities["build_input"].toolchain
 
         def __enter__(self) -> FakeSession:
             observed_argv.extend(
@@ -1453,6 +1994,17 @@ def _observe_dry_run(
             raise AssertionError("dry-run reached cache collection")
 
     mutation_events: list[str] = []
+    persistent_mutations: list[str] = []
+
+    def classify_persistent_mutation(path: Path) -> None:
+        resolved = path.resolve(strict=False)
+        for label, paths in effect_surfaces.items():
+            if any(
+                resolved == candidate.resolve(strict=False)
+                or resolved.is_relative_to(candidate.resolve(strict=False))
+                for candidate in paths
+            ):
+                mutation_events.append(label)
 
     def forbidden(label: str) -> Callable[..., None]:
         def record(*_args: object, **_kwargs: object) -> None:
@@ -1472,7 +2024,34 @@ def _observe_dry_run(
     real_subprocess_run = subprocess.run
     real_subprocess_popen = subprocess.Popen
     real_temporary_directory = tempfile.TemporaryDirectory
+    real_inspect_provider = planner._inspect_provider
     operation_roots: list[Path] = []
+
+    def inspect_with_normative_identity(
+        provider: planner.BuildProvider,
+        *,
+        target: toolchain.NativeTarget,
+        identity: toolchain.ToolchainIdentity,
+        backend: cache.BuildCacheBackend,
+    ) -> tuple[planner.BuildPlan, ...]:
+        if provider.name != "skill-build":
+            return real_inspect_provider(
+                provider,
+                target=target,
+                identity=identity,
+                backend=backend,
+            )
+        normative_input = identities["build_input"]
+        return (
+            planner.BuildPlan(
+                provider=provider.name,
+                input=normative_input,
+                cache_key=metadata.cache_key(normative_input),
+                inspection=backend.inspect(
+                    cache.CacheExpectation(input=normative_input)
+                ),
+            ),
+        )
 
     def observed_chmod(
         path: Path,
@@ -1492,6 +2071,7 @@ def _observe_dry_run(
             command,
             artifact_executions,
             roots=(csk_home / "builds",),
+            cwd=kwargs.get("cwd"),
         )
         return real_subprocess_run(*args, **kwargs)
 
@@ -1501,6 +2081,7 @@ def _observe_dry_run(
             command,
             artifact_executions,
             roots=(csk_home / "builds",),
+            cwd=kwargs.get("cwd"),
         )
         return real_subprocess_popen(*args, **kwargs)
 
@@ -1520,6 +2101,11 @@ def _observe_dry_run(
         monkeypatch.setenv("GOCACHE", str(operator_go_cache))
         monkeypatch.setattr(planner.toolchain, "establish_toolchain", lambda _cfg: FakeSession())
         monkeypatch.setattr(planner.cache, "cache_for_manager_home", lambda _home: ReadOnlyCache())
+        monkeypatch.setattr(
+            planner,
+            "_inspect_provider",
+            inspect_with_normative_identity,
+        )
         monkeypatch.setattr(go_v1, "build", forbidden("go-build"))
         monkeypatch.setattr(locking, "ProjectLock", forbidden_lock("project-lock"))
         monkeypatch.setattr(locking, "BuildLock", forbidden_lock("cache-build-lock"))
@@ -1546,6 +2132,18 @@ def _observe_dry_run(
         monkeypatch.setattr(subprocess, "run", observed_run)
         monkeypatch.setattr(subprocess, "Popen", observed_popen)
         monkeypatch.setattr(tempfile, "TemporaryDirectory", ObservedTemporaryDirectory)
+        _install_persistent_mutation_observer(
+            monkeypatch,
+            tuple(
+                dict.fromkeys(
+                    path
+                    for paths in effect_surfaces.values()
+                    for path in paths
+                )
+            ),
+            persistent_mutations,
+            on_mutation=classify_persistent_mutation,
+        )
         result = installer.install(
             cfg,
             options=installer.InstallOptions(dry_run=True),
@@ -1554,7 +2152,6 @@ def _observe_dry_run(
             label: _tree_state(paths)
             for label, paths in effect_surfaces.items()
         }
-
     outcomes = [
         cache.CacheInspection(status, "observed").dry_run_outcome
         for status in (
@@ -1580,6 +2177,14 @@ def _observe_dry_run(
         and forbidden_effects == _COMPILED_DRY_RUN_EFFECTS
         and [build.result for build in result.builds] == ["would-preflight-and-build"]
     )
+    observed_plan = result.builds[0] if len(result.builds) == 1 else None
+    observed_cache_key = (
+        observed_plan.cache_key
+        if observed_plan is not None
+        and observed_plan.input == identities["build_input"]
+        and observed_plan.cache_key == metadata.cache_key(observed_plan.input)
+        else "unexpected"
+    )
     command_labels = {
         "telemetry": "telemetry-off",
         "version": "version",
@@ -1595,7 +2200,7 @@ def _observe_dry_run(
             if all(argv[1] != command for argv in observed_argv)
         ],
         "forbidden_persistent_effects": forbidden_effects,
-        "logical_cache_key": identities["cache_key"],
+        "logical_cache_key": observed_cache_key,
         "name": "compiled-cache-miss-is-read-only",
         "operation_private_state_after": (
             "absent" if operation_private_absent else "present"
@@ -1694,6 +2299,14 @@ def _observe_gc(
             gc_root,
             skills_root,
             csk_home,
+            command="golden-tool",
+            install_pipeline=lambda patcher, events: (
+                _install_normative_lifecycle_pipeline(
+                    patcher,
+                    identities,
+                    events,
+                )
+            ),
         )
         assert isinstance(cfg, config_mod.GlobalConfig)
         gc_lock_traces: list[dict[str, Any]] = []
@@ -1784,6 +2397,7 @@ def _observe_gc(
                 command,
                 artifact_executions,
                 roots=(csk_home / "builds",),
+                cwd=kwargs.get("cwd"),
             )
             return real_subprocess_run(*args, **kwargs)
 
@@ -1793,6 +2407,7 @@ def _observe_gc(
                 command,
                 artifact_executions,
                 roots=(csk_home / "builds",),
+                cwd=kwargs.get("cwd"),
             )
             return real_subprocess_popen(*args, **kwargs)
 
@@ -1883,7 +2498,7 @@ def _observe_gc(
             "legacy-snapshot\n",
         )
         registered_consumer = project.resolve() in consumers.load_consumers(csk_home)
-        record = marker["builds"]["tool"]
+        record = _build_record(marker)
         entry = (
             csk_home
             / "builds"
@@ -1898,6 +2513,12 @@ def _observe_gc(
         actual_key_valid = (
             actual_receipt.cache_key == record["cache_key"]
             == metadata.cache_key(actual_receipt.input)
+            and actual_receipt.input == identities["build_input"]
+        )
+        actual_cache_key = (
+            actual_receipt.cache_key
+            if actual_key_valid
+            else "unexpected"
         )
         entry_fixture = gc_root / "compiled-entry-fixture"
         shutil.copytree(entry, entry_fixture)
@@ -2080,9 +2701,7 @@ def _observe_gc(
             if found
         ],
         "entry_adopted": entry_adopted,
-        "logical_cache_key": (
-            identities["cache_key"] if actual_key_valid else "unexpected"
-        ),
+        "logical_cache_key": actual_cache_key,
         "mark_roots": [
             label
             for label, found in (
@@ -2509,10 +3128,13 @@ def _observe_private_builds(
     private_artifact_commands: dict[Path, str] = {}
     artifact_executions: list[Path] = []
     home_lock_during_build: list[bool] = []
+    published_evidence: dict[str, Any] = {}
     real_private = cache.make_publication_source_private
     real_publish = installer._publish_planned_builds
     real_commit = installer._commit_materialization
     real_subprocess_popen = subprocess.Popen
+    real_cache_factory = cache.cache_for_manager_home
+    real_inspect_provider = planner._inspect_provider
 
     def verified(path: Path) -> None:
         real_private(path)
@@ -2529,7 +3151,12 @@ def _observe_private_builds(
     def publish(*args: object, **kwargs: object) -> object:
         shared_events.append("publication")
         success_trace.append("publication")
-        return real_publish(*args, **kwargs)
+        value = real_publish(*args, **kwargs)
+        if isinstance(value, dict):
+            for builds in value.values():
+                if isinstance(builds, dict):
+                    published_evidence.update(builds)
+        return value
 
     def commit(*args: object, **kwargs: object) -> object:
         shared_events.append("commit")
@@ -2542,11 +3169,85 @@ def _observe_private_builds(
             command,
             artifact_executions,
             exact_paths=private_artifact_paths,
+            cwd=kwargs.get("cwd"),
         )
         return real_subprocess_popen(*args, **kwargs)
 
+    class NormativeReceiptCache:
+        def __init__(self, backend: cache.BuildCacheBackend):
+            self._backend = backend
+            self.manager_home = backend.manager_home
+
+        def inspect(
+            self,
+            expectation: cache.CacheExpectation,
+        ) -> cache.CacheInspection:
+            value = self._backend.inspect(expectation)
+            if (
+                expectation.input == identities["build_input"]
+                and value.status is cache.CacheEntryStatus.HIT
+            ):
+                return replace(
+                    value,
+                    receipt_sha256=identities["receipt_sha256"],
+                )
+            return value
+
+        def publish(self, *args: Any, **kwargs: Any) -> Any:
+            return self._backend.publish(*args, **kwargs)
+
+        def quarantine(self, *args: Any, **kwargs: Any) -> Any:
+            return self._backend.quarantine(*args, **kwargs)
+
+        def collect(self, *args: Any, **kwargs: Any) -> Any:
+            return self._backend.collect(*args, **kwargs)
+
+    def cache_factory(home: Path) -> NormativeReceiptCache:
+        return NormativeReceiptCache(real_cache_factory(home))
+
+    def inspect_with_normative_golden_identity(
+        provider: planner.BuildProvider,
+        *,
+        target: toolchain.NativeTarget,
+        identity: toolchain.ToolchainIdentity,
+        backend: cache.BuildCacheBackend,
+    ) -> tuple[planner.BuildPlan, ...]:
+        ordinary = real_inspect_provider(
+            provider,
+            target=target,
+            identity=identity,
+            backend=backend,
+        )
+        if provider.name != "compiled":
+            return ordinary
+        normalized: list[planner.BuildPlan] = []
+        for plan in ordinary:
+            normalized_input = (
+                identities["build_input"]
+                if plan.command == "golden-tool"
+                else replace(
+                    plan.input,
+                    build_source=identities["build_input"].build_source,
+                )
+            )
+            normalized.append(
+                planner.BuildPlan(
+                    provider=plan.provider,
+                    input=normalized_input,
+                    cache_key=metadata.cache_key(normalized_input),
+                    inspection=backend.inspect(
+                        cache.CacheExpectation(input=normalized_input)
+                    ),
+                )
+            )
+        return tuple(normalized)
+
     with pytest.MonkeyPatch.context() as monkeypatch:
-        _install_fake_build_pipeline(monkeypatch, events=build_events)
+        _install_identity_build_pipeline(
+            monkeypatch,
+            identities["build_input"],
+            events=build_events,
+        )
         original_build = go_v1.build
 
         def observe_build(request: go_v1.BuildRequest) -> go_v1.BuildResult:
@@ -2561,6 +3262,12 @@ def _observe_private_builds(
             return built
 
         monkeypatch.setattr(go_v1, "build", observe_build)
+        monkeypatch.setattr(cache, "cache_for_manager_home", cache_factory)
+        monkeypatch.setattr(
+            planner,
+            "_inspect_provider",
+            inspect_with_normative_golden_identity,
+        )
         monkeypatch.setattr(cache, "make_publication_source_private", verified)
         monkeypatch.setattr(installer, "_publish_planned_builds", publish)
         monkeypatch.setattr(installer, "_commit_materialization", commit)
@@ -2587,14 +3294,54 @@ def _observe_private_builds(
         for build in result.builds
         if build.command in {"golden-tool", "second-tool"}
     ]
+    private_marker_path = (
+        project
+        / ".agents"
+        / "skills"
+        / "compiled"
+        / ".csk-install.json"
+    )
+    marker = (
+        install_marker.read_install_marker(private_marker_path.read_bytes())
+        if private_marker_path.is_file()
+        else None
+    )
+    golden_marker = (
+        marker.builds.get("golden-tool")
+        if isinstance(marker, install_marker.InstallMarkerV2)
+        else None
+    )
+    golden_plan = next(
+        (build for build in actual_builds if build.command == "golden-tool"),
+        None,
+    )
+    golden_published = published_evidence.get("golden-tool")
+    operation_cache_key = (
+        golden_marker.cache_key
+        if golden_marker is not None
+        and golden_plan is not None
+        and golden_plan.input == identities["build_input"]
+        and golden_plan.cache_key == golden_marker.cache_key
+        and golden_plan.cache_key == metadata.cache_key(golden_plan.input)
+        else "unexpected"
+    )
+    operation_receipt_sha256 = (
+        golden_marker.receipt_sha256
+        if golden_marker is not None
+        and golden_published is not None
+        and golden_published.marker == golden_marker
+        and golden_published.inspection.receipt_sha256
+        == golden_marker.receipt_sha256
+        else "unexpected"
+    )
     observed["all-misses-stage-and-verify-before-home-lock"] = {
         "artifacts_executed": bool(artifact_executions),
         "builds": [
             {
                 "artifact_verified": verified_before_publication("golden-tool"),
-                "cache_key": identities["cache_key"],
+                "cache_key": operation_cache_key,
                 "command": "golden-tool",
-                "receipt_sha256": identities["receipt_sha256"],
+                "receipt_sha256": operation_receipt_sha256,
                 "staging": (
                     "operation-private"
                     if private_artifacts.get("golden-tool", False)
@@ -3373,6 +4120,14 @@ def _observe_status_and_repair(
             status_root,
             skills_root,
             csk_home,
+            command="golden-tool",
+            install_pipeline=lambda patcher, events: (
+                _install_normative_lifecycle_pipeline(
+                    patcher,
+                    identities,
+                    events,
+                )
+            ),
         )
         assert isinstance(cfg, config_mod.GlobalConfig)
         parsed_markers: list[install_marker.InstallMarker] = []
@@ -3482,6 +4237,7 @@ def _observe_status_and_repair(
                 command,
                 status_artifact_executions,
                 roots=(csk_home / "builds",),
+                cwd=kwargs.get("cwd"),
             )
             return real_status_subprocess_run(*args, **kwargs)
 
@@ -3491,6 +4247,7 @@ def _observe_status_and_repair(
                 command,
                 status_artifact_executions,
                 roots=(csk_home / "builds",),
+                cwd=kwargs.get("cwd"),
             )
             return real_status_subprocess_popen(*args, **kwargs)
 
@@ -3554,7 +4311,7 @@ def _observe_status_and_repair(
             plan
             for plans in planned_builds
             for plan in plans
-            if plan.provider == "build-skill" and plan.command == "tool"
+            if plan.provider == "build-skill" and plan.command == "golden-tool"
         ),
         None,
     )
@@ -3564,7 +4321,7 @@ def _observe_status_and_repair(
         if inspection.status is cache.CacheEntryStatus.HIT
     ]
     recorded_build = (
-        parsed_v2.builds.get("tool")
+        parsed_v2.builds.get("golden-tool")
         if parsed_v2 is not None
         else None
     )
@@ -3618,8 +4375,10 @@ def _observe_status_and_repair(
                 inspection.receipt is not None
                 and inspection.receipt_bytes
                 == metadata.canonical_receipt_bytes(inspection.receipt)
+                and metadata.receipt_sha256(
+                    inspection.receipt_bytes or b""
+                ).startswith("sha256:")
                 and inspection.receipt_sha256
-                == metadata.receipt_sha256(inspection.receipt_bytes or b"")
                 == recorded_build.receipt_sha256
                 for inspection in hit_inspections
             )
@@ -3645,12 +4404,31 @@ def _observe_status_and_repair(
     }
     if set(validation_evidence) != set(_STATUS_VALIDATED):
         raise AssertionError("status validation classification is incomplete")
+    status_cache_key = (
+        recorded_build.cache_key
+        if recorded_build is not None
+        and observed_plan is not None
+        and observed_plan.input == identities["build_input"]
+        and recorded_build.cache_key == observed_plan.cache_key
+        and observed_plan.cache_key == metadata.cache_key(observed_plan.input)
+        else "unexpected"
+    )
+    status_receipt_sha256 = (
+        recorded_build.receipt_sha256
+        if recorded_build is not None
+        and bool(hit_inspections)
+        and all(
+            inspection.receipt_sha256 == recorded_build.receipt_sha256
+            for inspection in hit_inspections
+        )
+        else "unexpected"
+    )
     observed["compiled-installation-current"] = {
         "artifact_executed": bool(status_artifact_executions),
-        "cache_key": identities["cache_key"],
+        "cache_key": status_cache_key,
         "mutations": status_mutations,
         "name": "compiled-installation-current",
-        "receipt_sha256": identities["receipt_sha256"],
+        "receipt_sha256": status_receipt_sha256,
         "result": "current" if current else "non-current",
         "validated": [
             label
@@ -3702,6 +4480,14 @@ def _observe_status_and_repair(
                 case_root,
                 skills_root,
                 csk_home,
+                command="golden-tool",
+                install_pipeline=lambda patcher, events: (
+                    _install_normative_lifecycle_pipeline(
+                        patcher,
+                        identities,
+                        events,
+                    )
+                ),
             )
             mutate(project, csk_home, marker_path, marker, monkeypatch)
             real_matrix_cache_factory = cache.cache_for_manager_home
@@ -3746,6 +4532,7 @@ def _observe_status_and_repair(
                     command,
                     matrix_artifact_executions,
                     roots=(csk_home / "builds",),
+                    cwd=kwargs.get("cwd"),
                 )
                 return real_matrix_subprocess_run(*args, **kwargs)
 
@@ -3755,6 +4542,7 @@ def _observe_status_and_repair(
                     command,
                     matrix_artifact_executions,
                     roots=(csk_home / "builds",),
+                    cwd=kwargs.get("cwd"),
                 )
                 return real_matrix_subprocess_popen(*args, **kwargs)
 
@@ -3808,6 +4596,7 @@ def _observe_status_and_repair(
         "untrusted-boundary",
     ]
     rebuilt: list[str] = []
+    repair_cache_keys: list[str] = []
     pipeline_traces: dict[str, set[str]] = {}
     shortcut_evidence = {
         "adopt-candidate": True,
@@ -3826,6 +4615,14 @@ def _observe_status_and_repair(
                 case_root,
                 skills_root,
                 csk_home,
+                command="golden-tool",
+                install_pipeline=lambda patcher, build_events: (
+                    _install_normative_lifecycle_pipeline(
+                        patcher,
+                        identities,
+                        build_events,
+                    )
+                ),
             )
             assert isinstance(cfg, config_mod.GlobalConfig)
             cfg = replace(
@@ -3949,6 +4746,7 @@ def _observe_status_and_repair(
                     command,
                     candidate_executions,
                     roots=(candidate_entry,),
+                    cwd=kwargs.get("cwd"),
                 )
                 return real_repair_subprocess_run(*args, **kwargs)
 
@@ -3958,6 +4756,7 @@ def _observe_status_and_repair(
                     command,
                     candidate_executions,
                     roots=(candidate_entry,),
+                    cwd=kwargs.get("cwd"),
                 )
                 return real_repair_subprocess_popen(*args, **kwargs)
 
@@ -4053,6 +4852,8 @@ def _observe_status_and_repair(
             )
             if condition_rebuilt:
                 rebuilt.append(condition)
+                repaired_record = _build_record(repaired_marker)
+                repair_cache_keys.append(repaired_record["cache_key"])
 
             shortcut_evidence["adopt-candidate"] &= (
                 build_occurred
@@ -4093,7 +4894,12 @@ def _observe_status_and_repair(
         )
     ]
     observed["repair-rebuilds-invalid-compiled-entry"] = {
-        "cache_key": identities["cache_key"],
+        "cache_key": (
+            repair_cache_keys[0]
+            if len(repair_cache_keys) == len(repair_conditions)
+            and len(set(repair_cache_keys)) == 1
+            else "unexpected"
+        ),
         "forbidden_shortcuts": [
             label
             for label in (
@@ -4112,7 +4918,10 @@ def _observe_status_and_repair(
 
 
 def _build_record(marker: JsonObject) -> JsonObject:
-    return marker["builds"]["tool"]
+    builds = marker["builds"]
+    if not isinstance(builds, dict) or len(builds) != 1:
+        raise AssertionError("currentness fixture must contain exactly one build")
+    return next(iter(builds.values()))
 
 
 def _cache_entry(csk_home: Path, marker: JsonObject) -> Path:
@@ -4190,7 +4999,7 @@ def _status_unsupported_driver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     del project, csk_home, monkeypatch
-    marker["builds"]["tool"]["driver"] = "unsupported-v1"
+    _build_record(marker)["driver"] = "unsupported-v1"
     _write_marker(marker_path, marker)
 
 
@@ -4264,7 +5073,7 @@ def _status_build_source_mismatch(
 ) -> None:
     del project, marker_path, monkeypatch
     snapshot = csk_home / "cache" / "build-skill" / marker["commit"] / "snapshot"
-    source = snapshot / "build" / "cmd" / "tool" / "main.go"
+    source = snapshot / "build" / "cmd" / "golden-tool" / "main.go"
     source.write_text(
         source.read_text(encoding="utf-8") + "\n// drift\n",
         encoding="utf-8",
@@ -4279,7 +5088,7 @@ def _status_cache_key_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     del project, csk_home, monkeypatch
-    marker["builds"]["tool"]["cache_key"] = "sha256:" + "2" * 64
+    _build_record(marker)["cache_key"] = "sha256:" + "2" * 64
     _write_marker(marker_path, marker)
 
 
@@ -4291,7 +5100,7 @@ def _status_receipt_hash_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     del project, csk_home, monkeypatch
-    marker["builds"]["tool"]["receipt_sha256"] = "sha256:" + "3" * 64
+    _build_record(marker)["receipt_sha256"] = "sha256:" + "3" * 64
     _write_marker(marker_path, marker)
 
 
@@ -4303,7 +5112,7 @@ def _status_artifact_path_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     del project, csk_home, monkeypatch
-    marker["builds"]["tool"]["artifact_path"] = "bin/not-tool"
+    _build_record(marker)["artifact_path"] = "bin/not-tool"
     _write_marker(marker_path, marker)
 
 
@@ -4315,8 +5124,10 @@ def _status_artifact_hash_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     del project, csk_home, monkeypatch
-    marker["builds"]["tool"]["artifact_sha256"] = "sha256:" + "4" * 64
+    _build_record(marker)["artifact_sha256"] = "sha256:" + "4" * 64
     _write_marker(marker_path, marker)
+
+
 def _mutate_repair_condition(
     condition: str,
     project: Path,
@@ -4333,9 +5144,9 @@ def _mutate_repair_condition(
     elif condition == "corrupt":
         _corrupt_artifact(csk_home, marker)
     elif condition == "wrong-target":
-        _patch_different_toolchain(monkeypatch, change_target=True)
+        _write_mismatched_receipt(csk_home, marker, change_target=True)
     elif condition == "wrong-toolchain":
-        _patch_different_toolchain(monkeypatch, change_target=False)
+        _write_mismatched_receipt(csk_home, marker, change_target=False)
     elif condition == "untrusted-boundary":
         if os.name == "posix":
             entry.chmod(0o700)
@@ -4344,6 +5155,56 @@ def _mutate_repair_condition(
     else:
         raise AssertionError(f"unknown repair condition {condition}")
     assert marker_path.exists()
+
+
+def _write_mismatched_receipt(
+    csk_home: Path,
+    marker: JsonObject,
+    *,
+    change_target: bool,
+) -> None:
+    """Make one protected candidate disagree with the desired native input."""
+
+    receipt_path = _cache_entry(csk_home, marker) / "csk-receipt.ccj.json"
+    receipt = metadata.read_receipt(receipt_path.read_bytes())
+    if change_target:
+        current = receipt.input.target
+        changed_target = toolchain.NativeTarget(
+            goos=current.goos,
+            goarch="amd64" if current.goarch != "amd64" else "arm64",
+            tuning=(
+                {"GOAMD64": "v1"}
+                if current.goarch != "amd64"
+                else {"GOARM64": "v8.0"}
+            ),
+        )
+        version_prefix = receipt.input.toolchain.go_version.rsplit(" ", 1)[0]
+        changed_toolchain = replace(
+            receipt.input.toolchain,
+            go_version=(
+                f"{version_prefix} "
+                f"{changed_target.goos}/{changed_target.goarch}"
+            ),
+        )
+        changed_input = replace(
+            receipt.input,
+            target=changed_target,
+            toolchain=changed_toolchain,
+        )
+    else:
+        changed_toolchain = replace(
+            receipt.input.toolchain,
+            content_sha256="sha256:" + "b" * 64,
+        )
+        changed_input = replace(receipt.input, toolchain=changed_toolchain)
+    changed_receipt = replace(
+        receipt,
+        cache_key=metadata.cache_key(changed_input),
+        input=changed_input,
+    )
+    receipt_path.chmod(0o600)
+    receipt_path.write_bytes(metadata.canonical_receipt_bytes(changed_receipt))
+    receipt_path.chmod(0o400)
 
 
 def _patch_different_toolchain(
@@ -4483,6 +5344,13 @@ def _observe_transactions(
     committed: list[str] = []
     backups_at_consumer: list[bool] = []
     backup_paths: list[Path] = []
+    transaction_publication = _publication(
+        transaction_root / "cache",
+        identities["build_input"],
+        b"transaction-order shared cache",
+        suffix="shared",
+    )
+    transaction_cache = cache.cache_for_manager_home(home)
 
     def observe_commit(point: str, target: transactions.JournalTarget | None) -> None:
         if point == "target_committed" and target is not None:
@@ -4492,6 +5360,10 @@ def _observe_transactions(
 
     engine = transactions.TransactionEngine(home, fault_hook=observe_commit)
     with locking.ManagerHomeLock(home) as home_lock:
+        transaction_published = transaction_cache.publish(
+            transaction_publication,
+            guard=home_lock,
+        )
         journal = engine.prepare(
             home_lock,
             _plan("txn-observed-order", transaction_root / "project", *targets),
@@ -4513,9 +5385,23 @@ def _observe_transactions(
         )
         engine.commit(home_lock, journal.transaction_id)
     class_order = list(dict.fromkeys(ordered_labels))
+    transaction_cache_hit = transaction_cache.inspect(
+        cache.CacheExpectation(
+            input=transaction_publication.input,
+            receipt_sha256=transaction_published.receipt_sha256,
+        )
+    )
+    transaction_cache_key = (
+        metadata.cache_key(transaction_cache_hit.receipt.input)
+        if transaction_cache_hit.status is cache.CacheEntryStatus.HIT
+        and transaction_cache_hit.receipt is not None
+        and transaction_cache_hit.receipt.input
+        == transaction_publication.input
+        else "unexpected"
+    )
     observed["deterministic-target-order-and-consumer-last"] = {
         "backups_retained_until_consumer_durable": backups_at_consumer == [True],
-        "cache_key": identities["cache_key"],
+        "cache_key": transaction_cache_key,
         "canonical_identifier_order": (
             "unsigned-utf8-bytewise-within-class"
             if identifiers_canonical

@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 from pathlib import Path
+from typing import Callable
 
 import pytest
 from conftest import make_config, make_project, make_skill_repo, write_skillfile
@@ -49,12 +50,17 @@ def _installed_build(
     tmp_path: Path,
     skills_root: Path,
     csk_home: Path,
+    *,
+    command: str = "tool",
+    install_pipeline: (
+        Callable[[pytest.MonkeyPatch, list[str]], None] | None
+    ) = None,
 ) -> tuple[Path, object, list[str], Path, dict[str, object]]:
     project = make_project(tmp_path)
     make_skill_repo(
         skills_root,
         "build-skill",
-        _build_skill_files("tool"),
+        _build_skill_files(command),
         tag="v1",
     )
     write_skillfile(
@@ -66,7 +72,10 @@ def _installed_build(
     )
     config = make_config(csk_home, skills_root, project)
     events: list[str] = []
-    _install_fake_build_pipeline(monkeypatch, events=events)
+    if install_pipeline is None:
+        _install_fake_build_pipeline(monkeypatch, events=events)
+    else:
+        install_pipeline(monkeypatch, events)
     _fixed_evidence(monkeypatch)
     result = installer.install(config)[0]
     assert not result.errors

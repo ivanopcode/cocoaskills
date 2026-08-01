@@ -29,11 +29,10 @@ product-seam sabotage probes plus fail-closed literal/proxy classification now
 cover these properties while the 378-leaf expectation mutation audit remains
 exhaustive.
 
-Cycle-5 review exposed seven more causal gaps. Atomic publication now observes
-the exact live cache destination and rejects any partial destination created
-before the platform no-replace primitive. The cross-project case drives two
-real private-build calls concurrently, compares their shared `BuildInput` and
-derived cache key, and proves both private phases precede the publish handoff.
+Cycle-5 review exposed seven more causal gaps. Atomic publication observes the
+exact live cache destination around the platform no-replace primitive. The
+cross-project case drives two private-build calls concurrently and compares
+their shared `BuildInput` and derived cache key before the publish handoff.
 GC tests the consumer registry as an independent mark root rather than letting
 a configured-project marker mask it. Recovery verifies every primary target's
 exact class, identifier, live path, backup path, retained backup digest, and
@@ -48,6 +47,35 @@ call returns. Rollback compares the exact bytes and mode of every live target
 with its pre-commit tree state after reverse-order restoration. Seven exact
 reviewer sabotages pin those properties, bringing the independent sabotage
 total to seventeen without weakening the exhaustive 378-leaf audit.
+
+Cycle-6 review found that those claims still exceeded the observed boundary.
+The cross-project case now drives two real installs all the way through
+successful cache publication and materialization commit, reads both consumer
+records and the shared protected cache entry from that same run, and tolerates
+the normal optimistic-generation retry without replacing it with a synthetic
+consumer transaction. Distinct first cache-key builds prove private work can
+overlap while the actual publish and commit calls prove manager-home
+serialization and exact project order.
+
+Normative cache keys and receipt hashes are no longer returned from the
+authenticated fixture as scenario answers. Publication, cross-project success
+and rollback, dry-run, GC, private build, status, repair, and deterministic
+transaction order derive them from their own plans, markers, protected-cache
+inspections, publications, or repaired state and compare the resulting input
+to the normative identity. One operation-side sabotage changes those seams
+while leaving the fixture untouched and makes every corresponding complete
+case differ.
+
+Process observation resolves every path-like argv element against the
+effective subprocess `cwd`, including inherited cwd. Persistent-state
+observation covers the high-level `Path` mutations and descriptor-relative
+low-level open, write, unlink/remove, mkdir/rmdir, rename/replace, link,
+symlink, truncate, timestamp, and permission families. Atomic-publication
+evidence independently observes all supported namespace operations targeting
+the exact live cache destination, including alternate `os.rename` moves on
+POSIX and Windows. The five cycle-6 regressions preserve the exact surviving
+handoff, identity, cwd-relative execution, transient low-level mutation, and
+alternate live-destination probes in addition to the earlier seventeen.
 
 Binding the vector revealed three product mismatches. Project and global
 install ran recovery before private builds despite the publication-phase-only
