@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import urllib.request
@@ -53,6 +55,8 @@ from protocol_conformance_adapters import (
     assert_toolchain_case,
 )
 from protocol_lifecycle_observations import (
+    _project_identity_label,
+    _record_process_paths,
     clear_manager_lifecycle_observation_cache,
     observe_manager_lifecycle_case,
 )
@@ -261,6 +265,52 @@ LIFECYCLE_SCALAR_MUTATIONS = [
     for cluster, case in MANAGER_LIFECYCLE_CASES
     for path in _scalar_leaf_paths(case)
 ]
+
+
+_LIFECYCLE_LITERAL_FIELD_CLASSIFICATION = {
+    (
+        "provider-first-and-lexical-command-order",
+        "ordering",
+    ): "semantic label backed by the closure order and UTF-8 command trace",
+    (
+        "successful-project-survives-other-project-rollback",
+        "failing_project",
+    ): "selected failing transaction fixture backed by its rollback trace",
+    ("project-upgrade", "scope"): "exact project-upgrade CLI branch input",
+    ("global-upgrade", "scope"): "exact global-upgrade CLI branch input",
+    (
+        "compiled-cache-miss-is-read-only",
+        "scope",
+    ): "multi-project dry-run fixture input",
+    ("selected-project-closure", "scope"): "exact project-upgrade CLI branch input",
+    (
+        "selected-project-closure",
+        "selection",
+    ): "single selected-project CLI argument",
+    ("all-projects-deduplicate", "scope"): "exact project-upgrade CLI branch input",
+    (
+        "all-projects-deduplicate",
+        "selection",
+    ): "all-projects CLI argument",
+    ("global-closure", "scope"): "exact global-upgrade CLI branch input",
+    ("global-closure", "selection"): "global-upgrade CLI argument",
+    ("missing-config-if-missing", "force"): "exact bootstrap CLI flag absence",
+    (
+        "missing-config-if-missing",
+        "if_missing",
+    ): "exact bootstrap --if-missing CLI flag",
+    ("existing-config-if-missing", "force"): "exact bootstrap CLI flag absence",
+    (
+        "existing-config-if-missing",
+        "if_missing",
+    ): "exact bootstrap --if-missing CLI flag",
+    ("if-missing-with-force", "config"): "usage-error fixture accepts either config state",
+    ("if-missing-with-force", "force"): "exact bootstrap --force CLI flag",
+    (
+        "if-missing-with-force",
+        "if_missing",
+    ): "exact bootstrap --if-missing CLI flag",
+}
 
 
 def _mutation_id(item: tuple[str, str, tuple[str | int, ...]]) -> str:
@@ -811,6 +861,98 @@ def test_rc6_every_lifecycle_scalar_leaf_is_mutation_sensitive(
         )
 
 
+def test_rc6_lifecycle_literal_answers_are_explicitly_classified() -> None:
+    source = Path(__file__).with_name("protocol_lifecycle_observations.py")
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    classified: set[tuple[str, str]] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "observed"
+            and isinstance(target.slice, ast.Constant)
+            and isinstance(target.slice.value, str)
+            and isinstance(node.value, ast.Dict)
+        ):
+            continue
+        case_name = target.slice.value
+        for raw_field, expression in zip(node.value.keys, node.value.values):
+            field = ast.literal_eval(raw_field)
+            try:
+                literal = ast.literal_eval(expression)
+            except (TypeError, ValueError):
+                continue
+            if field == "name":
+                assert literal == case_name
+                continue
+            key = (case_name, field)
+            assert key in _LIFECYCLE_LITERAL_FIELD_CLASSIFICATION, (
+                f"unclassified literal lifecycle answer {case_name}.{field}"
+            )
+            classified.add(key)
+    assert classified == set(_LIFECYCLE_LITERAL_FIELD_CLASSIFICATION)
+
+
+def test_rc6_lifecycle_observer_rejects_known_lossy_proxy_forms() -> None:
+    source = Path(__file__).with_name("protocol_lifecycle_observations.py").read_text(
+        encoding="utf-8"
+    )
+    forbidden = {
+        "command[0]": "argv-element-zero-only process observation",
+        ".issubset(": "directory-name-set mutation proxy",
+        'Path(raw["project_identity"]).name': "journal-owner basename proxy",
+        "Path(lock.identity).name": "project-lock basename proxy",
+        'path.name.removeprefix("artifact-")': "private-artifact basename proxy",
+    }
+    for pattern, description in forbidden.items():
+        assert pattern not in source, description
+
+
+def test_rc6_process_path_observer_checks_every_argv_element(
+    tmp_path: Path,
+) -> None:
+    protected = tmp_path / "protected"
+    later = protected / "entry" / "bin" / "tool"
+    exact = tmp_path / "private" / "artifact"
+    observed: list[Path] = []
+
+    _record_process_paths(
+        ["/bin/sh", os.fspath(later), os.fspath(exact)],
+        observed,
+        roots=(protected,),
+        exact_paths={exact},
+    )
+
+    assert observed == [later.resolve(strict=False), exact.resolve(strict=False)]
+
+
+def test_rc6_project_identity_label_rejects_same_basename(
+    tmp_path: Path,
+) -> None:
+    expected = tmp_path / "canonical-owner" / "global"
+    wrong = tmp_path / "wrong-owner" / "global"
+
+    assert (
+        _project_identity_label(
+            locking.canonical_project_identity(expected),
+            expected,
+            "global",
+        )
+        == "global"
+    )
+    assert (
+        _project_identity_label(
+            locking.canonical_project_identity(wrong),
+            expected,
+            "global",
+        )
+        == "unexpected"
+    )
+
+
 def test_rc6_manifest_entry_authentication_rejects_mutated_bytes(
     tmp_path: Path,
 ) -> None:
@@ -1246,6 +1388,103 @@ def test_rc6_gc_binding_detects_guardless_collection(
         clear_manager_lifecycle_observation_cache()
 
 
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="the later-argv protected-artifact execution probe uses /bin/sh",
+)
+def test_rc6_gc_binding_detects_artifact_execution_in_later_argv_element(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executions = 0
+    original_collect_runtime = gc.collect_runtime
+
+    def execute_protected_artifact(
+        config_value: config.GlobalConfig,
+        csk_home: Path,
+        *,
+        guard: Any | None = None,
+        now: float | None = None,
+        build_grace_seconds: float = gc.BUILD_GRACE_SECONDS,
+    ) -> gc.GcStats:
+        nonlocal executions
+        artifacts = sorted(
+            path
+            for path in (csk_home / "builds" / "go-v1").glob("*/bin/*")
+            if path.is_file()
+        )
+        for artifact in artifacts:
+            completed = subprocess.run(
+                ["/bin/sh", os.fspath(artifact)],
+                check=False,
+                capture_output=True,
+            )
+            assert completed.returncode == 0
+            executions += 1
+        return original_collect_runtime(
+            config_value,
+            csk_home,
+            guard=guard,
+            now=now,
+            build_grace_seconds=build_grace_seconds,
+        )
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(gc, "collect_runtime", execute_protected_artifact)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "gc_cases",
+            "locked-mark-and-sweep-compiled-cache",
+        )
+        assert executions > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_gc_binding_detects_in_place_permission_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repairs = 0
+    original_collect_runtime = gc.collect_runtime
+
+    def repair_then_restore_rejected_entry(
+        config_value: config.GlobalConfig,
+        csk_home: Path,
+        *,
+        guard: Any | None = None,
+        now: float | None = None,
+        build_grace_seconds: float = gc.BUILD_GRACE_SECONDS,
+    ) -> gc.GcStats:
+        nonlocal repairs
+        rejected = csk_home / "builds" / "go-v1" / ("f" * 64)
+        if rejected.is_dir():
+            original_mode = stat.S_IMODE(rejected.lstat().st_mode)
+            rejected.chmod(original_mode | stat.S_IWUSR)
+            rejected.chmod(original_mode)
+            repairs += 2
+        return original_collect_runtime(
+            config_value,
+            csk_home,
+            guard=guard,
+            now=now,
+            build_grace_seconds=build_grace_seconds,
+        )
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        gc,
+        "collect_runtime",
+        repair_then_restore_rejected_entry,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "gc_cases",
+            "locked-mark-and-sweep-compiled-cache",
+        )
+        assert repairs >= 2
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
 def test_rc6_recovery_binding_detects_first_journal_only_scan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1272,6 +1511,57 @@ def test_rc6_recovery_binding_detects_first_journal_only_scan(
             "interrupted-global-journal-recovered-by-transaction-id",
         )
         assert any(len(inventory) >= 2 for inventory in inventories)
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_recovery_binding_detects_same_basename_wrong_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rewrites = 0
+    original_save_journal = transactions.TransactionEngine._save_journal
+
+    def save_with_wrong_primary_owner(
+        engine: transactions.TransactionEngine,
+        journal: transactions.Journal,
+        *,
+        create: bool = False,
+    ) -> None:
+        nonlocal rewrites
+        original_save_journal(engine, journal, create=create)
+        if journal.transaction_id != "transaction-global-17":
+            return
+        if "wrong-owner" in Path(journal.project_identity).parts:
+            return
+        path = engine.journal_root / f"{journal.transaction_id}.json"
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        canonical = Path(raw["project_identity"])
+        raw["project_identity"] = os.fspath(
+            canonical.parent / "wrong-owner" / canonical.name
+        )
+        path.write_bytes(
+            json.dumps(
+                raw,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            + b"\n"
+        )
+        rewrites += 1
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        transactions.TransactionEngine,
+        "_save_journal",
+        save_with_wrong_primary_owner,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "recovery_cases",
+            "interrupted-global-journal-recovered-by-transaction-id",
+        )
+        assert rewrites > 0
     finally:
         clear_manager_lifecycle_observation_cache()
 

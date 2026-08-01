@@ -56,6 +56,49 @@ from csk.builds import cache, go_v1, metadata, planner, source as build_source, 
 JsonObject = dict[str, Any]
 
 
+def _record_process_paths(
+    command: object,
+    sink: list[Path],
+    *,
+    roots: tuple[Path, ...] = (),
+    exact_paths: set[Path] | None = None,
+) -> None:
+    """Record every absolute argv path at an observed process boundary."""
+
+    raw_parts = command if isinstance(command, (list, tuple)) else (command,)
+    resolved_roots = tuple(root.resolve(strict=False) for root in roots)
+    resolved_exact = (
+        {path.resolve(strict=False) for path in exact_paths}
+        if exact_paths is not None
+        else set()
+    )
+    for raw in raw_parts:
+        try:
+            candidate = Path(os.fspath(raw))
+        except (TypeError, ValueError):
+            continue
+        if not candidate.is_absolute():
+            continue
+        try:
+            resolved = candidate.resolve(strict=False)
+        except OSError:
+            continue
+        if resolved in resolved_exact or any(
+            resolved.is_relative_to(root) for root in resolved_roots
+        ):
+            sink.append(resolved)
+
+
+def _project_identity_label(actual: str, expected: Path, label: str) -> str:
+    """Project one exact canonical filesystem identity into protocol vocabulary."""
+
+    return (
+        label
+        if actual == locking.canonical_project_identity(expected)
+        else "unexpected"
+    )
+
+
 def observe_manager_lifecycle_case(
     name: str,
     compiled_build_fixture: JsonObject,
@@ -980,6 +1023,7 @@ def _observe_dry_run(
 
     real_path_chmod = Path.chmod
     real_subprocess_run = subprocess.run
+    real_subprocess_popen = subprocess.Popen
     real_temporary_directory = tempfile.TemporaryDirectory
     operation_roots: list[Path] = []
 
@@ -997,13 +1041,21 @@ def _observe_dry_run(
 
     def observed_run(*args: Any, **kwargs: Any) -> Any:
         command = args[0] if args else kwargs.get("args")
-        if isinstance(command, (list, tuple)) and command:
-            candidate = Path(os.fspath(command[0]))
-            if candidate.is_absolute() and candidate.resolve(strict=False).is_relative_to(
-                (csk_home / "builds").resolve(strict=False)
-            ):
-                artifact_executions.append(candidate)
+        _record_process_paths(
+            command,
+            artifact_executions,
+            roots=(csk_home / "builds",),
+        )
         return real_subprocess_run(*args, **kwargs)
+
+    def observed_popen(*args: Any, **kwargs: Any) -> Any:
+        command = args[0] if args else kwargs.get("args")
+        _record_process_paths(
+            command,
+            artifact_executions,
+            roots=(csk_home / "builds",),
+        )
+        return real_subprocess_popen(*args, **kwargs)
 
     class ObservedTemporaryDirectory(tempfile.TemporaryDirectory[str]):
         def __init__(self, *args: object, **kwargs: object):
@@ -1045,6 +1097,7 @@ def _observe_dry_run(
         monkeypatch.setattr(config_mod, "save_config", forbidden("configuration"))
         monkeypatch.setattr(Path, "chmod", observed_chmod)
         monkeypatch.setattr(subprocess, "run", observed_run)
+        monkeypatch.setattr(subprocess, "Popen", observed_popen)
         monkeypatch.setattr(tempfile, "TemporaryDirectory", ObservedTemporaryDirectory)
         result = installer.install(
             cfg,
@@ -1199,11 +1252,16 @@ def _observe_gc(
         gc_lock_traces: list[dict[str, Any]] = []
         active_gc_lock_trace: dict[str, Any] | None = None
         artifact_executions: list[Path] = []
+        protected_entry_roots: set[Path] = set()
+        protected_entry_mutations: list[str] = []
         real_manager_home_lock = locking.ManagerHomeLock
         real_project_lock = locking.ProjectLock
         real_build_lock = locking.BuildLock
         real_collect_locked = gc._collect_locked
         real_subprocess_run = subprocess.run
+        real_subprocess_popen = subprocess.Popen
+        real_path_chmod = Path.chmod
+        real_os_chmod = os.chmod
 
         class ObservedGcManagerLock(real_manager_home_lock):
             def __enter__(self) -> locking.ManagerHomeLock:
@@ -1275,22 +1333,65 @@ def _observe_gc(
 
         def observed_run(*args: Any, **kwargs: Any) -> Any:
             command = args[0] if args else kwargs.get("args")
-            if isinstance(command, (list, tuple)) and command:
-                candidate = Path(os.fspath(command[0]))
-                if (
-                    candidate.is_absolute()
-                    and candidate.resolve(strict=False).is_relative_to(
-                        (csk_home / "builds").resolve(strict=False)
-                    )
-                ):
-                    artifact_executions.append(candidate)
+            _record_process_paths(
+                command,
+                artifact_executions,
+                roots=(csk_home / "builds",),
+            )
             return real_subprocess_run(*args, **kwargs)
+
+        def observed_popen(*args: Any, **kwargs: Any) -> Any:
+            command = args[0] if args else kwargs.get("args")
+            _record_process_paths(
+                command,
+                artifact_executions,
+                roots=(csk_home / "builds",),
+            )
+            return real_subprocess_popen(*args, **kwargs)
+
+        def record_protected_entry_mutation(path: object, operation: str) -> None:
+            try:
+                candidate = Path(os.fspath(path)).resolve(strict=False)
+            except (OSError, TypeError, ValueError):
+                return
+            if any(
+                candidate == root or candidate.is_relative_to(root)
+                for root in protected_entry_roots
+            ):
+                protected_entry_mutations.append(operation)
+
+        def observed_path_chmod(
+            path: Path,
+            mode: int,
+            *,
+            follow_symlinks: bool = True,
+        ) -> None:
+            record_protected_entry_mutation(path, "path-chmod")
+            real_path_chmod(path, mode, follow_symlinks=follow_symlinks)
+
+        def observed_os_chmod(
+            path: Any,
+            mode: int,
+            *,
+            dir_fd: int | None = None,
+            follow_symlinks: bool = True,
+        ) -> None:
+            record_protected_entry_mutation(path, "os-chmod")
+            real_os_chmod(
+                path,
+                mode,
+                dir_fd=dir_fd,
+                follow_symlinks=follow_symlinks,
+            )
 
         monkeypatch.setattr(locking, "ManagerHomeLock", ObservedGcManagerLock)
         monkeypatch.setattr(locking, "ProjectLock", ObservedGcProjectLock)
         monkeypatch.setattr(locking, "BuildLock", ObservedGcBuildLock)
         monkeypatch.setattr(gc, "_collect_locked", observed_collect_locked)
         monkeypatch.setattr(subprocess, "run", observed_run)
+        monkeypatch.setattr(subprocess, "Popen", observed_popen)
+        monkeypatch.setattr(Path, "chmod", observed_path_chmod)
+        monkeypatch.setattr(os, "chmod", observed_os_chmod)
         legacy = deepcopy(marker)
         legacy["schema_version"] = 1
         legacy["name"] = "legacy-skill"
@@ -1403,9 +1504,8 @@ def _observe_gc(
         rejected_entry = entry.parent / ("f" * 64)
         shutil.copytree(entry, rejected_entry)
         os.utime(rejected_entry, (1, 1), follow_symlinks=False)
-        live_entries_before_receipt_probe = {
-            path.name for path in entry.parent.iterdir()
-        }
+        protected_entry_roots.add(rejected_entry.resolve(strict=False))
+        rejected_entry_before_receipt_probe = _tree_state((rejected_entry,))
 
         young_now = float(gc.BUILD_GRACE_SECONDS + 200)
         young_mtime = young_now - (gc.BUILD_GRACE_SECONDS / 2)
@@ -1432,11 +1532,10 @@ def _observe_gc(
                 for warning in swept.warnings
             )
         )
-        live_entries_after_receipt_probe = {
-            path.name for path in rejected_entry.parent.iterdir()
-        }
-        entry_adopted = not live_entries_after_receipt_probe.issubset(
-            live_entries_before_receipt_probe
+        rejected_entry_after_receipt_probe = _tree_state((rejected_entry,))
+        entry_adopted = bool(protected_entry_mutations) or (
+            rejected_entry_after_receipt_probe
+            != rejected_entry_before_receipt_probe
         )
 
         # A malformed marker makes the mark phase uncertain and retains state.
@@ -1943,6 +2042,7 @@ def _observe_private_builds(
     success_trace: list[str] = []
     private_artifacts: dict[str, bool] = {}
     private_artifact_paths: set[Path] = set()
+    private_artifact_commands: dict[Path, str] = {}
     artifact_executions: list[Path] = []
     home_lock_during_build: list[bool] = []
     real_private = cache.make_publication_source_private
@@ -1952,11 +2052,13 @@ def _observe_private_builds(
 
     def verified(path: Path) -> None:
         real_private(path)
-        command = path.name.removeprefix("artifact-")
+        resolved = path.resolve(strict=False)
+        command = private_artifact_commands.get(resolved, "unexpected")
         verification_events.append(command)
         private_artifacts[command] = (
-            not path.resolve().is_relative_to(csk_home.resolve())
-            and not path.resolve().is_relative_to(project.resolve())
+            command != "unexpected"
+            and not resolved.is_relative_to(csk_home.resolve())
+            and not resolved.is_relative_to(project.resolve())
         )
         success_trace.append(f"verified:{command}")
 
@@ -1972,14 +2074,11 @@ def _observe_private_builds(
 
     def observed_popen(*args: Any, **kwargs: Any) -> Any:
         command = args[0] if args else kwargs.get("args")
-        raw_parts = command if isinstance(command, (list, tuple)) else (command,)
-        for raw in raw_parts:
-            try:
-                candidate = Path(os.fspath(raw)).resolve(strict=False)
-            except (TypeError, ValueError):
-                continue
-            if candidate in private_artifact_paths:
-                artifact_executions.append(candidate)
+        _record_process_paths(
+            command,
+            artifact_executions,
+            exact_paths=private_artifact_paths,
+        )
         return real_subprocess_popen(*args, **kwargs)
 
     with pytest.MonkeyPatch.context() as monkeypatch:
@@ -1992,6 +2091,9 @@ def _observe_private_builds(
             private_artifact_paths.add(
                 built.artifact.staged_path.resolve(strict=False)
             )
+            private_artifact_commands[
+                built.artifact.staged_path.resolve(strict=False)
+            ] = request.command
             return built
 
         monkeypatch.setattr(go_v1, "build", observe_build)
@@ -2029,12 +2131,20 @@ def _observe_private_builds(
                 "cache_key": identities["cache_key"],
                 "command": "golden-tool",
                 "receipt_sha256": identities["receipt_sha256"],
-                "staging": "operation-private",
+                "staging": (
+                    "operation-private"
+                    if private_artifacts.get("golden-tool", False)
+                    else "unexpected"
+                ),
             },
             {
                 "artifact_verified": verified_before_publication("second-tool"),
                 "command": "second-tool",
-                "staging": "operation-private",
+                "staging": (
+                    "operation-private"
+                    if private_artifacts.get("second-tool", False)
+                    else "unexpected"
+                ),
             },
         ],
         "manager_home_lock_during_build": any(home_lock_during_build),
@@ -2072,6 +2182,8 @@ def _observe_private_builds(
             "consumers.json": '{"schema_version":1,"consumers":[]}\n',
         },
     )
+    persistent_generation = csk_home / "persistent-generation"
+    persistent_generation_before = persistent_generation.read_text(encoding="utf-8")
     effect_surfaces: dict[str, tuple[Path, ...]] = {
         "recovery": (csk_home / "state" / "transactions" / "v1",),
         "cache-publication": (csk_home / "builds",),
@@ -2294,9 +2406,11 @@ def _observe_private_builds(
         "manager_home_lock_acquired": bool(home_lock_events),
         "name": "second-build-failure-preserves-persistent-state",
         "persistent_state_after": (
-            "persistent-generation-7" if before == after else "changed"
+            persistent_generation.read_text(encoding="utf-8")
+            if before == after
+            else "changed"
         ),
-        "persistent_state_before": "persistent-generation-7",
+        "persistent_state_before": persistent_generation_before,
         "result": "build-failed" if result.status == "failed" else result.status,
     }
 
@@ -2315,12 +2429,38 @@ def _observe_recovery(
     global_owner = interrupted / "global"
     triggering = interrupted / "project-beta"
     ledger = _write_text(interrupted / "consumers.json", '["project-alpha"]')
-    context = _write_text(interrupted / "context", "old")
+    recovery_context_before = {
+        "builds": {"tool": {"cache_key": identities["cache_key"]}},
+        "generation": "old",
+    }
+    recovery_context_desired = {
+        "builds": {"tool": {"cache_key": identities["cache_key"]}},
+        "generation": "new",
+    }
+    context = _write_text(
+        interrupted / "context",
+        json.dumps(
+            recovery_context_before,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+    )
     desired_ledger = _write_text(
         interrupted / "desired-consumers.json",
         '["project-alpha","global"]',
     )
-    desired_context = _write_text(interrupted / "desired-context", "new")
+    desired_context = _write_text(
+        interrupted / "desired-context",
+        json.dumps(
+            recovery_context_desired,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+    )
     restored: list[str] = []
     crash_once = True
 
@@ -2409,6 +2549,10 @@ def _observe_recovery(
         secondary_journal_path.read_text(encoding="utf-8")
     )
     expected_transaction_ids = [transaction_id, secondary_transaction_id]
+    expected_journal_identities = {
+        transaction_id: str(global_owner.resolve()),
+        secondary_transaction_id: str(secondary_owner.resolve()),
+    }
     journal_inventory_before = {
         journal_id: json.loads(
             (engine.journal_root / f"{journal_id}.json").read_text(
@@ -2443,10 +2587,9 @@ def _observe_recovery(
             "_resume",
             observed_resume,
         )
-        with (
-            locking.ProjectLock(home, triggering),
-            locking.ManagerHomeLock(home) as home_lock,
-        ):
+        triggering_lock = locking.ProjectLock(home, triggering)
+        triggering_lock_identity = triggering_lock.identity
+        with triggering_lock, locking.ManagerHomeLock(home) as home_lock:
             recovering.recover(home_lock)
     consumers_after = json.loads(ledger.read_text(encoding="utf-8"))
     restore_order = restored + [
@@ -2456,13 +2599,11 @@ def _observe_recovery(
     ]
     every_journal_recovered = (
         set(journal_inventory_before) == set(expected_transaction_ids)
-        and len(
-            {
-                value["project_identity"]
-                for value in journal_inventory_before.values()
-            }
-        )
-        == len(expected_transaction_ids)
+        and {
+            journal_id: value["project_identity"]
+            for journal_id, value in journal_inventory_before.items()
+        }
+        == expected_journal_identities
         and resumed_transaction_ids == expected_transaction_ids
         and not journal_path.exists()
         and not secondary_journal_path.exists()
@@ -2505,15 +2646,29 @@ def _observe_recovery(
         restore_order == ["machine", "global-context"]
         and preimage_guard_preserved
     )
+    recovered_context = json.loads(context.read_text(encoding="utf-8"))
+    recovered_cache_key = (
+        recovered_context.get("builds", {}).get("tool", {}).get("cache_key")
+        if isinstance(recovered_context, dict)
+        else None
+    )
+    primary_journal_identity_exact = (
+        raw["transaction_id"] == transaction_id
+        and raw["project_identity"] == expected_journal_identities[transaction_id]
+    )
     observed["interrupted-global-journal-recovered-by-transaction-id"] = {
         "backups_retained_until_recovery_succeeds": backups_before_recovery,
-        "cache_key": identities["cache_key"],
+        "cache_key": (
+            recovered_cache_key
+            if isinstance(recovered_cache_key, str)
+            else "unexpected"
+        ),
         "expected_action": (
             "verify-preimages-and-restore-reverse-commit-order"
             if recovery_action_verified
             else "unexpected"
         ),
-        "journal_owner": Path(raw["project_identity"]).name,
+        "journal_owner": "global" if primary_journal_identity_exact else "unexpected",
         "journal_state": "partially-committed" if raw["phase"] == "rolling_back" else raw["phase"],
         "journal_transaction_id": raw["transaction_id"],
         "name": "interrupted-global-journal-recovered-by-transaction-id",
@@ -2527,7 +2682,11 @@ def _observe_recovery(
         ),
         "successful_project_consumers_after": consumers_after,
         "successful_project_consumers_before": consumers_before,
-        "triggering_project": triggering.name,
+        "triggering_project": _project_identity_label(
+            triggering_lock_identity,
+            triggering,
+            "project-beta",
+        ),
     }
 
     ordering_root = root / "install-order"
@@ -2729,6 +2888,7 @@ def _observe_status_and_repair(
         real_cache_factory = cache.cache_for_manager_home
         real_status_build = go_v1.build
         real_status_subprocess_run = subprocess.run
+        real_status_subprocess_popen = subprocess.Popen
 
         def observed_read_marker(raw: bytes) -> install_marker.InstallMarker:
             value = real_read_marker(raw)
@@ -2807,16 +2967,21 @@ def _observe_status_and_repair(
 
         def observed_status_run(*args: Any, **kwargs: Any) -> Any:
             command = args[0] if args else kwargs.get("args")
-            if isinstance(command, (list, tuple)) and command:
-                candidate = Path(os.fspath(command[0]))
-                if (
-                    candidate.is_absolute()
-                    and candidate.resolve(strict=False).is_relative_to(
-                        (csk_home / "builds").resolve(strict=False)
-                    )
-                ):
-                    status_artifact_executions.append(candidate)
+            _record_process_paths(
+                command,
+                status_artifact_executions,
+                roots=(csk_home / "builds",),
+            )
             return real_status_subprocess_run(*args, **kwargs)
+
+        def observed_status_popen(*args: Any, **kwargs: Any) -> Any:
+            command = args[0] if args else kwargs.get("args")
+            _record_process_paths(
+                command,
+                status_artifact_executions,
+                roots=(csk_home / "builds",),
+            )
+            return real_status_subprocess_popen(*args, **kwargs)
 
         monkeypatch.setattr(
             status_mod.install_marker,
@@ -2846,6 +3011,7 @@ def _observe_status_and_repair(
         )
         monkeypatch.setattr(go_v1, "build", observed_status_build)
         monkeypatch.setattr(subprocess, "run", observed_status_run)
+        monkeypatch.setattr(subprocess, "Popen", observed_status_popen)
         before = _tree_state((status_root, csk_home, skills_root))
         project_status, build_status = _build_row(cfg)
         after = _tree_state((status_root, csk_home, skills_root))
@@ -3025,6 +3191,7 @@ def _observe_status_and_repair(
             real_matrix_cache_factory = cache.cache_for_manager_home
             real_matrix_build = go_v1.build
             real_matrix_subprocess_run = subprocess.run
+            real_matrix_subprocess_popen = subprocess.Popen
 
             class ObservedMatrixCache:
                 def __init__(self, backend: cache.BuildCacheBackend):
@@ -3058,16 +3225,21 @@ def _observe_status_and_repair(
 
             def observed_matrix_run(*args: Any, **kwargs: Any) -> Any:
                 command = args[0] if args else kwargs.get("args")
-                if isinstance(command, (list, tuple)) and command:
-                    candidate = Path(os.fspath(command[0]))
-                    if (
-                        candidate.is_absolute()
-                        and candidate.resolve(strict=False).is_relative_to(
-                            (csk_home / "builds").resolve(strict=False)
-                        )
-                    ):
-                        matrix_artifact_executions.append(candidate)
+                _record_process_paths(
+                    command,
+                    matrix_artifact_executions,
+                    roots=(csk_home / "builds",),
+                )
                 return real_matrix_subprocess_run(*args, **kwargs)
+
+            def observed_matrix_popen(*args: Any, **kwargs: Any) -> Any:
+                command = args[0] if args else kwargs.get("args")
+                _record_process_paths(
+                    command,
+                    matrix_artifact_executions,
+                    roots=(csk_home / "builds",),
+                )
+                return real_matrix_subprocess_popen(*args, **kwargs)
 
             monkeypatch.setattr(
                 cache,
@@ -3076,6 +3248,7 @@ def _observe_status_and_repair(
             )
             monkeypatch.setattr(go_v1, "build", observed_matrix_build)
             monkeypatch.setattr(subprocess, "run", observed_matrix_run)
+            monkeypatch.setattr(subprocess, "Popen", observed_matrix_popen)
             before = _tree_state((project, csk_home, skills_root))
             project_status, build = _build_row(cfg)
             after = _tree_state((project, csk_home, skills_root))
@@ -3625,13 +3798,21 @@ def _observe_transactions(
 ) -> None:
     lock_root = root / "locks"
     home = lock_root / "home"
-    project_paths = [
-        lock_root / "project-é",
-        lock_root / "project-z",
-        lock_root / "project-alpha",
+    project_inputs = [
+        ("project-é", lock_root / "project-é"),
+        ("project-z", lock_root / "project-z"),
+        ("project-alpha", lock_root / "project-alpha"),
     ]
+    project_paths = [path for _label, path in project_inputs]
     locks = locking.ProjectLocks(home, project_paths)
-    expected_order = [Path(lock.identity).name for lock in locks.locks]
+    identity_labels = {
+        locking.canonical_project_identity(path): label
+        for label, path in project_inputs
+    }
+    expected_order = [
+        identity_labels.get(lock.identity, "unexpected")
+        for lock in locks.locks
+    ]
     maximum_build_locks = 0
     forbidden: list[str] = []
     with locks:
@@ -3661,7 +3842,14 @@ def _observe_transactions(
         "cache_build_lock_released_before_home_lock": build_released,
         "expected_project_lock_order": expected_order,
         "forbidden_while_holding_home_lock": forbidden,
-        "input_project_identities": [path.name for path in project_paths],
+        "input_project_identities": [
+            _project_identity_label(
+                locking.canonical_project_identity(path),
+                path,
+                label,
+            )
+            for label, path in project_inputs
+        ],
         "maximum_cache_build_locks": maximum_build_locks,
         "name": "deterministic-lock-order",
         "result": "locks-acquired" if manager_acquired and optional_build else "unexpected",
@@ -3711,12 +3899,26 @@ def _observe_transactions(
             _TARGET_CLASS_LABELS[target.target_class]
             for target in journal.targets
         ]
+        identifiers_by_class: dict[str, list[str]] = {}
+        for target in journal.targets:
+            identifiers_by_class.setdefault(target.target_class, []).append(
+                target.identifier
+            )
+        identifiers_canonical = all(
+            identifiers
+            == sorted(identifiers, key=lambda value: value.encode("utf-8"))
+            for identifiers in identifiers_by_class.values()
+        )
         engine.commit(home_lock, journal.transaction_id)
     class_order = list(dict.fromkeys(ordered_labels))
     observed["deterministic-target-order-and-consumer-last"] = {
         "backups_retained_until_consumer_durable": backups_at_consumer == [True],
         "cache_key": identities["cache_key"],
-        "canonical_identifier_order": "unsigned-utf8-bytewise-within-class",
+        "canonical_identifier_order": (
+            "unsigned-utf8-bytewise-within-class"
+            if identifiers_canonical
+            else "unexpected"
+        ),
         "consumer_ledger_committed_last": committed[-1:] == ["consumer-ledger/machine"],
         "expected_commit_order": committed,
         "name": "deterministic-target-order-and-consumer-last",
