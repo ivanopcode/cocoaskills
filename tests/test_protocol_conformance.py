@@ -5,7 +5,9 @@ import hashlib
 import json
 import os
 import urllib.request
+from copy import deepcopy
 from dataclasses import replace
+from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -33,6 +35,8 @@ from csk.builds import go_v1
 from csk.config import RegistryConfig
 from csk.source_identity import SourceIdentityError, parse_source_identity
 from protocol_conformance_adapters import (
+    _BUILD_REJECTION_BINDINGS,
+    _LIFECYCLE_CASE_FIELDS,
     assert_build_positive_case,
     assert_build_rejection_case,
     assert_build_source_case,
@@ -102,15 +106,60 @@ def _root() -> Path:
     return root
 
 
+def _read_manifest_entry(
+    root: Path,
+    inventory: dict[str, str],
+    relative: str,
+) -> bytes:
+    """Read one suite file only after its manifest membership and bytes agree."""
+    assert relative in inventory, f"candidate manifest publishes no {relative}"
+    relative_path = Path(relative)
+    assert not relative_path.is_absolute()
+    assert ".." not in relative_path.parts
+    path = root / relative_path
+    assert path.is_file(), f"candidate suite publishes no file at {relative}"
+    raw = path.read_bytes()
+    actual = "sha256:" + hashlib.sha256(raw).hexdigest()
+    assert actual == inventory[relative], f"candidate digest mismatch for {relative}"
+    return raw
+
+
+@lru_cache(maxsize=1)
+def _manifest_inventory() -> dict[str, str]:
+    manifest = json.loads((_root() / "manifest.json").read_bytes())
+    assert set(manifest) == {"files", "generated_at", "generator", "protocol_version"}
+    assert manifest["protocol_version"] == EXPECTED_CANDIDATE_PROTOCOL_VERSION
+    inventory: dict[str, str] = {}
+    for entry in manifest["files"]:
+        assert set(entry) == {"path", "sha256"}
+        relative = entry["path"]
+        assert isinstance(relative, str) and relative
+        assert relative not in inventory, f"duplicate candidate manifest path: {relative}"
+        assert not Path(relative).is_absolute() and ".." not in Path(relative).parts
+        digest = entry["sha256"]
+        assert isinstance(digest, str) and digest.startswith("sha256:")
+        assert len(digest) == len("sha256:") + 64
+        inventory[relative] = digest
+    return inventory
+
+
+def _authenticated_bytes(relative: str) -> bytes:
+    if relative == "manifest.json":
+        raw = (_root() / relative).read_bytes()
+        assert "sha256:" + hashlib.sha256(raw).hexdigest() == (
+            EXPECTED_CANDIDATE_MANIFEST_SHA256
+        )
+        return raw
+    return _read_manifest_entry(_root(), _manifest_inventory(), relative)
+
+
 def _json(relative: str) -> Any:
-    return json.loads((_root() / relative).read_text(encoding="utf-8"))
+    return json.loads(_authenticated_bytes(relative))
 
 
 def _golden_bytes(relative: str) -> bytes:
     """Read one golden as bytes, failing closed when the suite omits it."""
-    path = _root() / relative
-    assert path.is_file(), f"conformance root {_root()} publishes no {relative}"
-    return path.read_bytes()
+    return _authenticated_bytes(relative)
 
 
 def _repository_root() -> Path:
@@ -139,6 +188,33 @@ SCHEMA_CASES = (
     if ROOT_TEXT
     else []
 )
+
+
+def _authenticate_rc6_scope() -> None:
+    """Authenticate every rc.6 artifact before an adapter can consume it."""
+    if not ROOT_TEXT:
+        return
+    required = {
+        "vectors/build-drivers.json",
+        "vectors/go-host-execution-policy.json",
+        "vectors/conformance-claim-v3-qualification.json",
+        "vectors/manager-lifecycle.json",
+        "schema-cases/index.json",
+        *(f"schema-cases/{entry['instance']}" for entry in SCHEMA_CASES),
+        *(f"expected/build-driver/{name}" for name in EXPECTED_BUILD_DRIVER_FILES),
+    }
+    fixture_files = {
+        path
+        for path in _manifest_inventory()
+        if path.startswith("fixtures/go-build-skill/")
+    }
+    assert fixture_files, "candidate manifest omits the go-build fixture"
+    required.update(fixture_files)
+    for relative in sorted(required, key=lambda value: value.encode("utf-8")):
+        _authenticated_bytes(relative)
+
+
+_authenticate_rc6_scope()
 MANAGER_LIFECYCLE_CASES = (
     [
         (cluster, case)
@@ -220,6 +296,9 @@ def test_rc6_in_scope_vector_inventory_is_exhaustive() -> None:
     assert len(SCHEMA_CASES) == 102
     assert len(BUILD_DRIVER_VECTORS["positive_cases"]) == 8
     assert len(BUILD_DRIVER_VECTORS["rejection_cases"]) == 77
+    assert set(_BUILD_REJECTION_BINDINGS) == {
+        case["name"] for case in BUILD_DRIVER_VECTORS["rejection_cases"]
+    }
     assert len(BUILD_DRIVER_VECTORS["build_source_cases"]) == 10
     assert len(BUILD_DRIVER_VECTORS["toolchain_cases"]) == 12
     assert len(HOST_POLICY_VECTORS["mandatory_controls"]) == 18
@@ -229,6 +308,9 @@ def test_rc6_in_scope_vector_inventory_is_exhaustive() -> None:
     assert len(HOST_POLICY_VECTORS["deferred_capability_rejection_guards"]) == 6
     assert len(FAILURE_BOUNDARY_CASES) == 3
     assert len(MANAGER_LIFECYCLE_CASES) == 32
+    assert set(_LIFECYCLE_CASE_FIELDS) == {
+        case["name"] for _cluster, case in MANAGER_LIFECYCLE_CASES
+    }
     assert len(EXPECTED_BUILD_DRIVER_FILES) == 11
     assert len(CLAIM_QUALIFICATION_VECTORS["rules"]) == 4
     assert len(CLAIM_QUALIFICATION_VECTORS["platforms"]) == 3
@@ -361,8 +443,11 @@ def test_rc6_build_driver_positive_case(
     BUILD_DRIVER_VECTORS.get("rejection_cases", []),
     ids=lambda case: case["name"],
 )
-def test_rc6_build_driver_rejection_case(case: dict[str, Any]) -> None:
-    assert_build_rejection_case(case)
+def test_rc6_build_driver_rejection_case(
+    case: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    assert_build_rejection_case(case, BUILD_DRIVER_VECTORS, _root(), tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -370,8 +455,12 @@ def test_rc6_build_driver_rejection_case(case: dict[str, Any]) -> None:
     BUILD_DRIVER_VECTORS.get("build_source_cases", []),
     ids=lambda case: case["name"],
 )
-def test_rc6_build_source_case(case: dict[str, Any]) -> None:
-    assert_build_source_case(case, BUILD_DRIVER_VECTORS["build_source_cases"])
+def test_rc6_build_source_case(case: dict[str, Any], tmp_path: Path) -> None:
+    assert_build_source_case(
+        case,
+        BUILD_DRIVER_VECTORS["build_source_cases"],
+        tmp_path,
+    )
 
 
 @pytest.mark.parametrize(
@@ -630,6 +719,94 @@ def test_rc6_manager_lifecycle_case(
     case: dict[str, Any],
 ) -> None:
     assert_manager_lifecycle_case(cluster, case, MANAGER_LIFECYCLE_VECTORS)
+
+
+def test_rc6_manifest_entry_authentication_rejects_mutated_bytes(
+    tmp_path: Path,
+) -> None:
+    relative = "vectors/build-drivers.json"
+    raw = _authenticated_bytes(relative)
+    root = tmp_path / "candidate"
+    path = root / relative
+    path.parent.mkdir(parents=True)
+    path.write_bytes(raw)
+    inventory = {relative: "sha256:" + hashlib.sha256(raw).hexdigest()}
+    assert _read_manifest_entry(root, inventory, relative) == raw
+    path.write_bytes(raw + b" ")
+    with pytest.raises(AssertionError, match="digest mismatch"):
+        _read_manifest_entry(root, inventory, relative)
+
+
+def test_rc6_build_rejection_binding_is_mutation_sensitive(tmp_path: Path) -> None:
+    case = deepcopy(
+        next(
+            item
+            for item in BUILD_DRIVER_VECTORS["rejection_cases"]
+            if item["name"] == "unknown-driver"
+        )
+    )
+    case["expected"]["error"] = "definitely-not-the-product-error"
+    with pytest.raises(AssertionError):
+        assert_build_rejection_case(case, BUILD_DRIVER_VECTORS, _root(), tmp_path)
+
+
+def test_rc6_fixed_environment_binding_is_mutation_sensitive(tmp_path: Path) -> None:
+    vectors = deepcopy(BUILD_DRIVER_VECTORS)
+    vectors["fixed_environment"]["GOENV"] = "poisoned"
+    case = next(
+        item
+        for item in vectors["positive_cases"]
+        if item["name"] == "fixed-environment-and-five-direct-argv-forms"
+    )
+    with pytest.raises(AssertionError):
+        assert_build_positive_case(case, vectors, _root(), tmp_path)
+
+
+def test_rc6_all_five_argv_records_are_mutation_sensitive(tmp_path: Path) -> None:
+    vectors = deepcopy(BUILD_DRIVER_VECTORS)
+    case = next(
+        item
+        for item in vectors["positive_cases"]
+        if item["name"] == "fixed-environment-and-five-direct-argv-forms"
+    )
+    case["argv"][0]["argv"][2] = "on"
+    with pytest.raises(AssertionError):
+        assert_build_positive_case(case, vectors, _root(), tmp_path)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "manager_home_lock_held_through_rollback",
+        "require_current_digest_equals_desired_before_restore",
+    ],
+)
+def test_rc6_rollback_contract_is_mutation_sensitive(field: str) -> None:
+    case = deepcopy(
+        next(
+            item
+            for item in MANAGER_LIFECYCLE_VECTORS["transaction_cases"]
+            if item["name"] == "reverse-rollback-under-home-lock"
+        )
+    )
+    case[field] = False
+    with pytest.raises(AssertionError):
+        assert_manager_lifecycle_case(
+            "transaction_cases",
+            case,
+            MANAGER_LIFECYCLE_VECTORS,
+        )
+
+
+def test_rc6_lifecycle_binding_rejects_unknown_fields() -> None:
+    case = deepcopy(MANAGER_LIFECYCLE_VECTORS["bootstrap_cases"][0])
+    case["future_unbound_field"] = True
+    with pytest.raises(AssertionError, match="unknown or missing fields"):
+        assert_manager_lifecycle_case(
+            "bootstrap_cases",
+            case,
+            MANAGER_LIFECYCLE_VECTORS,
+        )
 
 
 def test_shared_fixture_legacy_marker_v1_stays_readable() -> None:

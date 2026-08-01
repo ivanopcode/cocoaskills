@@ -387,3 +387,20 @@ GitHub Release is advanced here. The harness covers all 102 selected generated
 schema cases, 8 build-driver positives, 77 build-driver rejections, 10 build
 source cases, 12 toolchain cases, the complete policy minimum clusters, all 11
 byte-exact build-driver artifacts, and all 32 manager-lifecycle cases.
+
+Review hardening replaced metadata-only fallthroughs with closed name-to-seam
+bindings. Every rejection case now rejects unknown names and fields and drives
+the corresponding CocoaSkills manifest, filesystem, package-graph, compiler,
+process, toolchain, cache, context, or execution-policy boundary. Build-source
+and toolchain cases exercise snapshot/fingerprint creation and mutation guards.
+The fixed-process case records the three real parent probes and captures the
+worker plan before launch, then compares all 28 fixed environment entries and
+all five argv, cwd, and source-awareness records exactly.
+
+Candidate files are now admitted only through the reviewed manifest inventory:
+the harness verifies membership and SHA-256 before loading every in-scope
+vector, selected schema instance, go-build fixture file, and expected build
+artifact. Lifecycle adapters have an exact 32-name cluster/field map and assert
+all rollback lock and desired-digest guards. Mutation-sensitivity tests retain
+the rejected reviewer probes so future expected-error, environment, argv,
+lifecycle-field, or candidate-byte drift fails closed.
