@@ -579,3 +579,27 @@ Post-fix, the four new alias/surface/timestamp regressions, all 32 canonical
 lifecycle cases, all 417 scalar/classification checks, and all 28 inherited
 sabotage probes pass. No product release, pin, claim, schema-v7, tag, CI,
 changelog or packaging surface changed.
+
+## 2026-08-02 — BUG-260801-1iu1ln atomic handoff boundary
+
+Cycle-8 review found that the staged-to-live tree comparison still normalized
+the moved root's final `ctime_ns` without proving which operation produced it.
+A callable captured before observer installation could therefore `fchmod` and
+restore the live root after the real no-replace rename, or rename the live name
+away and back, while the complete publication case remained normative.
+
+Publication observation now witnesses the destination immediately after the
+underlying atomic OS primitive: `renameat2`/`renameatx_np` on POSIX and
+`MoveFileExW` on Windows. The staged tree must match that raw handoff with only
+the rename-induced root ctime transition allowed, and the raw handoff must then
+match the state returned by the wrapping CocoaSkills seam exactly. This places
+captured-callable mutations on the observed side of the boundary without
+mistaking the later legitimate cache-root seal for sabotage.
+
+Dedicated root-fchmod/restore and live-name-away/restore regressions exercise
+captured callables and descriptor-relative POSIX names; the Windows regression
+uses the corresponding supported path rename form. Both new probes, the four
+cycle-8 regressions, all 32 canonical lifecycle cases, the 417-case exhaustive
+scalar/classification gate, and the full authenticated conformance module pass.
+No product, release, pin, claim, schema-v7, tag, CI, changelog or packaging
+surface changed.

@@ -1156,6 +1156,57 @@ def _observe_cache_publication(
             from csk.builds import cache_posix
 
             real_atomic_publish = cache_posix._rename_noreplace
+            real_cdll = cache_posix.ctypes.CDLL
+            raw_atomic_destinations: list[
+                tuple[Path, dict[str, _TamperNode | None]]
+            ] = []
+
+            class ObservedAtomicFunction:
+                """Delegate one libc rename and witness its immediate result."""
+
+                def __init__(self, function: Any) -> None:
+                    object.__setattr__(self, "_function", function)
+
+                def __call__(self, *args: Any) -> Any:
+                    result = self._function(*args)
+                    if result == 0 and len(args) >= 4:
+                        destination_path = _observed_path(
+                            os.fsdecode(args[3]),
+                            dir_fd=int(args[2]),
+                        )
+                        if (
+                            destination_path is not None
+                            and destination_path
+                            == live_entry.resolve(strict=False)
+                        ):
+                            raw_atomic_destinations.append(
+                                (
+                                    destination_path,
+                                    _tamper_tree_state(destination_path),
+                                )
+                            )
+                    return result
+
+                def __getattr__(self, name: str) -> Any:
+                    return getattr(self._function, name)
+
+                def __setattr__(self, name: str, value: Any) -> None:
+                    setattr(self._function, name, value)
+
+            class ObservedLibC:
+                def __init__(self, library: Any) -> None:
+                    self._library = library
+
+                def __getattr__(self, name: str) -> Any:
+                    function = getattr(self._library, name)
+                    if name in {"renameat2", "renameatx_np"}:
+                        return ObservedAtomicFunction(function)
+                    return function
+
+            def observed_cdll(*args: Any, **kwargs: Any) -> Any:
+                return ObservedLibC(real_cdll(*args, **kwargs))
+
+            monkeypatch.setattr(cache_posix.ctypes, "CDLL", observed_cdll)
 
             def observed_atomic_publish(
                 source_dir_fd: int,
@@ -1179,6 +1230,7 @@ def _observe_cache_publication(
                     destination_absent = True
                 else:
                     destination_absent = False
+                raw_destination_count = len(raw_atomic_destinations)
                 real_atomic_publish(
                     source_dir_fd,
                     source_name,
@@ -1197,10 +1249,16 @@ def _observe_cache_publication(
                     atomic_tree_handoffs.append(
                         source_tree is not None
                         and destination_path is not None
+                        and len(raw_atomic_destinations)
+                        == raw_destination_count + 1
                         and _same_tree_across_atomic_rename(
                             source_tree,
-                            _tamper_tree_state(destination_path),
+                            raw_atomic_destinations[-1][1],
                         )
+                        and raw_atomic_destinations[-1][1]
+                        == _tamper_tree_state(destination_path)
+                        and raw_atomic_destinations[-1][0]
+                        == destination_path
                     )
 
             monkeypatch.setattr(
@@ -1212,19 +1270,71 @@ def _observe_cache_publication(
             from csk.builds import cache_windows
 
             real_atomic_publish = cache_windows._move_no_replace
+            real_windows_api = cache_windows._api
+            raw_windows_destinations: list[
+                tuple[Path, dict[str, _TamperNode | None]]
+            ] = []
+
+            class ObservedMoveFileEx:
+                """Witness the destination before a wrapping Windows seam resumes."""
+
+                def __init__(self, function: Any) -> None:
+                    self._function = function
+
+                def __call__(self, source: Any, destination: Any, flags: int) -> Any:
+                    result = self._function(source, destination, flags)
+                    if result:
+                        destination_path = Path(os.fsdecode(destination))
+                        raw_windows_destinations.append(
+                            (
+                                destination_path.resolve(strict=False),
+                                _tamper_tree_state(destination_path),
+                            )
+                        )
+                    return result
+
+            class ObservedKernel32:
+                def __init__(self, kernel32: Any) -> None:
+                    self._kernel32 = kernel32
+
+                def __getattr__(self, name: str) -> Any:
+                    function = getattr(self._kernel32, name)
+                    if name == "MoveFileExW":
+                        return ObservedMoveFileEx(function)
+                    return function
+
+            class ObservedWindowsApi:
+                def __init__(self, api: Any) -> None:
+                    self._api = api
+                    self.kernel32 = ObservedKernel32(api.kernel32)
+
+                def __getattr__(self, name: str) -> Any:
+                    return getattr(self._api, name)
+
+            def observed_windows_api() -> Any:
+                return ObservedWindowsApi(real_windows_api())
+
+            monkeypatch.setattr(cache_windows, "_api", observed_windows_api)
 
             def observed_atomic_move(source: Path, destination: Path) -> None:
                 destination_path = destination.resolve(strict=False)
                 destination_absent = not destination.exists()
                 source_tree = _tamper_tree_state(source)
+                raw_destination_count = len(raw_windows_destinations)
                 real_atomic_publish(source, destination)
                 if destination_path == live_entry.resolve(strict=False):
                     atomic_publish_calls.append(destination_absent)
                     atomic_tree_handoffs.append(
-                        _same_tree_across_atomic_rename(
+                        len(raw_windows_destinations)
+                        == raw_destination_count + 1
+                        and _same_tree_across_atomic_rename(
                             source_tree,
-                            _tamper_tree_state(destination_path),
+                            raw_windows_destinations[-1][1],
                         )
+                        and raw_windows_destinations[-1][1]
+                        == _tamper_tree_state(destination_path)
+                        and raw_windows_destinations[-1][0]
+                        == destination_path
                     )
 
             monkeypatch.setattr(

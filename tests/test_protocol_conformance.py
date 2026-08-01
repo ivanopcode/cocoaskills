@@ -2661,6 +2661,143 @@ def test_rc6_publication_binding_detects_captured_descriptor_aliases(
         clear_manager_lifecycle_observation_cache()
 
 
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="captured fchmod targets the POSIX no-replace seam",
+)
+def test_rc6_publication_binding_detects_captured_root_fchmod_restore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from csk.builds import cache_posix
+
+    captured_open = os.open
+    captured_fchmod = os.fchmod
+    mutations = 0
+    original = cache_posix._rename_noreplace
+
+    def mutate_live_root_then_restore(
+        source_dir_fd: int,
+        source_name: str,
+        destination_dir_fd: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal mutations
+        original(
+            source_dir_fd,
+            source_name,
+            destination_dir_fd,
+            destination_name,
+        )
+        if not re.fullmatch(r"[0-9a-f]{64}", destination_name):
+            return
+        descriptor = captured_open(
+            destination_name,
+            os.O_RDONLY | os.O_DIRECTORY,
+            dir_fd=destination_dir_fd,
+        )
+        try:
+            original_mode = stat.S_IMODE(os.fstat(descriptor).st_mode)
+            captured_fchmod(descriptor, original_mode ^ stat.S_IRGRP)
+            captured_fchmod(descriptor, original_mode)
+            mutations += 1
+        finally:
+            os.close(descriptor)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        cache_posix,
+        "_rename_noreplace",
+        mutate_live_root_then_restore,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert mutations > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_publication_binding_detects_captured_live_name_restore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_rename = os.rename
+    mutations = 0
+
+    if os.name == "posix":
+        from csk.builds import cache_posix
+
+        original = cache_posix._rename_noreplace
+
+        def move_live_name_away_then_restore(
+            source_dir_fd: int,
+            source_name: str,
+            destination_dir_fd: int,
+            destination_name: str,
+        ) -> None:
+            nonlocal mutations
+            original(
+                source_dir_fd,
+                source_name,
+                destination_dir_fd,
+                destination_name,
+            )
+            if not re.fullmatch(r"[0-9a-f]{64}", destination_name):
+                return
+            away_name = f".review-away-{destination_name}"
+            captured_rename(
+                destination_name,
+                away_name,
+                src_dir_fd=destination_dir_fd,
+                dst_dir_fd=destination_dir_fd,
+            )
+            captured_rename(
+                away_name,
+                destination_name,
+                src_dir_fd=destination_dir_fd,
+                dst_dir_fd=destination_dir_fd,
+            )
+            mutations += 1
+
+        monkeypatch.setattr(
+            cache_posix,
+            "_rename_noreplace",
+            move_live_name_away_then_restore,
+        )
+    else:
+        from csk.builds import cache_windows
+
+        original_move = cache_windows._move_no_replace
+
+        def move_live_name_away_then_restore_windows(
+            source: Path,
+            destination: Path,
+        ) -> None:
+            nonlocal mutations
+            original_move(source, destination)
+            away = destination.with_name(f".review-away-{destination.name}")
+            captured_rename(destination, away)
+            captured_rename(away, destination)
+            mutations += 1
+
+        monkeypatch.setattr(
+            cache_windows,
+            "_move_no_replace",
+            move_live_name_away_then_restore_windows,
+        )
+
+    clear_manager_lifecycle_observation_cache()
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert mutations > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
 def test_rc6_read_only_bindings_detect_file_object_alias_mutations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
