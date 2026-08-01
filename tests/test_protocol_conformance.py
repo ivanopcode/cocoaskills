@@ -774,6 +774,77 @@ def test_rc6_all_five_argv_records_are_mutation_sensitive(tmp_path: Path) -> Non
         assert_build_positive_case(case, vectors, _root(), tmp_path)
 
 
+def test_rc6_darwin_launcher_fixture_does_not_require_host_chmod(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launcher = tmp_path / "trusted-goroot" / "bin" / "go"
+    launcher_key = os.path.normcase(os.path.abspath(launcher))
+    real_chmod = Path.chmod
+
+    def preserve_unexecutable_launcher(
+        path: Path,
+        mode: int,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        if os.path.normcase(os.path.abspath(path)) == launcher_key:
+            return
+        real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "chmod", preserve_unexecutable_launcher)
+    case = next(
+        item
+        for item in BUILD_DRIVER_VECTORS["positive_cases"]
+        if item["name"] == "fixed-environment-and-five-direct-argv-forms"
+    )
+
+    assert_build_positive_case(case, BUILD_DRIVER_VECTORS, _root(), tmp_path)
+
+    assert launcher.stat().st_mode & 0o111 == 0
+
+
+def test_rc6_toolchain_fixture_materializes_targets_before_internal_links(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = next(
+        item
+        for item in BUILD_DRIVER_VECTORS["toolchain_cases"]
+        if "entries" in item
+    )
+    real_symlink_to = Path.symlink_to
+    observed_targets: list[Path] = []
+
+    def require_materialized_target(
+        path: Path,
+        target: str | Path,
+        target_is_directory: bool = False,
+    ) -> None:
+        native_target = Path(target)
+        if not native_target.is_absolute():
+            native_target = path.parent / native_target
+        assert native_target.exists(), f"link target was not materialized: {target}"
+        observed_targets.append(native_target)
+        real_symlink_to(
+            path,
+            target,
+            target_is_directory=target_is_directory,
+        )
+
+    monkeypatch.setattr(Path, "symlink_to", require_materialized_target)
+
+    assert_toolchain_case(
+        case,
+        BUILD_DRIVER_VECTORS["toolchain_cases"],
+        tmp_path,
+    )
+
+    assert len(observed_targets) == sum(
+        entry["type"] == "symlink" for entry in case["entries"]
+    )
+
+
 @pytest.mark.parametrize(
     "field",
     [

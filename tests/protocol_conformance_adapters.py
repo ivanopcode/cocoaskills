@@ -1007,18 +1007,26 @@ def assert_build_source_case(
 
 
 def _materialize_toolchain_entries(root: Path, entries: list[JsonObject]) -> None:
-    for entry in entries:
-        path = root / entry["path"]
-        if entry["type"] == "directory":
-            path.mkdir(parents=True, exist_ok=True)
-        elif entry["type"] == "file":
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(base64.b64decode(entry["content_base64"]))
-        elif entry["type"] == "symlink":
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.symlink_to(entry["target"])
-        else:
-            raise AssertionError(f"unknown toolchain entry type {entry['type']!r}")
+    unknown = {entry["type"] for entry in entries} - {"directory", "file", "symlink"}
+    assert not unknown, f"unknown toolchain entry types {sorted(unknown)!r}"
+
+    # The vector is intentionally unsorted.  Materialize links last because
+    # Windows classifies a new link from its target and may otherwise preserve
+    # an unusable dangling reparse point; fingerprinting still consumes the
+    # native tree order and must canonicalize it itself.
+    for entry_type in ("directory", "file", "symlink"):
+        for entry in entries:
+            if entry["type"] != entry_type:
+                continue
+            path = root / entry["path"]
+            if entry_type == "directory":
+                path.mkdir(parents=True, exist_ok=True)
+            elif entry_type == "file":
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(base64.b64decode(entry["content_base64"]))
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.symlink_to(entry["target"])
 
 
 def assert_toolchain_case(
@@ -1055,15 +1063,14 @@ def assert_toolchain_case(
     if "entries" in case:
         preimage = base64.b64decode(case["preimage_base64"])
         assert "sha256:" + hashlib.sha256(preimage).hexdigest() == case["content_sha256"]
-        if os.name != "nt":
-            root = tmp_path / "goroot"
-            root.mkdir()
-            _materialize_toolchain_entries(root, case["entries"])
-            identity = toolchain.fingerprint_toolchain(
-                root.resolve(),
-                base64.b64decode(case["go_version_stdout_base64"]),
-            )
-            assert identity.content_sha256 == case["content_sha256"]
+        root = tmp_path / "goroot"
+        root.mkdir()
+        _materialize_toolchain_entries(root, case["entries"])
+        identity = toolchain.fingerprint_toolchain(
+            root.resolve(),
+            base64.b64decode(case["go_version_stdout_base64"]),
+        )
+        assert identity.content_sha256 == case["content_sha256"]
         return
 
     if name == "toolchain-mode-and-timestamp-are-non-inputs":
@@ -1072,10 +1079,7 @@ def assert_toolchain_case(
         for index, variant in enumerate(case["variants"]):
             root = tmp_path / f"toolchain-mode-{index}"
             root.mkdir()
-            try:
-                _materialize_toolchain_entries(root, canonical["entries"])
-            except OSError as exc:
-                pytest.skip(f"host cannot create the candidate's internal symlink: {exc}")
+            _materialize_toolchain_entries(root, canonical["entries"])
             for path in root.rglob("*"):
                 if not path.is_symlink():
                     path.chmod(int(variant["mode"], 8))
@@ -1439,16 +1443,42 @@ def _assert_fixed_environment_and_argv(
     executable.chmod(0o755)
     runner = _RecordingProbeRunner(goroot.resolve())
     host = toolchain._Host(goos="darwin", goarch="arm64", windows=False)
-    session = toolchain._establish_toolchain(
-        toolchain.ToolchainConfig(
-            private_base=private_base.resolve(),
-            operator_search_path=toolchain.OperatorSearchPath(()),
-            forbidden_roots=(forbidden_root.resolve(),),
-            go_executable=executable.resolve(),
-            runner=runner,
-        ),
-        host,
+    native_path_type = type(executable)
+    real_lstat = native_path_type.lstat
+    executable_key = os.path.normcase(os.path.abspath(executable))
+
+    def darwin_fixture_lstat(path: Path) -> os.stat_result:
+        observed = real_lstat(path)
+        if os.path.normcase(os.path.abspath(path)) == executable_key:
+            # The candidate describes a Darwin launcher on every consumer.
+            # Model its executable mode at the filesystem-observation seam so
+            # filesystems without Unix mode bits can exercise the same host.
+            # CocoaSkills' real launcher validator still checks the file type,
+            # stable identity, native Mach-O header, and open boundary.
+            return os.stat_result((observed.st_mode | 0o111, *observed[1:]))
+        return observed
+
+    launcher_mode_patch = mock.patch.object(
+        native_path_type,
+        "lstat",
+        autospec=True,
+        side_effect=darwin_fixture_lstat,
     )
+    launcher_mode_patch.start()
+    try:
+        session = toolchain._establish_toolchain(
+            toolchain.ToolchainConfig(
+                private_base=private_base.resolve(),
+                operator_search_path=toolchain.OperatorSearchPath(()),
+                forbidden_roots=(forbidden_root.resolve(),),
+                go_executable=executable.resolve(),
+                runner=runner,
+            ),
+            host,
+        )
+    except BaseException:
+        launcher_mode_patch.stop()
+        raise
     snapshot_root = tmp_path / "source"
     source_dir = snapshot_root / "build" / "cmd" / "golden-tool"
     source_dir.mkdir(parents=True)
@@ -1566,7 +1596,10 @@ def _assert_fixed_environment_and_argv(
         assert case["artifact_executed"] is False
     finally:
         frozen.close()
-        session.close()
+        try:
+            session.close()
+        finally:
+            launcher_mode_patch.stop()
 
 
 def assert_build_positive_case(

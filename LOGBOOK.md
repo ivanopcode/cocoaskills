@@ -404,3 +404,13 @@ artifact. Lifecycle adapters have an exact 32-name cluster/field map and assert
 all rollback lock and desired-digest guards. Mutation-sensitivity tests retain
 the rejected reviewer probes so future expected-error, environment, argv,
 lifecycle-field, or candidate-byte drift fails closed.
+
+Hosted Windows rework exposed two fixture portability assumptions. The shared
+toolchain entries are intentionally unsorted, so adapters now materialize
+directories and files before internal links and never convert link failures
+into platform skips. The shared Darwin launcher is modeled with its declared
+execute mode at the filesystem-observation seam on every host; CocoaSkills'
+real regular-file, stable-identity, native-header, and open-boundary validation
+still runs. Regression tests remove the host execute bit and require each link
+target to exist at creation time, making both Windows failures reproducible on
+POSIX without `os.name` bypasses.
