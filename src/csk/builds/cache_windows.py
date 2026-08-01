@@ -107,7 +107,7 @@ _FILE_BASIC_INFO_CLASS: Final = 0
 _FILE_STANDARD_INFO_CLASS: Final = 1
 _FILE_ATTRIBUTE_TAG_INFO_CLASS: Final = 9
 _FILE_ID_INFO_CLASS: Final = 18
-_FILE_RENAME_INFO_CLASS: Final = 3
+_FILE_RENAME_INFORMATION_CLASS: Final = 10
 
 _TOKEN_QUERY: Final = 0x0008
 _TOKEN_USER_CLASS: Final = 1
@@ -224,12 +224,27 @@ class _FileIdInfo(ctypes.Structure):
     ]
 
 
-class _FileRenameInfo(ctypes.Structure):
+class _FileRenameInformation(ctypes.Structure):
     _fields_ = [
-        ("replace_if_exists", ctypes.c_uint32),
+        ("replace_if_exists", ctypes.c_ubyte),
         ("root_directory", ctypes.c_void_p),
         ("file_name_length", ctypes.c_uint32),
-        ("file_name", ctypes.c_wchar * 1),
+        ("file_name", ctypes.c_uint16 * 1),
+    ]
+
+
+class _IoStatusValue(ctypes.Union):
+    _fields_ = [
+        ("status", ctypes.c_long),
+        ("pointer", ctypes.c_void_p),
+    ]
+
+
+class _IoStatusBlock(ctypes.Structure):
+    _anonymous_ = ("value",)
+    _fields_ = [
+        ("value", _IoStatusValue),
+        ("information", ctypes.c_size_t),
     ]
 
 
@@ -264,6 +279,7 @@ class _TokenUser(ctypes.Structure):
 class _WindowsApi:
     kernel32: Any
     advapi32: Any
+    ntdll: Any
 
 
 @dataclass(frozen=True)
@@ -953,6 +969,7 @@ def _api() -> _WindowsApi:
     win_dll: Any = ctypes.__dict__["WinDLL"]
     kernel32: Any = win_dll("kernel32", use_last_error=True)
     advapi32: Any = win_dll("advapi32", use_last_error=True)
+    ntdll: Any = win_dll("ntdll")
 
     kernel32.CreateFileW.argtypes = [
         ctypes.c_wchar_p,
@@ -1024,6 +1041,17 @@ def _api() -> _WindowsApi:
     kernel32.GetCurrentProcess.restype = ctypes.c_void_p
     kernel32.LocalFree.argtypes = [ctypes.c_void_p]
     kernel32.LocalFree.restype = ctypes.c_void_p
+
+    ntdll.NtSetInformationFile.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(_IoStatusBlock),
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_int,
+    ]
+    ntdll.NtSetInformationFile.restype = ctypes.c_long
+    ntdll.RtlNtStatusToDosError.argtypes = [ctypes.c_long]
+    ntdll.RtlNtStatusToDosError.restype = ctypes.c_uint32
 
     advapi32.OpenProcessToken.argtypes = [
         ctypes.c_void_p,
@@ -1106,7 +1134,7 @@ def _api() -> _WindowsApi:
         ctypes.c_void_p,
     ]
     advapi32.SetSecurityInfo.restype = ctypes.c_uint32
-    return _WindowsApi(kernel32=kernel32, advapi32=advapi32)
+    return _WindowsApi(kernel32=kernel32, advapi32=advapi32, ntdll=ntdll)
 
 
 def _last_error() -> int:
@@ -2642,48 +2670,37 @@ def _move_handle_no_replace(
     """Rename the exact open object to one unused child of a held parent."""
 
     raw_name = destination_name.encode("utf-16-le")
-    file_name_offset = _FileRenameInfo.file_name.offset
+    file_name_offset = _FileRenameInformation.file_name.offset
     buffer = ctypes.create_string_buffer(
-        ctypes.sizeof(_FileRenameInfo) + len(raw_name)
+        ctypes.sizeof(_FileRenameInformation) + len(raw_name)
     )
-    info = _FileRenameInfo.from_buffer(buffer)
+    info = _FileRenameInformation.from_buffer(buffer)
     info.replace_if_exists = 0
+    info.root_directory = destination_parent.value
     info.file_name_length = len(raw_name)
     ctypes.memmove(
         ctypes.addressof(buffer) + file_name_offset,
         raw_name,
         len(raw_name),
     )
-    with _open_raw_handle(
-        destination_parent.path,
-        desired_access=_FILE_READ_ATTRIBUTES | _FILE_EXECUTE,
-        missing=_UntrustedState(
-            "cache quarantine disappeared before handle-bound rename"
-        ),
-    ) as rename_root:
-        selected_parent = _revalidate_handle(destination_parent, None)
-        if (
-            rename_root.identity != selected_parent.identity
-            or rename_root.final_path.casefold()
-            != selected_parent.final_path.casefold()
-        ):
-            raise _UntrustedState(
-                "cache quarantine changed before handle-bound rename"
-            )
-        info.root_directory = rename_root.value
-        if _api().kernel32.SetFileInformationByHandle(
+    # The Win32 FileRenameInfo wrapper rejects its advertised relative-root
+    # form on current hosted Windows runners.  The native contract explicitly
+    # accepts a held RootDirectory handle and therefore binds both endpoints.
+    io_status = _IoStatusBlock()
+    api = _api()
+    status = int(
+        api.ntdll.NtSetInformationFile(
             source.value,
-            _FILE_RENAME_INFO_CLASS,
+            ctypes.byref(io_status),
             ctypes.byref(buffer),
             len(buffer),
-        ):
-            _revalidate_handle(
-                rename_root,
-                None,
-                "cache quarantine rename root",
-            )
-            return
-        error = _last_error()
+            _FILE_RENAME_INFORMATION_CLASS,
+        )
+    )
+    if status >= 0:
+        _revalidate_handle(destination_parent, None)
+        return
+    error = int(api.ntdll.RtlNtStatusToDosError(status))
     if error in {_ERROR_FILE_EXISTS, _ERROR_ALREADY_EXISTS}:
         raise FileExistsError(
             errno.EEXIST,

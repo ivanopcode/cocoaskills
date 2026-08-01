@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import os
 import platform
@@ -8,6 +9,7 @@ import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -222,6 +224,73 @@ def test_windows_backend_module_is_import_safe_on_every_host(tmp_path: Path) -> 
         }
     else:
         assert result.status is CacheEntryStatus.UNSUPPORTED
+
+
+def test_handle_bound_rename_uses_native_relative_no_replace_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class NativeApi:
+        def NtSetInformationFile(
+            self,
+            source: int,
+            _io_status: object,
+            buffer: object,
+            length: int,
+            information_class: int,
+        ) -> int:
+            info = ctypes.cast(
+                buffer,
+                ctypes.POINTER(cache_windows._FileRenameInformation),
+            ).contents
+            observed.update(
+                source=source,
+                root=info.root_directory,
+                replace=info.replace_if_exists,
+                name_length=info.file_name_length,
+                name=ctypes.string_at(
+                    ctypes.addressof(info)
+                    + cache_windows._FileRenameInformation.file_name.offset,
+                    info.file_name_length,
+                ),
+                length=length,
+                information_class=information_class,
+            )
+            return 0
+
+        def RtlNtStatusToDosError(self, _status: int) -> int:
+            raise AssertionError("successful rename must not translate an error")
+
+    api = SimpleNamespace(ntdll=NativeApi())
+    source = cast(cache_windows._Handle, SimpleNamespace(value=101))
+    destination = cast(cache_windows._Handle, SimpleNamespace(value=202))
+    monkeypatch.setattr(cache_windows, "_api", lambda: api)
+    monkeypatch.setattr(
+        cache_windows,
+        "_revalidate_handle",
+        lambda handle, *_args, **_kwargs: handle,
+    )
+
+    cache_windows._move_handle_no_replace(
+        source,
+        destination,
+        "gc-entry-a1b2",
+    )
+
+    expected_name = "gc-entry-a1b2".encode("utf-16-le")
+    assert observed == {
+        "source": 101,
+        "root": 202,
+        "replace": 0,
+        "name_length": len(expected_name),
+        "name": expected_name,
+        "length": (
+            ctypes.sizeof(cache_windows._FileRenameInformation)
+            + len(expected_name)
+        ),
+        "information_class": cache_windows._FILE_RENAME_INFORMATION_CLASS,
+    }
 
 
 @_WINDOWS_ONLY
@@ -1025,6 +1094,58 @@ def test_windows_gc_root_exchange_never_retires_the_replacement(
     assert inspection.status is CacheEntryStatus.HIT
     assert inspection.artifact_path is not None
     assert inspection.artifact_path.read_bytes() == b"young artifact"
+
+
+@_WINDOWS_ONLY
+def test_windows_gc_destination_root_exchange_retains_exact_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, store = _new_store(tmp_path)
+    build_input = _build_input()
+    publication, _ = _publication(tmp_path, build_input, b"old artifact")
+    store.publish(publication, guard=_HeldGuard())
+    entry = _entry_path(home, build_input)
+    _age_entry(entry, 1.0)
+
+    quarantine = home / cache_windows.QUARANTINE_ROOT_NAME
+    detached_quarantine = home / "detached-quarantine"
+    replacement_quarantine = home / "replacement-quarantine"
+    replacement_quarantine.mkdir()
+    _protect(replacement_quarantine, cache_windows._MUTABLE_DIRECTORY)
+    original_move = cache_windows._move_handle_no_replace
+    exchanged = False
+
+    def exchange_destination_before_move(
+        source: cache_windows._Handle,
+        destination_parent: cache_windows._Handle,
+        destination_name: str,
+    ) -> None:
+        nonlocal exchanged
+        if destination_name.startswith("gc-entry-") and not exchanged:
+            exchanged = True
+            cache_windows._move_no_replace(quarantine, detached_quarantine)
+            cache_windows._move_no_replace(replacement_quarantine, quarantine)
+        original_move(source, destination_parent, destination_name)
+
+    monkeypatch.setattr(
+        cache_windows,
+        "_move_handle_no_replace",
+        exchange_destination_before_move,
+    )
+
+    result = store.collect(set(), older_than=100.0, guard=_HeldGuard())
+
+    assert exchanged
+    assert result.removed == 0
+    assert result.warnings
+    assert quarantine.is_dir()
+    assert list(quarantine.iterdir()) == []
+    retained = list(detached_quarantine.iterdir())
+    assert len(retained) == 1
+    assert retained[0].name.startswith("gc-entry-")
+    artifact = retained[0] / Path(*build_input.artifact_path.split("/"))
+    assert artifact.read_bytes() == b"old artifact"
 
 
 @_WINDOWS_ONLY

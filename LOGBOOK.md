@@ -331,10 +331,14 @@ descriptor, renames through that descriptor, and verifies the quarantined
 inode before deletion. A concurrent entry replacement is restored or retained,
 while a concurrent root replacement leaves the new namespace untouched. The
 Windows backend reopens and records the verified file identity, then uses
-`SetFileInformationByHandle(FileRenameInfo)` with the held quarantine directory
-handle so the rename acts on that exact object without replacing a destination.
-Native backend tests exchange entries and driver roots between classification
-and retirement and assert that young replacements are never deleted.
+`NtSetInformationFile(FileRenameInformation)` with the held quarantine
+directory handle so the rename acts on that exact object without replacing a
+destination. The Win32 `SetFileInformationByHandle(FileRenameInfo)` form
+returned `ERROR_INVALID_PARAMETER` for a non-null relative root on hosted
+Windows Server 2025, while a pathname-only fallback could not bind the
+destination root. Native backend tests exchange entries, driver roots, and the
+destination quarantine root between classification and retirement and assert
+that replacement state is never deleted.
 
 Runtime orphan cleanup recognizes only the manager-owned legacy and indexed
 temporary/backup names and indexed stale names. PID liveness remains the sweep
