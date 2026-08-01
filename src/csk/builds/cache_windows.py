@@ -21,12 +21,13 @@ from __future__ import annotations
 import ctypes
 import errno
 import hashlib
+import math
 import ntpath
 import os
 import secrets
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
@@ -37,6 +38,7 @@ from . import metadata as _metadata
 from ._windows import named_data_streams
 from .cache import (
     BuildCacheError,
+    CacheCollectionResult,
     CacheConflictError,
     CacheEntryStatus,
     CacheExpectation,
@@ -176,6 +178,10 @@ class _UntrustedState(Exception):
 
 
 class _CorruptState(Exception):
+    pass
+
+
+class _YoungEntry(Exception):
     pass
 
 
@@ -783,6 +789,129 @@ class WindowsBuildCache:
             raise BuildCacheError("cache_boundary_untrusted", str(exc)) from exc
         except OSError as exc:
             raise BuildCacheError("cache_quarantine_failed", str(exc)) from exc
+
+    def collect(
+        self,
+        referenced_cache_keys: Collection[str],
+        *,
+        older_than: float,
+        guard: CacheMutationGuard,
+    ) -> CacheCollectionResult:
+        _require_guard(guard)
+        if (
+            isinstance(older_than, bool)
+            or not isinstance(older_than, (int, float))
+            or not math.isfinite(older_than)
+        ):
+            raise BuildCacheError(
+                "cache_gc_invalid",
+                "build-cache GC cutoff must be a finite timestamp",
+            )
+        if not self._supported:
+            return CacheCollectionResult(
+                warnings=(
+                    "build cache retained: required Windows protection primitives are unavailable",
+                )
+            )
+        referenced = {_key_component(key) for key in referenced_cache_keys}
+        removed = 0
+        warnings: list[str] = []
+        try:
+            with _open_manager_home(self._manager_home) as home:
+                try:
+                    with _open_protected_child_directory(  # noqa: SIM117
+                        home,
+                        LIVE_ROOT_NAME,
+                        "build cache root",
+                        _MUTABLE_DIRECTORY,
+                        missing=_MissingState("build cache root is absent"),
+                    ) as builds:
+                        with _open_protected_child_directory(
+                            builds,
+                            _DRIVER_DIRECTORY,
+                            "build driver cache",
+                            _MUTABLE_DIRECTORY,
+                            missing=_MissingState(
+                                "build driver cache is absent"
+                            ),
+                        ) as driver:
+                            names = _directory_names(
+                                driver,
+                                "build driver cache",
+                            )
+                            with _open_or_create_mutable_directory(
+                                home,
+                                QUARANTINE_ROOT_NAME,
+                                "build cache quarantine",
+                                replacement_parent=home,
+                                replacement_prefix="builds-quarantine-untrusted",
+                                guard=guard,
+                            ) as quarantine:
+                                for component in names:
+                                    if not _is_key_component(component):
+                                        warnings.append(
+                                            "build cache retained unknown entry "
+                                            f"{component!r}"
+                                        )
+                                        continue
+                                    if component in referenced:
+                                        continue
+                                    try:
+                                        _inspect_gc_entry(
+                                            driver,
+                                            component,
+                                            f"sha256:{component}",
+                                            older_than=float(older_than),
+                                        )
+                                    except _YoungEntry:
+                                        continue
+                                    except _MissingState:
+                                        continue
+                                    except (
+                                        _UntrustedState,
+                                        _CorruptState,
+                                        _metadata.BuildMetadataError,
+                                        BuildCacheError,
+                                        OSError,
+                                        ValueError,
+                                    ) as exc:
+                                        warnings.append(
+                                            "build cache retained uncertain entry "
+                                            f"sha256:{component}: {exc}"
+                                        )
+                                        continue
+                                    _require_guard(guard)
+                                    moved = _move_aside(
+                                        driver,
+                                        component,
+                                        quarantine,
+                                        f"gc-entry-{component}",
+                                        missing_ok=True,
+                                    )
+                                    if moved is None:
+                                        continue
+                                    removed += 1
+                                    try:
+                                        _remove_stage(quarantine, moved)
+                                    except OSError as exc:
+                                        warnings.append(
+                                            "swept build entry remains in quarantine "
+                                            f"{moved}: {exc}"
+                                        )
+                except _MissingState:
+                    return CacheCollectionResult()
+        except _MissingState:
+            return CacheCollectionResult()
+        except (_UntrustedState, OSError) as exc:
+            return CacheCollectionResult(
+                warnings=(
+                    f"build cache retained because its protected boundary is uncertain: {exc}",
+                )
+            )
+        return CacheCollectionResult(
+            removed=removed,
+            warnings=tuple(warnings),
+        )
 
     def _artifact_path(self, key: str, build_input: _metadata.GoBuildInput) -> Path:
         artifact_path = str(build_input.artifact_path)
@@ -2242,6 +2371,65 @@ def _inspect_entry(
                     )
 
 
+def _inspect_gc_entry(
+    parent: _Handle,
+    entry_name: str,
+    key: str,
+    *,
+    older_than: float,
+) -> _VerifiedEntry:
+    with _open_protected_child_directory(
+        parent,
+        entry_name,
+        "cache entry",
+        _SEALED_ENTRY,
+        missing=_MissingState("cache entry is absent"),
+    ) as entry:
+        if _filetime_to_unix_seconds(entry.basic.last_write_time) >= older_than:
+            raise _YoungEntry
+        names = _directory_names(entry, "cache entry")
+        if names != ["bin", RECEIPT_FILENAME]:
+            raise _CorruptState("cache entry has unexpected contents")
+        with _open_protected_child_file(
+            entry,
+            RECEIPT_FILENAME,
+            "cache receipt",
+            _SEALED_RECEIPT,
+            missing=_CorruptState("cache receipt is absent"),
+        ) as receipt_handle:
+            receipt_bytes = _read_bounded_handle(
+                receipt_handle,
+                _MAX_RECEIPT_BYTES,
+                "cache receipt",
+            )
+        receipt = _metadata.read_receipt(receipt_bytes)
+        if (
+            _metadata.cache_key(receipt.input) != key
+            or receipt.cache_key != key
+        ):
+            raise _CorruptState(
+                "cache directory name does not match its canonical receipt input"
+            )
+        identity = entry.identity
+    verified = _inspect_entry(
+        parent,
+        entry_name,
+        CacheExpectation(
+            input=receipt.input,
+            receipt_sha256=_metadata.receipt_sha256(receipt_bytes),
+        ),
+        key,
+        _artifact_name(receipt.input),
+    )
+    if verified.entry_identity != identity:
+        raise _UntrustedState("cache entry changed during GC inspection")
+    return verified
+
+
+def _filetime_to_unix_seconds(value: int) -> float:
+    return value / 10_000_000 - 11_644_473_600
+
+
 def _directory_names(handle: _Handle, label: str) -> list[str]:
     before = _object_state(handle)
     try:
@@ -2561,6 +2749,13 @@ def _key_component(cache_key: str) -> str:
     if any(character not in "0123456789abcdef" for character in component):
         raise BuildCacheError("cache_key_invalid", "logical cache key is malformed")
     return component
+
+
+def _is_key_component(value: str) -> bool:
+    return (
+        len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _require_guard(guard: CacheMutationGuard) -> None:

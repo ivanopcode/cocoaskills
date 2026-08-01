@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import re
 import stat
+from collections.abc import Collection
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -136,6 +137,14 @@ class CachePublicationResult:
         _require_sha256(self.receipt_sha256, "published receipt SHA-256")
 
 
+@dataclass(frozen=True)
+class CacheCollectionResult:
+    """Result of one locked, fail-safe protected-cache sweep."""
+
+    removed: int = 0
+    warnings: tuple[str, ...] = ()
+
+
 @runtime_checkable
 class CacheMutationGuard(Protocol):
     """Caller-owned witness for the exclusive manager-home mutation lock."""
@@ -170,6 +179,15 @@ class BuildCacheBackend(Protocol):
         guard: CacheMutationGuard,
     ) -> Path | None:
         """Move one live entry outside the live namespace under the lock."""
+
+    def collect(
+        self,
+        referenced_cache_keys: Collection[str],
+        *,
+        older_than: float,
+        guard: CacheMutationGuard,
+    ) -> CacheCollectionResult:
+        """Remove validated, unreferenced entries older than the cutoff."""
 
 
 def cache_for_manager_home(manager_home: str | os.PathLike[str]) -> BuildCacheBackend:
@@ -255,6 +273,7 @@ def _require_sha256(value: str, label: str) -> None:
 __all__ = [
     "BuildCacheBackend",
     "BuildCacheError",
+    "CacheCollectionResult",
     "CacheConflictError",
     "CacheEntryStatus",
     "CacheExpectation",

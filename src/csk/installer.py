@@ -134,8 +134,12 @@ def install(config: GlobalConfig, *, alias: str | None = None, options: InstallO
         and not any(result.failed for result in results)
     ):
         try:
-            with locking.ManagerHomeLock(config.path.parent):
-                gc.collect_runtime(config, config.path.parent)
+            with locking.ManagerHomeLock(config.path.parent) as home_lock:
+                gc.collect_runtime(
+                    config,
+                    config.path.parent,
+                    guard=home_lock,
+                )
         except locking.LockOrderError:
             raise
         except locking.LockError as exc:

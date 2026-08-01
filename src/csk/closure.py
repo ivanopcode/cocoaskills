@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import stat
 import tempfile
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -82,6 +83,7 @@ def build_closure(
     fetch_existing: bool = False,
     fetched_repos: set[Path] | None = None,
     stack: ExitStack | None = None,
+    read_only: bool = False,
 ) -> list[ClosureNode]:
     """Expand direct skills and their requirements into an ordered closure.
 
@@ -114,6 +116,7 @@ def build_closure(
                 fetch_existing=fetch_existing,
                 fetched_repos=fetched_repos,
                 stack=stack,
+                read_only=read_only,
             )
             nodes[item.name] = node
             for requirement in node.spec.requirements.values():
@@ -196,6 +199,7 @@ def _resolve_node(
     fetch_existing: bool,
     fetched_repos: set[Path],
     stack: ExitStack | None,
+    read_only: bool,
 ) -> ClosureNode:
     substituted: str | None = None
     if substitution is not None and substitution.path is not None:
@@ -208,7 +212,14 @@ def _resolve_node(
         substituted = substitution.describe()
     elif substitution is not None:
         _gate_source(config, item.name, substitution.git or "", item.chain)
-        repo = _ensure_dev_repo(config, item.name, substitution, use_cache=use_cache, stack=stack)
+        repo = _ensure_dev_repo(
+            config,
+            item.name,
+            substitution,
+            use_cache=use_cache,
+            stack=stack,
+            read_only=read_only,
+        )
         resolved = git_ops.resolve_ref(repo, substitution.ref_kind or "", substitution.ref_value or "")
         substituted = substitution.describe()
     else:
@@ -219,6 +230,7 @@ def _resolve_node(
             fetch_existing=fetch_existing,
             fetched_repos=fetched_repos,
             stack=stack,
+            read_only=read_only,
         )
         try:
             resolved = git_ops.resolve_ref(repo, item.ref.kind, item.ref.value)
@@ -227,7 +239,15 @@ def _resolve_node(
                 f"Cannot resolve {item.ref.kind} {item.ref.value!r} for {item.name} (via {item.chain}): {exc}"
             ) from exc
 
-    snap = _snapshot_for(config, item.source, repo, resolved.commit, use_cache=use_cache, stack=stack)
+    snap = _snapshot_for(
+        config,
+        item.source,
+        repo,
+        resolved.commit,
+        use_cache=use_cache,
+        stack=stack,
+        read_only=read_only,
+    )
     if git_ops.repository_has_submodules(snap):
         raise ClosureError(f"Submodules are unsupported in MVP: {item.source}")
     spec = skillspec.load_skill_spec(snap)
@@ -258,13 +278,19 @@ def _ensure_repo(
     fetch_existing: bool,
     fetched_repos: set[Path],
     stack: ExitStack | None,
+    read_only: bool,
 ) -> Path:
     repo = config.skills_root / item.source
     if repo.exists():
         if not (repo / ".git").exists():
             raise ClosureError(f"Local skill path exists but is not a git repository: {repo}")
         repo_key = repo.resolve()
-        if fetch_existing and use_cache and repo_key not in fetched_repos:
+        if (
+            fetch_existing
+            and use_cache
+            and not read_only
+            and repo_key not in fetched_repos
+        ):
             try:
                 git_ops.fetch_repo(repo)
             except git_ops.GitError as exc:
@@ -273,6 +299,10 @@ def _ensure_repo(
         return repo
     if not item.git:
         raise ClosureError(f"Skill repository not found for {item.name}: {repo} (via {item.chain})")
+    if read_only:
+        raise ClosureError(
+            f"Skill repository not found for {item.name}: {repo} (read-only status does not clone sources)"
+        )
     _gate_source(config, item.name, item.git, item.chain)
     destination = repo if use_cache else _temp_repo_dir(stack, item.source)
     try:
@@ -291,9 +321,14 @@ def _ensure_dev_repo(
     *,
     use_cache: bool,
     stack: ExitStack | None,
+    read_only: bool,
 ) -> Path:
     git_url = substitution.git or ""
     if not use_cache:
+        if read_only:
+            raise ClosureError(
+                "read-only closure resolution cannot clone a development substitution"
+            )
         destination = _temp_repo_dir(stack, name)
         git_ops.clone_repo(git_url, destination)
         return destination
@@ -301,8 +336,14 @@ def _ensure_dev_repo(
     # declared source repository.
     repo = config.path.parent / "dev" / name
     if repo.exists() and (repo / ".git").exists():
-        git_ops.fetch_repo(repo)
+        if not read_only:
+            git_ops.fetch_repo(repo)
         return repo
+    if read_only:
+        raise ClosureError(
+            f"Substitution repository not found for {name}: {repo} "
+            "(read-only status does not clone sources)"
+        )
     git_ops.clone_repo(git_url, repo)
     return repo
 
@@ -315,8 +356,44 @@ def _snapshot_for(
     *,
     use_cache: bool,
     stack: ExitStack | None,
+    read_only: bool,
 ) -> Path:
     if use_cache:
+        if read_only:
+            candidate = snapshot.snapshot_dir(
+                config.path.parent,
+                source,
+                commit,
+            )
+            try:
+                info = candidate.lstat()
+            except FileNotFoundError:
+                if stack is None:
+                    raise ClosureError(
+                        "read-only closure resolution requires an ExitStack "
+                        "when the persistent snapshot is absent"
+                    )
+                tmp_root = Path(
+                    stack.enter_context(
+                        tempfile.TemporaryDirectory(
+                            prefix="csk-status-snapshot-"
+                        )
+                    )
+                )
+                temporary = tmp_root / source
+                git_ops.archive(repo, commit, temporary)
+                return temporary
+            except OSError as exc:
+                raise ClosureError(
+                    f"Raw snapshot cannot be inspected for {source} at "
+                    f"{commit}: {candidate}"
+                ) from exc
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                raise ClosureError(
+                    f"Raw snapshot is not a real directory for {source} at "
+                    f"{commit}: {candidate}"
+                )
+            return candidate
         return snapshot.get_snapshot(config.path.parent, source, repo, commit)
     if stack is None:
         raise ClosureError("dry-run snapshot planning requires an ExitStack")

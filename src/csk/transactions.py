@@ -418,6 +418,42 @@ class TransactionEngine:
                         )
             return dict(sorted(result.items(), key=lambda item: _utf8_key(item[0])))
 
+    def referenced_install_marker_paths(
+        self,
+        lock: HomeLockWitness,
+    ) -> tuple[Path, ...]:
+        """Return every context generation an in-flight journal can select.
+
+        GC uses these validated paths as additional marker roots for commit
+        and rollback.  A malformed journal raises instead of returning a
+        partial set, allowing the collector to retain all uncertain state.
+        """
+
+        lock.assert_held()
+        with self._mutex, self._witness_scope(lock):
+            paths: set[Path] = set()
+            for transaction_id in self._journal_ids():
+                journal, _deleting = self._load_journal_record(
+                    transaction_id
+                )
+                for target in journal.targets:
+                    if not (
+                        target.target_class == "10-context"
+                        or target.identifier.startswith("context/")
+                    ):
+                        continue
+                    values = (
+                        target.live_path,
+                        target.staged_path,
+                        target.staged_source,
+                        target.backup_path,
+                        target.rollback_path,
+                    )
+                    for value in values:
+                        if value is not None:
+                            paths.add(Path(value))
+            return tuple(sorted(paths, key=lambda item: _utf8_key(str(item))))
+
     def _resume(self, journal: Journal) -> None:
         if journal.phase == "preparing":
             self._discard_prepared(journal)

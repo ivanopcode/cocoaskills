@@ -402,10 +402,11 @@ def test_post_commit_gc_runs_only_after_successful_real_install(
     cfg = make_config(csk_home, skills_root, project)
     gc_calls = []
 
-    def record_gc(called_config, called_home):
+    def record_gc(called_config, called_home, *, guard):
         active_lock = installer.locking._STATE.home
         assert active_lock is not None
         active_lock.assert_held()
+        assert guard is active_lock
         gc_calls.append((called_config, called_home))
 
     monkeypatch.setattr(

@@ -18,12 +18,12 @@ from . import (
     gc,
     git_ops,
     global_bins,
-    hashing,
     installer,
     locking,
     manifest,
     protocol_json,
     shims,
+    status,
     transactions,
 )
 from .audit import pipeline as audit_pipeline
@@ -196,8 +196,8 @@ def install(config: GlobalConfig, *, options: installer.InstallOptions | None = 
 
     if not options.dry_run and not result.failed:
         try:
-            with locking.ManagerHomeLock(csk_home):
-                gc.collect_runtime(config, csk_home)
+            with locking.ManagerHomeLock(csk_home) as home_lock:
+                gc.collect_runtime(config, csk_home, guard=home_lock)
         except locking.LockOrderError:
             raise
         except locking.LockError as exc:
@@ -916,22 +916,7 @@ def update(config: GlobalConfig) -> GlobalResult:
 
 
 def render_status(config: GlobalConfig) -> str:
-    csk_home = config.path.parent
-    global_manifest = load_manifest(csk_home)
-    lines = [f"Global skills ({global_root(csk_home)})"]
-    if not global_manifest.skills:
-        lines.append("  no skills declared")
-        return "\n".join(lines)
-    for decl in global_manifest.skills:
-        skill_status = _skill_status(config, decl)
-        commit = (skill_status["installed_commit"] or "")[:7]
-        suffix = ""
-        if skill_status["label"] == "update-available" and skill_status["resolved_commit"]:
-            suffix = f" -> {skill_status['resolved_commit'][:7]}"
-        lines.append(
-            f"  {decl.name:<20} {decl.ref.kind:<8} {decl.ref.value:<12} {commit:<7}  {skill_status['label']}{suffix}"
-        )
-    return "\n".join(lines)
+    return status.render_global_status(config)
 
 
 
@@ -1089,33 +1074,6 @@ def _plans_with_available_dependencies(
         available = kept
         if not removed:
             return available
-
-
-def _skill_status(config: GlobalConfig, decl: manifest.SkillDecl) -> dict[str, str | None]:
-    resolved_commit: str | None = None
-    try:
-        resolved = git_ops.resolve_ref(config.skills_root / decl.source, decl.ref.kind, decl.ref.value)
-        resolved_commit = resolved.commit
-    except Exception:  # noqa: BLE001 - status rendering degrades to an error label
-        return {"installed_commit": None, "resolved_commit": None, "label": "error"}
-
-    marker_path = config.path.parent / "global" / "skills" / decl.name / ".csk-install.json"
-    if not marker_path.exists():
-        return {"installed_commit": None, "resolved_commit": resolved_commit, "label": "missing"}
-    try:
-        marker = protocol_json.loads(marker_path.read_bytes())
-    except Exception:  # noqa: BLE001 - status rendering degrades to an error label
-        return {"installed_commit": None, "resolved_commit": resolved_commit, "label": "error"}
-    installed_commit = marker.get("commit") if isinstance(marker.get("commit"), str) else None
-    if installed_commit != resolved_commit:
-        return {"installed_commit": installed_commit, "resolved_commit": resolved_commit, "label": "update-available"}
-    try:
-        actual_hash = hashing.content_sha256(marker_path.parent)
-    except Exception:  # noqa: BLE001 - status rendering degrades to an error label
-        return {"installed_commit": installed_commit, "resolved_commit": resolved_commit, "label": "error"}
-    if marker.get("content_sha256") != actual_hash:
-        return {"installed_commit": installed_commit, "resolved_commit": resolved_commit, "label": "content-drift"}
-    return {"installed_commit": installed_commit, "resolved_commit": resolved_commit, "label": "up-to-date"}
 
 
 def _read_global_payload(path: Path) -> dict[str, Any]:

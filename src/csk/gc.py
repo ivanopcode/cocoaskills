@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-import json
+import math
+import os
 import re
 import shutil
-from dataclasses import dataclass
+import stat
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 
-from . import consumers, protocol_json
+from . import consumers, install_marker, locking, protocol_json, transactions
+from .builds import cache as build_cache
 from .config import GlobalConfig
 from .locking import _pid_alive
 
@@ -14,62 +19,347 @@ from .locking import _pid_alive
 # Interrupted installs leave .<name>.tmp-<pid> / .<name>.backup-<pid> entries
 # behind. They are safe to delete once the owning process is gone.
 _ORPHAN_RE = re.compile(r"^\..+\.(tmp|backup)-(\d+)$")
+BUILD_GRACE_SECONDS = 24 * 60 * 60
+
+
+class _GcLockWitness(
+    build_cache.CacheMutationGuard,
+    transactions.HomeLockWitness,
+    Protocol,
+):
+    pass
 
 
 @dataclass
 class GcStats:
     runtime_removed: int = 0
     snapshots_removed: int = 0
+    builds_removed: int = 0
     consumers_pruned: int = 0
+    warnings: list[str] = field(default_factory=list)
 
 
-def collect_runtime(config: GlobalConfig, csk_home: Path) -> GcStats:
+@dataclass
+class _References:
+    runtime: set[tuple[str, str]] = field(default_factory=set)
+    snapshots: set[tuple[str, str]] = field(default_factory=set)
+    builds: set[str] = field(default_factory=set)
+
+
+def collect_runtime(
+    config: GlobalConfig,
+    csk_home: Path,
+    *,
+    guard: _GcLockWitness | None = None,
+    now: float | None = None,
+    build_grace_seconds: float = BUILD_GRACE_SECONDS,
+) -> GcStats:
+    """Collect manager state under exactly one manager-home mutation lock.
+
+    Existing callers that do not already hold the lock acquire it here.  The
+    installer passes its witness explicitly, avoiding lock recursion while
+    making the build-cache mutation authority visible to the backend.
+    """
+
+    if guard is None:
+        with locking.ManagerHomeLock(csk_home) as acquired:
+            return _collect_locked(
+                config,
+                csk_home,
+                guard=acquired,
+                now=now,
+                build_grace_seconds=build_grace_seconds,
+            )
+    guard.assert_held()
+    return _collect_locked(
+        config,
+        csk_home,
+        guard=guard,
+        now=now,
+        build_grace_seconds=build_grace_seconds,
+    )
+
+
+def _collect_locked(
+    config: GlobalConfig,
+    csk_home: Path,
+    *,
+    guard: _GcLockWitness,
+    now: float | None,
+    build_grace_seconds: float,
+) -> GcStats:
+    guard.assert_held()
+    timestamp = time.time() if now is None else now
+    if (
+        isinstance(timestamp, bool)
+        or not isinstance(timestamp, (int, float))
+        or not math.isfinite(timestamp)
+    ):
+        raise ValueError("GC time must be a finite timestamp")
+    if (
+        isinstance(build_grace_seconds, bool)
+        or not isinstance(build_grace_seconds, (int, float))
+        or not math.isfinite(build_grace_seconds)
+        or build_grace_seconds < 0
+    ):
+        raise ValueError("build GC grace must be a finite non-negative duration")
+
     stats = GcStats()
-    referenced: set[tuple[str, str]] = set()
-    referenced_snapshots: set[tuple[str, str]] = set()
-    _collect_markers(csk_home / "global" / "skills", referenced, referenced_snapshots)
-    sweep_orphans(csk_home / "global" / "skills")
-    _collect_markers(csk_home / "hybrid" / "skills", referenced, referenced_snapshots)
-    sweep_orphans(csk_home / "hybrid" / "skills")
-    for project in config.projects.values():
-        _collect_markers(project.path / ".agents" / "skills", referenced, referenced_snapshots)
-        sweep_orphans(project.path / ".agents" / "skills")
+    references = _References()
+    uncertain = False
+    roots = [
+        csk_home / "global" / "skills",
+        csk_home / "hybrid" / "skills",
+        *(project.path / ".agents" / "skills" for project in config.projects.values()),
+    ]
+    for root in roots:
+        found, warnings = _collect_marker_root(root, references)
+        del found
+        if warnings:
+            uncertain = True
+            stats.warnings.extend(warnings)
+        sweep_orphans(root)
 
-    # Checkouts installed without registration ('csk install .') reference
-    # runtime through the consumer registry; dead entries are pruned here.
+    registry_valid = True
+    try:
+        known = _load_consumers_strict(csk_home)
+    except ValueError as exc:
+        registry_valid = False
+        uncertain = True
+        known = []
+        stats.warnings.append(
+            f"consumer registry is uncertain; retaining referenced state: {exc}"
+        )
+
     alive: list[Path] = []
-    known = consumers.load_consumers(csk_home)
     for consumer in known:
-        if consumer.exists() and _collect_markers(consumer / ".agents" / "skills", referenced, referenced_snapshots):
-            alive.append(consumer)
-            sweep_orphans(consumer / ".agents" / "skills")
-    stats.consumers_pruned = len(known) - len(alive)
-    consumers.replace_consumers(csk_home, alive)
-
-    stats.snapshots_removed = _collect_snapshots(csk_home, referenced_snapshots)
-
-    runtime_root = csk_home / "runtime"
-    if not runtime_root.exists():
-        return stats
-    for skill_dir in runtime_root.iterdir():
-        if not skill_dir.is_dir():
+        try:
+            consumer_info = consumer.lstat()
+        except FileNotFoundError:
             continue
-        sweep_orphans(skill_dir)
-        for commit_dir in skill_dir.iterdir():
-            if commit_dir.is_dir() and (skill_dir.name, commit_dir.name) not in referenced:
-                shutil.rmtree(commit_dir)
-                stats.runtime_removed += 1
+        except OSError as exc:
+            uncertain = True
+            alive.append(consumer)
+            stats.warnings.append(
+                f"consumer {consumer} is uncertain; retaining it: {exc}"
+            )
+            continue
+        if stat.S_ISLNK(consumer_info.st_mode) or not stat.S_ISDIR(
+            consumer_info.st_mode
+        ):
+            uncertain = True
+            alive.append(consumer)
+            stats.warnings.append(
+                f"consumer {consumer} is not a real directory; retaining it"
+            )
+            continue
+        root = consumer / ".agents" / "skills"
+        found, warnings = _collect_marker_root(root, references)
+        if warnings:
+            uncertain = True
+            alive.append(consumer)
+            stats.warnings.extend(warnings)
+        elif found:
+            alive.append(consumer)
+            sweep_orphans(root)
+
+    try:
+        journal_paths = transactions.TransactionEngine(
+            csk_home
+        ).referenced_install_marker_paths(guard)
+        for path in journal_paths:
+            warning = _collect_marker_directory(path, references)
+            if warning is not None:
+                uncertain = True
+                stats.warnings.append(
+                    f"journal marker state is uncertain at {path}: {warning}"
+                )
+    except transactions.TransactionError as exc:
+        uncertain = True
+        stats.warnings.append(
+            f"transaction journals are uncertain; retaining referenced state: {exc}"
+        )
+
+    if uncertain:
+        stats.warnings.append(
+            "GC retained runtime, snapshot, and build entries because the mark phase was incomplete"
+        )
+        return stats
+
+    if registry_valid:
+        stats.consumers_pruned = len(known) - len(alive)
+        consumers.replace_consumers(csk_home, alive)
+
+    stats.snapshots_removed = _collect_snapshots(
+        csk_home,
+        references.snapshots,
+    )
+    runtime_removed, runtime_warnings = _collect_runtime_entries(
+        csk_home,
+        references.runtime,
+    )
+    stats.runtime_removed = runtime_removed
+    stats.warnings.extend(runtime_warnings)
+
+    try:
+        collected = build_cache.cache_for_manager_home(csk_home).collect(
+            references.builds,
+            older_than=float(timestamp - build_grace_seconds),
+            guard=guard,
+        )
+    except (build_cache.BuildCacheError, AttributeError) as exc:
+        stats.warnings.append(
+            f"build cache retained because collection could not prove its boundary: {exc}"
+        )
+    else:
+        stats.builds_removed = collected.removed
+        stats.warnings.extend(collected.warnings)
     return stats
 
 
-def _collect_snapshots(csk_home: Path, referenced: set[tuple[str, str]]) -> int:
+def _load_consumers_strict(csk_home: Path) -> list[Path]:
+    path = consumers.registry_path(csk_home)
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        raise ValueError(f"cannot inspect {path}: {exc}") from exc
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"{path} is not a regular non-link file")
+    try:
+        value = protocol_json.loads(path.read_bytes())
+    except (OSError, protocol_json.ProtocolJSONError) as exc:
+        raise ValueError(f"cannot read {path}: {exc}") from exc
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version",
+        "consumers",
+    }:
+        raise ValueError(f"{path} has an invalid object shape")
+    if value.get("schema_version") != consumers.SCHEMA_VERSION:
+        raise ValueError(f"{path} has an unsupported schema_version")
+    raw = value.get("consumers")
+    if (
+        not isinstance(raw, list)
+        or not all(isinstance(item, str) and item for item in raw)
+        or raw != sorted(set(raw))
+    ):
+        raise ValueError(f"{path} has an invalid consumers list")
+    result: list[Path] = []
+    for item in raw:
+        candidate = Path(item)
+        if not candidate.is_absolute() or Path(os.path.abspath(candidate)) != candidate:
+            raise ValueError(f"{path} contains a non-canonical consumer path")
+        result.append(candidate)
+    return result
+
+
+def _collect_marker_root(
+    skills_root: Path,
+    references: _References,
+) -> tuple[bool, list[str]]:
+    try:
+        before = skills_root.lstat()
+    except FileNotFoundError:
+        return False, []
+    except OSError as exc:
+        return False, [f"cannot inspect skill store {skills_root}: {exc}"]
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISDIR(before.st_mode):
+        return False, [f"skill store is not a real directory: {skills_root}"]
+    try:
+        children = sorted(
+            skills_root.iterdir(),
+            key=lambda item: item.name.encode("utf-8"),
+        )
+    except OSError as exc:
+        return False, [f"cannot list skill store {skills_root}: {exc}"]
+    found = False
+    warnings: list[str] = []
+    for child in children:
+        if _ORPHAN_RE.match(child.name):
+            continue
+        try:
+            info = child.lstat()
+        except OSError as exc:
+            warnings.append(f"cannot inspect skill entry {child}: {exc}")
+            continue
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            warnings.append(f"skill entry is not a real directory: {child}")
+            continue
+        warning = _collect_marker_directory(
+            child,
+            references,
+            expected_name=child.name,
+        )
+        if warning is None:
+            found = True
+        else:
+            warnings.append(f"uncertain install marker at {child}: {warning}")
+    try:
+        after = skills_root.lstat()
+    except OSError as exc:
+        warnings.append(f"skill store changed while scanning {skills_root}: {exc}")
+    else:
+        if _path_state(before) != _path_state(after):
+            warnings.append(f"skill store changed while scanning: {skills_root}")
+    return found, warnings
+
+
+def _collect_marker_directory(
+    directory: Path,
+    references: _References,
+    *,
+    expected_name: str | None = None,
+) -> str | None:
+    try:
+        directory_info = directory.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return str(exc)
+    if stat.S_ISLNK(directory_info.st_mode) or not stat.S_ISDIR(
+        directory_info.st_mode
+    ):
+        return "marker parent is not a real directory"
+    marker_path = directory / ".csk-install.json"
+    try:
+        before = marker_path.lstat()
+    except FileNotFoundError:
+        return "marker is missing"
+    except OSError as exc:
+        return str(exc)
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        return "marker is not a regular non-link file"
+    try:
+        raw = marker_path.read_bytes()
+        after = marker_path.lstat()
+        marker = install_marker.read_install_marker(raw)
+    except (OSError, install_marker.InstallMarkerError) as exc:
+        return str(exc)
+    if _path_state(before) != _path_state(after):
+        return "marker changed while it was read"
+    if expected_name is not None and marker.name != expected_name:
+        return f"marker name {marker.name!r} does not match store entry"
+    references.runtime.add((marker.name, marker.commit))
+    references.snapshots.add((marker.source, marker.commit))
+    if isinstance(marker, install_marker.InstallMarkerV2):
+        references.builds.update(
+            build.cache_key for build in marker.builds.values()
+        )
+    return None
+
+
+def _collect_snapshots(
+    csk_home: Path,
+    referenced: set[tuple[str, str]],
+) -> int:
     cache_root = csk_home / "cache"
-    if not cache_root.exists():
+    if not cache_root.exists() or cache_root.is_symlink():
         return 0
     removed = 0
     # Layout: cache/<source>/<commit>/snapshot, where <source> may be nested.
     for snapshot_dir in sorted(cache_root.rglob("snapshot")):
-        if not snapshot_dir.is_dir():
+        if snapshot_dir.is_symlink() or not snapshot_dir.is_dir():
             continue
         commit_dir = snapshot_dir.parent
         source = commit_dir.parent.relative_to(cache_root).as_posix()
@@ -84,16 +374,76 @@ def _collect_snapshots(csk_home: Path, referenced: set[tuple[str, str]]) -> int:
     return removed
 
 
+def _collect_runtime_entries(
+    csk_home: Path,
+    referenced: set[tuple[str, str]],
+) -> tuple[int, list[str]]:
+    runtime_root = csk_home / "runtime"
+    try:
+        root_info = runtime_root.lstat()
+    except FileNotFoundError:
+        return 0, []
+    except OSError as exc:
+        return 0, [f"runtime store retained: {exc}"]
+    if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
+        return 0, [f"runtime store retained because it is not a real directory: {runtime_root}"]
+    removed = 0
+    warnings: list[str] = []
+    for skill_dir in runtime_root.iterdir():
+        try:
+            skill_info = skill_dir.lstat()
+        except OSError as exc:
+            warnings.append(f"runtime entry retained at {skill_dir}: {exc}")
+            continue
+        if stat.S_ISLNK(skill_info.st_mode) or not stat.S_ISDIR(skill_info.st_mode):
+            warnings.append(f"runtime entry retained because it is not a real directory: {skill_dir}")
+            continue
+        sweep_orphans(skill_dir)
+        for commit_dir in skill_dir.iterdir():
+            if _ORPHAN_RE.match(commit_dir.name):
+                continue
+            try:
+                commit_info = commit_dir.lstat()
+            except OSError as exc:
+                warnings.append(f"runtime generation retained at {commit_dir}: {exc}")
+                continue
+            if stat.S_ISLNK(commit_info.st_mode) or not stat.S_ISDIR(
+                commit_info.st_mode
+            ):
+                warnings.append(
+                    f"runtime generation retained because it is not a real directory: {commit_dir}"
+                )
+                continue
+            if (skill_dir.name, commit_dir.name) not in referenced:
+                shutil.rmtree(commit_dir)
+                removed += 1
+    return removed, warnings
+
+
 def sweep_orphans(directory: Path) -> None:
-    if not directory.exists():
+    try:
+        info = directory.lstat()
+    except OSError:
         return
-    for child in directory.iterdir():
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        return
+    try:
+        children = list(directory.iterdir())
+    except OSError:
+        return
+    for child in children:
         match = _ORPHAN_RE.match(child.name)
         if not match:
             continue
         if _pid_alive(int(match.group(2))):
             continue
-        if child.is_dir() and not child.is_symlink():
+        try:
+            child_info = child.lstat()
+        except OSError:
+            continue
+        if stat.S_ISDIR(child_info.st_mode) and not stat.S_ISLNK(
+            child_info.st_mode
+        ):
             shutil.rmtree(child, ignore_errors=True)
         else:
             try:
@@ -102,25 +452,12 @@ def sweep_orphans(directory: Path) -> None:
                 pass
 
 
-def _collect_markers(
-    skills_root: Path,
-    referenced: set[tuple[str, str]],
-    referenced_snapshots: set[tuple[str, str]] | None = None,
-) -> bool:
-    if not skills_root.exists():
-        return False
-    found = False
-    for marker in skills_root.glob("*/.csk-install.json"):
-        try:
-            data = protocol_json.loads(marker.read_bytes())
-        except Exception:
-            continue
-        name = data.get("name")
-        commit = data.get("commit")
-        if isinstance(name, str) and isinstance(commit, str):
-            referenced.add((name, commit))
-            found = True
-            if referenced_snapshots is not None:
-                source = data.get("source")
-                referenced_snapshots.add((source if isinstance(source, str) and source else name, commit))
-    return found
+def _path_state(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )

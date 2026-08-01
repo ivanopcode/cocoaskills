@@ -161,7 +161,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub.add_parser(
         "gc",
-        help="Remove unreferenced runtime entries, snapshot cache entries, and dead consumer registry entries.",
+        help=(
+            "Remove unreferenced runtime, snapshot, and protected build-cache "
+            "entries plus dead consumer registry entries."
+        ),
     )
     add_parser = sub.add_parser("add", help="Add or replace a skill declaration in the project Skillfile.")
     add_parser.add_argument("name")
@@ -429,7 +432,20 @@ def _add_global(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
     remove = global_sub.add_parser("remove", help="remove a global skill declaration")
     remove.add_argument("name")
     global_sub.add_parser("list", help="list declared global skills")
-    global_sub.add_parser("status", help="show global installed state")
+    global_status = global_sub.add_parser(
+        "status",
+        help="show global installed state",
+    )
+    global_status.add_argument(
+        "--check",
+        action="store_true",
+        help="exit non-zero unless every global skill and build is current",
+    )
+    global_status.add_argument(
+        "--json",
+        action="store_true",
+        help="print machine-readable JSON instead of the table",
+    )
     install = global_sub.add_parser("install", help="install global skills")
     install.add_argument("--dry-run", action="store_true", help="validate without modifying files")
     install.add_argument("--verbose", action="store_true", help="print detailed progress")
@@ -570,13 +586,20 @@ def _dispatch(args: argparse.Namespace) -> int:
         return _cmd_hybrid(cfg, args)
 
     if args.command == "gc":
-        with GlobalLock(cfg.path.parent):
-            stats = gc.collect_runtime(cfg, cfg.path.parent)
+        with GlobalLock(cfg.path.parent) as home_lock:
+            stats = gc.collect_runtime(
+                cfg,
+                cfg.path.parent,
+                guard=home_lock,
+            )
         print(
             f"gc: removed {stats.runtime_removed} runtime dir(s), "
             f"{stats.snapshots_removed} snapshot(s), "
+            f"{stats.builds_removed} build(s), "
             f"pruned {stats.consumers_pruned} consumer(s)"
         )
+        for warning in stats.warnings:
+            print(f"gc: warning: {warning}", file=sys.stderr)
         return EXIT_OK
 
     if args.command in {"install", "update", "upgrade"}:
@@ -630,7 +653,19 @@ def _dispatch_global(args: argparse.Namespace) -> int:
 
     cfg = config.load_config()
     if args.global_command == "status":
-        print(global_install.render_status(cfg))
+        collected = status.collect_global_status(cfg)
+        if args.json:
+            print(
+                json.dumps(
+                    status.global_status_to_payload(collected),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        else:
+            print(status.render_global_collected(collected))
+        if args.check and not collected.clean:
+            return EXIT_PARTIAL_FAIL
         return EXIT_OK
     dry_run_operation = args.global_command in {"install", "upgrade"} and getattr(args, "dry_run", False)
     if dry_run_operation:

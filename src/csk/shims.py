@@ -438,6 +438,74 @@ def activate_build_command(
     )
 
 
+def inspect_bin_shim(
+    bin_dir: Path,
+    command_name: str,
+    runtime_path: Path,
+    *,
+    platform_name: str | None = None,
+    path_entries: tuple[Path, ...] = (),
+) -> str | None:
+    """Return ``None`` only when a managed launcher exactly matches.
+
+    This is the read-only counterpart of :func:`write_bin_shim`.  It checks
+    the selected path, object kind, link target or launcher bytes, and Unix
+    execute permission without following or repairing user-controlled state.
+    """
+
+    platform = _resolve_platform(platform_name)
+    shim = shim_path(bin_dir, command_name, platform_name=platform)
+    target = _require_launcher_target(
+        Path(runtime_path),
+        subject=f"Command {command_name!r} launcher target",
+    )
+    entries = _require_path_entries(path_entries, platform=platform)
+    try:
+        before = shim.lstat()
+    except FileNotFoundError:
+        return f"managed launcher is missing: {shim}"
+    except OSError as exc:
+        return f"managed launcher cannot be inspected: {shim}: {exc}"
+
+    if platform != WINDOWS_PLATFORM and not entries:
+        if not stat.S_ISLNK(before.st_mode):
+            return f"managed launcher is not the expected symbolic link: {shim}"
+        try:
+            actual_target = os.readlink(shim)
+            after = shim.lstat()
+        except OSError as exc:
+            return f"managed launcher link cannot be read: {shim}: {exc}"
+        if _shim_state(before) != _shim_state(after):
+            return f"managed launcher changed while it was inspected: {shim}"
+        expected_target = os.path.relpath(target, shim.parent)
+        if actual_target != expected_target:
+            return (
+                f"managed launcher target {actual_target!r} does not match "
+                f"{expected_target!r}: {shim}"
+            )
+        return None
+
+    if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode):
+        return f"managed launcher is not the expected regular file: {shim}"
+    try:
+        raw = shim.read_bytes()
+        after = shim.lstat()
+    except OSError as exc:
+        return f"managed launcher cannot be read: {shim}: {exc}"
+    if _shim_state(before) != _shim_state(after):
+        return f"managed launcher changed while it was inspected: {shim}"
+    expected = (
+        _windows_launcher(target, entries).encode("utf-8")
+        if platform == WINDOWS_PLATFORM
+        else _unix_launcher(target, entries).encode("utf-8")
+    )
+    if raw != expected:
+        return f"managed launcher bytes do not match the selected artifact: {shim}"
+    if platform != WINDOWS_PLATFORM and not stat.S_IMODE(before.st_mode) & stat.S_IXUSR:
+        return f"managed launcher is not owner-executable: {shim}"
+    return None
+
+
 def write_bin_shim(
     bin_dir: Path,
     command_name: str,
@@ -518,6 +586,17 @@ def _shim_command_name(shim: Path, expected_commands: set[str], *, platform: str
     ):
         return shim.stem
     return None
+
+
+def _shim_state(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
 
 
 def _resolve_platform(platform_name: str | None) -> str:

@@ -283,3 +283,33 @@ preserves the native Git executable name while exposing no Go executable.
 Regression tests simulate the Windows pathname/descriptor `st_ctime` split,
 prove post-read replacement is still rejected, and exercise both project and
 global real-install paths with Git available and Go absent.
+
+## 2026-08-01 — TASK-260720-th0jdi build currentness, repair, and GC
+
+Build-aware project and global status now rederive schema-v2 build state from
+the selected persistent raw snapshot and current static descriptor, toolchain,
+native target, and fixed `manager-worker-v1` execution policy. The complete
+cache key and canonical receipt remain the single comparison mechanism for
+those dimensions; capability evidence is surfaced as result-only diagnostics
+and cannot change a currentness verdict. Marker v1 remains current for skill
+schemas 1–5, using an operation-private Git archive when its persistent
+snapshot has already been collected. Marker v2 deliberately requires its
+recorded persistent raw snapshot and never recreates it as a side effect of
+status.
+
+Repair remains the normal install operation. Missing, corrupt, unsupported,
+wrong-input, or untrusted protected cache state is classified non-current, and
+install recompiles from a freshly frozen and revalidated snapshot rather than
+adopting or repairing candidate bytes. This includes receipts or markers that
+name either the legacy policy-less cache key or the reserved hardened-policy
+key.
+
+Maintenance now marks runtime generations, snapshots, and schema-v2 build keys
+from project, global, hybrid, registered-consumer, and active-transaction
+marker roots while holding the manager-home lock. Any malformed or unstable
+mark source suppresses all three sweeps. After a successful mark phase, native
+cache backends remove only unreferenced entries older than the 24-hour grace
+whose protected boundary, canonical receipt, complete logical key, artifact
+path, hash, and size can all be proven. Legacy-policy, corrupt, and otherwise
+unprovable entries are retained with warnings; that conservative retention is
+intentional because GC cannot establish that the candidate is safe to remove.
