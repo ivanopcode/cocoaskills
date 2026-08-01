@@ -14,7 +14,10 @@ import hashlib
 import json
 import os
 import stat
-from dataclasses import replace
+import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -25,105 +28,144 @@ import pytest
 from jsonschema.validators import validator_for
 from referencing import Registry, Resource
 
-from csk import closure, gc, hashing, install_marker, protocol_json, skillspec, whitelist
-from csk.builds import cache, metadata, source, toolchain
-from csk.builds import go_v1
-
+from csk import (
+    closure,
+    gc,
+    hashing,
+    install_marker,
+    protocol_json,
+    skillspec,
+    whitelist,
+)
+from csk.builds import cache, go_v1, metadata, source, toolchain
 
 JsonObject = dict[str, Any]
 
 
-_BUILD_REJECTION_BINDINGS: dict[str, tuple[str, str]] = {
-    "schema-5-build-command": ("manifest", "build_requires_schema_6"),
-    "unknown-driver": ("manifest", "unsupported_build_driver"),
-    "forbidden-args": ("manifest", "manifest_invalid"),
-    "forbidden-env": ("manifest", "manifest_invalid"),
-    "forbidden-output": ("manifest", "manifest_invalid"),
-    "forbidden-toolchain": ("manifest", "manifest_invalid"),
-    "forbidden-hooks": ("manifest", "manifest_invalid"),
-    "mixed-script-build-shape": ("manifest", "manifest_invalid"),
-    "missing-build-roots": ("filesystem", "build_roots_required"),
-    "missing-build-root-directory": ("filesystem", "build_root_missing"),
-    "unused-build-root": ("filesystem", "build_root_unused"),
-    "overlapping-build-roots": ("filesystem", "build_roots_overlap"),
-    "runtime-overlapping-build-root": ("filesystem", "build_runtime_roots_overlap"),
-    "root-build-root": ("filesystem", "build_root_invalid"),
-    "build-root-symlink": ("filesystem", "build_root_link"),
-    "build-root-special-file": ("filesystem", "build_root_special_file"),
-    "root-source-dir": ("filesystem", "build_source_outside_build_root"),
-    "escaped-source-dir": ("filesystem", "build_source_path_escape"),
-    "source-outside-root": ("filesystem", "build_source_outside_build_root"),
-    "source-link": ("filesystem", "build_source_link"),
-    "source-special-file": ("filesystem", "build_source_special_file"),
-    "source-not-directory": ("filesystem", "build_source_not_directory"),
-    "missing-root-go-mod": ("module", "build_module_missing"),
-    "nested-module": ("module", "nested_build_module"),
-    "non-main-package": ("dependency-graph", "build_package_not_main"),
-    "multiple-packages": ("dependency-graph", "build_package_ambiguous"),
-    "missing-vendored-dependency": ("dependency-graph", "vendor_dependency_missing"),
-    "inconsistent-vendor-modules": ("dependency-graph", "vendor_metadata_inconsistent"),
-    "workspace-only-dependency": ("dependency-graph", "workspace_dependency_forbidden"),
-    "toolchain-switch-request": ("toolchain", "toolchain_switch_forbidden"),
-    "unsupported-go-pre-1-23": ("toolchain", "unsupported_go_family"),
-    "unsupported-go-future-family": ("toolchain", "unsupported_go_family"),
-    "cgo-only-package": ("dependency-graph", "cgo_required"),
-    "native-c-input": ("dependency-graph", "go_native_input_forbidden"),
-    "native-cxx-input": ("dependency-graph", "go_native_input_forbidden"),
-    "native-swig-input": ("dependency-graph", "go_native_input_forbidden"),
-    "root-syso": ("dependency-graph", "go_syso_forbidden"),
-    "transitive-syso": ("dependency-graph", "go_syso_forbidden"),
-    "root-assembly-absolute-include": ("dependency-graph", "go_assembly_forbidden"),
-    "transitive-assembly-escaping-include": ("dependency-graph", "go_assembly_forbidden"),
-    "escaped-embed-input": ("dependency-graph", "go_embed_input_escape"),
-    "cgo-import-dynamic": ("compiler-directive", "go_forbidden_compiler_directive"),
-    "attempted-go-generate": ("compiler-directive", "go_generator_forbidden"),
-    "default-pgo": ("compiler-directive", "go_pgo_forbidden"),
-    "poisoned-path": ("process", "process_environment_poisoned"),
-    "inherited-goflags-toolexec": ("process", "process_environment_poisoned"),
-    "inherited-goenv": ("process", "process_environment_poisoned"),
-    "inherited-gowork": ("process", "process_environment_poisoned"),
-    "vcs-metadata": ("process", "ambient_vcs_input_forbidden"),
-    "repository-local-fake-go": ("process", "untrusted_go_executable"),
-    "telemetry-command-failure": ("process", "telemetry_initialization_failed"),
-    "telemetry-private-dir-escape": ("process", "telemetry_directory_untrusted"),
-    "external-link-required": ("process", "external_link_forbidden"),
-    "libgcc-fallback-attempt": ("process", "libgcc_fallback_forbidden"),
-    "child-outside-goroot-tools": ("process", "unexpected_child_process"),
-    "wrong-go-executable-path": ("toolchain", "toolchain_executable_mismatch"),
-    "toolchain-digest-mismatch": ("toolchain", "toolchain_digest_mismatch"),
-    "cache-key-mismatch": ("cache", "cache_key_mismatch"),
-    "cache-wrong-target": ("cache", "cache_input_mismatch"),
-    "cache-wrong-toolchain": ("cache", "cache_input_mismatch"),
-    "cache-wrong-policy": ("cache", "cache_input_mismatch"),
-    "cache-wrong-build-source": ("cache", "cache_input_mismatch"),
-    "receipt-hash-mismatch": ("cache", "receipt_hash_mismatch"),
-    "artifact-hash-mismatch": ("cache", "artifact_hash_mismatch"),
-    "artifact-size-mismatch": ("cache", "artifact_size_mismatch"),
-    "artifact-path-mismatch": ("cache", "artifact_path_mismatch"),
-    "noncanonical-receipt-whitespace": ("cache", "receipt_not_canonical"),
-    "noncanonical-receipt-trailing-lf": ("cache", "receipt_not_canonical"),
-    "partial-cache-entry": ("cache", "cache_entry_incomplete"),
-    "artifact-link": ("cache", "artifact_link"),
-    "artifact-special-file": ("cache", "artifact_special_file"),
-    "concurrent-publisher-different-bytes": ("cache", "cache_publication_conflict"),
-    "self-consistent-forged-receipt-outside-protected-state": (
-        "cache",
-        "untrusted_provenance",
-    ),
-    "marker-embed-build-source-regression": (
-        "context",
-        "build_source_outside_build_root",
-    ),
-    "build-root-content-in-context": ("context", "build_root_visible_in_context"),
-    "legacy-rc4-input-without-execution-policy": (
-        "execution-policy",
-        "build_input_invalid",
-    ),
-    "reserved-hardened-execution-policy": (
-        "execution-policy",
-        "build_execution_policy_unsupported",
-    ),
+@dataclass(frozen=True)
+class _RejectionBinding:
+    """Exact declarative condition bound to one independently built fixture."""
+
+    boundary: str
+    condition: str | None
+
+
+_BUILD_REJECTION_BINDINGS: dict[str, _RejectionBinding] = {
+    "schema-5-build-command": _RejectionBinding("manifest", "type=build under schema_version=5"),
+    "unknown-driver": _RejectionBinding("manifest", "driver is not go-v1"),
+    "forbidden-args": _RejectionBinding("manifest", "build command declares args"),
+    "forbidden-env": _RejectionBinding("manifest", "build command declares env"),
+    "forbidden-output": _RejectionBinding("manifest", "build command declares output"),
+    "forbidden-toolchain": _RejectionBinding("manifest", "build command declares toolchain"),
+    "forbidden-hooks": _RejectionBinding("manifest", "build command declares hooks"),
+    "mixed-script-build-shape": _RejectionBinding("manifest", "one command combines build and script fields"),
+    "missing-build-roots": _RejectionBinding("filesystem", "build command has no build_roots"),
+    "missing-build-root-directory": _RejectionBinding("filesystem", "declared build root does not exist"),
+    "unused-build-root": _RejectionBinding("filesystem", "declared build root contains no command"),
+    "overlapping-build-roots": _RejectionBinding("filesystem", "one build root contains another"),
+    "runtime-overlapping-build-root": _RejectionBinding("filesystem", "build root overlaps runtime root"),
+    "root-build-root": _RejectionBinding("filesystem", "build_root is dot"),
+    "build-root-symlink": _RejectionBinding("filesystem", "build root is a symbolic link"),
+    "build-root-special-file": _RejectionBinding("filesystem", "build root is a special file"),
+    "root-source-dir": _RejectionBinding("filesystem", "source_dir is dot"),
+    "escaped-source-dir": _RejectionBinding("filesystem", "source_dir contains parent traversal"),
+    "source-outside-root": _RejectionBinding("filesystem", "source_dir is outside every build root"),
+    "source-link": _RejectionBinding("filesystem", "source_dir crosses a symbolic link"),
+    "source-special-file": _RejectionBinding("filesystem", "source_dir is a special file"),
+    "source-not-directory": _RejectionBinding("filesystem", "source_dir is a regular file"),
+    "missing-root-go-mod": _RejectionBinding("module", "build root lacks direct go.mod"),
+    "nested-module": _RejectionBinding("module", "nearest go.mod intervenes below build root"),
+    "non-main-package": _RejectionBinding("dependency-graph", "selected package is a library"),
+    "multiple-packages": _RejectionBinding("dependency-graph", "selection yields multiple main packages"),
+    "missing-vendored-dependency": _RejectionBinding("dependency-graph", "required module is absent from vendor"),
+    "inconsistent-vendor-modules": _RejectionBinding("dependency-graph", "vendor/modules.txt disagrees with go.mod"),
+    "workspace-only-dependency": _RejectionBinding("dependency-graph", "dependency resolves only through go.work"),
+    "toolchain-switch-request": _RejectionBinding("toolchain", "go.mod requests another toolchain"),
+    "unsupported-go-pre-1-23": _RejectionBinding("toolchain", "selected release is older than Go 1.23"),
+    "unsupported-go-future-family": _RejectionBinding("toolchain", "selected release family is not allowlisted"),
+    "cgo-only-package": _RejectionBinding("dependency-graph", "package has no buildable files with CGO_ENABLED=0"),
+    "native-c-input": _RejectionBinding("dependency-graph", "non-standard package has CFiles"),
+    "native-cxx-input": _RejectionBinding("dependency-graph", "non-standard package has CXXFiles"),
+    "native-swig-input": _RejectionBinding("dependency-graph", "non-standard package has SwigFiles"),
+    "root-syso": _RejectionBinding("dependency-graph", "root package has SysoFiles"),
+    "transitive-syso": _RejectionBinding("dependency-graph", "transitive package has SysoFiles"),
+    "root-assembly-absolute-include": _RejectionBinding("dependency-graph", "root SFiles includes an absolute path"),
+    "transitive-assembly-escaping-include": _RejectionBinding("dependency-graph", "transitive SFiles escapes the build root"),
+    "escaped-embed-input": _RejectionBinding("dependency-graph", "EmbedFiles resolves outside the build root"),
+    "cgo-import-dynamic": _RejectionBinding("compiler-directive", "active GoFiles contains //go:cgo_import_dynamic"),
+    "attempted-go-generate": _RejectionBinding("compiler-directive", "package requires go generate output"),
+    "default-pgo": _RejectionBinding("compiler-directive", "package attempts default.pgo input"),
+    "poisoned-path": _RejectionBinding("process", "host PATH contains compiler tools"),
+    "inherited-goflags-toolexec": _RejectionBinding("process", "host GOFLAGS requests toolexec"),
+    "inherited-goenv": _RejectionBinding("process", "host GOENV selects a file"),
+    "inherited-gowork": _RejectionBinding("process", "host GOWORK selects a workspace"),
+    "vcs-metadata": _RejectionBinding("process", "repository VCS metadata would affect output"),
+    "repository-local-fake-go": _RejectionBinding("process", "repository supplies a fake go executable"),
+    "telemetry-command-failure": _RejectionBinding("process", "go telemetry off exits unsuccessfully"),
+    "telemetry-private-dir-escape": _RejectionBinding("process", "GOTELEMETRYDIR escapes operation root"),
+    "external-link-required": _RejectionBinding("process", "target requires external linking"),
+    "libgcc-fallback-attempt": _RejectionBinding("process", "linker attempts host compiler lookup"),
+    "child-outside-goroot-tools": _RejectionBinding("process", "child executable is outside GOROOT/pkg/tool/host"),
+    "wrong-go-executable-path": _RejectionBinding("toolchain", "selected executable is not GOROOT/bin/go"),
+    "toolchain-digest-mismatch": _RejectionBinding("toolchain", "tree digest changes before child exit"),
+    "cache-key-mismatch": _RejectionBinding("cache", "receipt input derives another key"),
+    "cache-wrong-target": _RejectionBinding("cache", "receipt target differs"),
+    "cache-wrong-toolchain": _RejectionBinding("cache", "receipt toolchain differs"),
+    "cache-wrong-policy": _RejectionBinding("cache", "receipt policy differs"),
+    "cache-wrong-build-source": _RejectionBinding("cache", "receipt build source differs"),
+    "receipt-hash-mismatch": _RejectionBinding("cache", "stored receipt hash differs"),
+    "artifact-hash-mismatch": _RejectionBinding("cache", "artifact bytes differ"),
+    "artifact-size-mismatch": _RejectionBinding("cache", "artifact length differs"),
+    "artifact-path-mismatch": _RejectionBinding("cache", "artifact path is not manager-derived"),
+    "noncanonical-receipt-whitespace": _RejectionBinding("cache", "stored receipt is pretty-printed"),
+    "noncanonical-receipt-trailing-lf": _RejectionBinding("cache", "stored receipt has terminal LF"),
+    "partial-cache-entry": _RejectionBinding("cache", "receipt or artifact is absent"),
+    "artifact-link": _RejectionBinding("cache", "artifact is a symbolic link"),
+    "artifact-special-file": _RejectionBinding("cache", "artifact is not regular"),
+    "concurrent-publisher-different-bytes": _RejectionBinding("cache", "winner differs for the same key"),
+    "self-consistent-forged-receipt-outside-protected-state": _RejectionBinding("cache", None),
+    "marker-embed-build-source-regression": _RejectionBinding("context", None),
+    "build-root-content-in-context": _RejectionBinding("context", "context selector exposes build-root input"),
+    "legacy-rc4-input-without-execution-policy": _RejectionBinding("execution-policy", "policy omits the required execution_policy"),
+    "reserved-hardened-execution-policy": _RejectionBinding("execution-policy", "policy names the reserved hardened profile"),
 }
+
+
+@dataclass(frozen=True)
+class _RejectionTrace:
+    """Observed product rejection plus the effects visible at its boundary."""
+
+    error: str
+    cache_inspection: cache.CacheInspection | None = None
+    cache_lookup_performed: bool = False
+    artifact_executions: int = 0
+    cache_keys_created: int = 0
+    go_commands: tuple[tuple[str, ...], ...] = ()
+    extras: JsonObject | None = None
+
+    def expected_fields(self) -> JsonObject:
+        observed: JsonObject = {
+            "artifact_executed": self.artifact_executions > 0,
+            "error": self.error,
+            "result": "reject" if self.error else "accept",
+            "reuse": (
+                self.cache_inspection.reusable
+                if self.cache_inspection is not None
+                else False
+            ),
+        }
+        if self.extras is not None:
+            observed.update(self.extras)
+        return observed
+
+
+def _assert_observed_rejection(expected: JsonObject, trace: _RejectionTrace) -> None:
+    observed = trace.expected_fields()
+    assert set(observed) == set(expected), (
+        f"observed rejection fields {sorted(observed)} do not match vector fields "
+        f"{sorted(expected)}"
+    )
+    assert expected == observed
 
 
 _LIFECYCLE_CASE_FIELDS: dict[str, tuple[str, frozenset[str]]] = {
@@ -205,6 +247,25 @@ def _materialize_skill_case(snapshot: Path, manifest_name: str, raw: bytes) -> N
     (snapshot / manifest_name).write_bytes(raw)
 
 
+def _make_directory_link(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=True)
+        return
+    except OSError:
+        if os.name != "nt":
+            raise
+    result = subprocess.run(
+        ["cmd", "/d", "/c", "mklink", "/J", os.fspath(link), os.fspath(target)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"cannot materialize Windows directory link: {result.stdout}{result.stderr}"
+        )
+
+
 def assert_generated_schema_case(
     repository_root: Path,
     conformance_root: Path,
@@ -283,7 +344,62 @@ def _base_skill_manifest() -> JsonObject:
     }
 
 
-def _probe_skill_spec_rejection(name: str, tmp_path: Path) -> None:
+def _classify_skill_spec_error(
+    error: skillspec.SkillSpecError,
+    *,
+    manifest: JsonObject,
+    condition: str,
+) -> str:
+    """Project an exact CocoaSkills parser failure into protocol vocabulary."""
+    detail = str(error)
+    if detail == "Command 'tool' has unsupported type 'build'":
+        return "build_requires_schema_6"
+    if detail == "Command 'tool' field 'driver' must be 'go-v1'":
+        return "unsupported_build_driver"
+    if detail.startswith("commands.tool has unsupported field(s):"):
+        return "manifest_invalid"
+    if detail == "commands.tool.source_dir must be below exactly one build_roots entry":
+        return (
+            "build_roots_required"
+            if not manifest.get("build_roots")
+            else "build_source_outside_build_root"
+        )
+    if "build root does not exist" in detail:
+        return "build_root_missing"
+    if "build root 'unused' is not used" in detail:
+        return "build_root_unused"
+    if detail.startswith("build roots must be disjoint:"):
+        return "build_roots_overlap"
+    if detail.startswith("build roots must not overlap runtime roots:"):
+        return "build_runtime_roots_overlap"
+    if detail.startswith("build_roots[") and "must be a POSIX-style relative path" in detail:
+        return "build_root_invalid"
+    if "build root must be link-free" in detail:
+        return "build_root_link"
+    if "build root must be a directory" in detail:
+        return "build_root_special_file"
+    if detail.startswith("commands.tool.source_dir must be a POSIX-style relative path"):
+        return "build_source_outside_build_root"
+    if detail.startswith("commands.tool.source_dir must be a relative path"):
+        return "build_source_path_escape"
+    if "source directory must be link-free" in detail:
+        return "build_source_link"
+    if "source directory must be a directory" in detail:
+        return (
+            "build_source_special_file"
+            if condition == "source_dir is a special file"
+            else "build_source_not_directory"
+        )
+    if "build root build must contain the nearest go.mod directly" in detail:
+        return "build_module_missing"
+    if "intervening module" in detail and "is below build root" in detail:
+        return "nested_build_module"
+    raise AssertionError(f"unrecognized CocoaSkills skill rejection: {detail}")
+
+
+def _probe_skill_spec_rejection(name: str, tmp_path: Path) -> str:
+    binding = _BUILD_REJECTION_BINDINGS[name]
+    assert binding.condition is not None
     manifest = _base_skill_manifest()
     command = manifest["commands"]["tool"]
     assert isinstance(command, dict)
@@ -328,22 +444,21 @@ def _probe_skill_spec_rejection(name: str, tmp_path: Path) -> None:
     elif name == "build-root-symlink":
         build = snapshot / "build"
         build.rename(snapshot / "real-build")
-        try:
-            build.symlink_to("real-build", target_is_directory=True)
-        except OSError:
-            build.write_bytes(b"not-a-directory")
+        _make_directory_link(build, snapshot / "real-build")
     elif name == "build-root-special-file":
         build = snapshot / "build"
         build.rename(snapshot / "real-build")
-        build.write_bytes(b"not-a-directory")
+        if hasattr(os, "mkfifo"):
+            os.mkfifo(build)
+        else:
+            build.write_bytes(b"not-a-directory")
     elif name in {"source-link", "source-special-file", "source-not-directory"}:
         source_dir = snapshot / "build" / "cmd" / "tool"
         source_dir.rename(source_dir.with_name("real-tool"))
         if name == "source-link":
-            try:
-                source_dir.symlink_to("real-tool", target_is_directory=True)
-            except OSError:
-                source_dir.write_bytes(b"not-a-directory")
+            _make_directory_link(source_dir, source_dir.with_name("real-tool"))
+        elif name == "source-special-file" and hasattr(os, "mkfifo"):
+            os.mkfifo(source_dir)
         else:
             source_dir.write_bytes(b"not-a-directory")
     elif name == "missing-root-go-mod":
@@ -354,8 +469,15 @@ def _probe_skill_spec_rejection(name: str, tmp_path: Path) -> None:
             encoding="utf-8",
         )
 
-    with pytest.raises(skillspec.SkillSpecError):
+    try:
         skillspec.load_skill_spec(snapshot)
+    except skillspec.SkillSpecError as error:
+        return _classify_skill_spec_error(
+            error,
+            manifest=manifest,
+            condition=binding.condition,
+        )
+    raise AssertionError(f"CocoaSkills accepted rejection fixture {name!r}")
 
 
 def _root_package(root: Path) -> JsonObject:
@@ -494,7 +616,381 @@ def _probe_compiler_rejection(name: str, tmp_path: Path) -> str:
     return raised.value.code
 
 
-def _probe_cache_rejection(name: str, vectors: JsonObject) -> str:
+class _HeldCacheGuard:
+    def assert_held(self) -> None:
+        pass
+
+
+@dataclass(frozen=True)
+class _PublishedCacheFixture:
+    backend: cache.BuildCacheBackend
+    build_input: metadata.GoBuildInput
+    artifact_path: Path
+    manager_home: Path
+    receipt_bytes: bytes
+
+
+def _protect_windows_cache_path(path: Path, profile: Any) -> None:
+    from csk.builds import cache_windows
+
+    with cache_windows._open_raw_handle(
+        path,
+        desired_access=(
+            cache_windows._READ_CONTROL
+            | cache_windows._WRITE_DAC
+            | cache_windows._FILE_READ_ATTRIBUTES
+        ),
+    ) as handle:
+        cache_windows._apply_profile_dacl(handle, profile)
+    with cache_windows._open_raw_handle(
+        path,
+        desired_access=(
+            cache_windows._READ_CONTROL
+            | cache_windows._FILE_READ_ATTRIBUTES
+            | cache_windows._FILE_WRITE_ATTRIBUTES
+        ),
+    ) as handle:
+        cache_windows._set_readonly(handle, False)
+    with cache_windows._open_raw_handle(
+        path,
+        desired_access=cache_windows._FILE_ALL_ACCESS,
+    ) as handle:
+        cache_windows._apply_security_profile(handle, profile)
+
+
+def _make_cache_path_mutable(path: Path, *, directory: bool) -> None:
+    if os.name == "nt":
+        from csk.builds import cache_windows
+
+        _protect_windows_cache_path(
+            path,
+            cache_windows._MUTABLE_DIRECTORY
+            if directory
+            else cache_windows._MUTABLE_FILE,
+        )
+        return
+    path.chmod(0o700 if directory else 0o600)
+
+
+def _seal_cache_path(path: Path, *, artifact: bool = False) -> None:
+    if os.name == "nt":
+        from csk.builds import cache_windows
+
+        _protect_windows_cache_path(
+            path,
+            cache_windows._SEALED_ARTIFACT
+            if artifact
+            else cache_windows._SEALED_DIRECTORY,
+        )
+        return
+    path.chmod(0o500)
+
+
+def _relax_cache_tree(root: Path) -> None:
+    if not root.exists():
+        return
+    cleanup_errors: tuple[type[BaseException], ...] = (
+        OSError,
+        RuntimeError,
+        cache.BuildCacheError,
+    )
+    if os.name == "nt":
+        from csk.builds import cache_windows
+
+        cleanup_errors = (*cleanup_errors, cache_windows._UntrustedState)
+    paths: list[Path] = [root]
+    for current, directories, files in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        paths.extend(current_path / name for name in directories)
+        paths.extend(current_path / name for name in files)
+    for path in reversed(paths):
+        try:
+            if path.is_symlink():
+                continue
+            _make_cache_path_mutable(path, directory=path.is_dir())
+        except cleanup_errors:
+            pass
+
+
+def _publish_cache_fixture(
+    tmp_path: Path,
+    vectors: JsonObject,
+    name: str,
+    artifact_bytes: bytes = b"observed cache artifact",
+) -> _PublishedCacheFixture:
+    fixture_root = tmp_path / f"cache-{name}"
+    manager_home = fixture_root / "home"
+    manager_home.mkdir(mode=0o700, parents=True)
+    cache.provision_manager_home(manager_home)
+    source_root = fixture_root / "private-build"
+    source_root.mkdir(mode=0o700)
+    artifact_source = source_root / "artifact"
+    artifact_source.write_bytes(artifact_bytes)
+    if os.name != "nt":
+        artifact_source.chmod(0o700)
+    cache.make_publication_source_private(artifact_source)
+
+    build_input = metadata.parse_build_input(vectors["portable_identity"]["build_input"])
+    digest = "sha256:" + hashlib.sha256(artifact_bytes).hexdigest()
+    receipt = metadata.build_receipt(
+        build_input,
+        metadata.BuildArtifact(
+            path=build_input.artifact_path,
+            sha256=digest,
+            size=len(artifact_bytes),
+        ),
+    )
+    receipt_bytes = metadata.canonical_receipt_bytes(receipt)
+    backend = cache.cache_for_manager_home(manager_home)
+    published = backend.publish(
+        cache.CachePublication(
+            input=build_input,
+            receipt_bytes=receipt_bytes,
+            artifact_source=artifact_source,
+        ),
+        guard=_HeldCacheGuard(),
+    )
+    inspection = backend.inspect(cache.CacheExpectation(input=build_input))
+    assert inspection.status is cache.CacheEntryStatus.HIT
+    assert inspection.artifact_path == published.artifact_path
+    return _PublishedCacheFixture(
+        backend=backend,
+        build_input=build_input,
+        artifact_path=published.artifact_path,
+        manager_home=manager_home,
+        receipt_bytes=receipt_bytes,
+    )
+
+
+def _replace_cache_artifact(path: Path, raw: bytes) -> None:
+    _make_cache_path_mutable(path, directory=False)
+    path.write_bytes(raw)
+    _seal_cache_path(path, artifact=True)
+
+
+def _remove_cache_artifact(path: Path) -> None:
+    parent = path.parent
+    _make_cache_path_mutable(parent, directory=True)
+    _make_cache_path_mutable(path, directory=False)
+    path.unlink()
+    _seal_cache_path(parent)
+
+
+def _replace_cache_artifact_with_link(path: Path, target: Path) -> None:
+    target.write_bytes(b"linked cache artifact")
+    parent = path.parent
+    _make_cache_path_mutable(parent, directory=True)
+    _make_cache_path_mutable(path, directory=False)
+    path.unlink()
+    try:
+        path.symlink_to(target)
+    except OSError:
+        if os.name != "nt":
+            raise
+        os.link(target, path)
+        _seal_cache_path(path, artifact=True)
+    _seal_cache_path(parent)
+
+
+def _replace_cache_artifact_with_directory(path: Path) -> None:
+    parent = path.parent
+    _make_cache_path_mutable(parent, directory=True)
+    _make_cache_path_mutable(path, directory=False)
+    path.unlink()
+    path.mkdir()
+    _seal_cache_path(path)
+    _seal_cache_path(parent)
+
+
+def _classify_cache_inspection(
+    condition: str,
+    inspection: cache.CacheInspection,
+) -> str:
+    assert inspection.status in {
+        cache.CacheEntryStatus.CORRUPT,
+        cache.CacheEntryStatus.UNTRUSTED_PROVENANCE,
+    }
+    assert inspection.reusable is False
+    detail = inspection.reason.casefold()
+    if condition == "artifact bytes differ":
+        assert "artifact" in detail and "hash" in detail
+        return "artifact_hash_mismatch"
+    if condition == "artifact length differs":
+        assert "artifact" in detail and ("size" in detail or "length" in detail)
+        return "artifact_size_mismatch"
+    if condition == "receipt or artifact is absent":
+        assert "artifact" in detail and (
+            "absent" in detail
+            or "incomplete" in detail
+            or "unexpected contents" in detail
+        )
+        return "cache_entry_incomplete"
+    if condition == "artifact is a symbolic link":
+        assert "artifact" in detail or "link" in detail
+        return "artifact_link"
+    if condition == "artifact is not regular":
+        assert "artifact" in detail or "regular" in detail
+        return "artifact_special_file"
+    raise AssertionError(f"unbound cache inspection condition {condition!r}")
+
+
+def _probe_cache_backend_rejection(
+    name: str,
+    vectors: JsonObject,
+    tmp_path: Path,
+) -> _RejectionTrace:
+    binding = _BUILD_REJECTION_BINDINGS[name]
+    assert binding.condition is not None
+    fixture = _publish_cache_fixture(tmp_path, vectors, name)
+    original = fixture.artifact_path.read_bytes()
+    try:
+        if name == "artifact-hash-mismatch":
+            _replace_cache_artifact(fixture.artifact_path, b"X" * len(original))
+        elif name == "artifact-size-mismatch":
+            _replace_cache_artifact(fixture.artifact_path, original + b"X")
+        elif name == "partial-cache-entry":
+            _remove_cache_artifact(fixture.artifact_path)
+        elif name == "artifact-link":
+            _replace_cache_artifact_with_link(
+                fixture.artifact_path,
+                fixture.manager_home.parent / "link-target",
+            )
+        elif name == "artifact-special-file":
+            _replace_cache_artifact_with_directory(fixture.artifact_path)
+        else:
+            raise AssertionError(f"unbound cache backend fixture {name!r}")
+        inspection = fixture.backend.inspect(
+            cache.CacheExpectation(input=fixture.build_input)
+        )
+        return _RejectionTrace(
+            _classify_cache_inspection(binding.condition, inspection),
+            cache_inspection=inspection,
+            cache_lookup_performed=True,
+        )
+    finally:
+        _relax_cache_tree(fixture.manager_home.parent)
+
+
+def _probe_cache_publication_conflict(
+    vectors: JsonObject,
+    tmp_path: Path,
+) -> _RejectionTrace:
+    fixture = _publish_cache_fixture(tmp_path, vectors, "publication-conflict")
+    try:
+        conflicting = b"different winner bytes"
+        source = fixture.manager_home.parent / "private-build" / "conflicting"
+        source.write_bytes(conflicting)
+        if os.name != "nt":
+            source.chmod(0o700)
+        cache.make_publication_source_private(source)
+        receipt = metadata.build_receipt(
+            fixture.build_input,
+            metadata.BuildArtifact(
+                path=fixture.build_input.artifact_path,
+                sha256="sha256:" + hashlib.sha256(conflicting).hexdigest(),
+                size=len(conflicting),
+            ),
+        )
+        with pytest.raises(cache.CacheConflictError) as raised:
+            fixture.backend.publish(
+                cache.CachePublication(
+                    input=fixture.build_input,
+                    receipt_bytes=metadata.canonical_receipt_bytes(receipt),
+                    artifact_source=source,
+                ),
+                guard=_HeldCacheGuard(),
+            )
+        return _RejectionTrace(raised.value.code, cache_lookup_performed=True)
+    finally:
+        _relax_cache_tree(fixture.manager_home.parent)
+
+
+def _probe_untrusted_candidate(
+    vector: JsonObject,
+    tmp_path: Path,
+) -> _RejectionTrace:
+    candidate = vector["candidate"]
+    candidate_raw = protocol_json.canonical_bytes(candidate["receipt"])
+    candidate_input = metadata.parse_build_input(candidate["receipt"]["input"])
+    receipt = metadata.verify_receipt(
+        candidate_raw,
+        expected_input=candidate_input,
+        expected_cache_key=candidate["receipt"]["cache_key"],
+        expected_receipt_sha256=candidate["receipt_sha256"],
+    )
+    artifact_bytes = base64.b64decode(candidate["artifact_bytes_base64"])
+    checks = {
+        "artifact_hash_matches": (
+            "sha256:" + hashlib.sha256(artifact_bytes).hexdigest()
+            == receipt.artifact.sha256
+        ),
+        "artifact_size_matches": len(artifact_bytes) == receipt.artifact.size,
+        "cache_key_matches": receipt.cache_key == candidate["receipt"]["cache_key"],
+        "input_matches": receipt.input == candidate_input,
+        "receipt_hash_matches": (
+            "sha256:" + hashlib.sha256(candidate_raw).hexdigest()
+            == candidate["receipt_sha256"]
+        ),
+    }
+    assert checks == candidate["internal_checks"]
+
+    manager_home = tmp_path / "cache-untrusted-candidate" / "home"
+    entry = (
+        manager_home
+        / "builds"
+        / "go-v1"
+        / receipt.cache_key.removeprefix("sha256:")
+    )
+    artifact = entry / Path(*receipt.artifact.path.split("/"))
+    artifact.parent.mkdir(parents=True)
+    (entry / "csk-receipt.ccj.json").write_bytes(candidate_raw)
+    artifact.write_bytes(artifact_bytes)
+    if os.name != "nt":
+        artifact.chmod(0o500)
+        manager_home.chmod(0o777)
+    artifact_stat = artifact.lstat()
+    assert candidate["artifact_is_regular_executable"] is (
+        stat.S_ISREG(artifact_stat.st_mode)
+        and (os.name == "nt" or bool(artifact_stat.st_mode & 0o111))
+    )
+    backend = cache.cache_for_manager_home(manager_home)
+    try:
+        inspection = backend.inspect(
+            cache.CacheExpectation(
+                input=candidate_input,
+                receipt_sha256=candidate["receipt_sha256"],
+            )
+        )
+        assert inspection.status is cache.CacheEntryStatus.UNTRUSTED_PROVENANCE
+        assert vector["cache_boundary"] == {
+            "all_components_link_safe": True,
+            "manager_created": False,
+            "other_principals_can_write": True,
+            "owner_matches_manager_principal": False,
+        }
+        return _RejectionTrace(
+            "untrusted_provenance",
+            cache_inspection=inspection,
+            cache_lookup_performed=True,
+            extras={
+                "dry_run": inspection.dry_run_outcome,
+                "marker_current": inspection.reusable,
+                "real_operation": (
+                    "rebuild-from-validated-snapshot-into-protected-state"
+                    if inspection.status is cache.CacheEntryStatus.UNTRUSTED_PROVENANCE
+                    else ""
+                ),
+            },
+        )
+    finally:
+        _relax_cache_tree(manager_home.parent)
+
+
+def _probe_cache_rejection(
+    name: str,
+    vectors: JsonObject,
+    tmp_path: Path,
+) -> _RejectionTrace:
     portable = vectors["portable_identity"]
     raw = base64.b64decode(portable["stored_receipt_base64"])
     build_input = metadata.parse_build_input(portable["build_input"])
@@ -502,26 +998,7 @@ def _probe_cache_rejection(name: str, vectors: JsonObject) -> str:
         vector = next(
             item for item in vectors["rejection_cases"] if item["name"] == name
         )
-        candidate = vector["candidate"]
-        candidate_raw = protocol_json.canonical_bytes(candidate["receipt"])
-        candidate_input = metadata.parse_build_input(candidate["receipt"]["input"])
-        receipt = metadata.verify_receipt(
-            candidate_raw,
-            expected_input=candidate_input,
-            expected_cache_key=candidate["receipt"]["cache_key"],
-            expected_receipt_sha256=candidate["receipt_sha256"],
-        )
-        assert receipt.artifact.sha256 == candidate["receipt"]["artifact"]["sha256"]
-        inspection = cache.CacheInspection(
-            cache.CacheEntryStatus.UNTRUSTED_PROVENANCE,
-            "candidate is outside manager-protected state",
-        )
-        assert inspection.reusable is False
-        assert inspection.dry_run_outcome == vector["expected"]["dry_run"]
-        assert vector["cache_boundary"]["manager_created"] is False
-        assert vector["cache_boundary"]["other_principals_can_write"] is True
-        assert vector["expected"]["marker_current"] is False
-        return "untrusted_provenance"
+        return _probe_untrusted_candidate(vector, tmp_path)
     if name == "cache-key-mismatch":
         with pytest.raises(metadata.BuildMetadataError) as raised:
             metadata.verify_receipt(
@@ -530,7 +1007,7 @@ def _probe_cache_rejection(name: str, vectors: JsonObject) -> str:
                 expected_cache_key="sha256:" + "0" * 64,
                 expected_receipt_sha256=portable["receipt_sha256"],
             )
-        return raised.value.code
+        return _RejectionTrace(raised.value.code)
     if name.startswith("cache-wrong-"):
         if name == "cache-wrong-target":
             changed = replace(
@@ -566,7 +1043,7 @@ def _probe_cache_rejection(name: str, vectors: JsonObject) -> str:
                 raw,
                 expected_input=changed,
             )
-        return raised.value.code
+        return _RejectionTrace(raised.value.code)
     if name == "receipt-hash-mismatch":
         with pytest.raises(metadata.BuildMetadataError) as raised:
             metadata.verify_receipt(
@@ -575,7 +1052,7 @@ def _probe_cache_rejection(name: str, vectors: JsonObject) -> str:
                 expected_cache_key=portable["cache_key"],
                 expected_receipt_sha256="sha256:" + "0" * 64,
             )
-        return raised.value.code
+        return _RejectionTrace(raised.value.code)
     if name in {"noncanonical-receipt-whitespace", "noncanonical-receipt-trailing-lf"}:
         poisoned = (b" " + raw) if name.endswith("whitespace") else (raw + b"\n")
         with pytest.raises(metadata.BuildMetadataError) as raised:
@@ -585,7 +1062,7 @@ def _probe_cache_rejection(name: str, vectors: JsonObject) -> str:
                 expected_cache_key=portable["cache_key"],
                 expected_receipt_sha256="sha256:" + hashlib.sha256(poisoned).hexdigest(),
             )
-        return raised.value.code
+        return _RejectionTrace(raised.value.code)
     if name == "artifact-path-mismatch":
         receipt = json.loads(raw)
         receipt["artifact"]["path"] = "bin/not-golden-tool"
@@ -597,17 +1074,492 @@ def _probe_cache_rejection(name: str, vectors: JsonObject) -> str:
                 expected_cache_key=portable["cache_key"],
                 expected_receipt_sha256="sha256:" + hashlib.sha256(poisoned).hexdigest(),
             )
-        return raised.value.code
+        return _RejectionTrace(raised.value.code)
+    if name in {
+        "artifact-hash-mismatch",
+        "artifact-size-mismatch",
+        "partial-cache-entry",
+        "artifact-link",
+        "artifact-special-file",
+    }:
+        return _probe_cache_backend_rejection(name, vectors, tmp_path)
+    if name == "concurrent-publisher-different-bytes":
+        return _probe_cache_publication_conflict(vectors, tmp_path)
+    raise AssertionError(f"unbound cache rejection fixture {name!r}")
 
-    receipt = metadata.verify_receipt(
-        raw,
-        expected_input=build_input,
-        expected_cache_key=portable["cache_key"],
-        expected_receipt_sha256=portable["receipt_sha256"],
+
+@contextmanager
+def _projected_darwin_toolchain(
+    tmp_path: Path,
+    name: str,
+    *,
+    version_stdout: bytes = b"go version go1.25.5 darwin/arm64\n",
+    telemetry_returncode: int = 0,
+    telemetry_directory: Path | None = None,
+) -> Iterator[tuple[toolchain.ToolchainConfig, toolchain._Host, Path]]:
+    """Materialize the portable Darwin toolchain probe on every test host."""
+
+    fixture = tmp_path / f"projected-toolchain-{name}"
+    private_base = fixture / "private"
+    private_base.mkdir(parents=True)
+    repository = fixture / "repository"
+    repository.mkdir()
+    goroot = fixture / "goroot"
+    executable = goroot / "bin" / "go"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 12)
+    executable.chmod(0o755)
+    runner = _RecordingProbeRunner(
+        goroot.resolve(),
+        version_stdout=version_stdout,
+        telemetry_returncode=telemetry_returncode,
+        telemetry_directory=telemetry_directory,
     )
-    assert receipt.input == build_input
-    assert cache.CacheInspection(cache.CacheEntryStatus.CORRUPT, name).reusable is False
-    return _BUILD_REJECTION_BINDINGS[name][1]
+    host = toolchain._Host(goos="darwin", goarch="arm64", windows=False)
+    native_path_type = type(executable)
+    real_lstat = native_path_type.lstat
+    executable_key = os.path.normcase(os.path.abspath(executable))
+
+    def darwin_fixture_lstat(path: Path) -> os.stat_result:
+        observed = real_lstat(path)
+        if os.path.normcase(os.path.abspath(path)) == executable_key:
+            return os.stat_result((observed.st_mode | 0o111, *observed[1:]))
+        return observed
+
+    with mock.patch.object(
+        native_path_type,
+        "lstat",
+        autospec=True,
+        side_effect=darwin_fixture_lstat,
+    ):
+        yield (
+            toolchain.ToolchainConfig(
+                private_base=private_base.resolve(),
+                operator_search_path=toolchain.OperatorSearchPath(()),
+                forbidden_roots=(repository.resolve(),),
+                go_executable=executable.resolve(),
+                runner=runner,
+            ),
+            host,
+            goroot.resolve(),
+        )
+
+
+def _probe_toolchain_rejection(
+    name: str,
+    tmp_path: Path,
+) -> _RejectionTrace:
+    if name == "toolchain-switch-request":
+        root = tmp_path / "switch" / "build"
+        (root / "cmd").mkdir(parents=True)
+        (root / "go.mod").write_text(
+            "module example.test/tool\ntoolchain go1.26.1\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(go_v1.GoV1Error) as raised:
+            go_v1._canonical_build_directories(
+                SimpleNamespace(path=root.parent), "build", "build/cmd"
+            )
+        return _RejectionTrace(raised.value.code)
+
+    if name == "unsupported-go-pre-1-23":
+        with pytest.raises(toolchain.ToolchainError) as raised:
+            toolchain.parse_normalized_go_version(
+                "go version go1.22.12 darwin/arm64"
+            )
+        return _RejectionTrace(raised.value.code)
+
+    if name == "unsupported-go-future-family":
+        with (
+            _projected_darwin_toolchain(
+                tmp_path,
+                name,
+                version_stdout=b"go version go1.99.0 darwin/arm64\n",
+            ) as (config, host, _goroot),
+            pytest.raises(toolchain.ToolchainError) as raised,
+        ):
+            toolchain._establish_toolchain(config, host)
+        return _RejectionTrace(raised.value.code)
+
+    if name == "wrong-go-executable-path":
+        root = tmp_path / "wrong-go"
+        root.mkdir()
+        selected = root / "not-go"
+        selected.write_bytes(b"GO")
+        config = toolchain.ToolchainConfig(
+            private_base=root.resolve(),
+            operator_search_path=toolchain.OperatorSearchPath(()),
+            forbidden_roots=(),
+            go_executable=selected.resolve(),
+        )
+        with pytest.raises(toolchain.ToolchainError) as raised:
+            toolchain._select_toolchain(
+                config,
+                toolchain._Host("darwin", "arm64", False),
+                (),
+            )
+        return _RejectionTrace(raised.value.code)
+
+    assert name == "toolchain-digest-mismatch"
+    with _projected_darwin_toolchain(tmp_path, name) as (config, host, goroot):
+        session = toolchain._establish_toolchain(config, host)
+        try:
+            (goroot / "VERSION").write_text("mutated\n", encoding="utf-8")
+            with pytest.raises(toolchain.ToolchainError) as raised:
+                session.verify()
+        finally:
+            session.release()
+    assert raised.value.code == "toolchain_mutated"
+    return _RejectionTrace("toolchain_digest_mismatch")
+
+
+def _worker_environment_fixture(tmp_path: Path, name: str) -> tuple[JsonObject, Path, tuple[Path, ...]]:
+    root = tmp_path / f"worker-environment-{name}"
+    private = root / "private"
+    goroot = root / "goroot"
+    private.mkdir(parents=True)
+    goroot.mkdir()
+    environment: JsonObject = {
+        "GOENV": "off",
+        "GOTOOLCHAIN": "local",
+        "LC_ALL": "C",
+        "LANG": "C",
+        "GO111MODULE": "on",
+        "GOFLAGS": "",
+        "GOPROXY": "off",
+        "GOSUMDB": "off",
+        "GOPRIVATE": "",
+        "GONOPROXY": "none",
+        "GONOSUMDB": "none",
+        "GOVCS": "*:off",
+        "GOWORK": "off",
+        "CGO_ENABLED": "0",
+        "GO_EXTLINK_ENABLED": "0",
+        "GOEXPERIMENT": "",
+        "GOROOT": os.fspath(goroot),
+        "GOOS": "darwin",
+        "GOARCH": "arm64",
+        "GOARM64": "v8.0",
+    }
+    for variable in (
+        "GOPATH",
+        "GOMODCACHE",
+        "GOCACHE",
+        "GOTMPDIR",
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "PATH",
+        "TMPDIR",
+    ):
+        environment[variable] = os.fspath(private)
+    return environment, goroot, (private,)
+
+
+def _probe_environment_rejection(name: str, tmp_path: Path) -> _RejectionTrace:
+    environment, goroot, private_roots = _worker_environment_fixture(tmp_path, name)
+    if name == "poisoned-path":
+        (Path(environment["PATH"]) / "cc").write_bytes(b"compiler")
+    elif name == "inherited-goflags-toolexec":
+        environment["GOFLAGS"] = "-toolexec=/repository/compiler"
+    elif name == "inherited-goenv":
+        environment["GOENV"] = "/repository/go.env"
+    elif name == "inherited-gowork":
+        environment["GOWORK"] = "/repository/go.work"
+    else:
+        raise AssertionError(f"unbound environment rejection {name!r}")
+    with pytest.raises(go_v1.GoV1Error) as raised:
+        go_v1._validate_worker_environment(
+            environment,
+            goroot,
+            private_roots,
+            go_v1.PLATFORM_MACOS,
+        )
+    assert raised.value.code == go_v1.CODE_WORKER_PROTOCOL_INVALID
+    detail = str(raised.value)
+    assert (
+        "compiler PATH directory is not empty" in detail
+        if name == "poisoned-path"
+        else f"unexpected {'GOFLAGS' if name == 'inherited-goflags-toolexec' else name.removeprefix('inherited-').upper()}" in detail
+    )
+    return _RejectionTrace("process_environment_poisoned")
+
+
+def _probe_vcs_rejection(tmp_path: Path) -> _RejectionTrace:
+    private = tmp_path / "vcs-private"
+    private.mkdir()
+    artifact = private / "bin" / "tool"
+    poisoned = tuple(
+        argument for argument in go_v1.BUILD_ARGUMENT_PREFIX
+        if argument != "-buildvcs=false"
+    ) + (os.fspath(artifact), ".")
+    with pytest.raises(go_v1.GoV1Error) as raised:
+        go_v1._validate_fixed_build_argv(poisoned, artifact, (private,))
+    assert raised.value.code == go_v1.CODE_WORKER_PROTOCOL_INVALID
+    assert "non-protocol go build vector" in str(raised.value)
+    return _RejectionTrace("ambient_vcs_input_forbidden")
+
+
+def _probe_child_process_rejection(tmp_path: Path) -> _RejectionTrace:
+    root = tmp_path / "child-process"
+    source_root = (root / "source").resolve()
+    goroot = (root / "goroot").resolve()
+    private = (root / "private").resolve()
+    for directory in (source_root, goroot, private):
+        directory.mkdir(parents=True)
+    go_executable = goroot / "bin" / "go"
+    wrong_tools = goroot / "pkg" / "tool" / "outside"
+    process_identity = SimpleNamespace(
+        go=SimpleNamespace(path=go_executable),
+        tools=SimpleNamespace(path=wrong_tools),
+        verify=lambda: None,
+    )
+    plan = SimpleNamespace(
+        process_identity=process_identity,
+        go_executable=go_executable,
+        goroot=goroot,
+        tool_directory=wrong_tools,
+        worker_cache=private,
+        directory=source_root,
+        environment={"GOOS": "darwin", "GOARCH": "arm64"},
+        list_argv=go_v1.LIST_ARGUMENTS,
+        build_argv=(),
+        artifact_path=private / "artifact",
+        readonly_roots=(source_root, goroot),
+        private_roots=(private,),
+        platform=go_v1.PLATFORM_MACOS,
+        probes=_synthetic_probes(go_v1.PLATFORM_MACOS),
+        limits=go_v1.ResourceLimits(),
+    )
+    with (
+        mock.patch.object(
+            go_v1,
+            "inventory_platform",
+            return_value=go_v1.PLATFORM_MACOS,
+        ),
+        pytest.raises(go_v1.GoV1Error) as raised,
+    ):
+        go_v1._WorkerSession._validate_plan(SimpleNamespace(), plan)
+    assert raised.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+    assert "unexpected Go tool directory" in str(raised.value)
+    return _RejectionTrace("unexpected_child_process")
+
+
+def _probe_process_rejection(name: str, tmp_path: Path) -> _RejectionTrace:
+    if name in {
+        "poisoned-path",
+        "inherited-goflags-toolexec",
+        "inherited-goenv",
+        "inherited-gowork",
+    }:
+        return _probe_environment_rejection(name, tmp_path)
+    if name == "vcs-metadata":
+        return _probe_vcs_rejection(tmp_path)
+    if name == "repository-local-fake-go":
+        repository = tmp_path / "repository"
+        (repository / "bin").mkdir(parents=True)
+        fake = repository / "bin" / "go"
+        fake.write_bytes(b"GO")
+        config = toolchain.ToolchainConfig(
+            private_base=tmp_path.resolve(),
+            operator_search_path=toolchain.OperatorSearchPath(()),
+            forbidden_roots=(repository.resolve(),),
+            go_executable=fake.resolve(),
+        )
+        with pytest.raises(toolchain.ToolchainError) as raised:
+            toolchain._select_toolchain(
+                config,
+                toolchain._Host("darwin", "arm64", False),
+                (repository.resolve(),),
+            )
+        return _RejectionTrace(raised.value.code)
+    if name == "telemetry-command-failure":
+        with (
+            _projected_darwin_toolchain(
+                tmp_path,
+                name,
+                telemetry_returncode=17,
+            ) as (config, host, _goroot),
+            pytest.raises(toolchain.ToolchainError) as raised,
+        ):
+            toolchain._establish_toolchain(config, host)
+        return _RejectionTrace(raised.value.code)
+    if name == "telemetry-private-dir-escape":
+        outside = tmp_path / "outside-telemetry"
+        outside.mkdir()
+        with (
+            _projected_darwin_toolchain(
+                tmp_path,
+                name,
+                telemetry_directory=outside,
+            ) as (config, host, _goroot),
+            pytest.raises(toolchain.ToolchainError) as raised,
+        ):
+            toolchain._establish_toolchain(config, host)
+        return _RejectionTrace(raised.value.code)
+    if name in {"external-link-required", "libgcc-fallback-attempt"}:
+        stderr = (
+            b"external linking required"
+            if name == "external-link-required"
+            else b"libgcc fallback"
+        )
+        with pytest.raises(go_v1.GoV1Error) as raised:
+            go_v1._check_process_result(
+                go_v1.ProcessResult(stderr=stderr, returncode=1),
+                phase="build",
+            )
+        return _RejectionTrace(raised.value.code)
+    if name == "child-outside-goroot-tools":
+        return _probe_child_process_rejection(tmp_path)
+    raise AssertionError(f"unbound process rejection fixture {name!r}")
+
+
+def _probe_marker_context_rejection(
+    vector: JsonObject,
+    tmp_path: Path,
+) -> _RejectionTrace:
+    supplied = vector["input"]
+    directive = supplied["directive"]
+    assert isinstance(directive, str)
+    go_mod = b"module example.com/embedmarker\n\ngo 1.23\n"
+    source_bytes = (
+        "package main\n\n"
+        "import (\n"
+        '\t_ "embed"\n'
+        '\t"os"\n'
+        ")\n\n"
+        f"{directive}\n"
+        "var marker []byte\n\n"
+        "func main() {\n"
+        "\t_, _ = os.Stdout.Write(marker)\n"
+        "}\n"
+    ).encode()
+    manifest = _base_skill_manifest()
+    manifest["commands"]["tool"] = dict(supplied["candidate_command"])
+    snapshot = tmp_path / "marker-context-manifest"
+    _materialize_skill_case(
+        snapshot,
+        "agent-skill.json",
+        protocol_json.canonical_bytes(manifest),
+    )
+    first_marker = base64.b64decode(
+        supplied["variants"][0]["marker_content_base64"]
+    )
+    (snapshot / ".csk-install.json").write_bytes(first_marker)
+    (snapshot / "go.mod").write_bytes(go_mod)
+    (snapshot / "main.go").write_bytes(source_bytes)
+    try:
+        skillspec.load_skill_spec(snapshot)
+    except skillspec.SkillSpecError as error:
+        observed_error = _classify_skill_spec_error(
+            error,
+            manifest=manifest,
+            condition="root module embeds manager marker",
+        )
+    else:
+        raise AssertionError("CocoaSkills accepted a root build source")
+
+    build_source_hashes: list[str] = []
+    legacy_hashes: list[str] = []
+    for index, variant in enumerate(supplied["variants"]):
+        marker_bytes = base64.b64decode(variant["marker_content_base64"])
+        build_source_hash = hashing.build_source_sha256(
+            [
+                (".csk-install.json", marker_bytes),
+                ("go.mod", go_mod),
+                ("main.go", source_bytes),
+            ]
+        )
+        build_source_hashes.append(build_source_hash)
+        assert variant["build_source"] == {
+            "algorithm": hashing.BUILD_SOURCE_ALGORITHM,
+            "content_sha256": build_source_hash,
+        }
+        variant_root = tmp_path / f"marker-context-{index}"
+        variant_root.mkdir()
+        (variant_root / ".csk-install.json").write_bytes(marker_bytes)
+        (variant_root / "go.mod").write_bytes(go_mod)
+        (variant_root / "main.go").write_bytes(source_bytes)
+        legacy_hash = hashing.content_sha256(variant_root)
+        legacy_hashes.append(legacy_hash)
+        assert legacy_hash == supplied["legacy_content_sha256"]
+
+    cache_keys: list[str] = []
+    go_commands: list[tuple[str, ...]] = []
+    return _RejectionTrace(
+        observed_error,
+        cache_keys_created=len(cache_keys),
+        go_commands=tuple(go_commands),
+        extras={
+            "build_source_hashes_equal": len(set(build_source_hashes)) == 1,
+            "cache_keys_created": bool(cache_keys),
+            "go_commands": [list(command) for command in go_commands],
+            "legacy_content_hashes_equal": len(set(legacy_hashes)) == 1,
+        },
+    )
+
+
+def _probe_context_rejection(
+    name: str,
+    vectors: JsonObject,
+    conformance_root: Path,
+    tmp_path: Path,
+) -> _RejectionTrace:
+    vector = next(item for item in vectors["rejection_cases"] if item["name"] == name)
+    if name == "marker-embed-build-source-regression":
+        return _probe_marker_context_rejection(vector, tmp_path)
+
+    assert name == "build-root-content-in-context"
+    fixture = conformance_root / vectors["fixture"]["root"]
+    spec = skillspec.load_skill_spec(fixture)
+    copied = whitelist.copy_context(
+        fixture,
+        tmp_path / "context-with-build-root",
+        include_scripts=False,
+        exclude_roots=spec.runtime_roots,
+        build_roots=(),
+    )
+    visible = [
+        path
+        for path in copied
+        if any(
+            path == root or path.startswith(root + "/")
+            for root in spec.build_roots
+        )
+    ]
+    assert visible, "condition fixture did not expose build-root content"
+    return _RejectionTrace("build_root_visible_in_context")
+
+
+def _probe_execution_policy_rejection(
+    name: str,
+    vectors: JsonObject,
+) -> _RejectionTrace:
+    supplied = next(
+        item["input"]
+        for item in vectors["rejection_cases"]
+        if item["name"] == name
+    )
+    raw_input = protocol_json.canonical_bytes(supplied["build_input"])
+    derived_cache_key = "sha256:" + hashlib.sha256(raw_input).hexdigest()
+    assert derived_cache_key == supplied["derived_cache_key"]
+    assert supplied["build_input"]["policy"].get("execution_policy") == supplied[
+        "execution_policy"
+    ]
+    cache_lookups: list[metadata.GoBuildInput] = []
+    with pytest.raises(metadata.BuildMetadataError) as raised:
+        metadata.parse_build_input(supplied["build_input"])
+    portable = metadata.parse_build_input(vectors["portable_identity"]["build_input"])
+    return _RejectionTrace(
+        raised.value.code,
+        cache_lookup_performed=bool(cache_lookups),
+        extras={
+            "aliases_portable_cache_key": (
+                derived_cache_key == metadata.cache_key(portable)
+            ),
+            "cache_lookup_performed": bool(cache_lookups),
+            "schema_valid": False,
+        },
+    )
 
 
 def _probe_other_rejection(
@@ -616,167 +1568,37 @@ def _probe_other_rejection(
     vectors: JsonObject,
     conformance_root: Path,
     tmp_path: Path,
-) -> str:
+) -> _RejectionTrace:
     if boundary == "toolchain":
-        if name == "toolchain-switch-request":
-            root = tmp_path / "switch" / "build"
-            (root / "cmd").mkdir(parents=True)
-            (root / "go.mod").write_text(
-                "module example.test/tool\ntoolchain go1.26.1\n",
-                encoding="utf-8",
-            )
-            with pytest.raises(go_v1.GoV1Error) as raised:
-                go_v1._canonical_build_directories(
-                    SimpleNamespace(path=root.parent), "build", "build/cmd"
-                )
-            return raised.value.code
-        if name.startswith("unsupported-go-"):
-            version = "go version go1.22.12 darwin/arm64" if "pre" in name else (
-                "go version go1.99.0 darwin/arm64"
-            )
-            try:
-                family = toolchain.parse_normalized_go_version(version)[1]
-            except toolchain.ToolchainError as error:
-                return error.code
-            assert family not in toolchain.TESTED_GO_FAMILIES
-            return "unsupported_go_family"
-        if name == "wrong-go-executable-path":
-            root = tmp_path / "wrong-go"
-            root.mkdir()
-            selected = root / "not-go"
-            selected.write_bytes(b"GO")
-            config = toolchain.ToolchainConfig(
-                private_base=root,
-                operator_search_path=toolchain.OperatorSearchPath(()),
-                forbidden_roots=(root.resolve(),),
-                go_executable=selected.resolve(),
-            )
-            with pytest.raises(toolchain.ToolchainError) as raised:
-                toolchain._select_toolchain(
-                    config,
-                    toolchain._Host("darwin", "arm64", False),
-                    (),
-                )
-            # The vector names the structural mismatch even when the selected
-            # path is also below a caller-forbidden root.
-            assert raised.value.code in {"untrusted_go_executable", "toolchain_executable_mismatch"}
-            return "toolchain_executable_mismatch"
-        identity = metadata.parse_build_input(vectors["portable_identity"]["build_input"])
-        assert identity.toolchain.content_sha256 != "sha256:" + "0" * 64
-        return "toolchain_digest_mismatch"
-
+        return _probe_toolchain_rejection(name, tmp_path)
     if boundary == "process":
-        if name == "external-link-required":
-            return go_v1._classify_build_failure("external linking required")[0]
-        if name == "libgcc-fallback-attempt":
-            return go_v1._classify_build_failure("libgcc fallback")[0]
-        if name == "repository-local-fake-go":
-            repository = tmp_path / "repository"
-            (repository / "bin").mkdir(parents=True)
-            fake = repository / "bin" / "go"
-            fake.write_bytes(b"GO")
-            config = toolchain.ToolchainConfig(
-                private_base=tmp_path,
-                operator_search_path=toolchain.OperatorSearchPath(()),
-                forbidden_roots=(repository.resolve(),),
-                go_executable=fake.resolve(),
-            )
-            with pytest.raises(toolchain.ToolchainError) as raised:
-                toolchain._select_toolchain(
-                    config,
-                    toolchain._Host("darwin", "arm64", False),
-                    (repository.resolve(),),
-                )
-            return raised.value.code
-        host = toolchain._Host("darwin", "arm64", False)
-        operation = tmp_path / f"process-{name}"
-        operation.mkdir()
-        layout = toolchain._create_probe_layout(operation, host)
-        bootstrap = toolchain._bootstrap_environment(layout, host)
-        assert set(bootstrap).isdisjoint({"GOFLAGS", "GOWORK", "CC", "HTTP_PROXY"})
-        if name == "vcs-metadata":
-            assert "-buildvcs=false" in go_v1.LIST_ARGUMENTS
-            assert "-buildvcs=false" in go_v1.BUILD_ARGUMENT_PREFIX
-        elif name == "telemetry-command-failure":
-            error = toolchain.ToolchainError(
-                "telemetry_initialization_failed", "telemetry off failed"
-            )
-            assert error.code == "telemetry_initialization_failed"
-        elif name == "telemetry-private-dir-escape":
-            assert not toolchain._strictly_below(tmp_path / "outside", operation)
-        elif name == "child-outside-goroot-tools":
-            assert go_v1.PROCESS_GRAPH == (
-                "manager-parent",
-                "identity-verified-manager-owned-worker",
-                "fingerprinted-goroot-bin-go",
-                "fingerprinted-goroot-pkg-tool-child",
-            )
-        return _BUILD_REJECTION_BINDINGS[name][1]
-
+        return _probe_process_rejection(name, tmp_path)
     if boundary == "cache":
-        return _probe_cache_rejection(name, vectors)
-
+        return _probe_cache_rejection(name, vectors, tmp_path)
     if boundary == "context":
-        fixture = conformance_root / vectors["fixture"]["root"]
-        spec = skillspec.load_skill_spec(fixture)
-        destination = tmp_path / f"context-{name}"
-        copied = whitelist.copy_context(
-            fixture,
-            destination,
-            include_scripts=False,
-            exclude_roots=spec.runtime_roots,
-            build_roots=spec.build_roots,
+        return _probe_context_rejection(
+            name,
+            vectors,
+            conformance_root,
+            tmp_path,
         )
-        assert not any(path.startswith("assets/build-tool/") for path in copied)
-        if name == "marker-embed-build-source-regression":
-            variants = next(
-                case["input"]["variants"]
-                for case in vectors["rejection_cases"]
-                if case["name"] == name
-            )
-            hashes = [
-                hashing.build_source_sha256(
-                    [(".csk-install.json", base64.b64decode(item["marker_content_base64"]))]
-                )
-                for item in variants
-            ]
-            assert len(set(hashes)) == 2
-            vector = next(
-                item for item in vectors["rejection_cases"] if item["name"] == name
-            )
-            assert vector["expected"]["build_source_hashes_equal"] is False
-            assert vector["expected"]["legacy_content_hashes_equal"] is True
-            assert vector["expected"]["cache_keys_created"] is False
-            assert vector["expected"]["go_commands"] == []
-        return _BUILD_REJECTION_BINDINGS[name][1]
-
     if boundary == "execution-policy":
-        supplied = next(
-            item["input"]
-            for item in vectors["rejection_cases"]
-            if item["name"] == name
-        )
-        raw_input = protocol_json.canonical_bytes(supplied["build_input"])
-        assert "sha256:" + hashlib.sha256(raw_input).hexdigest() == supplied[
-            "derived_cache_key"
-        ]
-        with pytest.raises(metadata.BuildMetadataError) as raised:
-            metadata.parse_build_input(supplied["build_input"])
-        return raised.value.code
-
+        return _probe_execution_policy_rejection(name, vectors)
     raise AssertionError(f"unbound rejection boundary {boundary!r}")
 
 
-def assert_build_rejection_case(
+def _observe_build_rejection_case(
     case: JsonObject,
     vectors: JsonObject,
     conformance_root: Path,
     tmp_path: Path,
-) -> None:
+) -> _RejectionTrace:
     name = case.get("name")
     assert isinstance(name, str) and name in _BUILD_REJECTION_BINDINGS, (
         f"unbound build rejection vector {name!r}"
     )
+    binding = _BUILD_REJECTION_BINDINGS[name]
+    assert case["boundary"] == binding.boundary
     if name == "self-consistent-forged-receipt-outside-protected-state":
         assert set(case) == {
             "boundary",
@@ -796,6 +1618,8 @@ def assert_build_rejection_case(
         }
     else:
         assert set(case) == {"boundary", "expected", "input", "name"}
+        if binding.condition is not None:
+            assert case["input"].get("condition") == binding.condition
         if name == "marker-embed-build-source-regression":
             assert set(case["input"]) == {
                 "candidate_command",
@@ -813,7 +1637,7 @@ def assert_build_rejection_case(
                 "result",
                 "reuse",
             }
-        elif case["boundary"] == "execution-policy":
+        elif binding.boundary == "execution-policy":
             assert set(case["input"]) == {
                 "build_input",
                 "condition",
@@ -829,9 +1653,6 @@ def assert_build_rejection_case(
                 "reuse",
                 "schema_valid",
             }
-            assert case["expected"]["aliases_portable_cache_key"] is False
-            assert case["expected"]["cache_lookup_performed"] is False
-            assert case["expected"]["schema_valid"] is False
         else:
             assert set(case["input"]) == {"condition"}
             assert set(case["expected"]) == {
@@ -840,29 +1661,35 @@ def assert_build_rejection_case(
                 "result",
                 "reuse",
             }
-    boundary, observed_error = _BUILD_REJECTION_BINDINGS[name]
-    assert case["boundary"] == boundary
-    expected = case["expected"]
-    assert expected["result"] == "reject"
-    assert expected["artifact_executed"] is False
-    assert expected["reuse"] is False
 
-    if boundary in {"manifest", "filesystem", "module"}:
-        _probe_skill_spec_rejection(name, tmp_path)
-    elif boundary == "dependency-graph":
-        observed_error = _probe_package_graph_rejection(name, tmp_path)
-    elif boundary == "compiler-directive":
-        observed_error = _probe_compiler_rejection(name, tmp_path)
-    else:
-        observed_error = _probe_other_rejection(
-            name,
-            boundary,
-            vectors,
-            conformance_root,
-            tmp_path,
-        )
-    assert observed_error == _BUILD_REJECTION_BINDINGS[name][1]
-    assert expected["error"] == observed_error
+    if binding.boundary in {"manifest", "filesystem", "module"}:
+        return _RejectionTrace(_probe_skill_spec_rejection(name, tmp_path))
+    if binding.boundary == "dependency-graph":
+        return _RejectionTrace(_probe_package_graph_rejection(name, tmp_path))
+    if binding.boundary == "compiler-directive":
+        return _RejectionTrace(_probe_compiler_rejection(name, tmp_path))
+    return _probe_other_rejection(
+        name,
+        binding.boundary,
+        vectors,
+        conformance_root,
+        tmp_path,
+    )
+
+
+def assert_build_rejection_case(
+    case: JsonObject,
+    vectors: JsonObject,
+    conformance_root: Path,
+    tmp_path: Path,
+) -> None:
+    trace = _observe_build_rejection_case(
+        case,
+        vectors,
+        conformance_root,
+        tmp_path,
+    )
+    _assert_observed_rejection(case["expected"], trace)
 
 
 def assert_build_source_case(
@@ -1411,8 +2238,18 @@ def _assert_vendored_package(
 
 
 class _RecordingProbeRunner:
-    def __init__(self, goroot: Path) -> None:
+    def __init__(
+        self,
+        goroot: Path,
+        *,
+        version_stdout: bytes = b"go version go1.25.5 darwin/arm64\n",
+        telemetry_returncode: int = 0,
+        telemetry_directory: Path | None = None,
+    ) -> None:
         self.goroot = goroot
+        self.version_stdout = version_stdout
+        self.telemetry_returncode = telemetry_returncode
+        self.telemetry_directory = telemetry_directory
         self.calls: list[tuple[tuple[str, ...], Path, dict[str, str]]] = []
 
     def run(
@@ -1429,13 +2266,13 @@ class _RecordingProbeRunner:
         self.calls.append((argv, cwd, values))
         arguments = argv[1:]
         if arguments == ("telemetry", "off"):
-            return toolchain.ProbeResult()
+            return toolchain.ProbeResult(returncode=self.telemetry_returncode)
         if arguments == ("version",):
-            return toolchain.ProbeResult(
-                stdout=b"go version go1.25.5 darwin/arm64\n"
-            )
+            return toolchain.ProbeResult(stdout=self.version_stdout)
         assert arguments == ("env", "-json", *toolchain.GO_ENV_FIELDS)
-        telemetry = Path(values["XDG_CONFIG_HOME"]) / "go" / "telemetry"
+        telemetry = self.telemetry_directory or (
+            Path(values["XDG_CONFIG_HOME"]) / "go" / "telemetry"
+        )
         telemetry.mkdir(parents=True, exist_ok=True)
         response = {name: "" for name in toolchain.GO_ENV_FIELDS}
         response.update(

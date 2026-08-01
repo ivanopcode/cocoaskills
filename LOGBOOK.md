@@ -422,3 +422,32 @@ components, verifies that the native `readlink` result denotes the exact
 declared vector target, and exposes the declared POSIX spelling only at the
 protocol-byte boundary. CocoaSkills still performs the real tree walk,
 resolution, mutation checks, framing, and digest calculation.
+
+## 2026-08-01 — BUG-260801-1xvc35 observed rejection outcomes
+
+The cycle-2 rejection audit found that a closed 77-name table was still acting
+as an answer key: its values included the expected protocol error, while 75
+published condition strings were ignored. That let an unrelated
+`SkillSpecError`, the wrong toolchain error, or a synthetic cache inspection
+produce a passing case. The binding registry now contains only the independent
+boundary and exact published condition. Every case constructs its condition
+fixture and records the error, cache status/reuse, command/cache effects, and
+artifact-execution count observed at the corresponding CocoaSkills seam before
+comparing the complete vector expectation.
+
+Manifest, filesystem, module, package-graph, compiler-directive, worker
+environment/argv, projected toolchain, context, build-metadata, and protected
+cache cases now execute their real validators or backends. Cache artifact
+corruption is published as a valid protected entry, mutated in place with the
+platform's protected-state profiles restored, and inspected again; the hash
+regression therefore observes `HIT` followed by `CORRUPT`. The marker-embed
+regression materializes its exact `example.com/embedmarker` module and Go
+source, reproduces the published legacy digest and both build-source digests,
+and rejects the root source before any cache-key or Go command effect.
+
+Regression coverage mutates all 75 conditions and all 321 expected-field
+leaves through the public adapter. Dedicated sabotage cases require unrelated
+skill errors and `untrusted_go_executable` at the wrong path seam to fail, and
+require artifact-hash corruption to reach the post-mutation cache inspection.
+This change remains confined to the rc.6 rejection harness: no workflow pin,
+schema, tag, release metadata, or conformance claim is changed.

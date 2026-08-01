@@ -11,10 +11,23 @@ from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest import mock
 
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from protocol_conformance_adapters import (
+    _BUILD_REJECTION_BINDINGS,
+    _LIFECYCLE_CASE_FIELDS,
+    _project_toolchain_link_target,
+    assert_build_positive_case,
+    assert_build_rejection_case,
+    assert_build_source_case,
+    assert_capability_evidence_case,
+    assert_generated_schema_case,
+    assert_manager_lifecycle_case,
+    assert_toolchain_case,
+)
 
 from csk import (
     audit_registry,
@@ -30,23 +43,9 @@ from csk import (
     skillspec,
     whitelist,
 )
-from csk.builds import metadata
-from csk.builds import go_v1
+from csk.builds import cache, go_v1, metadata, toolchain
 from csk.config import RegistryConfig
 from csk.source_identity import SourceIdentityError, parse_source_identity
-from protocol_conformance_adapters import (
-    _BUILD_REJECTION_BINDINGS,
-    _LIFECYCLE_CASE_FIELDS,
-    _project_toolchain_link_target,
-    assert_build_positive_case,
-    assert_build_rejection_case,
-    assert_build_source_case,
-    assert_capability_evidence_case,
-    assert_generated_schema_case,
-    assert_manager_lifecycle_case,
-    assert_toolchain_case,
-)
-
 
 ROOT_TEXT = os.environ.get("CURATOR_CONFORMANCE_ROOT")
 pytestmark = pytest.mark.skipif(not ROOT_TEXT, reason="CURATOR_CONFORMANCE_ROOT is not set")
@@ -300,6 +299,20 @@ def test_rc6_in_scope_vector_inventory_is_exhaustive() -> None:
     assert set(_BUILD_REJECTION_BINDINGS) == {
         case["name"] for case in BUILD_DRIVER_VECTORS["rejection_cases"]
     }
+    condition_cases = [
+        case
+        for case in BUILD_DRIVER_VECTORS["rejection_cases"]
+        if "condition" in case.get("input", {})
+    ]
+    assert len(condition_cases) == 75
+    assert sum(
+        binding.condition is not None
+        for binding in _BUILD_REJECTION_BINDINGS.values()
+    ) == 75
+    for case in BUILD_DRIVER_VECTORS["rejection_cases"]:
+        binding = _BUILD_REJECTION_BINDINGS[case["name"]]
+        assert binding.boundary == case["boundary"]
+        assert binding.condition == case.get("input", {}).get("condition")
     assert len(BUILD_DRIVER_VECTORS["build_source_cases"]) == 10
     assert len(BUILD_DRIVER_VECTORS["toolchain_cases"]) == 12
     assert len(HOST_POLICY_VECTORS["mandatory_controls"]) == 18
@@ -449,6 +462,156 @@ def test_rc6_build_driver_rejection_case(
     tmp_path: Path,
 ) -> None:
     assert_build_rejection_case(case, BUILD_DRIVER_VECTORS, _root(), tmp_path)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        case
+        for case in BUILD_DRIVER_VECTORS.get("rejection_cases", [])
+        if "condition" in case.get("input", {})
+    ],
+    ids=lambda case: case["name"],
+)
+def test_rc6_build_driver_rejection_condition_is_exact(
+    case: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    mutated = deepcopy(case)
+    mutated["input"]["condition"] += " [mutated]"
+    with pytest.raises(AssertionError):
+        assert_build_rejection_case(
+            mutated,
+            BUILD_DRIVER_VECTORS,
+            _root(),
+            tmp_path,
+        )
+
+
+def _different_expected_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, str):
+        return value + "-mutated"
+    if isinstance(value, list):
+        return [*value, ["mutated"]]
+    raise AssertionError(f"unhandled rejection expectation type: {type(value)!r}")
+
+
+@pytest.mark.parametrize(
+    "case",
+    BUILD_DRIVER_VECTORS.get("rejection_cases", []),
+    ids=lambda case: case["name"],
+)
+def test_rc6_build_driver_rejection_compares_every_observed_field(
+    case: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    for field, value in case["expected"].items():
+        mutated = deepcopy(case)
+        mutated["expected"][field] = _different_expected_value(value)
+        mutation_root = tmp_path / field
+        mutation_root.mkdir()
+        with pytest.raises(AssertionError):
+            assert_build_rejection_case(
+                mutated,
+                BUILD_DRIVER_VECTORS,
+                _root(),
+                mutation_root,
+            )
+
+
+def _build_rejection_case(name: str) -> dict[str, Any]:
+    return next(
+        case
+        for case in BUILD_DRIVER_VECTORS["rejection_cases"]
+        if case["name"] == name
+    )
+
+
+def test_rc6_unknown_driver_rejects_unrelated_skill_spec_error(
+    tmp_path: Path,
+) -> None:
+    with (
+        mock.patch.object(
+            skillspec,
+            "load_skill_spec",
+            side_effect=skillspec.SkillSpecError("unrelated parser failure"),
+        ),
+        pytest.raises(AssertionError, match="unrecognized CocoaSkills skill rejection"),
+    ):
+        assert_build_rejection_case(
+            _build_rejection_case("unknown-driver"),
+            BUILD_DRIVER_VECTORS,
+            _root(),
+            tmp_path,
+        )
+
+
+def test_rc6_wrong_go_executable_rejects_wrong_toolchain_code(
+    tmp_path: Path,
+) -> None:
+    with (
+        mock.patch.object(
+            toolchain,
+            "_select_toolchain",
+            side_effect=toolchain.ToolchainError(
+                "untrusted_go_executable",
+                "wrong rejection seam",
+            ),
+        ),
+        pytest.raises(AssertionError),
+    ):
+        assert_build_rejection_case(
+            _build_rejection_case("wrong-go-executable-path"),
+            BUILD_DRIVER_VECTORS,
+            _root(),
+            tmp_path,
+        )
+
+
+def test_rc6_artifact_hash_mismatch_reaches_mutated_cache_inspection(
+    tmp_path: Path,
+) -> None:
+    real_factory = cache.cache_for_manager_home
+    statuses: list[cache.CacheEntryStatus] = []
+
+    class RecordingBackend:
+        def __init__(self, manager_home: Path) -> None:
+            self._delegate = real_factory(manager_home)
+
+        def inspect(
+            self,
+            expectation: cache.CacheExpectation,
+        ) -> cache.CacheInspection:
+            inspection = self._delegate.inspect(expectation)
+            statuses.append(inspection.status)
+            return inspection
+
+        def publish(
+            self,
+            publication: cache.CachePublication,
+            *,
+            guard: cache.CacheMutationGuard,
+        ) -> cache.CachePublicationResult:
+            return self._delegate.publish(publication, guard=guard)
+
+    with mock.patch.object(
+        cache,
+        "cache_for_manager_home",
+        side_effect=RecordingBackend,
+    ):
+        assert_build_rejection_case(
+            _build_rejection_case("artifact-hash-mismatch"),
+            BUILD_DRIVER_VECTORS,
+            _root(),
+            tmp_path,
+        )
+
+    assert statuses == [
+        cache.CacheEntryStatus.HIT,
+        cache.CacheEntryStatus.CORRUPT,
+    ]
 
 
 @pytest.mark.parametrize(
