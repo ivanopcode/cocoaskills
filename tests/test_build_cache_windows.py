@@ -330,6 +330,7 @@ def test_handle_bound_rename_uses_native_relative_no_replace_contract(
         ),
         "information_class": cache_windows._FILE_RENAME_INFORMATION_CLASS,
     }
+    monkeypatch.undo()
 
 
 @_WINDOWS_ONLY
@@ -1060,7 +1061,10 @@ def test_windows_gc_entry_exchange_never_retires_the_replacement(
 
     assert exchanged
     assert result.removed == 0
-    assert any("uncertain entry" in warning for warning in result.warnings)
+    assert any(
+        "protected boundary is uncertain" in warning
+        for warning in result.warnings
+    )
     assert detached_old.exists()
     assert entry.exists()
     inspection = store.inspect(CacheExpectation(input=build_input))
