@@ -262,10 +262,44 @@ def test_handle_bound_rename_uses_native_relative_no_replace_contract(
         def RtlNtStatusToDosError(self, _status: int) -> int:
             raise AssertionError("successful rename must not translate an error")
 
+    identity = object()
+    destination_path = Path("C:/held-quarantine")
+    rename_root = SimpleNamespace(
+        value=303,
+        path=destination_path,
+        identity=identity,
+        final_path=r"\\?\C:\held-quarantine",
+    )
+
+    class HandleContext:
+        def __enter__(self) -> object:
+            return rename_root
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def open_rename_root(
+        path: Path,
+        *,
+        desired_access: int,
+        **_kwargs: object,
+    ) -> HandleContext:
+        observed.update(root_path=path, root_access=desired_access)
+        return HandleContext()
+
     api = SimpleNamespace(ntdll=NativeApi())
     source = cast(cache_windows._Handle, SimpleNamespace(value=101))
-    destination = cast(cache_windows._Handle, SimpleNamespace(value=202))
+    destination = cast(
+        cache_windows._Handle,
+        SimpleNamespace(
+            value=202,
+            path=destination_path,
+            identity=identity,
+            final_path=r"\\?\C:\held-quarantine",
+        ),
+    )
     monkeypatch.setattr(cache_windows, "_api", lambda: api)
+    monkeypatch.setattr(cache_windows, "_open_raw_handle", open_rename_root)
     monkeypatch.setattr(
         cache_windows,
         "_revalidate_handle",
@@ -281,7 +315,12 @@ def test_handle_bound_rename_uses_native_relative_no_replace_contract(
     expected_name = "gc-entry-a1b2".encode("utf-16-le")
     assert observed == {
         "source": 101,
-        "root": 202,
+        "root": 303,
+        "root_path": destination_path,
+        "root_access": (
+            cache_windows._FILE_EXECUTE
+            | cache_windows._FILE_READ_ATTRIBUTES
+        ),
         "replace": 0,
         "name_length": len(expected_name),
         "name": expected_name,
@@ -1113,26 +1152,27 @@ def test_windows_gc_destination_root_exchange_retains_exact_entry(
     replacement_quarantine = home / "replacement-quarantine"
     replacement_quarantine.mkdir()
     _protect(replacement_quarantine, cache_windows._MUTABLE_DIRECTORY)
-    original_move = cache_windows._move_handle_no_replace
+    real_api = cache_windows._api()
     exchanged = False
 
-    def exchange_destination_before_move(
-        source: cache_windows._Handle,
-        destination_parent: cache_windows._Handle,
-        destination_name: str,
-    ) -> None:
-        nonlocal exchanged
-        if destination_name.startswith("gc-entry-") and not exchanged:
-            exchanged = True
-            cache_windows._move_no_replace(quarantine, detached_quarantine)
-            cache_windows._move_no_replace(replacement_quarantine, quarantine)
-        original_move(source, destination_parent, destination_name)
+    class NativeApi:
+        def NtSetInformationFile(self, *args: object) -> int:
+            nonlocal exchanged
+            if not exchanged:
+                exchanged = True
+                cache_windows._move_no_replace(quarantine, detached_quarantine)
+                cache_windows._move_no_replace(replacement_quarantine, quarantine)
+            return int(real_api.ntdll.NtSetInformationFile(*args))
 
-    monkeypatch.setattr(
-        cache_windows,
-        "_move_handle_no_replace",
-        exchange_destination_before_move,
+        def RtlNtStatusToDosError(self, status: int) -> int:
+            return int(real_api.ntdll.RtlNtStatusToDosError(status))
+
+    api = SimpleNamespace(
+        kernel32=real_api.kernel32,
+        advapi32=real_api.advapi32,
+        ntdll=NativeApi(),
     )
+    monkeypatch.setattr(cache_windows, "_api", lambda: api)
 
     result = store.collect(set(), older_than=100.0, guard=_HeldGuard())
 

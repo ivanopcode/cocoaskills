@@ -2688,19 +2688,40 @@ def _move_handle_no_replace(
     # accepts a held RootDirectory handle and therefore binds both endpoints.
     io_status = _IoStatusBlock()
     api = _api()
-    status = int(
-        api.ntdll.NtSetInformationFile(
-            source.value,
-            ctypes.byref(io_status),
-            ctypes.byref(buffer),
-            len(buffer),
-            _FILE_RENAME_INFORMATION_CLASS,
+    with _open_raw_handle(
+        destination_parent.path,
+        desired_access=_FILE_EXECUTE | _FILE_READ_ATTRIBUTES,
+        missing=_UntrustedState(
+            "cache quarantine disappeared before handle-bound rename"
+        ),
+    ) as rename_root:
+        selected_parent = _revalidate_handle(destination_parent, None)
+        if (
+            rename_root.identity != selected_parent.identity
+            or rename_root.final_path.casefold()
+            != selected_parent.final_path.casefold()
+        ):
+            raise _UntrustedState(
+                "cache quarantine changed before handle-bound rename"
+            )
+        info.root_directory = rename_root.value
+        status = int(
+            api.ntdll.NtSetInformationFile(
+                source.value,
+                ctypes.byref(io_status),
+                ctypes.byref(buffer),
+                len(buffer),
+                _FILE_RENAME_INFORMATION_CLASS,
+            )
         )
-    )
-    if status >= 0:
-        _revalidate_handle(destination_parent, None)
-        return
-    error = int(api.ntdll.RtlNtStatusToDosError(status))
+        if status >= 0:
+            _revalidate_handle(
+                rename_root,
+                None,
+                "cache quarantine rename root",
+            )
+            return
+        error = int(api.ntdll.RtlNtStatusToDosError(status))
     if error in {_ERROR_FILE_EXISTS, _ERROR_ALREADY_EXISTS}:
         raise FileExistsError(
             errno.EEXIST,
