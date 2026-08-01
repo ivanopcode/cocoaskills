@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import base64
 import hashlib
+import io
 import json
 import os
 import re
@@ -1217,6 +1218,44 @@ def _transient_descriptor_rewrite(path: Path, marker: bytes) -> None:
     finally:
         os.close(parent_fd)
     assert path.read_bytes() == original
+
+
+def _transient_file_object_rewrite(
+    path: Path,
+    marker: bytes,
+    *,
+    captured_fchmod: Any,
+    captured_utime: Any,
+) -> None:
+    """Restore bytes, mode and timestamps after an unpatched file-object write."""
+
+    original = path.read_bytes()
+    original_state = path.stat()
+    with io.open(path, "r+b") as stream:
+        descriptor = stream.fileno()
+        captured_fchmod(
+            descriptor,
+            stat.S_IMODE(original_state.st_mode) | stat.S_IWUSR,
+        )
+        stream.seek(0, os.SEEK_END)
+        stream.write(marker)
+        stream.flush()
+        os.fsync(descriptor)
+        stream.seek(0)
+        stream.write(original)
+        stream.truncate(len(original))
+        stream.flush()
+        os.fsync(descriptor)
+        captured_fchmod(descriptor, stat.S_IMODE(original_state.st_mode))
+    captured_utime(
+        path,
+        ns=(original_state.st_atime_ns, original_state.st_mtime_ns),
+        follow_symlinks=False,
+    )
+    restored = path.stat()
+    assert path.read_bytes() == original
+    assert stat.S_IMODE(restored.st_mode) == stat.S_IMODE(original_state.st_mode)
+    assert restored.st_mtime_ns == original_state.st_mtime_ns
 
 
 def test_rc6_planning_binding_detects_omitted_skill_validation(
@@ -2520,6 +2559,283 @@ def test_rc6_private_failure_binding_detects_transient_persistent_write(
         assert mutations > 0
     finally:
         clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="captured descriptor aliases target the POSIX no-replace seam",
+)
+def test_rc6_publication_binding_detects_captured_descriptor_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from csk.builds import cache_posix
+
+    captured_open = os.open
+    captured_write = os.write
+    captured_ftruncate = os.ftruncate
+    captured_fchmod = os.fchmod
+    captured_utime = os.utime
+    corruptions = 0
+    original = cache_posix._rename_noreplace
+
+    def corrupt_live_child_then_restore(
+        source_dir_fd: int,
+        source_name: str,
+        destination_dir_fd: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal corruptions
+        original(
+            source_dir_fd,
+            source_name,
+            destination_dir_fd,
+            destination_name,
+        )
+        if not re.fullmatch(r"[0-9a-f]{64}", destination_name):
+            return
+        entry_fd = captured_open(
+            destination_name,
+            os.O_RDONLY | os.O_DIRECTORY,
+            dir_fd=destination_dir_fd,
+        )
+        try:
+            bin_fd = captured_open(
+                "bin",
+                os.O_RDONLY | os.O_DIRECTORY,
+                dir_fd=entry_fd,
+            )
+            try:
+                artifact_name = os.listdir(bin_fd)[0]
+                read_fd = captured_open(
+                    artifact_name,
+                    os.O_RDONLY,
+                    dir_fd=bin_fd,
+                )
+                try:
+                    state = os.fstat(read_fd)
+                    original_bytes = os.read(read_fd, state.st_size)
+                    original_mode = stat.S_IMODE(state.st_mode)
+                    captured_fchmod(read_fd, original_mode | stat.S_IWUSR)
+                finally:
+                    os.close(read_fd)
+                write_fd = captured_open(
+                    artifact_name,
+                    os.O_WRONLY,
+                    dir_fd=bin_fd,
+                )
+                try:
+                    captured_write(write_fd, b"!" * len(original_bytes))
+                    os.fsync(write_fd)
+                    os.lseek(write_fd, 0, os.SEEK_SET)
+                    captured_write(write_fd, original_bytes)
+                    captured_ftruncate(write_fd, len(original_bytes))
+                    os.fsync(write_fd)
+                    captured_fchmod(write_fd, original_mode)
+                finally:
+                    os.close(write_fd)
+                captured_utime(
+                    artifact_name,
+                    ns=(state.st_atime_ns, state.st_mtime_ns),
+                    dir_fd=bin_fd,
+                    follow_symlinks=False,
+                )
+                corruptions += 1
+            finally:
+                os.close(bin_fd)
+        finally:
+            os.close(entry_fd)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        cache_posix,
+        "_rename_noreplace",
+        corrupt_live_child_then_restore,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert corruptions > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_read_only_bindings_detect_file_object_alias_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_fchmod = os.fchmod
+    captured_utime = os.utime
+    mutations: list[str] = []
+    original_project_install = installer.install
+    original_global_install = global_install.install
+    original_selected_projects = installer._selected_projects
+    original_private_builds = installer._build_private_misses
+
+    def rewrite(path: Path, marker: bytes, label: str) -> None:
+        _transient_file_object_rewrite(
+            path,
+            marker,
+            captured_fchmod=captured_fchmod,
+            captured_utime=captured_utime,
+        )
+        mutations.append(label)
+
+    def mutate_project_config_then_install(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if "/dry-run/project/" in config_value.path.as_posix():
+            rewrite(
+                config_value.path,
+                b"\nfile-object-project-upgrade-write\n",
+                "project-upgrade",
+            )
+        return original_project_install(config_value, *args, **kwargs)
+
+    def mutate_global_config_then_install(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if "/dry-run/global/" in config_value.path.as_posix():
+            rewrite(
+                config_value.path,
+                b"\nfile-object-global-upgrade-write\n",
+                "global-upgrade",
+            )
+        return original_global_install(config_value, *args, **kwargs)
+
+    def mutate_planning_skillfile(
+        config_value: config.GlobalConfig,
+        alias: str | None,
+    ) -> list[config.ProjectConfig]:
+        selected = original_selected_projects(config_value, alias)
+        if "/planning/" in config_value.path.as_posix():
+            for project in selected:
+                skillfile = project.path / "Skillfile.json"
+                if skillfile.is_file():
+                    rewrite(
+                        skillfile,
+                        b"\nfile-object-planning-write\n",
+                        "planning",
+                    )
+        return selected
+
+    def mutate_generation_then_build(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        generation = config_value.path.parent / "persistent-generation"
+        if "/private-builds/failure/" in generation.as_posix():
+            rewrite(
+                generation,
+                b"\nfile-object-private-failure-write\n",
+                "private-failure",
+            )
+        return original_private_builds(config_value, *args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(installer, "install", mutate_project_config_then_install)
+    monkeypatch.setattr(global_install, "install", mutate_global_config_then_install)
+    monkeypatch.setattr(installer, "_selected_projects", mutate_planning_skillfile)
+    monkeypatch.setattr(installer, "_build_private_misses", mutate_generation_then_build)
+    try:
+        expected = {
+            ("dry_run_cases", "project-upgrade"),
+            ("dry_run_cases", "global-upgrade"),
+            ("planning_cases", "all-source-and-trust-gates-before-build"),
+            (
+                "private_build_cases",
+                "second-build-failure-preserves-persistent-state",
+            ),
+        }
+        differences = {
+            (cluster, name)
+            for cluster, name in expected
+            if observe_manager_lifecycle_case(
+                name,
+                MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"],
+            )
+            != _lifecycle_case(cluster, name)
+        }
+        assert differences == expected
+        assert set(mutations) == {
+            "project-upgrade",
+            "global-upgrade",
+            "planning",
+            "private-failure",
+        }
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_private_failure_binding_watches_project_skillfile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mutations = 0
+    original = installer._build_private_misses
+
+    def mutate_skillfile_then_build(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        nonlocal mutations
+        if "/private-builds/failure/" in config_value.path.as_posix():
+            project = next(iter(config_value.projects.values())).path
+            _transient_descriptor_rewrite(
+                project / "Skillfile.json",
+                b"\ntransient-private-failure-skillfile-write\n",
+            )
+            mutations += 1
+        return original(config_value, *args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_build_private_misses",
+        mutate_skillfile_then_build,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "private_build_cases",
+            "second-build-failure-preserves-persistent-state",
+        )
+        assert mutations > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="the captured-callable regression requires POSIX ctime semantics",
+)
+def test_rc6_persistent_tamper_witness_survives_exact_restoration(
+    tmp_path: Path,
+) -> None:
+    witness = tmp_path / "persistent-witness"
+    witness.write_bytes(b"original persistent bytes")
+    original = witness.stat()
+    before = lifecycle_observations._persistent_tamper_state((witness,))
+
+    _transient_file_object_rewrite(
+        witness,
+        b"\ntransient write\n",
+        captured_fchmod=os.fchmod,
+        captured_utime=os.utime,
+    )
+
+    restored = witness.stat()
+    after = lifecycle_observations._persistent_tamper_state((witness,))
+    assert witness.read_bytes() == b"original persistent bytes"
+    assert stat.S_IMODE(restored.st_mode) == stat.S_IMODE(original.st_mode)
+    assert restored.st_ino == original.st_ino
+    assert restored.st_mtime_ns == original.st_mtime_ns
+    assert restored.st_ctime_ns != original.st_ctime_ns
+    assert after != before
 
 
 @pytest.mark.parametrize("sabotage", ["zero-fetch", "duplicate-fetch"])

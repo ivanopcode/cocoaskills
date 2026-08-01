@@ -545,3 +545,37 @@ protected duplicate-fetch pass. After the observer changes it exited 0 with
 all six probes passing. The exact 32-case scalar-leaf/classification gate
 passes all 417 cases, including the repair refinement. No release pin,
 schema-v7 surface, tag, claim, or CI configuration changed.
+
+## 2026-08-01 — BUG-260801-1iu1ln lifecycle alias hardening
+
+Cycle-8 review demonstrated that attribute monkeypatching is not an authority
+for persistent-state immutability: `io.open` file-object writes and callables
+captured from `os` before observer installation could write, fsync, truncate,
+chmod and timestamp-restore protected files without an event. The same review
+showed that private-build failure observation omitted the project
+`Skillfile.json`. A standalone three-case pre-fix gate reproduced all three
+survivors and exited 1 with three failures.
+
+Read-only lifecycle evidence now uses a recursive tamper witness containing
+node kind, mode, device/inode identity, link count, owner, size, bytes or link
+target, `mtime_ns` and `ctime_ns`. On the supported Darwin filesystem, a direct
+probe restored bytes, mode, inode and `mtime_ns` exactly after a file-object
+write while `ctime_ns` remained changed. Atomic publication compares the
+staged and live descendant witnesses across the no-replace rename; only the
+moved root's rename-induced ctime change is allowed before its normal seal.
+This makes I/O spelling irrelevant without growing another alias patch list.
+
+The private-build failure witness is taken exactly around
+`_build_private_misses` over the complete project, config, manager-home and
+source roots. Operation-private build staging remains outside those roots, and
+stable lock records are explicitly excluded as coordination state. This phase
+boundary avoids treating earlier source snapshot creation as a failure effect.
+An idempotent `mkdir(exist_ok=True)` trace on the existing manager home also
+confirmed that attempted operations alone are not state changes; recursive
+identity/ctime equality is authoritative while operation traces continue to
+classify named effects.
+
+Post-fix, the four new alias/surface/timestamp regressions, all 32 canonical
+lifecycle cases, all 417 scalar/classification checks, and all 28 inherited
+sabotage probes pass. No product release, pin, claim, schema-v7, tag, CI,
+changelog or packaging surface changed.

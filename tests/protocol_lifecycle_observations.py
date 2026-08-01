@@ -13,6 +13,7 @@ import io
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -20,7 +21,7 @@ import threading
 import time
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,6 +56,147 @@ from csk.builds import cache, go_v1, metadata, planner, source as build_source, 
 
 
 JsonObject = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _TamperNode:
+    """One fail-closed filesystem node witness for persistent-state checks."""
+
+    kind: str
+    mode: int
+    device: int
+    inode: int
+    links: int
+    uid: int
+    gid: int
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+    flags: int | None
+    file_attributes: int | None
+    value: bytes | str | None
+
+
+def _tamper_node(path: Path) -> _TamperNode:
+    info = path.lstat()
+    if stat.S_ISREG(info.st_mode):
+        kind = "file"
+        with io.open(path, "rb") as stream:
+            value: bytes | str | None = stream.read()
+    elif stat.S_ISLNK(info.st_mode):
+        kind = "link"
+        value = os.readlink(path)
+    elif stat.S_ISDIR(info.st_mode):
+        kind = "directory"
+        value = None
+    else:
+        kind = "special"
+        value = None
+    return _TamperNode(
+        kind=kind,
+        mode=stat.S_IMODE(info.st_mode),
+        device=info.st_dev,
+        inode=info.st_ino,
+        links=info.st_nlink,
+        uid=info.st_uid,
+        gid=info.st_gid,
+        size=info.st_size,
+        mtime_ns=info.st_mtime_ns,
+        ctime_ns=info.st_ctime_ns,
+        flags=getattr(info, "st_flags", None),
+        file_attributes=getattr(info, "st_file_attributes", None),
+        value=value,
+    )
+
+
+def _tamper_tree_state(
+    root: Path,
+    *,
+    excluded_roots: tuple[Path, ...] = (),
+) -> dict[str, _TamperNode | None]:
+    """Capture relative recursive identity, metadata and content for one root."""
+
+    if not root.exists() and not root.is_symlink():
+        return {".": None}
+    state: dict[str, _TamperNode | None] = {}
+    excluded = tuple(
+        Path(os.path.abspath(candidate))
+        for candidate in excluded_roots
+    )
+
+    def visit(path: Path, relative: str) -> None:
+        absolute = Path(os.path.abspath(path))
+        if any(
+            absolute == candidate or absolute.is_relative_to(candidate)
+            for candidate in excluded
+        ):
+            return
+        node = _tamper_node(path)
+        state[relative] = node
+        if node.kind != "directory":
+            return
+        with os.scandir(path) as entries:
+            names = sorted(entry.name for entry in entries)
+        for name in names:
+            child = path / name
+            child_relative = name if relative == "." else f"{relative}/{name}"
+            visit(child, child_relative)
+
+    visit(root, ".")
+    return state
+
+
+def _persistent_tamper_state(
+    roots: tuple[Path, ...],
+    *,
+    excluded_roots: tuple[Path, ...] = (),
+) -> dict[str, _TamperNode | None]:
+    """Capture roots plus missing-root parent witnesses.
+
+    Final bytes and modes alone cannot reveal a write/chmod/restore sequence.
+    Node identity and ``ctime_ns`` retain that evidence.  A missing root also
+    carries its nearest existing ancestor because create/remove restoration
+    necessarily changes that directory's metadata.
+    """
+
+    state: dict[str, _TamperNode | None] = {}
+    for root in roots:
+        root_key = os.fspath(root)
+        tree = _tamper_tree_state(root, excluded_roots=excluded_roots)
+        for relative, node in tree.items():
+            state[f"{root_key}:{relative}"] = node
+        if tree["."] is not None:
+            continue
+        ancestor = root.parent
+        while not ancestor.exists() and not ancestor.is_symlink():
+            if ancestor == ancestor.parent:
+                break
+            ancestor = ancestor.parent
+        if ancestor.exists() or ancestor.is_symlink():
+            state[f"{root_key}:@missing-root-anchor:{ancestor}"] = _tamper_node(
+                ancestor
+            )
+    return state
+
+
+def _same_tree_across_atomic_rename(
+    source: dict[str, _TamperNode | None],
+    destination: dict[str, _TamperNode | None],
+) -> bool:
+    """Compare a staged tree with its live name, allowing only root rename ctime."""
+
+    if source.keys() != destination.keys():
+        return False
+    for relative, before in source.items():
+        after = destination[relative]
+        if relative == "." and before is not None and after is not None:
+            # POSIX directory rename changes the moved directory's ctime.  Its
+            # inode, contents and all other metadata must remain identical;
+            # descendants retain their pre-publication ctime exactly.
+            before = replace(before, ctime_ns=after.ctime_ns)
+        if before != after:
+            return False
+    return True
 
 
 def _record_process_paths(
@@ -169,10 +311,13 @@ def _install_persistent_mutation_observer(
     *,
     on_mutation: Callable[[Path], None] | None = None,
     on_event: Callable[[str, Path], None] | None = None,
+    enabled: Callable[[], bool] | None = None,
+    ignored_roots: tuple[Path, ...] = (),
 ) -> None:
     """Trace high- and low-level mutations, including descriptor-relative ones."""
 
     protected = tuple(root.resolve(strict=False) for root in roots)
+    ignored = tuple(root.resolve(strict=False) for root in ignored_roots)
 
     def record(
         operation: str,
@@ -180,8 +325,15 @@ def _install_persistent_mutation_observer(
         *,
         dir_fd: int | None = None,
     ) -> None:
+        if enabled is not None and not enabled():
+            return
         candidate = _observed_path(path, dir_fd=dir_fd)
         if candidate is None:
+            return
+        if any(
+            candidate == root or candidate.is_relative_to(root)
+            for root in ignored
+        ):
             return
         if any(
             candidate == root or candidate.is_relative_to(root)
@@ -843,6 +995,7 @@ def _observe_cache_publication(
         / publication_key.removeprefix("sha256:")
     )
     atomic_publish_calls: list[bool] = []
+    atomic_tree_handoffs: list[bool] = []
     live_destination_mutations: list[str] = []
     live_entry_mutations: list[str] = []
     live_entry_events: list[tuple[str, Path]] = []
@@ -1010,6 +1163,12 @@ def _observe_cache_publication(
                 destination_dir_fd: int,
                 destination_name: str,
             ) -> None:
+                source_path = _observed_path(source_name, dir_fd=source_dir_fd)
+                source_tree = (
+                    _tamper_tree_state(source_path)
+                    if source_path is not None
+                    else None
+                )
                 try:
                     os.stat(
                         destination_name,
@@ -1031,6 +1190,18 @@ def _observe_cache_publication(
                     destination_dir_fd,
                 ):
                     atomic_publish_calls.append(destination_absent)
+                    destination_path = _observed_path(
+                        destination_name,
+                        dir_fd=destination_dir_fd,
+                    )
+                    atomic_tree_handoffs.append(
+                        source_tree is not None
+                        and destination_path is not None
+                        and _same_tree_across_atomic_rename(
+                            source_tree,
+                            _tamper_tree_state(destination_path),
+                        )
+                    )
 
             monkeypatch.setattr(
                 cache_posix,
@@ -1045,9 +1216,16 @@ def _observe_cache_publication(
             def observed_atomic_move(source: Path, destination: Path) -> None:
                 destination_path = destination.resolve(strict=False)
                 destination_absent = not destination.exists()
+                source_tree = _tamper_tree_state(source)
                 real_atomic_publish(source, destination)
                 if destination_path == live_entry.resolve(strict=False):
                     atomic_publish_calls.append(destination_absent)
+                    atomic_tree_handoffs.append(
+                        _same_tree_across_atomic_rename(
+                            source_tree,
+                            _tamper_tree_state(destination_path),
+                        )
+                    )
 
             monkeypatch.setattr(
                 cache_windows,
@@ -1085,6 +1263,7 @@ def _observe_cache_publication(
     publication_atomic = (
         complete
         and atomic_publish_calls == [True]
+        and atomic_tree_handoffs == [True]
         and not live_destination_mutations
         and len(allowed_root_seals) <= 1
         and not unexpected_live_entry_mutations
@@ -1997,7 +2176,7 @@ def _observe_dry_run(
     if set(effect_surfaces) != set(_COMPILED_DRY_RUN_EFFECTS):
         raise AssertionError("compiled dry-run effect classification is incomplete")
     effects_before = {
-        label: _tree_state(paths)
+        label: _persistent_tamper_state(paths)
         for label, paths in effect_surfaces.items()
     }
     observed_argv: list[tuple[str, ...]] = []
@@ -2194,7 +2373,7 @@ def _observe_dry_run(
             options=installer.InstallOptions(dry_run=True),
         )[0]
         effects_after = {
-            label: _tree_state(paths)
+            label: _persistent_tamper_state(paths)
             for label, paths in effect_surfaces.items()
         }
     outcomes = [
@@ -2288,7 +2467,7 @@ def _observe_upgrade_dry_run(root: Path, *, global_scope: bool) -> list[str]:
     if set(effect_surfaces) != set(effects):
         raise AssertionError("upgrade dry-run effect classification is incomplete")
     before = {
-        label: _tree_state(paths)
+        label: _persistent_tamper_state(paths)
         for label, paths in effect_surfaces.items()
     }
     forbidden_calls: list[str] = []
@@ -2340,7 +2519,7 @@ def _observe_upgrade_dry_run(root: Path, *, global_scope: bool) -> list[str]:
                 ["upgrade", "app", "--dry-run"]
             )
         after = {
-            label: _tree_state(paths)
+            label: _persistent_tamper_state(paths)
             for label, paths in effect_surfaces.items()
         }
     return [
@@ -2658,7 +2837,9 @@ def _observe_gc(
         shutil.copytree(entry, rejected_entry)
         os.utime(rejected_entry, (1, 1), follow_symlinks=False)
         protected_entry_roots.add(rejected_entry.resolve(strict=False))
-        rejected_entry_before_receipt_probe = _tree_state((rejected_entry,))
+        rejected_entry_before_receipt_probe = _persistent_tamper_state(
+            (rejected_entry,)
+        )
 
         young_now = float(gc.BUILD_GRACE_SECONDS + 200)
         young_mtime = young_now - (gc.BUILD_GRACE_SECONDS / 2)
@@ -2685,7 +2866,9 @@ def _observe_gc(
                 for warning in swept.warnings
             )
         )
-        rejected_entry_after_receipt_probe = _tree_state((rejected_entry,))
+        rejected_entry_after_receipt_probe = _persistent_tamper_state(
+            (rejected_entry,)
+        )
         entry_adopted = bool(protected_entry_mutations) or (
             rejected_entry_after_receipt_probe
             != rejected_entry_before_receipt_probe
@@ -2992,7 +3175,7 @@ def _observe_planning_gate_failures(
     go_commands: list[str] = []
     persistent_mutations: list[str] = []
     roots = (project, cfg.path.parent, skills_root)
-    baseline = _tree_state(roots)
+    baseline = _persistent_tamper_state(roots)
 
     for label, target, attribute in _PLANNING_GATE_PROBES:
         downstream: list[str] = []
@@ -3023,7 +3206,7 @@ def _observe_planning_gate_failures(
                 options=installer.InstallOptions(dry_run=True),
             )[0]
 
-        after = _tree_state(roots)
+        after = _persistent_tamper_state(roots)
         if "cache-lookup" in downstream:
             cache_lookups.append(label)
         if "go-command" in downstream:
@@ -3507,6 +3690,10 @@ def _observe_private_builds(
     watched = tuple(
         dict.fromkeys(
             (
+                project,
+                cfg.path,
+                csk_home,
+                skills_root,
                 csk_home / "persistent-generation",
                 *(
                     path
@@ -3516,11 +3703,16 @@ def _observe_private_builds(
             )
         )
     )
-    before = _tree_state(watched)
-    effects_before = {
-        label: _tree_state(paths)
-        for label, paths in effect_surfaces.items()
-    }
+    # Stable lock records are coordination state, not a lifecycle effect.  The
+    # build operation's temporary staging is outside every watched root.  Take
+    # the comprehensive project/config/source/manager witness exactly around
+    # the private-build phase so earlier source freezing is not misclassified.
+    coordination_roots = (csk_home / "locks",)
+    before: dict[str, _TamperNode | None] | None = None
+    after: dict[str, _TamperNode | None] | None = None
+    effects_before: dict[str, dict[str, _TamperNode | None]] | None = None
+    effects_after: dict[str, dict[str, _TamperNode | None]] | None = None
+    private_failure_active = False
     events: list[str] = []
     effect_events: list[str] = []
     persistent_mutations: list[str] = []
@@ -3529,6 +3721,7 @@ def _observe_private_builds(
     real_manager_home_lock = locking.ManagerHomeLock
     real_cache_factory = cache.cache_for_manager_home
     real_path_chmod = Path.chmod
+    real_private_builds = installer._build_private_misses
 
     def record_effect(label: str) -> None:
         if label not in effect_events:
@@ -3625,6 +3818,31 @@ def _observe_private_builds(
                 operation_roots.append(Path(value))
             return value
 
+    def observed_private_builds(*args: Any, **kwargs: Any) -> Any:
+        nonlocal before, after, effects_before, effects_after
+        nonlocal private_failure_active
+        before = _persistent_tamper_state(
+            watched,
+            excluded_roots=coordination_roots,
+        )
+        effects_before = {
+            label: _persistent_tamper_state(paths)
+            for label, paths in effect_surfaces.items()
+        }
+        private_failure_active = True
+        try:
+            return real_private_builds(*args, **kwargs)
+        finally:
+            effects_after = {
+                label: _persistent_tamper_state(paths)
+                for label, paths in effect_surfaces.items()
+            }
+            after = _persistent_tamper_state(
+                watched,
+                excluded_roots=coordination_roots,
+            )
+            private_failure_active = False
+
     with pytest.MonkeyPatch.context() as monkeypatch:
         _install_fake_build_pipeline(
             monkeypatch,
@@ -3647,6 +3865,11 @@ def _observe_private_builds(
 
         monkeypatch.setattr(go_v1, "build", detailed_build)
         monkeypatch.setattr(installer.tempfile, "TemporaryDirectory", ObservedTemporaryDirectory)
+        monkeypatch.setattr(
+            installer,
+            "_build_private_misses",
+            observed_private_builds,
+        )
 
         def forbidden_call(label: str) -> Callable[..., None]:
             def record(*_args: object, **_kwargs: object) -> None:
@@ -3680,13 +3903,12 @@ def _observe_private_builds(
             watched,
             persistent_mutations,
             on_mutation=classify_persistent_mutation,
+            enabled=lambda: private_failure_active,
+            ignored_roots=coordination_roots,
         )
         result = installer.install(cfg)[0]
-    after = _tree_state(watched)
-    effects_after = {
-        label: _tree_state(paths)
-        for label, paths in effect_surfaces.items()
-    }
+    if before is None or after is None or effects_before is None or effects_after is None:
+        raise AssertionError("private-build failure phase was not observed")
     operation_removed = bool(operation_roots) and all(not path.exists() for path in operation_roots)
     protocol_events = [
         event
@@ -3714,7 +3936,11 @@ def _observe_private_builds(
         "name": "second-build-failure-preserves-persistent-state",
         "persistent_state_after": (
             persistent_generation.read_text(encoding="utf-8")
-            if before == after and not persistent_mutations
+            # The operation calls mkdir(exist_ok=True) on the already-existing
+            # manager home while preparing stable build locks.  That traced
+            # no-op is not a state mutation; the recursive identity/ctime
+            # witness is the fail-closed persistent-state authority.
+            if before == after
             else "changed"
         ),
         "persistent_state_before": persistent_generation_before,
@@ -4381,9 +4607,9 @@ def _observe_status_and_repair(
         monkeypatch.setattr(go_v1, "build", observed_status_build)
         monkeypatch.setattr(subprocess, "run", observed_status_run)
         monkeypatch.setattr(subprocess, "Popen", observed_status_popen)
-        before = _tree_state((status_root, csk_home, skills_root))
+        before = _persistent_tamper_state((status_root, csk_home, skills_root))
         project_status, build_status = _build_row(cfg)
-        after = _tree_state((status_root, csk_home, skills_root))
+        after = _persistent_tamper_state((status_root, csk_home, skills_root))
     read_only = before == after and not persistent_mutations
     current = (
         project_status.clean
@@ -4655,9 +4881,9 @@ def _observe_status_and_repair(
             monkeypatch.setattr(go_v1, "build", observed_matrix_build)
             monkeypatch.setattr(subprocess, "run", observed_matrix_run)
             monkeypatch.setattr(subprocess, "Popen", observed_matrix_popen)
-            before = _tree_state((project, csk_home, skills_root))
+            before = _persistent_tamper_state((project, csk_home, skills_root))
             project_status, build = _build_row(cfg)
-            after = _tree_state((project, csk_home, skills_root))
+            after = _persistent_tamper_state((project, csk_home, skills_root))
         if (
             not project_status.clean
             and not build.current
