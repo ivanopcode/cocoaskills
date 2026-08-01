@@ -46,6 +46,9 @@ from protocol_conformance_adapters import (
     assert_manager_lifecycle_case,
     assert_toolchain_case,
 )
+from protocol_lifecycle_observations import (
+    clear_manager_lifecycle_observation_cache,
+)
 
 
 ROOT_TEXT = os.environ.get("CURATOR_CONFORMANCE_ROOT")
@@ -225,6 +228,58 @@ MANAGER_LIFECYCLE_CASES = (
     if ROOT_TEXT
     else []
 )
+
+
+def _scalar_leaf_paths(
+    value: Any,
+    path: tuple[str | int, ...] = (),
+) -> list[tuple[str | int, ...]]:
+    if isinstance(value, dict):
+        return [
+            leaf
+            for key in sorted(value)
+            for leaf in _scalar_leaf_paths(value[key], (*path, key))
+        ]
+    if isinstance(value, list):
+        return [
+            leaf
+            for index, item in enumerate(value)
+            for leaf in _scalar_leaf_paths(item, (*path, index))
+        ]
+    return [path]
+
+
+LIFECYCLE_SCALAR_MUTATIONS = [
+    (cluster, case["name"], path)
+    for cluster, case in MANAGER_LIFECYCLE_CASES
+    for path in _scalar_leaf_paths(case)
+]
+
+
+def _mutation_id(item: tuple[str, str, tuple[str | int, ...]]) -> str:
+    cluster, name, path = item
+    rendered = ".".join(str(part) for part in path)
+    return f"{cluster}:{name}:{rendered}"
+
+
+def _mutate_scalar(value: Any) -> Any:
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, int):
+        return value + 1
+    if isinstance(value, str):
+        return value + "-mutated"
+    raise AssertionError(f"unsupported lifecycle scalar leaf {value!r}")
+
+
+def _mutate_path(value: Any, path: tuple[str | int, ...]) -> None:
+    target = value
+    for part in path[:-1]:
+        target = target[part]
+    leaf = path[-1]
+    target[leaf] = _mutate_scalar(target[leaf])
+
+
 CACHE_IDENTITY_CASES = (
     [
         (name, value)
@@ -722,6 +777,33 @@ def test_rc6_manager_lifecycle_case(
     assert_manager_lifecycle_case(cluster, case, MANAGER_LIFECYCLE_VECTORS)
 
 
+@pytest.mark.parametrize(
+    ("cluster", "case_name", "path"),
+    LIFECYCLE_SCALAR_MUTATIONS,
+    ids=[_mutation_id(item) for item in LIFECYCLE_SCALAR_MUTATIONS],
+)
+def test_rc6_every_lifecycle_scalar_leaf_is_mutation_sensitive(
+    cluster: str,
+    case_name: str,
+    path: tuple[str | int, ...],
+) -> None:
+    assert len(LIFECYCLE_SCALAR_MUTATIONS) == 378
+    case = deepcopy(
+        next(
+            item
+            for item in MANAGER_LIFECYCLE_VECTORS[cluster]
+            if item["name"] == case_name
+        )
+    )
+    _mutate_path(case, path)
+    with pytest.raises(AssertionError):
+        assert_manager_lifecycle_case(
+            cluster,
+            case,
+            MANAGER_LIFECYCLE_VECTORS,
+        )
+
+
 def test_rc6_manifest_entry_authentication_rejects_mutated_bytes(
     tmp_path: Path,
 ) -> None:
@@ -898,6 +980,31 @@ def test_rc6_lifecycle_binding_rejects_unknown_fields() -> None:
             case,
             MANAGER_LIFECYCLE_VECTORS,
         )
+
+
+def test_rc6_lifecycle_binding_follows_cocoaskills_ordering_seam(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = closure._topological_order
+
+    def reverse_only_protocol_fixture(nodes: dict[str, Any]) -> list[Any]:
+        ordered = original(nodes)
+        if set(nodes) == {"app", "data-provider", "ui-provider"}:
+            return list(reversed(ordered))
+        return ordered
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(closure, "_topological_order", reverse_only_protocol_fixture)
+    case = deepcopy(MANAGER_LIFECYCLE_VECTORS["build_order_cases"][0])
+    try:
+        with pytest.raises(AssertionError):
+            assert_manager_lifecycle_case(
+                "build_order_cases",
+                case,
+                MANAGER_LIFECYCLE_VECTORS,
+            )
+    finally:
+        clear_manager_lifecycle_observation_cache()
 
 
 def test_shared_fixture_legacy_marker_v1_stays_readable() -> None:

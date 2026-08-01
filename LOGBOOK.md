@@ -1,5 +1,27 @@
 # Logbook
 
+## 2026-08-01 — BUG-260801-1iu1ln observed rc.6 lifecycle bindings
+
+The cycle-2 scalar audit exposed 104 lifecycle mutations that survived the
+declarative adapter. The replacement binding reconstructs all 32 lifecycle
+cases from CocoaSkills cache, transaction, locking, installer/planner,
+currentness/status, recovery/repair, launcher, GC, bootstrap, and upgrade
+seams, then compares the complete observed objects with the authenticated
+candidate vector. A fail-closed 378-leaf mutation test and an explicit product
+seam sabotage test prevent new scalar fields or self-consistency fallbacks from
+silently passing.
+
+Binding the vector revealed three product mismatches. Project and global
+install ran recovery before private builds despite the publication-phase-only
+ordering; those pre-build passes are removed while the existing locked recovery
+inside each materialization attempt remains. Status now treats a declared build
+root copied into commit-keyed runtime state as non-current. Global upgrade now
+passes fetch intent into closure construction, so transitive repositories are
+updated as well as direct declarations. Focused regressions cover each change.
+
+This repair changes no protocol pin, schema, tag, release, claim, or CI
+curator-spec reference.
+
 ## 2026-08-01 — TASK-260720-akf5kh schema-6 documentation boundary
 
 The documentation treats three distinctions as non-negotiable. Go 1.23 is the

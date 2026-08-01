@@ -386,6 +386,12 @@ def _collect_resolved_scope(
         marker_inspection = _inspect_node_marker(
             node,
             installed_dir,
+            runtime_dir=(
+                csk_home
+                / "runtime"
+                / node.name
+                / node.resolved.commit
+            ),
             effective_locale=(
                 config.preferred_locale
                 if node.name in hybrid_store_names and node.context_active
@@ -467,6 +473,7 @@ def _inspect_node_marker(
     node: closure.ClosureNode,
     installed_dir: Path,
     *,
+    runtime_dir: Path,
     effective_locale: str | None,
     agents: list[str],
     expected_build_source: build_source.BuildSourceIdentity | None,
@@ -605,6 +612,14 @@ def _inspect_node_marker(
             marker,
             raw,
             ("build-context-exposed", detail),
+        )
+    if _runtime_exposes_build_roots(runtime_dir, node.spec.build_roots):
+        detail = "installed runtime exposes a declared build root"
+        return _MarkerInspection(
+            replace(base, label="build-drift", detail=detail),
+            marker,
+            raw,
+            ("build-runtime-exposed", detail),
         )
     try:
         actual_hash = hashing.content_sha256(installed_dir)
@@ -755,6 +770,24 @@ def _installed_files(installed_dir: Path) -> tuple[str, ...]:
         elif not stat.S_ISDIR(info.st_mode):
             raise ValueError(f"installed content contains a special entry: {path}")
     return tuple(sorted(files))
+
+
+def _runtime_exposes_build_roots(
+    runtime_dir: Path,
+    build_roots: tuple[str, ...],
+) -> bool:
+    """Fail closed when excluded build input appears in installed runtime."""
+
+    for build_root in build_roots:
+        installed_root = runtime_dir.joinpath(*build_root.split("/"))
+        try:
+            installed_root.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return True
+        return True
+    return False
 
 
 def _marker_bytes_unchanged(path: Path, expected: bytes) -> bool:

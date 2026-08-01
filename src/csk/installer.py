@@ -179,18 +179,6 @@ def _install_project(
         else locking.ProjectLock(csk_home, project.path)
     )
     with project_lock:
-        if not options.dry_run:
-            try:
-                with locking.ManagerHomeLock(csk_home) as home_lock:
-                    _transaction_engine(csk_home).recover(home_lock)
-            except transactions.TransactionError as exc:
-                result = ProjectResult(
-                    alias=project.alias,
-                    path=project.path,
-                    status="failed",
-                )
-                result.errors.append(str(exc))
-                return result
         for attempt in range(attempts):
             try:
                 expected_generation = generation_probe.capture()

@@ -322,6 +322,39 @@ def test_context_leak_and_raw_snapshot_drift_are_non_current(
     assert project_status.path == project
 
 
+@POSIX_BUILD_VECTOR
+def test_runtime_build_root_exposure_is_non_current(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+) -> None:
+    _project, config, _events, _marker_path, marker = _installed_build(
+        monkeypatch,
+        tmp_path,
+        skills_root,
+        csk_home,
+    )
+    runtime_build = (
+        csk_home
+        / "runtime"
+        / "build-skill"
+        / str(marker["commit"])
+        / "build"
+    )
+    runtime_build.mkdir(parents=True)
+    (runtime_build / "leak.go").write_text(
+        "package main\n",
+        encoding="utf-8",
+    )
+
+    project_status, build = _build_row(config)
+
+    assert not project_status.clean
+    assert build.label == "build-runtime-exposed"
+    assert "runtime exposes a declared build root" in build.detail
+
+
 def _different_toolchain(
     monkeypatch: pytest.MonkeyPatch,
     *,
