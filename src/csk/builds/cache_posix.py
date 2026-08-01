@@ -631,6 +631,15 @@ class PosixBuildCache:
                                                 raise _UntrustedState(
                                                     "cache entry changed during GC inspection"
                                                 )
+                                            _require_guard(guard)
+                                            moved = _move_aside(
+                                                driver_fd,
+                                                component,
+                                                quarantine_fd,
+                                                f"gc-entry-{component}",
+                                                missing_ok=True,
+                                                expected_state=after,
+                                            )
                                     except _MissingState:
                                         continue
                                     except (
@@ -646,14 +655,6 @@ class PosixBuildCache:
                                             f"sha256:{component}: {exc}"
                                         )
                                         continue
-                                    _require_guard(guard)
-                                    moved = _move_aside(
-                                        driver_fd,
-                                        component,
-                                        quarantine_fd,
-                                        f"gc-entry-{component}",
-                                        missing_ok=True,
-                                    )
                                     if moved is None:
                                         continue
                                     removed += 1
@@ -1563,6 +1564,7 @@ def _move_aside(
     prefix: str,
     *,
     missing_ok: bool = False,
+    expected_state: os.stat_result | None = None,
 ) -> str | None:
     try:
         source_state = os.stat(
@@ -1574,6 +1576,13 @@ def _move_aside(
         if missing_ok:
             return None
         raise _MissingState(f"{source_name} disappeared before quarantine")
+    if expected_state is not None and not _stable_directory_state(
+        expected_state,
+        source_state,
+    ):
+        raise _UntrustedState(
+            "cache entry pathname no longer selects the inspected object"
+        )
     is_directory = stat.S_ISDIR(source_state.st_mode)
     try:
         unlocked_fd, original_mode = _unlock_owned_directory_for_move(
@@ -1639,10 +1648,59 @@ def _move_aside(
     finally:
         _restore_moved_directory_mode(unlocked_fd, original_mode)
 
+    if expected_state is not None:
+        assert moved_name is not None
+        try:
+            moved_state = os.stat(
+                moved_name,
+                dir_fd=destination_parent_fd,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise _UntrustedState(
+                "cannot prove quarantined cache entry identity"
+            ) from exc
+        if not _same_gc_retirement_state(expected_state, moved_state):
+            try:
+                _rename_noreplace(
+                    destination_parent_fd,
+                    moved_name,
+                    source_parent_fd,
+                    source_name,
+                )
+                os.fsync(source_parent_fd)
+                if source_parent_fd != destination_parent_fd:
+                    os.fsync(destination_parent_fd)
+            except OSError as exc:
+                raise _UntrustedState(
+                    "cache entry changed during quarantine; replacement was retained "
+                    "outside the live namespace because it could not be restored"
+                ) from exc
+            raise _UntrustedState(
+                "cache entry changed during quarantine; replacement was restored"
+            )
+
     os.fsync(source_parent_fd)
     if source_parent_fd != destination_parent_fd:
         os.fsync(destination_parent_fd)
     return moved_name
+
+
+def _same_gc_retirement_state(
+    expected: os.stat_result,
+    actual: os.stat_result,
+) -> bool:
+    """Compare the classified object after rename, excluding rename ctime."""
+
+    return (
+        stat.S_ISDIR(actual.st_mode)
+        and actual.st_dev == expected.st_dev
+        and actual.st_ino == expected.st_ino
+        and actual.st_uid == expected.st_uid
+        and actual.st_nlink == expected.st_nlink
+        and actual.st_mode == expected.st_mode
+        and actual.st_mtime_ns == expected.st_mtime_ns
+    )
 
 
 def _unlock_owned_directory_for_move(

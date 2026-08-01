@@ -108,6 +108,12 @@ def _protect(path: Path, profile: cache_windows._SecurityProfile) -> None:
         cache_windows._apply_security_profile(handle, profile)
 
 
+def _age_entry(path: Path, timestamp: float) -> None:
+    _protect(path, cache_windows._MUTABLE_DIRECTORY)
+    os.utime(path, (timestamp, timestamp))
+    _protect(path, cache_windows._SEALED_ENTRY)
+
+
 def _new_store(tmp_path: Path) -> tuple[Path, WindowsBuildCache]:
     home = tmp_path / ".cocoaskills"
     home.mkdir()
@@ -859,6 +865,166 @@ def test_windows_quarantine_moves_entry_outside_live_namespace(
         store.inspect(CacheExpectation(input=build_input)).status
         is CacheEntryStatus.MISS
     )
+
+
+@_WINDOWS_ONLY
+def test_windows_gc_removes_only_old_unreferenced_entries(
+    tmp_path: Path,
+) -> None:
+    home, store = _new_store(tmp_path)
+    old_input = _build_input("old-tool")
+    young_input = _build_input("young-tool")
+    old_publication, _ = _publication(tmp_path, old_input, b"old artifact")
+    young_publication, _ = _publication(tmp_path, young_input, b"young artifact")
+    store.publish(old_publication, guard=_HeldGuard())
+    store.publish(young_publication, guard=_HeldGuard())
+    old_entry = _entry_path(home, old_input)
+    young_entry = _entry_path(home, young_input)
+    _age_entry(old_entry, 1.0)
+
+    result = store.collect(set(), older_than=100.0, guard=_HeldGuard())
+
+    assert result.removed == 1
+    assert not old_entry.exists()
+    assert young_entry.exists()
+    assert (
+        store.inspect(CacheExpectation(input=young_input)).status
+        is CacheEntryStatus.HIT
+    )
+
+
+@_WINDOWS_ONLY
+def test_windows_gc_entry_exchange_never_retires_the_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, store = _new_store(tmp_path)
+    build_input = _build_input()
+    old_publication, _ = _publication(tmp_path, build_input, b"old artifact")
+    store.publish(old_publication, guard=_HeldGuard())
+    entry = _entry_path(home, build_input)
+    _age_entry(entry, 1.0)
+
+    replacement_root = tmp_path / "replacement"
+    replacement_root.mkdir()
+    replacement_home, replacement_store = _new_store(replacement_root)
+    young_publication, _ = _publication(
+        replacement_root,
+        build_input,
+        b"young artifact",
+    )
+    replacement_store.publish(young_publication, guard=_HeldGuard())
+    replacement = _entry_path(replacement_home, build_input)
+    detached_old = home / "detached-old-entry"
+    original_move = cache_windows._move_aside
+    exchanged = False
+
+    def exchange_before_move(
+        source_parent: cache_windows._Handle,
+        source_name: str,
+        destination_parent: cache_windows._Handle,
+        prefix: str,
+        *,
+        missing_ok: bool,
+        expected_state: cache_windows._ObjectState | None = None,
+    ) -> str | None:
+        nonlocal exchanged
+        if prefix.startswith("gc-entry-") and not exchanged:
+            exchanged = True
+            _protect(entry, cache_windows._MUTABLE_DIRECTORY)
+            os.replace(entry, detached_old)
+            _protect(detached_old, cache_windows._SEALED_ENTRY)
+            _protect(replacement, cache_windows._MUTABLE_DIRECTORY)
+            os.replace(replacement, entry)
+            _protect(entry, cache_windows._SEALED_ENTRY)
+        return original_move(
+            source_parent,
+            source_name,
+            destination_parent,
+            prefix,
+            missing_ok=missing_ok,
+            expected_state=expected_state,
+        )
+
+    monkeypatch.setattr(cache_windows, "_move_aside", exchange_before_move)
+
+    result = store.collect(set(), older_than=100.0, guard=_HeldGuard())
+
+    assert exchanged
+    assert result.removed == 0
+    assert any("uncertain entry" in warning for warning in result.warnings)
+    assert detached_old.exists()
+    assert entry.exists()
+    inspection = store.inspect(CacheExpectation(input=build_input))
+    assert inspection.status is CacheEntryStatus.HIT
+    assert inspection.artifact_path is not None
+    assert inspection.artifact_path.read_bytes() == b"young artifact"
+
+
+@_WINDOWS_ONLY
+def test_windows_gc_root_exchange_never_retires_the_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, store = _new_store(tmp_path)
+    build_input = _build_input()
+    old_publication, _ = _publication(tmp_path, build_input, b"old artifact")
+    store.publish(old_publication, guard=_HeldGuard())
+    entry = _entry_path(home, build_input)
+    _age_entry(entry, 1.0)
+
+    replacement_root = tmp_path / "replacement-root"
+    replacement_root.mkdir()
+    replacement_home, replacement_store = _new_store(replacement_root)
+    young_publication, _ = _publication(
+        replacement_root,
+        build_input,
+        b"young artifact",
+    )
+    replacement_store.publish(young_publication, guard=_HeldGuard())
+    driver = home / cache_windows.LIVE_ROOT_NAME / "go-v1"
+    replacement_driver = (
+        replacement_home / cache_windows.LIVE_ROOT_NAME / "go-v1"
+    )
+    detached_driver = home / "detached-old-driver"
+    original_move = cache_windows._move_aside
+    exchanged = False
+
+    def exchange_root_before_move(
+        source_parent: cache_windows._Handle,
+        source_name: str,
+        destination_parent: cache_windows._Handle,
+        prefix: str,
+        *,
+        missing_ok: bool,
+        expected_state: cache_windows._ObjectState | None = None,
+    ) -> str | None:
+        nonlocal exchanged
+        if prefix.startswith("gc-entry-") and not exchanged:
+            exchanged = True
+            cache_windows._move_no_replace(driver, detached_driver)
+            cache_windows._move_no_replace(replacement_driver, driver)
+        return original_move(
+            source_parent,
+            source_name,
+            destination_parent,
+            prefix,
+            missing_ok=missing_ok,
+            expected_state=expected_state,
+        )
+
+    monkeypatch.setattr(cache_windows, "_move_aside", exchange_root_before_move)
+
+    result = store.collect(set(), older_than=100.0, guard=_HeldGuard())
+
+    assert exchanged
+    assert result.removed == 0
+    assert result.warnings
+    assert (detached_driver / entry.name).exists()
+    inspection = store.inspect(CacheExpectation(input=build_input))
+    assert inspection.status is CacheEntryStatus.HIT
+    assert inspection.artifact_path is not None
+    assert inspection.artifact_path.read_bytes() == b"young artifact"
 
 
 @_WINDOWS_ONLY

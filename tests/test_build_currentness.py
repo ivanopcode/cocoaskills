@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -89,6 +90,32 @@ def _build_row(config: object) -> tuple[status.ProjectStatus, object]:
     assert len(collected) == 1
     assert len(collected[0].builds) == 1
     return collected[0], collected[0].builds[0]
+
+
+def test_native_backend_reports_fresh_build_current(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+) -> None:
+    _project, config, _events, _marker_path, marker = _installed_build(
+        monkeypatch,
+        tmp_path,
+        skills_root,
+        csk_home,
+    )
+
+    project_status, build = _build_row(config)
+    payload = status.statuses_to_payload([project_status])[0]
+
+    assert project_status.clean
+    assert build.current
+    assert build.expected_cache_key == marker["builds"]["tool"]["cache_key"]  # type: ignore[index]
+    assert payload["builds"][0]["current"] is True  # type: ignore[index]
+    assert (
+        build_cache.cache_for_manager_home(csk_home).__class__.__name__
+        == ("WindowsBuildCache" if os.name == "nt" else "PosixBuildCache")
+    )
 
 
 @POSIX_BUILD_VECTOR

@@ -107,6 +107,7 @@ _FILE_BASIC_INFO_CLASS: Final = 0
 _FILE_STANDARD_INFO_CLASS: Final = 1
 _FILE_ATTRIBUTE_TAG_INFO_CLASS: Final = 9
 _FILE_ID_INFO_CLASS: Final = 18
+_FILE_RENAME_INFO_CLASS: Final = 3
 
 _TOKEN_QUERY: Final = 0x0008
 _TOKEN_USER_CLASS: Final = 1
@@ -220,6 +221,15 @@ class _FileIdInfo(ctypes.Structure):
     _fields_ = [
         ("volume_serial_number", ctypes.c_ulonglong),
         ("file_id", _FileId128),
+    ]
+
+
+class _FileRenameInfo(ctypes.Structure):
+    _fields_ = [
+        ("replace_if_exists", ctypes.c_uint32),
+        ("root_directory", ctypes.c_void_p),
+        ("file_name_length", ctypes.c_uint32),
+        ("file_name", ctypes.c_wchar * 1),
     ]
 
 
@@ -857,7 +867,7 @@ class WindowsBuildCache:
                                     if component in referenced:
                                         continue
                                     try:
-                                        _inspect_gc_entry(
+                                        _verified, expected_state = _inspect_gc_entry(
                                             driver,
                                             component,
                                             f"sha256:{component}",
@@ -887,6 +897,7 @@ class WindowsBuildCache:
                                         quarantine,
                                         f"gc-entry-{component}",
                                         missing_ok=True,
+                                        expected_state=expected_state,
                                     )
                                     if moved is None:
                                         continue
@@ -2377,7 +2388,7 @@ def _inspect_gc_entry(
     key: str,
     *,
     older_than: float,
-) -> _VerifiedEntry:
+) -> tuple[_VerifiedEntry, _ObjectState]:
     with _open_protected_child_directory(
         parent,
         entry_name,
@@ -2423,7 +2434,19 @@ def _inspect_gc_entry(
     )
     if verified.entry_identity != identity:
         raise _UntrustedState("cache entry changed during GC inspection")
-    return verified
+    with _open_protected_child_directory(
+        parent,
+        entry_name,
+        "cache entry",
+        _SEALED_ENTRY,
+        missing=_MissingState("cache entry is absent"),
+    ) as selected:
+        state = _object_state(selected)
+    if state.identity != verified.entry_identity:
+        raise _UntrustedState("cache entry changed during GC inspection")
+    if _filetime_to_unix_seconds(state.last_write_time) >= older_than:
+        raise _YoungEntry
+    return verified, state
 
 
 def _filetime_to_unix_seconds(value: int) -> float:
@@ -2548,26 +2571,48 @@ def _move_aside(
     prefix: str,
     *,
     missing_ok: bool,
+    expected_state: _ObjectState | None = None,
 ) -> str | None:
     source = source_parent.path / source_name
     try:
         with _open_raw_handle(
             source,
-            desired_access=_READ_CONTROL | _FILE_READ_ATTRIBUTES,
+            desired_access=_READ_CONTROL | _FILE_READ_ATTRIBUTES | _DELETE,
             missing=_MissingState(f"{source_name} is absent"),
         ) as source_handle:
             _require_direct_child(source_parent, source_handle, source_name)
+            if (
+                expected_state is not None
+                and _object_state(source_handle) != expected_state
+            ):
+                raise _UntrustedState(
+                    "cache entry pathname no longer selects the inspected object"
+                )
             for _attempt in range(16):
                 destination_name = (
                     f"{prefix}-{secrets.token_hex(8)}"
                 )
                 destination = destination_parent.path / destination_name
                 try:
-                    _move_no_replace(source, destination)
+                    _move_handle_no_replace(
+                        source_handle,
+                        destination_parent,
+                        destination_name,
+                    )
                 except FileExistsError:
                     continue
                 _revalidate_handle(source_parent, None)
                 _revalidate_handle(destination_parent, None)
+                moved_handle = _revalidate_handle(
+                    source_handle,
+                    None,
+                    allow_path_change=True,
+                )
+                _require_direct_child(
+                    destination_parent,
+                    moved_handle,
+                    destination_name,
+                )
                 with _open_raw_handle(
                     destination,
                     desired_access=_READ_CONTROL | _FILE_READ_ATTRIBUTES,
@@ -2587,6 +2632,47 @@ def _move_aside(
         if missing_ok:
             return None
         raise
+
+
+def _move_handle_no_replace(
+    source: _Handle,
+    destination_parent: _Handle,
+    destination_name: str,
+) -> None:
+    """Rename the exact open object to one unused child of a held parent."""
+
+    raw_name = destination_name.encode("utf-16-le")
+    file_name_offset = _FileRenameInfo.file_name.offset
+    buffer = ctypes.create_string_buffer(
+        ctypes.sizeof(_FileRenameInfo) + len(raw_name)
+    )
+    info = _FileRenameInfo.from_buffer(buffer)
+    info.replace_if_exists = 0
+    info.root_directory = destination_parent.value
+    info.file_name_length = len(raw_name)
+    ctypes.memmove(
+        ctypes.addressof(buffer) + file_name_offset,
+        raw_name,
+        len(raw_name),
+    )
+    if _api().kernel32.SetFileInformationByHandle(
+        source.value,
+        _FILE_RENAME_INFO_CLASS,
+        ctypes.byref(buffer),
+        len(buffer),
+    ):
+        return
+    error = _last_error()
+    if error in {_ERROR_FILE_EXISTS, _ERROR_ALREADY_EXISTS}:
+        raise FileExistsError(
+            errno.EEXIST,
+            f"destination already exists: {destination_name}",
+            destination_name,
+        )
+    raise _windows_error(
+        error,
+        f"cannot atomically move open cache object to {destination_name}",
+    )
 
 
 def _move_no_replace(source: Path, destination: Path) -> None:

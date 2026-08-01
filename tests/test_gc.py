@@ -7,7 +7,7 @@ import stat
 
 from conftest import make_config, make_project, make_skill_repo, write_skillfile
 
-from csk import installer
+from csk import gc, installer
 
 
 def test_runtime_gc_keeps_referenced_runtime_across_projects(tmp_path, skills_root, csk_home):
@@ -200,6 +200,44 @@ def test_gc_sweeps_orphan_tmp_dirs_of_dead_processes(tmp_path, skills_root, csk_
     assert not runtime_orphan.exists()
     assert live_tmp.exists()  # owner is alive; not ours to delete
     assert (skills_dir / "skill-tool").exists()
+
+
+def test_sweep_orphans_matches_legacy_and_indexed_runtime_names_only(
+    monkeypatch,
+    tmp_path,
+):
+    dead_pid = 424242
+    live_pid = 434343
+    directory = tmp_path / "orphans"
+    directory.mkdir()
+    dead_names = {
+        f".tool.tmp-{dead_pid}",
+        f".tool.backup-{dead_pid}",
+        f".tool.tmp-{dead_pid}-0",
+        f".tool.backup-{dead_pid}-19",
+        f".commit.stale-{dead_pid}-7",
+    }
+    live_names = {
+        f".tool.tmp-{live_pid}-0",
+        f".tool.backup-{live_pid}",
+        f".commit.stale-{live_pid}-2",
+    }
+    unrelated_names = {
+        f".tool.tmp-{dead_pid}-suffix",
+        f".tool.stale-{dead_pid}-01",
+        f".tool.stale-{dead_pid}",
+        f".tool.other-{dead_pid}-0",
+        f"tool.tmp-{dead_pid}-0",
+    }
+    for name in dead_names | live_names | unrelated_names:
+        (directory / name).mkdir()
+    monkeypatch.setattr(gc, "_pid_alive", lambda pid: pid == live_pid)
+
+    gc.sweep_orphans(directory)
+
+    assert all(not (directory / name).exists() for name in dead_names)
+    assert all((directory / name).exists() for name in live_names)
+    assert all((directory / name).exists() for name in unrelated_names)
 
 
 def test_snapshot_cache_gc_removes_unreferenced_keeps_referenced(tmp_path, skills_root, csk_home):

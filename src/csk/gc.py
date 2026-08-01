@@ -16,9 +16,14 @@ from .config import GlobalConfig
 from .locking import _pid_alive
 
 
-# Interrupted installs leave .<name>.tmp-<pid> / .<name>.backup-<pid> entries
-# behind. They are safe to delete once the owning process is gone.
-_ORPHAN_RE = re.compile(r"^\..+\.(tmp|backup)-(\d+)$")
+# Interrupted installs leave exact PID-owned temporary generations behind.
+# Current runtime staging adds a numeric allocation index; legacy project and
+# global staging does not.  Match only those two closed shapes so unrelated
+# dotfiles are never treated as manager-owned garbage.
+_ORPHAN_RE = re.compile(
+    r"^\..+\.(?:(?:tmp|backup)-([1-9]\d*)(?:-(?:0|[1-9]\d*))?"
+    r"|stale-([1-9]\d*)-(?:0|[1-9]\d*))$"
+)
 BUILD_GRACE_SECONDS = 24 * 60 * 60
 
 
@@ -164,17 +169,15 @@ def _collect_locked(
             sweep_orphans(root)
 
     try:
-        journal_paths = transactions.TransactionEngine(
+        journal_groups = transactions.TransactionEngine(
             csk_home
-        ).referenced_install_marker_paths(guard)
-        for path in journal_paths:
-            warning = _collect_marker_directory(path, references)
-            if warning is not None:
+        ).referenced_install_marker_groups(guard)
+        for group in journal_groups:
+            warnings = _collect_journal_marker_group(group, references)
+            if warnings:
                 uncertain = True
-                stats.warnings.append(
-                    f"journal marker state is uncertain at {path}: {warning}"
-                )
-    except transactions.TransactionError as exc:
+                stats.warnings.extend(warnings)
+    except (transactions.TransactionError, OSError) as exc:
         uncertain = True
         stats.warnings.append(
             f"transaction journals are uncertain; retaining referenced state: {exc}"
@@ -286,13 +289,13 @@ def _collect_marker_root(
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
             warnings.append(f"skill entry is not a real directory: {child}")
             continue
-        warning = _collect_marker_directory(
+        marker_found, warning = _collect_marker_directory(
             child,
             references,
             expected_name=child.name,
         )
         if warning is None:
-            found = True
+            found = found or marker_found
         else:
             warnings.append(f"uncertain install marker at {child}: {warning}")
     try:
@@ -310,43 +313,94 @@ def _collect_marker_directory(
     references: _References,
     *,
     expected_name: str | None = None,
-) -> str | None:
+) -> tuple[bool, str | None]:
     try:
         directory_info = directory.lstat()
     except FileNotFoundError:
-        return None
+        return False, None
     except OSError as exc:
-        return str(exc)
+        return False, str(exc)
     if stat.S_ISLNK(directory_info.st_mode) or not stat.S_ISDIR(
         directory_info.st_mode
     ):
-        return "marker parent is not a real directory"
+        return False, "marker parent is not a real directory"
     marker_path = directory / ".csk-install.json"
     try:
         before = marker_path.lstat()
     except FileNotFoundError:
-        return "marker is missing"
+        return False, "marker is missing"
     except OSError as exc:
-        return str(exc)
+        return False, str(exc)
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
-        return "marker is not a regular non-link file"
+        return False, "marker is not a regular non-link file"
     try:
         raw = marker_path.read_bytes()
         after = marker_path.lstat()
         marker = install_marker.read_install_marker(raw)
     except (OSError, install_marker.InstallMarkerError) as exc:
-        return str(exc)
+        return False, str(exc)
     if _path_state(before) != _path_state(after):
-        return "marker changed while it was read"
+        return False, "marker changed while it was read"
     if expected_name is not None and marker.name != expected_name:
-        return f"marker name {marker.name!r} does not match store entry"
+        return False, f"marker name {marker.name!r} does not match store entry"
     references.runtime.add((marker.name, marker.commit))
     references.snapshots.add((marker.source, marker.commit))
     if isinstance(marker, install_marker.InstallMarkerV2):
         references.builds.update(
             build.cache_key for build in marker.builds.values()
         )
-    return None
+    return True, None
+
+
+def _collect_journal_marker_group(
+    group: transactions.InstallMarkerGenerationGroup,
+    references: _References,
+) -> list[str]:
+    """Mark every safe generation and require one valid marker per target."""
+
+    before, state_warnings = _generation_states(group.paths)
+    candidate_references = _References()
+    found = False
+    warnings = list(state_warnings)
+    for path in group.paths:
+        marker_found, warning = _collect_marker_directory(
+            path,
+            candidate_references,
+        )
+        found = found or marker_found
+        if warning is not None:
+            warnings.append(f"{path}: {warning}")
+    after, after_warnings = _generation_states(group.paths)
+    warnings.extend(after_warnings)
+    if before != after:
+        warnings.append("generation paths changed while they were scanned")
+    if not found:
+        warnings.append("no valid install marker generation remains")
+    if warnings:
+        prefix = (
+            f"journal {group.transaction_id} context target "
+            f"{group.target_identifier!r} is uncertain"
+        )
+        return [f"{prefix}: {warning}" for warning in warnings]
+    references.runtime.update(candidate_references.runtime)
+    references.snapshots.update(candidate_references.snapshots)
+    references.builds.update(candidate_references.builds)
+    return []
+
+
+def _generation_states(
+    paths: tuple[Path, ...],
+) -> tuple[dict[Path, tuple[int, int, int, int, int, int] | None], list[str]]:
+    states: dict[Path, tuple[int, int, int, int, int, int] | None] = {}
+    warnings: list[str] = []
+    for path in paths:
+        try:
+            states[path] = _path_state(path.lstat())
+        except FileNotFoundError:
+            states[path] = None
+        except OSError as exc:
+            warnings.append(f"cannot inspect generation {path}: {exc}")
+    return states, warnings
 
 
 def _collect_snapshots(
@@ -435,7 +489,9 @@ def sweep_orphans(directory: Path) -> None:
         match = _ORPHAN_RE.match(child.name)
         if not match:
             continue
-        if _pid_alive(int(match.group(2))):
+        pid = match.group(1) or match.group(2)
+        assert pid is not None
+        if _pid_alive(int(pid)):
             continue
         try:
             child_info = child.lstat()

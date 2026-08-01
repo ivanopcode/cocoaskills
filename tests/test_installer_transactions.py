@@ -22,6 +22,7 @@ from conftest import (
 from csk import consumers, hybrid, installer, transactions
 from csk.audit import pipeline as audit_pipeline
 from csk.builds import go_v1
+from csk.builds import metadata as build_metadata
 from csk.builds import toolchain as build_toolchain
 
 POSIX_BUILD_VECTOR = pytest.mark.skipif(
@@ -33,7 +34,10 @@ CAPS = {"exec": "none", "network": "none"}
 
 
 def _native_target() -> build_toolchain.NativeTarget:
-    goos = "darwin" if sys.platform == "darwin" else "linux"
+    if os.name == "nt":
+        goos = "windows"
+    else:
+        goos = "darwin" if sys.platform == "darwin" else "linux"
     machine = platform.machine().lower()
     if machine in {"arm64", "aarch64"}:
         return build_toolchain.NativeTarget(
@@ -86,7 +90,12 @@ def _install_fake_build_pipeline(
                 "fixture_build_failure",
                 f"forced failure for {request.command}",
             )
-        payload = (f"#!/bin/sh\nprintf '%s\\n' {request.command}\n").encode()
+        if target.goos == "windows":
+            payload = (f"compiled fixture: {request.command}\n").encode()
+        else:
+            payload = (
+                f"#!/bin/sh\nprintf '%s\\n' {request.command}\n"
+            ).encode()
         artifact_path = request.toolchain_session.operation_root / (
             f"artifact-{request.command}"
         )
@@ -97,7 +106,10 @@ def _install_fake_build_pipeline(
             artifact=go_v1.BuildArtifact(
                 staged_path=artifact_path,
                 metadata=go_v1.ArtifactMetadata(
-                    path=f"bin/{request.command}",
+                    path=build_metadata.derived_artifact_path(
+                        request.command,
+                        goos=target.goos,
+                    ),
                     sha256=digest,
                     size=len(payload),
                 ),

@@ -313,3 +313,29 @@ whose protected boundary, canonical receipt, complete logical key, artifact
 path, hash, and size can all be proven. Legacy-policy, corrupt, and otherwise
 unprovable entries are retained with warnings; that conservative retention is
 intentional because GC cannot establish that the candidate is safe to remove.
+
+## 2026-08-01 — TASK-260720-th0jdi review hardening
+
+The journal mark boundary is per transaction context target, not a flat set of
+paths. Each group includes live, staged, staged-source, backup, rollback, and
+cleanup generations. GC snapshots every candidate before and after reading and
+requires at least one valid marker in every group. A vanished generation group,
+an unreadable journal or marker, or a concurrent generation change makes the
+entire mark phase uncertain and suppresses runtime, snapshot, and build sweeps.
+This prevents a valid marker from one project, global, or hybrid target from
+masking the loss of another in-flight target.
+
+Build retirement is also bound to the object that was classified. The POSIX
+backend compares the inspected directory generation at the held parent
+descriptor, renames through that descriptor, and verifies the quarantined
+inode before deletion. A concurrent entry replacement is restored or retained,
+while a concurrent root replacement leaves the new namespace untouched. The
+Windows backend reopens and records the verified file identity, then uses
+`SetFileInformationByHandle(FileRenameInfo)` with the held quarantine directory
+handle so the rename acts on that exact object without replacing a destination.
+Native backend tests exchange entries and driver roots between classification
+and retirement and assert that young replacements are never deleted.
+
+Runtime orphan cleanup recognizes only the manager-owned legacy and indexed
+temporary/backup names and indexed stale names. PID liveness remains the sweep
+gate; malformed, leading-zero, or unrelated dotfile names are retained.

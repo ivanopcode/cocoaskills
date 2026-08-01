@@ -162,6 +162,15 @@ class Journal:
     cleanup_sidecars: list[JournalCleanupSidecar]
 
 
+@dataclass(frozen=True)
+class InstallMarkerGenerationGroup:
+    """Every marker-bearing generation for one journaled context target."""
+
+    transaction_id: str
+    target_identifier: str
+    paths: tuple[Path, ...]
+
+
 class TransactionEngine:
     """Durable generic replacement transactions under a caller-held home lock."""
 
@@ -418,30 +427,32 @@ class TransactionEngine:
                         )
             return dict(sorted(result.items(), key=lambda item: _utf8_key(item[0])))
 
-    def referenced_install_marker_paths(
+    def referenced_install_marker_groups(
         self,
         lock: HomeLockWitness,
-    ) -> tuple[Path, ...]:
-        """Return every context generation an in-flight journal can select.
+    ) -> tuple[InstallMarkerGenerationGroup, ...]:
+        """Return context generations grouped by their journaled target.
 
-        GC uses these validated paths as additional marker roots for commit
-        and rollback.  A malformed journal raises instead of returning a
-        partial set, allowing the collector to retain all uncertain state.
+        GC must prove that every relevant target still has at least one valid
+        marker generation.  Keeping the paths grouped prevents a disappeared
+        target from being hidden by an unrelated target's valid sidecar.  A
+        malformed journal raises instead of returning a partial result.
         """
 
         lock.assert_held()
         with self._mutex, self._witness_scope(lock):
-            paths: set[Path] = set()
+            groups: list[InstallMarkerGenerationGroup] = []
             for transaction_id in self._journal_ids():
                 journal, _deleting = self._load_journal_record(
                     transaction_id
                 )
-                for target in journal.targets:
+                for target_index, target in enumerate(journal.targets):
                     if not (
                         target.target_class == "10-context"
                         or target.identifier.startswith("context/")
                     ):
                         continue
+                    paths: set[Path] = set()
                     values = (
                         target.live_path,
                         target.staged_path,
@@ -452,7 +463,23 @@ class TransactionEngine:
                     for value in values:
                         if value is not None:
                             paths.add(Path(value))
-            return tuple(sorted(paths, key=lambda item: _utf8_key(str(item))))
+                    for cleanup in journal.cleanup_sidecars:
+                        if cleanup.target_index == target_index:
+                            paths.add(Path(cleanup.path))
+                            paths.add(Path(cleanup.tomb_path))
+                    groups.append(
+                        InstallMarkerGenerationGroup(
+                            transaction_id=transaction_id,
+                            target_identifier=target.identifier,
+                            paths=tuple(
+                                sorted(
+                                    paths,
+                                    key=lambda item: _utf8_key(str(item)),
+                                )
+                            ),
+                        )
+                    )
+            return tuple(groups)
 
     def _resume(self, journal: Journal) -> None:
         if journal.phase == "preparing":
@@ -1504,15 +1531,25 @@ class TransactionEngine:
 
     def _journal_ids(self) -> list[str]:
         try:
-            info = self.journal_root.lstat()
+            before = self.journal_root.lstat()
         except FileNotFoundError:
             return []
-        if not stat.S_ISDIR(info.st_mode) or self.journal_root.is_symlink():
+        except OSError as exc:
+            raise TransactionError(
+                f"cannot inspect transaction state: {self.journal_root}"
+            ) from exc
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISDIR(before.st_mode):
             raise TransactionCorruptionError(
                 f"transaction state is not a safe directory: {self.journal_root}"
             )
+        try:
+            paths = list(self.journal_root.iterdir())
+        except OSError as exc:
+            raise TransactionError(
+                f"cannot list transaction state: {self.journal_root}"
+            ) from exc
         records: dict[str, str] = {}
-        for path in self.journal_root.iterdir():
+        for path in paths:
             name = path.name
             if name.endswith(".json.delete"):
                 transaction_id = name[: -len(".json.delete")]
@@ -1520,7 +1557,13 @@ class TransactionEngine:
                 transaction_id = name[: -len(".json")]
             else:
                 continue
-            if not path.is_file() or path.is_symlink():
+            try:
+                entry = path.lstat()
+            except OSError as exc:
+                raise TransactionError(
+                    f"cannot inspect transaction journal: {path.name}"
+                ) from exc
+            if stat.S_ISLNK(entry.st_mode) or not stat.S_ISREG(entry.st_mode):
                 raise TransactionCorruptionError(
                     f"journal is not a regular file: {path.name}"
                 )
@@ -1533,6 +1576,28 @@ class TransactionEngine:
                 raise TransactionCorruptionError(
                     f"transaction has multiple journal records: {transaction_id}"
                 )
+        try:
+            after = self.journal_root.lstat()
+        except OSError as exc:
+            raise TransactionError(
+                f"transaction state changed while scanning: {self.journal_root}"
+            ) from exc
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
+            raise TransactionError(
+                f"transaction state changed while scanning: {self.journal_root}"
+            )
         return sorted(records, key=_utf8_key)
 
     def _journal_record_path(self, transaction_id: str) -> tuple[Path, bool]:
