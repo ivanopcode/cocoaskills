@@ -307,7 +307,9 @@ Skills declare commands, capabilities, and dependencies through
 copied into `~/.cocoaskills/runtime/<skill>/<commit>/` and excluded from agent
 prompt context. Schema v3 adds the `capabilities` envelope used by `csk audit`
 and strict install gates. Schema v4 adds skill requirements (see
-[Skill dependencies](#skill-dependencies)).
+[Skill dependencies](#skill-dependencies)), schema v5 adds MCP server
+requirements, and schema v6 adds compiled commands and context-excluded
+`build_roots`.
 
 Existing packages named `csk-skill.json` remain readable. New and updated
 packages should write only `agent-skill.json`. During a staged rename, both
@@ -316,32 +318,287 @@ files fail installation instead of selecting one silently.
 
 ```json
 {
-  "schema_version": 4,
+  "schema_version": 6,
   "runtime_roots": ["scripts"],
+  "build_roots": ["build"],
   "capabilities": {
-    "network": ["gitlab.example.com"],
+    "network": "none",
     "filesystem": "repo",
-    "exec": ["review-cli"],
+    "exec": ["git"],
     "secrets": "none",
-    "env_read": ["HOME"],
-    "prompt_scope": "Review merge request metadata and produce local advice."
+    "env_read": [],
+    "prompt_scope": "Inspect a repository and produce local reports."
   },
   "commands": {
-    "mr": {
+    "format-report": {
       "type": "script",
-      "unix_path": "scripts/mr"
+      "unix_path": "scripts/format-report",
+      "win_path": "scripts/format-report.cmd"
     },
-    "review-cli": {
+    "repo-report": {
+      "type": "build",
+      "driver": "go-v1",
+      "source_dir": "build/cmd/repo-report"
+    },
+    "git": {
       "type": "system",
-      "command": "review-cli",
-      "hint": "Install the review CLI through project bootstrap tooling"
+      "command": "git",
+      "hint": "Install Git through project bootstrap tooling"
     }
+  },
+  "dependencies": {
+    "commands": {},
+    "mcp_servers": {},
+    "skills": {}
   }
 }
 ```
 
 `system` commands are only checked with `shutil.which`; CocoaSkills never
 installs system tools, and manifests carry no install hooks or version probes.
+
+## Compiled commands (schema 6)
+
+This section describes the accepted schema-6 `go-v1` boundary in the
+[rc.5 protocol core](https://github.com/relux-works/curator-spec/blob/v1.0.0-rc.5/protocol/core.md)
+and the corresponding landed csk behavior. Later protocol revisions are out of
+scope.
+
+The example above is a complete mixed command manifest: `format-report` is a
+script runtime, `repo-report` is built from Go source, and `git` is an
+operator-provided system requirement in the accepted compatibility location.
+New skills put consumed system tools under `dependencies.commands`; csk only
+checks their presence and does not create a system-command launcher. The source
+tree has this shape:
+
+```text
+agent-skill.json
+scripts/format-report
+scripts/format-report.cmd
+build/go.mod
+build/cmd/repo-report/main.go
+build/vendor/                    checked-in modules when non-standard packages are imported
+```
+
+Every `build_roots` entry is a real, link-free, portable relative directory.
+Build roots are unique and disjoint, cannot overlap `runtime_roots`, and each
+must be used by at least one build command. A `source_dir` is a real, link-free
+directory below exactly one build root. That build root contains `go.mod`
+directly and must be the nearest module root: an intervening `go.mod` is an
+error. Build roots stay in the validated raw source snapshot but are excluded
+from installed prompt context and script runtime storage.
+
+A build command has exactly three fields:
+
+```json
+{"type":"build","driver":"go-v1","source_dir":"build/cmd/repo-report"}
+```
+
+The package cannot select an output path, program, argument, environment
+value, build tag, flag, toolchain, target, build script, hook, plugin,
+generator, or post-build action. `go-v1` is the only accepted driver; another
+driver fails closed without a fallback. The only output is the manager-derived
+`bin/<command>` on Unix or `bin/<command>.exe` on Windows.
+Failing closed prevents package data from selecting an unimplemented execution
+contract or aliasing artifacts built under different cache semantics.
+
+### Fixed `go-v1` contract
+
+The protocol sets Go 1.23 as the minimum family a manager may support. It also
+requires a manager to accept only an operator-trusted family for which it has
+handoff evidence. The current CocoaSkills implementation accepts Go family
+1.25 only. Thus Go 1.23 is the protocol floor, not a claim that this `csk`
+accepts every Go family from 1.23 onward.
+
+The selected Go installation must be a fingerprintable, operator-provided
+native toolchain. CocoaSkills builds exactly one `package main` executable for
+the host `GOOS` and `GOARCH`. It switches Go telemetry off, uses private Go
+configuration/cache/temporary roots, fixes `GOTOOLCHAIN=local`, `GOENV=off`,
+`GOWORK=off`, `CGO_ENABLED=0`, and `GO_EXTLINK_ENABLED=0`, and runs only these
+source-aware shapes from the declared `source_dir`:
+
+```text
+go list  -mod=vendor -deps -json -buildvcs=false -compiler=gc -pgo=off .
+go build -mod=vendor -trimpath -buildvcs=false -buildmode=exe -compiler=gc \
+         -pgo=off -ldflags="-linkmode=internal -libgcc=none" -o <private-output> .
+```
+
+All non-standard packages must resolve from checked-in vendor data; dependency
+downloads and other build-time network access are disabled. Package validation
+rejects workspaces and toolchain switching, cross-compilation, cgo, PGO,
+generators, tests, plugins, overlays, package-selected assembly or host object
+files, external linking, and libgcc fallback. The complete package graph must
+contain exactly one non-test root `package main`; standard-library inputs must
+come from the fingerprinted `GOROOT`, and every other compiler input must stay
+inside the declared build root.
+
+Manager-selected bounds for one operation are 120 seconds wall time, 8 MiB of
+combined output, a 128 MiB artifact, 512 MiB per file, 1 GiB of private build
+storage, 2 GiB of memory, and 64 active processes. The per-file, memory, and
+process bounds are applied only where the native inventory below marks the
+corresponding facility available. These bounds do not claim the deferred hard
+aggregate descendant guarantee described under [Execution controls](#execution-controls).
+
+Source-aware `go-v1` is supported on macOS and Windows. Other hosts fail closed
+before a worker or Go child starts. Linux support is explicitly deferred to
+`TASK-260728-1skseh` and `TASK-260728-1e6811`; generic script/system skills and
+the rest of CocoaSkills are not reclassified by this source-aware build limit.
+
+### Portable execution boundary
+
+`manager-worker-v1` is the mandatory execution-policy identity. It is a
+normative cache, receipt, marker-currentness, and claim input; it is not an
+option, host label, operator preference, or package-visible setting. Different
+execution-policy identities derive different cache keys.
+
+The process graph is fixed to four nodes:
+
+```text
+CocoaSkills manager parent
+  -> identity-verified manager-owned worker
+       -> fingerprinted <GOROOT>/bin/go
+            -> fingerprinted regular children below <GOROOT>/pkg/tool/
+```
+
+The hidden worker is an exact manager re-execution, never a manifest-selected
+program. The manager verifies its identity before launch; the worker proves
+that identity against a fresh session nonce. One session may run exactly one
+fixed `go list`, wait for the parent to validate the entire package graph, and
+then run exactly one fixed `go build` after an authenticated permit. An extra
+message, retry, process, download, generator, test, or run request tears down
+the session without authorizing more compiler work.
+
+The source snapshot stays frozen. Its integrity and the worker and complete Go
+toolchain identities are reverified after execution. The entire worker domain
+is terminated and joined before the operation returns. Only then may the
+manager publish a bounded regular artifact. CocoaSkills never executes a newly
+built artifact while validating, installing, reporting status, repairing,
+rolling back, or collecting garbage. The artifact runs only later, when a user
+or agent explicitly invokes its activated command shim.
+
+### Execution controls
+
+Each source-aware execution operation produces exactly one closed
+`capability-evidence-v1` result with one entry for every control in
+`rc5-native-control-inventory-v1`. Entries record `name`, `availability`,
+`status`, and `probed_at: "pre-worker-launch"`; the record also carries its
+record version, `manager-worker-v1`, and platform. `status` is `applied` for an
+available control and `unavailable` for an unavailable one.
+
+| Inventory control | macOS | Windows |
+|---|---|---|
+| `descendant-domain-termination` | available: process-group and session teardown | available: Job Object kill-on-close |
+| `active-process-count-limit` | unavailable: no private aggregate domain | available: Job Object active-process limit |
+| `aggregate-memory-limit` | unavailable: no private aggregate domain | available: Job Object process and job memory limits |
+| `per-file-size-limit` | available: `RLIMIT_FSIZE` | unavailable: no private aggregate domain |
+| `inherited-handle-restriction` | available: close-on-exec and explicit descriptor release | available: explicit handle inheritance list |
+
+An inventory control marked unavailable does not reject a portable build. A
+missing mandatory portable control does: the operation returns
+`build_execution_control_unavailable` before the worker or Go starts and
+publishes nothing. Capability evidence is result-only. It does not enter the
+cache key, receipt, marker, claim, or currentness decision; `csk status`
+reports it separately when compiled commands are present.
+
+This portable policy does **not** provide or claim any of these separately
+deferred hardened guarantees:
+
+- `total-network-denial`;
+- `read-only-source-and-toolchain`;
+- `private-build-root-only-writes`;
+- `hard-aggregate-descendant-resource-bounds`;
+- `exact-executable-allowlisting`;
+- `fail-closed-capability-preflight`.
+
+The portable mechanisms above still fail closed when their own mandatory
+checks cannot be applied; they are not kernel-enforced versions of those six
+hardened guarantees.
+
+### Cache, lifecycle, status, and activation
+
+The logical cache identity includes the complete validated raw source,
+declared build root/source directory/command, native target, fingerprinted Go
+toolchain, fixed Go policy, and `manager-worker-v1`. Those logical inputs,
+canonical receipt bytes, artifact-relative path, and artifact bytes/hash/size
+form the portability boundary. CocoaSkills' physical manager-home layout is
+implementation-specific:
+
+```text
+<csk-home>/builds/go-v1/<64-lowercase-hex-cache-key>/
+  csk-receipt.ccj.json
+  bin/<command>                Unix
+  bin/<command>.exe            Windows
+<csk-home>/.builds-staging/
+<csk-home>/.builds-quarantine/
+```
+
+Do not confuse the installed-tree `content_sha256` with
+`curator-build-source-v1`: the first hashes installed content (excluding its
+marker), while the second identifies the fully validated raw snapshot and
+therefore includes build-only source. Likewise, a receipt whose key, input,
+artifact path, hash, and size agree is internally consistent, but that does
+not prove protected-state provenance. Persistent reuse also requires the
+manager-created ownership, permission/DACL, containment, regular-file, and
+link-safety boundary. Receipt hashes are consistency/currentness identifiers,
+not signatures, MACs, attestations, or provenance proofs.
+
+Real project and global installs resolve providers before consumers and build
+commands lexically within a provider. Validation, dependency closure, source
+and audit gates, freezing, toolchain selection, and cache planning precede any
+compiler. Cache misses compile in operation-private staging outside the
+manager-home mutation lock. Under that lock CocoaSkills recovers interrupted
+transactions, revalidates generations and target preimages, publishes an
+immutable protected cache winner, and commits materialization atomically.
+Project, global, and targeted hybrid surfaces are each all-or-rollback:
+contexts, runtimes, compiled/script shims, adapters, environment files,
+markers, stale removals, and consumer state either move together or the prior
+installation is restored. A safely published but unreferenced immutable cache
+entry may remain for later GC.
+
+`csk install --dry-run`, `csk upgrade --dry-run`, and their global forms stop
+before mutation and before `go list`, `go build`, a compiler, or a linker. They
+may validate and hash the frozen source, establish the trusted toolchain
+identity, and inspect the protected cache read-only. They create no persistent
+cache, snapshot, mutation lock, or journal. Each build plan reports one of
+`cache-hit`, `would-preflight-and-build`,
+`would-rebuild-untrusted-cache`, `corrupt`, or `unsupported` together with the
+build-source identity, cache key, native target, driver, command, build root,
+and source directory.
+
+`csk status --json` and `csk global status --json` report build rows with the
+provider, command, label/detail, expected and recorded cache keys,
+`manager-worker-v1`, and a separate capability-evidence result.
+`--check` exits 1 when any skill or build is non-current. Currentness requires
+the active descriptor, raw snapshot, build-source identity, toolchain, native
+target, execution policy, cache key, protected receipt/artifact, marker, and
+managed shim to agree. Status is read-only and never recreates missing state.
+Stable build labels include `current`, `build-command-drift`,
+`missing-build-marker`, `unsupported-build-driver`, `build-input-drift`,
+`missing-build-artifact`, `corrupt-build-cache`, `untrusted-build-cache`,
+`unsupported-build-platform`, `build-marker-drift`, `build-shim-drift`, and
+`build-state-changed`.
+
+Repair is ordinary reinstall: rerun `csk install` or `csk global install`.
+On a supported platform, missing, corrupt, wrong-input,
+legacy/unsupported-identity, or untrusted candidate state is rebuilt from a
+freshly frozen and revalidated source into new protected state; csk does not
+adopt or patch candidate bytes. A genuinely unsupported platform remains
+fail-closed rather than being repaired locally. `csk gc` takes the manager-home
+lock, marks schema-6 keys referenced by valid project/global/hybrid markers and
+registered-consumer marker roots or live transaction journals, and removes
+only protected, provably unreferenced entries older than 24 hours. Uncertain
+marker, journal, boundary, or receipt state is retained with a warning rather
+than guessed safe to delete.
+
+Activation never copies the compiled artifact into script runtime storage. A
+project or targeted hybrid install creates `<project>/.agents/bin/<command>`;
+a global install creates `<csk-home>/global/bin/<command>` and, when safe, a
+user-bin forwarder. On Unix the managed `/bin/sh` launcher directly `exec`s
+the absolute protected-cache artifact and forwards `"$@"`. On Windows the
+managed `<command>.cmd` directly calls the quoted absolute `.exe`, forwards
+`%*`, and returns its exit status. Agent resolution remains project shim,
+global shim, then a validated bare command, so shell-profile activation is not
+required.
 
 ## Skill audit
 
@@ -441,17 +698,17 @@ air-gapped bundle import for closed networks, is
 |---|---|
 | `csk bootstrap` | Create machine-level global config; interactive or scripted via `--skills-root`, `--default-agents`, `--non-interactive`, `--force`. `--if-missing` is an idempotent no-op when config already exists and is mutually exclusive with `--force`. |
 | `csk init [path]` | Create project `Skillfile.json` and the managed `.gitignore` block. Supports `--alias`, `--agents`, and `--no-interactive` for scripted setup. |
-| `csk install [target]` | Apply `Skillfile.json` using current git refs. Missing `git` URL sources are cloned into `skills_root`; existing local repositories are not fetched. No target means current project; `target` may be an alias, `.`, or a project path. |
+| `csk install [target]` | Apply `Skillfile.json` using current git refs. Missing `git` URL sources are cloned into `skills_root`; existing local repositories are not fetched. No target means current project; `target` may be an alias, `.`, or a project path. `--dry-run` validates and plans compiled cache outcomes without persistent mutation or compiler work. |
 | `csk install --audit [strict]` | Run the audit gate for this install only. Without `strict`, audit is advisory and does not change config. |
 | `csk install --all` | Install every project explicitly registered in global config. |
 | `csk update` | Fetch all git repositories under `skills_root`. Does not modify projects. |
 | `csk upgrade [target]` | Fetch only the selected project's direct and transitive skill repositories, then install. `--dry-run` does not update cached repositories or persist files. |
 | `csk upgrade --all` | Fetch the union of dependency closures once, then install every registered project. |
-| `csk status [target]` | Show manifest vs installed state, including active dev substitutions. `--check` exits non-zero unless everything is up-to-date; `--json` prints machine-readable output. |
+| `csk status [target]` | Show manifest vs installed state, including active dev substitutions and compiled-build currentness. `--check` exits non-zero unless every skill and build is current; `--json` includes stable build rows and result-only capability evidence. |
 | `csk status --all` | Show status for every registered project. |
 | `csk add <name> --tag/--branch/--revision ...` | Add or replace a skill declaration in the project Skillfile; apply with `csk install`. |
 | `csk remove <name>` | Remove a skill declaration from the project Skillfile; the next install cleans generated files. |
-| `csk gc` | Remove unreferenced runtime entries, snapshot cache entries, and dead consumer registry entries. |
+| `csk gc` | Under the manager-home lock, remove unreferenced runtime and snapshot entries, protected compiled-cache entries older than 24 hours, and dead consumer registry entries. Uncertain protected state is retained. |
 | `csk audit [target]` | Run skill security audit for the current project, an alias, `.`, or a project path. Supports `--all`, `--global`, and `--json`. |
 | `csk skill check <dir>` | Validate one skill directory without requiring global config or project setup. |
 | `csk list [--paths]` | List configured projects and declared skills. |
@@ -463,7 +720,7 @@ air-gapped bundle import for closed networks, is
 | `csk global install` | Install all globally declared skills without fetching. |
 | `csk global update` | Fetch source repositories for globally declared skills. |
 | `csk global upgrade` | Run global update, then global install. `--dry-run` skips the update and performs a non-persistent install plan. |
-| `csk global status` | Show global manifest vs installed state. |
+| `csk global status` | Show global manifest and compiled-build state; supports `--json` and `--check`. |
 | `csk global list` | List global skill declarations. |
 | `csk config show` | Print resolved config path and contents. |
 | `csk shell-init [auto\|zsh\|bash\|powershell]` | Optionally print shell hook code for human-facing global and project-local auto-`PATH` activation. The default `auto` detects the current environment; `--install` atomically caches it and prints the profile source command; `--no-global` limits activation to project checkouts. Agent execution does not require this hook. |
@@ -489,7 +746,8 @@ cd cocoaskills
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -e ".[dev]"
-pytest
+python -m pytest
+python -m mypy
 ```
 
 Build artifacts locally:
@@ -515,7 +773,8 @@ conventions, and the RFC process for design changes.
 - [Skill authoring guide](docs/skill-authoring.md): practical contract for
   authoring CocoaSkills-compatible skill repositories, covering schema v2
   runtime roots, schema v3 capabilities, schema v4 requirements, system
-  dependencies, audit behavior, and the release checklist.
+  dependencies, schema v6 compiled commands, audit behavior, and the author
+  checklist.
 - [Skill security audit, RFC 0005](docs/audit-design.md): schema v3
   capabilities, deterministic audit gates, verdict cache, and trust workflow.
 - [Audit LLM backends, RFC 0006](docs/v0.8-design.md): the `command` and

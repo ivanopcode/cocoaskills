@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Добавлено
+
+- Добавлен authoring-контракт `agent-skill.json` schema 6: исключённые из
+  контекста `build_roots` и закрытые команды
+  `{"type":"build","driver":"go-v1","source_dir":"..."}` рядом с
+  существующими script/system-командами.
+- Добавлена сборка одного нативного Go executable из vendor-only `package
+  main`. Нижняя граница протокола остаётся Go 1.23, а текущий операторский
+  allowlist csk принимает только семейство 1.25.
+- Добавлены защищённый immutable cache Go builds, canonical receipts, marker
+  v2 build state, прямые Unix/Windows launchers, build-aware
+  `status --json --check`, reinstall repair и locked conservative GC с
+  24-часовым grace period.
+
+### Изменено
+
+- Project, global и адресованные hybrid installs включают compilation,
+  publication и все materialization surfaces в provider-first
+  all-or-rollback lifecycle. Compiler-free dry-run сообщает стабильные
+  outcomes cache и ничего не сохраняет.
+- Логические build inputs и receipts являются переносимыми; физическая
+  раскладка `<csk-home>/builds/go-v1/...` остаётся деталью csk.
+  Installed-tree `content_sha256` отделён от raw build-source identity, а
+  receipt consistency — от protected-state provenance.
+
+### Безопасность
+
+- Portable policy `manager-worker-v1` фиксирует manager-owned worker,
+  fingerprinted `GOROOT/bin/go` и `GOROOT/pkg/tool` children, identity checks
+  до и после исполнения, frozen snapshot, worker-domain teardown и правило
+  never-run для артефакта внутри manager lifecycle.
+- `capability-evidence-v1` отражает точный
+  `rc5-native-control-inventory-v1`: process/memory Job Object limits доступны
+  на Windows и недоступны на macOS, а `RLIMIT_FSIZE` доступен на macOS и
+  недоступен на Windows. Недоступный inventory control не отклоняет portable
+  build; отсутствующий mandatory portable control отклоняет его до worker.
+- Source-aware `go-v1` доступен на macOS и Windows и fail-closed на других
+  host-ах. Linux явно отложен в `TASK-260728-1skseh` и
+  `TASK-260728-1e6811`.
+- Portable policy не заявляет шесть отложенных hardened guarantees:
+  `total-network-denial`, `read-only-source-and-toolchain`,
+  `private-build-root-only-writes`,
+  `hard-aggregate-descendant-resource-bounds`,
+  `exact-executable-allowlisting` и
+  `fail-closed-capability-preflight`.
+
+### Документация
+
+- README, архитектурные и security-документы на английском и русском, а также
+  skill authoring guide теперь описывают полный schema-6 author/operator
+  lifecycle, cache/status/repair/GC и прямую Unix/Windows activation без
+  shell-profile prerequisite.
+
 ## [0.12.5] - 2026-07-14
 
 ### Добавлено

@@ -1,5 +1,29 @@
 # Logbook
 
+## 2026-08-01 — TASK-260720-akf5kh schema-6 documentation boundary
+
+The documentation treats three distinctions as non-negotiable. Go 1.23 is the
+protocol floor, while the current csk operator-trusted allowlist contains only
+family 1.25. Logical build identity and canonical receipt/artifact data are
+portable, while the manager-home cache layout and native protection backend
+are csk-specific. Finally, a self-consistent receipt proves consistency but
+does not establish protected-state provenance; ownership, permission/DACL,
+containment, file type, and link safety still have to be independently proven.
+
+The source-aware platform statement is deliberately narrower than the package
+platform statement. `go-v1` is available on macOS and Windows and fails closed
+elsewhere; Linux source-aware work is explicitly owned by
+`TASK-260728-1skseh` and `TASK-260728-1e6811`. Generic script/system behavior
+is not reclassified by that limit.
+
+Portable `manager-worker-v1` mechanisms are documented without promoting them
+to the six deferred hardened guarantees. In particular, offline Go settings
+are not kernel network denial, identity rechecks are not read-only mounts,
+manager-selected write targets are not descendant write confinement, and the
+manager's numeric bounds are not hard aggregate descendant limits. No new
+release, tag, policy pin, signature, review, or interoperability claim is made
+for the documentation handoff.
+
 ## 2026-08-01 — TASK-260720-g7kgox atomic global builds
 
 Global install now follows the same planning and publication boundary as a
