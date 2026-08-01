@@ -1196,67 +1196,82 @@ def _observe_gc(
             csk_home,
         )
         assert isinstance(cfg, config_mod.GlobalConfig)
-        lock_events: list[str] = []
-        record_gc_locks = True
+        gc_lock_traces: list[dict[str, Any]] = []
+        active_gc_lock_trace: dict[str, Any] | None = None
         artifact_executions: list[Path] = []
         real_manager_home_lock = locking.ManagerHomeLock
         real_project_lock = locking.ProjectLock
         real_build_lock = locking.BuildLock
+        real_collect_locked = gc._collect_locked
         real_subprocess_run = subprocess.run
 
-        class ObservedGcManagerLock:
-            def __init__(self, home_path: Path, timeout: float | None = None):
-                self._delegate = real_manager_home_lock(home_path, timeout=timeout)
-
+        class ObservedGcManagerLock(real_manager_home_lock):
             def __enter__(self) -> locking.ManagerHomeLock:
-                if record_gc_locks:
-                    lock_events.append("manager-home-mutation-lock")
-                return self._delegate.__enter__()
+                witness = super().__enter__()
+                if active_gc_lock_trace is not None:
+                    active_gc_lock_trace["locks"].append(
+                        "manager-home-mutation-lock"
+                    )
+                    active_gc_lock_trace["acquired_guard"] = witness
+                return witness
 
-            def __exit__(self, *args: object) -> Any:
-                return self._delegate.__exit__(*args)
+            def assert_held(self) -> None:
+                if active_gc_lock_trace is not None:
+                    active_gc_lock_trace["assertions"] += 1
+                super().assert_held()
 
-        class ObservedGcProjectLock:
-            def __init__(
-                self,
-                home_path: Path,
-                project_path: Path,
-                timeout: float | None = None,
-            ):
-                self._delegate = real_project_lock(
-                    home_path,
-                    project_path,
-                    timeout=timeout,
-                )
-
+        class ObservedGcProjectLock(real_project_lock):
             def __enter__(self) -> locking.ProjectLock:
-                if record_gc_locks:
-                    lock_events.append("project-lock")
-                return self._delegate.__enter__()
+                witness = super().__enter__()
+                if active_gc_lock_trace is not None:
+                    active_gc_lock_trace["locks"].append("project-lock")
+                return witness
 
-            def __exit__(self, *args: object) -> Any:
-                return self._delegate.__exit__(*args)
-
-        class ObservedGcBuildLock:
-            def __init__(
-                self,
-                home_path: Path,
-                cache_key: str,
-                timeout: float | None = None,
-            ):
-                self._delegate = real_build_lock(
-                    home_path,
-                    cache_key,
-                    timeout=timeout,
-                )
-
+        class ObservedGcBuildLock(real_build_lock):
             def __enter__(self) -> locking.BuildLock:
-                if record_gc_locks:
-                    lock_events.append("cache-build-lock")
-                return self._delegate.__enter__()
+                witness = super().__enter__()
+                if active_gc_lock_trace is not None:
+                    active_gc_lock_trace["locks"].append("cache-build-lock")
+                return witness
 
-            def __exit__(self, *args: object) -> Any:
-                return self._delegate.__exit__(*args)
+        def observed_collect_locked(*args: Any, **kwargs: Any) -> gc.GcStats:
+            if active_gc_lock_trace is not None:
+                active_gc_lock_trace["forwarded_guard"] = kwargs.get("guard")
+                active_gc_lock_trace["assertions_before_collect_locked"] = (
+                    active_gc_lock_trace["assertions"]
+                )
+            return real_collect_locked(*args, **kwargs)
+
+        def observed_collect_runtime(
+            config_value: config_mod.GlobalConfig,
+            home_path: Path,
+            *,
+            guard: Any | None = None,
+            now: float | None = None,
+        ) -> gc.GcStats:
+            nonlocal active_gc_lock_trace
+            if active_gc_lock_trace is not None:
+                raise AssertionError("nested GC observation is unsupported")
+            trace: dict[str, Any] = {
+                "mode": "guarded" if guard is not None else "guardless",
+                "locks": [],
+                "supplied_guard": guard,
+                "acquired_guard": None,
+                "forwarded_guard": None,
+                "assertions": 0,
+                "assertions_before_collect_locked": None,
+            }
+            active_gc_lock_trace = trace
+            try:
+                return gc.collect_runtime(
+                    config_value,
+                    home_path,
+                    guard=guard,
+                    now=now,
+                )
+            finally:
+                active_gc_lock_trace = None
+                gc_lock_traces.append(trace)
 
         def observed_run(*args: Any, **kwargs: Any) -> Any:
             command = args[0] if args else kwargs.get("args")
@@ -1274,6 +1289,7 @@ def _observe_gc(
         monkeypatch.setattr(locking, "ManagerHomeLock", ObservedGcManagerLock)
         monkeypatch.setattr(locking, "ProjectLock", ObservedGcProjectLock)
         monkeypatch.setattr(locking, "BuildLock", ObservedGcBuildLock)
+        monkeypatch.setattr(gc, "_collect_locked", observed_collect_locked)
         monkeypatch.setattr(subprocess, "run", observed_run)
         legacy = deepcopy(marker)
         legacy["schema_version"] = 1
@@ -1336,7 +1352,7 @@ def _observe_gc(
             == metadata.cache_key(actual_receipt.input)
         )
         os.utime(entry, (1, 1), follow_symlinks=False)
-        marked = gc.collect_runtime(
+        marked = observed_collect_runtime(
             cfg,
             csk_home,
             now=gc.BUILD_GRACE_SECONDS + 100,
@@ -1370,7 +1386,7 @@ def _observe_gc(
         )
         with locking.ManagerHomeLock(csk_home) as home_lock:
             engine.prepare(home_lock, plan)
-            journal_marked = gc.collect_runtime(
+            journal_marked = observed_collect_runtime(
                 replace(cfg, projects={}),
                 csk_home,
                 guard=home_lock,
@@ -1394,7 +1410,7 @@ def _observe_gc(
         young_now = float(gc.BUILD_GRACE_SECONDS + 200)
         young_mtime = young_now - (gc.BUILD_GRACE_SECONDS / 2)
         os.utime(entry, (young_mtime, young_mtime), follow_symlinks=False)
-        young = gc.collect_runtime(
+        young = observed_collect_runtime(
             replace(cfg, projects={}),
             csk_home,
             now=young_now,
@@ -1402,7 +1418,7 @@ def _observe_gc(
         young_retained = young.builds_removed == 0 and entry.exists()
 
         os.utime(entry, (2, 2), follow_symlinks=False)
-        swept = gc.collect_runtime(
+        swept = observed_collect_runtime(
             replace(cfg, projects={}),
             csk_home,
             now=gc.BUILD_GRACE_SECONDS + 300,
@@ -1428,14 +1444,12 @@ def _observe_gc(
         other_skills = other_root / "skills"
         other_skills.mkdir(parents=True)
         other_home = other_root / "home"
-        record_gc_locks = False
         _project, other_cfg, _events, other_marker_path, other_marker = _installed_build(
             monkeypatch,
             other_root,
             other_skills,
             other_home,
         )
-        record_gc_locks = True
         other_record = other_marker["builds"]["tool"]
         other_entry = (
             other_home
@@ -1445,7 +1459,7 @@ def _observe_gc(
         )
         os.utime(other_entry, (1, 1), follow_symlinks=False)
         other_marker_path.write_bytes(b"not-json")
-        uncertain = gc.collect_runtime(
+        uncertain = observed_collect_runtime(
             other_cfg,
             other_home,
             now=gc.BUILD_GRACE_SECONDS + 100,
@@ -1456,9 +1470,33 @@ def _observe_gc(
             and any("mark phase was incomplete" in warning for warning in uncertain.warnings)
         )
 
+    guardless_gc_traces = [
+        trace for trace in gc_lock_traces if trace["mode"] == "guardless"
+    ]
+    guarded_gc_traces = [
+        trace for trace in gc_lock_traces if trace["mode"] == "guarded"
+    ]
     only_manager_home_lock = (
-        bool(lock_events)
-        and set(lock_events) == {"manager-home-mutation-lock"}
+        len(guardless_gc_traces) == 4
+        and len(guarded_gc_traces) == 1
+        and all(
+            trace["locks"] == ["manager-home-mutation-lock"]
+            and trace["supplied_guard"] is None
+            and trace["acquired_guard"] is trace["forwarded_guard"]
+            and isinstance(trace["assertions_before_collect_locked"], int)
+            and trace["assertions"] > trace["assertions_before_collect_locked"]
+            for trace in guardless_gc_traces
+        )
+        and guarded_gc_traces[0]["locks"] == []
+        and guarded_gc_traces[0]["supplied_guard"]
+        is guarded_gc_traces[0]["forwarded_guard"]
+        and isinstance(
+            guarded_gc_traces[0]["assertions_before_collect_locked"],
+            int,
+        )
+        and guarded_gc_traces[0]["assertions_before_collect_locked"] >= 1
+        and guarded_gc_traces[0]["assertions"]
+        > guarded_gc_traces[0]["assertions_before_collect_locked"]
     )
     unreferenced_required = (
         receipt_only.exists()
@@ -1904,10 +1942,13 @@ def _observe_private_builds(
     shared_events: list[str] = []
     success_trace: list[str] = []
     private_artifacts: dict[str, bool] = {}
+    private_artifact_paths: set[Path] = set()
+    artifact_executions: list[Path] = []
     home_lock_during_build: list[bool] = []
     real_private = cache.make_publication_source_private
     real_publish = installer._publish_planned_builds
     real_commit = installer._commit_materialization
+    real_subprocess_popen = subprocess.Popen
 
     def verified(path: Path) -> None:
         real_private(path)
@@ -1929,18 +1970,35 @@ def _observe_private_builds(
         success_trace.append("commit")
         return real_commit(*args, **kwargs)
 
+    def observed_popen(*args: Any, **kwargs: Any) -> Any:
+        command = args[0] if args else kwargs.get("args")
+        raw_parts = command if isinstance(command, (list, tuple)) else (command,)
+        for raw in raw_parts:
+            try:
+                candidate = Path(os.fspath(raw)).resolve(strict=False)
+            except (TypeError, ValueError):
+                continue
+            if candidate in private_artifact_paths:
+                artifact_executions.append(candidate)
+        return real_subprocess_popen(*args, **kwargs)
+
     with pytest.MonkeyPatch.context() as monkeypatch:
         _install_fake_build_pipeline(monkeypatch, events=build_events)
         original_build = go_v1.build
 
         def observe_build(request: go_v1.BuildRequest) -> go_v1.BuildResult:
             home_lock_during_build.append(locking._STATE.home is not None)
-            return original_build(request)
+            built = original_build(request)
+            private_artifact_paths.add(
+                built.artifact.staged_path.resolve(strict=False)
+            )
+            return built
 
         monkeypatch.setattr(go_v1, "build", observe_build)
         monkeypatch.setattr(cache, "make_publication_source_private", verified)
         monkeypatch.setattr(installer, "_publish_planned_builds", publish)
         monkeypatch.setattr(installer, "_commit_materialization", commit)
+        monkeypatch.setattr(subprocess, "Popen", observed_popen)
         result = installer.install(cfg)[0]
 
     def verified_before_publication(command: str) -> bool:
@@ -1964,7 +2022,7 @@ def _observe_private_builds(
         if build.command in {"golden-tool", "second-tool"}
     ]
     observed["all-misses-stage-and-verify-before-home-lock"] = {
-        "artifacts_executed": False,
+        "artifacts_executed": bool(artifact_executions),
         "builds": [
             {
                 "artifact_verified": verified_before_publication("golden-tool"),
@@ -2300,23 +2358,117 @@ def _observe_recovery(
             engine.commit(home_lock, transaction_id)
     journal_path = engine.journal_root / f"{transaction_id}.json"
     raw = json.loads(journal_path.read_text(encoding="utf-8"))
+
+    secondary_transaction_id = "transaction-project-18"
+    secondary_owner = interrupted / "project-alpha"
+    secondary_context = _write_text(
+        interrupted / "secondary-context",
+        "secondary-old",
+    )
+    secondary_desired = _write_text(
+        interrupted / "secondary-desired-context",
+        "secondary-new",
+    )
+    secondary_crash_once = True
+
+    def crash_secondary_rollback(
+        point: str,
+        target: transactions.JournalTarget | None,
+    ) -> None:
+        nonlocal secondary_crash_once
+        if point == "target_committed" and target is not None:
+            raise RuntimeError("force secondary rollback")
+        if point == "after_restore" and target is not None and secondary_crash_once:
+            secondary_crash_once = False
+            raise _ObservedCrash(point)
+
+    secondary_engine = transactions.TransactionEngine(
+        home,
+        fault_hook=crash_secondary_rollback,
+    )
+    with locking.ManagerHomeLock(home) as home_lock:
+        secondary_engine.prepare(
+            home_lock,
+            _plan(
+                secondary_transaction_id,
+                secondary_owner,
+                _target(
+                    "10-context",
+                    "project-alpha-context",
+                    secondary_context,
+                    secondary_desired,
+                ),
+            ),
+        )
+        with pytest.raises(_ObservedCrash):
+            secondary_engine.commit(home_lock, secondary_transaction_id)
+    secondary_journal_path = (
+        secondary_engine.journal_root / f"{secondary_transaction_id}.json"
+    )
+    secondary_raw = json.loads(
+        secondary_journal_path.read_text(encoding="utf-8")
+    )
+    expected_transaction_ids = [transaction_id, secondary_transaction_id]
+    journal_inventory_before = {
+        journal_id: json.loads(
+            (engine.journal_root / f"{journal_id}.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for journal_id in engine._journal_ids()
+    }
     backups_before_recovery = any(path.exists() for path in backup_paths)
     consumers_before = json.loads(ledger.read_text(encoding="utf-8"))
     recovery_events: list[str] = []
+    resumed_transaction_ids: list[str] = []
     recovering = transactions.TransactionEngine(
         home,
         fault_hook=lambda point, target: recovery_events.append(
             f"{point}:{target.identifier if target else '-'}"
         ),
     )
-    with locking.ProjectLock(home, triggering), locking.ManagerHomeLock(home) as home_lock:
-        recovering.recover(home_lock)
+    real_resume = transactions.TransactionEngine._resume
+
+    def observed_resume(
+        engine_value: transactions.TransactionEngine,
+        journal_value: transactions.Journal,
+    ) -> None:
+        if engine_value is recovering:
+            resumed_transaction_ids.append(journal_value.transaction_id)
+        real_resume(engine_value, journal_value)
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            transactions.TransactionEngine,
+            "_resume",
+            observed_resume,
+        )
+        with (
+            locking.ProjectLock(home, triggering),
+            locking.ManagerHomeLock(home) as home_lock,
+        ):
+            recovering.recover(home_lock)
     consumers_after = json.loads(ledger.read_text(encoding="utf-8"))
     restore_order = restored + [
         event.split(":", 1)[1]
         for event in recovery_events
         if event.startswith("after_restore:")
     ]
+    every_journal_recovered = (
+        set(journal_inventory_before) == set(expected_transaction_ids)
+        and len(
+            {
+                value["project_identity"]
+                for value in journal_inventory_before.values()
+            }
+        )
+        == len(expected_transaction_ids)
+        and resumed_transaction_ids == expected_transaction_ids
+        and not journal_path.exists()
+        and not secondary_journal_path.exists()
+        and secondary_context.read_text(encoding="utf-8") == "secondary-old"
+        and secondary_raw["phase"] == "rolling_back"
+    )
 
     guard_root = root / "preimage-guard"
     guard_home = guard_root / "home"
@@ -2367,10 +2519,12 @@ def _observe_recovery(
         "name": "interrupted-global-journal-recovered-by-transaction-id",
         "result": (
             "restored"
-            if consumers_after == ["project-alpha"] and not journal_path.exists()
+            if consumers_after == ["project-alpha"] and every_journal_recovered
             else "unexpected"
         ),
-        "scan_scope": "all-incomplete-journals" if recovery_events else "none",
+        "scan_scope": (
+            "all-incomplete-journals" if every_journal_recovered else "none"
+        ),
         "successful_project_consumers_after": consumers_after,
         "successful_project_consumers_before": consumers_before,
         "triggering_project": triggering.name,

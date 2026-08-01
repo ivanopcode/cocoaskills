@@ -4,6 +4,8 @@ import base64
 import hashlib
 import json
 import os
+import subprocess
+import sys
 import urllib.request
 from copy import deepcopy
 from dataclasses import replace
@@ -20,6 +22,7 @@ from csk import (
     audit_registry,
     closure,
     config,
+    gc,
     git_ops,
     hashing,
     identifiers,
@@ -29,6 +32,7 @@ from csk import (
     manifest,
     protocol_json,
     skillspec,
+    transactions,
     whitelist,
 )
 from csk.audit import pipeline as audit_pipeline
@@ -1130,6 +1134,144 @@ def test_rc6_recovery_binding_detects_omitted_generation_guard(
             "install-recovery-runs-after-private-builds",
         )
         assert calls > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_private_build_binding_detects_artifact_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executions = 0
+    original = installer._build_private_misses
+
+    def execute_staged_artifacts(*args: Any, **kwargs: Any) -> Any:
+        nonlocal executions
+        publications = original(*args, **kwargs)
+        plans = args[3]
+        if {plan.command for plan in plans} != {"golden-tool", "second-tool"}:
+            return publications
+        for publication in publications.values():
+            artifact = publication.artifact_source
+            if os.name == "nt":
+                original_bytes = artifact.read_bytes()
+                original_mode = artifact.stat().st_mode
+                artifact.write_text("raise SystemExit(0)\n", encoding="utf-8")
+                try:
+                    completed = subprocess.run(
+                        [sys.executable, os.fspath(artifact)],
+                        check=False,
+                        capture_output=True,
+                    )
+                finally:
+                    artifact.write_bytes(original_bytes)
+                    artifact.chmod(original_mode)
+            else:
+                completed = subprocess.run(
+                    [os.fspath(artifact)],
+                    check=False,
+                    capture_output=True,
+                )
+            assert completed.returncode == 0
+            executions += 1
+        return publications
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_build_private_misses",
+        execute_staged_artifacts,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "private_build_cases",
+            "all-misses-stage-and-verify-before-home-lock",
+        )
+        assert executions == 2
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_gc_binding_detects_guardless_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scanned_without_lock = 0
+    original_collect_runtime = gc.collect_runtime
+    original_collect_locked = gc._collect_locked
+
+    class GuardlessWitness:
+        def __init__(self, csk_home: Path):
+            self.home_identity = transactions.canonical_manager_home_identity(
+                csk_home
+            )
+
+        @staticmethod
+        def assert_held() -> None:
+            return None
+
+    def collect_without_manager_lock(
+        config_value: config.GlobalConfig,
+        csk_home: Path,
+        *,
+        guard: Any | None = None,
+        now: float | None = None,
+        build_grace_seconds: float = gc.BUILD_GRACE_SECONDS,
+    ) -> gc.GcStats:
+        nonlocal scanned_without_lock
+        if guard is not None:
+            return original_collect_runtime(
+                config_value,
+                csk_home,
+                guard=guard,
+                now=now,
+                build_grace_seconds=build_grace_seconds,
+            )
+        scanned_without_lock += 1
+        return original_collect_locked(
+            config_value,
+            csk_home,
+            guard=GuardlessWitness(csk_home),
+            now=now,
+            build_grace_seconds=build_grace_seconds,
+        )
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(gc, "collect_runtime", collect_without_manager_lock)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "gc_cases",
+            "locked-mark-and-sweep-compiled-cache",
+        )
+        assert scanned_without_lock == 4
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_recovery_binding_detects_first_journal_only_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inventories: list[tuple[str, ...]] = []
+
+    def recover_first_journal_only(
+        self: transactions.TransactionEngine,
+        lock: Any,
+    ) -> None:
+        transaction_ids = tuple(self._journal_ids())
+        if transaction_ids:
+            inventories.append(transaction_ids)
+            self.commit(lock, transaction_ids[0])
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        transactions.TransactionEngine,
+        "recover",
+        recover_first_journal_only,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "recovery_cases",
+            "interrupted-global-journal-recovered-by-transaction-id",
+        )
+        assert any(len(inventory) >= 2 for inventory in inventories)
     finally:
         clear_manager_lifecycle_observation_cache()
 
