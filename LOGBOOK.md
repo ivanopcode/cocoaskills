@@ -7,9 +7,14 @@ declarative adapter. The replacement binding reconstructs all 32 lifecycle
 cases from CocoaSkills cache, transaction, locking, installer/planner,
 currentness/status, recovery/repair, launcher, GC, bootstrap, and upgrade
 seams, then compares the complete observed objects with the authenticated
-candidate vector. A fail-closed 378-leaf mutation test and an explicit product
-seam sabotage test prevent new scalar fields or self-consistency fallbacks from
-silently passing.
+candidate vector. The 378-leaf mutation test proves expectation-side equality
+sensitivity; it does not by itself prove product-seam sensitivity. A fail-closed
+field classification plus four independent sabotage tests now make omitted
+skill validation, transient private-build home locking, omitted repair audit,
+and omitted generation-current enforcement change the observed result. Named
+dry-run, GC, status, recovery, private-build, cross-project, and repair fields
+are individually backed by mutation traps, state witnesses, or concurrent
+handoff traces instead of aggregate success literals.
 
 Binding the vector revealed three product mismatches. Project and global
 install ran recovery before private builds despite the publication-phase-only

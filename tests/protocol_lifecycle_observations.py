@@ -15,7 +15,9 @@ import os
 import shutil
 import subprocess
 import tempfile
-from contextlib import redirect_stderr, redirect_stdout
+import threading
+import time
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from copy import deepcopy
 from dataclasses import replace
 from functools import lru_cache
@@ -44,10 +46,11 @@ from csk import (
     installer,
     locking,
     shims,
+    status as status_mod,
     transactions,
 )
 from csk.audit import pipeline as audit_pipeline
-from csk.builds import cache, go_v1, metadata, planner, toolchain
+from csk.builds import cache, go_v1, metadata, planner, source as build_source, toolchain
 
 
 JsonObject = dict[str, Any]
@@ -571,6 +574,142 @@ def _commit_consumer(
     return before, committed
 
 
+def _commit_consumers_concurrently(
+    home: Path,
+    root: Path,
+    ledger: Path,
+) -> tuple[list[str], list[str], bool, bool]:
+    """Observe distinct project locks overlapping at one serialized home handoff."""
+
+    project_names = ("project-alpha", "project-beta")
+    before = json.loads(ledger.read_text(encoding="utf-8"))
+    projects_ready = {name: threading.Event() for name in project_names}
+    start_first_home = threading.Event()
+    first_home_acquired = threading.Event()
+    second_home_attempted = threading.Event()
+    second_home_acquired = threading.Event()
+    state_guard = threading.Lock()
+    errors: list[BaseException] = []
+    commit_order: list[str] = []
+    home_order: list[str] = []
+    active_home_consumers = 0
+    maximum_home_consumers = 0
+    second_observed_waiting = False
+    timeout = 30.0 if os.name == "nt" else 10.0
+
+    def commit_consumer(
+        project_name: str,
+        project: Path,
+        home_lock: locking.ManagerHomeLock,
+    ) -> None:
+        current = set(json.loads(ledger.read_text(encoding="utf-8")))
+        current.add(project_name)
+        desired = _write_text(
+            root / f"desired-{project_name}.json",
+            json.dumps(sorted(current)),
+        )
+
+        def committed(
+            point: str,
+            target: transactions.JournalTarget | None,
+        ) -> None:
+            if (
+                point == "target_committed"
+                and target is not None
+                and target.target_class == "90-consumer"
+            ):
+                with state_guard:
+                    commit_order.append(project_name)
+
+        engine = transactions.TransactionEngine(home, fault_hook=committed)
+        engine.recover(home_lock)
+        engine.prepare(
+            home_lock,
+            _plan(
+                f"txn-{project_name}",
+                project,
+                _target("90-consumer", "machine", ledger, desired),
+            ),
+        )
+        engine.commit(home_lock, f"txn-{project_name}")
+
+    def hold_home(project_name: str, *, first: bool) -> None:
+        nonlocal active_home_consumers, maximum_home_consumers
+        nonlocal second_observed_waiting
+        project = root / project_name
+        try:
+            with locking.ProjectLock(home, project, timeout=timeout):
+                projects_ready[project_name].set()
+                if first:
+                    if not start_first_home.wait(timeout=timeout):
+                        raise AssertionError("concurrent lifecycle probe did not start")
+                else:
+                    if not first_home_acquired.wait(timeout=timeout):
+                        raise AssertionError("first home consumer was not observed")
+                    second_home_attempted.set()
+                with locking.ManagerHomeLock(home, timeout=timeout) as home_lock:
+                    with state_guard:
+                        active_home_consumers += 1
+                        maximum_home_consumers = max(
+                            maximum_home_consumers,
+                            active_home_consumers,
+                        )
+                        home_order.append(project_name)
+                    try:
+                        if first:
+                            first_home_acquired.set()
+                            if not second_home_attempted.wait(timeout=timeout):
+                                raise AssertionError(
+                                    "second home consumer did not attempt the serialized handoff"
+                                )
+                            second_observed_waiting = not second_home_acquired.is_set()
+                        else:
+                            second_home_acquired.set()
+                        commit_consumer(project_name, project, home_lock)
+                    finally:
+                        with state_guard:
+                            active_home_consumers -= 1
+        except BaseException as exc:  # noqa: BLE001 - worker failures are parent evidence
+            with state_guard:
+                errors.append(exc)
+
+    threads = [
+        threading.Thread(
+            name="lifecycle-project-alpha",
+            target=hold_home,
+            args=("project-alpha",),
+            kwargs={"first": True},
+        ),
+        threading.Thread(
+            name="lifecycle-project-beta",
+            target=hold_home,
+            args=("project-beta",),
+            kwargs={"first": False},
+        ),
+    ]
+    for thread in threads:
+        thread.start()
+    private_overlap = all(
+        event.wait(timeout=timeout) for event in projects_ready.values()
+    )
+    start_first_home.set()
+    deadline = time.monotonic() + (timeout * 2) + 5.0
+    for thread in threads:
+        thread.join(timeout=max(0.0, deadline - time.monotonic()))
+    if errors:
+        raise AssertionError(f"concurrent lifecycle probe failed: {errors!r}")
+    if any(thread.is_alive() for thread in threads):
+        raise AssertionError("concurrent lifecycle probe did not terminate")
+
+    serialized = (
+        second_observed_waiting
+        and maximum_home_consumers == 1
+        and home_order == ["project-alpha", "project-beta"]
+        and commit_order == ["project-alpha", "project-beta"]
+    )
+    return before, commit_order, private_overlap, serialized
+
+
 def _observe_cross_project(
     root: Path,
     identities: JsonObject,
@@ -579,21 +718,12 @@ def _observe_cross_project(
     success_root = root / "success"
     ledger = _write_text(success_root / "consumers.json", "[]")
     home = success_root / "home"
-    before, first = _commit_consumer(home, success_root, "project-alpha", ledger)
-    _before_second, second = _commit_consumer(home, success_root, "project-beta", ledger)
-    after = json.loads(ledger.read_text(encoding="utf-8"))
-
-    # Distinct project locks may coexist; the shared transaction still passes
-    # through the single manager-home lock.
-    locks = locking.ProjectLocks(
-        success_root / "overlap-home",
-        [success_root / "private-alpha", success_root / "private-beta"],
+    before, commit_order, private_overlap, serialized = (
+        _commit_consumers_concurrently(home, success_root, ledger)
     )
-    with locks:
-        private_overlap = all(lock.acquired for lock in locks.locks)
-    serialized = first == ["machine"] and second == ["machine"]
+    after = json.loads(ledger.read_text(encoding="utf-8"))
     observed["two-project-success-preserves-both-consumers"] = {
-        "commit_order": after,
+        "commit_order": commit_order,
         "consumer_ledger_after": after,
         "consumer_ledger_before": before,
         "name": "two-project-success-preserves-both-consumers",
@@ -735,8 +865,60 @@ def _observe_dry_run(
             "consumers.json": '{"schema_version":1,"consumers":[]}\n',
         },
     )
+    operator_module_cache = compiled_root / "operator-module-cache"
+    operator_go_cache = compiled_root / "operator-go-build-cache"
+    write_files(
+        compiled_root,
+        {
+            "operator-module-cache/witness": "module-cache-witness\n",
+            "operator-go-build-cache/witness": "go-cache-witness\n",
+        },
+    )
+    effect_surfaces: dict[str, tuple[Path, ...]] = {
+        "source-checkout": (skills_root,),
+        "snapshot-cache": (csk_home / "cache" / "snapshots",),
+        "response-cache": (csk_home / "audit" / "cache",),
+        "toolchain-probe-memo": (csk_home / "state" / "toolchain-probes",),
+        "module-cache": (operator_module_cache,),
+        "go-build-cache": (operator_go_cache,),
+        "compiled-artifact-cache": (csk_home / "builds",),
+        "audit-state": (csk_home / "audit",),
+        "registry-state": (
+            csk_home / "cache" / "registry",
+            csk_home / "state" / "registry",
+        ),
+        "revocation-state": (csk_home / "audit" / "revocations",),
+        "configuration": (cfg.path,),
+        "project-lock": (csk_home / "locks" / "projects",),
+        "cache-build-lock": (csk_home / "locks" / "builds",),
+        "manager-home-lock": (csk_home / "locks" / "manager-home.lock",),
+        "journal": (csk_home / "state" / "transactions" / "v1",),
+        "backup": (project, csk_home),
+        "quarantine": (csk_home / ".builds-quarantine",),
+        "permission-repair": (csk_home / "builds", csk_home / "runtime"),
+        "context-tree": (project / ".agents" / "skills",),
+        "runtime-tree": (csk_home / "runtime",),
+        "environment-file": (
+            project / ".agents" / "env.sh",
+            project / ".agents" / "env.ps1",
+        ),
+        "install-marker": (
+            project / ".agents" / "skills" / "skill-build" / ".csk-install.json",
+        ),
+        "command-shim": (project / ".agents" / "bin",),
+        "adapter-ledger": (project / ".claude" / "skills" / ".csk-managed.json",),
+        "adapter-mirror": (project / ".claude" / "skills" / "skill-build",),
+        "consumer-ledger": (csk_home / "consumers.json",),
+        "gc-metadata": (csk_home / "state" / "gc",),
+    }
+    if set(effect_surfaces) != set(_COMPILED_DRY_RUN_EFFECTS):
+        raise AssertionError("compiled dry-run effect classification is incomplete")
+    effects_before = {
+        label: _tree_state(paths)
+        for label, paths in effect_surfaces.items()
+    }
     observed_argv: list[tuple[str, ...]] = []
-    artifact_executed = False
+    artifact_executions: list[Path] = []
 
     class FakeSession:
         target = _native_target()
@@ -769,10 +951,16 @@ def _observe_dry_run(
             return cache.CacheInspection(cache.CacheEntryStatus.MISS, "observed miss")
 
         def publish(self, *_args: object, **_kwargs: object) -> object:
+            mutation_events.append("compiled-artifact-cache")
             raise AssertionError("dry-run reached cache publication")
 
         def quarantine(self, *_args: object, **_kwargs: object) -> object:
+            mutation_events.append("quarantine")
             raise AssertionError("dry-run reached cache quarantine")
+
+        def collect(self, *_args: object, **_kwargs: object) -> object:
+            mutation_events.append("gc-metadata")
+            raise AssertionError("dry-run reached cache collection")
 
     mutation_events: list[str] = []
 
@@ -783,10 +971,65 @@ def _observe_dry_run(
 
         return record
 
+    def forbidden_lock(label: str) -> Callable[..., None]:
+        def construct(*_args: object, **_kwargs: object) -> None:
+            mutation_events.append(label)
+            raise AssertionError(f"dry-run constructed {label}")
+
+        return construct
+
+    real_path_chmod = Path.chmod
+    real_subprocess_run = subprocess.run
+    real_temporary_directory = tempfile.TemporaryDirectory
+    operation_roots: list[Path] = []
+
+    def observed_chmod(
+        path: Path,
+        mode: int,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        persistent_roots = (project.resolve(), csk_home.resolve())
+        resolved = path.resolve(strict=False)
+        if any(resolved.is_relative_to(parent) for parent in persistent_roots):
+            mutation_events.append("permission-repair")
+        real_path_chmod(path, mode, follow_symlinks=follow_symlinks)
+
+    def observed_run(*args: Any, **kwargs: Any) -> Any:
+        command = args[0] if args else kwargs.get("args")
+        if isinstance(command, (list, tuple)) and command:
+            candidate = Path(os.fspath(command[0]))
+            if candidate.is_absolute() and candidate.resolve(strict=False).is_relative_to(
+                (csk_home / "builds").resolve(strict=False)
+            ):
+                artifact_executions.append(candidate)
+        return real_subprocess_run(*args, **kwargs)
+
+    class ObservedTemporaryDirectory(tempfile.TemporaryDirectory[str]):
+        def __init__(self, *args: object, **kwargs: object):
+            self.observed_prefix = str(kwargs.get("prefix", ""))
+            super().__init__(*args, **kwargs)
+
+        def __enter__(self) -> str:
+            value = super().__enter__()
+            if self.observed_prefix.startswith("csk-build-operation-"):
+                operation_roots.append(Path(value))
+            return value
+
     with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("GOMODCACHE", str(operator_module_cache))
+        monkeypatch.setenv("GOCACHE", str(operator_go_cache))
         monkeypatch.setattr(planner.toolchain, "establish_toolchain", lambda _cfg: FakeSession())
         monkeypatch.setattr(planner.cache, "cache_for_manager_home", lambda _home: ReadOnlyCache())
         monkeypatch.setattr(go_v1, "build", forbidden("go-build"))
+        monkeypatch.setattr(locking, "ProjectLock", forbidden_lock("project-lock"))
+        monkeypatch.setattr(locking, "BuildLock", forbidden_lock("cache-build-lock"))
+        monkeypatch.setattr(
+            locking,
+            "ManagerHomeLock",
+            forbidden_lock("manager-home-lock"),
+        )
+        monkeypatch.setattr(installer, "_transaction_engine", forbidden("journal"))
         monkeypatch.setattr(installer.consumers, "record_consumer", forbidden("consumer-ledger"))
         monkeypatch.setattr(installer, "install_runtime_commands", forbidden("runtime-tree"))
         monkeypatch.setattr(installer, "_install_skill_context", forbidden("context-tree"))
@@ -798,12 +1041,19 @@ def _observe_dry_run(
             "refresh_adapter_groups",
             forbidden("adapter-mirror"),
         )
-        before = _tree_state((project, csk_home, skills_root))
+        monkeypatch.setattr(installer.gc, "collect_runtime", forbidden("gc-metadata"))
+        monkeypatch.setattr(config_mod, "save_config", forbidden("configuration"))
+        monkeypatch.setattr(Path, "chmod", observed_chmod)
+        monkeypatch.setattr(subprocess, "run", observed_run)
+        monkeypatch.setattr(tempfile, "TemporaryDirectory", ObservedTemporaryDirectory)
         result = installer.install(
             cfg,
             options=installer.InstallOptions(dry_run=True),
         )[0]
-        after = _tree_state((project, csk_home, skills_root))
+        effects_after = {
+            label: _tree_state(paths)
+            for label, paths in effect_surfaces.items()
+        }
 
     outcomes = [
         cache.CacheInspection(status, "observed").dry_run_outcome
@@ -815,10 +1065,19 @@ def _observe_dry_run(
             cache.CacheEntryStatus.UNSUPPORTED,
         )
     ]
+    forbidden_effects = [
+        label
+        for label in _COMPILED_DRY_RUN_EFFECTS
+        if label not in mutation_events
+        and effects_before[label] == effects_after[label]
+    ]
+    operation_private_absent = (
+        all(not path.exists() for path in operation_roots)
+        and "compiled-artifact-cache" in forbidden_effects
+    )
     readonly = (
         not result.errors
-        and before == after
-        and not mutation_events
+        and forbidden_effects == _COMPILED_DRY_RUN_EFFECTS
         and [build.result for build in result.builds] == ["would-preflight-and-build"]
     )
     command_labels = {
@@ -829,18 +1088,18 @@ def _observe_dry_run(
     allowed = [command_labels[argv[1]] for argv in observed_argv] if readonly else []
     observed["compiled-cache-miss-is-read-only"] = {
         "allowed_go_commands": allowed,
-        "artifact_executed": artifact_executed,
+        "artifact_executed": bool(artifact_executions),
         "forbidden_go_commands": [
             command
             for command in ("list", "build")
             if all(argv[1] != command for argv in observed_argv)
         ],
-        "forbidden_persistent_effects": (
-            list(_COMPILED_DRY_RUN_EFFECTS) if readonly else []
-        ),
+        "forbidden_persistent_effects": forbidden_effects,
         "logical_cache_key": identities["cache_key"],
         "name": "compiled-cache-miss-is-read-only",
-        "operation_private_state_after": "absent" if readonly else "present",
+        "operation_private_state_after": (
+            "absent" if operation_private_absent else "present"
+        ),
         "reported_build_outcomes": outcomes,
         "scope": "multi-project",
     }
@@ -851,39 +1110,73 @@ def _observe_upgrade_dry_run(root: Path, *, global_scope: bool) -> list[str]:
     csk_home = root / "home"
     missing_skills = root / "missing-skills"
     cfg = make_config(csk_home, missing_skills, project)
-    before = _tree_state((project, csk_home, missing_skills))
+    config_mod.save_config(cfg)
+    if global_scope:
+        global_install.init(csk_home, default_agents=["codex_cli"])
+    else:
+        write_skillfile(project, {"schema_version": 1, "skills": []})
+        config_mod.save_config(cfg)
+
+    effects = _GLOBAL_UPGRADE_EFFECTS if global_scope else _PROJECT_UPGRADE_EFFECTS
+    artifact_root = csk_home / "global" if global_scope else project / ".agents"
+    effect_surfaces: dict[str, tuple[Path, ...]] = {
+        "source-fetch": (missing_skills,),
+        "source-clone": (missing_skills,),
+        "snapshot-cache": (csk_home / "cache" / "snapshots",),
+        "response-cache": (csk_home / "audit" / "cache",),
+        "audit-state": (csk_home / "audit",),
+        "registry-state": (
+            csk_home / "cache" / "registry",
+            csk_home / "state" / "registry",
+        ),
+        "configuration": (cfg.path,),
+        "runtime": (csk_home / "runtime",),
+        ("global-artifacts" if global_scope else "project-artifacts"): (
+            artifact_root,
+        ),
+    }
+    if set(effect_surfaces) != set(effects):
+        raise AssertionError("upgrade dry-run effect classification is incomplete")
+    before = {
+        label: _tree_state(paths)
+        for label, paths in effect_surfaces.items()
+    }
     forbidden_calls: list[str] = []
 
     def unexpected_fetch(_repo: Path) -> None:
         forbidden_calls.append("source-fetch")
 
-    class ForbiddenLock:
-        def __init__(self, _home: Path):
-            forbidden_calls.append("manager-home-lock")
-            raise AssertionError("dry-run constructed a mutation lock")
+    def unexpected_clone(_remote: str, _destination: Path) -> None:
+        forbidden_calls.append("source-clone")
+
+    def unexpected_save(_cfg: config_mod.GlobalConfig) -> None:
+        forbidden_calls.append("configuration")
+        raise AssertionError("dry-run attempted to save configuration")
 
     with pytest.MonkeyPatch.context() as monkeypatch:
-        config_mod.save_config(cfg)
         monkeypatch.setenv("CSK_CONFIG", str(cfg.path))
         monkeypatch.setattr(cli.git_ops, "fetch_repo", unexpected_fetch)
-        monkeypatch.setattr(cli, "GlobalLock", ForbiddenLock)
+        monkeypatch.setattr(cli.git_ops, "clone_repo", unexpected_clone)
+        monkeypatch.setattr(config_mod, "save_config", unexpected_save)
         if global_scope:
-            global_install.init(csk_home, default_agents=["codex_cli"])
-            before = _tree_state((project, csk_home, missing_skills))
             exit_code, _stdout, _stderr = _run_cli(
                 ["global", "upgrade", "--dry-run"]
             )
         else:
-            write_skillfile(project, {"schema_version": 1, "skills": []})
-            config_mod.save_config(cfg)
-            before = _tree_state((project, csk_home, missing_skills))
             exit_code, _stdout, _stderr = _run_cli(
                 ["upgrade", "app", "--dry-run"]
             )
-        after = _tree_state((project, csk_home, missing_skills))
-    readonly = exit_code == cli.EXIT_OK and before == after and not forbidden_calls
-    effects = _GLOBAL_UPGRADE_EFFECTS if global_scope else _PROJECT_UPGRADE_EFFECTS
-    return list(effects) if readonly else []
+        after = {
+            label: _tree_state(paths)
+            for label, paths in effect_surfaces.items()
+        }
+    return [
+        label
+        for label in effects
+        if exit_code == cli.EXIT_OK
+        and label not in forbidden_calls
+        and before[label] == after[label]
+    ]
 
 
 def _observe_gc(
@@ -902,8 +1195,91 @@ def _observe_gc(
             skills_root,
             csk_home,
         )
+        assert isinstance(cfg, config_mod.GlobalConfig)
+        lock_events: list[str] = []
+        record_gc_locks = True
+        artifact_executions: list[Path] = []
+        real_manager_home_lock = locking.ManagerHomeLock
+        real_project_lock = locking.ProjectLock
+        real_build_lock = locking.BuildLock
+        real_subprocess_run = subprocess.run
+
+        class ObservedGcManagerLock:
+            def __init__(self, home_path: Path, timeout: float | None = None):
+                self._delegate = real_manager_home_lock(home_path, timeout=timeout)
+
+            def __enter__(self) -> locking.ManagerHomeLock:
+                if record_gc_locks:
+                    lock_events.append("manager-home-mutation-lock")
+                return self._delegate.__enter__()
+
+            def __exit__(self, *args: object) -> Any:
+                return self._delegate.__exit__(*args)
+
+        class ObservedGcProjectLock:
+            def __init__(
+                self,
+                home_path: Path,
+                project_path: Path,
+                timeout: float | None = None,
+            ):
+                self._delegate = real_project_lock(
+                    home_path,
+                    project_path,
+                    timeout=timeout,
+                )
+
+            def __enter__(self) -> locking.ProjectLock:
+                if record_gc_locks:
+                    lock_events.append("project-lock")
+                return self._delegate.__enter__()
+
+            def __exit__(self, *args: object) -> Any:
+                return self._delegate.__exit__(*args)
+
+        class ObservedGcBuildLock:
+            def __init__(
+                self,
+                home_path: Path,
+                cache_key: str,
+                timeout: float | None = None,
+            ):
+                self._delegate = real_build_lock(
+                    home_path,
+                    cache_key,
+                    timeout=timeout,
+                )
+
+            def __enter__(self) -> locking.BuildLock:
+                if record_gc_locks:
+                    lock_events.append("cache-build-lock")
+                return self._delegate.__enter__()
+
+            def __exit__(self, *args: object) -> Any:
+                return self._delegate.__exit__(*args)
+
+        def observed_run(*args: Any, **kwargs: Any) -> Any:
+            command = args[0] if args else kwargs.get("args")
+            if isinstance(command, (list, tuple)) and command:
+                candidate = Path(os.fspath(command[0]))
+                if (
+                    candidate.is_absolute()
+                    and candidate.resolve(strict=False).is_relative_to(
+                        (csk_home / "builds").resolve(strict=False)
+                    )
+                ):
+                    artifact_executions.append(candidate)
+            return real_subprocess_run(*args, **kwargs)
+
+        monkeypatch.setattr(locking, "ManagerHomeLock", ObservedGcManagerLock)
+        monkeypatch.setattr(locking, "ProjectLock", ObservedGcProjectLock)
+        monkeypatch.setattr(locking, "BuildLock", ObservedGcBuildLock)
+        monkeypatch.setattr(subprocess, "run", observed_run)
         legacy = deepcopy(marker)
         legacy["schema_version"] = 1
+        legacy["name"] = "legacy-skill"
+        legacy["source"] = "legacy-skill"
+        legacy["commit"] = "1" * 40
         legacy["skill_schema_version"] = min(
             int(legacy["skill_schema_version"]),
             5,
@@ -918,6 +1294,30 @@ def _observe_gc(
             parsed_legacy,
             install_marker.InstallMarkerV1,
         )
+        legacy_marker = (
+            csk_home
+            / "global"
+            / "skills"
+            / "legacy-skill"
+            / ".csk-install.json"
+        )
+        legacy_marker.parent.mkdir(parents=True)
+        legacy_marker.write_bytes(
+            install_marker.serialize_install_marker(legacy)
+        )
+        legacy_runtime = _write_text(
+            csk_home / "runtime" / "legacy-skill" / ("1" * 40) / "witness",
+            "legacy-runtime\n",
+        )
+        legacy_snapshot = _write_text(
+            csk_home
+            / "cache"
+            / "legacy-skill"
+            / ("1" * 40)
+            / "snapshot"
+            / "witness",
+            "legacy-snapshot\n",
+        )
         registered_consumer = project.resolve() in consumers.load_consumers(csk_home)
         record = marker["builds"]["tool"]
         entry = (
@@ -926,6 +1326,15 @@ def _observe_gc(
             / "go-v1"
             / record["cache_key"].removeprefix("sha256:")
         )
+        actual_receipt = metadata.parse_receipt(
+            json.loads(
+                (entry / "csk-receipt.ccj.json").read_text(encoding="utf-8")
+            )
+        )
+        actual_key_valid = (
+            actual_receipt.cache_key == record["cache_key"]
+            == metadata.cache_key(actual_receipt.input)
+        )
         os.utime(entry, (1, 1), follow_symlinks=False)
         marked = gc.collect_runtime(
             cfg,
@@ -933,6 +1342,11 @@ def _observe_gc(
             now=gc.BUILD_GRACE_SECONDS + 100,
         )
         marker_v2_live = marked.builds_removed == 0 and entry.exists()
+        marker_v1_live = (
+            marker_v1_supported
+            and legacy_runtime.exists()
+            and legacy_snapshot.exists()
+        )
 
         desired = gc_root / "journal-source"
         shutil.copytree(marker_path.parent, desired)
@@ -970,25 +1384,58 @@ def _observe_gc(
         receipt_only = gc_root / "receipt-only.ccj.json"
         receipt_only.write_bytes((entry / "csk-receipt.ccj.json").read_bytes())
         shutil.rmtree(journal_live)
+        rejected_entry = entry.parent / ("f" * 64)
+        shutil.copytree(entry, rejected_entry)
+        os.utime(rejected_entry, (1, 1), follow_symlinks=False)
+        live_entries_before_receipt_probe = {
+            path.name for path in entry.parent.iterdir()
+        }
+
+        young_now = float(gc.BUILD_GRACE_SECONDS + 200)
+        young_mtime = young_now - (gc.BUILD_GRACE_SECONDS / 2)
+        os.utime(entry, (young_mtime, young_mtime), follow_symlinks=False)
+        young = gc.collect_runtime(
+            replace(cfg, projects={}),
+            csk_home,
+            now=young_now,
+        )
+        young_retained = young.builds_removed == 0 and entry.exists()
+
         os.utime(entry, (2, 2), follow_symlinks=False)
         swept = gc.collect_runtime(
             replace(cfg, projects={}),
             csk_home,
-            now=gc.BUILD_GRACE_SECONDS + 200,
+            now=gc.BUILD_GRACE_SECONDS + 300,
         )
         swept_old = swept.builds_removed == 1 and not entry.exists()
+        rejected_boundary_retained = (
+            rejected_entry.exists()
+            and any(
+                f"sha256:{rejected_entry.name}" in warning
+                and "retained uncertain entry" in warning
+                for warning in swept.warnings
+            )
+        )
+        live_entries_after_receipt_probe = {
+            path.name for path in rejected_entry.parent.iterdir()
+        }
+        entry_adopted = not live_entries_after_receipt_probe.issubset(
+            live_entries_before_receipt_probe
+        )
 
         # A malformed marker makes the mark phase uncertain and retains state.
         other_root = root / "uncertain"
         other_skills = other_root / "skills"
         other_skills.mkdir(parents=True)
         other_home = other_root / "home"
+        record_gc_locks = False
         _project, other_cfg, _events, other_marker_path, other_marker = _installed_build(
             monkeypatch,
             other_root,
             other_skills,
             other_home,
         )
+        record_gc_locks = True
         other_record = other_marker["builds"]["tool"]
         other_entry = (
             other_home
@@ -1009,8 +1456,20 @@ def _observe_gc(
             and any("mark phase was incomplete" in warning for warning in uncertain.warnings)
         )
 
+    only_manager_home_lock = (
+        bool(lock_events)
+        and set(lock_events) == {"manager-home-mutation-lock"}
+    )
+    unreferenced_required = (
+        receipt_only.exists()
+        and not journal_live.exists()
+        and swept_old
+    )
+    machine_local_required = swept_old and rejected_boundary_retained
+    grace_required = young_retained and swept_old
+
     observed["locked-mark-and-sweep-compiled-cache"] = {
-        "artifact_executed": False,
+        "artifact_executed": bool(artifact_executions),
         "compiled_cache_mark_roots": [
             label
             for label, found in (
@@ -1019,33 +1478,38 @@ def _observe_gc(
             )
             if found
         ],
-        "entry_adopted": False,
-        "logical_cache_key": identities["cache_key"],
-        "mark_roots": (
-            [
-                "registered-consumer",
-                "supported-valid-marker-v1",
-                "supported-valid-marker-v2",
-                "in-flight-journal",
-            ]
-            if (
-                registered_consumer
-                and marker_v1_supported
-                and marker_v2_live
-                and journal_live_reference
-            )
-            else []
+        "entry_adopted": entry_adopted,
+        "logical_cache_key": (
+            identities["cache_key"] if actual_key_valid else "unexpected"
         ),
+        "mark_roots": [
+            label
+            for label, found in (
+                ("registered-consumer", registered_consumer),
+                ("supported-valid-marker-v1", marker_v1_live),
+                ("supported-valid-marker-v2", marker_v2_live),
+                ("in-flight-journal", journal_live_reference),
+            )
+            if found
+        ],
         "name": "locked-mark-and-sweep-compiled-cache",
-        "only_lock": "manager-home-mutation-lock",
-        "protected_boundary_revalidated": swept_old,
+        "only_lock": (
+            "manager-home-mutation-lock"
+            if only_manager_home_lock
+            else "unexpected"
+        ),
+        "protected_boundary_revalidated": machine_local_required,
         "receipt_content_alone_is_live_reference": not swept_old,
         "result": "swept-unreferenced-old-entries" if swept_old else "retained",
         "sweep_requires": [
-            "unreferenced",
-            "machine-local",
-            "older-than-grace-period",
-        ] if gc.BUILD_GRACE_SECONDS > 0 and swept_old else [],
+            label
+            for label, found in (
+                ("unreferenced", unreferenced_required),
+                ("machine-local", machine_local_required),
+                ("older-than-grace-period", grace_required),
+            )
+            if found
+        ],
         "uncertain_state_action": (
             "retain-or-conservatively-quarantine-and-report"
             if retained_uncertain
@@ -1169,19 +1633,117 @@ def _observe_launchers(root: Path, observed: dict[str, JsonObject]) -> None:
         }
 
 
-_PLANNING_GATES = [
-    "complete-snapshot-tree-validation",
-    "dual-manifest-parse-and-schema-validation",
-    "runtime-build-root-and-source-dir-validation",
-    "static-build-root-context-and-runtime-exclusion",
-    "curator-build-source-v1",
-    "provider-first-closure",
-    "command-shim-portable-and-platform-collision-planning",
-    "source-allowlist-and-snapshot-checks",
-    "source-audit-policy",
-    "trusted-registry-resolution",
-    "attestation-revocation-and-moved-tag-policy",
-]
+_PLANNING_GATE_PROBES: tuple[tuple[str, object, str], ...] = (
+    (
+        "complete-snapshot-tree-validation",
+        installer.closure,
+        "build_closure",
+    ),
+    (
+        "dual-manifest-parse-and-schema-validation",
+        installer.manifest,
+        "load_manifest",
+    ),
+    (
+        "runtime-build-root-and-source-dir-validation",
+        installer,
+        "_validate_skills",
+    ),
+    (
+        "static-build-root-context-and-runtime-exclusion",
+        installer,
+        "_freeze_build_providers",
+    ),
+    (
+        "curator-build-source-v1",
+        installer.build_source,
+        "freeze_snapshot",
+    ),
+    (
+        "provider-first-closure",
+        installer.closure,
+        "_topological_order",
+    ),
+    (
+        "command-shim-portable-and-platform-collision-planning",
+        installer.closure,
+        "detect_active_command_collisions",
+    ),
+    (
+        "source-allowlist-and-snapshot-checks",
+        installer.skillcheck,
+        "validate_skill",
+    ),
+    (
+        "source-audit-policy",
+        installer.audit_pipeline,
+        "gate_plans",
+    ),
+    (
+        "trusted-registry-resolution",
+        installer,
+        "_check_audit_registries",
+    ),
+    (
+        "attestation-revocation-and-moved-tag-policy",
+        installer,
+        "_moved_tag_warnings",
+    ),
+)
+
+
+def _observe_planning_gate_failures(
+    cfg: config_mod.GlobalConfig,
+    project: Path,
+    skills_root: Path,
+) -> tuple[list[str], JsonObject]:
+    """Fail each named product seam and prove no downstream or persistent work."""
+
+    blocked: list[str] = []
+    cache_lookups: list[str] = []
+    go_commands: list[str] = []
+    persistent_mutations: list[str] = []
+    roots = (project, cfg.path.parent, skills_root)
+    baseline = _tree_state(roots)
+
+    for label, target, attribute in _PLANNING_GATE_PROBES:
+        downstream: list[str] = []
+
+        def fail_gate(*_args: object, **_kwargs: object) -> object:
+            raise installer.InstallError(f"observed planning gate failure: {label}")
+
+        def cache_lookup(*_args: object, **_kwargs: object) -> tuple[()]:
+            downstream.append("cache-lookup")
+            return ()
+
+        def go_command(*_args: object, **_kwargs: object) -> object:
+            downstream.append("go-command")
+            raise AssertionError("planning gate failure reached Go execution")
+
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(target, attribute, fail_gate)
+            monkeypatch.setattr(planner, "plan_builds", cache_lookup)
+            monkeypatch.setattr(go_v1, "build", go_command)
+            result = installer.install(
+                cfg,
+                options=installer.InstallOptions(dry_run=True),
+            )[0]
+
+        after = _tree_state(roots)
+        if "cache-lookup" in downstream:
+            cache_lookups.append(label)
+        if "go-command" in downstream:
+            go_commands.append(label)
+        if after != baseline:
+            persistent_mutations.append(label)
+        if result.errors and not downstream and after == baseline:
+            blocked.append(label)
+
+    return blocked, {
+        "cache_lookup": bool(cache_lookups),
+        "go_commands": go_commands,
+        "persistent_mutations": persistent_mutations,
+    }
 
 
 def _observe_planning(root: Path, observed: dict[str, JsonObject]) -> None:
@@ -1195,123 +1757,124 @@ def _observe_planning(root: Path, observed: dict[str, JsonObject]) -> None:
         {"schema_version": 1, "skills": [{"name": "skill-build", "tag": "v1"}]},
     )
     cfg = make_config(csk_home, skills_root, project)
-    trace: list[str] = []
-    real_build_closure = installer.closure.build_closure
-    real_validate = installer._validate_skills
-    real_freeze = installer._freeze_build_providers
-    real_collisions = installer.closure.detect_active_command_collisions
-    real_dependencies = installer._check_dependencies
-    real_mcp = installer._check_mcp_servers
-    real_moved = installer._moved_tag_warnings
-
-    def build_closure(*args: object, **kwargs: object) -> object:
-        value = real_build_closure(*args, **kwargs)
-        trace.extend(
-            [
-                "complete-snapshot-tree-validation",
-                "dual-manifest-parse-and-schema-validation",
-                "provider-first-closure",
-            ]
-        )
-        return value
-
-    def validate(*args: object, **kwargs: object) -> object:
-        value = real_validate(*args, **kwargs)
-        trace.extend(
-            [
-                "runtime-build-root-and-source-dir-validation",
-                "source-allowlist-and-snapshot-checks",
-            ]
-        )
-        return value
-
-    def freeze(*args: object, **kwargs: object) -> object:
-        value = real_freeze(*args, **kwargs)
-        trace.extend(
-            [
-                "static-build-root-context-and-runtime-exclusion",
-                "curator-build-source-v1",
-            ]
-        )
-        return value
-
-    def collisions(*args: object, **kwargs: object) -> object:
-        value = real_collisions(*args, **kwargs)
-        trace.append("command-shim-portable-and-platform-collision-planning")
-        return value
-
-    def dependencies(*args: object, **kwargs: object) -> object:
-        return real_dependencies(*args, **kwargs)
-
-    def mcp(*args: object, **kwargs: object) -> object:
-        return real_mcp(*args, **kwargs)
-
-    def audit(*_args: object, **_kwargs: object) -> audit_pipeline.GateResult:
-        trace.append("source-audit-policy")
-        return audit_pipeline.GateResult(reports=())
-
-    def registry(*_args: object, **_kwargs: object) -> dict[str, object]:
-        trace.append("trusted-registry-resolution")
-        return {}
-
-    def moved(*args: object, **kwargs: object) -> object:
-        value = real_moved(*args, **kwargs)
-        trace.append("attestation-revocation-and-moved-tag-policy")
-        return value
-
+    required_gates, failure_at_any_gate = _observe_planning_gate_failures(
+        cfg,
+        project,
+        skills_root,
+    )
     planning_state: dict[str, object] = {}
+    stages: list[str] = []
 
-    def plan_builds(providers: object, **_kwargs: object) -> tuple[()]:
-        planning_state["gates"] = list(trace)
-        planning_state["providers"] = providers
-        trace.extend(
-            [
-                "trusted-toolchain-resolution-and-fingerprint",
-                "logical-cache-key-derivation",
-                "protected-cache-read-only-inspection",
-            ]
-        )
-        return ()
+    def record_stage(label: str) -> None:
+        if label not in stages:
+            stages.append(label)
 
     with pytest.MonkeyPatch.context() as monkeypatch:
+        build_events: list[str] = []
+        _install_fake_build_pipeline(monkeypatch, events=build_events)
+        real_closure = installer.closure.build_closure
+        real_plan_builds = planner.plan_builds
+        real_cache_key = planner.metadata.cache_key
+        real_cache_factory = planner.cache.cache_for_manager_home
+        fake_build = go_v1.build
+
+        def build_closure(*args: object, **kwargs: object) -> object:
+            nodes = real_closure(*args, **kwargs)
+            planning_state["nodes"] = nodes
+            return nodes
+
+        def cache_key(value: metadata.GoBuildInput) -> str:
+            key = real_cache_key(value)
+            record_stage("logical-cache-key-derivation")
+            return key
+
+        class ObservedCache:
+            def __init__(self, backend: cache.BuildCacheBackend):
+                self._backend = backend
+                self.manager_home = backend.manager_home
+
+            def inspect(self, expectation: cache.CacheExpectation) -> cache.CacheInspection:
+                value = self._backend.inspect(expectation)
+                record_stage("protected-cache-read-only-inspection")
+                return value
+
+            def publish(self, *_args: object, **_kwargs: object) -> object:
+                raise AssertionError("planning observation reached publication")
+
+            def quarantine(self, *_args: object, **_kwargs: object) -> object:
+                raise AssertionError("planning observation reached quarantine")
+
+            def collect(self, *_args: object, **_kwargs: object) -> object:
+                raise AssertionError("planning observation reached collection")
+
+        def cache_factory(home: Path) -> ObservedCache:
+            return ObservedCache(real_cache_factory(home))
+
+        def plan_builds(
+            providers: Any,
+            **kwargs: Any,
+        ) -> Any:
+            record_stage("trusted-toolchain-resolution-and-fingerprint")
+            value = real_plan_builds(providers, **kwargs)
+            planning_state["providers"] = providers
+            planning_state["plans"] = value
+            nodes = planning_state.get("nodes")
+            if isinstance(nodes, list) and isinstance(value, tuple):
+                with locking.ProjectLock(csk_home, project):
+                    with ExitStack() as stack:
+                        installer._build_private_misses(
+                            cfg,
+                            nodes,
+                            providers,
+                            value,
+                            kwargs["operator_search_path"],
+                            kwargs["cache_backend"],
+                            stack,
+                            operation_roots=(project,),
+                        )
+            return value
+
+        def build(request: go_v1.BuildRequest) -> go_v1.BuildResult:
+            record_stage("go-list")
+            value = fake_build(request)
+            record_stage("go-build")
+            return value
+
         monkeypatch.setattr(installer.closure, "build_closure", build_closure)
-        monkeypatch.setattr(installer, "_validate_skills", validate)
-        monkeypatch.setattr(installer, "_freeze_build_providers", freeze)
-        monkeypatch.setattr(installer.closure, "detect_active_command_collisions", collisions)
-        monkeypatch.setattr(installer, "_check_dependencies", dependencies)
-        monkeypatch.setattr(installer, "_check_mcp_servers", mcp)
-        monkeypatch.setattr(installer.audit_pipeline, "gate_plans", audit)
-        monkeypatch.setattr(installer, "_check_audit_registries", registry)
-        monkeypatch.setattr(installer, "_moved_tag_warnings", moved)
+        monkeypatch.setattr(planner.metadata, "cache_key", cache_key)
+        monkeypatch.setattr(planner.cache, "cache_for_manager_home", cache_factory)
         monkeypatch.setattr(planner, "plan_builds", plan_builds)
+        monkeypatch.setattr(go_v1, "build", build)
         result = installer.install(
             cfg,
             options=installer.InstallOptions(dry_run=True),
         )[0]
 
-    gates_before_planning = planning_state.get("gates", [])
-    # Build execution is separately observed in the private-build probe; here
-    # the protocol's last two stages are projected only after every gate was
-    # observed before the toolchain/cache seam.
-    eligible = not result.errors and set(_PLANNING_GATES) == set(gates_before_planning)
-    observed["all-source-and-trust-gates-before-build"] = {
-        "failure_at_any_gate": {
+    gate_names = [label for label, _target, _attribute in _PLANNING_GATE_PROBES]
+    eligible = (
+        not result.errors
+        and required_gates == gate_names
+        and failure_at_any_gate
+        == {
             "cache_lookup": False,
             "go_commands": [],
             "persistent_mutations": [],
-        },
-        "name": "all-source-and-trust-gates-before-build",
-        "required_before_toolchain_or_cache": (
-            list(_PLANNING_GATES) if eligible else []
-        ),
-        "result": "build-eligible" if eligible else "ineligible",
-        "then": [
+        }
+        and stages
+        == [
             "trusted-toolchain-resolution-and-fingerprint",
             "logical-cache-key-derivation",
             "protected-cache-read-only-inspection",
             "go-list",
             "go-build",
-        ] if eligible else [],
+        ]
+    )
+    observed["all-source-and-trust-gates-before-build"] = {
+        "failure_at_any_gate": failure_at_any_gate,
+        "name": "all-source-and-trust-gates-before-build",
+        "required_before_toolchain_or_cache": required_gates,
+        "result": "build-eligible" if eligible else "ineligible",
+        "then": stages,
     }
 
 
@@ -1339,6 +1902,8 @@ def _observe_private_builds(
     build_events: list[str] = []
     verification_events: list[str] = []
     shared_events: list[str] = []
+    success_trace: list[str] = []
+    private_artifacts: dict[str, bool] = {}
     home_lock_during_build: list[bool] = []
     real_private = cache.make_publication_source_private
     real_publish = installer._publish_planned_builds
@@ -1346,14 +1911,22 @@ def _observe_private_builds(
 
     def verified(path: Path) -> None:
         real_private(path)
-        verification_events.append(path.name.removeprefix("artifact-"))
+        command = path.name.removeprefix("artifact-")
+        verification_events.append(command)
+        private_artifacts[command] = (
+            not path.resolve().is_relative_to(csk_home.resolve())
+            and not path.resolve().is_relative_to(project.resolve())
+        )
+        success_trace.append(f"verified:{command}")
 
     def publish(*args: object, **kwargs: object) -> object:
         shared_events.append("publication")
+        success_trace.append("publication")
         return real_publish(*args, **kwargs)
 
     def commit(*args: object, **kwargs: object) -> object:
         shared_events.append("commit")
+        success_trace.append("commit")
         return real_commit(*args, **kwargs)
 
     with pytest.MonkeyPatch.context() as monkeypatch:
@@ -1370,9 +1943,20 @@ def _observe_private_builds(
         monkeypatch.setattr(installer, "_commit_materialization", commit)
         result = installer.install(cfg)[0]
 
+    def verified_before_publication(command: str) -> bool:
+        verification = f"verified:{command}"
+        return (
+            private_artifacts.get(command, False)
+            and verification in success_trace
+            and "publication" in success_trace
+            and success_trace.index(verification)
+            < success_trace.index("publication")
+        )
+
     all_verified_before_shared = (
         verification_events == ["golden-tool", "second-tool"]
-        and shared_events[:1] == ["publication"]
+        and verified_before_publication("golden-tool")
+        and verified_before_publication("second-tool")
     )
     actual_builds = [
         build
@@ -1383,14 +1967,14 @@ def _observe_private_builds(
         "artifacts_executed": False,
         "builds": [
             {
-                "artifact_verified": all_verified_before_shared,
+                "artifact_verified": verified_before_publication("golden-tool"),
                 "cache_key": identities["cache_key"],
                 "command": "golden-tool",
                 "receipt_sha256": identities["receipt_sha256"],
                 "staging": "operation-private",
             },
             {
-                "artifact_verified": all_verified_before_shared,
+                "artifact_verified": verified_before_publication("second-tool"),
                 "command": "second-tool",
                 "staging": "operation-private",
             },
@@ -1430,18 +2014,134 @@ def _observe_private_builds(
             "consumers.json": '{"schema_version":1,"consumers":[]}\n',
         },
     )
-    watched = (
-        project / ".agents",
-        csk_home / "runtime",
-        csk_home / "builds",
-        csk_home / "hybrid",
-        csk_home / "consumers.json",
-        csk_home / "persistent-generation",
+    effect_surfaces: dict[str, tuple[Path, ...]] = {
+        "recovery": (csk_home / "state" / "transactions" / "v1",),
+        "cache-publication": (csk_home / "builds",),
+        "quarantine": (csk_home / ".builds-quarantine",),
+        "permission-repair": (csk_home / "builds", csk_home / "runtime"),
+        "journal": (csk_home / "state" / "transactions" / "v1",),
+        "target-swap": (
+            project / ".agents",
+            csk_home / "runtime",
+            csk_home / "hybrid",
+        ),
+        "consumer-update": (csk_home / "consumers.json",),
+        "gc": (
+            csk_home / "runtime",
+            csk_home / "builds",
+            csk_home / "consumers.json",
+        ),
+    }
+    failure_effects = (
+        "recovery",
+        "cache-publication",
+        "quarantine",
+        "permission-repair",
+        "journal",
+        "target-swap",
+        "consumer-update",
+        "gc",
+    )
+    if set(effect_surfaces) != set(failure_effects):
+        raise AssertionError("private-build failure effect classification is incomplete")
+    watched = tuple(
+        dict.fromkeys(
+            (
+                csk_home / "persistent-generation",
+                *(
+                    path
+                    for paths in effect_surfaces.values()
+                    for path in paths
+                ),
+            )
+        )
     )
     before = _tree_state(watched)
+    effects_before = {
+        label: _tree_state(paths)
+        for label, paths in effect_surfaces.items()
+    }
     events: list[str] = []
-    forbidden: list[str] = []
+    effect_events: list[str] = []
+    home_lock_events: list[str] = []
     operation_roots: list[Path] = []
+    real_manager_home_lock = locking.ManagerHomeLock
+    real_cache_factory = cache.cache_for_manager_home
+    real_path_chmod = Path.chmod
+
+    def record_effect(label: str) -> None:
+        if label not in effect_events:
+            effect_events.append(label)
+
+    class ObservedManagerHomeLock:
+        def __init__(self, home: Path, timeout: float | None = None):
+            self._delegate = real_manager_home_lock(home, timeout=timeout)
+
+        def __enter__(self) -> locking.ManagerHomeLock:
+            home_lock_events.append("manager-home-lock")
+            return self._delegate.__enter__()
+
+        def __exit__(self, *args: object) -> Any:
+            return self._delegate.__exit__(*args)
+
+    class ObservedCache:
+        def __init__(self, backend: cache.BuildCacheBackend):
+            self._backend = backend
+            self.manager_home = backend.manager_home
+
+        def inspect(self, expectation: cache.CacheExpectation) -> cache.CacheInspection:
+            return self._backend.inspect(expectation)
+
+        def publish(
+            self,
+            publication: cache.CachePublication,
+            *,
+            guard: cache.CacheMutationGuard,
+        ) -> cache.CachePublicationResult:
+            record_effect("cache-publication")
+            return self._backend.publish(publication, guard=guard)
+
+        def quarantine(
+            self,
+            cache_key: str,
+            *,
+            guard: cache.CacheMutationGuard,
+        ) -> Path | None:
+            record_effect("quarantine")
+            return self._backend.quarantine(cache_key, guard=guard)
+
+        def collect(
+            self,
+            referenced_cache_keys: Any,
+            *,
+            older_than: float,
+            guard: cache.CacheMutationGuard,
+        ) -> cache.CacheCollectionResult:
+            record_effect("gc")
+            return self._backend.collect(
+                referenced_cache_keys,
+                older_than=older_than,
+                guard=guard,
+            )
+
+    def observed_cache_factory(home: Path) -> ObservedCache:
+        return ObservedCache(real_cache_factory(home))
+
+    def observed_chmod(
+        path: Path,
+        mode: int,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        try:
+            persistent = path.resolve(strict=False).is_relative_to(
+                csk_home.resolve(strict=False)
+            )
+        except OSError:
+            persistent = False
+        if persistent:
+            record_effect("permission-repair")
+        real_path_chmod(path, mode, follow_symlinks=follow_symlinks)
 
     class ObservedTemporaryDirectory(tempfile.TemporaryDirectory[str]):
         def __init__(self, *args: object, **kwargs: object):
@@ -1479,20 +2179,37 @@ def _observe_private_builds(
 
         def forbidden_call(label: str) -> Callable[..., None]:
             def record(*_args: object, **_kwargs: object) -> None:
-                forbidden.append(label)
+                record_effect(label)
                 raise AssertionError(f"failure path reached {label}")
 
             return record
 
+        monkeypatch.setattr(locking, "ManagerHomeLock", ObservedManagerHomeLock)
+        monkeypatch.setattr(cache, "cache_for_manager_home", observed_cache_factory)
+        monkeypatch.setattr(Path, "chmod", observed_chmod)
+        monkeypatch.setattr(
+            installer,
+            "_transaction_engine",
+            forbidden_call("recovery"),
+        )
         monkeypatch.setattr(
             installer,
             "_publish_planned_builds",
             forbidden_call("cache-publication"),
         )
         monkeypatch.setattr(installer, "_commit_materialization", forbidden_call("target-swap"))
+        monkeypatch.setattr(
+            installer.consumers,
+            "record_consumer",
+            forbidden_call("consumer-update"),
+        )
         monkeypatch.setattr(installer.gc, "collect_runtime", forbidden_call("gc"))
         result = installer.install(cfg)[0]
     after = _tree_state(watched)
+    effects_after = {
+        label: _tree_state(paths)
+        for label, paths in effect_surfaces.items()
+    }
     operation_removed = bool(operation_roots) and all(not path.exists() for path in operation_roots)
     protocol_events = [
         event
@@ -1505,19 +2222,18 @@ def _observe_private_builds(
     ]
     if operation_removed:
         protocol_events.append("operation-private-staging-removed")
+    if "recovery" in effect_events:
+        record_effect("journal")
+    forbidden_effects = [
+        label
+        for label in failure_effects
+        if label not in effect_events
+        and effects_before[label] == effects_after[label]
+    ]
     observed["second-build-failure-preserves-persistent-state"] = {
         "events": protocol_events,
-        "forbidden_effects": [
-            "recovery",
-            "cache-publication",
-            "quarantine",
-            "permission-repair",
-            "journal",
-            "target-swap",
-            "consumer-update",
-            "gc",
-        ] if not forbidden else [],
-        "manager_home_lock_acquired": locking._STATE.home is not None,
+        "forbidden_effects": forbidden_effects,
+        "manager_home_lock_acquired": bool(home_lock_events),
         "name": "second-build-failure-preserves-persistent-state",
         "persistent_state_after": (
             "persistent-generation-7" if before == after else "changed"
@@ -1596,10 +2312,55 @@ def _observe_recovery(
     with locking.ProjectLock(home, triggering), locking.ManagerHomeLock(home) as home_lock:
         recovering.recover(home_lock)
     consumers_after = json.loads(ledger.read_text(encoding="utf-8"))
+    restore_order = restored + [
+        event.split(":", 1)[1]
+        for event in recovery_events
+        if event.startswith("after_restore:")
+    ]
+
+    guard_root = root / "preimage-guard"
+    guard_home = guard_root / "home"
+    guarded_live = _write_text(guard_root / "live", "expected-preimage")
+    guarded_desired = _write_text(guard_root / "desired", "transaction-write")
+    guard_engine = transactions.TransactionEngine(guard_home)
+    with locking.ManagerHomeLock(guard_home) as guard_lock:
+        guard_engine.prepare(
+            guard_lock,
+            _plan(
+                "transaction-preimage-guard",
+                guard_root / "project-alpha",
+                _target(
+                    "10-context",
+                    "guarded-context",
+                    guarded_live,
+                    guarded_desired,
+                ),
+            ),
+        )
+        guarded_live.write_text("newer-project-state", encoding="utf-8")
+        with pytest.raises(
+            transactions.TransactionCorruptionError,
+            match="stale preimage",
+        ):
+            guard_engine.commit(guard_lock, "transaction-preimage-guard")
+    preimage_guard_preserved = (
+        guarded_live.read_text(encoding="utf-8") == "newer-project-state"
+        and not (
+            guard_engine.journal_root / "transaction-preimage-guard.json"
+        ).exists()
+    )
+    recovery_action_verified = (
+        restore_order == ["machine", "global-context"]
+        and preimage_guard_preserved
+    )
     observed["interrupted-global-journal-recovered-by-transaction-id"] = {
         "backups_retained_until_recovery_succeeds": backups_before_recovery,
         "cache_key": identities["cache_key"],
-        "expected_action": "verify-preimages-and-restore-reverse-commit-order",
+        "expected_action": (
+            "verify-preimages-and-restore-reverse-commit-order"
+            if recovery_action_verified
+            else "unexpected"
+        ),
         "journal_owner": Path(raw["project_identity"]).name,
         "journal_state": "partially-committed" if raw["phase"] == "rolling_back" else raw["phase"],
         "journal_transaction_id": raw["transaction_id"],
@@ -1628,12 +2389,34 @@ def _observe_recovery(
     cfg = make_config(csk_home, skills_root, project)
     trace: list[str] = []
     recover_under_lock = False
+    generation_changed = False
+    private_attempts = 0
     real_private = installer._build_private_misses
     real_engine_factory = installer._transaction_engine
 
+    first_generation = "sha256:" + "1" * 64
+    second_generation = "sha256:" + "2" * 64
+
+    class Generation:
+        def __init__(self) -> None:
+            self.value = first_generation
+            self.captures: list[str] = []
+
+        def capture(self) -> dict[str, str]:
+            self.captures.append(self.value)
+            return {"shared": self.value}
+
+    generation = Generation()
+
     def private(*args: object, **kwargs: object) -> object:
+        nonlocal generation_changed, private_attempts
         value = real_private(*args, **kwargs)
+        private_attempts += 1
         trace.append("private-builds-verified")
+        if private_attempts == 1:
+            generation.value = second_generation
+            generation_changed = True
+            trace.append("planning-generation-changed")
         return value
 
     class ObservedEngine:
@@ -1655,19 +2438,54 @@ def _observe_recovery(
     with pytest.MonkeyPatch.context() as monkeypatch:
         events: list[str] = []
         _install_fake_build_pipeline(monkeypatch, events=events)
+        monkeypatch.setattr(
+            installer,
+            "_project_generation_probe",
+            lambda _config, _project: generation,
+        )
         monkeypatch.setattr(installer, "_build_private_misses", private)
         monkeypatch.setattr(installer, "_transaction_engine", ObservedEngine)
         result = installer.install(cfg)[0]
-    private_before_recovery = trace[:2] == ["private-builds-verified", "recovery"]
+    private_positions = [
+        index for index, event in enumerate(trace) if event == "private-builds-verified"
+    ]
+    recovery_positions = [
+        index for index, event in enumerate(trace) if event == "recovery"
+    ]
+    private_before_recovery = (
+        len(private_positions) == len(recovery_positions) == 2
+        and all(
+            private_position < recovery_position
+            for private_position, recovery_position in zip(
+                private_positions,
+                recovery_positions,
+                strict=True,
+            )
+        )
+    )
+    recovery_before_build = any(
+        recovery_position < private_position
+        for recovery_position, private_position in zip(
+            recovery_positions,
+            private_positions,
+            strict=True,
+        )
+    )
+    restarted = (
+        generation_changed
+        and private_attempts == 2
+        and generation.captures.count(first_generation) >= 2
+        and second_generation in generation.captures
+    )
     observed["install-recovery-runs-after-private-builds"] = {
         "manager_home_lock": recover_under_lock,
         "name": "install-recovery-runs-after-private-builds",
         "private_builds_verified": private_before_recovery,
-        "recovery_before_build": not private_before_recovery,
-        "restart_if_plan_assumption_changed": True,
+        "recovery_before_build": recovery_before_build,
+        "restart_if_plan_assumption_changed": restarted,
         "result": (
             "publication-may-proceed"
-            if not result.errors and private_before_recovery
+            if not result.errors and private_before_recovery and restarted
             else "unexpected"
         ),
     }
@@ -1727,28 +2545,288 @@ def _observe_status_and_repair(
     skills_root.mkdir(parents=True)
     csk_home = status_root / "home"
     with pytest.MonkeyPatch.context() as monkeypatch:
-        _project, cfg, _events, _marker_path, marker = _installed_build(
+        project, cfg, _events, _marker_path, marker = _installed_build(
             monkeypatch,
             status_root,
             skills_root,
             csk_home,
         )
+        assert isinstance(cfg, config_mod.GlobalConfig)
+        parsed_markers: list[install_marker.InstallMarker] = []
+        closure_nodes: list[list[closure.ClosureNode]] = []
+        frozen_identities: list[build_source.BuildSourceIdentity] = []
+        planned_builds: list[tuple[planner.BuildPlan, ...]] = []
+        logical_keys: list[tuple[metadata.GoBuildInput, str]] = []
+        content_observations: dict[str, object] = {}
+        context_exclusion: list[bool] = []
+        runtime_exclusion: list[bool] = []
+        cache_inspections: list[cache.CacheInspection] = []
+        status_side_effects: list[str] = []
+        status_artifact_executions: list[Path] = []
+        real_read_marker = status_mod.install_marker.read_install_marker
+        real_build_closure = status_mod.closure.build_closure
+        real_freeze = status_mod.build_source.freeze_snapshot
+        real_plan_builds = status_mod.build_planner.plan_builds
+        real_cache_key = metadata.cache_key
+        real_content_hash = status_mod.hashing.content_sha256
+        real_installed_files = status_mod._installed_files
+        real_context_exclusion = installer._installed_context_exposes_build_roots
+        real_runtime_exclusion = status_mod._runtime_exposes_build_roots
+        real_cache_factory = cache.cache_for_manager_home
+        real_status_build = go_v1.build
+        real_status_subprocess_run = subprocess.run
+
+        def observed_read_marker(raw: bytes) -> install_marker.InstallMarker:
+            value = real_read_marker(raw)
+            parsed_markers.append(value)
+            return value
+
+        def observed_build_closure(*args: Any, **kwargs: Any) -> Any:
+            value = real_build_closure(*args, **kwargs)
+            closure_nodes.append(value)
+            return value
+
+        def observed_freeze(*args: Any, **kwargs: Any) -> Any:
+            value = real_freeze(*args, **kwargs)
+            frozen_identities.append(value.identity)
+            return value
+
+        def observed_plan_builds(*args: Any, **kwargs: Any) -> Any:
+            value = real_plan_builds(*args, **kwargs)
+            planned_builds.append(value)
+            return value
+
+        def observed_cache_key(value: metadata.GoBuildInput) -> str:
+            key = real_cache_key(value)
+            logical_keys.append((value, key))
+            return key
+
+        def observed_content_hash(path: Path) -> str:
+            value = real_content_hash(path)
+            if path == project / ".agents" / "skills" / "build-skill":
+                content_observations["hash"] = value
+            return value
+
+        def observed_installed_files(path: Path) -> tuple[str, ...]:
+            value = real_installed_files(path)
+            content_observations["files"] = value
+            return value
+
+        def observed_context_exclusion(*args: Any, **kwargs: Any) -> bool:
+            value = real_context_exclusion(*args, **kwargs)
+            context_exclusion.append(value)
+            return value
+
+        def observed_runtime_exclusion(*args: Any, **kwargs: Any) -> bool:
+            value = real_runtime_exclusion(*args, **kwargs)
+            runtime_exclusion.append(value)
+            return value
+
+        class ObservedStatusCache:
+            def __init__(self, backend: cache.BuildCacheBackend):
+                self._backend = backend
+                self.manager_home = backend.manager_home
+
+            def inspect(self, expectation: cache.CacheExpectation) -> cache.CacheInspection:
+                value = self._backend.inspect(expectation)
+                cache_inspections.append(value)
+                return value
+
+            def publish(self, *_args: Any, **_kwargs: Any) -> Any:
+                status_side_effects.append("adopt")
+                raise AssertionError("status observation reached cache publication")
+
+            def quarantine(self, *_args: Any, **_kwargs: Any) -> Any:
+                status_side_effects.append("quarantine")
+                raise AssertionError("status observation reached quarantine")
+
+            def collect(self, *_args: Any, **_kwargs: Any) -> Any:
+                status_side_effects.append("collection")
+                raise AssertionError("status observation reached collection")
+
+        def observed_cache_factory(home: Path) -> ObservedStatusCache:
+            return ObservedStatusCache(real_cache_factory(home))
+
+        def observed_status_build(*args: Any, **kwargs: Any) -> Any:
+            status_side_effects.append("repair")
+            return real_status_build(*args, **kwargs)
+
+        def observed_status_run(*args: Any, **kwargs: Any) -> Any:
+            command = args[0] if args else kwargs.get("args")
+            if isinstance(command, (list, tuple)) and command:
+                candidate = Path(os.fspath(command[0]))
+                if (
+                    candidate.is_absolute()
+                    and candidate.resolve(strict=False).is_relative_to(
+                        (csk_home / "builds").resolve(strict=False)
+                    )
+                ):
+                    status_artifact_executions.append(candidate)
+            return real_status_subprocess_run(*args, **kwargs)
+
+        monkeypatch.setattr(
+            status_mod.install_marker,
+            "read_install_marker",
+            observed_read_marker,
+        )
+        monkeypatch.setattr(status_mod.closure, "build_closure", observed_build_closure)
+        monkeypatch.setattr(status_mod.build_source, "freeze_snapshot", observed_freeze)
+        monkeypatch.setattr(status_mod.build_planner, "plan_builds", observed_plan_builds)
+        monkeypatch.setattr(metadata, "cache_key", observed_cache_key)
+        monkeypatch.setattr(status_mod.hashing, "content_sha256", observed_content_hash)
+        monkeypatch.setattr(status_mod, "_installed_files", observed_installed_files)
+        monkeypatch.setattr(
+            installer,
+            "_installed_context_exposes_build_roots",
+            observed_context_exclusion,
+        )
+        monkeypatch.setattr(
+            status_mod,
+            "_runtime_exposes_build_roots",
+            observed_runtime_exclusion,
+        )
+        monkeypatch.setattr(
+            cache,
+            "cache_for_manager_home",
+            observed_cache_factory,
+        )
+        monkeypatch.setattr(go_v1, "build", observed_status_build)
+        monkeypatch.setattr(subprocess, "run", observed_status_run)
         before = _tree_state((status_root, csk_home, skills_root))
         project_status, build_status = _build_row(cfg)
         after = _tree_state((status_root, csk_home, skills_root))
     read_only = before == after
-    current = project_status.clean and build_status.current
+    current = (
+        project_status.clean
+        and build_status.current
+        and not status_side_effects
+        and not status_artifact_executions
+    )
+    status_mutations = list(dict.fromkeys(status_side_effects))
+    if not read_only:
+        status_mutations.append("filesystem")
+    parsed_v2 = next(
+        (
+            value
+            for value in parsed_markers
+            if isinstance(value, install_marker.InstallMarkerV2)
+        ),
+        None,
+    )
+    observed_plan = next(
+        (
+            plan
+            for plans in planned_builds
+            for plan in plans
+            if plan.provider == "build-skill" and plan.command == "tool"
+        ),
+        None,
+    )
+    hit_inspections = [
+        inspection
+        for inspection in cache_inspections
+        if inspection.status is cache.CacheEntryStatus.HIT
+    ]
+    recorded_build = (
+        parsed_v2.builds.get("tool")
+        if parsed_v2 is not None
+        else None
+    )
+    validation_evidence = {
+        "marker-schema": parsed_v2 is not None,
+        "effective-plan": bool(closure_nodes and observed_plan is not None),
+        "installed-content": (
+            parsed_v2 is not None
+            and content_observations.get("hash") == parsed_v2.content_sha256
+            and content_observations.get("files") == parsed_v2.files
+        ),
+        "static-build-root-exclusion": (
+            context_exclusion == [False]
+            and runtime_exclusion == [False]
+        ),
+        "raw-snapshot-build-source": (
+            parsed_v2 is not None
+            and parsed_v2.build_source is not None
+            and parsed_v2.build_source in frozen_identities
+        ),
+        "build-input": (
+            observed_plan is not None
+            and bool(hit_inspections)
+            and all(
+                inspection.receipt is not None
+                and inspection.receipt.input == observed_plan.input
+                for inspection in hit_inspections
+            )
+        ),
+        "logical-cache-key": (
+            observed_plan is not None
+            and (observed_plan.input, observed_plan.cache_key) in logical_keys
+            and recorded_build is not None
+            and recorded_build.cache_key == observed_plan.cache_key
+        ),
+        "protected-boundary": (
+            len(hit_inspections) >= 2
+            and all(
+                inspection.artifact_path is not None
+                and inspection.artifact_path.exists()
+                and inspection.artifact_path.resolve().is_relative_to(
+                    (csk_home / "builds" / "go-v1").resolve()
+                )
+                for inspection in hit_inspections
+            )
+        ),
+        "canonical-receipt": (
+            recorded_build is not None
+            and bool(hit_inspections)
+            and all(
+                inspection.receipt is not None
+                and inspection.receipt_bytes
+                == metadata.canonical_receipt_bytes(inspection.receipt)
+                and inspection.receipt_sha256
+                == metadata.receipt_sha256(inspection.receipt_bytes or b"")
+                == recorded_build.receipt_sha256
+                for inspection in hit_inspections
+            )
+        ),
+        "artifact-path-hash-and-size": (
+            bool(hit_inspections)
+            and all(
+                inspection.receipt is not None
+                and inspection.artifact_path is not None
+                and inspection.artifact_path.relative_to(
+                    inspection.artifact_path.parents[1]
+                ).as_posix()
+                == inspection.receipt.artifact.path
+                and metadata.sha256_identity(
+                    inspection.artifact_path.read_bytes()
+                )
+                == inspection.receipt.artifact.sha256
+                and inspection.artifact_path.stat().st_size
+                == inspection.receipt.artifact.size
+                for inspection in hit_inspections
+            )
+        ),
+    }
+    if set(validation_evidence) != set(_STATUS_VALIDATED):
+        raise AssertionError("status validation classification is incomplete")
     observed["compiled-installation-current"] = {
-        "artifact_executed": False,
+        "artifact_executed": bool(status_artifact_executions),
         "cache_key": identities["cache_key"],
-        "mutations": [] if read_only else ["filesystem"],
+        "mutations": status_mutations,
         "name": "compiled-installation-current",
         "receipt_sha256": identities["receipt_sha256"],
         "result": "current" if current else "non-current",
-        "validated": list(_STATUS_VALIDATED) if current else [],
+        "validated": [
+            label
+            for label in _STATUS_VALIDATED
+            if validation_evidence.get(label, False)
+        ],
     }
 
     observed_conditions: list[str] = []
+    matrix_side_effects: list[str] = []
+    matrix_artifact_executions: list[Path] = []
+    matrix_mutations: list[str] = []
     # Exercise each status failure through the same installed-state helpers.
     # Related protocol labels share a product boundary where CocoaSkills
     # intentionally reports one stable non-current classification.
@@ -1790,21 +2868,77 @@ def _observe_status_and_repair(
                 csk_home,
             )
             mutate(project, csk_home, marker_path, marker, monkeypatch)
+            real_matrix_cache_factory = cache.cache_for_manager_home
+            real_matrix_build = go_v1.build
+            real_matrix_subprocess_run = subprocess.run
+
+            class ObservedMatrixCache:
+                def __init__(self, backend: cache.BuildCacheBackend):
+                    self._backend = backend
+                    self.manager_home = backend.manager_home
+
+                def inspect(
+                    self,
+                    expectation: cache.CacheExpectation,
+                ) -> cache.CacheInspection:
+                    return self._backend.inspect(expectation)
+
+                def publish(self, *args: Any, **kwargs: Any) -> Any:
+                    matrix_side_effects.append("adopt")
+                    return self._backend.publish(*args, **kwargs)
+
+                def quarantine(self, *args: Any, **kwargs: Any) -> Any:
+                    matrix_side_effects.append("quarantine")
+                    return self._backend.quarantine(*args, **kwargs)
+
+                def collect(self, *args: Any, **kwargs: Any) -> Any:
+                    matrix_side_effects.append("collection")
+                    return self._backend.collect(*args, **kwargs)
+
+            def observed_matrix_cache_factory(home: Path) -> ObservedMatrixCache:
+                return ObservedMatrixCache(real_matrix_cache_factory(home))
+
+            def observed_matrix_build(*args: Any, **kwargs: Any) -> Any:
+                matrix_side_effects.append("repair")
+                return real_matrix_build(*args, **kwargs)
+
+            def observed_matrix_run(*args: Any, **kwargs: Any) -> Any:
+                command = args[0] if args else kwargs.get("args")
+                if isinstance(command, (list, tuple)) and command:
+                    candidate = Path(os.fspath(command[0]))
+                    if (
+                        candidate.is_absolute()
+                        and candidate.resolve(strict=False).is_relative_to(
+                            (csk_home / "builds").resolve(strict=False)
+                        )
+                    ):
+                        matrix_artifact_executions.append(candidate)
+                return real_matrix_subprocess_run(*args, **kwargs)
+
+            monkeypatch.setattr(
+                cache,
+                "cache_for_manager_home",
+                observed_matrix_cache_factory,
+            )
+            monkeypatch.setattr(go_v1, "build", observed_matrix_build)
+            monkeypatch.setattr(subprocess, "run", observed_matrix_run)
             before = _tree_state((project, csk_home, skills_root))
             project_status, build = _build_row(cfg)
             after = _tree_state((project, csk_home, skills_root))
         if not project_status.clean and not build.current and before == after:
             observed_conditions.append(label)
+        if before != after:
+            matrix_mutations.append(label)
         _make_tree_writable(case_root)
 
     observed["compiled-currentness-failure-matrix"] = {
-        "adopt": False,
-        "artifact_executed": False,
+        "adopt": "adopt" in matrix_side_effects,
+        "artifact_executed": bool(matrix_artifact_executions),
         "independent_conditions": observed_conditions,
-        "mutations": [],
+        "mutations": matrix_mutations,
         "name": "compiled-currentness-failure-matrix",
-        "quarantine": False,
-        "repair": False,
+        "quarantine": "quarantine" in matrix_side_effects,
+        "repair": "repair" in matrix_side_effects,
         "result": (
             "non-current"
             if observed_conditions == _CURRENTNESS_CONDITIONS
@@ -1820,7 +2954,13 @@ def _observe_status_and_repair(
         "untrusted-boundary",
     ]
     rebuilt: list[str] = []
-    pipeline_trace: list[str] = []
+    pipeline_traces: dict[str, set[str]] = {}
+    shortcut_evidence = {
+        "adopt-candidate": True,
+        "chmod-then-adopt": True,
+        "recalculate-marker-only": True,
+        "trust-self-consistent-receipt": True,
+    }
     for index, condition in enumerate(repair_conditions):
         case_root = root / "repair" / f"{index:02d}-{condition}"
         skills_root = case_root / "skills"
@@ -1833,59 +2973,208 @@ def _observe_status_and_repair(
                 skills_root,
                 csk_home,
             )
+            assert isinstance(cfg, config_mod.GlobalConfig)
+            cfg = replace(
+                cfg,
+                audit=replace(cfg.audit, enabled=True),
+            )
             _mutate_repair_condition(condition, project, csk_home, marker_path, marker, monkeypatch)
-            real_gate = installer.audit_pipeline.gate_plans
+            build_events_before = len(events)
+            trace: set[str] = set()
+            trust_gates: set[str] = set()
+            planner_events: set[str] = set()
+            real_closure = installer.closure.build_closure
+            real_topological_order = installer.closure._topological_order
+            real_freeze = build_source.freeze_snapshot
+            real_audit = audit_pipeline.audit_plans
+            real_registry = installer._check_audit_registries
+            real_moved = installer._moved_tag_warnings
+            real_plan_builds = planner.plan_builds
+            real_build = go_v1.build
+            real_private = installer._build_private_misses
             real_publish = installer._publish_planned_builds
-            real_commit = installer._commit_materialization
+            real_commit_targets = installer._commit_transaction_targets
+            real_engine_factory = installer._transaction_engine
 
-            def gate(*args: object, **kwargs: object) -> object:
-                pipeline_trace.extend(
-                    [
-                        "complete-snapshot-validation",
-                        "static-context-exclusion",
-                        "build-source-identity",
-                        "provider-first-closure",
-                        "source-audit",
-                        "registry-and-attestation-gates",
-                    ]
-                )
-                return real_gate(*args, **kwargs)
+            def observed_closure(*args: Any, **kwargs: Any) -> Any:
+                nodes = real_closure(*args, **kwargs)
+                if nodes and all(
+                    node.snapshot.is_dir()
+                    and node.spec.schema_version >= 1
+                    for node in nodes
+                ):
+                    trace.add("complete-snapshot-validation")
+                return nodes
 
-            def publish(*args: object, **kwargs: object) -> object:
-                pipeline_trace.extend(
-                    [
-                        "fixed-toolchain-and-process-graph",
-                        "operation-private-build",
-                        "protected-publication",
-                    ]
-                )
-                return real_publish(*args, **kwargs)
+            def observed_topological_order(*args: Any, **kwargs: Any) -> Any:
+                nodes = real_topological_order(*args, **kwargs)
+                if nodes:
+                    trace.add("provider-first-closure")
+                return nodes
 
-            def commit(*args: object, **kwargs: object) -> object:
-                value = real_commit(*args, **kwargs)
-                pipeline_trace.append("journaled-commit")
+            def observed_freeze(*args: Any, **kwargs: Any) -> Any:
+                frozen = real_freeze(*args, **kwargs)
+                if (
+                    frozen.identity.algorithm
+                    and frozen.identity.content_sha256.startswith("sha256:")
+                ):
+                    trace.add("build-source-identity")
+                return frozen
+
+            def observed_audit(*args: Any, **kwargs: Any) -> Any:
+                reports = real_audit(*args, **kwargs)
+                if reports:
+                    trace.add("source-audit")
+                return reports
+
+            def observed_registry(*args: Any, **kwargs: Any) -> Any:
+                value = real_registry(*args, **kwargs)
+                trust_gates.add("registry")
                 return value
 
-            monkeypatch.setattr(installer.audit_pipeline, "gate_plans", gate)
-            monkeypatch.setattr(installer, "_publish_planned_builds", publish)
-            monkeypatch.setattr(installer, "_commit_materialization", commit)
+            def observed_moved_tags(*args: Any, **kwargs: Any) -> Any:
+                value = real_moved(*args, **kwargs)
+                trust_gates.add("attestation")
+                return value
+
+            def observed_plan_builds(*args: Any, **kwargs: Any) -> Any:
+                plans = real_plan_builds(*args, **kwargs)
+                if plans:
+                    planner_events.add("plan")
+                return plans
+
+            def observed_build(*args: Any, **kwargs: Any) -> Any:
+                value = real_build(*args, **kwargs)
+                planner_events.add("build")
+                return value
+
+            def observed_private(*args: Any, **kwargs: Any) -> Any:
+                publications = real_private(*args, **kwargs)
+                if publications and all(
+                    publication.artifact_source.exists()
+                    and not publication.artifact_source.resolve().is_relative_to(
+                        csk_home.resolve()
+                    )
+                    and not publication.artifact_source.resolve().is_relative_to(
+                        project.resolve()
+                    )
+                    for publication in publications.values()
+                ):
+                    trace.add("operation-private-build")
+                return publications
+
+            def observed_publish(*args: Any, **kwargs: Any) -> Any:
+                value = real_publish(*args, **kwargs)
+                if value and locking._STATE.home is not None:
+                    trace.add("protected-publication")
+                return value
+
+            def observed_commit_targets(*args: Any, **kwargs: Any) -> Any:
+                value = real_commit_targets(*args, **kwargs)
+                if locking._STATE.home is not None:
+                    trace.add("journaled-commit")
+                return value
+
+            class ObservedEngine:
+                def __init__(self, home_path: Path):
+                    self._engine = real_engine_factory(home_path)
+
+                def recover(self, *args: Any, **kwargs: Any) -> Any:
+                    return self._engine.recover(*args, **kwargs)
+
+                def prepare(self, *args: Any, **kwargs: Any) -> Any:
+                    return self._engine.prepare(*args, **kwargs)
+
+                def commit(self, *args: Any, **kwargs: Any) -> Any:
+                    value = self._engine.commit(*args, **kwargs)
+                    trace.add("journaled-commit")
+                    return value
+
+            monkeypatch.setattr(installer.closure, "build_closure", observed_closure)
+            monkeypatch.setattr(
+                installer.closure,
+                "_topological_order",
+                observed_topological_order,
+            )
+            monkeypatch.setattr(build_source, "freeze_snapshot", observed_freeze)
+            monkeypatch.setattr(audit_pipeline, "audit_plans", observed_audit)
+            monkeypatch.setattr(installer, "_check_audit_registries", observed_registry)
+            monkeypatch.setattr(installer, "_moved_tag_warnings", observed_moved_tags)
+            monkeypatch.setattr(planner, "plan_builds", observed_plan_builds)
+            monkeypatch.setattr(go_v1, "build", observed_build)
+            monkeypatch.setattr(installer, "_build_private_misses", observed_private)
+            monkeypatch.setattr(installer, "_publish_planned_builds", observed_publish)
+            monkeypatch.setattr(
+                installer,
+                "_commit_transaction_targets",
+                observed_commit_targets,
+            )
+            monkeypatch.setattr(installer, "_transaction_engine", ObservedEngine)
             repaired = installer.install(cfg)[0]
-            if not repaired.errors and len(events) >= 2 and _build_row(cfg)[0].clean:
+            project_status, build_status = _build_row(cfg)
+            build_occurred = len(events) > build_events_before
+            context_build_root = (
+                project / ".agents" / "skills" / "build-skill" / "build"
+            )
+            if not context_build_root.exists():
+                trace.add("static-context-exclusion")
+            if trust_gates == {"registry", "attestation"}:
+                trace.add("registry-and-attestation-gates")
+            if planner_events == {"plan", "build"}:
+                trace.add("fixed-toolchain-and-process-graph")
+            pipeline_traces[condition] = trace
+            condition_rebuilt = (
+                not repaired.errors
+                and build_occurred
+                and project_status.clean
+                and build_status.current
+                and all(label in trace for label in _REPAIR_PIPELINE)
+            )
+            if condition_rebuilt:
                 rebuilt.append(condition)
+
+            shortcut_evidence["adopt-candidate"] &= (
+                build_occurred and "operation-private-build" in trace
+            )
+            shortcut_evidence["recalculate-marker-only"] &= (
+                build_occurred and "journaled-commit" in trace
+            )
+            if condition == "untrusted-boundary":
+                shortcut_evidence["chmod-then-adopt"] &= (
+                    build_occurred
+                    and "operation-private-build" in trace
+                    and "protected-publication" in trace
+                    and build_status.current
+                )
+            if condition == "corrupt":
+                shortcut_evidence["trust-self-consistent-receipt"] &= (
+                    build_occurred
+                    and "operation-private-build" in trace
+                    and "protected-publication" in trace
+                    and build_status.current
+                )
         _make_tree_writable(case_root)
 
-    normalized_pipeline = []
-    for label in _REPAIR_PIPELINE:
-        if label in pipeline_trace:
-            normalized_pipeline.append(label)
+    normalized_pipeline = [
+        label
+        for label in _REPAIR_PIPELINE
+        if all(
+            label in pipeline_traces.get(condition, set())
+            for condition in repair_conditions
+        )
+    ]
     observed["repair-rebuilds-invalid-compiled-entry"] = {
         "cache_key": identities["cache_key"],
         "forbidden_shortcuts": [
-            "adopt-candidate",
-            "chmod-then-adopt",
-            "recalculate-marker-only",
-            "trust-self-consistent-receipt",
-        ] if rebuilt == repair_conditions else [],
+            label
+            for label in (
+                "adopt-candidate",
+                "chmod-then-adopt",
+                "recalculate-marker-only",
+                "trust-self-consistent-receipt",
+            )
+            if shortcut_evidence[label]
+        ],
         "independent_conditions": rebuilt,
         "name": "repair-rebuilds-invalid-compiled-entry",
         "required_pipeline": normalized_pipeline,

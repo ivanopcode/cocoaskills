@@ -25,11 +25,13 @@ from csk import (
     identifiers,
     install_marker,
     installer,
+    locking,
     manifest,
     protocol_json,
     skillspec,
     whitelist,
 )
+from csk.audit import pipeline as audit_pipeline
 from csk.builds import metadata
 from csk.builds import go_v1
 from csk.config import RegistryConfig
@@ -48,6 +50,7 @@ from protocol_conformance_adapters import (
 )
 from protocol_lifecycle_observations import (
     clear_manager_lifecycle_observation_cache,
+    observe_manager_lifecycle_case,
 )
 
 
@@ -1003,6 +1006,130 @@ def test_rc6_lifecycle_binding_follows_cocoaskills_ordering_seam(
                 case,
                 MANAGER_LIFECYCLE_VECTORS,
             )
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def _lifecycle_case(cluster: str, name: str) -> dict[str, Any]:
+    return deepcopy(
+        next(
+            item
+            for item in MANAGER_LIFECYCLE_VECTORS[cluster]
+            if item["name"] == name
+        )
+    )
+
+
+def _assert_sabotaged_lifecycle_case_differs(
+    cluster: str,
+    name: str,
+) -> None:
+    case = _lifecycle_case(cluster, name)
+    fixture = MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"]
+    observed = observe_manager_lifecycle_case(name, fixture)
+    assert observed != case
+    with pytest.raises(AssertionError):
+        assert_manager_lifecycle_case(
+            cluster,
+            case,
+            MANAGER_LIFECYCLE_VECTORS,
+        )
+
+
+def test_rc6_planning_binding_detects_omitted_skill_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def omit_validation(*_args: object, **_kwargs: object) -> list[object]:
+        nonlocal calls
+        calls += 1
+        return []
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(installer, "_validate_skills", omit_validation)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "planning_cases",
+            "all-source-and-trust-gates-before-build",
+        )
+        assert calls > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_private_failure_binding_detects_transient_home_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    original = installer._build_private_misses
+
+    def acquire_transient_home_lock(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        config_value = args[0]
+        plans = args[3]
+        commands = {plan.command for plan in plans}
+        if commands == {"golden-tool", "second-tool"}:
+            calls += 1
+            with locking.ManagerHomeLock(config_value.path.parent):
+                pass
+        return original(*args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_build_private_misses",
+        acquire_transient_home_lock,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "private_build_cases",
+            "second-build-failure-preserves-persistent-state",
+        )
+        assert calls >= 2
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_repair_binding_detects_omitted_audit_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def omit_audit(*_args: object, **_kwargs: object) -> audit_pipeline.GateResult:
+        nonlocal calls
+        calls += 1
+        return audit_pipeline.GateResult(reports=())
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(installer.audit_pipeline, "gate_plans", omit_audit)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "repair_cases",
+            "repair-rebuilds-invalid-compiled-entry",
+        )
+        assert calls > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_recovery_binding_detects_omitted_generation_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def omit_guard(*_args: object, **_kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(installer, "_assert_generation_current", omit_guard)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "recovery_cases",
+            "install-recovery-runs-after-private-builds",
+        )
+        assert calls > 0
     finally:
         clear_manager_lifecycle_observation_cache()
 
