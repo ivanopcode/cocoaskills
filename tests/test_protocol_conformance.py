@@ -5,9 +5,12 @@ import base64
 import hashlib
 import json
 import os
+import re
+import shutil
 import stat
 import subprocess
 import sys
+import threading
 import urllib.request
 from copy import deepcopy
 from dataclasses import replace
@@ -34,6 +37,7 @@ from csk import (
     manifest,
     protocol_json,
     skillspec,
+    status as status_mod,
     transactions,
     whitelist,
 )
@@ -1383,7 +1387,7 @@ def test_rc6_gc_binding_detects_guardless_collection(
             "gc_cases",
             "locked-mark-and-sweep-compiled-cache",
         )
-        assert scanned_without_lock == 4
+        assert scanned_without_lock == 5
     finally:
         clear_manager_lifecycle_observation_cache()
 
@@ -1562,6 +1566,295 @@ def test_rc6_recovery_binding_detects_same_basename_wrong_owner(
             "interrupted-global-journal-recovered-by-transaction-id",
         )
         assert rewrites > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="the transient live-entry sabotage targets the POSIX rename seam",
+)
+def test_rc6_publication_binding_detects_transient_partial_live_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from csk.builds import cache_posix
+
+    exposures = 0
+    original = cache_posix._rename_noreplace
+
+    def expose_partial_then_rename(
+        source_dir_fd: int,
+        source_name: str,
+        destination_dir_fd: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal exposures
+        if re.fullmatch(r"[0-9a-f]{64}", destination_name):
+            os.mkdir(destination_name, mode=0o700, dir_fd=destination_dir_fd)
+            entry_fd = os.open(
+                destination_name,
+                os.O_RDONLY | os.O_DIRECTORY,
+                dir_fd=destination_dir_fd,
+            )
+            try:
+                partial_fd = os.open(
+                    "partial",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=entry_fd,
+                )
+                os.close(partial_fd)
+                exposures += 1
+                os.unlink("partial", dir_fd=entry_fd)
+            finally:
+                os.close(entry_fd)
+            os.rmdir(destination_name, dir_fd=destination_dir_fd)
+        original(
+            source_dir_fd,
+            source_name,
+            destination_dir_fd,
+            destination_name,
+        )
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        cache_posix,
+        "_rename_noreplace",
+        expose_partial_then_rename,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert exposures > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_cross_project_binding_detects_globally_serialized_private_builds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    active = 0
+    maximum = 0
+    serial = threading.Lock()
+    original = installer._build_private_misses
+
+    def globally_serialized_private_builds(*args: Any, **kwargs: Any) -> Any:
+        nonlocal active, calls, maximum
+        with serial:
+            calls += 1
+            active += 1
+            maximum = max(maximum, active)
+            try:
+                return original(*args, **kwargs)
+            finally:
+                active -= 1
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_build_private_misses",
+        globally_serialized_private_builds,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cross_project_cases",
+            "two-project-success-preserves-both-consumers",
+        )
+        assert calls > 0
+        assert maximum == 1
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_gc_binding_detects_ignored_registered_consumers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    original = gc._load_consumers_strict
+
+    def ignore_after_initial_gc(home: Path) -> list[Path]:
+        nonlocal calls
+        calls += 1
+        return original(home) if calls == 1 else []
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(gc, "_load_consumers_strict", ignore_after_initial_gc)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "gc_cases",
+            "locked-mark-and-sweep-compiled-cache",
+        )
+        assert calls > 1
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_recovery_binding_detects_missing_target_backup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    removed: list[Path] = []
+    original = transactions.TransactionEngine.commit
+
+    def drop_restored_backup(
+        engine: transactions.TransactionEngine,
+        lock: Any,
+        transaction_id: str,
+    ) -> None:
+        try:
+            original(engine, lock, transaction_id)
+        except BaseException:
+            if transaction_id == "transaction-global-17":
+                journal_path = engine.journal_root / f"{transaction_id}.json"
+                raw = json.loads(journal_path.read_text(encoding="utf-8"))
+                target = next(
+                    item
+                    for item in raw["targets"]
+                    if item["identifier"] == "machine"
+                )
+                backup = Path(target["backup_path"])
+                if backup.is_dir() and not backup.is_symlink():
+                    shutil.rmtree(backup)
+                elif backup.exists() or backup.is_symlink():
+                    backup.unlink()
+                removed.append(backup)
+            raise
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        transactions.TransactionEngine,
+        "commit",
+        drop_restored_backup,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "recovery_cases",
+            "interrupted-global-journal-recovered-by-transaction-id",
+        )
+        assert len(removed) == 1
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="the untrusted protected fixture is an executable POSIX artifact",
+)
+def test_rc6_repair_binding_detects_untrusted_artifact_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executed: list[tuple[Path, int]] = []
+    original = installer._build_private_misses
+
+    def execute_untrusted_before_rebuild(*args: Any, **kwargs: Any) -> Any:
+        cfg = args[0]
+        home = cfg.path.parent
+        if "status-repair/repair/04-untrusted-boundary" in home.as_posix():
+            artifacts = sorted((home / "builds" / "go-v1").glob("*/bin/*"))
+            for artifact in artifacts:
+                completed = subprocess.run(
+                    [artifact],
+                    check=False,
+                    capture_output=True,
+                )
+                executed.append((artifact, completed.returncode))
+        return original(*args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_build_private_misses",
+        execute_untrusted_before_rebuild,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "repair_cases",
+            "repair-rebuilds-invalid-compiled-entry",
+        )
+        assert executed
+        assert all(returncode == 0 for _path, returncode in executed)
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_currentness_binding_detects_transient_permission_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repairs: list[Path] = []
+    original = status_mod._collect_resolved_scope
+
+    def transient_permission_repair(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        home = config_value.path.parent
+        home_text = home.as_posix()
+        if (
+            "status-repair/current/home" in home_text
+            or "status-repair/matrix/" in home_text
+        ):
+            for entry in sorted((home / "builds" / "go-v1").glob("*")):
+                mode = stat.S_IMODE(entry.lstat().st_mode)
+                entry.chmod(mode | stat.S_IWUSR)
+                entry.chmod(mode)
+                repairs.append(entry)
+        return original(config_value, *args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        status_mod,
+        "_collect_resolved_scope",
+        transient_permission_repair,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "status_cases",
+            "compiled-installation-current",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "status_cases",
+            "compiled-currentness-failure-matrix",
+        )
+        assert len(repairs) >= 15
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_transaction_binding_detects_post_restore_corruption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    corruptions: list[str] = []
+    original = transactions.TransactionEngine._rollback_target
+
+    def corrupt_after_restore(
+        engine: transactions.TransactionEngine,
+        journal: transactions.Journal,
+        target: transactions.JournalTarget,
+    ) -> None:
+        original(engine, journal, target)
+        if journal.transaction_id == "txn-observed-rollback":
+            live = Path(target.live_path)
+            live.write_text(
+                f"corrupted-after-restore:{target.identifier}",
+                encoding="utf-8",
+            )
+            corruptions.append(target.identifier)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        transactions.TransactionEngine,
+        "_rollback_target",
+        corrupt_after_restore,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "transaction_cases",
+            "reverse-rollback-under-home-lock",
+        )
+        assert len(corruptions) == 6
     finally:
         clear_manager_lifecycle_observation_cache()
 

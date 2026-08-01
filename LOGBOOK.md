@@ -9,14 +9,10 @@ currentness/status, recovery/repair, launcher, GC, bootstrap, and upgrade
 seams, then compares the complete observed objects with the authenticated
 candidate vector. The 378-leaf mutation test proves expectation-side equality
 sensitivity; it does not by itself prove product-seam sensitivity. A fail-closed
-field classification plus the initial seven independent sabotage tests make omitted
-skill validation, transient private-build home locking, omitted repair audit,
-omitted generation-current enforcement, private-artifact execution, guardless
-GC, and first-journal-only recovery change the observed result. Named dry-run,
-GC, status, recovery, private-build, cross-project, and repair fields are
-individually backed by mutation traps, per-call lock witnesses, exact journal
-resume inventories, state transitions, or concurrent handoff traces instead of
-aggregate success literals.
+field classification plus the initial seven independent sabotage tests make
+omitted skill validation, transient private-build home locking, omitted repair
+audit, omitted generation-current enforcement, private-artifact execution,
+guardless GC, and first-journal-only recovery change the observed result.
 
 The cycle-4 review found three remaining lossy projections adjacent to those
 seams. Process observation now scans every argv element through both `run` and
@@ -28,9 +24,30 @@ derives the cache key from restored state, and labels the triggering project
 only from the exact lock identity. Filesystem basenames and directory-name sets
 are no longer used as lifecycle answers. The private-build persistent generation
 is read from state rather than repeated as a literal, and transaction lock/order
-labels are projected only after exact identity/order checks. Ten product-seam
-sabotage probes plus fail-closed literal/proxy classification now cover these
-properties while the 378-leaf expectation mutation audit remains exhaustive.
+labels are projected only after exact identity/order checks. The first ten
+product-seam sabotage probes plus fail-closed literal/proxy classification now
+cover these properties while the 378-leaf expectation mutation audit remains
+exhaustive.
+
+Cycle-5 review exposed seven more causal gaps. Atomic publication now observes
+the exact live cache destination and rejects any partial destination created
+before the platform no-replace primitive. The cross-project case drives two
+real private-build calls concurrently, compares their shared `BuildInput` and
+derived cache key, and proves both private phases precede the publish handoff.
+GC tests the consumer registry as an independent mark root rather than letting
+a configured-project marker mask it. Recovery verifies every primary target's
+exact class, identifier, live path, backup path, retained backup digest, and
+preimage digest before recovery begins.
+
+Repair observes protected candidate execution at process boundaries and rejects
+candidate adoption, in-place permission changes, and self-consistent receipt
+trust unless a fresh private build follows the full gate/publish/commit
+pipeline. Both clean status and every currentness-matrix row record transient
+persistent mutation attempts even when bytes and modes are restored before the
+call returns. Rollback compares the exact bytes and mode of every live target
+with its pre-commit tree state after reverse-order restoration. Seven exact
+reviewer sabotages pin those properties, bringing the independent sabotage
+total to seventeen without weakening the exhaustive 378-leaf audit.
 
 Binding the vector revealed three product mismatches. Project and global
 install ran recovery before private builds despite the publication-phase-only
