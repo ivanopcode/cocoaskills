@@ -76,12 +76,12 @@ def _canonical_sha256(value: Any) -> str:
     return "sha256:" + hashlib.sha256(protocol_json.canonical_bytes(value)).hexdigest()
 
 
-def test_rc5_candidate_manifest_digest_is_pinned_as_non_release_evidence() -> None:
+def test_rc6_candidate_manifest_digest_is_pinned_as_non_release_evidence() -> None:
     manifest = (_root() / "manifest.json").read_bytes()
     assert "sha256:" + hashlib.sha256(manifest).hexdigest() == EXPECTED_MANIFEST_SHA256
 
 
-def test_go_v1_input_and_receipt_match_caller_supplied_rc5_bytes() -> None:
+def test_go_v1_input_and_receipt_match_caller_supplied_rc6_candidate_bytes() -> None:
     expected_dir = _root() / "expected" / "build-driver"
     vector = _json("vectors/build-drivers.json")["portable_identity"]
     input_raw = (expected_dir / "build-input.ccj.json").read_bytes()
@@ -179,7 +179,7 @@ RECEIPT_INVALID_CASES = (
 
 
 @pytest.mark.parametrize("case_name", RECEIPT_INVALID_CASES)
-def test_all_rc5_build_receipt_schema_negatives_are_rejected(case_name: str) -> None:
+def test_all_rc6_build_receipt_schema_negatives_are_rejected(case_name: str) -> None:
     payload = _json(f"schema-cases/build-receipt-v1/{case_name}")
     with pytest.raises(BuildMetadataError):
         parse_receipt(payload)
@@ -411,7 +411,9 @@ MARKER_INVALID_CASES = (
 
 
 @pytest.mark.parametrize("case_name", MARKER_V1_VALID_CASES)
-def test_rc5_marker_v1_remains_readable_for_pre_v6_installs(case_name: str) -> None:
+def test_rc6_candidate_marker_v1_remains_readable_for_pre_v6_installs(
+    case_name: str,
+) -> None:
     raw = (_root() / "schema-cases" / "install-marker-v1" / case_name).read_bytes()
     marker = install_marker.read_install_marker(raw)
 
@@ -425,7 +427,7 @@ def test_rc5_marker_v1_remains_readable_for_pre_v6_installs(case_name: str) -> N
 
 
 @pytest.mark.parametrize("case_name", MARKER_V2_VALID_CASES)
-def test_all_rc5_marker_v2_schema_positives_are_typed(case_name: str) -> None:
+def test_all_rc6_marker_v2_schema_positives_are_typed(case_name: str) -> None:
     raw = (_root() / "schema-cases" / "install-marker-v2" / case_name).read_bytes()
     marker = install_marker.read_install_marker(raw)
 
@@ -438,7 +440,7 @@ def test_all_rc5_marker_v2_schema_positives_are_typed(case_name: str) -> None:
 
 
 @pytest.mark.parametrize(("schema", "case_name"), MARKER_INVALID_CASES)
-def test_all_rc5_marker_v1_and_v2_schema_negatives_are_rejected(
+def test_all_rc6_marker_v1_and_v2_schema_negatives_are_rejected(
     schema: str,
     case_name: str,
 ) -> None:

@@ -367,3 +367,23 @@ that replacement state is never deleted.
 Runtime orphan cleanup recognizes only the manager-owned legacy and indexed
 temporary/backup names and indexed stale names. PID liveness remains the sweep
 gate; malformed, leading-zero, or unrelated dotfile names are retained.
+
+## 2026-08-01 — TASK-260720-12r55p rc.6 candidate consumption
+
+The Python conformance harness now consumes the reviewed protocol 1.0.0-rc.6
+candidate at curator-spec commit
+`432eb2ee1fe2d6b271e37269f867c8851c325539`, manifest
+`sha256:12e58b82579645ba1ccafba49d3e2dd3216005ddf37ae63c68a9fafd46773071`,
+exclusively through `CURATOR_CONFORMANCE_ROOT`. Data-driven adapters route the
+schema-v6, local go-v1, portable execution-policy, cache/identity, and
+manager-lifecycle vectors through CocoaSkills validators where the candidate
+publishes executable inputs; declarative cases are asserted independently and
+fail closed without copying Curator implementation code.
+
+This commit records candidate evidence only. The committed CI curator-spec ref
+remains unchanged, claim-v3 fixtures remain on protocol 1.0.0-rc.5, and no
+release pin, conformance claim, schema-v7/external-repository surface, tag, or
+GitHub Release is advanced here. The harness covers all 102 selected generated
+schema cases, 8 build-driver positives, 77 build-driver rejections, 10 build
+source cases, 12 toolchain cases, the complete policy minimum clusters, all 11
+byte-exact build-driver artifacts, and all 32 manager-lifecycle cases.
