@@ -2648,21 +2648,42 @@ def _move_handle_no_replace(
     )
     info = _FileRenameInfo.from_buffer(buffer)
     info.replace_if_exists = 0
-    info.root_directory = destination_parent.value
     info.file_name_length = len(raw_name)
     ctypes.memmove(
         ctypes.addressof(buffer) + file_name_offset,
         raw_name,
         len(raw_name),
     )
-    if _api().kernel32.SetFileInformationByHandle(
-        source.value,
-        _FILE_RENAME_INFO_CLASS,
-        ctypes.byref(buffer),
-        len(buffer),
-    ):
-        return
-    error = _last_error()
+    with _open_raw_handle(
+        destination_parent.path,
+        desired_access=_FILE_READ_ATTRIBUTES | _FILE_EXECUTE,
+        missing=_UntrustedState(
+            "cache quarantine disappeared before handle-bound rename"
+        ),
+    ) as rename_root:
+        selected_parent = _revalidate_handle(destination_parent, None)
+        if (
+            rename_root.identity != selected_parent.identity
+            or rename_root.final_path.casefold()
+            != selected_parent.final_path.casefold()
+        ):
+            raise _UntrustedState(
+                "cache quarantine changed before handle-bound rename"
+            )
+        info.root_directory = rename_root.value
+        if _api().kernel32.SetFileInformationByHandle(
+            source.value,
+            _FILE_RENAME_INFO_CLASS,
+            ctypes.byref(buffer),
+            len(buffer),
+        ):
+            _revalidate_handle(
+                rename_root,
+                None,
+                "cache quarantine rename root",
+            )
+            return
+        error = _last_error()
     if error in {_ERROR_FILE_EXISTS, _ERROR_ALREADY_EXISTS}:
         raise FileExistsError(
             errno.EEXIST,
