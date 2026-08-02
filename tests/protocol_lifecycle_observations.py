@@ -253,6 +253,23 @@ def _same_tree_across_atomic_rename(
     return True
 
 
+def _same_persistent_state_except_change_time(
+    before: dict[str, _TamperNode | None],
+    after: dict[str, _TamperNode | None],
+) -> bool:
+    """Compare status snapshots while causal mutation tracing owns writes."""
+
+    if before.keys() != after.keys():
+        return False
+    for key, before_node in before.items():
+        after_node = after[key]
+        if before_node is not None and after_node is not None:
+            before_node = replace(before_node, ctime_ns=after_node.ctime_ns)
+        if before_node != after_node:
+            return False
+    return True
+
+
 def _same_native_path_identity(first: Path, second: Path) -> bool:
     """Compare path spellings by the filesystem object they select."""
 
@@ -5239,14 +5256,15 @@ def _observe_status_and_repair(
             before = _persistent_tamper_state((project, csk_home, skills_root))
             project_status, build = _build_row(cfg)
             after = _persistent_tamper_state((project, csk_home, skills_root))
+        stable_state = _same_persistent_state_except_change_time(before, after)
         if (
             not project_status.clean
             and not build.current
-            and before == after
+            and stable_state
             and not case_persistent_mutations
         ):
             observed_conditions.append(label)
-        if before != after or case_persistent_mutations:
+        if not stable_state or case_persistent_mutations:
             matrix_mutations.append(label)
         _make_tree_writable(case_root)
 

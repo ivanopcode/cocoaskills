@@ -3394,13 +3394,12 @@ def test_rc6_publication_binding_detects_native_loader_fchmod_restore(
     os.name != "nt",
     reason="MoveFileExW supplies the Windows no-replace native callable",
 )
-def test_rc6_publication_binding_detects_windows_native_api_chmod_restore(
+def test_rc6_publication_binding_detects_windows_native_api_dacl_restore(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from csk.builds import cache_windows
 
     real_api = cache_windows._api
-    captured_chmod = os.chmod
     mutations = 0
 
     class MutatingMoveFileEx:
@@ -3413,12 +3412,22 @@ def test_rc6_publication_binding_detects_windows_native_api_chmod_restore(
             if result:
                 destination_path = Path(os.fsdecode(destination))
                 if re.fullmatch(r"[0-9a-f]{64}", destination_path.name):
-                    original_mode = stat.S_IMODE(destination_path.stat().st_mode)
-                    captured_chmod(
+                    with cache_windows._open_raw_handle(
                         destination_path,
-                        original_mode ^ stat.S_IWRITE,
-                    )
-                    captured_chmod(destination_path, original_mode)
+                        desired_access=(
+                            cache_windows._READ_CONTROL
+                            | cache_windows._WRITE_DAC
+                            | cache_windows._FILE_READ_ATTRIBUTES
+                        ),
+                    ) as destination_handle:
+                        cache_windows._apply_profile_dacl(
+                            destination_handle,
+                            cache_windows._MUTABLE_DIRECTORY,
+                        )
+                        cache_windows._apply_profile_dacl(
+                            destination_handle,
+                            cache_windows._SEALED_DIRECTORY,
+                        )
                     mutations += 1
             return result
 
@@ -3718,6 +3727,10 @@ def test_rc6_persistent_tamper_witness_survives_exact_restoration(
     assert restored.st_mtime_ns == original.st_mtime_ns
     assert restored.st_ctime_ns != original.st_ctime_ns
     assert after != before
+    assert lifecycle_observations._same_persistent_state_except_change_time(
+        before,
+        after,
+    )
 
 
 @pytest.mark.parametrize("sabotage", ["zero-fetch", "duplicate-fetch"])

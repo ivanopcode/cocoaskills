@@ -750,6 +750,17 @@ for ordinary Windows files and directories. Reparse points retain the portable
 candidate-root conformance file are green locally. No product behavior,
 release pin, tag, claim, schema, or workflow pin changed.
 
+The next exact-head Windows run showed two remaining evidence-boundary defects.
+The Windows publication sabotage still toggled the read-only attribute even
+though the observer had moved to native DACL/change-time evidence, and the
+status matrix treated change-time drift as a second mutation signal despite
+already owning a causal write observer. The sabotage now drifts and restores
+the real sealed-directory DACL. Status snapshots compare every persistent
+field except change time and still require zero traced mutation operations;
+publication and rollback witnesses continue to use native change time. This
+keeps status reads non-mutating without weakening byte, identity, mode, DACL,
+or explicit-write coverage.
+
 The next exact-head Windows matrix completed its full two-hour native lifecycle
 path and exposed one remaining direct timestamp call in the GC fixture. The
 entry-aging step still required `os.utime(..., follow_symlinks=False)`, so its
