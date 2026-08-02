@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 from pathlib import Path
+from typing import Callable
 
 import pytest
 from conftest import make_config, make_project, make_skill_repo, write_skillfile
@@ -49,12 +50,17 @@ def _installed_build(
     tmp_path: Path,
     skills_root: Path,
     csk_home: Path,
+    *,
+    command: str = "tool",
+    install_pipeline: (
+        Callable[[pytest.MonkeyPatch, list[str]], None] | None
+    ) = None,
 ) -> tuple[Path, object, list[str], Path, dict[str, object]]:
     project = make_project(tmp_path)
     make_skill_repo(
         skills_root,
         "build-skill",
-        _build_skill_files("tool"),
+        _build_skill_files(command),
         tag="v1",
     )
     write_skillfile(
@@ -66,7 +72,10 @@ def _installed_build(
     )
     config = make_config(csk_home, skills_root, project)
     events: list[str] = []
-    _install_fake_build_pipeline(monkeypatch, events=events)
+    if install_pipeline is None:
+        _install_fake_build_pipeline(monkeypatch, events=events)
+    else:
+        install_pipeline(monkeypatch, events)
     _fixed_evidence(monkeypatch)
     result = installer.install(config)[0]
     assert not result.errors
@@ -320,6 +329,39 @@ def test_context_leak_and_raw_snapshot_drift_are_non_current(
     assert build.label == "build-source-drift"
     assert "validated raw snapshot" in build.detail
     assert project_status.path == project
+
+
+@POSIX_BUILD_VECTOR
+def test_runtime_build_root_exposure_is_non_current(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+) -> None:
+    _project, config, _events, _marker_path, marker = _installed_build(
+        monkeypatch,
+        tmp_path,
+        skills_root,
+        csk_home,
+    )
+    runtime_build = (
+        csk_home
+        / "runtime"
+        / "build-skill"
+        / str(marker["commit"])
+        / "build"
+    )
+    runtime_build.mkdir(parents=True)
+    (runtime_build / "leak.go").write_text(
+        "package main\n",
+        encoding="utf-8",
+    )
+
+    project_status, build = _build_row(config)
+
+    assert not project_status.clean
+    assert build.label == "build-runtime-exposed"
+    assert "runtime exposes a declared build root" in build.detail
 
 
 def _different_toolchain(

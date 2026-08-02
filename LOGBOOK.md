@@ -1,5 +1,93 @@
 # Logbook
 
+## 2026-08-01 — BUG-260801-1iu1ln observed rc.6 lifecycle bindings
+
+The cycle-2 scalar audit exposed 104 lifecycle mutations that survived the
+declarative adapter. The replacement binding reconstructs all 32 lifecycle
+cases from CocoaSkills cache, transaction, locking, installer/planner,
+currentness/status, recovery/repair, launcher, GC, bootstrap, and upgrade
+seams, then compares the complete observed objects with the authenticated
+candidate vector. The 378-leaf mutation test proves expectation-side equality
+sensitivity; it does not by itself prove product-seam sensitivity. A fail-closed
+field classification plus the initial seven independent sabotage tests make
+omitted skill validation, transient private-build home locking, omitted repair
+audit, omitted generation-current enforcement, private-artifact execution,
+guardless GC, and first-journal-only recovery change the observed result.
+
+The cycle-4 review found three remaining lossy projections adjacent to those
+seams. Process observation now scans every argv element through both `run` and
+`Popen`, so a protected GC artifact invoked through an interpreter is visible.
+GC adoption evidence compares the complete rejected-entry tree and records
+in-place permission repair attempts even when the original mode is restored.
+Recovery binds each transaction ID to its exact canonical project identity,
+derives the cache key from restored state, and labels the triggering project
+only from the exact lock identity. Filesystem basenames and directory-name sets
+are no longer used as lifecycle answers. The private-build persistent generation
+is read from state rather than repeated as a literal, and transaction lock/order
+labels are projected only after exact identity/order checks. The first ten
+product-seam sabotage probes plus fail-closed literal/proxy classification now
+cover these properties while the 378-leaf expectation mutation audit remains
+exhaustive.
+
+Cycle-5 review exposed seven more causal gaps. Atomic publication observes the
+exact live cache destination around the platform no-replace primitive. The
+cross-project case drives two private-build calls concurrently and compares
+their shared `BuildInput` and derived cache key before the publish handoff.
+GC tests the consumer registry as an independent mark root rather than letting
+a configured-project marker mask it. Recovery verifies every primary target's
+exact class, identifier, live path, backup path, retained backup digest, and
+preimage digest before recovery begins.
+
+Repair observes protected candidate execution at process boundaries and rejects
+candidate adoption, in-place permission changes, and self-consistent receipt
+trust unless a fresh private build follows the full gate/publish/commit
+pipeline. Both clean status and every currentness-matrix row record transient
+persistent mutation attempts even when bytes and modes are restored before the
+call returns. Rollback compares the exact bytes and mode of every live target
+with its pre-commit tree state after reverse-order restoration. Seven exact
+reviewer sabotages pin those properties, bringing the independent sabotage
+total to seventeen without weakening the exhaustive 378-leaf audit.
+
+Cycle-6 review found that those claims still exceeded the observed boundary.
+The cross-project case now drives two real installs all the way through
+successful cache publication and materialization commit, reads both consumer
+records and the shared protected cache entry from that same run, and tolerates
+the normal optimistic-generation retry without replacing it with a synthetic
+consumer transaction. Distinct first cache-key builds prove private work can
+overlap while the actual publish and commit calls prove manager-home
+serialization and exact project order.
+
+Normative cache keys and receipt hashes are no longer returned from the
+authenticated fixture as scenario answers. Publication, cross-project success
+and rollback, dry-run, GC, private build, status, repair, and deterministic
+transaction order derive them from their own plans, markers, protected-cache
+inspections, publications, or repaired state and compare the resulting input
+to the normative identity. One operation-side sabotage changes those seams
+while leaving the fixture untouched and makes every corresponding complete
+case differ.
+
+Process observation resolves every path-like argv element against the
+effective subprocess `cwd`, including inherited cwd. Persistent-state
+observation covers the high-level `Path` mutations and descriptor-relative
+low-level open, write, unlink/remove, mkdir/rmdir, rename/replace, link,
+symlink, truncate, timestamp, and permission families. Atomic-publication
+evidence independently observes all supported namespace operations targeting
+the exact live cache destination, including alternate `os.rename` moves on
+POSIX and Windows. The five cycle-6 regressions preserve the exact surviving
+handoff, identity, cwd-relative execution, transient low-level mutation, and
+alternate live-destination probes in addition to the earlier seventeen.
+
+Binding the vector revealed three product mismatches. Project and global
+install ran recovery before private builds despite the publication-phase-only
+ordering; those pre-build passes are removed while the existing locked recovery
+inside each materialization attempt remains. Status now treats a declared build
+root copied into commit-keyed runtime state as non-current. Global upgrade now
+passes fetch intent into closure construction, so transitive repositories are
+updated as well as direct declarations. Focused regressions cover each change.
+
+This repair changes no protocol pin, schema, tag, release, claim, or CI
+curator-spec reference.
+
 ## 2026-08-01 — TASK-260720-akf5kh schema-6 documentation boundary
 
 The documentation treats three distinctions as non-negotiable. Go 1.23 is the
@@ -423,6 +511,20 @@ declared vector target, and exposes the declared POSIX spelling only at the
 protocol-byte boundary. CocoaSkills still performs the real tree walk,
 resolution, mutation checks, framing, and digest calculation.
 
+## 2026-08-02 — TASK-260720-12r55p accepted consumer integration
+
+The independently accepted rejection binding at `7b016388` and lifecycle
+binding through `80b5b167` were integrated into the rc.6 candidate consumer.
+The shared adapter keeps the rejection implementation's exact observed product
+outcomes while routing all 32 lifecycle cases through the native observation
+harness. The combined authenticated candidate-root gate passes 1,025 tests;
+the related transaction, install, status/currentness, GC, planner, Go driver,
+toolchain, and source suites pass 496 tests. Strict mypy, package build, and
+Twine validation also pass. The candidate remains identified only by reviewed
+curator-spec commit `432eb2ee1fe2d6b271e37269f867c8851c325539` and manifest
+SHA-256 `12e58b82579645ba1ccafba49d3e2dd3216005ddf37ae63c68a9fafd46773071`;
+no workflow pin, tag, release, schema-v7 surface, or conformance claim changed.
+
 ## 2026-08-01 — BUG-260801-1xvc35 observed rejection outcomes
 
 The cycle-2 rejection audit found that a closed 77-name table was still acting
@@ -451,3 +553,123 @@ skill errors and `untrusted_go_executable` at the wrong path seam to fail, and
 require artifact-hash corruption to reach the post-mutation cache inspection.
 This change remains confined to the rc.6 rejection harness: no workflow pin,
 schema, tag, release metadata, or conformance claim is changed.
+
+## 2026-08-01 — BUG-260801-1iu1ln lifecycle trace hardening
+
+Cycle-7 review found three remaining ways that a normative lifecycle answer
+could survive without its required CocoaSkills observation. A process could
+mutate and restore a published cache descendant, a dry-run/planning/private-
+failure path could transiently write and restore a persistent surface, and the
+all-project upgrade deduplication answer could be true without fetching any
+member of the dependency closure. Dedicated sabotage tests reproduced all
+three gaps through the real transaction, installer/planner, private-build, and
+upgrade seams before the observer was changed.
+
+The shared persistent-mutation observer now resolves descriptor-relative I/O
+on Darwin with `F_GETPATH` as well as the Linux `/proc/self/fd` and portable
+`/dev/fd` forms. Publication traces cover the live entry after its atomic
+rename and reject descendant writes, truncates, fsync-backed restoration, or
+permission changes while distinguishing the single legitimate cache-root
+seal. Project and global upgrade dry-runs, every planning-gate probe, and the
+private-build failure case similarly classify any observed write as an effect
+even when the final byte snapshot is identical.
+
+All-project upgrade observation now requires the exact nonempty direct and
+transitive repository closure, once per repository, and separately excludes
+the unrelated repository. Zero-fetch and duplicate-fetch probes both fail the
+normative vector. Strengthened descriptor tracing also exposed legitimate
+permission changes while repair quarantines and replaces an invalid candidate;
+the rebuild condition therefore remains based on the observed repair pipeline,
+post-repair currentness, and absence of candidate execution, while the
+chmod-and-adopt shortcut continues to reject permission mutation.
+
+The pre-fix six-case sabotage gate exited 1 with five failures and one already-
+protected duplicate-fetch pass. After the observer changes it exited 0 with
+all six probes passing. The exact 32-case scalar-leaf/classification gate
+passes all 417 cases, including the repair refinement. No release pin,
+schema-v7 surface, tag, claim, or CI configuration changed.
+
+## 2026-08-01 — BUG-260801-1iu1ln lifecycle alias hardening
+
+Cycle-8 review demonstrated that attribute monkeypatching is not an authority
+for persistent-state immutability: `io.open` file-object writes and callables
+captured from `os` before observer installation could write, fsync, truncate,
+chmod and timestamp-restore protected files without an event. The same review
+showed that private-build failure observation omitted the project
+`Skillfile.json`. A standalone three-case pre-fix gate reproduced all three
+survivors and exited 1 with three failures.
+
+Read-only lifecycle evidence now uses a recursive tamper witness containing
+node kind, mode, device/inode identity, link count, owner, size, bytes or link
+target, `mtime_ns` and `ctime_ns`. On the supported Darwin filesystem, a direct
+probe restored bytes, mode, inode and `mtime_ns` exactly after a file-object
+write while `ctime_ns` remained changed. Atomic publication compares the
+staged and live descendant witnesses across the no-replace rename; only the
+moved root's rename-induced ctime change is allowed before its normal seal.
+This makes I/O spelling irrelevant without growing another alias patch list.
+
+The private-build failure witness is taken exactly around
+`_build_private_misses` over the complete project, config, manager-home and
+source roots. Operation-private build staging remains outside those roots, and
+stable lock records are explicitly excluded as coordination state. This phase
+boundary avoids treating earlier source snapshot creation as a failure effect.
+An idempotent `mkdir(exist_ok=True)` trace on the existing manager home also
+confirmed that attempted operations alone are not state changes; recursive
+identity/ctime equality is authoritative while operation traces continue to
+classify named effects.
+
+Post-fix, the four new alias/surface/timestamp regressions, all 32 canonical
+lifecycle cases, all 417 scalar/classification checks, and all 28 inherited
+sabotage probes pass. No product release, pin, claim, schema-v7, tag, CI,
+changelog or packaging surface changed.
+
+## 2026-08-02 — BUG-260801-1iu1ln atomic handoff boundary
+
+Cycle-8 review found that the staged-to-live tree comparison still normalized
+the moved root's final `ctime_ns` without proving which operation produced it.
+A callable captured before observer installation could therefore `fchmod` and
+restore the live root after the real no-replace rename, or rename the live name
+away and back, while the complete publication case remained normative.
+
+Publication observation now witnesses the destination immediately after the
+underlying atomic OS primitive: `renameat2`/`renameatx_np` on POSIX and
+`MoveFileExW` on Windows. The staged tree must match that raw handoff with only
+the rename-induced root ctime transition allowed, and the raw handoff must then
+match the state returned by the wrapping CocoaSkills seam exactly. This places
+captured-callable mutations on the observed side of the boundary without
+mistaking the later legitimate cache-root seal for sabotage.
+
+Dedicated root-fchmod/restore and live-name-away/restore regressions exercise
+captured callables and descriptor-relative POSIX names; the Windows regression
+uses the corresponding supported path rename form. Both new probes, the four
+cycle-8 regressions, all 32 canonical lifecycle cases, the 417-case exhaustive
+scalar/classification gate, and the full authenticated conformance module pass.
+No product, release, pin, claim, schema-v7, tag, CI, changelog or packaging
+surface changed.
+
+## 2026-08-02 — BUG-260801-1iu1ln native-callable audit boundary
+
+Cycle-9 review demonstrated that wrapping the function returned by
+`ctypes.CDLL` still sampled too late: a delegating `renameat2` or
+`renameatx_np` callable could perform the real atomic rename, use a previously
+captured `os.fchmod` to change and restore the published root, and only then
+return to the observer. The raw destination snapshot therefore remained
+normative despite two real post-handoff permission mutations.
+
+Publication observation now activates a scoped CPython audit sink only around
+`backend.publish`. CPython emits `os.chmod` audit events for descriptor-based
+`os.fchmod` even when the callable was captured before monkeypatching. The
+trusted audit paths below the live entry must exactly correspond to the
+ordinary observed root-seal trace; any additional captured permission event
+makes publication incomplete. A `ContextVar` scopes the sink to the active
+publication and a `finally` block resets it, while the process audit hook stays
+inert outside that boundary.
+
+The retained POSIX regression injects the mutating/restoring callable through
+`cache_posix.ctypes.CDLL`, one layer inside the former witness. A Windows-only
+equivalent injects through `_api().kernel32.MoveFileExW` and changes/restores
+the live directory with a captured `os.chmod`; Windows CI exercises that case,
+and non-Windows runs skip it explicitly. The new POSIX probe, the cycle-8/9
+barrier, all 32 canonical cases, all 378 scalar mutations, and the full
+authenticated module pass. No product, release, pin, claim, schema-v7, tag,
+CI, changelog or packaging surface changed.

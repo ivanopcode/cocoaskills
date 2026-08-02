@@ -486,15 +486,53 @@ def test_post_commit_gc_lock_contention_does_not_fail_committed_install(
     )
 
 
-def test_initial_transaction_recovery_error_is_reported_per_project(
+def test_transaction_recovery_waits_for_private_builds_and_reports_per_project(
     monkeypatch, tmp_path, skills_root, csk_home
 ):
     project = make_project(tmp_path)
-    write_skillfile(project, {"schema_version": 1, "skills": []})
+    make_skill_repo(
+        skills_root,
+        "compiled",
+        {
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 6,
+                    "capabilities": {},
+                    "build_roots": ["build"],
+                    "commands": {
+                        "tool": {
+                            "type": "build",
+                            "driver": "go-v1",
+                            "source_dir": "build/cmd/tool",
+                        }
+                    },
+                }
+            ),
+            "build/go.mod": "module example.com/tool\n\ngo 1.23\n",
+            "build/cmd/tool/main.go": "package main\n\nfunc main() {}\n",
+        },
+        tag="v1",
+    )
+    write_skillfile(
+        project,
+        {"schema_version": 1, "skills": [{"name": "compiled", "tag": "v1"}]},
+    )
     cfg = make_config(csk_home, skills_root, project)
+    _stub_trusted_toolchain(monkeypatch)
+    events: list[str] = []
+    real_build = go_v1.build
+
+    def observe_build(request: go_v1.BuildRequest) -> go_v1.BuildResult:
+        result = real_build(request)
+        events.append(f"build:{request.command}")
+        return result
+
+    monkeypatch.setattr(go_v1, "build", observe_build)
 
     class CorruptEngine:
-        def recover(self, _home_lock):
+        def recover(self, home_lock):
+            home_lock.assert_held()
+            assert events == ["build:tool"]
             raise installer.transactions.TransactionCorruptionError(
                 "fixture corrupt journal"
             )
@@ -509,6 +547,7 @@ def test_initial_transaction_recovery_error_is_reported_per_project(
 
     assert result.status == "failed"
     assert result.errors == ["fixture corrupt journal"]
+    assert events == ["build:tool"]
 
 
 def test_locale_fallback_warning_surfaces_when_install_is_up_to_date(tmp_path, skills_root, csk_home):

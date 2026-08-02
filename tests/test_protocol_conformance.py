@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
+import io
 import json
 import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import threading
 import urllib.request
 from copy import deepcopy
 from dataclasses import replace
@@ -33,19 +41,32 @@ from csk import (
     audit_registry,
     closure,
     config,
+    gc,
     git_ops,
+    global_install,
     hashing,
     identifiers,
     install_marker,
     installer,
+    locking,
     manifest,
     protocol_json,
     skillspec,
+    status as status_mod,
+    transactions,
     whitelist,
 )
+from csk.audit import pipeline as audit_pipeline
 from csk.builds import cache, go_v1, metadata, toolchain
 from csk.config import RegistryConfig
 from csk.source_identity import SourceIdentityError, parse_source_identity
+import protocol_lifecycle_observations as lifecycle_observations
+from protocol_lifecycle_observations import (
+    _project_identity_label,
+    _record_process_paths,
+    clear_manager_lifecycle_observation_cache,
+    observe_manager_lifecycle_case,
+)
 
 ROOT_TEXT = os.environ.get("CURATOR_CONFORMANCE_ROOT")
 pytestmark = pytest.mark.skipif(not ROOT_TEXT, reason="CURATOR_CONFORMANCE_ROOT is not set")
@@ -224,6 +245,104 @@ MANAGER_LIFECYCLE_CASES = (
     if ROOT_TEXT
     else []
 )
+
+
+def _scalar_leaf_paths(
+    value: Any,
+    path: tuple[str | int, ...] = (),
+) -> list[tuple[str | int, ...]]:
+    if isinstance(value, dict):
+        return [
+            leaf
+            for key in sorted(value)
+            for leaf in _scalar_leaf_paths(value[key], (*path, key))
+        ]
+    if isinstance(value, list):
+        return [
+            leaf
+            for index, item in enumerate(value)
+            for leaf in _scalar_leaf_paths(item, (*path, index))
+        ]
+    return [path]
+
+
+LIFECYCLE_SCALAR_MUTATIONS = [
+    (cluster, case["name"], path)
+    for cluster, case in MANAGER_LIFECYCLE_CASES
+    for path in _scalar_leaf_paths(case)
+]
+
+
+_LIFECYCLE_LITERAL_FIELD_CLASSIFICATION = {
+    (
+        "provider-first-and-lexical-command-order",
+        "ordering",
+    ): "semantic label backed by the closure order and UTF-8 command trace",
+    (
+        "successful-project-survives-other-project-rollback",
+        "failing_project",
+    ): "selected failing transaction fixture backed by its rollback trace",
+    ("project-upgrade", "scope"): "exact project-upgrade CLI branch input",
+    ("global-upgrade", "scope"): "exact global-upgrade CLI branch input",
+    (
+        "compiled-cache-miss-is-read-only",
+        "scope",
+    ): "multi-project dry-run fixture input",
+    ("selected-project-closure", "scope"): "exact project-upgrade CLI branch input",
+    (
+        "selected-project-closure",
+        "selection",
+    ): "single selected-project CLI argument",
+    ("all-projects-deduplicate", "scope"): "exact project-upgrade CLI branch input",
+    (
+        "all-projects-deduplicate",
+        "selection",
+    ): "all-projects CLI argument",
+    ("global-closure", "scope"): "exact global-upgrade CLI branch input",
+    ("global-closure", "selection"): "global-upgrade CLI argument",
+    ("missing-config-if-missing", "force"): "exact bootstrap CLI flag absence",
+    (
+        "missing-config-if-missing",
+        "if_missing",
+    ): "exact bootstrap --if-missing CLI flag",
+    ("existing-config-if-missing", "force"): "exact bootstrap CLI flag absence",
+    (
+        "existing-config-if-missing",
+        "if_missing",
+    ): "exact bootstrap --if-missing CLI flag",
+    ("if-missing-with-force", "config"): "usage-error fixture accepts either config state",
+    ("if-missing-with-force", "force"): "exact bootstrap --force CLI flag",
+    (
+        "if-missing-with-force",
+        "if_missing",
+    ): "exact bootstrap --if-missing CLI flag",
+}
+
+
+def _mutation_id(item: tuple[str, str, tuple[str | int, ...]]) -> str:
+    cluster, name, path = item
+    rendered = ".".join(str(part) for part in path)
+    return f"{cluster}:{name}:{rendered}"
+
+
+def _mutate_scalar(value: Any) -> Any:
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, int):
+        return value + 1
+    if isinstance(value, str):
+        return value + "-mutated"
+    raise AssertionError(f"unsupported lifecycle scalar leaf {value!r}")
+
+
+def _mutate_path(value: Any, path: tuple[str | int, ...]) -> None:
+    target = value
+    for part in path[:-1]:
+        target = target[part]
+    leaf = path[-1]
+    target[leaf] = _mutate_scalar(target[leaf])
+
+
 CACHE_IDENTITY_CASES = (
     [
         (name, value)
@@ -885,6 +1004,130 @@ def test_rc6_manager_lifecycle_case(
     assert_manager_lifecycle_case(cluster, case, MANAGER_LIFECYCLE_VECTORS)
 
 
+@pytest.mark.parametrize(
+    ("cluster", "case_name", "path"),
+    LIFECYCLE_SCALAR_MUTATIONS,
+    ids=[_mutation_id(item) for item in LIFECYCLE_SCALAR_MUTATIONS],
+)
+def test_rc6_every_lifecycle_scalar_leaf_is_mutation_sensitive(
+    cluster: str,
+    case_name: str,
+    path: tuple[str | int, ...],
+) -> None:
+    assert len(LIFECYCLE_SCALAR_MUTATIONS) == 378
+    case = deepcopy(
+        next(
+            item
+            for item in MANAGER_LIFECYCLE_VECTORS[cluster]
+            if item["name"] == case_name
+        )
+    )
+    _mutate_path(case, path)
+    with pytest.raises(AssertionError):
+        assert_manager_lifecycle_case(
+            cluster,
+            case,
+            MANAGER_LIFECYCLE_VECTORS,
+        )
+
+
+def test_rc6_lifecycle_literal_answers_are_explicitly_classified() -> None:
+    source = Path(__file__).with_name("protocol_lifecycle_observations.py")
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    classified: set[tuple[str, str]] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "observed"
+            and isinstance(target.slice, ast.Constant)
+            and isinstance(target.slice.value, str)
+            and isinstance(node.value, ast.Dict)
+        ):
+            continue
+        case_name = target.slice.value
+        for raw_field, expression in zip(node.value.keys, node.value.values):
+            field = ast.literal_eval(raw_field)
+            try:
+                literal = ast.literal_eval(expression)
+            except (TypeError, ValueError):
+                continue
+            if field == "name":
+                assert literal == case_name
+                continue
+            key = (case_name, field)
+            assert key in _LIFECYCLE_LITERAL_FIELD_CLASSIFICATION, (
+                f"unclassified literal lifecycle answer {case_name}.{field}"
+            )
+            classified.add(key)
+    assert classified == set(_LIFECYCLE_LITERAL_FIELD_CLASSIFICATION)
+
+
+def test_rc6_lifecycle_observer_rejects_known_lossy_proxy_forms() -> None:
+    source = Path(__file__).with_name("protocol_lifecycle_observations.py").read_text(
+        encoding="utf-8"
+    )
+    forbidden = {
+        "command[0]": "argv-element-zero-only process observation",
+        ".issubset(": "directory-name-set mutation proxy",
+        'Path(raw["project_identity"]).name': "journal-owner basename proxy",
+        "Path(lock.identity).name": "project-lock basename proxy",
+        'path.name.removeprefix("artifact-")': "private-artifact basename proxy",
+    }
+    for pattern, description in forbidden.items():
+        assert pattern not in source, description
+
+
+def test_rc6_process_path_observer_checks_every_argv_element(
+    tmp_path: Path,
+) -> None:
+    protected = tmp_path / "protected"
+    later = protected / "entry" / "bin" / "tool"
+    exact = tmp_path / "private" / "artifact"
+    observed: list[Path] = []
+
+    _record_process_paths(
+        ["/bin/sh", os.fspath(later), os.fspath(exact), "./entry/bin/tool"],
+        observed,
+        roots=(protected,),
+        exact_paths={exact},
+        cwd=protected,
+    )
+
+    assert observed == [
+        later.resolve(strict=False),
+        exact.resolve(strict=False),
+        later.resolve(strict=False),
+    ]
+
+
+def test_rc6_project_identity_label_rejects_same_basename(
+    tmp_path: Path,
+) -> None:
+    expected = tmp_path / "canonical-owner" / "global"
+    wrong = tmp_path / "wrong-owner" / "global"
+
+    assert (
+        _project_identity_label(
+            locking.canonical_project_identity(expected),
+            expected,
+            "global",
+        )
+        == "global"
+    )
+    assert (
+        _project_identity_label(
+            locking.canonical_project_identity(wrong),
+            expected,
+            "global",
+        )
+        == "unexpected"
+    )
+
+
 def test_rc6_manifest_entry_authentication_rejects_mutated_bytes(
     tmp_path: Path,
 ) -> None:
@@ -1061,6 +1304,2037 @@ def test_rc6_lifecycle_binding_rejects_unknown_fields() -> None:
             case,
             MANAGER_LIFECYCLE_VECTORS,
         )
+
+
+def test_rc6_lifecycle_binding_follows_cocoaskills_ordering_seam(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = closure._topological_order
+
+    def reverse_only_protocol_fixture(nodes: dict[str, Any]) -> list[Any]:
+        ordered = original(nodes)
+        if set(nodes) == {"app", "data-provider", "ui-provider"}:
+            return list(reversed(ordered))
+        return ordered
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(closure, "_topological_order", reverse_only_protocol_fixture)
+    case = deepcopy(MANAGER_LIFECYCLE_VECTORS["build_order_cases"][0])
+    try:
+        with pytest.raises(AssertionError):
+            assert_manager_lifecycle_case(
+                "build_order_cases",
+                case,
+                MANAGER_LIFECYCLE_VECTORS,
+            )
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def _lifecycle_case(cluster: str, name: str) -> dict[str, Any]:
+    return deepcopy(
+        next(
+            item
+            for item in MANAGER_LIFECYCLE_VECTORS[cluster]
+            if item["name"] == name
+        )
+    )
+
+
+def _assert_sabotaged_lifecycle_case_differs(
+    cluster: str,
+    name: str,
+) -> None:
+    case = _lifecycle_case(cluster, name)
+    fixture = MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"]
+    observed = observe_manager_lifecycle_case(name, fixture)
+    assert observed != case
+    with pytest.raises(AssertionError):
+        assert_manager_lifecycle_case(
+            cluster,
+            case,
+            MANAGER_LIFECYCLE_VECTORS,
+        )
+
+
+def _transient_descriptor_rewrite(path: Path, marker: bytes) -> None:
+    """Mutate persistent bytes through dir-fd I/O, then restore them exactly."""
+
+    original = path.read_bytes()
+    parent_fd = os.open(
+        path.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        descriptor = os.open(
+            path.name,
+            os.O_WRONLY | os.O_APPEND,
+            dir_fd=parent_fd,
+        )
+        try:
+            os.write(descriptor, marker)
+            os.fsync(descriptor)
+            os.ftruncate(descriptor, len(original))
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(parent_fd)
+    assert path.read_bytes() == original
+
+
+def _transient_file_object_rewrite(
+    path: Path,
+    marker: bytes,
+    *,
+    captured_fchmod: Any,
+    captured_utime: Any,
+) -> None:
+    """Restore bytes, mode and timestamps after an unpatched file-object write."""
+
+    original = path.read_bytes()
+    original_state = path.stat()
+    with io.open(path, "r+b") as stream:
+        descriptor = stream.fileno()
+        captured_fchmod(
+            descriptor,
+            stat.S_IMODE(original_state.st_mode) | stat.S_IWUSR,
+        )
+        stream.seek(0, os.SEEK_END)
+        stream.write(marker)
+        stream.flush()
+        os.fsync(descriptor)
+        stream.seek(0)
+        stream.write(original)
+        stream.truncate(len(original))
+        stream.flush()
+        os.fsync(descriptor)
+        captured_fchmod(descriptor, stat.S_IMODE(original_state.st_mode))
+    captured_utime(
+        path,
+        ns=(original_state.st_atime_ns, original_state.st_mtime_ns),
+        follow_symlinks=False,
+    )
+    restored = path.stat()
+    assert path.read_bytes() == original
+    assert stat.S_IMODE(restored.st_mode) == stat.S_IMODE(original_state.st_mode)
+    assert restored.st_mtime_ns == original_state.st_mtime_ns
+
+
+def test_rc6_planning_binding_detects_omitted_skill_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def omit_validation(*_args: object, **_kwargs: object) -> list[object]:
+        nonlocal calls
+        calls += 1
+        return []
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(installer, "_validate_skills", omit_validation)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "planning_cases",
+            "all-source-and-trust-gates-before-build",
+        )
+        assert calls > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_private_failure_binding_detects_transient_home_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    original = installer._build_private_misses
+
+    def acquire_transient_home_lock(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        config_value = args[0]
+        plans = args[3]
+        commands = {plan.command for plan in plans}
+        if commands == {"golden-tool", "second-tool"}:
+            calls += 1
+            with locking.ManagerHomeLock(config_value.path.parent):
+                pass
+        return original(*args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_build_private_misses",
+        acquire_transient_home_lock,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "private_build_cases",
+            "second-build-failure-preserves-persistent-state",
+        )
+        assert calls >= 2
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_repair_binding_detects_omitted_audit_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def omit_audit(*_args: object, **_kwargs: object) -> audit_pipeline.GateResult:
+        nonlocal calls
+        calls += 1
+        return audit_pipeline.GateResult(reports=())
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(installer.audit_pipeline, "gate_plans", omit_audit)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "repair_cases",
+            "repair-rebuilds-invalid-compiled-entry",
+        )
+        assert calls > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_recovery_binding_detects_omitted_generation_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def omit_guard(*_args: object, **_kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(installer, "_assert_generation_current", omit_guard)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "recovery_cases",
+            "install-recovery-runs-after-private-builds",
+        )
+        assert calls > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_private_build_binding_detects_artifact_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executions = 0
+    original = installer._build_private_misses
+
+    def execute_staged_artifacts(*args: Any, **kwargs: Any) -> Any:
+        nonlocal executions
+        publications = original(*args, **kwargs)
+        plans = args[3]
+        if {plan.command for plan in plans} != {"golden-tool", "second-tool"}:
+            return publications
+        for publication in publications.values():
+            artifact = publication.artifact_source
+            if os.name == "nt":
+                original_bytes = artifact.read_bytes()
+                original_mode = artifact.stat().st_mode
+                artifact.write_text("raise SystemExit(0)\n", encoding="utf-8")
+                try:
+                    completed = subprocess.run(
+                        [sys.executable, os.fspath(artifact)],
+                        check=False,
+                        capture_output=True,
+                    )
+                finally:
+                    artifact.write_bytes(original_bytes)
+                    artifact.chmod(original_mode)
+            else:
+                completed = subprocess.run(
+                    [os.fspath(artifact)],
+                    check=False,
+                    capture_output=True,
+                )
+            assert completed.returncode == 0
+            executions += 1
+        return publications
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_build_private_misses",
+        execute_staged_artifacts,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "private_build_cases",
+            "all-misses-stage-and-verify-before-home-lock",
+        )
+        assert executions == 2
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_gc_binding_detects_guardless_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scanned_without_lock = 0
+    original_collect_runtime = gc.collect_runtime
+    original_collect_locked = gc._collect_locked
+
+    class GuardlessWitness:
+        def __init__(self, csk_home: Path):
+            self.home_identity = transactions.canonical_manager_home_identity(
+                csk_home
+            )
+
+        @staticmethod
+        def assert_held() -> None:
+            return None
+
+    def collect_without_manager_lock(
+        config_value: config.GlobalConfig,
+        csk_home: Path,
+        *,
+        guard: Any | None = None,
+        now: float | None = None,
+        build_grace_seconds: float = gc.BUILD_GRACE_SECONDS,
+    ) -> gc.GcStats:
+        nonlocal scanned_without_lock
+        if guard is not None:
+            return original_collect_runtime(
+                config_value,
+                csk_home,
+                guard=guard,
+                now=now,
+                build_grace_seconds=build_grace_seconds,
+            )
+        scanned_without_lock += 1
+        return original_collect_locked(
+            config_value,
+            csk_home,
+            guard=GuardlessWitness(csk_home),
+            now=now,
+            build_grace_seconds=build_grace_seconds,
+        )
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(gc, "collect_runtime", collect_without_manager_lock)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "gc_cases",
+            "locked-mark-and-sweep-compiled-cache",
+        )
+        assert scanned_without_lock == 5
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="the later-argv protected-artifact execution probe uses /bin/sh",
+)
+def test_rc6_gc_binding_detects_artifact_execution_in_later_argv_element(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executions = 0
+    original_collect_runtime = gc.collect_runtime
+
+    def execute_protected_artifact(
+        config_value: config.GlobalConfig,
+        csk_home: Path,
+        *,
+        guard: Any | None = None,
+        now: float | None = None,
+        build_grace_seconds: float = gc.BUILD_GRACE_SECONDS,
+    ) -> gc.GcStats:
+        nonlocal executions
+        artifacts = sorted(
+            path
+            for path in (csk_home / "builds" / "go-v1").glob("*/bin/*")
+            if path.is_file()
+        )
+        for artifact in artifacts:
+            completed = subprocess.run(
+                ["/bin/sh", os.fspath(artifact)],
+                check=False,
+                capture_output=True,
+            )
+            assert completed.returncode == 0
+            executions += 1
+        return original_collect_runtime(
+            config_value,
+            csk_home,
+            guard=guard,
+            now=now,
+            build_grace_seconds=build_grace_seconds,
+        )
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(gc, "collect_runtime", execute_protected_artifact)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "gc_cases",
+            "locked-mark-and-sweep-compiled-cache",
+        )
+        assert executions > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_gc_binding_detects_in_place_permission_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repairs = 0
+    original_collect_runtime = gc.collect_runtime
+
+    def repair_then_restore_rejected_entry(
+        config_value: config.GlobalConfig,
+        csk_home: Path,
+        *,
+        guard: Any | None = None,
+        now: float | None = None,
+        build_grace_seconds: float = gc.BUILD_GRACE_SECONDS,
+    ) -> gc.GcStats:
+        nonlocal repairs
+        rejected = csk_home / "builds" / "go-v1" / ("f" * 64)
+        if rejected.is_dir():
+            original_mode = stat.S_IMODE(rejected.lstat().st_mode)
+            rejected.chmod(original_mode | stat.S_IWUSR)
+            rejected.chmod(original_mode)
+            repairs += 2
+        return original_collect_runtime(
+            config_value,
+            csk_home,
+            guard=guard,
+            now=now,
+            build_grace_seconds=build_grace_seconds,
+        )
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        gc,
+        "collect_runtime",
+        repair_then_restore_rejected_entry,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "gc_cases",
+            "locked-mark-and-sweep-compiled-cache",
+        )
+        assert repairs >= 2
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_recovery_binding_detects_first_journal_only_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inventories: list[tuple[str, ...]] = []
+
+    def recover_first_journal_only(
+        self: transactions.TransactionEngine,
+        lock: Any,
+    ) -> None:
+        transaction_ids = tuple(self._journal_ids())
+        if transaction_ids:
+            inventories.append(transaction_ids)
+            self.commit(lock, transaction_ids[0])
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        transactions.TransactionEngine,
+        "recover",
+        recover_first_journal_only,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "recovery_cases",
+            "interrupted-global-journal-recovered-by-transaction-id",
+        )
+        assert any(len(inventory) >= 2 for inventory in inventories)
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_recovery_binding_detects_same_basename_wrong_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rewrites = 0
+    original_save_journal = transactions.TransactionEngine._save_journal
+
+    def save_with_wrong_primary_owner(
+        engine: transactions.TransactionEngine,
+        journal: transactions.Journal,
+        *,
+        create: bool = False,
+    ) -> None:
+        nonlocal rewrites
+        original_save_journal(engine, journal, create=create)
+        if journal.transaction_id != "transaction-global-17":
+            return
+        if "wrong-owner" in Path(journal.project_identity).parts:
+            return
+        path = engine.journal_root / f"{journal.transaction_id}.json"
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        canonical = Path(raw["project_identity"])
+        raw["project_identity"] = os.fspath(
+            canonical.parent / "wrong-owner" / canonical.name
+        )
+        path.write_bytes(
+            json.dumps(
+                raw,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            + b"\n"
+        )
+        rewrites += 1
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        transactions.TransactionEngine,
+        "_save_journal",
+        save_with_wrong_primary_owner,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "recovery_cases",
+            "interrupted-global-journal-recovered-by-transaction-id",
+        )
+        assert rewrites > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="the transient live-entry sabotage targets the POSIX rename seam",
+)
+def test_rc6_publication_binding_detects_transient_partial_live_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from csk.builds import cache_posix
+
+    exposures = 0
+    original = cache_posix._rename_noreplace
+
+    def expose_partial_then_rename(
+        source_dir_fd: int,
+        source_name: str,
+        destination_dir_fd: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal exposures
+        if re.fullmatch(r"[0-9a-f]{64}", destination_name):
+            os.mkdir(destination_name, mode=0o700, dir_fd=destination_dir_fd)
+            entry_fd = os.open(
+                destination_name,
+                os.O_RDONLY | os.O_DIRECTORY,
+                dir_fd=destination_dir_fd,
+            )
+            try:
+                partial_fd = os.open(
+                    "partial",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=entry_fd,
+                )
+                os.close(partial_fd)
+                exposures += 1
+                os.unlink("partial", dir_fd=entry_fd)
+            finally:
+                os.close(entry_fd)
+            os.rmdir(destination_name, dir_fd=destination_dir_fd)
+        original(
+            source_dir_fd,
+            source_name,
+            destination_dir_fd,
+            destination_name,
+        )
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        cache_posix,
+        "_rename_noreplace",
+        expose_partial_then_rename,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert exposures > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_publication_binding_detects_alternate_rename_to_live_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exposures = 0
+
+    if os.name == "posix":
+        from csk.builds import cache_posix
+
+        original = cache_posix._rename_noreplace
+
+        def expose_via_rename_then_publish(
+            source_dir_fd: int,
+            source_name: str,
+            destination_dir_fd: int,
+            destination_name: str,
+        ) -> None:
+            nonlocal exposures
+            if re.fullmatch(r"[0-9a-f]{64}", destination_name):
+                partial_name = f"partial-{destination_name}"
+                os.mkdir(partial_name, mode=0o700, dir_fd=source_dir_fd)
+                partial_fd = os.open(
+                    partial_name,
+                    os.O_RDONLY | os.O_DIRECTORY,
+                    dir_fd=source_dir_fd,
+                )
+                try:
+                    witness_fd = os.open(
+                        "partial",
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=partial_fd,
+                    )
+                    os.close(witness_fd)
+                finally:
+                    os.close(partial_fd)
+                os.rename(
+                    partial_name,
+                    destination_name,
+                    src_dir_fd=source_dir_fd,
+                    dst_dir_fd=destination_dir_fd,
+                )
+                exposures += 1
+                exposed_fd = os.open(
+                    destination_name,
+                    os.O_RDONLY | os.O_DIRECTORY,
+                    dir_fd=destination_dir_fd,
+                )
+                try:
+                    os.unlink("partial", dir_fd=exposed_fd)
+                finally:
+                    os.close(exposed_fd)
+                os.rmdir(destination_name, dir_fd=destination_dir_fd)
+            original(
+                source_dir_fd,
+                source_name,
+                destination_dir_fd,
+                destination_name,
+            )
+
+        monkeypatch.setattr(
+            cache_posix,
+            "_rename_noreplace",
+            expose_via_rename_then_publish,
+        )
+    else:
+        from csk.builds import cache_windows
+
+        original_move = cache_windows._move_no_replace
+
+        def expose_via_rename_then_move(
+            source: Path,
+            destination: Path,
+        ) -> None:
+            nonlocal exposures
+            partial = source.with_name(f"partial-{source.name}")
+            partial.mkdir()
+            (partial / "partial").write_bytes(b"partial")
+            os.rename(partial, destination)
+            exposures += 1
+            shutil.rmtree(destination)
+            original_move(source, destination)
+
+        monkeypatch.setattr(
+            cache_windows,
+            "_move_no_replace",
+            expose_via_rename_then_move,
+        )
+
+    clear_manager_lifecycle_observation_cache()
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert exposures > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_cross_project_binding_detects_globally_serialized_private_builds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    active = 0
+    maximum = 0
+    serial = threading.Lock()
+    original = installer._build_private_misses
+
+    def globally_serialized_private_builds(*args: Any, **kwargs: Any) -> Any:
+        nonlocal active, calls, maximum
+        with serial:
+            calls += 1
+            active += 1
+            maximum = max(maximum, active)
+            try:
+                return original(*args, **kwargs)
+            finally:
+                active -= 1
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_build_private_misses",
+        globally_serialized_private_builds,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cross_project_cases",
+            "two-project-success-preserves-both-consumers",
+        )
+        assert calls > 0
+        assert maximum == 1
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_cross_project_binding_requires_successful_publish_and_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failures = 0
+    original = installer._publish_planned_builds
+
+    def fail_real_cross_project_handoff(*args: Any, **kwargs: Any) -> Any:
+        nonlocal failures
+        manager_home = Path(args[0])
+        if "cross-project/private-overlap/home" in manager_home.as_posix():
+            failures += 1
+            raise installer.InstallError("observed cross-project handoff failure")
+        return original(*args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_publish_planned_builds",
+        fail_real_cross_project_handoff,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cross_project_cases",
+            "two-project-success-preserves-both-consumers",
+        )
+        assert failures > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_identity_binding_detects_operation_side_key_and_receipt_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_changes = 0
+    receipt_changes = 0
+    original_plan_builds = installer.build_planner.plan_builds
+    original_publish = installer._publish_planned_builds
+    original_publication = lifecycle_observations._publication
+
+    def publication_with_changed_operation_identity(
+        root: Path,
+        build_input: metadata.GoBuildInput,
+        payload: bytes,
+        *,
+        suffix: str,
+    ) -> Any:
+        scoped_roots = (
+            "cache/publish",
+            "cross-project/rollback/cache",
+            "transactions/commit-order/cache",
+        )
+        if any(fragment in root.as_posix() for fragment in scoped_roots):
+            build_input = replace(
+                build_input,
+                build_source=replace(
+                    build_input.build_source,
+                    content_sha256="sha256:" + "e" * 64,
+                ),
+            )
+        return original_publication(
+            root,
+            build_input,
+            payload,
+            suffix=suffix,
+        )
+
+    def plan_with_changed_operation_identity(*args: Any, **kwargs: Any) -> Any:
+        nonlocal key_changes
+        plans = original_plan_builds(*args, **kwargs)
+        manager_home = Path(kwargs["manager_home"])
+        scoped_homes = (
+            "cross-project/private-overlap/home",
+            "dry-run/compiled/home",
+            "gc/mark-sweep/home",
+            "status-repair/current/home",
+            "status-repair/matrix/",
+            "status-repair/repair/",
+        )
+        if (
+            not plans
+            or not any(
+                fragment in manager_home.as_posix()
+                for fragment in scoped_homes
+            )
+        ):
+            return plans
+        selected = next(
+            (
+                index
+                for index, plan in enumerate(plans)
+                if plan.command == "golden-tool"
+            ),
+            None,
+        )
+        if selected is None:
+            return plans
+        changed_input = replace(
+            plans[selected].input,
+            build_source=replace(
+                plans[selected].input.build_source,
+                content_sha256="sha256:" + "e" * 64,
+            ),
+        )
+        key_changes += 1
+        changed_plans = list(plans)
+        changed_plans[selected] = replace(
+            plans[selected],
+            input=changed_input,
+            cache_key=metadata.cache_key(changed_input),
+        )
+        return tuple(changed_plans)
+
+    def publish_with_changed_receipt(*args: Any, **kwargs: Any) -> Any:
+        nonlocal receipt_changes
+        published = original_publish(*args, **kwargs)
+        manager_home = Path(args[0])
+        if "private-builds/success/home" not in manager_home.as_posix():
+            return published
+        changed: dict[str, dict[str, Any]] = {}
+        for provider, builds in published.items():
+            changed[provider] = dict(builds)
+            if "golden-tool" not in builds:
+                continue
+            selected = builds["golden-tool"]
+            changed[provider]["golden-tool"] = replace(
+                selected,
+                marker=replace(
+                    selected.marker,
+                    receipt_sha256="sha256:" + "e" * 64,
+                ),
+            )
+            receipt_changes += 1
+        return changed
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer.build_planner,
+        "plan_builds",
+        plan_with_changed_operation_identity,
+    )
+    monkeypatch.setattr(
+        installer,
+        "_publish_planned_builds",
+        publish_with_changed_receipt,
+    )
+    monkeypatch.setattr(
+        lifecycle_observations,
+        "_publication",
+        publication_with_changed_operation_identity,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "cross_project_cases",
+            "two-project-success-preserves-both-consumers",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "dry_run_cases",
+            "compiled-cache-miss-is-read-only",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "gc_cases",
+            "locked-mark-and-sweep-compiled-cache",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "private_build_cases",
+            "all-misses-stage-and-verify-before-home-lock",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "status_cases",
+            "compiled-installation-current",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "repair_cases",
+            "repair-rebuilds-invalid-compiled-entry",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "cross_project_cases",
+            "successful-project-survives-other-project-rollback",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "transaction_cases",
+            "deterministic-target-order-and-consumer-last",
+        )
+        assert key_changes > 0
+        assert receipt_changes > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_gc_binding_detects_ignored_registered_consumers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    original = gc._load_consumers_strict
+
+    def ignore_after_initial_gc(home: Path) -> list[Path]:
+        nonlocal calls
+        calls += 1
+        return original(home) if calls == 1 else []
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(gc, "_load_consumers_strict", ignore_after_initial_gc)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "gc_cases",
+            "locked-mark-and-sweep-compiled-cache",
+        )
+        assert calls > 1
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_recovery_binding_detects_missing_target_backup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    removed: list[Path] = []
+    original = transactions.TransactionEngine.commit
+
+    def drop_restored_backup(
+        engine: transactions.TransactionEngine,
+        lock: Any,
+        transaction_id: str,
+    ) -> None:
+        try:
+            original(engine, lock, transaction_id)
+        except BaseException:
+            if transaction_id == "transaction-global-17":
+                journal_path = engine.journal_root / f"{transaction_id}.json"
+                raw = json.loads(journal_path.read_text(encoding="utf-8"))
+                target = next(
+                    item
+                    for item in raw["targets"]
+                    if item["identifier"] == "machine"
+                )
+                backup = Path(target["backup_path"])
+                if backup.is_dir() and not backup.is_symlink():
+                    shutil.rmtree(backup)
+                elif backup.exists() or backup.is_symlink():
+                    backup.unlink()
+                removed.append(backup)
+            raise
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        transactions.TransactionEngine,
+        "commit",
+        drop_restored_backup,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "recovery_cases",
+            "interrupted-global-journal-recovered-by-transaction-id",
+        )
+        assert len(removed) == 1
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="the untrusted protected fixture is an executable POSIX artifact",
+)
+def test_rc6_repair_binding_detects_untrusted_artifact_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executed: list[tuple[Path, int]] = []
+    original = installer._build_private_misses
+
+    def execute_untrusted_before_rebuild(*args: Any, **kwargs: Any) -> Any:
+        cfg = args[0]
+        home = cfg.path.parent
+        if "status-repair/repair/04-untrusted-boundary" in home.as_posix():
+            artifacts = sorted((home / "builds" / "go-v1").glob("*/bin/*"))
+            for artifact in artifacts:
+                completed = subprocess.run(
+                    [artifact],
+                    check=False,
+                    capture_output=True,
+                )
+                executed.append((artifact, completed.returncode))
+        return original(*args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_build_private_misses",
+        execute_untrusted_before_rebuild,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "repair_cases",
+            "repair-rebuilds-invalid-compiled-entry",
+        )
+        assert executed
+        assert all(returncode == 0 for _path, returncode in executed)
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="the relative protected-artifact execution probe uses a POSIX script",
+)
+def test_rc6_repair_binding_detects_cwd_relative_artifact_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executions = 0
+    original = installer._build_private_misses
+
+    def execute_relative_untrusted_candidate(*args: Any, **kwargs: Any) -> Any:
+        nonlocal executions
+        config_value = args[0]
+        home = config_value.path.parent
+        if "status-repair/repair/04-untrusted-boundary" in home.as_posix():
+            entries = sorted((home / "builds" / "go-v1").glob("*"))
+            for entry in entries:
+                artifact = entry / "bin" / "golden-tool"
+                if not artifact.is_file():
+                    continue
+                completed = subprocess.run(
+                    ["./bin/golden-tool"],
+                    cwd=entry,
+                    check=False,
+                    capture_output=True,
+                )
+                assert completed.returncode == 0
+                executions += 1
+        return original(*args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_build_private_misses",
+        execute_relative_untrusted_candidate,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "repair_cases",
+            "repair-rebuilds-invalid-compiled-entry",
+        )
+        assert executions > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_read_only_bindings_detect_low_level_transient_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    currentness_mutations = 0
+    dry_run_mutations = 0
+    original_collect = status_mod._collect_resolved_scope
+    original_plan = installer.build_planner.plan_builds
+
+    def write_then_remove(parent: Path, name: str) -> None:
+        parent.mkdir(parents=True, exist_ok=True)
+        parent_state = parent.stat()
+        parent_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            descriptor = os.open(
+                name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=parent_fd,
+            )
+            try:
+                os.write(descriptor, b"transient persistent mutation\n")
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.unlink(name, dir_fd=parent_fd)
+        finally:
+            os.close(parent_fd)
+        os.utime(
+            parent,
+            ns=(parent_state.st_atime_ns, parent_state.st_mtime_ns),
+            follow_symlinks=False,
+        )
+
+    def mutate_currentness_then_collect(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        nonlocal currentness_mutations
+        home = config_value.path.parent
+        if (
+            "status-repair/current/home" in home.as_posix()
+            or "status-repair/matrix/" in home.as_posix()
+        ):
+            write_then_remove(home / "builds", "transient-currentness-write")
+            currentness_mutations += 1
+        return original_collect(config_value, *args, **kwargs)
+
+    def mutate_dry_run_after_plan(*args: Any, **kwargs: Any) -> Any:
+        nonlocal dry_run_mutations
+        plans = original_plan(*args, **kwargs)
+        home = Path(kwargs["manager_home"])
+        if "dry-run/compiled/home" in home.as_posix():
+            write_then_remove(home / "builds", "transient-dry-run-write")
+            dry_run_mutations += 1
+        return plans
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        status_mod,
+        "_collect_resolved_scope",
+        mutate_currentness_then_collect,
+    )
+    monkeypatch.setattr(
+        installer.build_planner,
+        "plan_builds",
+        mutate_dry_run_after_plan,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "status_cases",
+            "compiled-installation-current",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "status_cases",
+            "compiled-currentness-failure-matrix",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "dry_run_cases",
+            "compiled-cache-miss-is-read-only",
+        )
+        assert currentness_mutations >= 15
+        assert dry_run_mutations > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_currentness_binding_detects_transient_permission_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repairs: list[Path] = []
+    original = status_mod._collect_resolved_scope
+
+    def transient_permission_repair(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        home = config_value.path.parent
+        home_text = home.as_posix()
+        if (
+            "status-repair/current/home" in home_text
+            or "status-repair/matrix/" in home_text
+        ):
+            for entry in sorted((home / "builds" / "go-v1").glob("*")):
+                mode = stat.S_IMODE(entry.lstat().st_mode)
+                entry.chmod(mode | stat.S_IWUSR)
+                entry.chmod(mode)
+                repairs.append(entry)
+        return original(config_value, *args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        status_mod,
+        "_collect_resolved_scope",
+        transient_permission_repair,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "status_cases",
+            "compiled-installation-current",
+        )
+        _assert_sabotaged_lifecycle_case_differs(
+            "status_cases",
+            "compiled-currentness-failure-matrix",
+        )
+        assert len(repairs) >= 15
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_transaction_binding_detects_post_restore_corruption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    corruptions: list[str] = []
+    original = transactions.TransactionEngine._rollback_target
+
+    def corrupt_after_restore(
+        engine: transactions.TransactionEngine,
+        journal: transactions.Journal,
+        target: transactions.JournalTarget,
+    ) -> None:
+        original(engine, journal, target)
+        if journal.transaction_id == "txn-observed-rollback":
+            live = Path(target.live_path)
+            live.write_text(
+                f"corrupted-after-restore:{target.identifier}",
+                encoding="utf-8",
+            )
+            corruptions.append(target.identifier)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        transactions.TransactionEngine,
+        "_rollback_target",
+        corrupt_after_restore,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "transaction_cases",
+            "reverse-rollback-under-home-lock",
+        )
+        assert len(corruptions) == 6
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="the post-publication child sabotage targets the POSIX rename seam",
+)
+def test_rc6_publication_binding_detects_transient_live_child_corruption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from csk.builds import cache_posix
+
+    corruptions = 0
+    original = cache_posix._rename_noreplace
+
+    def corrupt_live_child_then_restore(
+        source_dir_fd: int,
+        source_name: str,
+        destination_dir_fd: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal corruptions
+        original(
+            source_dir_fd,
+            source_name,
+            destination_dir_fd,
+            destination_name,
+        )
+        if not re.fullmatch(r"[0-9a-f]{64}", destination_name):
+            return
+        entry_fd = os.open(
+            destination_name,
+            os.O_RDONLY | os.O_DIRECTORY,
+            dir_fd=destination_dir_fd,
+        )
+        try:
+            bin_fd = os.open("bin", os.O_RDONLY | os.O_DIRECTORY, dir_fd=entry_fd)
+            try:
+                artifact_name = os.listdir(bin_fd)[0]
+                read_fd = os.open(artifact_name, os.O_RDONLY, dir_fd=bin_fd)
+                try:
+                    state = os.fstat(read_fd)
+                    original_bytes = os.read(read_fd, state.st_size)
+                    original_mode = stat.S_IMODE(state.st_mode)
+                    os.fchmod(read_fd, original_mode | stat.S_IWUSR)
+                finally:
+                    os.close(read_fd)
+                write_fd = os.open(artifact_name, os.O_WRONLY, dir_fd=bin_fd)
+                try:
+                    os.write(write_fd, b"!" * len(original_bytes))
+                    os.fsync(write_fd)
+                    os.lseek(write_fd, 0, os.SEEK_SET)
+                    os.write(write_fd, original_bytes)
+                    os.ftruncate(write_fd, len(original_bytes))
+                    os.fsync(write_fd)
+                    os.fchmod(write_fd, original_mode)
+                finally:
+                    os.close(write_fd)
+                corruptions += 1
+            finally:
+                os.close(bin_fd)
+        finally:
+            os.close(entry_fd)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        cache_posix,
+        "_rename_noreplace",
+        corrupt_live_child_then_restore,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert corruptions > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_upgrade_dry_run_bindings_detect_transient_persistent_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mutations: list[str] = []
+    original_project_install = installer.install
+    original_global_install = global_install.install
+
+    def mutate_project_config_then_install(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if "/dry-run/project/" in config_value.path.as_posix():
+            _transient_descriptor_rewrite(
+                config_value.path,
+                b"\ntransient-project-upgrade-dry-run-write\n",
+            )
+            mutations.append("project")
+        return original_project_install(config_value, *args, **kwargs)
+
+    def mutate_global_config_then_install(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if "/dry-run/global/" in config_value.path.as_posix():
+            _transient_descriptor_rewrite(
+                config_value.path,
+                b"\ntransient-global-upgrade-dry-run-write\n",
+            )
+            mutations.append("global")
+        return original_global_install(config_value, *args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(installer, "install", mutate_project_config_then_install)
+    monkeypatch.setattr(global_install, "install", mutate_global_config_then_install)
+    try:
+        differences = {
+            name
+            for name in ("project-upgrade", "global-upgrade")
+            if observe_manager_lifecycle_case(
+                name,
+                MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"],
+            )
+            != _lifecycle_case("dry_run_cases", name)
+        }
+        assert differences == {"project-upgrade", "global-upgrade"}
+        assert set(mutations) == {"project", "global"}
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_planning_binding_detects_transient_persistent_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mutations = 0
+    original = installer._selected_projects
+
+    def mutate_skillfile_after_selection(
+        config_value: config.GlobalConfig,
+        alias: str | None,
+    ) -> list[config.ProjectConfig]:
+        nonlocal mutations
+        selected = original(config_value, alias)
+        if "/planning/" in config_value.path.as_posix():
+            for project in selected:
+                skillfile = project.path / "Skillfile.json"
+                if skillfile.is_file():
+                    _transient_descriptor_rewrite(
+                        skillfile,
+                        b"\ntransient-planning-gate-write\n",
+                    )
+                    mutations += 1
+        return selected
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_selected_projects",
+        mutate_skillfile_after_selection,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "planning_cases",
+            "all-source-and-trust-gates-before-build",
+        )
+        assert mutations > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_private_failure_binding_detects_transient_persistent_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mutations = 0
+    original = installer._build_private_misses
+
+    def mutate_generation_then_build(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        nonlocal mutations
+        generation = config_value.path.parent / "persistent-generation"
+        if "/private-builds/failure/" in generation.as_posix():
+            _transient_descriptor_rewrite(
+                generation,
+                b"\ntransient-private-build-failure-write\n",
+            )
+            mutations += 1
+        return original(config_value, *args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_build_private_misses",
+        mutate_generation_then_build,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "private_build_cases",
+            "second-build-failure-preserves-persistent-state",
+        )
+        assert mutations > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="captured descriptor aliases target the POSIX no-replace seam",
+)
+def test_rc6_publication_binding_detects_captured_descriptor_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from csk.builds import cache_posix
+
+    captured_open = os.open
+    captured_write = os.write
+    captured_ftruncate = os.ftruncate
+    captured_fchmod = os.fchmod
+    captured_utime = os.utime
+    corruptions = 0
+    original = cache_posix._rename_noreplace
+
+    def corrupt_live_child_then_restore(
+        source_dir_fd: int,
+        source_name: str,
+        destination_dir_fd: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal corruptions
+        original(
+            source_dir_fd,
+            source_name,
+            destination_dir_fd,
+            destination_name,
+        )
+        if not re.fullmatch(r"[0-9a-f]{64}", destination_name):
+            return
+        entry_fd = captured_open(
+            destination_name,
+            os.O_RDONLY | os.O_DIRECTORY,
+            dir_fd=destination_dir_fd,
+        )
+        try:
+            bin_fd = captured_open(
+                "bin",
+                os.O_RDONLY | os.O_DIRECTORY,
+                dir_fd=entry_fd,
+            )
+            try:
+                artifact_name = os.listdir(bin_fd)[0]
+                read_fd = captured_open(
+                    artifact_name,
+                    os.O_RDONLY,
+                    dir_fd=bin_fd,
+                )
+                try:
+                    state = os.fstat(read_fd)
+                    original_bytes = os.read(read_fd, state.st_size)
+                    original_mode = stat.S_IMODE(state.st_mode)
+                    captured_fchmod(read_fd, original_mode | stat.S_IWUSR)
+                finally:
+                    os.close(read_fd)
+                write_fd = captured_open(
+                    artifact_name,
+                    os.O_WRONLY,
+                    dir_fd=bin_fd,
+                )
+                try:
+                    captured_write(write_fd, b"!" * len(original_bytes))
+                    os.fsync(write_fd)
+                    os.lseek(write_fd, 0, os.SEEK_SET)
+                    captured_write(write_fd, original_bytes)
+                    captured_ftruncate(write_fd, len(original_bytes))
+                    os.fsync(write_fd)
+                    captured_fchmod(write_fd, original_mode)
+                finally:
+                    os.close(write_fd)
+                captured_utime(
+                    artifact_name,
+                    ns=(state.st_atime_ns, state.st_mtime_ns),
+                    dir_fd=bin_fd,
+                    follow_symlinks=False,
+                )
+                corruptions += 1
+            finally:
+                os.close(bin_fd)
+        finally:
+            os.close(entry_fd)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        cache_posix,
+        "_rename_noreplace",
+        corrupt_live_child_then_restore,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert corruptions > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="captured fchmod targets the POSIX no-replace seam",
+)
+def test_rc6_publication_binding_detects_captured_root_fchmod_restore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from csk.builds import cache_posix
+
+    captured_open = os.open
+    captured_fchmod = os.fchmod
+    mutations = 0
+    original = cache_posix._rename_noreplace
+
+    def mutate_live_root_then_restore(
+        source_dir_fd: int,
+        source_name: str,
+        destination_dir_fd: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal mutations
+        original(
+            source_dir_fd,
+            source_name,
+            destination_dir_fd,
+            destination_name,
+        )
+        if not re.fullmatch(r"[0-9a-f]{64}", destination_name):
+            return
+        descriptor = captured_open(
+            destination_name,
+            os.O_RDONLY | os.O_DIRECTORY,
+            dir_fd=destination_dir_fd,
+        )
+        try:
+            original_mode = stat.S_IMODE(os.fstat(descriptor).st_mode)
+            captured_fchmod(descriptor, original_mode ^ stat.S_IRGRP)
+            captured_fchmod(descriptor, original_mode)
+            mutations += 1
+        finally:
+            os.close(descriptor)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        cache_posix,
+        "_rename_noreplace",
+        mutate_live_root_then_restore,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert mutations > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="ctypes.CDLL supplies the POSIX no-replace native callable",
+)
+def test_rc6_publication_binding_detects_native_loader_fchmod_restore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from csk.builds import cache_posix
+
+    real_cdll = cache_posix.ctypes.CDLL
+    captured_open = os.open
+    captured_fchmod = os.fchmod
+    mutations = 0
+
+    class MutatingAtomicFunction:
+        def __init__(self, function: Any) -> None:
+            object.__setattr__(self, "_function", function)
+
+        def __call__(self, *args: Any) -> Any:
+            nonlocal mutations
+            result = self._function(*args)
+            if result != 0 or len(args) < 4:
+                return result
+            destination_name = os.fsdecode(args[3])
+            if not re.fullmatch(r"[0-9a-f]{64}", destination_name):
+                return result
+            descriptor = captured_open(
+                destination_name,
+                os.O_RDONLY | os.O_DIRECTORY,
+                dir_fd=int(args[2]),
+            )
+            try:
+                original_mode = stat.S_IMODE(os.fstat(descriptor).st_mode)
+                captured_fchmod(descriptor, original_mode ^ stat.S_IRGRP)
+                captured_fchmod(descriptor, original_mode)
+                mutations += 1
+            finally:
+                os.close(descriptor)
+            return result
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._function, name)
+
+        def __setattr__(self, name: str, value: Any) -> None:
+            setattr(self._function, name, value)
+
+    class MutatingLibC:
+        def __init__(self, library: Any) -> None:
+            self._library = library
+
+        def __getattr__(self, name: str) -> Any:
+            function = getattr(self._library, name)
+            if name in {"renameat2", "renameatx_np"}:
+                return MutatingAtomicFunction(function)
+            return function
+
+    def mutating_cdll(*args: Any, **kwargs: Any) -> Any:
+        return MutatingLibC(real_cdll(*args, **kwargs))
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(cache_posix.ctypes, "CDLL", mutating_cdll)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert mutations > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="MoveFileExW supplies the Windows no-replace native callable",
+)
+def test_rc6_publication_binding_detects_windows_native_api_chmod_restore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from csk.builds import cache_windows
+
+    real_api = cache_windows._api
+    captured_chmod = os.chmod
+    mutations = 0
+
+    class MutatingMoveFileEx:
+        def __init__(self, function: Any) -> None:
+            self._function = function
+
+        def __call__(self, source: Any, destination: Any, flags: int) -> Any:
+            nonlocal mutations
+            result = self._function(source, destination, flags)
+            if result:
+                destination_path = Path(os.fsdecode(destination))
+                if re.fullmatch(r"[0-9a-f]{64}", destination_path.name):
+                    original_mode = stat.S_IMODE(destination_path.stat().st_mode)
+                    captured_chmod(
+                        destination_path,
+                        original_mode ^ stat.S_IWRITE,
+                    )
+                    captured_chmod(destination_path, original_mode)
+                    mutations += 1
+            return result
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._function, name)
+
+        def __setattr__(self, name: str, value: Any) -> None:
+            setattr(self._function, name, value)
+
+    class MutatingKernel32:
+        def __init__(self, kernel32: Any) -> None:
+            self._kernel32 = kernel32
+
+        def __getattr__(self, name: str) -> Any:
+            function = getattr(self._kernel32, name)
+            if name == "MoveFileExW":
+                return MutatingMoveFileEx(function)
+            return function
+
+    class MutatingWindowsApi:
+        def __init__(self, api: Any) -> None:
+            self._api = api
+            self.kernel32 = MutatingKernel32(api.kernel32)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._api, name)
+
+    def mutating_api() -> Any:
+        return MutatingWindowsApi(real_api())
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(cache_windows, "_api", mutating_api)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert mutations > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_publication_binding_detects_captured_live_name_restore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_rename = os.rename
+    mutations = 0
+
+    if os.name == "posix":
+        from csk.builds import cache_posix
+
+        original = cache_posix._rename_noreplace
+
+        def move_live_name_away_then_restore(
+            source_dir_fd: int,
+            source_name: str,
+            destination_dir_fd: int,
+            destination_name: str,
+        ) -> None:
+            nonlocal mutations
+            original(
+                source_dir_fd,
+                source_name,
+                destination_dir_fd,
+                destination_name,
+            )
+            if not re.fullmatch(r"[0-9a-f]{64}", destination_name):
+                return
+            away_name = f".review-away-{destination_name}"
+            captured_rename(
+                destination_name,
+                away_name,
+                src_dir_fd=destination_dir_fd,
+                dst_dir_fd=destination_dir_fd,
+            )
+            captured_rename(
+                away_name,
+                destination_name,
+                src_dir_fd=destination_dir_fd,
+                dst_dir_fd=destination_dir_fd,
+            )
+            mutations += 1
+
+        monkeypatch.setattr(
+            cache_posix,
+            "_rename_noreplace",
+            move_live_name_away_then_restore,
+        )
+    else:
+        from csk.builds import cache_windows
+
+        original_move = cache_windows._move_no_replace
+
+        def move_live_name_away_then_restore_windows(
+            source: Path,
+            destination: Path,
+        ) -> None:
+            nonlocal mutations
+            original_move(source, destination)
+            away = destination.with_name(f".review-away-{destination.name}")
+            captured_rename(destination, away)
+            captured_rename(away, destination)
+            mutations += 1
+
+        monkeypatch.setattr(
+            cache_windows,
+            "_move_no_replace",
+            move_live_name_away_then_restore_windows,
+        )
+
+    clear_manager_lifecycle_observation_cache()
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert mutations > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_read_only_bindings_detect_file_object_alias_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_fchmod = os.fchmod
+    captured_utime = os.utime
+    mutations: list[str] = []
+    original_project_install = installer.install
+    original_global_install = global_install.install
+    original_selected_projects = installer._selected_projects
+    original_private_builds = installer._build_private_misses
+
+    def rewrite(path: Path, marker: bytes, label: str) -> None:
+        _transient_file_object_rewrite(
+            path,
+            marker,
+            captured_fchmod=captured_fchmod,
+            captured_utime=captured_utime,
+        )
+        mutations.append(label)
+
+    def mutate_project_config_then_install(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if "/dry-run/project/" in config_value.path.as_posix():
+            rewrite(
+                config_value.path,
+                b"\nfile-object-project-upgrade-write\n",
+                "project-upgrade",
+            )
+        return original_project_install(config_value, *args, **kwargs)
+
+    def mutate_global_config_then_install(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if "/dry-run/global/" in config_value.path.as_posix():
+            rewrite(
+                config_value.path,
+                b"\nfile-object-global-upgrade-write\n",
+                "global-upgrade",
+            )
+        return original_global_install(config_value, *args, **kwargs)
+
+    def mutate_planning_skillfile(
+        config_value: config.GlobalConfig,
+        alias: str | None,
+    ) -> list[config.ProjectConfig]:
+        selected = original_selected_projects(config_value, alias)
+        if "/planning/" in config_value.path.as_posix():
+            for project in selected:
+                skillfile = project.path / "Skillfile.json"
+                if skillfile.is_file():
+                    rewrite(
+                        skillfile,
+                        b"\nfile-object-planning-write\n",
+                        "planning",
+                    )
+        return selected
+
+    def mutate_generation_then_build(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        generation = config_value.path.parent / "persistent-generation"
+        if "/private-builds/failure/" in generation.as_posix():
+            rewrite(
+                generation,
+                b"\nfile-object-private-failure-write\n",
+                "private-failure",
+            )
+        return original_private_builds(config_value, *args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(installer, "install", mutate_project_config_then_install)
+    monkeypatch.setattr(global_install, "install", mutate_global_config_then_install)
+    monkeypatch.setattr(installer, "_selected_projects", mutate_planning_skillfile)
+    monkeypatch.setattr(installer, "_build_private_misses", mutate_generation_then_build)
+    try:
+        expected = {
+            ("dry_run_cases", "project-upgrade"),
+            ("dry_run_cases", "global-upgrade"),
+            ("planning_cases", "all-source-and-trust-gates-before-build"),
+            (
+                "private_build_cases",
+                "second-build-failure-preserves-persistent-state",
+            ),
+        }
+        differences = {
+            (cluster, name)
+            for cluster, name in expected
+            if observe_manager_lifecycle_case(
+                name,
+                MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"],
+            )
+            != _lifecycle_case(cluster, name)
+        }
+        assert differences == expected
+        assert set(mutations) == {
+            "project-upgrade",
+            "global-upgrade",
+            "planning",
+            "private-failure",
+        }
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+def test_rc6_private_failure_binding_watches_project_skillfile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mutations = 0
+    original = installer._build_private_misses
+
+    def mutate_skillfile_then_build(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        nonlocal mutations
+        if "/private-builds/failure/" in config_value.path.as_posix():
+            project = next(iter(config_value.projects.values())).path
+            _transient_descriptor_rewrite(
+                project / "Skillfile.json",
+                b"\ntransient-private-failure-skillfile-write\n",
+            )
+            mutations += 1
+        return original(config_value, *args, **kwargs)
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(
+        installer,
+        "_build_private_misses",
+        mutate_skillfile_then_build,
+    )
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "private_build_cases",
+            "second-build-failure-preserves-persistent-state",
+        )
+        assert mutations > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="the captured-callable regression requires POSIX ctime semantics",
+)
+def test_rc6_persistent_tamper_witness_survives_exact_restoration(
+    tmp_path: Path,
+) -> None:
+    witness = tmp_path / "persistent-witness"
+    witness.write_bytes(b"original persistent bytes")
+    original = witness.stat()
+    before = lifecycle_observations._persistent_tamper_state((witness,))
+
+    _transient_file_object_rewrite(
+        witness,
+        b"\ntransient write\n",
+        captured_fchmod=os.fchmod,
+        captured_utime=os.utime,
+    )
+
+    restored = witness.stat()
+    after = lifecycle_observations._persistent_tamper_state((witness,))
+    assert witness.read_bytes() == b"original persistent bytes"
+    assert stat.S_IMODE(restored.st_mode) == stat.S_IMODE(original.st_mode)
+    assert restored.st_ino == original.st_ino
+    assert restored.st_mtime_ns == original.st_mtime_ns
+    assert restored.st_ctime_ns != original.st_ctime_ns
+    assert after != before
+
+
+@pytest.mark.parametrize("sabotage", ["zero-fetch", "duplicate-fetch"])
+def test_rc6_all_project_upgrade_binding_requires_exact_nonempty_fetch_closure(
+    monkeypatch: pytest.MonkeyPatch,
+    sabotage: str,
+) -> None:
+    sabotaged_calls = 0
+    original = closure.build_closure
+
+    def alter_all_project_fetch(
+        config_value: config.GlobalConfig,
+        project_manifest: manifest.ProjectManifest,
+        substitutions: dict[str, Any],
+        **kwargs: Any,
+    ) -> list[closure.ClosureNode]:
+        nonlocal sabotaged_calls
+        if (
+            "/upgrade/all/" not in config_value.path.as_posix()
+            or not kwargs.get("fetch_existing", False)
+        ):
+            return original(
+                config_value,
+                project_manifest,
+                substitutions,
+                **kwargs,
+            )
+        sabotaged_calls += 1
+        if sabotage == "zero-fetch":
+            kwargs = {**kwargs, "fetch_existing": False}
+            return original(
+                config_value,
+                project_manifest,
+                substitutions,
+                **kwargs,
+            )
+        nodes = original(
+            config_value,
+            project_manifest,
+            substitutions,
+            **kwargs,
+        )
+        fetched_repos = kwargs.get("fetched_repos")
+        if isinstance(fetched_repos, set) and fetched_repos:
+            git_ops.fetch_repo(sorted(fetched_repos, key=os.fspath)[0])
+        return nodes
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(closure, "build_closure", alter_all_project_fetch)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "upgrade_cases",
+            "all-projects-deduplicate",
+        )
+        assert sabotaged_calls == 2
+    finally:
+        clear_manager_lifecycle_observation_cache()
 
 
 def test_shared_fixture_legacy_marker_v1_stays_readable() -> None:

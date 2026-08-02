@@ -1712,6 +1712,57 @@ def test_global_upgrade_fetches_remote_branch_then_installs(monkeypatch, tmp_pat
     assert json.loads(marker_path.read_text(encoding="utf-8"))["commit"] == second_commit
 
 
+def test_global_upgrade_fetches_transitive_closure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+) -> None:
+    transitive, _ = make_skill_repo(skills_root, "transitive", tag="v1")
+    direct, _ = make_skill_repo(
+        skills_root,
+        "direct",
+        {
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 6,
+                    "capabilities": {"exec": "none", "network": "none"},
+                    "commands": {},
+                    "dependencies": {
+                        "skills": {
+                            "transitive": {
+                                "git": str(transitive),
+                                "ref": {"kind": "tag", "value": "v1"},
+                            }
+                        }
+                    },
+                }
+            )
+        },
+        tag="v1",
+    )
+    unrelated, _ = make_skill_repo(skills_root, "unrelated", tag="v1")
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project)
+    _save_config(monkeypatch, cfg)
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [{"name": "direct", "tag": "v1"}],
+        },
+    )
+    fetched: list[Path] = []
+    monkeypatch.setattr(global_install.git_ops, "fetch_repo", fetched.append)
+
+    assert cli.main(["global", "upgrade"]) == 0
+
+    assert direct in fetched
+    assert transitive in fetched
+    assert unrelated not in fetched
+
+
 def test_global_upgrade_releases_update_lock_before_install_and_preserves_options(
     monkeypatch, tmp_path, skills_root, csk_home
 ):

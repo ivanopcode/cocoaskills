@@ -913,6 +913,10 @@ def _cmd_global_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> i
         dry_run=getattr(args, "dry_run", False),
         strict_tags=getattr(args, "strict_tags", False),
         verbose=getattr(args, "verbose", False),
+        fetch=(
+            getattr(args, "global_command", None) == "upgrade"
+            and not getattr(args, "dry_run", False)
+        ),
     )
     cfg = _cfg_with_audit_override(cfg, args)
     result = global_install.install(cfg, options=options)

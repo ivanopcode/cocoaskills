@@ -163,12 +163,6 @@ def install(config: GlobalConfig, *, options: installer.InstallOptions | None = 
         else locking.ProjectLock(csk_home, global_root(csk_home))
     )
     with operation_lock:
-        if not options.dry_run:
-            try:
-                with locking.ManagerHomeLock(csk_home) as home_lock:
-                    _transaction_engine(csk_home).recover(home_lock)
-            except transactions.TransactionError as exc:
-                return GlobalResult(status="failed", errors=[str(exc)])
         for attempt in range(attempts):
             try:
                 expected_generation = generation_probe.capture()
@@ -960,7 +954,7 @@ def _build_nodes(
             replace(global_manifest, skills=decls),
             {},
             use_cache=not options.dry_run,
-            fetch_existing=False,
+            fetch_existing=options.fetch,
             fetched_repos=set(),
             stack=stack,
         )
