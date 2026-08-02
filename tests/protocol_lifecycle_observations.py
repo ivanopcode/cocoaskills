@@ -404,7 +404,7 @@ def _install_persistent_mutation_observer(
         )
 
     real_os_chmod = os.chmod
-    real_os_fchmod = os.fchmod
+    real_os_fchmod = getattr(os, "fchmod", None)
     real_os_open = os.open
     real_os_write = os.write
     real_os_unlink = os.unlink
@@ -598,6 +598,7 @@ def _install_persistent_mutation_observer(
 
     def observed_os_fchmod(fd: int, mode: int) -> None:
         record_descriptor("os-fchmod", fd)
+        assert real_os_fchmod is not None
         real_os_fchmod(fd, mode)
 
     monkeypatch.setattr(os, "open", observed_os_open)
@@ -614,8 +615,9 @@ def _install_persistent_mutation_observer(
     monkeypatch.setattr(os, "ftruncate", observed_os_ftruncate)
     monkeypatch.setattr(os, "utime", observed_os_utime)
     monkeypatch.setattr(os, "chmod", observed_os_chmod)
-    monkeypatch.setattr(os, "fchmod", observed_os_fchmod)
-    support_mapping = {
+    if real_os_fchmod is not None:
+        monkeypatch.setattr(os, "fchmod", observed_os_fchmod)
+    support_mapping: dict[Callable[..., Any], Callable[..., Any]] = {
         real_os_open: observed_os_open,
         real_os_unlink: observed_os_unlink,
         real_os_remove: observed_os_remove,
@@ -629,8 +631,9 @@ def _install_persistent_mutation_observer(
         real_os_ftruncate: observed_os_ftruncate,
         real_os_utime: observed_os_utime,
         real_os_chmod: observed_os_chmod,
-        real_os_fchmod: observed_os_fchmod,
     }
+    if real_os_fchmod is not None:
+        support_mapping[real_os_fchmod] = observed_os_fchmod
     for support_name in (
         "supports_dir_fd",
         "supports_effective_ids",

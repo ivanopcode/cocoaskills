@@ -1387,19 +1387,25 @@ def _transient_file_object_rewrite(
     path: Path,
     marker: bytes,
     *,
-    captured_fchmod: Any,
+    captured_chmod: Any,
     captured_utime: Any,
 ) -> None:
-    """Restore bytes, mode and timestamps after an unpatched file-object write."""
+    """Restore bytes, mode and timestamps after an unpatched file-object write.
+
+    Path-based chmod is the portable primitive here: Windows has no
+    ``os.fchmod``, while its ``os.chmod`` still preserves the read-only state
+    that the platform can represent.  Capture the callable before installing
+    lifecycle observers so the sabotage remains independent of their hooks.
+    """
 
     original = path.read_bytes()
     original_state = path.stat()
+    captured_chmod(
+        path,
+        stat.S_IMODE(original_state.st_mode) | stat.S_IWUSR,
+    )
     with io.open(path, "r+b") as stream:
         descriptor = stream.fileno()
-        captured_fchmod(
-            descriptor,
-            stat.S_IMODE(original_state.st_mode) | stat.S_IWUSR,
-        )
         stream.seek(0, os.SEEK_END)
         stream.write(marker)
         stream.flush()
@@ -1409,7 +1415,7 @@ def _transient_file_object_rewrite(
         stream.truncate(len(original))
         stream.flush()
         os.fsync(descriptor)
-        captured_fchmod(descriptor, stat.S_IMODE(original_state.st_mode))
+    captured_chmod(path, stat.S_IMODE(original_state.st_mode))
     captured_utime(
         path,
         ns=(original_state.st_atime_ns, original_state.st_mtime_ns),
@@ -1419,6 +1425,26 @@ def _transient_file_object_rewrite(
     assert path.read_bytes() == original
     assert stat.S_IMODE(restored.st_mode) == stat.S_IMODE(original_state.st_mode)
     assert restored.st_mtime_ns == original_state.st_mtime_ns
+
+
+def test_rc6_persistent_mutation_observer_supports_windows_without_fchmod(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    mutations: list[str] = []
+
+    monkeypatch.delattr(os, "fchmod", raising=False)
+    lifecycle_observations._install_persistent_mutation_observer(
+        monkeypatch,
+        (watched,),
+        mutations,
+    )
+
+    watched.chmod(0o700)
+
+    assert any(event.startswith("path-chmod:") for event in mutations)
 
 
 def test_rc6_planning_binding_detects_omitted_skill_validation(
@@ -3106,7 +3132,7 @@ def test_rc6_publication_binding_detects_captured_live_name_restore(
 def test_rc6_read_only_bindings_detect_file_object_alias_mutations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured_fchmod = os.fchmod
+    captured_chmod = os.chmod
     captured_utime = os.utime
     mutations: list[str] = []
     original_project_install = installer.install
@@ -3118,7 +3144,7 @@ def test_rc6_read_only_bindings_detect_file_object_alias_mutations(
         _transient_file_object_rewrite(
             path,
             marker,
-            captured_fchmod=captured_fchmod,
+            captured_chmod=captured_chmod,
             captured_utime=captured_utime,
         )
         mutations.append(label)
@@ -3266,7 +3292,7 @@ def test_rc6_persistent_tamper_witness_survives_exact_restoration(
     _transient_file_object_rewrite(
         witness,
         b"\ntransient write\n",
-        captured_fchmod=os.fchmod,
+        captured_chmod=os.chmod,
         captured_utime=os.utime,
     )
 

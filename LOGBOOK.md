@@ -681,3 +681,20 @@ and non-Windows runs skip it explicitly. The new POSIX probe, the cycle-8/9
 barrier, all 32 canonical cases, all 378 scalar mutations, and the full
 authenticated module pass. No product, release, pin, claim, schema-v7, tag,
 CI, changelog or packaging surface changed.
+
+## 2026-08-02 — TASK-260720-12r55p portable lifecycle chmod observation
+
+The first hosted matrix after integrating the observed rc.6 bindings passed
+strict mypy plus every Ubuntu and macOS lane, but all four Windows lanes failed
+before lifecycle assertions because `os.fchmod` is not provided on Windows.
+The persistent-mutation observer had unconditionally captured and patched that
+POSIX-only callable, so one observation-infrastructure portability fault
+expanded into 408 conformance failures per Windows job.
+
+Descriptor chmod observation is now installed only when the host exposes
+`os.fchmod`. Captured file-object sabotage uses the already supported
+path-based `os.chmod` primitive, preserving independent write, mode and
+timestamp restoration evidence on both platform families. A regression
+removes `os.fchmod` from the active `os` module and still requires a protected
+path-chmod mutation event. No skip, xfail, platform bypass, product behavior,
+release pin, tag, claim, schema or workflow pin changed.
