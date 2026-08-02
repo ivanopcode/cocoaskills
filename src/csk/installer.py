@@ -517,6 +517,11 @@ def _install_project_once(
         result.status = "failed"
         result.errors.append(str(exc))
         return result
+    except locking.LockError:
+        # Lock failures are process-coordination outcomes.  Preserve them for
+        # the CLI boundary so callers receive EXIT_LOCK instead of a generic
+        # per-project failure after the home lock moved into the commit phase.
+        raise
     except Exception as exc:  # noqa: BLE001 - project boundary reports stable failures
         result.status = "failed"
         result.errors.append(str(exc))

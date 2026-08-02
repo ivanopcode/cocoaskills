@@ -525,6 +525,14 @@ curator-spec commit `432eb2ee1fe2d6b271e37269f867c8851c325539` and manifest
 SHA-256 `12e58b82579645ba1ccafba49d3e2dd3216005ddf37ae63c68a9fafd46773071`;
 no workflow pin, tag, release, schema-v7 surface, or conformance claim changed.
 
+The first integrated hosted run exposed one cross-platform regression after the
+manager-home lock moved behind the lifecycle gates: `LockError` was absorbed by
+the ordinary per-project/global result boundary, so CLI contention returned 1
+instead of the stable `EXIT_LOCK` value 3. Project and global installers now
+re-raise coordination failures to the existing CLI boundary, with direct
+regressions for both scopes. The post-fix authenticated candidate gate again
+passes 1,025 tests and the affected CLI/install suites pass 153 tests.
+
 ## 2026-08-01 — BUG-260801-1xvc35 observed rejection outcomes
 
 The cycle-2 rejection audit found that a closed 77-name table was still acting

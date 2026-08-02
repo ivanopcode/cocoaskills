@@ -146,6 +146,25 @@ def test_global_init_uses_config_default_agents(monkeypatch, tmp_path, skills_ro
     assert (csk_home / "global" / "env.ps1").exists()
 
 
+def test_global_install_lock_contention_returns_lock_exit(
+    monkeypatch, tmp_path, skills_root, csk_home, capsys
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project)
+    _save_config(monkeypatch, cfg)
+    _write_global_skillfile(
+        csk_home,
+        {"schema_version": 1, "agents": ["codex_cli"], "skills": []},
+    )
+    (csk_home / ".lock").write_text(
+        json.dumps({"pid": os.getpid(), "created_at": 0}),
+        encoding="utf-8",
+    )
+
+    assert cli.main(["global", "install"]) == cli.EXIT_LOCK
+    assert "another csk process holds lock" in capsys.readouterr().err
+
+
 def test_global_add_remove_and_list(monkeypatch, tmp_path, skills_root, csk_home, capsys):
     project = make_project(tmp_path)
     cfg = make_config(csk_home, skills_root, project)

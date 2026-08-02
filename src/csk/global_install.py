@@ -404,6 +404,10 @@ def _install_once(
         result.status = "failed"
         result.errors.append(str(exc))
         return result
+    except locking.LockError:
+        # Keep manager-home coordination failures distinct from ordinary
+        # global installation failures for the CLI EXIT_LOCK contract.
+        raise
     except Exception as exc:  # noqa: BLE001 - global boundary reports stable failures
         result.status = "failed"
         result.errors.append(str(exc))
