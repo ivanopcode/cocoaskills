@@ -735,6 +735,21 @@ its delegated callable through `object.__setattr__` so its forwarding setter
 cannot recurse before initialization. No skip, xfail, platform bypass, product
 behavior, release pin, tag, claim, schema, or workflow pin changed.
 
+## 2026-08-02 — TASK-260720-12r55p native Windows lifecycle evidence
+
+Exact-head hosted run 30751379393 completed with the same three fixture-only
+failures on Windows 3.11, 3.13, and 3.14; Windows 3.12 separately lost runner
+communication. The atomic publication observer compared the Win32 extended
+destination spelling with a normal `Path` spelling, the untrusted-cache case
+never drifted the Windows DACL, and transient write/restore evidence used
+Python's Windows `st_ctime` creation timestamp instead of the native change
+time. The observer now compares native file IDs, deliberately changes one
+sealed artifact to the mutable DACL, and records `FILE_BASIC_INFO.ChangeTime`
+for ordinary Windows files and directories. Reparse points retain the portable
+`lstat` witness. A focused native-identity regression and the full immutable
+candidate-root conformance file are green locally. No product behavior,
+release pin, tag, claim, schema, or workflow pin changed.
+
 The next exact-head Windows matrix completed its full two-hour native lifecycle
 path and exposed one remaining direct timestamp call in the GC fixture. The
 entry-aging step still required `os.utime(..., follow_symlinks=False)`, so its

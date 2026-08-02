@@ -134,6 +134,18 @@ def _tamper_node(path: Path) -> _TamperNode:
     else:
         kind = "special"
         value = None
+    change_time = info.st_ctime_ns
+    if os.name == "nt" and kind in {"file", "directory"}:
+        # Python exposes Windows creation time as ``st_ctime``.  The native
+        # change-time field is the durable witness for a write/restore sequence
+        # whose bytes and last-write timestamp are put back exactly.
+        from csk.builds import cache_windows
+
+        with cache_windows._open_raw_handle(
+            path,
+            desired_access=cache_windows._FILE_READ_ATTRIBUTES,
+        ) as handle:
+            change_time = int(handle.basic.change_time)
     return _TamperNode(
         kind=kind,
         mode=stat.S_IMODE(info.st_mode),
@@ -144,7 +156,7 @@ def _tamper_node(path: Path) -> _TamperNode:
         gid=info.st_gid,
         size=info.st_size,
         mtime_ns=info.st_mtime_ns,
-        ctime_ns=info.st_ctime_ns,
+        ctime_ns=change_time,
         flags=getattr(info, "st_flags", None),
         file_attributes=getattr(info, "st_file_attributes", None),
         value=value,
@@ -239,6 +251,33 @@ def _same_tree_across_atomic_rename(
         if before != after:
             return False
     return True
+
+
+def _same_native_path_identity(first: Path, second: Path) -> bool:
+    """Compare path spellings by the filesystem object they select."""
+
+    try:
+        return _native_node_identity(first) == _native_node_identity(second)
+    except (OSError, ValueError):
+        return False
+
+
+def _native_node_identity(path: Path) -> object:
+    """Return the platform-native stable identity for one filesystem node."""
+
+    if os.name == "nt":
+        from csk.builds import cache_windows
+
+        with cache_windows._open_raw_handle(
+            path,
+            desired_access=cache_windows._FILE_READ_ATTRIBUTES,
+        ) as handle:
+            return (
+                handle.identity.volume_serial_number,
+                handle.identity.file_id,
+            )
+    info = path.stat()
+    return (info.st_dev, info.st_ino)
 
 
 def _record_process_paths(
@@ -1441,8 +1480,10 @@ def _observe_cache_publication(
                         )
                         and raw_windows_destinations[-1][1]
                         == _tamper_tree_state(destination_path)
-                        and raw_windows_destinations[-1][0]
-                        == destination_path
+                        and _same_native_path_identity(
+                            raw_windows_destinations[-1][0],
+                            destination_path,
+                        )
                     )
 
             monkeypatch.setattr(
@@ -1668,7 +1709,25 @@ def _observe_cache_publication(
     candidate = first.artifact_path.parent.parent
     if os.name == "posix":
         candidate.chmod(0o700)
-    candidate_inode = candidate.stat().st_ino
+    elif os.name == "nt":
+        # Drift one sealed child to the mutable DACL.  Windows ``chmod`` only
+        # toggles the read-only attribute and cannot model the trust boundary
+        # enforced by the native cache backend.
+        from csk.builds import cache_windows
+
+        with cache_windows._open_raw_handle(
+            first.artifact_path,
+            desired_access=(
+                cache_windows._READ_CONTROL
+                | cache_windows._WRITE_DAC
+                | cache_windows._FILE_READ_ATTRIBUTES
+            ),
+        ) as artifact_handle:
+            cache_windows._apply_profile_dacl(
+                artifact_handle,
+                cache_windows._MUTABLE_FILE,
+            )
+    candidate_identity = _native_node_identity(candidate)
     before_receipt = metadata.verify_receipt(
         candidate_publication.receipt_bytes,
         expected_input=build_input,
@@ -1686,8 +1745,12 @@ def _observe_cache_publication(
     rebuilt_hit = backend.inspect(cache.CacheExpectation(input=build_input))
     observed["untrusted-cache-boundary"] = {
         "cache_key": key,
-        "candidate_reused": rebuilt_entry.stat().st_ino == candidate_inode,
-        "chmod_then_adopt": rebuilt_entry.stat().st_ino == candidate_inode,
+        "candidate_reused": (
+            _native_node_identity(rebuilt_entry) == candidate_identity
+        ),
+        "chmod_then_adopt": (
+            _native_node_identity(rebuilt_entry) == candidate_identity
+        ),
         "embedded_hashes_match": (
             before_receipt.artifact.sha256
             == "sha256:"

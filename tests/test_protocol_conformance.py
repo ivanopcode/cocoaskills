@@ -1517,6 +1517,27 @@ def test_rc6_lifecycle_utime_falls_back_without_follow_symlinks() -> None:
     assert calls == [((1, 1), False), ((1, 1), None)]
 
 
+def test_rc6_native_path_identity_ignores_alias_spelling(tmp_path: Path) -> None:
+    """Atomic handoff evidence follows object identity, not path spelling."""
+
+    selected = tmp_path / "selected"
+    selected.write_bytes(b"identity witness")
+    alias = tmp_path / "." / "selected"
+    other = tmp_path / "other"
+    other.write_bytes(b"identity witness")
+
+    assert lifecycle_observations._same_native_path_identity(selected, alias)
+    assert not lifecycle_observations._same_native_path_identity(selected, other)
+    assert (
+        lifecycle_observations._native_node_identity(selected)
+        == lifecycle_observations._native_node_identity(alias)
+    )
+    assert (
+        lifecycle_observations._native_node_identity(selected)
+        != lifecycle_observations._native_node_identity(other)
+    )
+
+
 def test_rc6_gc_observation_survives_hosts_without_utime_follow_symlinks(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
