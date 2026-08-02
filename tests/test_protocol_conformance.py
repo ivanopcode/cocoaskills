@@ -1211,6 +1211,23 @@ def test_rc6_darwin_launcher_fixture_does_not_require_host_chmod(
     assert launcher.stat().st_mode & 0o111 == 0
 
 
+def test_rc6_lifecycle_fixture_uses_its_receipt_activation_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_input = metadata.parse_build_input(
+        MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"]["build_input"]
+    )
+
+    lifecycle_observations._install_identity_build_pipeline(
+        monkeypatch,
+        build_input,
+        events=[],
+    )
+
+    assert lifecycle_observations.shims._resolve_platform(None) == "unix"
+    assert lifecycle_observations.shims._resolve_platform("windows") == "windows"
+
+
 def test_rc6_toolchain_fixture_materializes_targets_before_internal_links(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -708,3 +708,12 @@ The fixture now calls the same public
 that primitive retains chmod semantics on POSIX and applies owner/DACL state on
 Windows. No skip, xfail, platform bypass, product behavior, release pin, tag,
 claim, schema or workflow pin changed.
+
+The next Windows run reached launcher materialization and exposed a third
+fixture-only assumption: the candidate compiled-build receipt is intentionally
+Darwin/arm64 and byte-bound to its published cache key, but an implicit launcher
+selection followed the executing Windows host. Normative lifecycle installs now
+derive only that implicit selection from the authenticated receipt target;
+explicit platform arguments remain unchanged for launcher-specific cases. This
+keeps the shared identity byte-exact without weakening the product's native
+activation rejection.

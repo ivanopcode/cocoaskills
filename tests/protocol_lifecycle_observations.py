@@ -851,6 +851,18 @@ def _install_identity_build_pipeline(
 ) -> None:
     """Install a fake compiler whose logical platform identity is normative."""
 
+    logical_activation_platform = (
+        shims.WINDOWS_PLATFORM
+        if build_input.target.goos == "windows"
+        else shims.UNIX_PLATFORM
+    )
+    real_resolve_platform = shims._resolve_platform
+
+    def resolve_logical_activation_platform(platform_name: str | None) -> str:
+        if platform_name is None:
+            return logical_activation_platform
+        return real_resolve_platform(platform_name)
+
     class FakeSession:
         target = build_input.target
         toolchain = build_input.toolchain
@@ -906,6 +918,11 @@ def _install_identity_build_pipeline(
         toolchain,
         "capture_operator_search_path",
         lambda: toolchain.OperatorSearchPath(("/fixture/bin",)),
+    )
+    monkeypatch.setattr(
+        shims,
+        "_resolve_platform",
+        resolve_logical_activation_platform,
     )
     monkeypatch.setattr(toolchain, "establish_toolchain", FakeSession)
     monkeypatch.setattr(go_v1, "build", fake_build)
