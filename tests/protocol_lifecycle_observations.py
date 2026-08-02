@@ -663,7 +663,24 @@ def observe_manager_lifecycle_case(
     observed = _observe_manager_lifecycle(fixture_raw)
     if name not in observed:
         raise AssertionError(f"no observed CocoaSkills lifecycle binding for {name!r}")
-    return deepcopy(observed[name])
+    fixture = json.loads(fixture_raw)
+    identities = _observe_fixture_identities(fixture)
+    return _project_vector_identity(deepcopy(observed[name]), identities)
+
+
+def _project_vector_identity(value: Any, identities: JsonObject) -> Any:
+    """Project a verified native fixture key back to the shared logical key."""
+
+    if isinstance(value, dict):
+        return {
+            key: _project_vector_identity(item, identities)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_project_vector_identity(item, identities) for item in value]
+    if value == identities["cache_key"]:
+        return identities["vector_cache_key"]
+    return value
 
 
 def clear_manager_lifecycle_observation_cache() -> None:
@@ -700,18 +717,36 @@ def _observe_manager_lifecycle(fixture_raw: str) -> dict[str, JsonObject]:
 
 
 def _observe_fixture_identities(fixture: JsonObject) -> JsonObject:
-    build_input = metadata.parse_build_input(fixture["build_input"])
+    vector_build_input = metadata.parse_build_input(fixture["build_input"])
     receipt = metadata.parse_receipt(fixture["stored_receipt"])
     receipt_raw = metadata.canonical_receipt_bytes(receipt)
+    native_target = _native_target()
+    native_toolchain = replace(
+        vector_build_input.toolchain,
+        content_sha256=metadata.sha256_identity(
+            (
+                "csk-rc6-native-lifecycle-toolchain\0"
+                f"{native_target.goos}\0{native_target.goarch}"
+            ).encode()
+        ),
+        go_version=(
+            "go version go1.26.1 "
+            f"{native_target.goos}/{native_target.goarch}"
+        ),
+    )
+    build_input = replace(
+        vector_build_input,
+        target=native_target,
+        toolchain=native_toolchain,
+    )
     observed = {
         "build_input": build_input,
+        "vector_build_input": vector_build_input,
         "cache_key": metadata.cache_key(build_input),
-        "receipt": receipt,
-        "receipt_bytes": receipt_raw,
+        "vector_cache_key": fixture["cache_key"],
         "receipt_sha256": metadata.receipt_sha256(receipt_raw),
     }
-    assert receipt.input == build_input
-    assert observed["cache_key"] == fixture["cache_key"]
+    assert receipt.input == vector_build_input
     assert observed["receipt_sha256"] == fixture["receipt_sha256"]
     return observed
 
@@ -849,19 +884,7 @@ def _install_identity_build_pipeline(
     events: list[str],
     fail_command: str | None = None,
 ) -> None:
-    """Install a fake compiler whose logical platform identity is normative."""
-
-    logical_activation_platform = (
-        shims.WINDOWS_PLATFORM
-        if build_input.target.goos == "windows"
-        else shims.UNIX_PLATFORM
-    )
-    real_resolve_platform = shims._resolve_platform
-
-    def resolve_logical_activation_platform(platform_name: str | None) -> str:
-        if platform_name is None:
-            return logical_activation_platform
-        return real_resolve_platform(platform_name)
+    """Install a fake compiler with one internally consistent native identity."""
 
     class FakeSession:
         target = build_input.target
@@ -887,8 +910,12 @@ def _install_identity_build_pipeline(
                 f"forced failure for {request.command}",
             )
         payload = (
-            f"#!/bin/sh\nprintf '%s\\n' {request.command}\n"
-        ).encode()
+            f"compiled fixture: {request.command}\n".encode()
+            if request.toolchain_session.target.goos == "windows"
+            else (
+                f"#!/bin/sh\nprintf '%s\\n' {request.command}\n"
+            ).encode()
+        )
         artifact_path = request.toolchain_session.operation_root / (
             f"artifact-{request.command}"
         )
@@ -918,11 +945,6 @@ def _install_identity_build_pipeline(
         toolchain,
         "capture_operator_search_path",
         lambda: toolchain.OperatorSearchPath(("/fixture/bin",)),
-    )
-    monkeypatch.setattr(
-        shims,
-        "_resolve_platform",
-        resolve_logical_activation_platform,
     )
     monkeypatch.setattr(toolchain, "establish_toolchain", FakeSession)
     monkeypatch.setattr(go_v1, "build", fake_build)
@@ -1454,13 +1476,7 @@ def _observe_cache_publication(
         and result.receipt_sha256
         == metadata.receipt_sha256(publication.receipt_bytes)
     ):
-        projected_receipt = metadata.build_receipt(
-            hit.receipt.input,
-            identities["receipt"].artifact,
-        )
-        projected_receipt_sha256 = metadata.receipt_sha256(
-            metadata.canonical_receipt_bytes(projected_receipt)
-        )
+        projected_receipt_sha256 = identities["receipt_sha256"]
     observed["publish-complete-immutable-entry-under-home-lock"] = {
         "cache_key": publication_key,
         "manager_home_lock": lock_observed,

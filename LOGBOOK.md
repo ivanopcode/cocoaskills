@@ -717,3 +717,20 @@ derive only that implicit selection from the authenticated receipt target;
 explicit platform arguments remain unchanged for launcher-specific cases. This
 keeps the shared identity byte-exact without weakening the product's native
 activation rejection.
+
+The following matrix showed that deriving activation from the Darwin receipt
+still forced a non-native executable contract on Windows. Lifecycle operations
+now use an internally consistent host-native target, tuning, toolchain identity,
+receipt, and cache key. Only after CocoaSkills has validated those native
+operations does the observer project the authenticated candidate fixture key
+into the protocol result. A regression proves both sides of that projection;
+the shared vector bytes remain the source of the logical identity and the
+product's native activation checks remain untouched.
+
+The same Windows run exposed three independent probe portability faults.
+Descriptor sabotage now uses direct file-descriptor I/O where Windows cannot
+open directory descriptors, timestamp restoration falls back when
+`follow_symlinks=False` is unsupported, and the `MoveFileExW` wrapper initializes
+its delegated callable through `object.__setattr__` so its forwarding setter
+cannot recurse before initialization. No skip, xfail, platform bypass, product
+behavior, release pin, tag, claim, schema, or workflow pin changed.

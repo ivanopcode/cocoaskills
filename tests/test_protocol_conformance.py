@@ -1211,12 +1211,14 @@ def test_rc6_darwin_launcher_fixture_does_not_require_host_chmod(
     assert launcher.stat().st_mode & 0o111 == 0
 
 
-def test_rc6_lifecycle_fixture_uses_its_receipt_activation_platform(
+def test_rc6_lifecycle_fixture_uses_a_native_activation_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    build_input = metadata.parse_build_input(
-        MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"]["build_input"]
+    identities = lifecycle_observations._observe_fixture_identities(
+        MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"]
     )
+    build_input = identities["build_input"]
+    vector_build_input = identities["vector_build_input"]
 
     lifecycle_observations._install_identity_build_pipeline(
         monkeypatch,
@@ -1224,7 +1226,24 @@ def test_rc6_lifecycle_fixture_uses_its_receipt_activation_platform(
         events=[],
     )
 
-    assert lifecycle_observations.shims._resolve_platform(None) == "unix"
+    assert (build_input.target.goos == "windows") == (os.name == "nt")
+    assert build_input.toolchain.go_version.endswith(
+        f"{build_input.target.goos}/{build_input.target.goarch}"
+    )
+    assert vector_build_input == metadata.parse_build_input(
+        MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"]["build_input"]
+    )
+    assert identities["cache_key"] == metadata.cache_key(build_input)
+    assert identities["vector_cache_key"] == MANAGER_LIFECYCLE_VECTORS[
+        "compiled_build_fixture"
+    ]["cache_key"]
+    assert lifecycle_observations._project_vector_identity(
+        {"nested": [identities["cache_key"]]},
+        identities,
+    ) == {"nested": [identities["vector_cache_key"]]}
+    assert lifecycle_observations.shims._resolve_platform(None) == (
+        "windows" if os.name == "nt" else "unix"
+    )
     assert lifecycle_observations.shims._resolve_platform("windows") == "windows"
 
 
@@ -1378,6 +1397,18 @@ def _transient_descriptor_rewrite(path: Path, marker: bytes) -> None:
     """Mutate persistent bytes through dir-fd I/O, then restore them exactly."""
 
     original = path.read_bytes()
+    if os.name == "nt":
+        descriptor = os.open(path, os.O_WRONLY | os.O_APPEND)
+        try:
+            os.write(descriptor, marker)
+            os.fsync(descriptor)
+            os.ftruncate(descriptor, len(original))
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        assert path.read_bytes() == original
+        return
+
     parent_fd = os.open(
         path.parent,
         os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
@@ -1433,11 +1464,17 @@ def _transient_file_object_rewrite(
         stream.flush()
         os.fsync(descriptor)
     captured_chmod(path, stat.S_IMODE(original_state.st_mode))
-    captured_utime(
-        path,
-        ns=(original_state.st_atime_ns, original_state.st_mtime_ns),
-        follow_symlinks=False,
-    )
+    try:
+        captured_utime(
+            path,
+            ns=(original_state.st_atime_ns, original_state.st_mtime_ns),
+            follow_symlinks=False,
+        )
+    except NotImplementedError:
+        captured_utime(
+            path,
+            ns=(original_state.st_atime_ns, original_state.st_mtime_ns),
+        )
     restored = path.stat()
     assert path.read_bytes() == original
     assert stat.S_IMODE(restored.st_mode) == stat.S_IMODE(original_state.st_mode)
@@ -3011,7 +3048,7 @@ def test_rc6_publication_binding_detects_windows_native_api_chmod_restore(
 
     class MutatingMoveFileEx:
         def __init__(self, function: Any) -> None:
-            self._function = function
+            object.__setattr__(self, "_function", function)
 
         def __call__(self, source: Any, destination: Any, flags: int) -> Any:
             nonlocal mutations
@@ -3032,7 +3069,10 @@ def test_rc6_publication_binding_detects_windows_native_api_chmod_restore(
             return getattr(self._function, name)
 
         def __setattr__(self, name: str, value: Any) -> None:
-            setattr(self._function, name, value)
+            if name == "_function":
+                object.__setattr__(self, name, value)
+            else:
+                setattr(self._function, name, value)
 
     class MutatingKernel32:
         def __init__(self, kernel32: Any) -> None:
