@@ -744,3 +744,34 @@ stronger no-follow form and retries only when the platform reports that keyword
 unsupported. A platform-independent regression forces that exact fallback, and
 the representative GC vector plus the full authenticated conformance module
 remain green. No product behavior or release surface changed.
+
+## 2026-08-02 — TASK-260720-12r55p portable lifecycle GC and launcher observation
+
+The cycle-3 review and the terminal Windows 3.11 job of run 30743353816 agree on
+one cause: every one of the 408 Windows failures reported
+`NotImplementedError: utime: follow_symlinks unavailable on this platform`, all
+raised at the same GC aging call. The previous repair centralized the fallback
+but reused it at only one of five timestamp writes, so the first unconverted
+call still aborted the shared cached observation and cascaded across all 32
+lifecycle cases. All five aging writes now go through the one helper.
+
+Two regressions close that class rather than the single line. A behavioural test
+runs the complete GC observation while `os.utime` rejects `follow_symlinks`
+exactly as Windows does, and asserts the observed sweep, grace, uncertainty and
+lock evidence still match. A source-level test parses this module and the
+conformance module and fails when any `utime`/`chmod` call passes
+`follow_symlinks=False` outside the sanctioned helper or a POSIX-only scope.
+Both were verified against the reverted pre-repair source.
+
+Because that single boundary aborted the shared observation, hosted Windows CI
+has in fact only ever executed the first six of thirteen observers; the whole
+observation module postdates the last Windows-green commit. A static sweep of
+the remaining path found two further boundaries and a companion source test now
+guards the second class. Descriptor-relative low-level I/O in the read-only
+binding used `dir_fd` and `O_DIRECTORY`, neither of which exists on Windows, and
+now has a path-based branch. Launcher observation executed the POSIX launcher
+unconditionally; a Windows host cannot even write that flavour, because `:`
+separates a POSIX PATH list and every absolute Windows path carries a drive
+separator. Each host now executes its native launcher and reads the other, which
+is the symmetry POSIX hosts already had. No product behavior, release pin, tag,
+claim, schema, or workflow pin changed.

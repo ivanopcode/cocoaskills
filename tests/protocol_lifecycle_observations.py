@@ -24,7 +24,7 @@ from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, Callable
 
@@ -3052,7 +3052,7 @@ def _observe_gc(
         shutil.rmtree(journal_live)
         rejected_entry = entry.parent / ("f" * 64)
         shutil.copytree(entry, rejected_entry)
-        os.utime(rejected_entry, (1, 1), follow_symlinks=False)
+        _utime_portably(os.utime, rejected_entry, times=(1, 1))
         protected_entry_roots.add(rejected_entry.resolve(strict=False))
         rejected_entry_before_receipt_probe = _persistent_tamper_state(
             (rejected_entry,)
@@ -3060,7 +3060,7 @@ def _observe_gc(
 
         young_now = float(gc.BUILD_GRACE_SECONDS + 200)
         young_mtime = young_now - (gc.BUILD_GRACE_SECONDS / 2)
-        os.utime(entry, (young_mtime, young_mtime), follow_symlinks=False)
+        _utime_portably(os.utime, entry, times=(young_mtime, young_mtime))
         young = observed_collect_runtime(
             replace(cfg, projects={}),
             csk_home,
@@ -3068,7 +3068,7 @@ def _observe_gc(
         )
         young_retained = young.builds_removed == 0 and entry.exists()
 
-        os.utime(entry, (2, 2), follow_symlinks=False)
+        _utime_portably(os.utime, entry, times=(2, 2))
         swept = observed_collect_runtime(
             replace(cfg, projects={}),
             csk_home,
@@ -3109,7 +3109,7 @@ def _observe_gc(
             / "go-v1"
             / other_record["cache_key"].removeprefix("sha256:")
         )
-        os.utime(other_entry, (1, 1), follow_symlinks=False)
+        _utime_portably(os.utime, other_entry, times=(1, 1))
         other_marker_path.write_bytes(b"not-json")
         uncertain = observed_collect_runtime(
             other_cfg,
@@ -3256,18 +3256,42 @@ def _observe_gc(
 
 
 def _observe_launchers(root: Path, observed: dict[str, JsonObject]) -> None:
+    """Observe both launcher flavours, executing the one this host can run.
+
+    A launcher case is cross-platform evidence, so exactly one flavour can be
+    executed and the other has to be read.  A POSIX host runs the ``sh``
+    launcher and reads the ``.cmd`` one; a Windows host does the reverse.  A
+    Windows host also cannot *write* the POSIX flavour: ``:`` separates a POSIX
+    PATH list and every absolute Windows path carries a drive separator, so the
+    manager rejects such entries.  That flavour is therefore rendered from
+    POSIX-shaped inputs through the same manager template.
+    """
+
+    windows_host = os.name == "nt"
     for case_name in (
         "skill-command-without-shell-activation",
         "declared-system-command-without-profile",
     ):
         case_root = root / case_name
-        runtime = case_root / "runtime" / "tool"
+        runtime = case_root / "runtime" / ("tool.cmd" if windows_host else "tool")
         runtime.parent.mkdir(parents=True)
-        runtime.write_text(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\"\nprintf '%s\\n' \"$PATH\"\nexit 37\n",
-            encoding="utf-8",
-        )
-        runtime.chmod(0o700)
+        if windows_host:
+            # ``call`` only launches a recognised extension, and the launcher
+            # bytes are written verbatim so no newline translation applies.
+            runtime.write_text(
+                "@echo off\r\necho args:%*\r\necho path:%PATH%\r\nexit /b 37\r\n",
+                encoding="utf-8",
+                newline="",
+            )
+        else:
+            runtime.write_text(
+                "#!/bin/sh\n"
+                "printf 'args:%s\\n' \"$*\"\n"
+                "printf 'path:%s\\n' \"$PATH\"\n"
+                "exit 37\n",
+                encoding="utf-8",
+            )
+            runtime.chmod(0o700)
         role_names = (
             "command_directory",
             "implementation_runtime",
@@ -3276,46 +3300,97 @@ def _observe_launchers(root: Path, observed: dict[str, JsonObject]) -> None:
         entries = tuple((case_root / role).resolve() for role in role_names)
         for entry in entries:
             entry.mkdir(parents=True)
-        unix = shims.write_project_shim(
-            case_root / "project-unix",
+
+        native_platform = "windows" if windows_host else "unix"
+        native = shims.write_project_shim(
+            case_root / f"project-{native_platform}",
             "tool",
             runtime.resolve(),
-            platform_name="unix",
+            platform_name=native_platform,
             path_entries=entries,
         )
+        inherited = (
+            "C:\\observed\\inherited\\path"
+            if windows_host
+            else "/observed/inherited/path"
+        )
+        # ``cmd`` needs its real environment, so only PATH is replaced there.
+        environment = (
+            {**os.environ, "PATH": inherited}
+            if windows_host
+            else {"PATH": inherited}
+        )
         process = subprocess.run(
-            [str(unix), "alpha", "two words"],
+            [str(native), "alpha", "two words"],
             check=False,
             text=True,
             capture_output=True,
-            env={"PATH": "/observed/inherited/path"},
+            env=environment,
         )
-        output = process.stdout.splitlines()
-        unix_forward = output[:1] == ["alpha two words"]
-        unix_path = output[1].split(":") if len(output) > 1 else []
-        unix_preserves = unix_path == [
-            *(str(entry) for entry in entries),
-            "/observed/inherited/path",
-        ]
+        reported = {
+            line.split(":", 1)[0]: line.split(":", 1)[1].strip()
+            for line in process.stdout.splitlines()
+            if ":" in line
+        }
+        # ``cmd`` forwards the raw command tail, so it may still carry the
+        # quoting that ``sh`` has already removed by the time ``"$*"`` is
+        # expanded.  The evidence is the forwarded tail, not the convention.
+        native_forward = (
+            reported.get("args", "").replace('"', "") == "alpha two words"
+        )
+        native_preserves = reported.get("path", "").split(
+            ";" if windows_host else ":"
+        ) == [*(str(entry) for entry in entries), inherited]
+        native_exit = process.returncode == 37
 
-        windows = shims.write_project_shim(
-            case_root / "project-windows",
-            "tool",
-            runtime.resolve(),
-            platform_name="windows",
-            path_entries=entries,
+        if windows_host:
+            foreign_entries: tuple[Any, ...] = tuple(
+                PurePosixPath("/observed/launcher") / role for role in role_names
+            )
+            foreign_raw = shims._unix_launcher(
+                PurePosixPath("/observed/launcher/runtime/tool"),
+                foreign_entries,
+            )
+        else:
+            foreign_entries = entries
+            foreign_raw = (
+                shims.write_project_shim(
+                    case_root / "project-windows",
+                    "tool",
+                    runtime.resolve(),
+                    platform_name="windows",
+                    path_entries=entries,
+                )
+                .read_bytes()
+                .decode("utf-8")
+            )
+        foreign_present = all(
+            str(entry) in foreign_raw for entry in foreign_entries
         )
-        windows_raw = windows.read_bytes().decode("utf-8")
-        windows_forward = "%*" in windows_raw
-        windows_exit = "exit /b %ERRORLEVEL%" in windows_raw
-        windows_path = "%PATH%" in windows_raw and all(
-            str(entry) in windows_raw for entry in entries
-        )
+        if windows_host:
+            unix_forward = '"$@"' in foreign_raw
+            unix_exit = foreign_raw.startswith("#!/bin/sh\n") and "exec " in foreign_raw
+            unix_preserves = '"$PATH"' in foreign_raw and foreign_present
+            windows_forward, windows_exit, windows_path = (
+                native_forward,
+                native_exit,
+                native_preserves,
+            )
+        else:
+            windows_forward = "%*" in foreign_raw
+            windows_exit = "exit /b %ERRORLEVEL%" in foreign_raw
+            windows_path = "%PATH%" in foreign_raw and foreign_present
+            unix_forward, unix_exit, unix_preserves = (
+                native_forward,
+                native_exit,
+                native_preserves,
+            )
+
         observed[case_name] = {
             "forward_arguments": unix_forward and windows_forward,
             "name": case_name,
             "platforms": ["unix", "windows"],
-            "preserve_exit_status": process.returncode == 37 and windows_exit,
+            "preserve_exit_status": unix_exit and windows_exit,
             "preserve_inherited_path": unix_preserves and windows_path,
             "required_path_roles": list(role_names),
         }

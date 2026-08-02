@@ -1517,6 +1517,301 @@ def test_rc6_lifecycle_utime_falls_back_without_follow_symlinks() -> None:
     assert calls == [((1, 1), False), ((1, 1), None)]
 
 
+def test_rc6_gc_observation_survives_hosts_without_utime_follow_symlinks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Observe GC end to end on a host that rejects ``follow_symlinks``.
+
+    Windows raises ``NotImplementedError`` for every ``os.utime`` call that
+    supplies ``follow_symlinks``.  Reproducing that rejection here keeps the
+    guarantee platform independent: the whole GC observation, not just the
+    fallback helper in isolation, has to survive it.
+    """
+
+    real_utime = os.utime
+    rejected: list[str] = []
+
+    def host_without_follow_symlinks(
+        path: Any,
+        times: tuple[float, float] | None = None,
+        *,
+        ns: tuple[int, int] | None = None,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        if follow_symlinks is False:
+            rejected.append(os.fspath(path))
+            raise NotImplementedError(
+                "utime: follow_symlinks unavailable on this platform"
+            )
+        if ns is not None:
+            real_utime(path, ns=ns, dir_fd=dir_fd)
+        else:
+            real_utime(path, times, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "utime", host_without_follow_symlinks)
+
+    identities = lifecycle_observations._observe_fixture_identities(
+        MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"]
+    )
+    observed: dict[str, Any] = {}
+    lifecycle_observations._observe_gc(tmp_path / "gc", identities, observed)
+
+    # Every aging write in the observation must have taken the fallback.
+    assert len(rejected) == 5
+    assert set(observed) == {
+        "locked-mark-and-sweep-compiled-cache",
+        "post-commit-gc-failure-is-maintenance-warning",
+    }
+    sweep = observed["locked-mark-and-sweep-compiled-cache"]
+    assert sweep["result"] == "swept-unreferenced-old-entries"
+    assert sweep["sweep_requires"] == [
+        "unreferenced",
+        "machine-local",
+        "older-than-grace-period",
+    ]
+    assert sweep["uncertain_state_action"] == (
+        "retain-or-conservatively-quarantine-and-report"
+    )
+    assert sweep["only_lock"] == "manager-home-mutation-lock"
+
+
+def _posix_only_decorator(node: ast.AST) -> bool:
+    """Report whether a definition carries a POSIX-only skip marker."""
+
+    decorators = getattr(node, "decorator_list", [])
+    return any(
+        "skipif" in ast.unparse(decorator) and "posix" in ast.unparse(decorator)
+        for decorator in decorators
+    )
+
+
+def _platform_test(node: ast.expr) -> str | None:
+    """Return the platform name an ``os.name`` comparison selects, if any."""
+
+    if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+        return None
+    if ast.unparse(node.left) != "os.name":
+        return None
+    comparator = node.comparators[0]
+    if not isinstance(comparator, ast.Constant) or not isinstance(
+        comparator.value, str
+    ):
+        return None
+    if isinstance(node.ops[0], ast.Eq):
+        return comparator.value
+    if isinstance(node.ops[0], ast.NotEq):
+        return "posix" if comparator.value == "nt" else "nt"
+    return None
+
+
+def _posix_only_scopes(tree: ast.Module) -> list[tuple[int, int]]:
+    """Collect the line ranges that only ever execute on a POSIX host."""
+
+    scopes: list[tuple[int, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if _posix_only_decorator(node):
+                scopes.append((node.lineno, node.end_lineno or node.lineno))
+            # ``if os.name == "nt": ...; return`` leaves the rest POSIX-only.
+            for statement in node.body:
+                if (
+                    isinstance(statement, ast.If)
+                    and _platform_test(statement.test) == "nt"
+                    and isinstance(statement.body[-1], ast.Return)
+                ):
+                    scopes.append(
+                        (
+                            (statement.end_lineno or statement.lineno) + 1,
+                            node.end_lineno or node.lineno,
+                        )
+                    )
+        if not isinstance(node, ast.If):
+            continue
+        platform = _platform_test(node.test)
+        branch = (
+            node.body
+            if platform == "posix"
+            else node.orelse
+            if platform == "nt"
+            else []
+        )
+        if branch:
+            scopes.append(
+                (branch[0].lineno, branch[-1].end_lineno or branch[-1].lineno)
+            )
+    return scopes
+
+
+def _forwarded_descriptor(call: ast.Call, keyword: ast.keyword, tree: ast.Module) -> bool:
+    """Report whether a descriptor keyword just forwards an enclosing parameter.
+
+    Observer wrappers mirror the ``os`` signature and hand the caller's value
+    straight through.  Those stay portable because the value is ``None`` on
+    hosts without directory descriptors.
+    """
+
+    if not isinstance(keyword.value, ast.Name):
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not node.lineno <= call.lineno <= (node.end_lineno or node.lineno):
+            continue
+        parameters = {
+            argument.arg
+            for argument in [*node.args.args, *node.args.kwonlyargs]
+        }
+        if keyword.value.id in parameters:
+            return True
+    return False
+
+
+_PORTABILITY_MODULES = (
+    Path(lifecycle_observations.__file__),
+    Path(__file__),
+)
+_UNSUPPORTED_ON_WINDOWS = {"utime", "chmod"}
+_DESCRIPTOR_KEYWORDS = {"dir_fd", "src_dir_fd", "dst_dir_fd"}
+# ``os`` entry points that reject descriptor-relative paths on Windows.  Local
+# helpers such as ``_observed_path`` accept the same keyword but resolve it in
+# pure Python, so they stay portable and are deliberately excluded.
+_DESCRIPTOR_TARGETS = {
+    "access",
+    "chmod",
+    "chown",
+    "link",
+    "listdir",
+    "lstat",
+    "mkdir",
+    "mkfifo",
+    "mknod",
+    "open",
+    "readlink",
+    "remove",
+    "rename",
+    "replace",
+    "rmdir",
+    "scandir",
+    "stat",
+    "symlink",
+    "truncate",
+    "unlink",
+    "utime",
+}
+
+
+def test_rc6_lifecycle_timestamp_writes_route_through_the_portable_helper() -> None:
+    """Keep every unguarded ``utime``/``chmod`` off the Windows-unsupported path.
+
+    ``_utime_portably`` owns the single sanctioned ``follow_symlinks=False``
+    attempt plus its fallback.  Any other unguarded call site reintroduces the
+    Windows ``NotImplementedError`` that cascades through the shared
+    manager-lifecycle observation.
+    """
+
+    offenders: list[str] = []
+    for module_path in _PORTABILITY_MODULES:
+        tree = ast.parse(module_path.read_text(encoding="utf-8"))
+        sanctioned = _posix_only_scopes(tree)
+        sanctioned.extend(
+            (node.lineno, node.end_lineno or node.lineno)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_utime_portably"
+        )
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            function = node.func
+            name = (
+                function.attr
+                if isinstance(function, ast.Attribute)
+                else function.id
+                if isinstance(function, ast.Name)
+                else ""
+            )
+            if not any(
+                candidate in name for candidate in _UNSUPPORTED_ON_WINDOWS
+            ):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg != "follow_symlinks":
+                    continue
+                if not (
+                    isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is False
+                ):
+                    continue
+                if any(
+                    start <= node.lineno <= end for start, end in sanctioned
+                ):
+                    continue
+                offenders.append(
+                    f"{module_path.name}:{node.lineno}: "
+                    f"{ast.unparse(function)}(follow_symlinks=False)"
+                )
+
+    assert offenders == []
+
+
+def test_rc6_lifecycle_directory_descriptor_io_stays_posix_guarded() -> None:
+    """Keep descriptor-relative test I/O out of the portable execution path.
+
+    Windows supports neither directory descriptors nor ``O_DIRECTORY``, so a
+    call site that is not POSIX-guarded and not a signature-preserving forward
+    aborts the whole hosted Windows lane.
+    """
+
+    offenders: list[str] = []
+    for module_path in _PORTABILITY_MODULES:
+        tree = ast.parse(module_path.read_text(encoding="utf-8"))
+        guarded = _posix_only_scopes(tree)
+
+        def is_guarded(node: ast.AST) -> bool:
+            return any(
+                start <= node.lineno <= end for start, end in guarded
+            )
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr in {
+                "O_DIRECTORY",
+                "fchmod",
+            }:
+                if ast.unparse(node.value) != "os" or is_guarded(node):
+                    continue
+                offenders.append(
+                    f"{module_path.name}:{node.lineno}: {ast.unparse(node)}"
+                )
+                continue
+            if not isinstance(node, ast.Call):
+                continue
+            target = ast.unparse(node.func).rsplit(".", 1)[-1]
+            if not any(
+                target == name or target.endswith(f"_{name}")
+                for name in _DESCRIPTOR_TARGETS
+            ):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg not in _DESCRIPTOR_KEYWORDS:
+                    continue
+                if isinstance(keyword.value, ast.Constant) and (
+                    keyword.value.value is None
+                ):
+                    continue
+                if is_guarded(node) or _forwarded_descriptor(
+                    node, keyword, tree
+                ):
+                    continue
+                offenders.append(
+                    f"{module_path.name}:{node.lineno}: "
+                    f"{ast.unparse(node.func)}({keyword.arg}=...)"
+                )
+
+    assert offenders == []
+
+
 def test_rc6_planning_binding_detects_omitted_skill_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2457,28 +2752,53 @@ def test_rc6_read_only_bindings_detect_low_level_transient_mutations(
     original_plan = installer.build_planner.plan_builds
 
     def write_then_remove(parent: Path, name: str) -> None:
+        """Create and drop a persistent child through low-level descriptor I/O.
+
+        Windows has neither directory descriptors nor ``O_DIRECTORY``, so the
+        portable variant addresses the same child by path.  Both variants stay
+        below the high-level ``Path`` API, which is what the read-only bindings
+        must still witness.
+        """
+
         parent.mkdir(parents=True, exist_ok=True)
         parent_state = parent.stat()
-        parent_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
+        if os.name == "nt":
+            child = parent / name
             descriptor = os.open(
-                name,
+                child,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL,
                 0o600,
-                dir_fd=parent_fd,
             )
             try:
                 os.write(descriptor, b"transient persistent mutation\n")
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
-            os.unlink(name, dir_fd=parent_fd)
-        finally:
-            os.close(parent_fd)
-        os.utime(
+            os.unlink(child)
+        else:
+            parent_fd = os.open(
+                parent,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            try:
+                descriptor = os.open(
+                    name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+                try:
+                    os.write(descriptor, b"transient persistent mutation\n")
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+                os.unlink(name, dir_fd=parent_fd)
+            finally:
+                os.close(parent_fd)
+        lifecycle_observations._utime_portably(
+            os.utime,
             parent,
             ns=(parent_state.st_atime_ns, parent_state.st_mtime_ns),
-            follow_symlinks=False,
         )
 
     def mutate_currentness_then_collect(
