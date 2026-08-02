@@ -696,5 +696,15 @@ Descriptor chmod observation is now installed only when the host exposes
 path-based `os.chmod` primitive, preserving independent write, mode and
 timestamp restoration evidence on both platform families. A regression
 removes `os.fchmod` from the active `os` module and still requires a protected
-path-chmod mutation event. No skip, xfail, platform bypass, product behavior,
-release pin, tag, claim, schema or workflow pin changed.
+path-chmod mutation event.
+
+The first post-repair Windows run then reached the native cache validator and
+exposed a second fixture-only assumption: lifecycle artifacts were prepared
+with raw `chmod(0700)`. That is sufficient on POSIX, but an elevated Windows
+process creates new objects under the token-owner group, so publication
+correctly rejected the source as not owned by the current manager principal.
+The fixture now calls the same public
+`cache.make_publication_source_private` primitive as the production installer;
+that primitive retains chmod semantics on POSIX and applies owner/DACL state on
+Windows. No skip, xfail, platform bypass, product behavior, release pin, tag,
+claim, schema or workflow pin changed.

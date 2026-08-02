@@ -825,7 +825,7 @@ def _publication(
     artifact = root / "private" / suffix
     artifact.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     artifact.write_bytes(payload)
-    artifact.chmod(0o700)
+    cache.make_publication_source_private(artifact)
     digest = "sha256:" + hashlib.sha256(payload).hexdigest()
     receipt = metadata.build_receipt(
         build_input,
