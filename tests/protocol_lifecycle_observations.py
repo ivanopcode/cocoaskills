@@ -20,6 +20,7 @@ import tempfile
 import threading
 import time
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from functools import lru_cache
@@ -56,6 +57,25 @@ from csk.builds import cache, go_v1, metadata, planner, source as build_source, 
 
 
 JsonObject = dict[str, Any]
+
+
+_AUDIT_SINK: ContextVar[Callable[[str, tuple[Any, ...]], None] | None] = (
+    ContextVar("manager_lifecycle_audit_sink", default=None)
+)
+
+
+def _dispatch_manager_lifecycle_audit(
+    event: str,
+    arguments: tuple[Any, ...],
+) -> None:
+    """Dispatch CPython audit events to the active lifecycle observation."""
+
+    sink = _AUDIT_SINK.get()
+    if sink is not None:
+        sink(event, arguments)
+
+
+sys.addaudithook(_dispatch_manager_lifecycle_audit)
 
 
 @dataclass(frozen=True)
@@ -1151,6 +1171,30 @@ def _observe_cache_publication(
                 (operation, path)
             ),
         )
+        trusted_live_permission_mutations: list[Path] = []
+
+        def record_trusted_permission_mutation(
+            event: str,
+            arguments: tuple[Any, ...],
+        ) -> None:
+            if event != "os.chmod" or not arguments:
+                return
+            raw_path = arguments[0]
+            if isinstance(raw_path, int):
+                candidate = _descriptor_path(raw_path)
+            else:
+                raw_dir_fd = arguments[2] if len(arguments) >= 3 else None
+                dir_fd = (
+                    raw_dir_fd
+                    if isinstance(raw_dir_fd, int) and raw_dir_fd >= 0
+                    else None
+                )
+                candidate = _observed_path(raw_path, dir_fd=dir_fd)
+            if candidate is not None and (
+                candidate == live_entry.resolve(strict=False)
+                or candidate.is_relative_to(live_entry.resolve(strict=False))
+            ):
+                trusted_live_permission_mutations.append(candidate)
 
         if os.name == "posix":
             from csk.builds import cache_posix
@@ -1343,10 +1387,14 @@ def _observe_cache_publication(
                 observed_atomic_move,
             )
 
-        with locking.ManagerHomeLock(home) as home_lock:
-            home_lock.assert_held()
-            result = backend.publish(publication, guard=home_lock)
-            lock_observed = locking._STATE.home is home_lock
+        audit_token = _AUDIT_SINK.set(record_trusted_permission_mutation)
+        try:
+            with locking.ManagerHomeLock(home) as home_lock:
+                home_lock.assert_held()
+                result = backend.publish(publication, guard=home_lock)
+                lock_observed = locking._STATE.home is home_lock
+        finally:
+            _AUDIT_SINK.reset(audit_token)
     hit = backend.inspect(
         cache.CacheExpectation(
             input=operation_input,
@@ -1376,6 +1424,7 @@ def _observe_cache_publication(
         and atomic_tree_handoffs == [True]
         and not live_destination_mutations
         and len(allowed_root_seals) <= 1
+        and len(trusted_live_permission_mutations) == len(allowed_root_seals)
         and not unexpected_live_entry_mutations
     )
     projected_receipt_sha256 = "unexpected"

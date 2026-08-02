@@ -603,3 +603,30 @@ cycle-8 regressions, all 32 canonical lifecycle cases, the 417-case exhaustive
 scalar/classification gate, and the full authenticated conformance module pass.
 No product, release, pin, claim, schema-v7, tag, CI, changelog or packaging
 surface changed.
+
+## 2026-08-02 — BUG-260801-1iu1ln native-callable audit boundary
+
+Cycle-9 review demonstrated that wrapping the function returned by
+`ctypes.CDLL` still sampled too late: a delegating `renameat2` or
+`renameatx_np` callable could perform the real atomic rename, use a previously
+captured `os.fchmod` to change and restore the published root, and only then
+return to the observer. The raw destination snapshot therefore remained
+normative despite two real post-handoff permission mutations.
+
+Publication observation now activates a scoped CPython audit sink only around
+`backend.publish`. CPython emits `os.chmod` audit events for descriptor-based
+`os.fchmod` even when the callable was captured before monkeypatching. The
+trusted audit paths below the live entry must exactly correspond to the
+ordinary observed root-seal trace; any additional captured permission event
+makes publication incomplete. A `ContextVar` scopes the sink to the active
+publication and a `finally` block resets it, while the process audit hook stays
+inert outside that boundary.
+
+The retained POSIX regression injects the mutating/restoring callable through
+`cache_posix.ctypes.CDLL`, one layer inside the former witness. A Windows-only
+equivalent injects through `_api().kernel32.MoveFileExW` and changes/restores
+the live directory with a captured `os.chmod`; Windows CI exercises that case,
+and non-Windows runs skip it explicitly. The new POSIX probe, the cycle-8/9
+barrier, all 32 canonical cases, all 378 scalar mutations, and the full
+authenticated module pass. No product, release, pin, claim, schema-v7, tag,
+CI, changelog or packaging surface changed.

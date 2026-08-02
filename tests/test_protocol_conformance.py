@@ -2719,6 +2719,148 @@ def test_rc6_publication_binding_detects_captured_root_fchmod_restore(
         clear_manager_lifecycle_observation_cache()
 
 
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="ctypes.CDLL supplies the POSIX no-replace native callable",
+)
+def test_rc6_publication_binding_detects_native_loader_fchmod_restore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from csk.builds import cache_posix
+
+    real_cdll = cache_posix.ctypes.CDLL
+    captured_open = os.open
+    captured_fchmod = os.fchmod
+    mutations = 0
+
+    class MutatingAtomicFunction:
+        def __init__(self, function: Any) -> None:
+            object.__setattr__(self, "_function", function)
+
+        def __call__(self, *args: Any) -> Any:
+            nonlocal mutations
+            result = self._function(*args)
+            if result != 0 or len(args) < 4:
+                return result
+            destination_name = os.fsdecode(args[3])
+            if not re.fullmatch(r"[0-9a-f]{64}", destination_name):
+                return result
+            descriptor = captured_open(
+                destination_name,
+                os.O_RDONLY | os.O_DIRECTORY,
+                dir_fd=int(args[2]),
+            )
+            try:
+                original_mode = stat.S_IMODE(os.fstat(descriptor).st_mode)
+                captured_fchmod(descriptor, original_mode ^ stat.S_IRGRP)
+                captured_fchmod(descriptor, original_mode)
+                mutations += 1
+            finally:
+                os.close(descriptor)
+            return result
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._function, name)
+
+        def __setattr__(self, name: str, value: Any) -> None:
+            setattr(self._function, name, value)
+
+    class MutatingLibC:
+        def __init__(self, library: Any) -> None:
+            self._library = library
+
+        def __getattr__(self, name: str) -> Any:
+            function = getattr(self._library, name)
+            if name in {"renameat2", "renameatx_np"}:
+                return MutatingAtomicFunction(function)
+            return function
+
+    def mutating_cdll(*args: Any, **kwargs: Any) -> Any:
+        return MutatingLibC(real_cdll(*args, **kwargs))
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(cache_posix.ctypes, "CDLL", mutating_cdll)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert mutations > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="MoveFileExW supplies the Windows no-replace native callable",
+)
+def test_rc6_publication_binding_detects_windows_native_api_chmod_restore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from csk.builds import cache_windows
+
+    real_api = cache_windows._api
+    captured_chmod = os.chmod
+    mutations = 0
+
+    class MutatingMoveFileEx:
+        def __init__(self, function: Any) -> None:
+            self._function = function
+
+        def __call__(self, source: Any, destination: Any, flags: int) -> Any:
+            nonlocal mutations
+            result = self._function(source, destination, flags)
+            if result:
+                destination_path = Path(os.fsdecode(destination))
+                if re.fullmatch(r"[0-9a-f]{64}", destination_path.name):
+                    original_mode = stat.S_IMODE(destination_path.stat().st_mode)
+                    captured_chmod(
+                        destination_path,
+                        original_mode ^ stat.S_IWRITE,
+                    )
+                    captured_chmod(destination_path, original_mode)
+                    mutations += 1
+            return result
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._function, name)
+
+        def __setattr__(self, name: str, value: Any) -> None:
+            setattr(self._function, name, value)
+
+    class MutatingKernel32:
+        def __init__(self, kernel32: Any) -> None:
+            self._kernel32 = kernel32
+
+        def __getattr__(self, name: str) -> Any:
+            function = getattr(self._kernel32, name)
+            if name == "MoveFileExW":
+                return MutatingMoveFileEx(function)
+            return function
+
+    class MutatingWindowsApi:
+        def __init__(self, api: Any) -> None:
+            self._api = api
+            self.kernel32 = MutatingKernel32(api.kernel32)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._api, name)
+
+    def mutating_api() -> Any:
+        return MutatingWindowsApi(real_api())
+
+    clear_manager_lifecycle_observation_cache()
+    monkeypatch.setattr(cache_windows, "_api", mutating_api)
+    try:
+        _assert_sabotaged_lifecycle_case_differs(
+            "cache_publication_cases",
+            "publish-complete-immutable-entry-under-home-lock",
+        )
+        assert mutations > 0
+    finally:
+        clear_manager_lifecycle_observation_cache()
+
+
 def test_rc6_publication_binding_detects_captured_live_name_restore(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
