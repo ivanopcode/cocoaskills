@@ -78,6 +78,28 @@ def _dispatch_manager_lifecycle_audit(
 sys.addaudithook(_dispatch_manager_lifecycle_audit)
 
 
+def _utime_portably(
+    utime: Callable[..., None],
+    path: Path,
+    *,
+    times: tuple[float, float] | None = None,
+    ns: tuple[int, int] | None = None,
+) -> None:
+    """Set file times without requiring ``follow_symlinks`` support."""
+
+    assert (times is None) != (ns is None)
+    try:
+        if ns is not None:
+            utime(path, ns=ns, follow_symlinks=False)
+        else:
+            utime(path, times, follow_symlinks=False)
+    except NotImplementedError:
+        if ns is not None:
+            utime(path, ns=ns)
+        else:
+            utime(path, times)
+
+
 @dataclass(frozen=True)
 class _TamperNode:
     """One fail-closed filesystem node witness for persistent-state checks."""
@@ -2964,7 +2986,7 @@ def _observe_gc(
         )
         entry_fixture = gc_root / "compiled-entry-fixture"
         shutil.copytree(entry, entry_fixture)
-        os.utime(entry, (1, 1), follow_symlinks=False)
+        _utime_portably(os.utime, entry, times=(1, 1))
         consumer_marked = observed_collect_runtime(
             replace(cfg, projects={}),
             csk_home,

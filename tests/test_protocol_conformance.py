@@ -1464,17 +1464,11 @@ def _transient_file_object_rewrite(
         stream.flush()
         os.fsync(descriptor)
     captured_chmod(path, stat.S_IMODE(original_state.st_mode))
-    try:
-        captured_utime(
-            path,
-            ns=(original_state.st_atime_ns, original_state.st_mtime_ns),
-            follow_symlinks=False,
-        )
-    except NotImplementedError:
-        captured_utime(
-            path,
-            ns=(original_state.st_atime_ns, original_state.st_mtime_ns),
-        )
+    lifecycle_observations._utime_portably(
+        captured_utime,
+        path,
+        ns=(original_state.st_atime_ns, original_state.st_mtime_ns),
+    )
     restored = path.stat()
     assert path.read_bytes() == original
     assert stat.S_IMODE(restored.st_mode) == stat.S_IMODE(original_state.st_mode)
@@ -1499,6 +1493,28 @@ def test_rc6_persistent_mutation_observer_supports_windows_without_fchmod(
     watched.chmod(0o700)
 
     assert any(event.startswith("path-chmod:") for event in mutations)
+
+
+def test_rc6_lifecycle_utime_falls_back_without_follow_symlinks() -> None:
+    calls: list[tuple[tuple[float, float] | None, bool | None]] = []
+
+    def unsupported_follow_symlinks(
+        _path: Path,
+        times: tuple[float, float] | None = None,
+        *,
+        follow_symlinks: bool | None = None,
+    ) -> None:
+        calls.append((times, follow_symlinks))
+        if follow_symlinks is False:
+            raise NotImplementedError("follow_symlinks unavailable")
+
+    lifecycle_observations._utime_portably(
+        unsupported_follow_symlinks,
+        Path("fixture-entry"),
+        times=(1, 1),
+    )
+
+    assert calls == [((1, 1), False), ((1, 1), None)]
 
 
 def test_rc6_planning_binding_detects_omitted_skill_validation(

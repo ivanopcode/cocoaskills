@@ -734,3 +734,13 @@ open directory descriptors, timestamp restoration falls back when
 its delegated callable through `object.__setattr__` so its forwarding setter
 cannot recurse before initialization. No skip, xfail, platform bypass, product
 behavior, release pin, tag, claim, schema, or workflow pin changed.
+
+The next exact-head Windows matrix completed its full two-hour native lifecycle
+path and exposed one remaining direct timestamp call in the GC fixture. The
+entry-aging step still required `os.utime(..., follow_symlinks=False)`, so its
+`NotImplementedError` invalidated the shared cached observation and cascaded to
+408 failures. Timestamp changes now share one helper that first requests the
+stronger no-follow form and retries only when the platform reports that keyword
+unsupported. A platform-independent regression forces that exact fallback, and
+the representative GC vector plus the full authenticated conformance module
+remain green. No product behavior or release surface changed.
