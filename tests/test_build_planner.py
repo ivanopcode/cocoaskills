@@ -300,6 +300,44 @@ def test_plan_builds_with_no_commands_never_probes_or_inspects(
     ) == ()
 
 
+def test_status_preflight_failure_precedes_private_directory_allocation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manager_home = tmp_path / "manager"
+    manager_home.mkdir()
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    (snapshot / "source.txt").write_text("source", encoding="utf-8")
+
+    def unsupported(_config: toolchain.ToolchainConfig) -> None:
+        raise toolchain.ToolchainError(
+            "unsupported_go_family",
+            "fixture unsupported toolchain",
+        )
+
+    def unexpected_private_directory(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("preflight failure must precede temporary allocation")
+
+    monkeypatch.setattr(toolchain, "preflight_toolchain", unsupported)
+    monkeypatch.setattr(planner.tempfile, "TemporaryDirectory", unexpected_private_directory)
+    with source.freeze_snapshot(snapshot) as frozen:
+        provider = planner.BuildProvider(
+            name="provider",
+            snapshot=frozen,
+            commands=(_command("tool"),),
+        )
+        with pytest.raises(toolchain.ToolchainError) as raised:
+            planner.plan_builds(
+                (provider,),
+                manager_home=manager_home,
+                operator_search_path=toolchain.OperatorSearchPath(()),
+                read_only_preflight=True,
+            )
+
+    assert raised.value.code == "unsupported_go_family"
+
+
 def test_filesystem_generation_probe_is_deterministic_and_read_only(
     tmp_path: Path,
 ) -> None:

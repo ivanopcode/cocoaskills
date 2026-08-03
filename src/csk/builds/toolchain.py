@@ -509,6 +509,85 @@ def establish_toolchain(config: ToolchainConfig) -> ToolchainSession:
     return _establish_toolchain(config, _native_host())
 
 
+def preflight_toolchain(config: ToolchainConfig) -> None:
+    """Reject unsupported or non-native Go executables without writing state.
+
+    The complete probe still runs in :func:`establish_toolchain`.  This first
+    pass deliberately uses only ``go version`` so status failure boundaries
+    can be decided before allocating operation-private configuration, cache,
+    telemetry, or temporary directories.
+    """
+
+    host = _native_host()
+    probe_timeout = _bounded_timeout(config.probe_timeout, DEFAULT_PROBE_TIMEOUT)
+    output_limit = config.output_limit
+    if output_limit <= 0 or output_limit > DEFAULT_OUTPUT_LIMIT:
+        output_limit = DEFAULT_OUTPUT_LIMIT
+    forbidden = _canonical_forbidden_roots(config.forbidden_roots)
+    selection = _select_toolchain(config, host, forbidden)
+    runner = SubprocessProbeRunner() if config.runner is None else config.runner
+    environment: dict[str, str] = {
+        "GOENV": "off",
+        "GOROOT": str(selection.goroot),
+        "GOTOOLCHAIN": "local",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "",
+    }
+    if host.windows:
+        for name in ("SYSTEMROOT", "WINDIR"):
+            inherited = os.environ.get(name)
+            if inherited:
+                environment[name] = inherited
+    _verify_selected_root(
+        selection.goroot,
+        selection.root_stat,
+        selection.executable,
+        host,
+    )
+    try:
+        result = runner.run(
+            (str(selection.executable), "version"),
+            cwd=selection.goroot,
+            environment=dict(sorted(environment.items())),
+            timeout=probe_timeout,
+            output_limit=output_limit,
+        )
+    except ToolchainError:
+        raise
+    except Exception as exc:
+        raise ToolchainError("go_version_failed", "version failed") from exc
+    if len(result.stdout) + len(result.stderr) > output_limit:
+        raise ToolchainError(
+            "process_output_limit",
+            "Go probe exceeded its output bound",
+        )
+    if result.returncode != 0:
+        raise ToolchainError(
+            "go_version_failed",
+            f"version exited with status {result.returncode}",
+        )
+    _version, family, version_goos, version_goarch = _parse_go_version(
+        result.stdout
+    )
+    if family not in TESTED_GO_FAMILIES:
+        raise ToolchainError(
+            "unsupported_go_family",
+            f"Go release family {family} is not allowlisted",
+        )
+    if version_goos != host.goos or version_goarch != host.goarch:
+        raise ToolchainError(
+            "target_mismatch",
+            "Go version target and manager platform must be identical",
+        )
+    _verify_selected_root(
+        selection.goroot,
+        selection.root_stat,
+        selection.executable,
+        host,
+    )
+
+
 def probe_toolchain(config: ToolchainConfig) -> ToolchainSnapshot:
     """One-shot package-independent probe that leaves no private state."""
 

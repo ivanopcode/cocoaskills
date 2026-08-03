@@ -332,8 +332,39 @@ def _collect_resolved_scope(
             providers.append(provider)
             provider_identities[node.name] = frozen.identity
 
+    marker_inspections: dict[str, _MarkerInspection] = {}
+    for node in nodes:
+        node_skills_root = (
+            csk_home / "hybrid" / "skills"
+            if node.name in hybrid_store_names
+            else skills_root
+        )
+        marker_inspections[node.name] = _inspect_node_marker(
+            node,
+            node_skills_root / node.name,
+            runtime_dir=csk_home / "runtime" / node.name / node.resolved.commit,
+            effective_locale=(
+                config.preferred_locale
+                if node.name in hybrid_store_names and node.context_active
+                else effective_locale
+                if node.context_active
+                else None
+            ),
+            agents=(
+                []
+                if node.name in hybrid_store_names or not node.context_active
+                else agents
+            ),
+            expected_build_source=provider_identities.get(node.name),
+        )
+
     planned: dict[tuple[str, str], build_planner.BuildPlan] = {}
-    if providers:
+    plannable_providers = [
+        provider
+        for provider in providers
+        if marker_inspections[provider.name].build_boundary_error is None
+    ]
+    if plannable_providers:
         try:
             operator_path = build_toolchain.capture_operator_search_path()
             probe = build_planner.FilesystemGenerationProbe(
@@ -345,7 +376,7 @@ def _collect_resolved_scope(
                 )
             )
             plans = build_planner.plan_builds(
-                providers,
+                plannable_providers,
                 manager_home=csk_home,
                 operator_search_path=operator_path,
                 forbidden_roots=(
@@ -357,16 +388,17 @@ def _collect_resolved_scope(
                 generation_probe=probe,
                 expected_generation=probe.capture(),
                 max_generation_attempts=1,
+                read_only_preflight=True,
             )
             planned = {(plan.provider, plan.command): plan for plan in plans}
         except build_planner.BuildPlanningError as exc:
-            for provider in providers:
+            for provider in plannable_providers:
                 provider_errors[provider.name] = (
                     _planning_label(exc.code),
                     str(exc),
                 )
         except Exception as exc:  # noqa: BLE001 - toolchain status is non-current
-            for provider in providers:
+            for provider in plannable_providers:
                 provider_errors[provider.name] = (
                     "unusable-build-toolchain",
                     str(exc),
@@ -382,30 +414,7 @@ def _collect_resolved_scope(
             else skills_root
         )
         installed_dir = node_skills_root / node.name
-        expected_identity = provider_identities.get(node.name)
-        marker_inspection = _inspect_node_marker(
-            node,
-            installed_dir,
-            runtime_dir=(
-                csk_home
-                / "runtime"
-                / node.name
-                / node.resolved.commit
-            ),
-            effective_locale=(
-                config.preferred_locale
-                if node.name in hybrid_store_names and node.context_active
-                else effective_locale
-                if node.context_active
-                else None
-            ),
-            agents=(
-                []
-                if node.name in hybrid_store_names or not node.context_active
-                else agents
-            ),
-            expected_build_source=expected_identity,
-        )
+        marker_inspection = marker_inspections[node.name]
         node_builds = _node_build_statuses(
             config,
             node,

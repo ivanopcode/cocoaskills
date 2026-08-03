@@ -1024,6 +1024,7 @@ def _install_identity_build_pipeline(
         "capture_operator_search_path",
         lambda: toolchain.OperatorSearchPath(("/fixture/bin",)),
     )
+    monkeypatch.setattr(toolchain, "preflight_toolchain", lambda _config: None)
     monkeypatch.setattr(toolchain, "establish_toolchain", FakeSession)
     monkeypatch.setattr(go_v1, "build", fake_build)
 
@@ -5706,13 +5707,13 @@ def _status_unsupported_toolchain(
 ) -> None:
     del project, csk_home, marker_path, marker
 
-    def unsupported(_config: toolchain.ToolchainConfig) -> object:
+    def unsupported(_config: toolchain.ToolchainConfig) -> None:
         raise toolchain.ToolchainError(
             "unsupported_go_family",
             "observed unsupported toolchain",
         )
 
-    monkeypatch.setattr(toolchain, "establish_toolchain", unsupported)
+    monkeypatch.setattr(toolchain, "preflight_toolchain", unsupported)
 
 
 def _status_corrupt_receipt(
@@ -5755,7 +5756,13 @@ def _status_wrong_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     del project, csk_home, marker_path, marker
-    _patch_different_toolchain(monkeypatch, change_target=True)
+    def wrong_target(_config: toolchain.ToolchainConfig) -> None:
+        raise toolchain.ToolchainError(
+            "target_mismatch",
+            "observed wrong native target",
+        )
+
+    monkeypatch.setattr(toolchain, "preflight_toolchain", wrong_target)
 
 
 def _status_build_source_mismatch(
