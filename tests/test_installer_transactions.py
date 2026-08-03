@@ -127,6 +127,7 @@ def _install_fake_build_pipeline(
         "capture_operator_search_path",
         lambda: build_toolchain.OperatorSearchPath(("/fixture/bin",)),
     )
+    monkeypatch.setattr(build_toolchain, "preflight_toolchain", lambda _config: None)
     monkeypatch.setattr(build_toolchain, "establish_toolchain", FakeSession)
     monkeypatch.setattr(go_v1, "build", fake_build)
 

@@ -278,6 +278,7 @@ def plan_builds(
     generation_probe: GenerationProbe | None = None,
     expected_generation: Mapping[str, str] | None = None,
     max_generation_attempts: int = 2,
+    read_only_preflight: bool = False,
 ) -> tuple[BuildPlan, ...]:
     """Produce a complete immutable plan without source-aware Go or mutation.
 
@@ -313,6 +314,7 @@ def plan_builds(
             forbidden_roots=forbidden_roots,
             cache_backend=cache_backend,
             establish_toolchain=establish_toolchain,
+            read_only_preflight=read_only_preflight,
         )
         after = _capture_generation(generation_probe)
         if before == after:
@@ -334,6 +336,7 @@ def _plan_once(
     forbidden_roots: Sequence[Path],
     cache_backend: cache.BuildCacheBackend | None,
     establish_toolchain: ToolchainFactory | None,
+    read_only_preflight: bool,
 ) -> tuple[BuildPlan, ...]:
     if not providers:
         return ()
@@ -359,6 +362,14 @@ def _plan_once(
         )
         if path.exists()
     )
+    if read_only_preflight:
+        toolchain.preflight_toolchain(
+            toolchain.ToolchainConfig(
+                private_base=home,
+                operator_search_path=operator_search_path,
+                forbidden_roots=forbidden,
+            )
+        )
     plans: list[BuildPlan] = []
     with tempfile.TemporaryDirectory(prefix="csk-build-plan-") as private:
         config = toolchain.ToolchainConfig(

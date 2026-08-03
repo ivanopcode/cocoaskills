@@ -261,6 +261,38 @@ def test_establish_uses_only_exact_bootstrap_argv_and_clean_environment(
     assert not operation_root.exists()
 
 
+def test_preflight_uses_only_version_and_does_not_allocate_private_state(
+    tmp_path: Path,
+) -> None:
+    config, runner, goroot, private_base = _setup(tmp_path)
+
+    toolchain.preflight_toolchain(config)
+
+    executable = str(
+        (goroot / "bin" / ("go.exe" if os.name == "nt" else "go")).resolve()
+    )
+    assert [call[0] for call in runner.calls] == [(executable, "version")]
+    assert runner.calls[0][1] == goroot.resolve()
+    assert runner.calls[0][2]["GOENV"] == "off"
+    assert runner.calls[0][2]["GOTOOLCHAIN"] == "local"
+    assert list(private_base.iterdir()) == []
+
+
+def test_preflight_rejects_unsupported_family_without_private_state(
+    tmp_path: Path,
+) -> None:
+    config, _runner, _goroot, private_base = _setup(
+        tmp_path,
+        version="go version go1.24.9 darwin/arm64\n",
+    )
+
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.preflight_toolchain(config)
+
+    _assert_code("unsupported_go_family", raised)
+    assert list(private_base.iterdir()) == []
+
+
 def test_probe_returns_frozen_snapshot_and_removes_private_root(tmp_path: Path):
     config, runner, _, private_base = _setup(tmp_path)
 
