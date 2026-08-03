@@ -1610,6 +1610,71 @@ def test_rc6_windows_vcs_administrative_attribute_drift_retains_provenance(
     )
 
 
+def test_rc6_current_status_diagnostic_separates_host_drift_from_causal_writes(
+) -> None:
+    host_drift = lifecycle_observations._SnapshotDrift(
+        root_class="project",
+        relative_path=".git/objects/pack",
+        fields=("file-attributes",),
+        provenance="host-vcs-administration",
+    )
+    host_only = lifecycle_observations._persistent_observation_diagnostic(
+        (host_drift,),
+        (),
+    )
+
+    assert host_only["signal"] == "host-vcs-administration-drift"
+    assert host_only["causal_writes"] == []
+    assert not lifecycle_observations._snapshot_has_protected_state_drift(
+        (host_drift,),
+        native_change_time_owned_by_causal_observer=True,
+    )
+
+    causal = lifecycle_observations._CausalWrite(
+        operation="path-write_text",
+        root_class="manager-home",
+        relative_path="status-write",
+    )
+    with_write = lifecycle_observations._persistent_observation_diagnostic(
+        (host_drift,),
+        (causal,),
+    )
+
+    assert with_write["signal"] == "causal-write-and-snapshot-drift"
+    assert with_write["causal_writes"] == [
+        {
+            "operation": "path-write_text",
+            "root_class": "manager-home",
+            "relative_path": "status-write",
+        }
+    ]
+
+
+def test_rc6_compiled_current_status_reports_classified_read_only_evidence() -> None:
+    clear_manager_lifecycle_observation_cache()
+    fixture = MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"]
+
+    observed = observe_manager_lifecycle_case(
+        "compiled-installation-current",
+        fixture,
+    )
+    diagnostic = lifecycle_observations.manager_lifecycle_case_diagnostics(
+        "compiled-installation-current",
+        fixture,
+    )
+
+    assert observed["result"] == "current"
+    assert observed["mutations"] == []
+    assert diagnostic["isolation"] == "fresh-current-installation-root"
+    assert diagnostic["read_only"]
+    assert diagnostic["causal_writes"] == []
+    assert all(
+        item["provenance"]
+        in {"native-change-time-observer", "host-vcs-administration"}
+        for item in diagnostic["snapshot_drift"]
+    )
+
+
 def test_rc6_empty_classified_drift_is_deterministically_stable() -> None:
     drift: tuple[lifecycle_observations._SnapshotDrift, ...] = ()
     stable = not lifecycle_observations._snapshot_has_protected_state_drift(

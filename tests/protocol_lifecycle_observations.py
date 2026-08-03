@@ -453,6 +453,48 @@ def _snapshot_has_protected_state_drift(
     )
 
 
+def _persistent_observation_diagnostic(
+    snapshot_drift: tuple[_SnapshotDrift, ...],
+    causal_writes: tuple[_CausalWrite, ...],
+) -> JsonObject:
+    """Render classified snapshot and causal evidence without absolute paths."""
+
+    if causal_writes and snapshot_drift:
+        signal = "causal-write-and-snapshot-drift"
+    elif causal_writes:
+        signal = "causal-write"
+    elif snapshot_drift:
+        provenances = {item.provenance for item in snapshot_drift}
+        if provenances == {"host-vcs-administration"}:
+            signal = "host-vcs-administration-drift"
+        elif provenances == {"native-change-time-observer"}:
+            signal = "native-change-time-drift"
+        else:
+            signal = "snapshot-drift"
+    else:
+        signal = "none"
+    return {
+        "signal": signal,
+        "snapshot_drift": [
+            {
+                "root_class": item.root_class,
+                "relative_path": item.relative_path,
+                "fields": list(item.fields),
+                "provenance": item.provenance,
+            }
+            for item in snapshot_drift
+        ],
+        "causal_writes": [
+            {
+                "operation": item.operation,
+                "root_class": item.root_class,
+                "relative_path": item.relative_path,
+            }
+            for item in causal_writes
+        ],
+    }
+
+
 def _same_native_path_identity(first: Path, second: Path) -> bool:
     """Compare path spellings by the filesystem object they select."""
 
@@ -5132,6 +5174,13 @@ def _observe_status_and_repair(
         status_side_effects: list[str] = []
         status_artifact_executions: list[Path] = []
         persistent_mutations: list[str] = []
+        causal_writes: list[_CausalWrite] = []
+        protected_roots = (project, csk_home, skills_root)
+        provenance_roots = (
+            ("project", project),
+            ("manager-home", csk_home),
+            ("skills-root", skills_root),
+        )
         real_read_marker = status_mod.install_marker.read_install_marker
         real_build_closure = status_mod.closure.build_closure
         real_freeze = status_mod.build_source.freeze_snapshot
@@ -5241,10 +5290,24 @@ def _observe_status_and_repair(
             )
             return real_status_subprocess_popen(*args, **kwargs)
 
+        def record_causal_write(operation: str, path: Path) -> None:
+            root_class, relative_path = _protected_path_provenance(
+                path,
+                provenance_roots,
+            )
+            causal_writes.append(
+                _CausalWrite(
+                    operation=operation,
+                    root_class=root_class,
+                    relative_path=relative_path,
+                )
+            )
+
         _install_persistent_mutation_observer(
             monkeypatch,
-            (status_root, csk_home, skills_root),
+            protected_roots,
             persistent_mutations,
+            on_event=record_causal_write,
         )
         monkeypatch.setattr(
             status_mod.install_marker,
@@ -5275,10 +5338,22 @@ def _observe_status_and_repair(
         monkeypatch.setattr(go_v1, "build", observed_status_build)
         monkeypatch.setattr(subprocess, "run", observed_status_run)
         monkeypatch.setattr(subprocess, "Popen", observed_status_popen)
-        before = _persistent_tamper_state((status_root, csk_home, skills_root))
+        before = _persistent_tamper_state(protected_roots)
         project_status, build_status = _build_row(cfg)
-        after = _persistent_tamper_state((status_root, csk_home, skills_root))
-    read_only = before == after and not persistent_mutations
+        after = _persistent_tamper_state(protected_roots)
+    causal = tuple(dict.fromkeys(causal_writes))
+    if bool(persistent_mutations) != bool(causal):
+        raise AssertionError("status causal provenance lost an observed write")
+    snapshot_drift = _persistent_snapshot_drift(
+        before,
+        after,
+        provenance_roots,
+    )
+    protected_state_drift = _snapshot_has_protected_state_drift(
+        snapshot_drift,
+        native_change_time_owned_by_causal_observer=True,
+    )
+    read_only = not causal and not protected_state_drift
     current = (
         project_status.clean
         and build_status.current
@@ -5286,8 +5361,13 @@ def _observe_status_and_repair(
         and not status_artifact_executions
     )
     status_mutations = list(dict.fromkeys(status_side_effects))
-    if persistent_mutations or before != after:
+    if causal or protected_state_drift:
         status_mutations.append("filesystem")
+    diagnostics["compiled-installation-current"] = {
+        "isolation": "fresh-current-installation-root",
+        "read_only": read_only,
+        **_persistent_observation_diagnostic(snapshot_drift, causal),
+    }
     parsed_v2 = next(
         (
             value
@@ -6225,20 +6305,6 @@ def _currentness_failure_diagnostic(
 ) -> JsonObject:
     """Render causal and snapshot signals separately without absolute paths."""
 
-    if observation.causal_writes and observation.snapshot_drift:
-        signal = "causal-write-and-snapshot-drift"
-    elif observation.causal_writes:
-        signal = "causal-write"
-    elif observation.snapshot_drift:
-        provenances = {item.provenance for item in observation.snapshot_drift}
-        if provenances == {"host-vcs-administration"}:
-            signal = "host-vcs-administration-drift"
-        elif provenances == {"native-change-time-observer"}:
-            signal = "native-change-time-drift"
-        else:
-            signal = "snapshot-drift"
-    else:
-        signal = "none"
     return {
         "label": observation.label,
         "order": {
@@ -6250,26 +6316,12 @@ def _currentness_failure_diagnostic(
             "fresh_root": observation.fresh_root,
             "root_removed": observation.root_removed,
         },
-        "signal": signal,
         "non_current": observation.non_current,
         "persistent_state_stable": observation.persistent_state_stable,
-        "snapshot_drift": [
-            {
-                "root_class": item.root_class,
-                "relative_path": item.relative_path,
-                "fields": list(item.fields),
-                "provenance": item.provenance,
-            }
-            for item in observation.snapshot_drift
-        ],
-        "causal_writes": [
-            {
-                "operation": item.operation,
-                "root_class": item.root_class,
-                "relative_path": item.relative_path,
-            }
-            for item in observation.causal_writes
-        ],
+        **_persistent_observation_diagnostic(
+            observation.snapshot_drift,
+            observation.causal_writes,
+        ),
     }
 
 

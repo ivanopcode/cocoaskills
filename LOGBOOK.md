@@ -1,5 +1,25 @@
 # Logbook
 
+## 2026-08-04 — BUG-260803-2sqyqy current-status observer gains causal provenance
+
+Hosted Windows Python 3.12 at signed head `a361899d` returned the correct
+`compiled-installation-current` product verdict and all ten validation
+witnesses, but the conformance adapter emitted `mutations=[filesystem]` from
+its legacy unclassified `before != after` comparison.  Unlike the independently
+isolated negative-currentness cases, that current-state observation exposed no
+snapshot or causal diagnostic, so host metadata drift and a CocoaSkills write
+were indistinguishable.
+
+The current-state observer now watches the exact project, manager-home, and
+skills roots, records every protected-root mutation call with sanitized causal
+provenance, and derives the filesystem mutation verdict from the same classified
+snapshot model as the negative cases.  Any causal write or protected-state
+drift remains fail-closed.  Directory-only Windows `.git` file-attribute drift
+and observer-owned native ChangeTime remain preserved in diagnostics without
+being mislabeled as product writes.  Focused tests pin both the host-only and
+causal-write signals and require the compiled-current observation to publish
+read-only provenance.
+
 ## 2026-08-01 — BUG-260801-1iu1ln observed rc.6 lifecycle bindings
 
 The cycle-2 scalar audit exposed 104 lifecycle mutations that survived the
