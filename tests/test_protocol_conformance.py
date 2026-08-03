@@ -1393,6 +1393,41 @@ def _assert_sabotaged_lifecycle_case_differs(
         )
 
 
+def test_rc6_atomic_handoff_normalizes_only_the_moved_root_change_time() -> None:
+    node = lifecycle_observations._TamperNode(
+        kind="file",
+        mode=0o400,
+        device=1,
+        inode=2,
+        links=1,
+        uid=3,
+        gid=4,
+        size=5,
+        mtime_ns=6,
+        ctime_ns=7,
+        flags=None,
+        file_attributes=None,
+        value=b"sealed",
+    )
+    source = {".": replace(node, kind="directory", value=None), "receipt": node}
+    renamed_root = {
+        ".": replace(source["."], ctime_ns=8),
+        "receipt": node,
+    }
+    assert lifecycle_observations._same_tree_across_atomic_rename(
+        source,
+        renamed_root,
+    )
+    restored_child_dacl = {
+        **renamed_root,
+        "receipt": replace(node, ctime_ns=8),
+    }
+    assert not lifecycle_observations._same_tree_across_atomic_rename(
+        source,
+        restored_child_dacl,
+    )
+
+
 def _transient_descriptor_rewrite(path: Path, marker: bytes) -> None:
     """Mutate persistent bytes through dir-fd I/O, then restore them exactly."""
 
@@ -3400,35 +3435,80 @@ def test_rc6_publication_binding_detects_windows_native_api_dacl_restore(
     from csk.builds import cache_windows
 
     real_api = cache_windows._api
-    mutations = 0
+    mutations: list[tuple[object, object, int, int]] = []
 
     class MutatingMoveFileEx:
         def __init__(self, function: Any) -> None:
             object.__setattr__(self, "_function", function)
 
         def __call__(self, source: Any, destination: Any, flags: int) -> Any:
-            nonlocal mutations
             result = self._function(source, destination, flags)
             if result:
                 destination_path = Path(os.fsdecode(destination))
                 if re.fullmatch(r"[0-9a-f]{64}", destination_path.name):
+                    # The entry root's ChangeTime is deliberately normalized by
+                    # the atomic-rename witness: moving a directory can change
+                    # that field without changing its staged contents.  Mutate
+                    # a sealed child whose metadata must survive the handoff
+                    # exactly, so the native witness remains independently
+                    # sensitive after the DACL is restored.
+                    receipt_path = (
+                        destination_path / cache_windows.RECEIPT_FILENAME
+                    )
                     with cache_windows._open_raw_handle(
-                        destination_path,
+                        receipt_path,
                         desired_access=(
                             cache_windows._READ_CONTROL
                             | cache_windows._WRITE_DAC
                             | cache_windows._FILE_READ_ATTRIBUTES
                         ),
-                    ) as destination_handle:
-                        cache_windows._apply_profile_dacl(
-                            destination_handle,
-                            cache_windows._MUTABLE_DIRECTORY,
+                    ) as receipt_handle:
+                        before_identity = receipt_handle.identity
+                        before_security = cache_windows._security_snapshot(
+                            receipt_handle
+                        )
+                        before_change_time = int(
+                            receipt_handle.basic.change_time
                         )
                         cache_windows._apply_profile_dacl(
-                            destination_handle,
-                            cache_windows._SEALED_DIRECTORY,
+                            receipt_handle,
+                            cache_windows._MUTABLE_FILE,
                         )
-                    mutations += 1
+                        mutable_security = cache_windows._security_snapshot(
+                            receipt_handle
+                        )
+                        assert mutable_security != before_security
+                        cache_windows._apply_profile_dacl(
+                            receipt_handle,
+                            cache_windows._SEALED_RECEIPT,
+                        )
+                        assert (
+                            cache_windows._security_snapshot(receipt_handle)
+                            == before_security
+                        )
+                    with cache_windows._open_raw_handle(
+                        receipt_path,
+                        desired_access=(
+                            cache_windows._READ_CONTROL
+                            | cache_windows._FILE_READ_ATTRIBUTES
+                        ),
+                    ) as restored_handle:
+                        assert restored_handle.identity == before_identity
+                        assert (
+                            cache_windows._security_snapshot(restored_handle)
+                            == before_security
+                        )
+                        after_change_time = int(
+                            restored_handle.basic.change_time
+                        )
+                    mutations.append(
+                        (
+                            before_identity,
+                            mutable_security,
+                            before_change_time,
+                            after_change_time,
+                        )
+                    )
             return result
 
         def __getattr__(self, name: str) -> Any:
@@ -3464,11 +3544,23 @@ def test_rc6_publication_binding_detects_windows_native_api_dacl_restore(
     clear_manager_lifecycle_observation_cache()
     monkeypatch.setattr(cache_windows, "_api", mutating_api)
     try:
-        _assert_sabotaged_lifecycle_case_differs(
+        case = _lifecycle_case(
             "cache_publication_cases",
             "publish-complete-immutable-entry-under-home-lock",
         )
-        assert mutations > 0
+        fixture = MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"]
+        observed = observe_manager_lifecycle_case(case["name"], fixture)
+        assert mutations
+        assert all(before != after for _, _, before, after in mutations)
+        expected = deepcopy(case)
+        expected["publication"] = "incomplete"
+        assert observed == expected
+        with pytest.raises(AssertionError):
+            assert_manager_lifecycle_case(
+                "cache_publication_cases",
+                case,
+                MANAGER_LIFECYCLE_VECTORS,
+            )
     finally:
         clear_manager_lifecycle_observation_cache()
 
