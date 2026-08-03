@@ -761,6 +761,16 @@ publication and rollback witnesses continue to use native change time. This
 keeps status reads non-mutating without weakening byte, identity, mode, DACL,
 or explicit-write coverage.
 
+Hosted validation disproved that attempted separation. Run 30763408033 still
+reported a causal/persistent mutation for `unsupported-toolchain` after the
+change, while the prior exact-head run reported `wrong-native-target` and
+`build-source-mismatch`. Removing the causal observer would make the vector
+pass by construction and recreate the self-asserting coverage rejected in
+review. The task therefore stops before that workaround: either product status
+behavior must become read-only under these failure boundaries, or the protocol
+owner must explicitly redefine the vector's empty `mutations` outcome and its
+required evidence model.
+
 The next exact-head Windows matrix completed its full two-hour native lifecycle
 path and exposed one remaining direct timestamp call in the GC fixture. The
 entry-aging step still required `os.utime(..., follow_symlinks=False)`, so its
@@ -801,3 +811,31 @@ separates a POSIX PATH list and every absolute Windows path carries a drive
 separator. Each host now executes its native launcher and reads the other, which
 is the symmetry POSIX hosts already had. No product behavior, release pin, tag,
 claim, schema, or workflow pin changed.
+
+## 2026-08-03 — BUG-260803-2sqyqy isolated Windows status observation
+
+Matched hosted evidence and an exact-head native focus run excluded the accepted
+status fix and the later DACL-witness change as deterministic sources of the
+Python 3.14-only currentness labels. The conformance observer nevertheless
+collapsed persistent snapshot drift and causal protected-root calls into one
+label while retaining all fourteen status boundaries inside a shared lifecycle
+root. It could therefore report a host or ordering signal as an unexplained
+product mutation.
+
+Every currentness failure now provisions and removes its own short temporary
+root and owns an independent MonkeyPatch lifetime. The vector remains a single
+matrix with the same fourteen conditions and exact fields. Non-vector
+diagnostics record the sequence position and predecessor, fresh-root identity
+and cleanup, snapshot differences as sanitized root/relative-path/field tuples,
+and causal calls as sanitized operation/root/relative-path tuples. Windows
+snapshots now retain the native owner/DACL alongside byte content, identity,
+mode, attributes, last-write time and native ChangeTime. Persistent drift and
+causal mutation observation both remain fail-closed; neither signal is filtered
+or converted into an expected answer.
+
+Regressions run the three hosted labels five times from distinct roots, run all
+fourteen cases in forward and reverse order, and prove that snapshot-only host
+drift is diagnosed separately from an attributed CocoaSkills write. Existing
+low-level create/remove and permission-change/restore sabotages still invalidate
+the matrix. The accepted product status implementation and rc.6 vectors are
+unchanged.

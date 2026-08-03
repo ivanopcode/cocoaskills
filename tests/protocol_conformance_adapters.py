@@ -37,7 +37,10 @@ from csk import (
     whitelist,
 )
 from csk.builds import cache, go_v1, metadata, source, toolchain
-from protocol_lifecycle_observations import observe_manager_lifecycle_case
+from protocol_lifecycle_observations import (
+    manager_lifecycle_case_diagnostics,
+    observe_manager_lifecycle_case,
+)
 
 JsonObject = dict[str, Any]
 
@@ -2674,8 +2677,11 @@ def assert_manager_lifecycle_case(
     assert set(observed) == expected_fields, (
         f"observed lifecycle binding {name!r} has unknown or missing fields"
     )
+    diagnostics = manager_lifecycle_case_diagnostics(name, fixture)
     assert case == observed, (
         f"lifecycle case {name!r} differs from observed CocoaSkills state:\n"
         f"expected={json.dumps(case, ensure_ascii=False, sort_keys=True)}\n"
-        f"observed={json.dumps(observed, ensure_ascii=False, sort_keys=True)}"
+        f"observed={json.dumps(observed, ensure_ascii=False, sort_keys=True)}\n"
+        "diagnostics="
+        f"{json.dumps(diagnostics, ensure_ascii=False, sort_keys=True)}"
     )

@@ -1377,6 +1377,10 @@ def _lifecycle_case(cluster: str, name: str) -> dict[str, Any]:
     )
 
 
+def _is_isolated_currentness_home(path: Path) -> bool:
+    return path.name == "home" and path.parent.name.startswith("csk-s-")
+
+
 def _assert_sabotaged_lifecycle_case_differs(
     cluster: str,
     name: str,
@@ -1393,6 +1397,183 @@ def _assert_sabotaged_lifecycle_case_differs(
         )
 
 
+def _currentness_observation_signature(observation: Any) -> tuple[object, ...]:
+    return (
+        observation.non_current,
+        observation.persistent_state_stable,
+        observation.causal_writes,
+        observation.side_effects,
+        observation.artifact_executed,
+    )
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "context-visible-build-root",
+        "runtime-copied-build-root",
+        "artifact-path-mismatch",
+    ],
+)
+def test_rc6_currentness_failure_observation_repeats_from_fresh_roots(
+    label: str,
+) -> None:
+    identities = lifecycle_observations._observe_fixture_identities(
+        MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"]
+    )
+
+    observations = tuple(
+        lifecycle_observations._observe_currentness_failure_sequence(
+            identities,
+            (label,),
+        )[0]
+        for _ in range(5)
+    )
+
+    assert len({item.isolation_id for item in observations}) == 5
+    assert all(item.fresh_root and item.root_removed for item in observations)
+    assert {
+        _currentness_observation_signature(item) for item in observations
+    } == {(True, True, (), (), False)}
+    assert all(item.condition_observed for item in observations)
+    assert all(not item.mutation_detected for item in observations)
+    assert all(
+        set(drift.fields) <= {"native-change-time"}
+        for item in observations
+        for drift in item.snapshot_drift
+    )
+
+
+def test_rc6_currentness_failure_observation_is_order_independent() -> None:
+    identities = lifecycle_observations._observe_fixture_identities(
+        MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"]
+    )
+    labels = tuple(lifecycle_observations._CURRENTNESS_CONDITIONS)
+
+    forward = lifecycle_observations._observe_currentness_failure_sequence(
+        identities,
+        labels,
+    )
+    reverse = lifecycle_observations._observe_currentness_failure_sequence(
+        identities,
+        tuple(reversed(labels)),
+    )
+
+    assert len({item.isolation_id for item in (*forward, *reverse)}) == 28
+    assert all(item.fresh_root and item.root_removed for item in (*forward, *reverse))
+    assert [item.label for item in forward] == list(labels)
+    assert [item.label for item in reverse] == list(reversed(labels))
+    assert forward[0].predecessor is None
+    assert reverse[0].predecessor is None
+    assert [item.predecessor for item in forward[1:]] == list(labels[:-1])
+    assert [item.predecessor for item in reverse[1:]] == list(reversed(labels))[:-1]
+    assert {
+        item.label: _currentness_observation_signature(item)
+        for item in forward
+    } == {
+        item.label: _currentness_observation_signature(item)
+        for item in reverse
+    }
+    assert all(item.condition_observed for item in (*forward, *reverse))
+    assert all(not item.mutation_detected for item in (*forward, *reverse))
+
+
+def test_rc6_currentness_failure_provenance_names_causal_protected_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identities = lifecycle_observations._observe_fixture_identities(
+        MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"]
+    )
+    original = status_mod._collect_resolved_scope
+
+    def write_protected_witness(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        home = config_value.path.parent
+        if "csk-s-" in home.as_posix():
+            witness = home / "causal-status-write"
+            witness.write_text("causal\n", encoding="utf-8")
+        return original(config_value, *args, **kwargs)
+
+    monkeypatch.setattr(
+        status_mod,
+        "_collect_resolved_scope",
+        write_protected_witness,
+    )
+    observation = lifecycle_observations._observe_currentness_failure_sequence(
+        identities,
+        ("context-visible-build-root",),
+    )[0]
+
+    assert observation.non_current
+    assert observation.mutation_detected
+    assert not observation.condition_observed
+    assert observation.causal_writes
+    assert {
+        (event.root_class, event.relative_path)
+        for event in observation.causal_writes
+    } == {("manager-home", "causal-status-write")}
+    assert all(not Path(event.relative_path).is_absolute() for event in observation.causal_writes)
+    assert any(
+        drift.root_class == "manager-home"
+        and drift.relative_path == "causal-status-write"
+        and "existence" in drift.fields
+        for drift in observation.snapshot_drift
+    )
+
+
+def test_rc6_currentness_failure_provenance_separates_snapshot_only_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identities = lifecycle_observations._observe_fixture_identities(
+        MANAGER_LIFECYCLE_VECTORS["compiled_build_fixture"]
+    )
+    original = status_mod._collect_resolved_scope
+
+    def add_untraced_host_drift(
+        config_value: config.GlobalConfig,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        result = original(config_value, *args, **kwargs)
+        home = config_value.path.parent
+        if _is_isolated_currentness_home(home):
+            # ``io.open`` is captured before the observer's Python-level path
+            # wrappers.  It models an external host write: persistent state
+            # changes, while no CocoaSkills mutation call is attributed.
+            with io.open(home / "snapshot-only-host-drift", "wb") as stream:
+                stream.write(b"host drift\n")
+        return result
+
+    monkeypatch.setattr(
+        status_mod,
+        "_collect_resolved_scope",
+        add_untraced_host_drift,
+    )
+    observation = lifecycle_observations._observe_currentness_failure_sequence(
+        identities,
+        ("context-visible-build-root",),
+    )[0]
+    diagnostic = lifecycle_observations._currentness_failure_diagnostic(
+        observation
+    )
+
+    assert observation.non_current
+    assert observation.mutation_detected
+    assert not observation.condition_observed
+    assert observation.causal_writes == ()
+    assert diagnostic["signal"] == "snapshot-drift"
+    assert diagnostic["causal_writes"] == []
+    assert {
+        (item["root_class"], item["relative_path"], tuple(item["fields"]))
+        for item in diagnostic["snapshot_drift"]
+    } >= {
+        ("manager-home", "snapshot-only-host-drift", ("existence",)),
+    }
+
+
 def test_rc6_atomic_handoff_normalizes_only_the_moved_root_change_time() -> None:
     node = lifecycle_observations._TamperNode(
         kind="file",
@@ -1407,6 +1588,7 @@ def test_rc6_atomic_handoff_normalizes_only_the_moved_root_change_time() -> None
         ctime_ns=7,
         flags=None,
         file_attributes=None,
+        dacl=None,
         value=b"sealed",
     )
     source = {".": replace(node, kind="directory", value=None), "receipt": node}
@@ -2525,14 +2707,16 @@ def test_rc6_identity_binding_detects_operation_side_key_and_receipt_changes(
             "dry-run/compiled/home",
             "gc/mark-sweep/home",
             "status-repair/current/home",
-            "status-repair/matrix/",
             "status-repair/repair/",
         )
         if (
             not plans
-            or not any(
-                fragment in manager_home.as_posix()
-                for fragment in scoped_homes
+            or not (
+                any(
+                    fragment in manager_home.as_posix()
+                    for fragment in scoped_homes
+                )
+                or _is_isolated_currentness_home(manager_home)
             )
         ):
             return plans
@@ -2866,7 +3050,7 @@ def test_rc6_read_only_bindings_detect_low_level_transient_mutations(
         home = config_value.path.parent
         if (
             "status-repair/current/home" in home.as_posix()
-            or "status-repair/matrix/" in home.as_posix()
+            or _is_isolated_currentness_home(home)
         ):
             write_then_remove(home / "builds", "transient-currentness-write")
             currentness_mutations += 1
@@ -2926,7 +3110,7 @@ def test_rc6_currentness_binding_detects_transient_permission_mutations(
         home_text = home.as_posix()
         if (
             "status-repair/current/home" in home_text
-            or "status-repair/matrix/" in home_text
+            or _is_isolated_currentness_home(home)
         ):
             for entry in sorted((home / "builds" / "go-v1").glob("*")):
                 mode = stat.S_IMODE(entry.lstat().st_mode)

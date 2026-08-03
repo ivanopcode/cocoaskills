@@ -4,6 +4,9 @@ The shared vector is an expectation, never a source of lifecycle answers.  This
 module constructs independent operations against CocoaSkills seams and projects
 their traces into the protocol vocabulary.  The projection is cached because a
 single run covers all 32 cases and the conformance test parametrizes by case.
+Status failure boundaries are the exception: every condition is observed under
+its own short-lived root so filesystem state and monkeypatch lifetimes cannot
+leak from one condition into another.
 """
 
 from __future__ import annotations
@@ -116,7 +119,56 @@ class _TamperNode:
     ctime_ns: int
     flags: int | None
     file_attributes: int | None
+    dacl: object | None
     value: bytes | str | None
+
+
+@dataclass(frozen=True)
+class _SnapshotDrift:
+    """Sanitized persistent-state difference for one protected node."""
+
+    root_class: str
+    relative_path: str
+    fields: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _CausalWrite:
+    """One sanitized write call observed inside a protected root."""
+
+    operation: str
+    root_class: str
+    relative_path: str
+
+
+@dataclass(frozen=True)
+class _CurrentnessFailureObservation:
+    """One independently isolated status failure and its causal provenance."""
+
+    label: str
+    sequence_index: int
+    predecessor: str | None
+    isolation_id: str
+    fresh_root: bool
+    root_removed: bool
+    non_current: bool
+    persistent_state_stable: bool
+    snapshot_drift: tuple[_SnapshotDrift, ...]
+    causal_writes: tuple[_CausalWrite, ...]
+    side_effects: tuple[str, ...]
+    artifact_executed: bool
+
+    @property
+    def mutation_detected(self) -> bool:
+        """Retain both persistent drift and causal write observation."""
+
+        return not self.persistent_state_stable or bool(self.causal_writes)
+
+    @property
+    def condition_observed(self) -> bool:
+        """Return whether this boundary is non-current and deterministically read-only."""
+
+        return self.non_current and not self.mutation_detected
 
 
 def _tamper_node(path: Path) -> _TamperNode:
@@ -135,6 +187,7 @@ def _tamper_node(path: Path) -> _TamperNode:
         kind = "special"
         value = None
     change_time = info.st_ctime_ns
+    dacl: object | None = None
     if os.name == "nt" and kind in {"file", "directory"}:
         # Python exposes Windows creation time as ``st_ctime``.  The native
         # change-time field is the durable witness for a write/restore sequence
@@ -143,9 +196,13 @@ def _tamper_node(path: Path) -> _TamperNode:
 
         with cache_windows._open_raw_handle(
             path,
-            desired_access=cache_windows._FILE_READ_ATTRIBUTES,
+            desired_access=(
+                cache_windows._FILE_READ_ATTRIBUTES
+                | cache_windows._READ_CONTROL
+            ),
         ) as handle:
             change_time = int(handle.basic.change_time)
+            dacl = cache_windows._security_snapshot(handle)
     return _TamperNode(
         kind=kind,
         mode=stat.S_IMODE(info.st_mode),
@@ -159,6 +216,7 @@ def _tamper_node(path: Path) -> _TamperNode:
         ctime_ns=change_time,
         flags=getattr(info, "st_flags", None),
         file_attributes=getattr(info, "st_file_attributes", None),
+        dacl=dacl,
         value=value,
     )
 
@@ -268,6 +326,95 @@ def _same_persistent_state_except_change_time(
         if before_node != after_node:
             return False
     return True
+
+
+_TAMPER_FIELD_LABELS = (
+    ("kind", "kind"),
+    ("mode", "mode"),
+    ("device", "identity"),
+    ("inode", "identity"),
+    ("links", "link-count"),
+    ("uid", "owner"),
+    ("gid", "group"),
+    ("size", "size"),
+    ("mtime_ns", "last-write-time"),
+    ("ctime_ns", "native-change-time"),
+    ("flags", "flags"),
+    ("file_attributes", "file-attributes"),
+    ("dacl", "dacl"),
+    ("value", "bytes-or-link-target"),
+)
+
+
+def _protected_path_provenance(
+    path: Path,
+    roots: tuple[tuple[str, Path], ...],
+) -> tuple[str, str]:
+    """Classify an observed path without publishing its temporary absolute root."""
+
+    candidate = path.resolve(strict=False)
+    for root_class, root in roots:
+        protected = root.resolve(strict=False)
+        if candidate == protected:
+            return root_class, "."
+        if candidate.is_relative_to(protected):
+            return root_class, candidate.relative_to(protected).as_posix()
+    raise AssertionError(f"unclassified protected path for {path.name!r}")
+
+
+def _snapshot_key_provenance(
+    key: str,
+    roots: tuple[tuple[str, Path], ...],
+) -> tuple[str, str]:
+    """Project a persistent-snapshot key to a stable root and relative path."""
+
+    for root_class, root in roots:
+        prefix = f"{os.fspath(root)}:"
+        if not key.startswith(prefix):
+            continue
+        relative = key[len(prefix) :]
+        if relative.startswith("@missing-root-anchor:"):
+            relative = "@missing-root-anchor"
+        return root_class, relative
+    raise AssertionError("persistent snapshot contains an unclassified root")
+
+
+def _persistent_snapshot_drift(
+    before: dict[str, _TamperNode | None],
+    after: dict[str, _TamperNode | None],
+    roots: tuple[tuple[str, Path], ...],
+) -> tuple[_SnapshotDrift, ...]:
+    """Return exact, sanitized field provenance for persistent snapshot drift."""
+
+    drift: list[_SnapshotDrift] = []
+    for key in sorted(before.keys() | after.keys()):
+        before_node = before.get(key)
+        after_node = after.get(key)
+        if before_node == after_node:
+            continue
+        root_class, relative = _snapshot_key_provenance(key, roots)
+        if key not in before or key not in after or (
+            before_node is None
+        ) != (after_node is None):
+            fields = ("existence",)
+        else:
+            assert before_node is not None and after_node is not None
+            fields = tuple(
+                dict.fromkeys(
+                    label
+                    for attribute, label in _TAMPER_FIELD_LABELS
+                    if getattr(before_node, attribute)
+                    != getattr(after_node, attribute)
+                )
+            )
+        drift.append(
+            _SnapshotDrift(
+                root_class=root_class,
+                relative_path=relative,
+                fields=fields,
+            )
+        )
+    return tuple(drift)
 
 
 def _same_native_path_identity(first: Path, second: Path) -> bool:
@@ -738,12 +885,31 @@ def observe_manager_lifecycle_case(
         sort_keys=True,
         separators=(",", ":"),
     )
-    observed = _observe_manager_lifecycle(fixture_raw)
+    observed, _diagnostics = _observe_manager_lifecycle(fixture_raw)
     if name not in observed:
         raise AssertionError(f"no observed CocoaSkills lifecycle binding for {name!r}")
     fixture = json.loads(fixture_raw)
     identities = _observe_fixture_identities(fixture)
     return _project_vector_identity(deepcopy(observed[name]), identities)
+
+
+def manager_lifecycle_case_diagnostics(
+    name: str,
+    compiled_build_fixture: JsonObject,
+) -> JsonObject:
+    """Return sanitized non-vector diagnostics for one lifecycle observation."""
+
+    fixture_raw = json.dumps(
+        compiled_build_fixture,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    _observed, diagnostics = _observe_manager_lifecycle(fixture_raw)
+    value = diagnostics.get(name, {})
+    if not isinstance(value, dict):
+        raise AssertionError(f"invalid lifecycle diagnostics for {name!r}")
+    return deepcopy(value)
 
 
 def _project_vector_identity(value: Any, identities: JsonObject) -> Any:
@@ -768,12 +934,15 @@ def clear_manager_lifecycle_observation_cache() -> None:
 
 
 @lru_cache(maxsize=None)
-def _observe_manager_lifecycle(fixture_raw: str) -> dict[str, JsonObject]:
+def _observe_manager_lifecycle(
+    fixture_raw: str,
+) -> tuple[dict[str, JsonObject], dict[str, JsonObject]]:
     fixture = json.loads(fixture_raw)
     identities = _observe_fixture_identities(fixture)
     root = Path(tempfile.mkdtemp(prefix="csk-rc6-lifecycle-"))
     try:
         observed: dict[str, JsonObject] = {}
+        diagnostics: dict[str, JsonObject] = {}
         _observe_bootstrap(root / "bootstrap", observed)
         _observe_build_order(observed)
         _observe_cache_publication(root / "cache", identities, observed)
@@ -784,11 +953,16 @@ def _observe_manager_lifecycle(fixture_raw: str) -> dict[str, JsonObject]:
         _observe_planning(root / "planning", observed)
         _observe_private_builds(root / "private-builds", identities, observed)
         _observe_recovery(root / "recovery", identities, observed)
-        _observe_status_and_repair(root / "status-repair", identities, observed)
+        _observe_status_and_repair(
+            root / "status-repair",
+            identities,
+            observed,
+            diagnostics,
+        )
         _observe_transactions(root / "transactions", identities, observed)
         _observe_upgrade(root / "upgrade", observed)
         assert len(observed) == 32
-        return observed
+        return observed, diagnostics
     finally:
         _make_tree_writable(root)
         shutil.rmtree(root, ignore_errors=True)
@@ -4804,6 +4978,7 @@ def _observe_status_and_repair(
     root: Path,
     identities: JsonObject,
     observed: dict[str, JsonObject],
+    diagnostics: dict[str, JsonObject],
 ) -> None:
     status_root = root / "current"
     skills_root = status_root / "skills"
@@ -5132,146 +5307,38 @@ def _observe_status_and_repair(
         ],
     }
 
-    observed_conditions: list[str] = []
-    matrix_side_effects: list[str] = []
-    matrix_artifact_executions: list[Path] = []
-    matrix_mutations: list[str] = []
-    # Exercise each status failure through the same installed-state helpers.
-    # Related protocol labels share a product boundary where CocoaSkills
-    # intentionally reports one stable non-current classification.
-    matrix_groups: tuple[
-        tuple[
-            str,
-            Callable[
-                [Path, Path, Path, JsonObject, pytest.MonkeyPatch],
-                None,
-            ],
-        ],
-        ...,
-    ] = (
-        (("missing-raw-snapshot"), _status_remove_snapshot),
-        (("context-visible-build-root"), _status_expose_build_root),
-        (("runtime-copied-build-root"), _status_copy_build_root_to_runtime),
-        (("untrusted-cache-boundary"), _status_untrust_cache),
-        (("unsupported-driver"), _status_unsupported_driver),
-        (("unsupported-toolchain"), _status_unsupported_toolchain),
-        (("corrupt-receipt"), _status_corrupt_receipt),
-        (("corrupt-artifact"), _status_corrupt_artifact),
-        (("wrong-native-target"), _status_wrong_target),
-        (("build-source-mismatch"), _status_build_source_mismatch),
-        (("cache-key-mismatch"), _status_cache_key_mismatch),
-        (("receipt-hash-mismatch"), _status_receipt_hash_mismatch),
-        (("artifact-path-mismatch"), _status_artifact_path_mismatch),
-        (("artifact-hash-mismatch"), _status_artifact_hash_mismatch),
+    # Each status failure receives a freshly allocated short root and its own
+    # MonkeyPatch lifetime.  The vector remains one matrix, but no case can
+    # inherit filesystem or observer state from a predecessor.
+    matrix_observations = _observe_currentness_failure_sequence(
+        identities,
+        tuple(_CURRENTNESS_CONDITIONS),
     )
-    for index, (label, mutate) in enumerate(matrix_groups):
-        case_root = root / "matrix" / f"{index:02d}-{label}"
-        skills_root = case_root / "skills"
-        skills_root.mkdir(parents=True)
-        csk_home = case_root / "home"
-        with pytest.MonkeyPatch.context() as monkeypatch:
-            project, cfg, _events, marker_path, marker = _installed_build(
-                monkeypatch,
-                case_root,
-                skills_root,
-                csk_home,
-                command="golden-tool",
-                install_pipeline=lambda patcher, events: (
-                    _install_normative_lifecycle_pipeline(
-                        patcher,
-                        identities,
-                        events,
-                    )
-                ),
-            )
-            mutate(project, csk_home, marker_path, marker, monkeypatch)
-            real_matrix_cache_factory = cache.cache_for_manager_home
-            real_matrix_build = go_v1.build
-            real_matrix_subprocess_run = subprocess.run
-            real_matrix_subprocess_popen = subprocess.Popen
-            case_persistent_mutations: list[str] = []
-
-            class ObservedMatrixCache:
-                def __init__(self, backend: cache.BuildCacheBackend):
-                    self._backend = backend
-                    self.manager_home = backend.manager_home
-
-                def inspect(
-                    self,
-                    expectation: cache.CacheExpectation,
-                ) -> cache.CacheInspection:
-                    return self._backend.inspect(expectation)
-
-                def publish(self, *args: Any, **kwargs: Any) -> Any:
-                    matrix_side_effects.append("adopt")
-                    return self._backend.publish(*args, **kwargs)
-
-                def quarantine(self, *args: Any, **kwargs: Any) -> Any:
-                    matrix_side_effects.append("quarantine")
-                    return self._backend.quarantine(*args, **kwargs)
-
-                def collect(self, *args: Any, **kwargs: Any) -> Any:
-                    matrix_side_effects.append("collection")
-                    return self._backend.collect(*args, **kwargs)
-
-            def observed_matrix_cache_factory(home: Path) -> ObservedMatrixCache:
-                return ObservedMatrixCache(real_matrix_cache_factory(home))
-
-            def observed_matrix_build(*args: Any, **kwargs: Any) -> Any:
-                matrix_side_effects.append("repair")
-                return real_matrix_build(*args, **kwargs)
-
-            def observed_matrix_run(*args: Any, **kwargs: Any) -> Any:
-                command = args[0] if args else kwargs.get("args")
-                _record_process_paths(
-                    command,
-                    matrix_artifact_executions,
-                    roots=(csk_home / "builds",),
-                    cwd=kwargs.get("cwd"),
-                )
-                return real_matrix_subprocess_run(*args, **kwargs)
-
-            def observed_matrix_popen(*args: Any, **kwargs: Any) -> Any:
-                command = args[0] if args else kwargs.get("args")
-                _record_process_paths(
-                    command,
-                    matrix_artifact_executions,
-                    roots=(csk_home / "builds",),
-                    cwd=kwargs.get("cwd"),
-                )
-                return real_matrix_subprocess_popen(*args, **kwargs)
-
-            _install_persistent_mutation_observer(
-                monkeypatch,
-                (project, csk_home, skills_root),
-                case_persistent_mutations,
-            )
-            monkeypatch.setattr(
-                cache,
-                "cache_for_manager_home",
-                observed_matrix_cache_factory,
-            )
-            monkeypatch.setattr(go_v1, "build", observed_matrix_build)
-            monkeypatch.setattr(subprocess, "run", observed_matrix_run)
-            monkeypatch.setattr(subprocess, "Popen", observed_matrix_popen)
-            before = _persistent_tamper_state((project, csk_home, skills_root))
-            project_status, build = _build_row(cfg)
-            after = _persistent_tamper_state((project, csk_home, skills_root))
-        stable_state = _same_persistent_state_except_change_time(before, after)
-        if (
-            not project_status.clean
-            and not build.current
-            and stable_state
-            and not case_persistent_mutations
-        ):
-            observed_conditions.append(label)
-        if not stable_state or case_persistent_mutations:
-            matrix_mutations.append(label)
-        _make_tree_writable(case_root)
+    observed_conditions = [
+        item.label for item in matrix_observations if item.condition_observed
+    ]
+    matrix_mutations = [
+        item.label for item in matrix_observations if item.mutation_detected
+    ]
+    matrix_side_effects = [
+        side_effect
+        for item in matrix_observations
+        for side_effect in item.side_effects
+    ]
+    matrix_artifact_executed = any(
+        item.artifact_executed for item in matrix_observations
+    )
+    diagnostics["compiled-currentness-failure-matrix"] = {
+        "isolation": "fresh-root-per-condition",
+        "cases": [
+            _currentness_failure_diagnostic(item)
+            for item in matrix_observations
+        ],
+    }
 
     observed["compiled-currentness-failure-matrix"] = {
         "adopt": "adopt" in matrix_side_effects,
-        "artifact_executed": bool(matrix_artifact_executions),
+        "artifact_executed": matrix_artifact_executed,
         "independent_conditions": observed_conditions,
         "mutations": matrix_mutations,
         "name": "compiled-currentness-failure-matrix",
@@ -5827,6 +5894,254 @@ def _status_artifact_hash_mismatch(
     del project, csk_home, monkeypatch
     _build_record(marker)["artifact_sha256"] = "sha256:" + "4" * 64
     _write_marker(marker_path, marker)
+
+
+_StatusFailureMutation = Callable[
+    [Path, Path, Path, JsonObject, pytest.MonkeyPatch],
+    None,
+]
+
+
+_CURRENTNESS_FAILURE_MUTATIONS: dict[str, _StatusFailureMutation] = {
+    "missing-raw-snapshot": _status_remove_snapshot,
+    "context-visible-build-root": _status_expose_build_root,
+    "runtime-copied-build-root": _status_copy_build_root_to_runtime,
+    "untrusted-cache-boundary": _status_untrust_cache,
+    "unsupported-driver": _status_unsupported_driver,
+    "unsupported-toolchain": _status_unsupported_toolchain,
+    "corrupt-receipt": _status_corrupt_receipt,
+    "corrupt-artifact": _status_corrupt_artifact,
+    "wrong-native-target": _status_wrong_target,
+    "build-source-mismatch": _status_build_source_mismatch,
+    "cache-key-mismatch": _status_cache_key_mismatch,
+    "receipt-hash-mismatch": _status_receipt_hash_mismatch,
+    "artifact-path-mismatch": _status_artifact_path_mismatch,
+    "artifact-hash-mismatch": _status_artifact_hash_mismatch,
+}
+
+
+def _observe_currentness_failure_case(
+    identities: JsonObject,
+    label: str,
+    *,
+    sequence_index: int,
+    predecessor: str | None,
+) -> _CurrentnessFailureObservation:
+    """Observe one status boundary under an independently disposable root."""
+
+    if tuple(_CURRENTNESS_FAILURE_MUTATIONS) != tuple(_CURRENTNESS_CONDITIONS):
+        raise AssertionError("currentness failure mutation inventory drifted")
+    try:
+        mutate = _CURRENTNESS_FAILURE_MUTATIONS[label]
+    except KeyError as exc:
+        raise AssertionError(f"unknown currentness failure {label!r}") from exc
+
+    case_root = Path(tempfile.mkdtemp(prefix="csk-s-"))
+    fresh_root = not any(case_root.iterdir())
+    observation: _CurrentnessFailureObservation | None = None
+    try:
+        skills_root = case_root / "skills"
+        skills_root.mkdir()
+        csk_home = case_root / "home"
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            project, cfg, _events, marker_path, marker = _installed_build(
+                monkeypatch,
+                case_root,
+                skills_root,
+                csk_home,
+                command="golden-tool",
+                install_pipeline=lambda patcher, events: (
+                    _install_normative_lifecycle_pipeline(
+                        patcher,
+                        identities,
+                        events,
+                    )
+                ),
+            )
+            mutate(project, csk_home, marker_path, marker, monkeypatch)
+            roots = (
+                ("project", project),
+                ("manager-home", csk_home),
+                ("skills-root", skills_root),
+            )
+            real_cache_factory = cache.cache_for_manager_home
+            real_build = go_v1.build
+            real_subprocess_run = subprocess.run
+            real_subprocess_popen = subprocess.Popen
+            side_effects: list[str] = []
+            artifact_executions: list[Path] = []
+            raw_mutations: list[str] = []
+            causal_writes: list[_CausalWrite] = []
+
+            class ObservedMatrixCache:
+                def __init__(self, backend: cache.BuildCacheBackend):
+                    self._backend = backend
+                    self.manager_home = backend.manager_home
+
+                def inspect(
+                    self,
+                    expectation: cache.CacheExpectation,
+                ) -> cache.CacheInspection:
+                    return self._backend.inspect(expectation)
+
+                def publish(self, *args: Any, **kwargs: Any) -> Any:
+                    side_effects.append("adopt")
+                    return self._backend.publish(*args, **kwargs)
+
+                def quarantine(self, *args: Any, **kwargs: Any) -> Any:
+                    side_effects.append("quarantine")
+                    return self._backend.quarantine(*args, **kwargs)
+
+                def collect(self, *args: Any, **kwargs: Any) -> Any:
+                    side_effects.append("collection")
+                    return self._backend.collect(*args, **kwargs)
+
+            def observed_cache_factory(home: Path) -> ObservedMatrixCache:
+                return ObservedMatrixCache(real_cache_factory(home))
+
+            def observed_build(*args: Any, **kwargs: Any) -> Any:
+                side_effects.append("repair")
+                return real_build(*args, **kwargs)
+
+            def observed_run(*args: Any, **kwargs: Any) -> Any:
+                command = args[0] if args else kwargs.get("args")
+                _record_process_paths(
+                    command,
+                    artifact_executions,
+                    roots=(csk_home / "builds",),
+                    cwd=kwargs.get("cwd"),
+                )
+                return real_subprocess_run(*args, **kwargs)
+
+            def observed_popen(*args: Any, **kwargs: Any) -> Any:
+                command = args[0] if args else kwargs.get("args")
+                _record_process_paths(
+                    command,
+                    artifact_executions,
+                    roots=(csk_home / "builds",),
+                    cwd=kwargs.get("cwd"),
+                )
+                return real_subprocess_popen(*args, **kwargs)
+
+            def record_causal_write(operation: str, path: Path) -> None:
+                root_class, relative_path = _protected_path_provenance(
+                    path,
+                    roots,
+                )
+                causal_writes.append(
+                    _CausalWrite(
+                        operation=operation,
+                        root_class=root_class,
+                        relative_path=relative_path,
+                    )
+                )
+
+            _install_persistent_mutation_observer(
+                monkeypatch,
+                (project, csk_home, skills_root),
+                raw_mutations,
+                on_event=record_causal_write,
+            )
+            monkeypatch.setattr(
+                cache,
+                "cache_for_manager_home",
+                observed_cache_factory,
+            )
+            monkeypatch.setattr(go_v1, "build", observed_build)
+            monkeypatch.setattr(subprocess, "run", observed_run)
+            monkeypatch.setattr(subprocess, "Popen", observed_popen)
+            before = _persistent_tamper_state((project, csk_home, skills_root))
+            project_status, build = _build_row(cfg)
+            after = _persistent_tamper_state((project, csk_home, skills_root))
+
+        causal = tuple(dict.fromkeys(causal_writes))
+        if bool(raw_mutations) != bool(causal):
+            raise AssertionError("causal mutation provenance lost an observed write")
+        observation = _CurrentnessFailureObservation(
+            label=label,
+            sequence_index=sequence_index,
+            predecessor=predecessor,
+            isolation_id=case_root.name,
+            fresh_root=fresh_root,
+            root_removed=False,
+            non_current=not project_status.clean and not build.current,
+            persistent_state_stable=(
+                _same_persistent_state_except_change_time(before, after)
+            ),
+            snapshot_drift=_persistent_snapshot_drift(before, after, roots),
+            causal_writes=causal,
+            side_effects=tuple(dict.fromkeys(side_effects)),
+            artifact_executed=bool(artifact_executions),
+        )
+    finally:
+        _make_tree_writable(case_root)
+        shutil.rmtree(case_root, ignore_errors=True)
+
+    assert observation is not None
+    return replace(observation, root_removed=not case_root.exists())
+
+
+def _observe_currentness_failure_sequence(
+    identities: JsonObject,
+    labels: tuple[str, ...],
+) -> tuple[_CurrentnessFailureObservation, ...]:
+    """Run status failures in the requested order without sharing case roots."""
+
+    return tuple(
+        _observe_currentness_failure_case(
+            identities,
+            label,
+            sequence_index=index,
+            predecessor=labels[index - 1] if index else None,
+        )
+        for index, label in enumerate(labels)
+    )
+
+
+def _currentness_failure_diagnostic(
+    observation: _CurrentnessFailureObservation,
+) -> JsonObject:
+    """Render causal and snapshot signals separately without absolute paths."""
+
+    if observation.causal_writes and observation.snapshot_drift:
+        signal = "causal-write-and-snapshot-drift"
+    elif observation.causal_writes:
+        signal = "causal-write"
+    elif observation.snapshot_drift:
+        signal = "snapshot-drift"
+    else:
+        signal = "none"
+    return {
+        "label": observation.label,
+        "order": {
+            "index": observation.sequence_index,
+            "predecessor": observation.predecessor,
+        },
+        "isolation": {
+            "id": observation.isolation_id,
+            "fresh_root": observation.fresh_root,
+            "root_removed": observation.root_removed,
+        },
+        "signal": signal,
+        "non_current": observation.non_current,
+        "persistent_state_stable": observation.persistent_state_stable,
+        "snapshot_drift": [
+            {
+                "root_class": item.root_class,
+                "relative_path": item.relative_path,
+                "fields": list(item.fields),
+            }
+            for item in observation.snapshot_drift
+        ],
+        "causal_writes": [
+            {
+                "operation": item.operation,
+                "root_class": item.root_class,
+                "relative_path": item.relative_path,
+            }
+            for item in observation.causal_writes
+        ],
+    }
 
 
 def _mutate_repair_condition(
