@@ -1438,7 +1438,11 @@ def test_rc6_currentness_failure_observation_repeats_from_fresh_roots(
     assert all(item.condition_observed for item in observations)
     assert all(not item.mutation_detected for item in observations)
     assert all(
-        set(drift.fields) <= {"native-change-time"}
+        (drift.fields, drift.provenance)
+        in {
+            (("native-change-time",), "native-change-time-observer"),
+            (("file-attributes",), "host-vcs-administration"),
+        }
         for item in observations
         for drift in item.snapshot_drift
     )
