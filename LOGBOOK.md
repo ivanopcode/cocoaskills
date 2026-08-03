@@ -839,3 +839,26 @@ drift is diagnosed separately from an attributed CocoaSkills write. Existing
 low-level create/remove and permission-change/restore sabotages still invalidate
 the matrix. The accepted product status implementation and rc.6 vectors are
 unchanged.
+
+## 2026-08-03 — BUG-260803-2sqyqy Windows VCS drift provenance
+
+Fresh hosted Windows Python 3.13 evidence narrowed the remaining status labels
+to archive-attribute changes on `.git` administrative directories. The same
+run attributed no causal CocoaSkills write and exposed one planning failure at
+the source-audit probe, whose cases still reused a mutable repository fixture
+and published no diagnostic provenance.
+
+Snapshot observations now retain every field-level difference and classify its
+owner. A Windows directory-only `file-attributes` change below `.git` is
+reported as `host-vcs-administration`; native ChangeTime remains a separate
+observer signal; all other drift remains `protected-state`. Only the first two
+non-product classifications can be read-only without a causal write. Any byte,
+identity, mode, DACL, timestamp, existence, or mixed-field change remains
+fail-closed, and any causally observed write remains a mutation regardless of
+path or final snapshot.
+
+Each planning failure probe now creates and removes its own repository,
+manager-home, and skills-root fixture. Its non-vector diagnostics expose the
+fresh-root lifecycle, raw snapshot provenance, causal writes, and mutation
+verdict per gate. This removes gate-order contamination while keeping the rc.6
+vector and its persistent-mutation sensitivity unchanged.

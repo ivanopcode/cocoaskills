@@ -130,6 +130,7 @@ class _SnapshotDrift:
     root_class: str
     relative_path: str
     fields: tuple[str, ...]
+    provenance: str
 
 
 @dataclass(frozen=True)
@@ -407,14 +408,49 @@ def _persistent_snapshot_drift(
                     != getattr(after_node, attribute)
                 )
             )
+        provenance = "protected-state"
+        path_parts = PurePosixPath(relative).parts
+        if fields == ("native-change-time",):
+            provenance = "native-change-time-observer"
+        elif (
+            os.name == "nt"
+            and fields == ("file-attributes",)
+            and before_node is not None
+            and after_node is not None
+            and before_node.kind == after_node.kind == "directory"
+            and ".git" in path_parts
+        ):
+            # Git for Windows may set the archive attribute while merely
+            # enumerating administrative directories.  Keep the raw drift in
+            # diagnostics, but do not attribute that host-owned metadata churn
+            # to CocoaSkills unless the causal observer also saw a write.
+            provenance = "host-vcs-administration"
         drift.append(
             _SnapshotDrift(
                 root_class=root_class,
                 relative_path=relative,
                 fields=fields,
+                provenance=provenance,
             )
         )
     return tuple(drift)
+
+
+def _snapshot_has_protected_state_drift(
+    drift: tuple[_SnapshotDrift, ...],
+    *,
+    native_change_time_owned_by_causal_observer: bool = False,
+) -> bool:
+    """Return whether snapshot drift belongs to CocoaSkills-protected state."""
+
+    return any(
+        item.provenance == "protected-state"
+        or (
+            item.provenance == "native-change-time-observer"
+            and not native_change_time_owned_by_causal_observer
+        )
+        for item in drift
+    )
 
 
 def _same_native_path_identity(first: Path, second: Path) -> bool:
@@ -950,7 +986,7 @@ def _observe_manager_lifecycle(
         _observe_dry_run(root / "dry-run", identities, observed)
         _observe_gc(root / "gc", identities, observed)
         _observe_launchers(root / "launchers", observed)
-        _observe_planning(root / "planning", observed)
+        _observe_planning(root / "planning", observed, diagnostics)
         _observe_private_builds(root / "private-builds", identities, observed)
         _observe_recovery(root / "recovery", identities, observed)
         _observe_status_and_repair(
@@ -3711,22 +3747,47 @@ _PLANNING_GATE_PROBES: tuple[tuple[str, object, str], ...] = (
 
 
 def _observe_planning_gate_failures(
-    cfg: config_mod.GlobalConfig,
-    project: Path,
-    skills_root: Path,
-) -> tuple[list[str], JsonObject]:
+    root: Path,
+) -> tuple[list[str], JsonObject, JsonObject]:
     """Fail each named product seam and prove no downstream or persistent work."""
 
     blocked: list[str] = []
     cache_lookups: list[str] = []
     go_commands: list[str] = []
     persistent_mutations: list[str] = []
-    roots = (project, cfg.path.parent, skills_root)
-    baseline = _persistent_tamper_state(roots)
+    case_diagnostics: list[JsonObject] = []
+    root.mkdir(parents=True, exist_ok=True)
 
-    for label, target, attribute in _PLANNING_GATE_PROBES:
+    for index, (label, target, attribute) in enumerate(_PLANNING_GATE_PROBES):
+        case_root = Path(tempfile.mkdtemp(prefix=f"csk-p-{index:02d}-", dir=root))
+        project = make_project(case_root)
+        skills_root = case_root / "skills"
+        skills_root.mkdir()
+        csk_home = case_root / "home"
+        make_skill_repo(
+            skills_root,
+            "skill-build",
+            _build_skill_files("z-tool"),
+            tag="v1",
+        )
+        write_skillfile(
+            project,
+            {
+                "schema_version": 1,
+                "skills": [{"name": "skill-build", "tag": "v1"}],
+            },
+        )
+        cfg = make_config(csk_home, skills_root, project)
+        protected_roots = (project, cfg.path.parent, skills_root)
+        provenance_roots = (
+            ("project", project),
+            ("manager-home", cfg.path.parent),
+            ("skills-root", skills_root),
+        )
+        baseline = _persistent_tamper_state(protected_roots)
         downstream: list[str] = []
         case_mutations: list[str] = []
+        causal_writes: list[_CausalWrite] = []
 
         def fail_gate(*_args: object, **_kwargs: object) -> object:
             raise installer.InstallError(f"observed planning gate failure: {label}")
@@ -3739,57 +3800,115 @@ def _observe_planning_gate_failures(
             downstream.append("go-command")
             raise AssertionError("planning gate failure reached Go execution")
 
+        def record_causal_write(operation: str, path: Path) -> None:
+            root_class, relative_path = _protected_path_provenance(
+                path,
+                provenance_roots,
+            )
+            causal_writes.append(
+                _CausalWrite(
+                    operation=operation,
+                    root_class=root_class,
+                    relative_path=relative_path,
+                )
+            )
+
         with pytest.MonkeyPatch.context() as monkeypatch:
             monkeypatch.setattr(target, attribute, fail_gate)
             monkeypatch.setattr(planner, "plan_builds", cache_lookup)
             monkeypatch.setattr(go_v1, "build", go_command)
             _install_persistent_mutation_observer(
                 monkeypatch,
-                roots,
+                protected_roots,
                 case_mutations,
+                on_event=record_causal_write,
             )
             result = installer.install(
                 cfg,
                 options=installer.InstallOptions(dry_run=True),
             )[0]
 
-        after = _persistent_tamper_state(roots)
+        after = _persistent_tamper_state(protected_roots)
+        snapshot_drift = _persistent_snapshot_drift(
+            baseline,
+            after,
+            provenance_roots,
+        )
+        causal = tuple(dict.fromkeys(causal_writes))
+        if bool(case_mutations) != bool(causal):
+            raise AssertionError("planning causal provenance lost an observed write")
+        mutation_detected = bool(causal) or _snapshot_has_protected_state_drift(
+            snapshot_drift
+        )
         if "cache-lookup" in downstream:
             cache_lookups.append(label)
         if "go-command" in downstream:
             go_commands.append(label)
-        if case_mutations or after != baseline:
+        if mutation_detected:
             persistent_mutations.append(label)
         if (
             result.errors
             and not downstream
-            and not case_mutations
-            and after == baseline
+            and not mutation_detected
         ):
             blocked.append(label)
+        _make_tree_writable(case_root)
+        shutil.rmtree(case_root, ignore_errors=True)
+        case_diagnostics.append(
+            {
+                "label": label,
+                "isolation": {
+                    "id": case_root.name,
+                    "fresh_root": True,
+                    "root_removed": not case_root.exists(),
+                },
+                "snapshot_drift": [
+                    {
+                        "root_class": item.root_class,
+                        "relative_path": item.relative_path,
+                        "fields": list(item.fields),
+                        "provenance": item.provenance,
+                    }
+                    for item in snapshot_drift
+                ],
+                "causal_writes": [
+                    {
+                        "operation": item.operation,
+                        "root_class": item.root_class,
+                        "relative_path": item.relative_path,
+                    }
+                    for item in causal
+                ],
+                "mutation_detected": mutation_detected,
+            }
+        )
 
     return blocked, {
         "cache_lookup": bool(cache_lookups),
         "go_commands": go_commands,
         "persistent_mutations": persistent_mutations,
-    }
+    }, {"cases": case_diagnostics, "isolation": "fresh-root-per-gate"}
 
 
-def _observe_planning(root: Path, observed: dict[str, JsonObject]) -> None:
-    project = make_project(root)
-    skills_root = root / "skills"
+def _observe_planning(
+    root: Path,
+    observed: dict[str, JsonObject],
+    diagnostics: dict[str, JsonObject],
+) -> None:
+    root.mkdir(parents=True)
+    success_root = root / "success"
+    project = make_project(success_root)
+    skills_root = success_root / "skills"
     skills_root.mkdir()
-    csk_home = root / "home"
+    csk_home = success_root / "home"
     make_skill_repo(skills_root, "skill-build", _build_skill_files("z-tool"), tag="v1")
     write_skillfile(
         project,
         {"schema_version": 1, "skills": [{"name": "skill-build", "tag": "v1"}]},
     )
     cfg = make_config(csk_home, skills_root, project)
-    required_gates, failure_at_any_gate = _observe_planning_gate_failures(
-        cfg,
-        project,
-        skills_root,
+    required_gates, failure_at_any_gate, planning_diagnostics = (
+        _observe_planning_gate_failures(root / "gate-observations")
     )
     planning_state: dict[str, object] = {}
     stages: list[str] = []
@@ -3905,6 +4024,7 @@ def _observe_planning(root: Path, observed: dict[str, JsonObject]) -> None:
         "result": "build-eligible" if eligible else "ineligible",
         "then": stages,
     }
+    diagnostics["all-source-and-trust-gates-before-build"] = planning_diagnostics
 
 
 def _observe_private_builds(
@@ -6057,6 +6177,7 @@ def _observe_currentness_failure_case(
         causal = tuple(dict.fromkeys(causal_writes))
         if bool(raw_mutations) != bool(causal):
             raise AssertionError("causal mutation provenance lost an observed write")
+        snapshot_drift = _persistent_snapshot_drift(before, after, roots)
         observation = _CurrentnessFailureObservation(
             label=label,
             sequence_index=sequence_index,
@@ -6065,10 +6186,11 @@ def _observe_currentness_failure_case(
             fresh_root=fresh_root,
             root_removed=False,
             non_current=not project_status.clean and not build.current,
-            persistent_state_stable=(
-                _same_persistent_state_except_change_time(before, after)
+            persistent_state_stable=not _snapshot_has_protected_state_drift(
+                snapshot_drift,
+                native_change_time_owned_by_causal_observer=True,
             ),
-            snapshot_drift=_persistent_snapshot_drift(before, after, roots),
+            snapshot_drift=snapshot_drift,
             causal_writes=causal,
             side_effects=tuple(dict.fromkeys(side_effects)),
             artifact_executed=bool(artifact_executions),
@@ -6108,7 +6230,13 @@ def _currentness_failure_diagnostic(
     elif observation.causal_writes:
         signal = "causal-write"
     elif observation.snapshot_drift:
-        signal = "snapshot-drift"
+        provenances = {item.provenance for item in observation.snapshot_drift}
+        if provenances == {"host-vcs-administration"}:
+            signal = "host-vcs-administration-drift"
+        elif provenances == {"native-change-time-observer"}:
+            signal = "native-change-time-drift"
+        else:
+            signal = "snapshot-drift"
     else:
         signal = "none"
     return {
@@ -6130,6 +6258,7 @@ def _currentness_failure_diagnostic(
                 "root_class": item.root_class,
                 "relative_path": item.relative_path,
                 "fields": list(item.fields),
+                "provenance": item.provenance,
             }
             for item in observation.snapshot_drift
         ],

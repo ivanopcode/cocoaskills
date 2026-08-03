@@ -1574,6 +1574,102 @@ def test_rc6_currentness_failure_provenance_separates_snapshot_only_drift(
     }
 
 
+def test_rc6_windows_vcs_administrative_attribute_drift_retains_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    node = lifecycle_observations._tamper_node(tmp_path)
+    key = f"{tmp_path}:.git/objects/pack"
+    before = {key: replace(node, file_attributes=16)}
+    after = {key: replace(node, file_attributes=32)}
+
+    monkeypatch.setattr(lifecycle_observations.os, "name", "nt")
+    drift = lifecycle_observations._persistent_snapshot_drift(
+        before,
+        after,
+        (("project", tmp_path),),
+    )
+
+    assert len(drift) == 1
+    assert drift[0].fields == ("file-attributes",)
+    assert drift[0].provenance == "host-vcs-administration"
+    assert not lifecycle_observations._snapshot_has_protected_state_drift(drift)
+
+    content_drift = lifecycle_observations._persistent_snapshot_drift(
+        before,
+        {key: replace(node, file_attributes=32, value=b"changed")},
+        (("project", tmp_path),),
+    )
+    assert content_drift[0].provenance == "protected-state"
+    assert lifecycle_observations._snapshot_has_protected_state_drift(
+        content_drift
+    )
+
+
+def test_rc6_empty_classified_drift_is_deterministically_stable() -> None:
+    drift: tuple[lifecycle_observations._SnapshotDrift, ...] = ()
+    stable = not lifecycle_observations._snapshot_has_protected_state_drift(
+        drift,
+        native_change_time_owned_by_causal_observer=True,
+    )
+    observation = lifecycle_observations._CurrentnessFailureObservation(
+        label="empty-classified-drift",
+        sequence_index=0,
+        predecessor=None,
+        isolation_id="isolated-empty-drift",
+        fresh_root=True,
+        root_removed=True,
+        non_current=True,
+        persistent_state_stable=stable,
+        snapshot_drift=drift,
+        causal_writes=(),
+        side_effects=(),
+        artifact_executed=False,
+    )
+
+    assert observation.persistent_state_stable
+    assert not observation.mutation_detected
+    assert observation.condition_observed
+
+
+def test_rc6_planning_gate_failures_use_fresh_roots_and_report_provenance(
+    tmp_path: Path,
+) -> None:
+    required, failure, diagnostics = (
+        lifecycle_observations._observe_planning_gate_failures(tmp_path)
+    )
+
+    labels = [
+        label
+        for label, _target, _attribute in lifecycle_observations._PLANNING_GATE_PROBES
+    ]
+    assert required == labels
+    assert failure == {
+        "cache_lookup": False,
+        "go_commands": [],
+        "persistent_mutations": [],
+    }
+    assert diagnostics["isolation"] == "fresh-root-per-gate"
+    cases = diagnostics["cases"]
+    assert isinstance(cases, list)
+    assert [case["label"] for case in cases] == labels
+    assert len({case["isolation"]["id"] for case in cases}) == len(labels)
+    assert all(
+        case["isolation"]["fresh_root"]
+        and case["isolation"]["root_removed"]
+        and not case["mutation_detected"]
+        for case in cases
+    )
+    source_audit = next(
+        case for case in cases if case["label"] == "source-audit-policy"
+    )
+    assert source_audit["causal_writes"] == []
+    assert all(
+        item["provenance"] != "protected-state"
+        for item in source_audit["snapshot_drift"]
+    )
+
+
 def test_rc6_atomic_handoff_normalizes_only_the_moved_root_change_time() -> None:
     node = lifecycle_observations._TamperNode(
         kind="file",
