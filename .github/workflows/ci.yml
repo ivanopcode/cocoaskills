@@ -111,6 +111,7 @@ jobs:
         run: >-
           python -m pytest -q tests/test_go_build_e2e.py
           -m "${{ runner.os == 'Linux' && 'csk_e2e_ubuntu' || 'csk_e2e_native' }}"
+          --basetemp="${{ runner.temp }}/csk-e2e"
           --junitxml=csk-e2e-results.xml
 
       - name: Upload accepted Go E2E evidence

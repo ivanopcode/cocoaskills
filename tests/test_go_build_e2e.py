@@ -487,10 +487,12 @@ def test_go_install_fails_closed_without_native_control(
     def worker_must_not_launch(*args, **kwargs):
         raise AssertionError("Ubuntu fail-closed path launched the go-v1 worker")
 
-    monkeypatch.setattr(go_v1, "build", worker_must_not_launch)
+    monkeypatch.setattr(go_v1._NativeControlDomain, "launch", worker_must_not_launch)
     result = _install(cfg, scope)
     assert result.status == "failed"
-    assert any("build_execution_control_unavailable" in error for error in result.errors)
+    assert any(
+        "build_execution_control_unavailable" in error for error in result.errors
+    ), result.errors
     assert not _marker(csk_home, project, scope).exists()
     assert not _shim(csk_home, project, scope, "argv-exit").exists()
     assert not (csk_home / "builds" / "go-v1").exists()

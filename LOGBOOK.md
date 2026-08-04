@@ -906,3 +906,11 @@ until the configured SSH signing key is unlocked or the GitHub credential is
 granted permission to use the auto-signed `createCommitOnBranch` mutation. The
 remote task branch currently remains at the recorded base and contains no
 unsigned implementation commit.
+
+The first PR-head run exposed two harness defects. Windows exhausted the legacy
+path budget while pytest nested the vendored source snapshot under its default
+temporary root; the focused command now uses the short, runner-owned
+`runner.temp/csk-e2e` base, which is also reproducible locally with pytest's
+`--basetemp` option. Ubuntu's fail-closed test now guards the concrete worker
+launch seam instead of replacing the whole build entry point, so the real
+source-aware native-control preflight returns its stable unavailable diagnostic.
