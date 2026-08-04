@@ -385,6 +385,10 @@ def test_concurrent_real_go_publishers_converge_on_one_identity(
     config.save_config(cfg)  # type: ignore[arg-type]
     environment = dict(os.environ)
     environment["CSK_CONFIG"] = str(csk_home / "config.json")
+    # A native Windows build can outlive the default 30-second contention
+    # budget. Keep the persistent lock invariant and let the losing public
+    # installer wait long enough to consume the winner's verified cache entry.
+    environment["CSK_LOCK_TIMEOUT"] = "300"
     manager = os.fspath(required_go_e2e_host[0])
     environment["CSK_GO_V1_MANAGER_EXECUTABLE"] = manager
     processes = [
@@ -397,7 +401,7 @@ def test_concurrent_real_go_publishers_converge_on_one_identity(
         )
         for _ in range(2)
     ]
-    results = [process.communicate(timeout=180) for process in processes]
+    results = [process.communicate(timeout=360) for process in processes]
     assert [process.returncode for process in processes] == [0, 0], results
     build = _marker_build(csk_home, project, "project", "argv-exit")
     assert _artifact(csk_home, build).is_file()
