@@ -74,6 +74,10 @@ version_file = "src/csk/_version.py"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "csk_e2e_native: real compiled-command E2E coverage on macOS and Windows",
+  "csk_e2e_ubuntu: portable and source-aware fail-closed E2E coverage on Ubuntu",
+]
 
 [tool.mypy]
 strict = true

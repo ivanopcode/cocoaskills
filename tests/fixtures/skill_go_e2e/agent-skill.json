@@ -1,0 +1,30 @@
+{
+  "schema_version": 6,
+  "capabilities": {
+    "exec": "none",
+    "network": "none"
+  },
+  "runtime_roots": [
+    "scripts"
+  ],
+  "build_roots": [
+    "build"
+  ],
+  "commands": {
+    "argv-exit": {
+      "type": "build",
+      "driver": "go-v1",
+      "source_dir": "build/cmd/argv-exit"
+    },
+    "second-tool": {
+      "type": "build",
+      "driver": "go-v1",
+      "source_dir": "build/cmd/second-tool"
+    },
+    "echo-script": {
+      "type": "script",
+      "unix_path": "scripts/echo-script",
+      "win_path": "scripts/echo-script.cmd"
+    }
+  }
+}

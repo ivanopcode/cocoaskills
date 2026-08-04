@@ -1,0 +1,2 @@
+#!/bin/sh
+printf 'script:%s\n' "$*"

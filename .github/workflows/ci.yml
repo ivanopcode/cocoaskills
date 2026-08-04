@@ -32,6 +32,19 @@ jobs:
           ref: 0c81c1f8d5321d822be2a2817b05aea03e656e15
           path: protocol-spec
 
+      - name: Checkout caller-supplied rc.6 candidate
+        uses: actions/checkout@v4
+        with:
+          repository: relux-works/curator-spec
+          ref: ${{ vars.CSK_E2E_CURATOR_SPEC_SHA }}
+          path: protocol-spec-candidate
+
+      - name: Set up Go 1.25.5
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25.5"
+          cache: false
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -58,12 +71,56 @@ jobs:
       - name: Install package
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install ".[dev]"
+
+      - name: Authenticate caller-supplied rc.6 candidate
+        env:
+          CANDIDATE_CHECKOUT: ${{ github.workspace }}/protocol-spec-candidate
+          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
+        run: >-
+          python -c "import hashlib, os, pathlib, subprocess;
+          checkout=pathlib.Path(os.environ['CANDIDATE_CHECKOUT']);
+          root=pathlib.Path(os.environ['CURATOR_CONFORMANCE_ROOT']);
+          head=subprocess.run(['git','-C',str(checkout),'rev-parse','HEAD'],check=True,text=True,capture_output=True).stdout.strip();
+          digest=hashlib.sha256((root/'manifest.json').read_bytes()).hexdigest();
+          assert head == '432eb2ee1fe2d6b271e37269f867c8851c325539', head;
+          assert digest == '12e58b82579645ba1ccafba49d3e2dd3216005ddf37ae63c68a9fafd46773071', digest"
 
       - name: Run tests
         env:
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec/conformance/v1
         run: python -m pytest -v
+
+      - name: Collect accepted Go E2E node IDs
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
+          CSK_GO_V1_MANAGER_EXECUTABLE: csk
+          CSK_GO_V1_GO_EXECUTABLE: go
+          CSK_E2E_REQUIRED_PLATFORM: ${{ runner.os == 'macOS' && 'macos_native' || runner.os == 'Windows' && 'windows_native' || 'ubuntu_portable_fail_closed' }}
+        run: >-
+          python -m pytest --collect-only -q tests/test_go_build_e2e.py
+          -m "${{ runner.os == 'Linux' && 'csk_e2e_ubuntu' || 'csk_e2e_native' }}"
+          > csk-e2e-nodeids.txt
+
+      - name: Run accepted Go E2E selection
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
+          CSK_GO_V1_MANAGER_EXECUTABLE: csk
+          CSK_GO_V1_GO_EXECUTABLE: go
+          CSK_E2E_REQUIRED_PLATFORM: ${{ runner.os == 'macOS' && 'macos_native' || runner.os == 'Windows' && 'windows_native' || 'ubuntu_portable_fail_closed' }}
+        run: >-
+          python -m pytest -q tests/test_go_build_e2e.py
+          -m "${{ runner.os == 'Linux' && 'csk_e2e_ubuntu' || 'csk_e2e_native' }}"
+          --junitxml=csk-e2e-results.xml
+
+      - name: Upload accepted Go E2E evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: csk-e2e-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: |
+            csk-e2e-nodeids.txt
+            csk-e2e-results.xml
+          if-no-files-found: error
 
   typecheck:
     name: Type check / mypy strict

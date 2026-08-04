@@ -1,0 +1,3 @@
+# example.test/fixturedep v0.0.0
+## explicit; go 1.23
+example.test/fixturedep

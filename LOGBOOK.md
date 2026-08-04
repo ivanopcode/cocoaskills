@@ -882,3 +882,27 @@ manager-home, and skills-root fixture. Its non-vector diagnostics expose the
 fresh-root lifecycle, raw snapshot provenance, causal writes, and mutation
 verdict per gate. This removes gate-order contamination while keeping the rc.6
 vector and its persistent-mutation sensitivity unchanged.
+
+## 2026-08-04 — TASK-260720-3pemm6 real Go public-flow E2E
+
+Added a small offline-vendored Go skill fixture and process-level tests that
+join the previously separate real compiler, public installer, protected cache,
+transaction, recovery, and native shim seams. macOS and Windows selections use
+the installed manager plus Go 1.25 and cover project, global, hybrid, mixed
+script/build activation, exact argv and exit forwarding, cache/currentness,
+dry-run, rollback, recovery, concurrent CLI publishers, two projects, and
+repair. Ubuntu has a separate portable script lane and requires source-aware
+go-v1 to fail closed before worker launch or publication.
+
+CI keeps the committed curator-spec checkout at
+`0c81c1f8d5321d822be2a2817b05aea03e656e15`. A separate repository variable
+supplies candidate commit `432eb2ee1fe2d6b271e37269f867c8851c325539`;
+every matrix cell authenticates the manifest digest and uploads collected node
+IDs plus JUnit evidence. This is non-release evidence and changes no release
+workflow, tag, release record, or conformance claim.
+
+The implementation is locally gated but its required signed commit is blocked
+until the configured SSH signing key is unlocked or the GitHub credential is
+granted permission to use the auto-signed `createCommitOnBranch` mutation. The
+remote task branch currently remains at the recorded base and contains no
+unsigned implementation commit.

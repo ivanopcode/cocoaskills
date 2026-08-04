@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -10,6 +11,12 @@ import pytest
 
 from csk import deprecation, locking
 from csk.config import GlobalConfig, ProjectConfig
+
+
+E2E_CANDIDATE_SHA = "432eb2ee1fe2d6b271e37269f867c8851c325539"
+E2E_CANDIDATE_MANIFEST_SHA256 = (
+    "12e58b82579645ba1ccafba49d3e2dd3216005ddf37ae63c68a9fafd46773071"
+)
 
 
 def run(cmd: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -139,3 +146,53 @@ def stable_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("CSK_CONFIG", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+
+
+@pytest.fixture
+def required_go_e2e_host(monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """Bind a required native E2E run to its installed manager and Go 1.25."""
+    manager_value = os.environ.get("CSK_GO_V1_MANAGER_EXECUTABLE")
+    go_value = os.environ.get("CSK_GO_V1_GO_EXECUTABLE")
+    required = os.environ.get("CSK_E2E_REQUIRED_PLATFORM")
+    if not manager_value or not go_value:
+        if required:
+            pytest.fail(
+                "required Go E2E host lacks CSK_GO_V1_MANAGER_EXECUTABLE or "
+                "CSK_GO_V1_GO_EXECUTABLE"
+            )
+        pytest.skip("real Go E2E manager/toolchain inputs are not configured")
+    manager_path = shutil.which(manager_value) or manager_value
+    go_path = shutil.which(go_value) or go_value
+    manager = Path(manager_path).resolve(strict=True)
+    go = Path(go_path).resolve(strict=True)
+    version = subprocess.run(
+        [go, "version"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    if " go1.25." not in version:
+        pytest.fail(f"Go E2E requires the accepted 1.25 family, got {version.strip()!r}")
+    monkeypatch.setattr("sys.argv", [str(manager)])
+    monkeypatch.setenv("PATH", os.pathsep.join((str(go.parent), os.environ.get("PATH", ""))))
+    return manager, go
+
+
+@pytest.fixture
+def authenticated_e2e_candidate_root() -> Path:
+    """Authenticate the explicitly supplied rc.6 candidate without pinning it."""
+    root_value = os.environ.get("CURATOR_CONFORMANCE_ROOT")
+    required = os.environ.get("CSK_E2E_REQUIRED_PLATFORM")
+    if not root_value:
+        if required:
+            pytest.fail("required Go E2E run lacks CURATOR_CONFORMANCE_ROOT")
+        pytest.skip("rc.6 candidate root is not configured")
+    root = Path(root_value).resolve(strict=True)
+    checkout = root.parent.parent
+    head = run(["git", "rev-parse", "HEAD"], checkout).stdout.strip()
+    if head != E2E_CANDIDATE_SHA:
+        pytest.fail(f"wrong rc.6 candidate HEAD: {head}")
+    digest = hashlib.sha256((root / "manifest.json").read_bytes()).hexdigest()
+    if digest != E2E_CANDIDATE_MANIFEST_SHA256:
+        pytest.fail(f"wrong rc.6 candidate manifest SHA-256: {digest}")
+    return root
