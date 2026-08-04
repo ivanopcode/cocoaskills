@@ -376,13 +376,17 @@ def test_interrupted_real_go_install_recovers_on_next_public_command(
 @pytest.mark.csk_e2e_native
 @NATIVE
 def test_concurrent_real_go_publishers_converge_on_one_identity(
-    tmp_path: Path, skills_root: Path, csk_home: Path
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    required_go_e2e_host: tuple[Path, Path],
 ) -> None:
     cfg, project, _ = _setup_scope(tmp_path, skills_root, csk_home, "project")
     config.save_config(cfg)  # type: ignore[arg-type]
     environment = dict(os.environ)
     environment["CSK_CONFIG"] = str(csk_home / "config.json")
-    manager = environment["CSK_GO_V1_MANAGER_EXECUTABLE"]
+    manager = os.fspath(required_go_e2e_host[0])
+    environment["CSK_GO_V1_MANAGER_EXECUTABLE"] = manager
     processes = [
         subprocess.Popen(
             [manager, "install", "app"],
