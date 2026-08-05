@@ -7,12 +7,20 @@ from typing import Any
 
 from . import protocol_json
 from .audit.capabilities import CapabilityManifest, CapabilityParseError, parse_capabilities
+from .build_repository import (
+    GO_REPOSITORY_V1_DRIVER,
+    BuildRepository,
+    BuildRepositoryError,
+    is_valid_ref_name,
+    parse_locked_commit,
+    parse_repository_source,
+)
 from .builds import GO_V1_DRIVER
 from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_portable_path
 
 
 SCHEMA_VERSION = 1
-SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6}
+SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6, 7}
 CANONICAL_MANIFEST = "agent-skill.json"
 LEGACY_MANIFEST = "csk-skill.json"
 RUNTIME_FALLBACK = "agents/runtime.json"
@@ -24,7 +32,10 @@ UPGRADE_HINT = (
 REQUIREMENT_MODES = {"full", "runtime", "context"}
 REQUIREMENT_REF_KINDS = {"tag", "revision"}
 _RANGE_MARKERS = ("^", "~", ">", "<", "*", " ")
-_SCHEMA_V1_RESERVED_COMMAND_FIELDS = frozenset({"driver", "source_dir"})
+_SCHEMA_V1_RESERVED_TOP_LEVEL_FIELDS = frozenset(
+    {"build_roots", "build_repositories", "driver", "repository", "target"}
+)
+_SCHEMA_V1_RESERVED_COMMAND_FIELDS = frozenset({"driver", "source_dir", "repository", "target"})
 
 MCP_TRANSPORTS = {"stdio", "http"}
 MCP_REQUIRED_IN = {"any", "all"}
@@ -45,6 +56,8 @@ class CommandSpec:
     source: str = CANONICAL_MANIFEST
     driver: str | None = None
     source_dir: str | None = None
+    repository: str | None = None
+    target: str | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +105,7 @@ class SkillSpec:
     requirements: dict[str, SkillRequirement] = field(default_factory=dict)
     mcp_servers: dict[str, McpServerRequirement] = field(default_factory=dict)
     build_roots: tuple[str, ...] = ()
+    build_repositories: dict[str, BuildRepository] = field(default_factory=dict)
 
 
 def load_skill_spec(snapshot: Path) -> SkillSpec:
@@ -150,14 +164,19 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
             f"Unsupported {source_file} schema_version {schema!r}; this skill requires a newer csk. "
             f"{UPGRADE_HINT}"
         )
-    if schema == 1 and "build_roots" in data:
-        raise SkillSpecError(f"{source_file} has unsupported field(s): 'build_roots'")
+    if schema == 1:
+        reserved_fields = sorted(data.keys() & _SCHEMA_V1_RESERVED_TOP_LEVEL_FIELDS)
+        if reserved_fields:
+            joined = ", ".join(repr(key) for key in reserved_fields)
+            raise SkillSpecError(f"{source_file} has unsupported field(s): {joined}")
     if schema >= 2:
         allowed_fields = {"schema_version", "runtime_roots", "commands", "dependencies"}
         if schema >= 3:
             allowed_fields.add("capabilities")
         if schema >= 6:
             allowed_fields.add("build_roots")
+        if schema >= 7:
+            allowed_fields.add("build_repositories")
         _reject_unknown_fields(data, allowed_fields, source_file)
     if schema >= 3 and "capabilities" not in data:
         raise SkillSpecError(f"{source_file} schema v{schema} requires 'capabilities'")
@@ -184,6 +203,7 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
         if schema >= 6
         else ()
     )
+    build_repositories = _parse_build_repositories(data.get("build_repositories"), schema=schema)
     commands_raw = data.get("commands", {})
     if not isinstance(commands_raw, dict):
         raise SkillSpecError(f"{source_file} field 'commands' must be an object")
@@ -252,11 +272,9 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
                 hint=hint,
                 source=source_file,
             )
-        elif command_type == "build" and schema >= 6:
+        elif command_type == "build" and schema >= 6 and raw.get("driver") == GO_V1_DRIVER:
             _reject_unknown_fields(raw, {"type", "driver", "source_dir"}, f"commands.{name}")
             driver = raw.get("driver")
-            if driver != GO_V1_DRIVER:
-                raise SkillSpecError(f"Command {name!r} field 'driver' must be {GO_V1_DRIVER!r}")
             source_dir = _validate_relative_path(
                 raw.get("source_dir"),
                 field=f"commands.{name}.source_dir",
@@ -269,10 +287,35 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
                 source_dir=source_dir,
                 source=source_file,
             )
+        elif command_type == "build" and schema >= 7 and raw.get("driver") == GO_REPOSITORY_V1_DRIVER:
+            _reject_unknown_fields(raw, {"type", "driver", "repository", "target"}, f"commands.{name}")
+            repository = raw.get("repository")
+            target = raw.get("target")
+            if not isinstance(repository, str) or not is_valid_identifier(repository):
+                raise SkillSpecError(f"commands.{name}.repository must be a portable repository identifier")
+            if not isinstance(target, str) or not is_valid_identifier(target):
+                raise SkillSpecError(f"commands.{name}.target must be a portable target identifier")
+            commands[name] = CommandSpec(
+                name=name,
+                type="build",
+                driver=GO_REPOSITORY_V1_DRIVER,
+                repository=repository,
+                target=target,
+                source=source_file,
+            )
+        elif command_type == "build" and schema >= 6:
+            expected = (
+                f"{GO_V1_DRIVER!r} or {GO_REPOSITORY_V1_DRIVER!r}"
+                if schema >= 7
+                else repr(GO_V1_DRIVER)
+            )
+            raise SkillSpecError(f"Command {name!r} field 'driver' must be {expected}")
         else:
             raise SkillSpecError(f"Command {name!r} has unsupported type {command_type!r}")
     if schema >= 6:
         _validate_build_layout(path.parent, build_roots, commands)
+    if schema >= 7:
+        _validate_repository_commands(build_repositories, commands)
     dependencies, requirements, mcp_servers = _parse_dependencies(
         data.get("dependencies"), schema=schema, source_file=source_file
     )
@@ -286,7 +329,67 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
         dependencies=dependencies,
         requirements=requirements,
         mcp_servers=mcp_servers,
+        build_repositories=build_repositories,
     ), data
+
+
+def _parse_build_repositories(raw: Any, *, schema: int) -> dict[str, BuildRepository]:
+    if schema < 7:
+        return {}
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or not raw:
+        raise SkillSpecError("build_repositories must be a non-empty object when present")
+    repositories: dict[str, BuildRepository] = {}
+    for name in sorted(raw):
+        label = f"build_repositories.{name}"
+        if not isinstance(name, str) or not is_valid_identifier(name):
+            raise SkillSpecError(f"{label} repository name {IDENTIFIER_RULE}")
+        entry = raw[name]
+        if not isinstance(entry, dict):
+            raise SkillSpecError(f"{label} must be an object")
+        _reject_unknown_fields(entry, {"git", "locked_commit", "tag"}, label)
+        git = entry.get("git")
+        if not isinstance(git, str):
+            raise SkillSpecError(f"{label}.git must be an HTTPS or SSH repository URL")
+        try:
+            source = parse_repository_source(git)
+            locked_commit = parse_locked_commit(entry.get("locked_commit"), field=f"{label}.locked_commit")
+        except BuildRepositoryError as exc:
+            raise SkillSpecError(str(exc)) from exc
+        tag = entry.get("tag")
+        if tag is not None and (not isinstance(tag, str) or not is_valid_ref_name(tag)):
+            raise SkillSpecError(f"{label}.tag must be a safe immutable Git tag name")
+        repositories[name] = BuildRepository(
+            name=name,
+            git=git,
+            identity=source.identity,
+            transport=source.transport,
+            locked_commit=locked_commit,
+            tag=tag,
+        )
+    return repositories
+
+
+def _validate_repository_commands(
+    repositories: dict[str, BuildRepository], commands: dict[str, CommandSpec]
+) -> None:
+    selected: set[str] = set()
+    for name in sorted(commands):
+        command = commands[name]
+        if command.driver != GO_REPOSITORY_V1_DRIVER:
+            continue
+        assert command.repository is not None
+        if command.repository not in repositories:
+            raise SkillSpecError(
+                f"commands.{name}.repository selects undeclared build repository {command.repository!r}"
+            )
+        selected.add(command.repository)
+    for name in sorted(repositories):
+        if name not in selected:
+            raise SkillSpecError(
+                f"build_repositories.{name} is not selected by any {GO_REPOSITORY_V1_DRIVER} command"
+            )
 
 
 def _load_runtime_fallback(path: Path) -> SkillSpec:
@@ -602,7 +705,7 @@ def _validate_build_layout(
     used_roots: set[str] = set()
     for name in sorted(commands):
         command = commands[name]
-        if command.type != "build":
+        if command.type != "build" or command.driver != GO_V1_DRIVER:
             continue
         source_dir = command.source_dir
         if source_dir is None:

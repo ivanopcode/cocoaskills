@@ -14,11 +14,13 @@ from . import (
     adapters,
     closure,
     consumers,
+    dev_substitutions,
     env_files,
     gc,
     git_ops,
     global_bins,
     installer,
+    install_marker,
     locking,
     manifest,
     protocol_json,
@@ -319,6 +321,21 @@ def _install_once(
                     max_generation_attempts=1,
                 )
             )
+            external_published, external_messages = installer._publish_external_builds(
+                config,
+                project_root=global_root(csk_home),
+                nodes=nodes,
+                substitutions=dev_substitutions.DevManifest(
+                    schema_version=1,
+                    substitutions={},
+                    build_repository_substitutions={},
+                ),
+                operator_search_path=operator_search_path,
+                stack=stack,
+                dry_run=options.dry_run,
+                marker_roots=(global_skills_root(csk_home),),
+            )
+            result.messages.extend(external_messages)
             if options.dry_run:
                 for build in result.builds:
                     payload = json.dumps(
@@ -378,6 +395,8 @@ def _install_once(
                     cache_backend,
                     home_lock,
                 )
+                for provider, commands in external_published.items():
+                    published.setdefault(provider, {}).update(commands)
                 messages = _commit_global_materialization(
                     config,
                     options,
@@ -745,8 +764,22 @@ def _stage_global_materialization(
         ) = None
         for name in sorted(provider_builds):
             published = provider_builds[name]
-            identity = published.plan.input.build_source
-            if (
+            external = (
+                isinstance(
+                    published.marker, install_marker.InstallMarkerBuildV3
+                )
+                and published.marker.driver == "go-repository-v1"
+            )
+            identity = (
+                published.plan.input.build_source
+                if published.plan is not None
+                else published.build_source_identity
+            )
+            if identity is None:
+                raise installer.InstallError(
+                    f"build provider {node.name}.{name} has no source identity"
+                )
+            if not external and (
                 build_source_identity is not None
                 and identity != build_source_identity
             ):
@@ -754,13 +787,40 @@ def _stage_global_materialization(
                     f"build provider {node.name} has inconsistent source "
                     "identities"
                 )
-            build_source_identity = identity
-            activation = shims.select_build_activation(
-                csk_home=csk_home,
-                command=node.spec.commands[name],
-                marker_build=published.marker,
-                inspection=published.inspection,
-            )
+            if not external:
+                build_source_identity = identity
+            command = node.spec.commands[name]
+            if external:
+                assert isinstance(
+                    published.marker, install_marker.InstallMarkerBuildV3
+                )
+                if published.receipt_bytes is None or published.artifact_path is None:
+                    raise installer.InstallError(
+                        f"external build {node.name}.{name} has incomplete publication state"
+                    )
+                activation = shims.select_external_build_activation(
+                    csk_home=csk_home,
+                    command=command,
+                    marker_build=published.marker,
+                    receipt_bytes=published.receipt_bytes,
+                    artifact_path=published.artifact_path,
+                )
+            else:
+                if (
+                    not isinstance(
+                        published.marker, install_marker.InstallMarkerBuild
+                    )
+                    or published.inspection is None
+                ):
+                    raise installer.InstallError(
+                        f"local build {node.name}.{name} has incomplete publication state"
+                    )
+                activation = shims.select_build_activation(
+                    csk_home=csk_home,
+                    command=command,
+                    marker_build=published.marker,
+                    inspection=published.inspection,
+                )
             shims.write_global_build_shim(
                 staged_home,
                 activation,

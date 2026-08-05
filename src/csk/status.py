@@ -10,6 +10,7 @@ from typing import Any
 
 from . import (
     closure,
+    build_repository_pipeline,
     dev_substitutions,
     git_ops,
     hashing,
@@ -18,6 +19,7 @@ from . import (
     installer,
     manifest,
     snapshot,
+    shims,
 )
 from .builds import cache as build_cache
 from .builds import currentness as build_currentness
@@ -672,7 +674,12 @@ def _inspect_node_marker(
             ("build-context-drift", detail),
         )
     active_builds = installer._active_build_command_names(node)
-    if active_builds:
+    active_local_builds = {
+        name
+        for name in active_builds
+        if node.spec.commands[name].driver == "go-v1"
+    }
+    if active_local_builds:
         if expected_build_source is None:
             detail = "the selected raw snapshot could not be validated"
             return _MarkerInspection(
@@ -689,7 +696,15 @@ def _inspect_node_marker(
                 raw,
                 ("build-source-drift", detail),
             )
-    elif marker.build_source is not None or marker.builds:
+    elif marker.build_source is not None:
+        detail = "marker records a local build source with no active local build"
+        return _MarkerInspection(
+            replace(base, label="build-drift", detail=detail),
+            marker,
+            raw,
+            ("build-command-drift", detail),
+        )
+    if not active_builds and marker.builds:
         detail = "marker records builds that are not active in the current closure"
         return _MarkerInspection(
             replace(base, label="build-drift", detail=detail),
@@ -709,8 +724,8 @@ def _node_build_statuses(
     cache_backend: build_cache.BuildCacheBackend,
     bin_dir: Path,
 ) -> tuple[build_currentness.BuildStatus, ...]:
-    marker_builds: Mapping[str, install_marker.InstallMarkerBuild] = {}
-    if isinstance(marker_inspection.marker, install_marker.InstallMarkerV2):
+    marker_builds: Mapping[str, install_marker.MarkerBuild] = {}
+    if isinstance(marker_inspection.marker, (install_marker.InstallMarkerV2, install_marker.InstallMarkerV3)):
         marker_builds = marker_inspection.marker.builds
     active = installer._active_build_command_names(node)
     commands = sorted(active | set(marker_builds))
@@ -734,6 +749,20 @@ def _node_build_statuses(
                     label="build-command-drift",
                     detail="marker records a command absent from the current build descriptor",
                     recorded=recorded,
+                )
+            )
+            continue
+        if isinstance(recorded, install_marker.InstallMarkerBuildV3) and recorded.driver == "go-repository-v1":
+            result.append(
+                _classify_external_build(
+                    config=config,
+                    node=node,
+                    name=name,
+                    command=command,
+                    recorded=recorded,
+                    bin_dir=bin_dir,
+                    path_entries=path_entries,
+                    boundary_error=marker_inspection.build_boundary_error,
                 )
             )
             continue
@@ -764,6 +793,103 @@ def _node_build_statuses(
             )
         )
     return tuple(result)
+
+
+def _classify_external_build(
+    *,
+    config: GlobalConfig,
+    node: closure.ClosureNode,
+    name: str,
+    command: Any,
+    recorded: install_marker.InstallMarkerBuildV3,
+    bin_dir: Path,
+    path_entries: tuple[Path, ...],
+    boundary_error: tuple[str, str] | None,
+) -> build_currentness.BuildStatus:
+    def result(label: str, detail: str) -> build_currentness.BuildStatus:
+        return build_currentness.BuildStatus(
+            provider=node.name,
+            command=name,
+            label=label,
+            detail=detail,
+            expected_cache_key=recorded.cache_key,
+            recorded_cache_key=recorded.cache_key,
+        )
+
+    if boundary_error is not None:
+        return result(*boundary_error)
+    if command.driver != "go-repository-v1" or command.repository is None:
+        return result("unsupported-build-driver", "descriptor and marker drivers differ")
+    repository = node.spec.build_repositories.get(command.repository)
+    if repository is None:
+        return result("build-command-drift", "external repository declaration is missing")
+    if (
+        recorded.repository != repository.name
+        or recorded.descriptor_target != command.target
+        or recorded.declared_identity is None
+        or recorded.declared_identity.kind != "network-git"
+        or recorded.declared_identity.value != repository.identity
+        or recorded.declared_locked_commit is None
+        or recorded.declared_locked_commit.object_format
+        != repository.locked_commit.object_format
+        or recorded.declared_locked_commit.hex != repository.locked_commit.hex
+        or recorded.declared_tag != repository.tag
+    ):
+        return result(
+            "build-input-drift",
+            "marker repository identity, lock, tag, or descriptor target differs",
+        )
+    store = build_repository_pipeline.DiskProtectedStore(
+        config.path.parent / "external-builds"
+    )
+    try:
+        hit = store.inspect_artifact(recorded.cache_key)
+    except build_repository_pipeline.ExternalBuildError as exc:
+        label = (
+            "untrusted-build-cache"
+            if exc.code == build_repository_pipeline.PROTECTED_BOUNDARY_UNTRUSTED
+            else "corrupt-build-cache"
+        )
+        return result(label, str(exc))
+    if hit is None:
+        return result("missing-build-artifact", "protected external artifact is missing")
+    artifact_path = (
+        store.root
+        / "artifacts"
+        / recorded.cache_key.removeprefix("sha256:")
+        / "artifact"
+    )
+    try:
+        activation = shims.select_external_build_activation(
+            csk_home=config.path.parent,
+            command=command,
+            marker_build=recorded,
+            receipt_bytes=hit.receipt,
+            artifact_path=artifact_path,
+        )
+    except shims.ShimError as exc:
+        return result("build-marker-drift", str(exc))
+    shim_error = shims.inspect_bin_shim(
+        bin_dir,
+        name,
+        activation.artifact_path,
+        path_entries=path_entries,
+    )
+    if shim_error is not None:
+        return result("build-shim-drift", shim_error)
+    try:
+        current = store.inspect_artifact(recorded.cache_key)
+    except build_repository_pipeline.ExternalBuildError as exc:
+        return result("build-state-changed", str(exc))
+    if current != hit:
+        return result(
+            "build-state-changed",
+            "protected external receipt or artifact changed during read-only status",
+        )
+    return result(
+        "current",
+        "marker, protected receipt-v2/artifact, and managed shim agree",
+    )
 
 
 def _installed_files(installed_dir: Path) -> tuple[str, ...]:
@@ -941,7 +1067,7 @@ def _unavailable_recorded_builds(
             marker = install_marker.read_install_marker(marker_path.read_bytes())
         except Exception:  # noqa: BLE001 - the scope error is already reported
             continue
-        if not isinstance(marker, install_marker.InstallMarkerV2):
+        if not isinstance(marker, (install_marker.InstallMarkerV2, install_marker.InstallMarkerV3)):
             continue
         for name, recorded in marker.builds.items():
             result.append(

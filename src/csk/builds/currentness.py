@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import shims
-from ..install_marker import InstallMarkerBuild
+from ..install_marker import MarkerBuild
 from ..skillspec import CommandSpec
 from . import cache, metadata, planner
 
@@ -46,7 +46,7 @@ def unavailable_status(
     *,
     label: str,
     detail: str,
-    recorded: InstallMarkerBuild | None = None,
+    recorded: MarkerBuild | None = None,
 ) -> BuildStatus:
     return BuildStatus(
         provider=provider,
@@ -64,7 +64,7 @@ def classify_build(
     provider: str,
     command: CommandSpec,
     plan: planner.BuildPlan | None,
-    recorded: InstallMarkerBuild | None,
+    recorded: MarkerBuild | None,
     cache_backend: cache.BuildCacheBackend,
     path_entries: tuple[Path, ...],
     boundary_error: tuple[str, str] | None = None,

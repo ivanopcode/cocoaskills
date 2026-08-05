@@ -71,6 +71,20 @@ from protocol_lifecycle_observations import (
 ROOT_TEXT = os.environ.get("CURATOR_CONFORMANCE_ROOT")
 pytestmark = pytest.mark.skipif(not ROOT_TEXT, reason="CURATOR_CONFORMANCE_ROOT is not set")
 
+# rc.5 carries the separately versioned external-repository corpus consumed by
+# test_rc5_external_repository_conformance.py.  This module intentionally binds
+# the later rc.6 manager/build corpus; do not make an rc.5 root fail collection
+# merely because both authenticated consumers share the conventional root env.
+if ROOT_TEXT:
+    _candidate_manifest = Path(ROOT_TEXT) / "manifest.json"
+    if _candidate_manifest.is_file() and hashlib.sha256(
+        _candidate_manifest.read_bytes()
+    ).hexdigest() == "b6f56aacc0e37dcc6692f73f641bff761e89b645adfe20a47a06d81c6fda204c":
+        pytest.skip(
+            "rc.5 root is handled by the external-repository consumer",
+            allow_module_level=True,
+        )
+
 EXPECTED_CANDIDATE_MANIFEST_SHA256 = (
     "sha256:12e58b82579645ba1ccafba49d3e2dd3216005ddf37ae63c68a9fafd46773071"
 )

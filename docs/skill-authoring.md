@@ -349,6 +349,15 @@ Bad (three independent fragments):
 
 ## 5. Build Roots and Compiled Commands
 
+Schema-7 skills may also select a locked external Git source with the closed
+`go-repository-v1` command shape. The package declares identity and an exact
+commit; it cannot provide Git helpers, credentials, hooks, build arguments,
+environment, output paths, or signing behavior. The external repository owns a
+separate `skill-build.json` descriptor. See
+[External build repositories](external-build-repositories.md) for complete
+examples and lifecycle rules. This source-aware mode is supported on macOS and
+Windows; Linux remains outside the qualified platform set.
+
 `build_roots` names source-only directories that csk validates and hashes but
 never copies into installed prompt context or script runtime storage.
 

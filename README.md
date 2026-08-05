@@ -364,6 +364,13 @@ This section describes the accepted schema-6 `go-v1` boundary in the
 and the corresponding landed csk behavior. Later protocol revisions are out of
 scope.
 
+Schema 7 adds locked external Git build repositories through
+`go-repository-v1`. See
+[External build repositories](docs/external-build-repositories.md) for the
+complete authoring, audit, cache, activation, repair, and qualification
+contract. External builds are supported on macOS and Windows only; Linux
+support is not claimed.
+
 The example above is a complete mixed command manifest: `format-report` is a
 script runtime, `repo-report` is built from Go source, and `git` is an
 operator-provided system requirement in the accepted compatibility location.

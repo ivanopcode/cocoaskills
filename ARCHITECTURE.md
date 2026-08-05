@@ -207,6 +207,15 @@ storage backend remain csk implementation details.
 
 ## Schema-6 build contract
 
+Schema 7 composes this same fixed `go-v1` compiler session with an independently
+admitted external Git snapshot. Acquisition, raw-object proof, whole-snapshot
+validation, external audit, protected-cache lookup, compilation, receipt-v2
+publication, and marker-v3 consumer commit occur in that order. The package
+cannot insert a hook or script between them. See
+[External build repositories](docs/external-build-repositories.md). The native
+external-build boundary is qualified only for macOS and Windows; this document
+makes no Linux support claim.
+
 This architecture boundary follows the accepted
 [rc.5 protocol core](https://github.com/relux-works/curator-spec/blob/v1.0.0-rc.5/protocol/core.md).
 Later protocol revisions are outside this document's scope.

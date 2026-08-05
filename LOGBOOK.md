@@ -914,3 +914,176 @@ temporary root; the focused command now uses the short, runner-owned
 `--basetemp` option. Ubuntu's fail-closed test now guards the concrete worker
 launch seam instead of replacing the whole build entry point, so the real
 source-aware native-control preflight returns its stable unavailable diagnostic.
+## 2026-08-05 — TASK-260728-1ph8rs schema-7 repository models
+
+Implemented the read-only Python boundary for external build repositories
+without adding acquisition, audit, build, or install mutation. The binding
+protocol is curator-spec `v1.0.0-rc.5` at
+`f5d7673039226ab81de2f4f87e2155ae995c4df3`, source baseline
+`57c1f56846d221ecc55786bd3c2467ec32f11730`, with conformance manifest SHA-256
+`b6f56aacc0e37dcc6692f73f641bff761e89b645adfe20a47a06d81c6fda204c`.
+The independently accepted architecture-v6 resource was rehashed as
+`2abae77d80eba6789f9911db7e9722595b4f21ba47391ca9eafd0064af03d67e`.
+
+The Curator reference checkout was at
+`74fe162415d800cd0a6975313827f9dc8594d299`; its accepted schema/model task
+`TASK-260728-pwbr32` was `done`, and the current relevant overlay
+(`internal/buildrepo`, `internal/devsub`, `internal/skillspec`) had binary-diff
+SHA-256 `01fd5e0d33dfce19b545f19342d7e0e20e944e1d9beeaa166ec24afadae5e91e`.
+The broader referenced `TASK-260728-20ao7p` remained `backlog`, so no claim is
+made that its future acquisition/E2E surface was consumed by this parsing-only
+task.
+
+Authenticated rc.5 schema/model tests passed with 43 tests, the focused Python
+suite passed with 160 tests and one pre-existing environment-gated schema-6
+skip, and the full local suite passed with 1,252 tests and 218 platform/external
+suite skips. Mypy, compileall, diff validation, sdist/wheel build, and Twine
+checks all exited zero. The release cases also exposed and closed a schema-1
+compatibility gap: schemas 1–6 now reject reserved schema-7 repository/target
+fields while retaining their prior script and local `go-v1` behavior.
+
+## 2026-08-05 — TASK-260728-2mfeje clean Git and raw-object admission
+
+Implemented Python Git acquisition and admission without archive, checkout, or
+working-tree byte derivation. Network acquisition validates an operator-pinned
+Git tool, initializes a private bare object store under an empty configuration,
+fetches either the full locked OID or one exact tag refspec, and reads only full
+OIDs through a bounded `cat-file` protocol. Admission recomputes SHA-1/SHA-256
+object identities, parses commit/tag/tree semantics, proves the reachable graph,
+and rejects Git LFS pointers, submodules, links, special modes, malformed or
+missing objects, and unexpected reader termination.
+
+Local substitutions admit only a narrow ordinary `.git` files/refs/object
+layout. Config includes, alternates, grafts, replace refs, promisor/partial clone
+state, reftable, linked worktrees, bare repositories, Git files, pack sidecars,
+and source races fail closed. Pack/index pairs are checksum-, fanout-, offset-,
+and CRC-validated before they enter a sealed private object store. Source-owned
+filter and credential-helper configuration remains inert because no source
+configuration is passed to an executing Git process.
+
+The focused SHA-1/SHA-256 network/local, exact-tag, shared raw-object/LFS/pack,
+all 15 local-config/ref vector, race, and adversarial suites passed with 171
+tests and four platform/environment skips. Strict mypy, `git diff --check`, and
+sdist/wheel build gates exited zero. Per the tracked operator directive, the
+known over-23-minute bare full-suite run was not repeated; consolidated full
+security/conformance/platform validation remains assigned to the manager E2E
+task, and this result must remain unmerged/unreleased until that gate accepts.
+
+## 2026-08-05 — TASK-260728-2uxmut external snapshot audit and cache
+
+Added the schema-7 external repository pre-publication pipeline. Every admitted
+repository snapshot is materialized and byte-revalidated, digested as an
+independent build source, descriptor-checked, and passed to an independently
+typed audit subject before any protected artifact lookup or compiler call.
+Declared package identity and immutable lock remain separate from the effective
+operator-selected identity in snapshot keys and receipt-v2 cache inputs. Fixed
+policy state, target, descriptor selection, native target, and the existing Go
+toolchain identity are bound into the same canonical input.
+
+The protected store admits exact snapshots and receipt-v2 artifacts only below
+an owner-controlled, link-free boundary. It verifies canonical metadata, file
+sets, hashes, receipt input, executable bytes, and link counts on every reuse.
+Mutating operations quarantine corrupt live entries before rebuilding; dry-run
+detects corruption without mutation. Untagged installs may reuse an explicitly
+referenced exact protected snapshot while offline, then repeat whole-snapshot
+validation and audit. Tagged declarations still require fresh same-operation
+tag proof and fail closed offline.
+
+Compiler staging copies only the descriptor-selected build root and translates
+the selected source directory relative to that root. The adapter invokes the
+existing closed `go-v1` compiler with the exact established toolchain session;
+it creates no second probe or altered local `go-v1` receipt. Persistent reuse
+fails closed on non-POSIX platforms until a native protected identity proof is
+provided, avoiding unproved Windows cache trust. Marker publication and the
+full install transaction remain assigned to the downstream lifecycle task.
+
+## 2026-08-05 — TASK-260728-3jaa57 mixed receipt marker and lifecycle
+
+Extended the schema-7 lifecycle boundary with canonical receipt-v2 identity
+vectors, marker-v3 records that structurally distinguish local `go-v1`
+receipt-v1 commands from external `go-repository-v1` receipt-v2 commands, and
+fail-closed activation validation for manager-derived artifact paths, hashes,
+sizes, executable state, and single-link ownership. Existing schemas retain
+marker v2 and cannot accept external receipt state through a schema alias.
+
+Read-only status now recognizes marker v3 without interpreting external
+evidence as a local cache receipt, and external artifact/snapshot collection is
+rooted only by validated marker or journal state. The existing project/global
+transaction, rollback, crash-recovery, collision, PATH/shim, repair, and
+deduplication suites remain the shared lifecycle enforcement surface.
+
+Focused verification passed with 209 tests and two platform skips in the
+preserved producer run; an independent rerun passed 123 tests. Strict mypy,
+offline isolated package build, Twine distribution checks, and `git diff
+--check` all exited zero. The first ordinary isolated build attempt was
+interrupted after dependency installation stalled (exit 130), and the direct
+no-isolation retry correctly failed because the existing venv lacked
+`setuptools` (exit 1); the offline cached `uv` build then succeeded without
+network access.
+
+## 2026-08-05 — TASK-260728-3kuxg7 rc.5 external-repository lifecycle
+
+Wired schema-7 external repository builds into the existing project and global
+installation transactions. The manager now acquires an exact admitted Git
+snapshot, audits materialized source before cache lookup or compilation, binds
+the fixed Go toolchain session into receipt-v2, publishes marker-v3 state, and
+activates the protected artifact through the existing direct managed-shim
+boundary. Offline reinstall can reuse only a named, revalidated immutable
+snapshot; cache corruption is quarantined and repaired, while declaration
+removal reconciles the shim and marker through the normal uninstall lifecycle.
+
+Added an implementation-independent consumer for all 60 authenticated rc.5
+external-repository cases (18 threat and 12 lifecycle vectors) and real local
+Git project/global lifecycle tests. The consumer pins curator-spec
+`v1.0.0-rc.5` at `f5d7673039226ab81de2f4f87e2155ae995c4df3`, manifest SHA-256
+`b6f56aacc0e37dcc6692f73f641bff761e89b645adfe20a47a06d81c6fda204c`,
+external corpus manifest SHA-256
+`cc9e9c0f93b2497a060a533503a4d030d1a715fe1dd4eb8bf9820168a9257697`,
+and Curator reference checkout
+`74fe162415d800cd0a6975313827f9dc8594d299`. The rc.5 consumer does not import
+or execute Curator internals.
+
+The authoring and architecture documentation now describes schema 7, exact
+identity and tag rules, ordered audit/build/install behavior, protected cache
+and repair semantics, project/global activation, declaration-driven uninstall,
+and local development substitutions. It recommends direct manager-owned shims,
+not script wrappers or PATH hacks, and explicitly limits this qualification to
+macOS and Windows without claiming Linux support.
+
+Native macOS qualification ran through SSH alias `relux` on macOS 15.7.4
+(24G517), Darwin 24.6.0 x86_64, Python 3.12.13, Apple Git 2.50.1, Go 1.25.5,
+uv 0.11.29, and a staged csk `0.0.0rc5` build. The corrected task-focused
+rc.5/rc.6 suite passed 311 tests with one platform skip in 215.50 seconds;
+strict mypy passed 71 source files. A first broad attempt incorrectly pointed
+rc.6 regression tests at the rc.5 fixture root and was interrupted with exit
+130. The corrected broad run then exposed a real Darwin rename failure for a
+pre-sealed directory; publication now retains the private root mode through
+atomic rename and seals the published root afterward, matching the established
+cache boundary. The corrected native external subset passed 23 tests.
+
+Windows qualification resumed after `mbpro-win` returned to Tailscale and SSH.
+The native host is Windows 10 Pro 10.0.19045.6466 on amd64 with Python 3.14.4,
+Git 2.50.1.windows.1, Go 1.25.5, uv 0.11.29, and staged csk `0.0.0rc5`. All
+three staged manifest hashes matched the recorded rc.5 external, rc.5 schema,
+and current schema-regression pins. The first native run retained its real
+negative result: 21 failed, 273 passed, and 18 skipped because fake Git tests
+used POSIX helper paths and raw materialization incorrectly required sealed
+cache ownership, while artifact sealing set readonly before applying the DACL.
+The corrected design keeps strict owner/DACL validation for protected entries,
+uses handle-based disk/reparse/type/link validation for fresh materialization,
+applies the Windows security profile before readonly state, and uses native
+test helpers. The focused rerun passed 46 tests; the final native qualification
+passed 294 tests with 18 platform-appropriate skips in 269.45 seconds. Native
+mypy still reports 113 pre-existing platform-stub diagnostics in POSIX-only
+modules; the authoritative cross-platform source check remains the green
+71-file macOS/local mypy run. No Linux support is claimed.
+
+Reviewer rework tightened the source-acquisition boundary after an independent
+reproducer showed that `INCOMPLETE_SOURCE` could be mistaken for an offline
+transport outage and served from protected cache. Offline reuse is now limited
+to the typed `SOURCE_UNAVAILABLE` admission result; malformed/incomplete graph
+failures and non-recoverable exceptions propagate. The new regression passed
+locally and in both native qualification suites. Final post-rework results were
+312 passed/1 skipped on macOS and 295 passed/18 skipped on Windows, both exit
+zero; local strict mypy, package build, Twine validation, and diff checks also
+exited zero.

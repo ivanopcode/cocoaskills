@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Protocol
 
 from . import consumers, install_marker, locking, protocol_json, transactions
+from .build_repository_pipeline import EffectiveState, DiskProtectedStore, snapshot_key
 from .builds import cache as build_cache
 from .config import GlobalConfig
 from .locking import _pid_alive
@@ -40,6 +41,8 @@ class GcStats:
     runtime_removed: int = 0
     snapshots_removed: int = 0
     builds_removed: int = 0
+    external_builds_removed: int = 0
+    external_snapshots_removed: int = 0
     consumers_pruned: int = 0
     warnings: list[str] = field(default_factory=list)
 
@@ -49,6 +52,8 @@ class _References:
     runtime: set[tuple[str, str]] = field(default_factory=set)
     snapshots: set[tuple[str, str]] = field(default_factory=set)
     builds: set[str] = field(default_factory=set)
+    external_builds: set[str] = field(default_factory=set)
+    external_snapshots: set[str] = field(default_factory=set)
 
 
 def collect_runtime(
@@ -217,6 +222,15 @@ def _collect_locked(
     else:
         stats.builds_removed = collected.removed
         stats.warnings.extend(collected.warnings)
+    try:
+        (
+            stats.external_builds_removed,
+            stats.external_snapshots_removed,
+        ) = _collect_external_cache(csk_home, references)
+    except (OSError, ValueError) as exc:
+        stats.warnings.append(
+            f"external build cache retained because collection could not prove its boundary: {exc}"
+        )
     return stats
 
 
@@ -346,9 +360,29 @@ def _collect_marker_directory(
     references.runtime.add((marker.name, marker.commit))
     references.snapshots.add((marker.source, marker.commit))
     if isinstance(marker, install_marker.InstallMarkerV2):
-        references.builds.update(
-            build.cache_key for build in marker.builds.values()
-        )
+        references.builds.update(build.cache_key for build in marker.builds.values())
+    elif isinstance(marker, install_marker.InstallMarkerV3):
+        for build in marker.builds.values():
+            if build.driver == "go-v1":
+                references.builds.add(build.cache_key)
+                continue
+            references.external_builds.add(build.cache_key)
+            assert build.effective_identity is not None
+            assert build.object_format is not None and build.commit is not None
+            assert build.build_source is not None
+            references.external_snapshots.add(
+                snapshot_key(
+                    EffectiveState(
+                        identity_kind=build.effective_identity.kind,
+                        identity=build.effective_identity.value,
+                        transport=None,
+                        object_format=build.object_format,
+                        commit=build.commit,
+                        substituted=bool(build.substituted),
+                    ),
+                    build.build_source.content_sha256,
+                )
+            )
     return True, None
 
 
@@ -385,7 +419,39 @@ def _collect_journal_marker_group(
     references.runtime.update(candidate_references.runtime)
     references.snapshots.update(candidate_references.snapshots)
     references.builds.update(candidate_references.builds)
+    references.external_builds.update(candidate_references.external_builds)
+    references.external_snapshots.update(candidate_references.external_snapshots)
     return []
+
+
+def _collect_external_cache(csk_home: Path, references: _References) -> tuple[int, int]:
+    root = csk_home / "external-builds"
+    if not root.exists():
+        return 0, 0
+    # Reuse the store's boundary proof before deleting anything. GC does not
+    # repair permissions or infer liveness from receipt contents.
+    DiskProtectedStore(root)._prepare(mutate=False)
+    removed: list[int] = []
+    for kind, live in (
+        ("artifacts", references.external_builds),
+        ("snapshots", references.external_snapshots),
+    ):
+        parent = root / kind
+        if not parent.exists():
+            removed.append(0)
+            continue
+        DiskProtectedStore(root)._protected_dir(parent, create=False)
+        count = 0
+        for entry in parent.iterdir():
+            key = "sha256:" + entry.name
+            if key in live:
+                continue
+            DiskProtectedStore(root)._protected_dir(entry, create=False)
+            entry.chmod(0o700)
+            shutil.rmtree(entry)
+            count += 1
+        removed.append(count)
+    return removed[0], removed[1]
 
 
 def _generation_states(

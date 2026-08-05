@@ -528,7 +528,7 @@ def test_marker_v2_models_and_sorts_all_optional_schema_members() -> None:
     assert canonical["substituted"] == payload["substituted"]
 
 
-def test_marker_reader_rejects_duplicate_keys_unsafe_integers_and_marker_v3() -> None:
+def test_marker_reader_rejects_duplicate_keys_and_unsafe_integers_and_reads_marker_v3() -> None:
     with pytest.raises(install_marker.InstallMarkerError) as raised:
         install_marker.read_install_marker(
             b'{"schema_version":2,"schema_version":2}'
@@ -544,9 +544,8 @@ def test_marker_reader_rejects_duplicate_keys_unsafe_integers_and_marker_v3() ->
     marker_v3 = (
         _root() / "schema-cases" / "install-marker-v3" / "valid.json"
     ).read_bytes()
-    with pytest.raises(install_marker.InstallMarkerError) as raised:
-        install_marker.read_install_marker(marker_v3)
-    _assert_marker_error("unsupported_install_marker_schema", raised)
+    marker = install_marker.read_install_marker(marker_v3)
+    assert isinstance(marker, install_marker.InstallMarkerV3)
 
 
 @pytest.mark.parametrize("encoding", NON_UTF8_ENCODINGS)

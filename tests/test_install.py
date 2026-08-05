@@ -1562,7 +1562,7 @@ def test_cleanup_removes_undeclared_skill_and_runtime(tmp_path, skills_root, csk
     assert not (csk_home / "runtime" / "skill-tool").exists() or not any((csk_home / "runtime" / "skill-tool").iterdir())
 
 
-def test_marker_schema_mismatch_fails_cleanly(tmp_path, skills_root, csk_home):
+def test_marker_schema_mismatch_is_repaired_without_aliasing_v2_as_v3(tmp_path, skills_root, csk_home):
     project = make_project(tmp_path)
     make_skill_repo(skills_root, "skill-a", tag="v1")
     write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
@@ -1576,8 +1576,9 @@ def test_marker_schema_mismatch_fails_cleanly(tmp_path, skills_root, csk_home):
 
     result = installer.install(cfg)[0]
 
-    assert result.errors
-    assert "Unsupported installed marker schema" in result.errors[0]
+    assert not result.errors
+    repaired = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert repaired["schema_version"] == 2
 
 
 def test_snapshot_cache_reused_for_same_skill_commit_across_projects(tmp_path, skills_root, csk_home):

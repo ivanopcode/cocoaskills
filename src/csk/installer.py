@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -15,7 +16,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from . import (
     adapters,
@@ -26,6 +27,7 @@ from . import (
     env_files,
     gc,
     git_ops,
+    git_admission,
     gitignore_gate,
     hashing,
     hybrid,
@@ -42,7 +44,12 @@ from . import (
     transactions,
     whitelist,
 )
+from . import build_repository as build_repository_model
+from . import build_repository_pipeline
 from . import source_identity as source_identity_mod
+from .audit import detectors as audit_detectors
+from .audit.capabilities import CapabilityManifest
+from .audit.model import Severity
 from .audit import pipeline as audit_pipeline
 from .builds import cache as build_cache
 from .builds import go_v1
@@ -103,9 +110,12 @@ class _MaterializationTarget:
 
 @dataclass(frozen=True)
 class _PublishedBuild:
-    plan: build_planner.BuildPlan
-    inspection: build_cache.CacheInspection
-    marker: install_marker.InstallMarkerBuild
+    plan: build_planner.BuildPlan | None
+    inspection: build_cache.CacheInspection | None
+    marker: install_marker.MarkerBuild
+    artifact_path: Path | None = None
+    receipt_bytes: bytes | None = None
+    build_source_identity: build_source.BuildSourceIdentity | None = None
 
 
 class _MessageResult(Protocol):
@@ -290,8 +300,9 @@ def _install_project_once(
             result.messages.append(f"{project.alias}: {exc}; skipped")
             return result
 
-        substitutions = dev_substitutions.load_substitutions(project.path)
-        if substitutions:
+        dev_manifest = dev_substitutions.load_manifest(project.path)
+        substitutions = dev_manifest.substitutions
+        if substitutions or dev_manifest.build_repository_substitutions:
             if config.audit.enabled and config.audit.mode == "strict":
                 raise InstallError(
                     f"Dev substitutions are active in {dev_substitutions.DEV_MANIFEST_NAME}; "
@@ -311,6 +322,20 @@ def _install_project_once(
                 result.messages.append(
                     f"{project.alias}: SUBSTITUTION {substitution.name} -> {substitution.describe()}"
                 )
+            for skill_name in sorted(dev_manifest.build_repository_substitutions):
+                for repository_name, repository_substitution in sorted(
+                    dev_manifest.build_repository_substitutions[skill_name].items()
+                ):
+                    selected = (
+                        f"path {repository_substitution.path}"
+                        if repository_substitution.path is not None
+                        else f"git {repository_substitution.git} "
+                        f"{repository_substitution.ref_kind} {repository_substitution.ref_value}"
+                    )
+                    result.messages.append(
+                        f"{project.alias}: BUILD REPOSITORY SUBSTITUTION "
+                        f"{skill_name}.{repository_name} -> {selected}"
+                    )
 
         try:
             hybrid_decls = hybrid.load_hybrid_decls(config.path.parent)
@@ -422,6 +447,20 @@ def _install_project_once(
                     max_generation_attempts=1,
                 )
             )
+            external_published, external_messages = _publish_external_builds(
+                config,
+                project_root=project.path,
+                nodes=nodes,
+                substitutions=dev_manifest,
+                operator_search_path=operator_search_path,
+                stack=stack,
+                dry_run=options.dry_run,
+                marker_roots=(
+                    project.path / ".agents" / "skills",
+                    hybrid.hybrid_skills_root(config.path.parent),
+                ),
+            )
+            result.messages.extend(external_messages)
             if options.dry_run:
                 for build in result.builds:
                     payload = json.dumps(
@@ -481,6 +520,8 @@ def _install_project_once(
                     cache_backend,
                     home_lock,
                 )
+                for provider, commands in external_published.items():
+                    published.setdefault(provider, {}).update(commands)
                 messages = _commit_materialization(
                     config,
                     project,
@@ -572,7 +613,7 @@ def _freeze_build_providers(
 ) -> tuple[build_planner.BuildProvider, ...]:
     providers: list[build_planner.BuildProvider] = []
     for node in nodes:
-        active = _active_build_command_names(node)
+        active = _active_local_build_command_names(node)
         if not active:
             continue
         frozen = stack.enter_context(
@@ -607,6 +648,384 @@ def _active_build_command_names(node: closure.ClosureNode) -> set[str]:
             if command in exported
         )
     return active
+
+
+def _active_local_build_command_names(node: closure.ClosureNode) -> set[str]:
+    return {
+        name
+        for name in _active_build_command_names(node)
+        if node.spec.commands[name].driver == build_metadata.GO_V1_DRIVER
+    }
+
+
+def _active_external_build_command_names(node: closure.ClosureNode) -> set[str]:
+    return {
+        name
+        for name in _active_build_command_names(node)
+        if node.spec.commands[name].driver
+        == build_repository_model.GO_REPOSITORY_V1_DRIVER
+    }
+
+
+def _operator_program(
+    name: str, operator_search_path: build_toolchain.OperatorSearchPath
+) -> Path:
+    found = shutil.which(name, path=os.pathsep.join(operator_search_path.entries))
+    if found is None:
+        raise InstallError(f"operator-provided {name} is unavailable")
+    return Path(found).resolve(strict=True)
+
+
+def _external_git_tool(
+    operator_search_path: build_toolchain.OperatorSearchPath,
+    *,
+    require_ssh: bool,
+) -> git_admission.GitTool:
+    executable = _operator_program("git", operator_search_path)
+    try:
+        version = subprocess.run(
+            (os.fspath(executable), "--version"),
+            check=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        ).stdout.decode("ascii", "strict").strip()
+        exec_path = Path(
+            subprocess.run(
+                (os.fspath(executable), "--exec-path"),
+                check=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            ).stdout.decode("utf-8", "strict").strip()
+        ).resolve(strict=True)
+    except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
+        raise InstallError("operator-provided Git identity cannot be frozen") from exc
+    ssh = _operator_program("ssh", operator_search_path) if require_ssh else None
+    # Public HTTPS never invokes askpass. If authentication is requested,
+    # Python exits without yielding a credential rather than consulting a
+    # repository-selected helper. SSH is likewise the frozen operator binary;
+    # package data never supplies a wrapper or its options.
+    return git_admission.GitTool(
+        executable=executable,
+        exec_path=exec_path,
+        allowed_versions=(version,),
+        askpass=Path(sys.executable).resolve(strict=True),
+        ssh_wrapper=ssh,
+    )
+
+
+def _external_static_audit(subject: build_repository_pipeline.AuditSubject) -> None:
+    findings = audit_detectors.detect_snapshot(
+        subject.snapshot_root, CapabilityManifest.implicit_none()
+    )
+    blocked = [
+        finding
+        for finding in findings
+        if finding.severity in {Severity.HIGH, Severity.CRITICAL}
+    ]
+    if blocked:
+        raise InstallError(
+            "external repository static audit blocked: "
+            + ", ".join(sorted({finding.id for finding in blocked}))
+        )
+
+
+def _existing_external_snapshot_key(
+    marker_roots: tuple[Path, ...],
+    provider: str,
+    command: str,
+) -> str | None:
+    for root in marker_roots:
+        path = root / provider / ".csk-install.json"
+        try:
+            marker = install_marker.read_install_marker(path.read_bytes())
+        except (OSError, install_marker.InstallMarkerError):
+            continue
+        if not isinstance(marker, install_marker.InstallMarkerV3):
+            continue
+        build = marker.builds.get(command)
+        if (
+            build is None
+            or build.driver != build_repository_model.GO_REPOSITORY_V1_DRIVER
+            or build.effective_identity is None
+            or build.object_format is None
+            or build.commit is None
+            or build.build_source is None
+        ):
+            continue
+        return build_repository_pipeline.snapshot_key(
+            build_repository_pipeline.EffectiveState(
+                identity_kind=build.effective_identity.kind,
+                identity=build.effective_identity.value,
+                transport=None,
+                object_format=build.object_format,
+                commit=build.commit,
+                substituted=bool(build.substituted),
+            ),
+            build.build_source.content_sha256,
+        )
+    return None
+
+
+def _external_effective_state(
+    project_identity: str,
+    repository: build_repository_model.BuildRepository,
+    substitution: dev_substitutions.BuildRepositorySubstitution | None,
+) -> build_repository_pipeline.EffectiveState:
+    if substitution is None:
+        return build_repository_pipeline.EffectiveState(
+            "network-git",
+            repository.identity,
+            repository.transport,
+            repository.locked_commit.object_format,
+            repository.locked_commit.hex,
+        )
+    if substitution.path is not None:
+        assert substitution.selector is not None
+        return build_repository_pipeline.EffectiveState(
+            "operator-local-git",
+            substitution.effective_identity(project_identity),
+            None,
+            repository.locked_commit.object_format,
+            repository.locked_commit.hex,
+            True,
+            build_repository_pipeline.SubstitutionState("local-path"),
+        )
+    assert substitution.identity is not None and substitution.transport is not None
+    assert substitution.ref_kind is not None and substitution.ref_value is not None
+    commit = (
+        substitution.ref_value
+        if substitution.ref_kind == "revision"
+        else repository.locked_commit.hex
+    )
+    return build_repository_pipeline.EffectiveState(
+        "network-git",
+        substitution.identity,
+        substitution.transport,
+        repository.locked_commit.object_format,
+        commit,
+        True,
+        build_repository_pipeline.SubstitutionState(
+            "network-git", substitution.ref_kind, substitution.ref_value
+        ),
+    )
+
+
+def _publish_external_builds(
+    config: GlobalConfig,
+    *,
+    project_root: Path,
+    nodes: list[closure.ClosureNode],
+    substitutions: dev_substitutions.DevManifest,
+    operator_search_path: build_toolchain.OperatorSearchPath,
+    stack: ExitStack,
+    dry_run: bool,
+    marker_roots: tuple[Path, ...],
+) -> tuple[dict[str, dict[str, _PublishedBuild]], list[str]]:
+    selected = [
+        (node, name)
+        for node in nodes
+        for name in sorted(_active_external_build_command_names(node))
+    ]
+    if not selected:
+        return {}, []
+    if sys.platform not in {"darwin", "win32"}:
+        raise InstallError(
+            "go-repository-v1 is supported only on macOS and Windows; "
+            "Linux qualification is deferred"
+        )
+    require_ssh = any(
+        (
+            substitutions.build_repository_substitution(
+                node.name, node.spec.commands[name].repository or ""
+            )
+            or node.spec.build_repositories[node.spec.commands[name].repository or ""]
+        ).transport
+        == "ssh"
+        for node, name in selected
+    )
+    git_tool = _external_git_tool(
+        operator_search_path, require_ssh=require_ssh
+    )
+    private_base = Path(
+        stack.enter_context(
+            tempfile.TemporaryDirectory(prefix="csk-external-build-operation-")
+        )
+    )
+    session = stack.enter_context(
+        build_toolchain.establish_toolchain(
+            build_toolchain.ToolchainConfig(
+                private_base=private_base,
+                operator_search_path=operator_search_path,
+                forbidden_roots=tuple(
+                    path
+                    for path in (
+                        config.path.parent,
+                        project_root,
+                        config.skills_root,
+                        *(node.repo for node in nodes),
+                    )
+                    if path.exists()
+                ),
+            )
+        )
+    )
+    compiler = build_repository_pipeline.ExistingGoV1Session(session)
+    store = build_repository_pipeline.DiskProtectedStore(
+        config.path.parent / "external-builds"
+    )
+    project_identity = locking.canonical_project_identity(project_root)
+    published: dict[str, dict[str, _PublishedBuild]] = {}
+    messages: list[str] = []
+    for node, name in selected:
+        command = node.spec.commands[name]
+        assert command.repository is not None and command.target is not None
+        repository = node.spec.build_repositories[command.repository]
+        substitution = substitutions.build_repository_substitution(
+            node.name, repository.name
+        )
+        effective = _external_effective_state(
+            project_identity, repository, substitution
+        )
+
+        def acquire(
+            repository: build_repository_model.BuildRepository = repository,
+            substitution: dev_substitutions.BuildRepositorySubstitution | None = substitution,
+            effective: build_repository_pipeline.EffectiveState = effective,
+        ) -> git_admission.Snapshot:
+            if substitution is not None and substitution.path is not None:
+                return git_admission.admit_local(substitution.path, git_tool)
+            git = repository.git if substitution is None else substitution.git
+            assert git is not None
+            source = build_repository_model.parse_repository_source(git)
+            tag = repository.tag
+            if substitution is not None:
+                tag = (
+                    substitution.ref_value
+                    if substitution.ref_kind == "tag"
+                    else None
+                )
+                if substitution.ref_kind == "branch":
+                    raise InstallError(
+                        "network build repository branch substitutions require "
+                        "an independently pinned revision"
+                    )
+            return git_admission.acquire_network(
+                source,
+                build_repository_model.LockedCommit(
+                    effective.object_format, effective.commit
+                ),
+                git_tool,
+                tag=tag,
+            )
+
+        result = build_repository_pipeline.run_pipeline(
+            build_repository_pipeline.PipelineRequest(
+                operation=(
+                    build_repository_pipeline.Operation.DRY_RUN
+                    if dry_run
+                    else build_repository_pipeline.Operation.INSTALL
+                ),
+                command=name,
+                target=command.target,
+                declared=build_repository_pipeline.declared_state(repository),
+                effective=effective,
+                acquire=acquire,
+                audit=_external_static_audit,
+                store=store,
+                compiler=compiler,
+                offline_snapshot_key=_existing_external_snapshot_key(
+                    marker_roots, node.name, name
+                ),
+            )
+        )
+        messages.append(
+            f"external build {node.name}.{name}: {result.state} "
+            f"source={result.build_source} cache={result.cache_key}"
+        )
+        if dry_run:
+            continue
+        if (
+            result.cache_key is None
+            or result.receipt is None
+            or result.artifact is None
+            or result.subject is None
+            or result.build_source is None
+        ):
+            raise InstallError(f"external build {node.name}.{name} returned incomplete state")
+        receipt_value = protocol_json.loads_canonical(result.receipt)
+        assert isinstance(receipt_value, dict)
+        artifact_value = receipt_value.get("artifact")
+        assert isinstance(artifact_value, dict)
+        artifact_relative = artifact_value.get("path")
+        if not isinstance(artifact_relative, str):
+            raise InstallError("external build receipt has no artifact path")
+        selected_state = result.subject.effective
+        marker = install_marker.InstallMarkerBuildV3(
+            driver=build_repository_model.GO_REPOSITORY_V1_DRIVER,
+            receipt_schema_version=2,
+            execution_policy=build_metadata.PORTABLE_EXECUTION_POLICY,
+            repository=repository.name,
+            declared_identity=install_marker.MarkerRepositoryIdentity(
+                "network-git", repository.identity
+            ),
+            declared_locked_commit=install_marker.MarkerRepositoryCommit(
+                repository.locked_commit.object_format,
+                repository.locked_commit.hex,
+            ),
+            declared_tag=repository.tag,
+            effective_identity=install_marker.MarkerRepositoryIdentity(
+                selected_state.identity_kind, selected_state.identity
+            ),
+            object_format=selected_state.object_format,
+            commit=selected_state.commit,
+            substituted=selected_state.substituted,
+            substitution=(
+                install_marker.MarkerRepositorySubstitution(
+                    type=selected_state.substitution.type,
+                    ref=(
+                        install_marker.MarkerRepositoryRef(
+                            selected_state.substitution.ref_kind,
+                            selected_state.substitution.ref_value or "",
+                        )
+                        if selected_state.substitution.ref_kind is not None
+                        else None
+                    ),
+                )
+                if selected_state.substitution is not None
+                else None
+            ),
+            build_source=build_source.BuildSourceIdentity(
+                "curator-build-source-v1", result.build_source
+            ),
+            descriptor_target=command.target,
+            cache_key=result.cache_key,
+            receipt_sha256="sha256:"
+            + hashlib.sha256(result.receipt).hexdigest(),
+            artifact_sha256="sha256:"
+            + hashlib.sha256(result.artifact).hexdigest(),
+            artifact_path=artifact_relative,
+        )
+        artifact_path = (
+            store.root
+            / "artifacts"
+            / result.cache_key.removeprefix("sha256:")
+            / "artifact"
+        )
+        published.setdefault(node.name, {})[name] = _PublishedBuild(
+            plan=None,
+            inspection=None,
+            marker=marker,
+            artifact_path=artifact_path,
+            receipt_bytes=result.receipt,
+            build_source_identity=build_source.BuildSourceIdentity(
+                "curator-build-source-v1", result.build_source
+            ),
+        )
+    return published, messages
 
 
 def _active_script_owners(
@@ -1149,7 +1568,7 @@ def _revalidate_closure(
                 f"build provider disappeared before commit: {provider.name}"
             )
         provider.snapshot.recheck()
-        expected_commands = _active_build_command_names(provider_node)
+        expected_commands = _active_local_build_command_names(provider_node)
         if {command.name for command in provider.commands} != expected_commands:
             raise _concurrent_state_change(
                 f"build activation changed before commit: {provider.name}"
@@ -1439,8 +1858,23 @@ def _stage_materialization(
         build_source_identity: build_source.BuildSourceIdentity | None = None
         for name in sorted(provider_builds):
             published = provider_builds[name]
-            identity = published.plan.input.build_source
-            if (
+            external = (
+                isinstance(
+                    published.marker, install_marker.InstallMarkerBuildV3
+                )
+                and published.marker.driver
+                == build_repository_model.GO_REPOSITORY_V1_DRIVER
+            )
+            identity = (
+                published.plan.input.build_source
+                if published.plan is not None
+                else published.build_source_identity
+            )
+            if identity is None:
+                raise InstallError(
+                    f"build provider {node.name}.{name} has no source identity"
+                )
+            if not external and (
                 build_source_identity is not None
                 and identity != build_source_identity
             ):
@@ -1448,14 +1882,40 @@ def _stage_materialization(
                     f"build provider {node.name} has inconsistent source "
                     "identities"
                 )
-            build_source_identity = identity
+            if not external:
+                build_source_identity = identity
             command = node.spec.commands[name]
-            activation = shims.select_build_activation(
-                csk_home=config.path.parent,
-                command=command,
-                marker_build=published.marker,
-                inspection=published.inspection,
-            )
+            if external:
+                assert isinstance(
+                    published.marker, install_marker.InstallMarkerBuildV3
+                )
+                if published.receipt_bytes is None or published.artifact_path is None:
+                    raise InstallError(
+                        f"external build {node.name}.{name} has incomplete publication state"
+                    )
+                activation = shims.select_external_build_activation(
+                    csk_home=config.path.parent,
+                    command=command,
+                    marker_build=published.marker,
+                    receipt_bytes=published.receipt_bytes,
+                    artifact_path=published.artifact_path,
+                )
+            else:
+                if (
+                    not isinstance(
+                        published.marker, install_marker.InstallMarkerBuild
+                    )
+                    or published.inspection is None
+                ):
+                    raise InstallError(
+                        f"local build {node.name}.{name} has incomplete publication state"
+                    )
+                activation = shims.select_build_activation(
+                    csk_home=config.path.parent,
+                    command=command,
+                    marker_build=published.marker,
+                    inspection=published.inspection,
+                )
             shims.write_project_build_shim(
                 staged_project,
                 activation,
@@ -2193,7 +2653,7 @@ def _install_skill_context(
     substituted: str | None = None,
     mcp_servers: dict[str, list[str]] | None = None,
     attestation: dict[str, object] | None = None,
-    builds: Mapping[str, install_marker.InstallMarkerBuild] | None = None,
+    builds: Mapping[str, install_marker.MarkerBuild] | None = None,
     build_source_identity: build_source.BuildSourceIdentity | None = None,
 ) -> str:
     return _install_skill_context_to_root(
@@ -2222,7 +2682,7 @@ def _install_skill_context_to_root(
     substituted: str | None = None,
     mcp_servers: dict[str, list[str]] | None = None,
     attestation: dict[str, object] | None = None,
-    builds: Mapping[str, install_marker.InstallMarkerBuild] | None = None,
+    builds: Mapping[str, install_marker.MarkerBuild] | None = None,
     build_source_identity: build_source.BuildSourceIdentity | None = None,
 ) -> str:
     target = target_root / plan.decl.name
@@ -2282,7 +2742,7 @@ def _install_marker_only(
     mcp_servers: dict[str, list[str]] | None = None,
     target_root: Path | None = None,
     attestation: dict[str, object] | None = None,
-    builds: Mapping[str, install_marker.InstallMarkerBuild] | None = None,
+    builds: Mapping[str, install_marker.MarkerBuild] | None = None,
     build_source_identity: build_source.BuildSourceIdentity | None = None,
 ) -> str:
     """Record a runtime-only or context-less node without agent prompt files.
@@ -2338,7 +2798,7 @@ def _marker_payload(
     substituted: str | None,
     mcp_servers: dict[str, list[str]] | None = None,
     attestation: dict[str, object] | None = None,
-    builds: Mapping[str, install_marker.InstallMarkerBuild] | None = None,
+    builds: Mapping[str, install_marker.MarkerBuild] | None = None,
     build_source_identity: build_source.BuildSourceIdentity | None = None,
 ) -> dict[str, object]:
     marker_activation: install_marker.MarkerActivation | None = None
@@ -2371,7 +2831,7 @@ def _marker_payload(
             status=status,
             key_id=key_id,
         )
-    marker = install_marker.InstallMarkerV2(
+    common: dict[str, Any] = dict(
         name=plan.decl.name,
         source=plan.decl.source,
         ref_kind=plan.resolved.kind,
@@ -2413,10 +2873,42 @@ def _marker_payload(
         activation=marker_activation,
         requirers=tuple(requirers) if requirers else None,
         substituted=substituted,
-        build_roots=plan.spec.build_roots,
-        builds={} if builds is None else builds,
-        build_source=build_source_identity,
     )
+    if plan.spec.schema_version == 7:
+        marker_builds: dict[str, install_marker.InstallMarkerBuildV3] = {}
+        for name, build in (builds or {}).items():
+            if isinstance(build, install_marker.InstallMarkerBuildV3):
+                marker_builds[name] = build
+            else:
+                marker_builds[name] = install_marker.InstallMarkerBuildV3(
+                    driver=build.driver,
+                    receipt_schema_version=1,
+                    execution_policy=build_metadata.PORTABLE_EXECUTION_POLICY,
+                    cache_key=build.cache_key,
+                    receipt_sha256=build.receipt_sha256,
+                    artifact_sha256=build.artifact_sha256,
+                    artifact_path=build.artifact_path,
+                )
+        marker: install_marker.InstallMarker = install_marker.InstallMarkerV3(
+            **common,
+            build_roots=plan.spec.build_roots,
+            builds=marker_builds,
+            build_source=build_source_identity,
+        )
+    else:
+        local_builds = {
+            name: build
+            for name, build in (builds or {}).items()
+            if isinstance(build, install_marker.InstallMarkerBuild)
+        }
+        if len(local_builds) != len(builds or {}):
+            raise InstallError("external marker state requires skill schema 7")
+        marker = install_marker.InstallMarkerV2(
+            **common,
+            build_roots=plan.spec.build_roots,
+            builds=local_builds,
+            build_source=build_source_identity,
+        )
     return marker.to_json()
 
 
@@ -2431,7 +2923,7 @@ def _marker_is_current(
     substituted: str | None = None,
     mcp_servers: dict[str, list[str]] | None = None,
     attestation: dict[str, object] | None = None,
-    builds: Mapping[str, install_marker.InstallMarkerBuild] | None = None,
+    builds: Mapping[str, install_marker.MarkerBuild] | None = None,
     build_source_identity: build_source.BuildSourceIdentity | None = None,
 ) -> bool:
     if not marker or not target.exists():

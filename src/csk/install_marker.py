@@ -1,4 +1,4 @@
-"""Typed install-marker schemas 1 and 2.
+"""Typed install-marker schemas 1, 2, and 3.
 
 The marker records portable installation state only. Physical build-cache,
 receipt, lock, quarantine, and manager-home paths are deliberately absent from
@@ -17,6 +17,7 @@ from typing import Any, Final, Literal, TypeAlias
 
 from . import protocol_json
 from .builds.metadata import GO_V1_DRIVER, derived_artifact_path
+from .build_repository import GO_REPOSITORY_V1_DRIVER
 from .builds.source import BuildSourceIdentity
 from .hashing import BUILD_SOURCE_ALGORITHM
 from .identifiers import is_valid_identifier, is_valid_locale, is_valid_portable_path
@@ -24,8 +25,13 @@ from .identifiers import is_valid_identifier, is_valid_locale, is_valid_portable
 
 INSTALL_MARKER_V1_SCHEMA_VERSION: Final = 1
 INSTALL_MARKER_V2_SCHEMA_VERSION: Final = 2
+INSTALL_MARKER_V3_SCHEMA_VERSION: Final = 3
 SUPPORTED_INSTALL_MARKER_SCHEMA_VERSIONS: Final[frozenset[int]] = frozenset(
-    {INSTALL_MARKER_V1_SCHEMA_VERSION, INSTALL_MARKER_V2_SCHEMA_VERSION}
+    {
+        INSTALL_MARKER_V1_SCHEMA_VERSION,
+        INSTALL_MARKER_V2_SCHEMA_VERSION,
+        INSTALL_MARKER_V3_SCHEMA_VERSION,
+    }
 )
 
 _SHA256_PREFIX: Final = "sha256:"
@@ -75,10 +81,38 @@ _V2_REQUIRED_MEMBERS: Final[frozenset[str]] = _COMMON_REQUIRED_MEMBERS | frozens
 _V2_MEMBERS: Final[frozenset[str]] = (
     _V2_REQUIRED_MEMBERS | _COMMON_OPTIONAL_MEMBERS | frozenset({"build_source"})
 )
+_V3_REQUIRED_MEMBERS: Final[frozenset[str]] = _V2_REQUIRED_MEMBERS
+_V3_MEMBERS: Final[frozenset[str]] = _V2_MEMBERS
 _BUILD_SOURCE_MEMBERS: Final[frozenset[str]] = frozenset({"algorithm", "content_sha256"})
 _BUILD_RECORD_MEMBERS: Final[frozenset[str]] = frozenset(
     {"driver", "cache_key", "receipt_sha256", "artifact_sha256", "artifact_path"}
 )
+_V3_BUILD_COMMON_MEMBERS: Final[frozenset[str]] = _BUILD_RECORD_MEMBERS | frozenset(
+    {"receipt_schema_version", "execution_policy"}
+)
+_V3_EXTERNAL_BUILD_MEMBERS: Final[frozenset[str]] = _V3_BUILD_COMMON_MEMBERS | frozenset(
+    {
+        "repository",
+        "declared_identity",
+        "declared_locked_commit",
+        "declared_tag",
+        "effective_identity",
+        "object_format",
+        "commit",
+        "substituted",
+        "substitution",
+        "build_source",
+        "descriptor_target",
+    }
+)
+_V3_EXTERNAL_BUILD_REQUIRED: Final[frozenset[str]] = _V3_EXTERNAL_BUILD_MEMBERS - frozenset(
+    {"declared_tag", "substitution"}
+)
+_IDENTITY_MEMBERS: Final[frozenset[str]] = frozenset({"kind", "value"})
+_LOCKED_COMMIT_MEMBERS: Final[frozenset[str]] = frozenset({"object_format", "hex"})
+_SUBSTITUTION_MEMBERS: Final[frozenset[str]] = frozenset({"type", "ref"})
+_SUBSTITUTION_REF_MEMBERS: Final[frozenset[str]] = frozenset({"kind", "value"})
+_EXECUTION_POLICY: Final = "manager-worker-v1"
 _ACTIVATION_MEMBERS: Final[frozenset[str]] = frozenset({"context", "commands"})
 _ATTESTATION_REQUIRED_MEMBERS: Final[frozenset[str]] = frozenset({"registry", "status"})
 _ATTESTATION_MEMBERS: Final[frozenset[str]] = (
@@ -173,6 +207,185 @@ class InstallMarkerBuild:
             "artifact_sha256": self.artifact_sha256,
             "artifact_path": self.artifact_path,
         }
+
+
+@dataclass(frozen=True)
+class MarkerRepositoryIdentity:
+    kind: str
+    value: str
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"network-git", "operator-local-git"}:
+            raise InstallMarkerError("install_marker_invalid", f"repository identity kind is invalid: {self.kind!r}")
+        _require_non_empty_string(self.value, "repository identity value")
+
+    def to_json(self) -> dict[str, str]:
+        return {"kind": self.kind, "value": self.value}
+
+
+@dataclass(frozen=True)
+class MarkerRepositoryCommit:
+    object_format: str
+    hex: str
+
+    def __post_init__(self) -> None:
+        width = 40 if self.object_format == "sha1" else 64 if self.object_format == "sha256" else 0
+        if width == 0 or not isinstance(self.hex, str) or len(self.hex) != width or not set(self.hex) <= _SHA256_DIGITS:
+            raise InstallMarkerError("install_marker_invalid", "repository commit must match its sha1 or sha256 object format")
+
+    def to_json(self) -> dict[str, str]:
+        return {"object_format": self.object_format, "hex": self.hex}
+
+
+@dataclass(frozen=True)
+class MarkerRepositoryRef:
+    kind: str
+    value: str
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"tag", "revision"}:
+            raise InstallMarkerError("install_marker_invalid", "repository substitution ref kind must be tag or revision")
+        _require_non_empty_string(self.value, "repository substitution ref value")
+
+    def to_json(self) -> dict[str, str]:
+        return {"kind": self.kind, "value": self.value}
+
+
+@dataclass(frozen=True)
+class MarkerRepositorySubstitution:
+    type: str
+    ref: MarkerRepositoryRef | None = None
+
+    def __post_init__(self) -> None:
+        if self.type == "local-path":
+            if self.ref is not None:
+                raise InstallMarkerError("install_marker_invalid", "local-path substitution must not contain ref")
+        elif self.type == "network-git":
+            if self.ref is None:
+                raise InstallMarkerError("install_marker_invalid", "network-git substitution requires ref")
+        else:
+            raise InstallMarkerError("install_marker_invalid", f"repository substitution type is invalid: {self.type!r}")
+
+    def to_json(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"type": self.type}
+        if self.ref is not None:
+            result["ref"] = self.ref.to_json()
+        return result
+
+
+@dataclass(frozen=True)
+class InstallMarkerBuildV3:
+    """One marker-v3 local receipt-v1 or external receipt-v2 reference."""
+
+    driver: str
+    receipt_schema_version: int
+    execution_policy: str
+    cache_key: str
+    receipt_sha256: str
+    artifact_sha256: str
+    artifact_path: str
+    repository: str | None = None
+    declared_identity: MarkerRepositoryIdentity | None = None
+    declared_locked_commit: MarkerRepositoryCommit | None = None
+    declared_tag: str | None = None
+    effective_identity: MarkerRepositoryIdentity | None = None
+    object_format: str | None = None
+    commit: str | None = None
+    substituted: bool | None = None
+    substitution: MarkerRepositorySubstitution | None = None
+    build_source: BuildSourceIdentity | None = None
+    descriptor_target: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.receipt_schema_version, int) or isinstance(self.receipt_schema_version, bool):
+            raise InstallMarkerError("install_marker_invalid", "build receipt_schema_version must be an integer")
+        if self.execution_policy != _EXECUTION_POLICY:
+            raise InstallMarkerError("install_marker_invalid", f"build execution_policy must be {_EXECUTION_POLICY!r}")
+        _require_sha256(self.cache_key, "build cache_key")
+        _require_sha256(self.receipt_sha256, "build receipt_sha256")
+        _require_sha256(self.artifact_sha256, "build artifact_sha256")
+        _require_portable_path(self.artifact_path, "build artifact_path")
+        external_values = (
+            self.repository,
+            self.declared_identity,
+            self.declared_locked_commit,
+            self.declared_tag,
+            self.effective_identity,
+            self.object_format,
+            self.commit,
+            self.substituted,
+            self.substitution,
+            self.build_source,
+            self.descriptor_target,
+        )
+        if self.driver == GO_V1_DRIVER:
+            if self.receipt_schema_version != 1 or any(value is not None for value in external_values):
+                raise InstallMarkerError("install_marker_invalid", "local go-v1 marker-v3 build must be receipt schema 1 without repository state")
+            return
+        if self.driver != GO_REPOSITORY_V1_DRIVER or self.receipt_schema_version != 2:
+            raise InstallMarkerError("install_marker_invalid", "external marker-v3 build must use go-repository-v1 receipt schema 2")
+        if not isinstance(self.substituted, bool):
+            raise InstallMarkerError("install_marker_invalid", "external build substituted must be boolean")
+        required = (self.repository, self.declared_identity, self.declared_locked_commit, self.effective_identity, self.object_format, self.commit, self.build_source, self.descriptor_target)
+        if any(value is None for value in required):
+            raise InstallMarkerError("install_marker_invalid", "external marker-v3 build is missing repository state")
+        assert self.repository is not None
+        assert self.declared_identity is not None
+        assert self.declared_locked_commit is not None
+        assert self.effective_identity is not None
+        assert self.object_format is not None
+        assert self.build_source is not None
+        assert self.descriptor_target is not None
+        _require_identifier(self.repository, "external build repository")
+        _require_identifier(self.descriptor_target, "external build descriptor_target")
+        assert isinstance(self.commit, str)
+        MarkerRepositoryCommit(object_format=self.object_format, hex=self.commit)
+        _validate_build_source(self.build_source)
+        if self.declared_identity.kind != "network-git":
+            raise InstallMarkerError("install_marker_invalid", "declared repository identity must be network-git")
+        if self.substituted != (self.substitution is not None):
+            raise InstallMarkerError("install_marker_invalid", "substitution must be present exactly when substituted is true")
+        if not self.substituted and (
+            self.effective_identity != self.declared_identity
+            or self.object_format != self.declared_locked_commit.object_format
+            or self.commit != self.declared_locked_commit.hex
+        ):
+            raise InstallMarkerError("install_marker_invalid", "unsubstituted external source must equal declared state")
+        if self.declared_tag is not None:
+            _require_non_empty_string(self.declared_tag, "external build declared_tag")
+
+    def to_json(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "driver": self.driver,
+            "receipt_schema_version": self.receipt_schema_version,
+            "execution_policy": self.execution_policy,
+            "cache_key": self.cache_key,
+            "receipt_sha256": self.receipt_sha256,
+            "artifact_sha256": self.artifact_sha256,
+            "artifact_path": self.artifact_path,
+        }
+        if self.driver == GO_REPOSITORY_V1_DRIVER:
+            assert self.repository is not None and self.declared_identity is not None
+            assert self.declared_locked_commit is not None and self.effective_identity is not None
+            assert self.object_format is not None and self.commit is not None
+            assert self.substituted is not None and self.build_source is not None
+            assert self.descriptor_target is not None
+            result.update(
+                repository=self.repository,
+                declared_identity=self.declared_identity.to_json(),
+                declared_locked_commit=self.declared_locked_commit.to_json(),
+                effective_identity=self.effective_identity.to_json(),
+                object_format=self.object_format,
+                commit=self.commit,
+                substituted=self.substituted,
+                build_source={"algorithm": self.build_source.algorithm, "content_sha256": self.build_source.content_sha256},
+                descriptor_target=self.descriptor_target,
+            )
+            if self.declared_tag is not None:
+                result["declared_tag"] = self.declared_tag
+            if self.substitution is not None:
+                result["substitution"] = self.substitution.to_json()
+        return result
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -422,7 +635,50 @@ class InstallMarkerV2(_InstallMarkerCommon):
         return result
 
 
-InstallMarker: TypeAlias = InstallMarkerV1 | InstallMarkerV2
+@dataclass(frozen=True, kw_only=True)
+class InstallMarkerV3(_InstallMarkerCommon):
+    """Schema-7 marker supporting local and external compiled commands."""
+
+    build_roots: tuple[str, ...]
+    builds: Mapping[str, InstallMarkerBuildV3]
+    build_source: BuildSourceIdentity | None = None
+    schema_version: Literal[3] = INSTALL_MARKER_V3_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if self.schema_version != INSTALL_MARKER_V3_SCHEMA_VERSION:
+            raise InstallMarkerError("unsupported_install_marker_schema", f"marker v3 schema_version must be 3, got {self.schema_version!r}")
+        self._validate_common(maximum_skill_schema=7)
+        if self.skill_schema_version != 7:
+            raise InstallMarkerError("install_marker_invalid", "marker v3 requires skill_schema_version 7")
+        object.__setattr__(self, "build_roots", _freeze_path_set(self.build_roots, "build_roots"))
+        object.__setattr__(self, "builds", _freeze_builds_v3(self.builds))
+        local_builds = [build for build in self.builds.values() if build.driver == GO_V1_DRIVER]
+        if bool(local_builds) != (self.build_source is not None):
+            requirement = "present" if local_builds else "absent"
+            raise InstallMarkerError("install_marker_invalid", f"build_source must be {requirement} exactly when local go-v1 builds are present")
+        if self.build_source is not None:
+            _validate_build_source(self.build_source)
+        if local_builds and not self.build_roots:
+            raise InstallMarkerError("install_marker_invalid", "local marker-v3 builds require build_roots")
+        for name, build in self.builds.items():
+            if name not in self.commands:
+                raise InstallMarkerError("install_marker_invalid", f"build {name!r} is not present in commands")
+            _validate_build_artifact_path(name, build.artifact_path)
+
+    def to_json(self) -> dict[str, Any]:
+        result = self._common_json(INSTALL_MARKER_V3_SCHEMA_VERSION)
+        result["build_roots"] = list(self.build_roots)
+        result["builds"] = {name: build.to_json() for name, build in self.builds.items()}
+        if self.build_source is not None:
+            result["build_source"] = {
+                "algorithm": self.build_source.algorithm,
+                "content_sha256": self.build_source.content_sha256,
+            }
+        return result
+
+
+MarkerBuild: TypeAlias = InstallMarkerBuild | InstallMarkerBuildV3
+InstallMarker: TypeAlias = InstallMarkerV1 | InstallMarkerV2 | InstallMarkerV3
 
 
 def serialize_install_marker(payload: Mapping[str, Any]) -> bytes:
@@ -448,7 +704,7 @@ def read_install_marker(raw: bytes | str) -> InstallMarker:
 
 
 def parse_install_marker(value: Any) -> InstallMarker:
-    """Parse one decoded marker schema 1 or 2 and canonicalize set ordering."""
+    """Parse one decoded marker schema 1, 2, or 3 and freeze set ordering."""
     body = _require_object(value, "marker")
     schema_version = body.get("schema_version")
     if (
@@ -467,17 +723,31 @@ def parse_install_marker(value: Any) -> InstallMarker:
             schema_version=INSTALL_MARKER_V1_SCHEMA_VERSION,
         )
 
-    _validate_object_shape(body, _V2_REQUIRED_MEMBERS, _V2_MEMBERS, "marker v2")
-    return InstallMarkerV2(
+    if schema_version == INSTALL_MARKER_V2_SCHEMA_VERSION:
+        _validate_object_shape(body, _V2_REQUIRED_MEMBERS, _V2_MEMBERS, "marker v2")
+        return InstallMarkerV2(
+            **_parse_common(body),
+            build_roots=_parse_array(body["build_roots"], "build_roots"),
+            builds=_parse_builds(body["builds"]),
+            build_source=(
+                _parse_build_source(body["build_source"])
+                if "build_source" in body
+                else None
+            ),
+            schema_version=INSTALL_MARKER_V2_SCHEMA_VERSION,
+        )
+
+    _validate_object_shape(body, _V3_REQUIRED_MEMBERS, _V3_MEMBERS, "marker v3")
+    return InstallMarkerV3(
         **_parse_common(body),
         build_roots=_parse_array(body["build_roots"], "build_roots"),
-        builds=_parse_builds(body["builds"]),
+        builds=_parse_builds_v3(body["builds"]),
         build_source=(
             _parse_build_source(body["build_source"])
             if "build_source" in body
             else None
         ),
-        schema_version=INSTALL_MARKER_V2_SCHEMA_VERSION,
+        schema_version=INSTALL_MARKER_V3_SCHEMA_VERSION,
     )
 
 
@@ -495,7 +765,9 @@ def marker_can_be_current(
         return False
     if isinstance(marker, InstallMarkerV1):
         return 0 <= skill_schema_version <= 5
-    return 0 <= skill_schema_version <= 6
+    if isinstance(marker, InstallMarkerV2):
+        return 0 <= skill_schema_version <= 6
+    return skill_schema_version == 7
 
 
 def _parse_common(body: dict[str, Any]) -> dict[str, Any]:
@@ -582,6 +854,65 @@ def _parse_builds(value: Any) -> Mapping[str, InstallMarkerBuild]:
     return result
 
 
+def _parse_builds_v3(value: Any) -> Mapping[str, InstallMarkerBuildV3]:
+    body = _require_object(value, "builds")
+    result: dict[str, InstallMarkerBuildV3] = {}
+    for name, raw in body.items():
+        _require_identifier(name, "build name")
+        record = _require_object(raw, f"builds.{name}")
+        driver = record.get("driver")
+        if not isinstance(driver, str):
+            raise InstallMarkerError("install_marker_invalid", f"builds.{name}.driver must be a string")
+        allowed = _V3_EXTERNAL_BUILD_MEMBERS if driver == GO_REPOSITORY_V1_DRIVER else _V3_BUILD_COMMON_MEMBERS
+        required = _V3_EXTERNAL_BUILD_REQUIRED if driver == GO_REPOSITORY_V1_DRIVER else _V3_BUILD_COMMON_MEMBERS
+        _validate_object_shape(record, required, allowed, f"builds.{name}")
+        result[name] = InstallMarkerBuildV3(
+            driver=driver,
+            receipt_schema_version=record["receipt_schema_version"],
+            execution_policy=record["execution_policy"],
+            cache_key=record["cache_key"],
+            receipt_sha256=record["receipt_sha256"],
+            artifact_sha256=record["artifact_sha256"],
+            artifact_path=record["artifact_path"],
+            repository=record.get("repository"),
+            declared_identity=_parse_repository_identity(record["declared_identity"], "declared_identity") if "declared_identity" in record else None,
+            declared_locked_commit=_parse_repository_commit(record["declared_locked_commit"], "declared_locked_commit") if "declared_locked_commit" in record else None,
+            declared_tag=record.get("declared_tag"),
+            effective_identity=_parse_repository_identity(record["effective_identity"], "effective_identity") if "effective_identity" in record else None,
+            object_format=record.get("object_format"),
+            commit=record.get("commit"),
+            substituted=record.get("substituted"),
+            substitution=_parse_repository_substitution(record["substitution"]) if "substitution" in record else None,
+            build_source=_parse_build_source(record["build_source"]) if "build_source" in record else None,
+            descriptor_target=record.get("descriptor_target"),
+        )
+    return result
+
+
+def _parse_repository_identity(value: Any, subject: str) -> MarkerRepositoryIdentity:
+    body = _require_object(value, subject)
+    _validate_object_shape(body, _IDENTITY_MEMBERS, _IDENTITY_MEMBERS, subject)
+    return MarkerRepositoryIdentity(kind=body["kind"], value=body["value"])
+
+
+def _parse_repository_commit(value: Any, subject: str) -> MarkerRepositoryCommit:
+    body = _require_object(value, subject)
+    _validate_object_shape(body, _LOCKED_COMMIT_MEMBERS, _LOCKED_COMMIT_MEMBERS, subject)
+    return MarkerRepositoryCommit(object_format=body["object_format"], hex=body["hex"])
+
+
+def _parse_repository_substitution(value: Any) -> MarkerRepositorySubstitution:
+    body = _require_object(value, "substitution")
+    required = frozenset({"type"})
+    _validate_object_shape(body, required, _SUBSTITUTION_MEMBERS, "substitution")
+    ref: MarkerRepositoryRef | None = None
+    if "ref" in body:
+        ref_body = _require_object(body["ref"], "substitution.ref")
+        _validate_object_shape(ref_body, _SUBSTITUTION_REF_MEMBERS, _SUBSTITUTION_REF_MEMBERS, "substitution.ref")
+        ref = MarkerRepositoryRef(kind=ref_body["kind"], value=ref_body["value"])
+    return MarkerRepositorySubstitution(type=body["type"], ref=ref)
+
+
 def _parse_activation(value: Any) -> MarkerActivation:
     body = _require_object(value, "activation")
     _validate_object_shape(
@@ -634,6 +965,18 @@ def _freeze_builds(value: Any) -> Mapping[str, InstallMarkerBuild]:
                 "install_marker_invalid",
                 f"builds.{name} must be an InstallMarkerBuild",
             )
+        result[name] = build
+    return MappingProxyType(dict(sorted(result.items())))
+
+
+def _freeze_builds_v3(value: Any) -> Mapping[str, InstallMarkerBuildV3]:
+    if not isinstance(value, Mapping):
+        raise InstallMarkerError("install_marker_invalid", f"builds must be an object, got {type(value).__name__}")
+    result: dict[str, InstallMarkerBuildV3] = {}
+    for name, build in value.items():
+        _require_identifier(name, "build name")
+        if not isinstance(build, InstallMarkerBuildV3):
+            raise InstallMarkerError("install_marker_invalid", f"builds.{name} must be an InstallMarkerBuildV3")
         result[name] = build
     return MappingProxyType(dict(sorted(result.items())))
 
@@ -791,13 +1134,21 @@ def _require_sha256(value: Any, subject: str) -> None:
 __all__ = [
     "INSTALL_MARKER_V1_SCHEMA_VERSION",
     "INSTALL_MARKER_V2_SCHEMA_VERSION",
+    "INSTALL_MARKER_V3_SCHEMA_VERSION",
     "SUPPORTED_INSTALL_MARKER_SCHEMA_VERSIONS",
     "InstallMarker",
     "InstallMarkerBuild",
+    "InstallMarkerBuildV3",
     "InstallMarkerError",
     "InstallMarkerV1",
     "InstallMarkerV2",
+    "InstallMarkerV3",
+    "MarkerRepositoryCommit",
+    "MarkerRepositoryIdentity",
+    "MarkerRepositoryRef",
+    "MarkerRepositorySubstitution",
     "MarkerActivation",
+    "MarkerBuild",
     "MarkerAttestation",
     "marker_can_be_current",
     "parse_install_marker",
