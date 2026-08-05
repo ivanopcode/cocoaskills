@@ -12,6 +12,10 @@ jobs:
   build:
     name: Build distributions
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,26 +30,22 @@ jobs:
       - name: Install build tools
         run: python -m pip install --upgrade build twine
 
+      - name: Resolve release route
+        id: release
+        run: python .github/scripts/release_contract.py resolve --tag "${{ github.ref_name }}"
+
       - name: Build wheel and sdist
         run: python -m build
 
       - name: Check metadata
         run: twine check dist/*
 
-      - name: Generate checksums
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import hashlib
-
-          lines = []
-          for path in sorted(Path("dist").iterdir()):
-              if path.name == "SHA256SUMS":
-                  continue
-              digest = hashlib.sha256(path.read_bytes()).hexdigest()
-              lines.append(f"{digest}  {path.name}")
-          Path("dist/SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
-          PY
+      - name: Verify tag, metadata, assets, and generate checksums
+        run: >-
+          python .github/scripts/release_contract.py verify-dist
+          --tag "${{ steps.release.outputs.tag }}"
+          --dist dist
+          --write-checksums
 
       - name: Upload Python distributions
         uses: actions/upload-artifact@v4
@@ -65,44 +65,20 @@ jobs:
     name: Publish to TestPyPI
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref_name, 'v') && (contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta'))
+    if: needs.build.outputs.prerelease == 'true'
     environment: testpypi
     permissions:
       contents: read
       id-token: write
     steps:
+      - name: Checkout release contract
+        uses: actions/checkout@v4
+
       - name: Download distributions
         uses: actions/download-artifact@v4
         with:
           name: python-dist
           path: dist
-
-      - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          packages-dir: dist/
-
-  publish-pypi:
-    name: Publish to PyPI and GitHub Releases
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref_name, 'v') && !contains(github.ref_name, '-')
-    environment: pypi
-    permissions:
-      contents: write
-      id-token: write
-    steps:
-      - name: Download distributions
-        uses: actions/download-artifact@v4
-        with:
-          name: python-dist
-          path: dist
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/
 
       - name: Download checksums
         uses: actions/download-artifact@v4
@@ -110,9 +86,91 @@ jobs:
           name: checksums
           path: dist
 
+      - name: Reverify immutable distributions
+        run: |
+          python .github/scripts/release_contract.py verify-dist \
+            --tag "${{ needs.build.outputs.tag }}" \
+            --dist dist
+          rm dist/SHA256SUMS
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist/
+          attestations: true
+
+  publish-pypi:
+    name: Publish to production PyPI and GitHub Releases
+    needs: [build, publish-testpypi]
+    runs-on: ubuntu-latest
+    if: >-
+      ${{ always() && needs.build.result == 'success' &&
+          (needs.build.outputs.prerelease == 'false' ||
+           needs.publish-testpypi.result == 'success') }}
+    environment: pypi
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout release contract
+        uses: actions/checkout@v4
+
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist
+
+      - name: Download checksums
+        uses: actions/download-artifact@v4
+        with:
+          name: checksums
+          path: dist
+
+      - name: Reverify immutable distributions
+        run: |
+          python .github/scripts/release_contract.py verify-dist \
+            --tag "${{ needs.build.outputs.tag }}" \
+            --dist dist
+          rm dist/SHA256SUMS
+
+      - name: Publish exact release to production PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          attestations: true
+
+      - name: Restore verified checksums for GitHub Release
+        uses: actions/download-artifact@v4
+        with:
+          name: checksums
+          path: dist
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           fail_on_unmatched_files: true
           generate_release_notes: true
+          overwrite_files: false
+          tag_name: ${{ needs.build.outputs.tag }}
+          draft: ${{ needs.build.outputs.prerelease }}
+          prerelease: ${{ needs.build.outputs.prerelease }}
+          make_latest: ${{ needs.build.outputs.prerelease == 'true' && 'false' || 'true' }}
+
+      - name: Publish GitHub prerelease after immutable asset upload
+        if: needs.build.outputs.prerelease == 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.build.outputs.tag }}
+          prerelease: true
+          make_latest: false
+
+      - name: Verify production publication and immutable GitHub assets
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python .github/scripts/release_contract.py verify-published
+          --tag "${{ needs.build.outputs.tag }}"
+          --repo "${{ github.repository }}"

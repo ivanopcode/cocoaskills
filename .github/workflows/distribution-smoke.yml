@@ -25,26 +25,26 @@ jobs:
   resolve-version:
     name: Resolve version
     runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && !contains(github.event.workflow_run.head_branch, '-')) }}
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      stable_latest: ${{ steps.version.outputs.stable_latest }}
     steps:
-      - name: Normalize version
+      - name: Checkout release contract
+        uses: actions/checkout@v4
+
+      - name: Resolve and verify published release
         id: version
         env:
           RAW_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.event.release.tag_name }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import os
-
-          raw = os.environ["RAW_VERSION"].strip()
-          tag = raw if raw.startswith("v") else f"v{raw}"
-          version = raw[1:] if raw.startswith("v") else raw
-          version = version.replace("-rc", "rc").replace("-alpha", "a").replace("-beta", "b")
-          print(f"tag={tag}")
-          print(f"version={version}")
-          PY
+          python .github/scripts/release_contract.py resolve --tag "$RAW_VERSION"
+          python .github/scripts/release_contract.py verify-published \
+            --tag "$RAW_VERSION" \
+            --repo "${{ github.repository }}"
 
   smoke:
     name: ${{ matrix.channel }} / ${{ matrix.os }}
@@ -79,6 +79,11 @@ jobs:
         shell: bash
     env:
       CSK_VERSION: ${{ needs.resolve-version.outputs.version }}
+      PIP_INDEX_URL: https://pypi.org/simple
+      PIP_EXTRA_INDEX_URL: ""
+      UV_DEFAULT_INDEX: https://pypi.org/simple
+      UV_EXTRA_INDEX_URL: ""
+      MISE_PIPX_REGISTRY_URL: https://pypi.org/simple/{}
     steps:
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -273,8 +278,8 @@ jobs:
 
   compare-hashes:
     name: Compare content hashes
-    needs: smoke
-    if: ${{ always() && !cancelled() }}
+    needs: [resolve-version, smoke]
+    if: ${{ always() && !cancelled() && needs.resolve-version.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Download content hashes
@@ -308,7 +313,9 @@ jobs:
     name: homebrew / macos-latest
     needs: resolve-version
     runs-on: macos-latest
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.include_homebrew }}
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' && inputs.include_homebrew &&
+          needs.resolve-version.outputs.prerelease == 'false' }}
     defaults:
       run:
         shell: bash

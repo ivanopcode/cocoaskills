@@ -914,3 +914,39 @@ temporary root; the focused command now uses the short, runner-owned
 `--basetemp` option. Ubuntu's fail-closed test now guards the concrete worker
 launch seam instead of replacing the whole build entry point, so the real
 source-aware native-control preflight returns its stable unavailable diagnostic.
+
+## 2026-08-06 — BUG-260805-fky0kz prerelease distribution routing
+
+The preserved `v0.13.0-rc.3` Distribution Smoke logs prove that every installer
+resolved the exact candidate from production PyPI while the release workflow
+had published it only to TestPyPI. Pipx failed on Ubuntu, macOS, and Windows;
+uv tool failed on the same three platforms; mise failed on Ubuntu and macOS;
+and the `CSK_VERSION` install.sh path failed on Ubuntu and macOS. The resolver
+also produced the non-canonical spelling `0.13.0rc.3`. The hash comparison then
+ran after all smoke jobs failed and reported zero artifacts, a secondary error
+rather than an independent content mismatch. A separate workflow-run guard
+explicitly skipped prerelease tags, so only the release event exposed these
+production-channel assumptions.
+
+Release routing now accepts only canonical stable, rc, alpha, and beta tag
+shapes and binds the tag to exact wheel/sdist filenames and embedded metadata.
+Prereleases publish through trusted publishing to both TestPyPI and production
+PyPI, upload GitHub assets to a draft, and only then publish the prerelease with
+`make_latest: false`; this order supports immutable-release repositories. Stable
+tags keep the production-only stable route and `make_latest: true`. Both
+publishing paths explicitly generate PEP 740 attestations. Before upload and
+again before each publication, the workflow verifies the exact two distributions and
+`SHA256SUMS`. Post-publication verification downloads every GitHub asset and
+requires exact asset names plus GitHub, checksum, and PyPI digest agreement.
+It also requires `/releases/latest` to remain the stable tag and independently
+derives the newest non-yanked stable version from PyPI.
+
+Distribution Smoke now runs after successful RC release workflows, verifies
+the published contract before any installer starts, pins pip, uv, and mise to
+production PyPI, uses canonical `0.13.0rc4`, and suppresses Homebrew for
+prereleases. Hash comparison runs only after successful resolution. Local
+evidence built and installed both simulated `0.13.0rc4` and stable `0.13.0`
+artifacts, then installed exact RC4 through pipx, uv tool, mise, and the
+`CSK_VERSION` install.sh uv branch against an isolated PEP 503 index. Public
+state was not mutated: production PyPI and GitHub latest remained `0.12.5`,
+and no `v0.13.0-rc.4` tag or release existed during validation.
