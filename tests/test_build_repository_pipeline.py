@@ -217,6 +217,61 @@ def test_only_descriptor_build_root_is_compiler_visible(tmp_path: Path) -> None:
     assert compiler.source_dir == "cmd/tool"
 
 
+def test_repository_root_build_with_nested_source_reaches_compiler(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot()
+    files = tuple(
+        SnapshotFile(
+            item.path.removeprefix("repo/"),
+            item.content,
+        )
+        for item in snapshot.files
+        if item.path != "skill-build.json"
+    )
+    descriptor = SnapshotFile(
+        "skill-build.json",
+        protocol_json.canonical_bytes(
+            {
+                "schema_version": 1,
+                "targets": {
+                    "tool": {
+                        "driver": "go-repository-v1",
+                        "build_root": ".",
+                        "source_dir": "cmd/tool",
+                    }
+                },
+            }
+        ),
+    )
+    files = tuple(sorted((*files, descriptor), key=lambda item: item.path))
+    canonical = _frame(files)
+    root_snapshot = Snapshot(
+        object_format=snapshot.object_format,
+        commit=snapshot.commit,
+        files=files,
+        canonical_bytes=canonical,
+        digest="sha256:" + hashlib.sha256(canonical).hexdigest(),
+        tag_verified=snapshot.tag_verified,
+    )
+    events: list[str] = []
+    compiler = _Compiler(events)
+
+    run_pipeline(
+        _request(
+            tmp_path,
+            Operation.INSTALL,
+            events,
+            compiler,
+            snapshot=root_snapshot,
+        )
+    )
+
+    assert "go.mod" in compiler.visible
+    assert "cmd/tool/main.go" in compiler.visible
+    assert compiler.source_dir == "cmd/tool"
+
+
 def test_exact_protected_snapshot_supports_untagged_offline_reinstall(
     tmp_path: Path,
 ) -> None:

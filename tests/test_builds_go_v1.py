@@ -2416,6 +2416,100 @@ def _root_package(root: Path, *, source: str = "cmd") -> dict[str, object]:
     }
 
 
+def test_protocol_root_marker_canonicalizes_to_frozen_snapshot_root(
+    tmp_path: Path,
+) -> None:
+    snapshot_root = tmp_path / "snapshot"
+    nested_source = snapshot_root / "cmd" / "tool"
+    nested_source.mkdir(parents=True)
+    (snapshot_root / "go.mod").write_text(
+        "module example.test/root\ngo 1.25\n",
+        encoding="utf-8",
+    )
+    snapshot = type("Snapshot", (), {"path": snapshot_root})()
+
+    source_root, build_root, source_dir = go_v1._canonical_build_directories(
+        snapshot,  # type: ignore[arg-type]
+        ".",
+        "cmd/tool",
+    )
+    assert source_root == snapshot_root
+    assert build_root == snapshot_root
+    assert source_dir == nested_source
+
+    source_root, build_root, source_dir = go_v1._canonical_build_directories(
+        snapshot,  # type: ignore[arg-type]
+        ".",
+        ".",
+    )
+    assert source_root == build_root == source_dir == snapshot_root
+
+
+@pytest.mark.parametrize(
+    ("build_root", "source_dir"),
+    [
+        ("..", "cmd/tool"),
+        (".", "../outside"),
+        ("/absolute", "cmd/tool"),
+        (".", "/absolute"),
+        (r"build\root", "cmd/tool"),
+        (".", r"cmd\tool"),
+    ],
+)
+def test_protocol_root_marker_does_not_relax_portable_path_validation(
+    tmp_path: Path,
+    build_root: str,
+    source_dir: str,
+) -> None:
+    snapshot_root = tmp_path / "snapshot"
+    snapshot_root.mkdir()
+    snapshot = type("Snapshot", (), {"path": snapshot_root})()
+
+    with pytest.raises(go_v1.GoV1Error) as raised:
+        go_v1._canonical_build_directories(
+            snapshot,  # type: ignore[arg-type]
+            build_root,
+            source_dir,
+        )
+
+    assert raised.value.code == "invalid_build_request"
+
+
+def test_protocol_root_marker_keeps_link_reparse_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot_root = tmp_path / "snapshot"
+    nested_source = snapshot_root / "cmd" / "tool"
+    nested_source.mkdir(parents=True)
+    (snapshot_root / "go.mod").write_text(
+        "module example.test/root\ngo 1.25\n",
+        encoding="utf-8",
+    )
+    source_stat = nested_source.lstat()
+    original = go_v1._is_link_or_reparse
+
+    def treat_source_as_reparse(value: os.stat_result) -> bool:
+        same_source = (
+            value.st_dev == source_stat.st_dev
+            and value.st_ino == source_stat.st_ino
+        )
+        return same_source or original(value)
+
+    monkeypatch.setattr(go_v1, "_is_link_or_reparse", treat_source_as_reparse)
+    snapshot = type("Snapshot", (), {"path": snapshot_root})()
+
+    with pytest.raises(go_v1.GoV1Error) as raised:
+        go_v1._canonical_build_directories(
+            snapshot,  # type: ignore[arg-type]
+            ".",
+            "cmd/tool",
+        )
+
+    assert raised.value.code == "invalid_build_request"
+    assert "link-free" in raised.value.detail
+
+
 def _encode_packages(packages: list[dict[str, object]]) -> bytes:
     return b"".join(
         json.dumps(package, separators=(",", ":")).encode() + b"\n"
