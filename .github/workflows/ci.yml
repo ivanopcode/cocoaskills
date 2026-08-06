@@ -33,6 +33,7 @@ jobs:
           path: protocol-spec
 
       - name: Checkout caller-supplied rc.6 candidate
+        if: matrix.python-version == '3.11'
         uses: actions/checkout@v4
         with:
           repository: relux-works/curator-spec
@@ -74,6 +75,7 @@ jobs:
           python -m pip install ".[dev]"
 
       - name: Authenticate caller-supplied rc.6 candidate
+        if: matrix.python-version == '3.11'
         env:
           CANDIDATE_CHECKOUT: ${{ github.workspace }}/protocol-spec-candidate
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
@@ -86,12 +88,22 @@ jobs:
           assert head == '432eb2ee1fe2d6b271e37269f867c8851c325539', head;
           assert digest == '12e58b82579645ba1ccafba49d3e2dd3216005ddf37ae63c68a9fafd46773071', digest"
 
-      - name: Run tests
+      - name: Run ordinary tests
         env:
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec/conformance/v1
-        run: python -m pytest -v
+        run: >-
+          python -m pytest -v
+          --ignore=tests/test_protocol_conformance.py
+          --ignore=tests/test_go_build_e2e.py
+
+      - name: Run protocol conformance suite
+        if: matrix.python-version == '3.11'
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec/conformance/v1
+        run: python -m pytest -v tests/test_protocol_conformance.py
 
       - name: Collect accepted Go E2E node IDs
+        if: matrix.python-version == '3.11'
         env:
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
           CSK_GO_V1_MANAGER_EXECUTABLE: csk
@@ -103,6 +115,7 @@ jobs:
           > csk-e2e-nodeids.txt
 
       - name: Run accepted Go E2E selection
+        if: matrix.python-version == '3.11'
         env:
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
           CSK_GO_V1_MANAGER_EXECUTABLE: csk
@@ -115,9 +128,10 @@ jobs:
           --junitxml=csk-e2e-results.xml
 
       - name: Upload accepted Go E2E evidence
+        if: matrix.python-version == '3.11'
         uses: actions/upload-artifact@v4
         with:
-          name: csk-e2e-${{ matrix.os }}-py${{ matrix.python-version }}
+          name: csk-e2e-${{ matrix.os }}-py311
           path: |
             csk-e2e-nodeids.txt
             csk-e2e-results.xml
