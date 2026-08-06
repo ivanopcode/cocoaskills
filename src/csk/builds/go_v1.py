@@ -6954,12 +6954,12 @@ def _canonical_build_directories(
     source_dir_value: str,
 ) -> tuple[Path, Path, Path]:
     if (
-        not is_valid_portable_path(build_root_value)
-        or not is_valid_portable_path(source_dir_value)
+        (build_root_value != "." and not is_valid_portable_path(build_root_value))
+        or (source_dir_value != "." and not is_valid_portable_path(source_dir_value))
     ):
         raise GoV1Error(
             "invalid_build_request",
-            "build root and source directory must be portable relative paths",
+            "build root and source directory must be '.' or portable relative paths",
         )
     try:
         source_root = snapshot.path.resolve(strict=True)
@@ -6968,8 +6968,16 @@ def _canonical_build_directories(
             "invalid_build_request",
             "frozen source root cannot be canonicalized",
         ) from exc
-    build_root = source_root.joinpath(*build_root_value.split("/"))
-    source_dir = source_root.joinpath(*source_dir_value.split("/"))
+    build_root = (
+        source_root
+        if build_root_value == "."
+        else source_root.joinpath(*build_root_value.split("/"))
+    )
+    source_dir = (
+        source_root
+        if source_dir_value == "."
+        else source_root.joinpath(*source_dir_value.split("/"))
+    )
     for path, label in (
         (build_root, "build root"),
         (source_dir, "source directory"),

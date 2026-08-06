@@ -1123,3 +1123,15 @@ artifacts, then installed exact RC4 through pipx, uv tool, mise, and the
 `CSK_VERSION` install.sh uv branch against an isolated PEP 503 index. Public
 state was not mutated: production PyPI and GitHub latest remained `0.12.5`,
 and no `v0.13.0-rc.4` tag or release existed during validation.
+
+## 2026-08-06 — BUG-260806-2dgjjh repository root marker canonicalization
+
+Schema 7 and `skill-build.json` already admitted `build_root="."` and
+`source_dir="."`, but the external repository compiler adapter forwarded the
+root marker into the closed go-v1 boundary, whose generic portable-path check
+rejects dot components. The runtime now handles only the exact `"."` sentinel
+as the frozen snapshot root before applying its existing canonical-directory,
+containment, symlink/reparse, and `go.mod` checks. The shared identifier grammar
+is unchanged, so traversal, absolute paths, backslashes, and embedded dot
+components remain rejected. Focused schema, go-v1, pipeline, and native external
+install tests cover root-module/nested-source and root-package forms.

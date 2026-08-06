@@ -157,6 +157,11 @@ def test_skill_build_targets_are_closed_and_contained() -> None:
                 "schema_version": 1,
                 "targets": {
                     "root": {"driver": "go-repository-v1", "build_root": ".", "source_dir": "cmd/tool"},
+                    "root-package": {
+                        "driver": "go-repository-v1",
+                        "build_root": ".",
+                        "source_dir": ".",
+                    },
                     "nested": {
                         "driver": "go-repository-v1",
                         "build_root": "tools/admin",
@@ -166,7 +171,7 @@ def test_skill_build_targets_are_closed_and_contained() -> None:
             }
         )
     )
-    assert set(descriptor.targets) == {"nested", "root"}
+    assert set(descriptor.targets) == {"nested", "root", "root-package"}
 
     for extra in ("argv", "environment", "output", "name", "hook", "plugin", "signing"):
         target = {"driver": "go-repository-v1", "build_root": ".", "source_dir": ".", extra: []}
