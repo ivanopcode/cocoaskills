@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "ci.yml"
-HEAVY_PYTHON = "if: matrix.python-version == '3.11'"
+HEAVY_PYTHON = "if: matrix.python-version == '3.14'"
 
 
 def _workflow() -> str:

@@ -33,7 +33,7 @@ jobs:
           path: protocol-spec
 
       - name: Checkout caller-supplied rc.6 candidate
-        if: matrix.python-version == '3.11'
+        if: matrix.python-version == '3.14'
         uses: actions/checkout@v4
         with:
           repository: relux-works/curator-spec
@@ -75,7 +75,7 @@ jobs:
           python -m pip install ".[dev]"
 
       - name: Authenticate caller-supplied rc.6 candidate
-        if: matrix.python-version == '3.11'
+        if: matrix.python-version == '3.14'
         env:
           CANDIDATE_CHECKOUT: ${{ github.workspace }}/protocol-spec-candidate
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
@@ -97,13 +97,13 @@ jobs:
           --ignore=tests/test_go_build_e2e.py
 
       - name: Run protocol conformance suite
-        if: matrix.python-version == '3.11'
+        if: matrix.python-version == '3.14'
         env:
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec/conformance/v1
         run: python -m pytest -v tests/test_protocol_conformance.py
 
       - name: Collect accepted Go E2E node IDs
-        if: matrix.python-version == '3.11'
+        if: matrix.python-version == '3.14'
         env:
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
           CSK_GO_V1_MANAGER_EXECUTABLE: csk
@@ -115,7 +115,7 @@ jobs:
           > csk-e2e-nodeids.txt
 
       - name: Run accepted Go E2E selection
-        if: matrix.python-version == '3.11'
+        if: matrix.python-version == '3.14'
         env:
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
           CSK_GO_V1_MANAGER_EXECUTABLE: csk
@@ -128,10 +128,10 @@ jobs:
           --junitxml=csk-e2e-results.xml
 
       - name: Upload accepted Go E2E evidence
-        if: matrix.python-version == '3.11'
+        if: matrix.python-version == '3.14'
         uses: actions/upload-artifact@v4
         with:
-          name: csk-e2e-${{ matrix.os }}-py311
+          name: csk-e2e-${{ matrix.os }}-py314
           path: |
             csk-e2e-nodeids.txt
             csk-e2e-results.xml
