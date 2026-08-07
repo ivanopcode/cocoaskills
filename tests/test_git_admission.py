@@ -517,7 +517,13 @@ def test_local_admission_cleanup_failure_cannot_mask_an_admission_diagnostic(
 def test_local_admission_retries_a_transient_cleanup_refusal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Windows keeps a just-released pack index mapped for a moment; retry covers it."""
+    """A refusal that clears on its own must not fail the admission.
+
+    Synthetic: no native run has shown a self-clearing refusal here.  The
+    observed Windows one came from a reader that never exited at all, which no
+    retry can outlast — see ``_remove_private_root``.  This pins the retry's
+    contract, not a reproduction.
+    """
     fixture = _packed_fixture(tmp_path / "fixture", "sha1")
     base = _private_base(tmp_path, monkeypatch)
     remove = shutil.rmtree

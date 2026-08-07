@@ -78,16 +78,26 @@ def _unseal_tree(root: Path) -> None:
 def _remove_private_root(root: Path) -> OSError | None:
     """Remove the private admission root and report, never raise, a failure.
 
-    ``_seal_object_store`` leaves 0o400 files under 0o500 directories, and that
-    is what defeats removal on both platforms.  On POSIX a plain ``rmtree``
-    cannot unlink inside a directory without write permission.  On Windows the
-    same ``chmod`` sets FILE_ATTRIBUTE_READONLY, and removal then fails with
-    ERROR_ACCESS_DENIED — reproduced natively against the copied
-    ``pack-*.idx``.  So the tree is unsealed first, every attempt.
+    ``_seal_object_store`` leaves 0o400 files under 0o500 directories, which
+    ``TemporaryDirectory`` used to absorb — its ``_rmtree`` resets permissions
+    on refusal.  A plain ``shutil.rmtree`` does not, so the tree is unsealed
+    first, on every attempt.  On POSIX that is required and demonstrated: the
+    seal alone stops the unlink.  On Windows the same ``chmod`` sets
+    FILE_ATTRIBUTE_READONLY, which ``rmtree`` also refuses — that follows by
+    construction and has *not* been reproduced natively; do not cite it as an
+    observation.
 
-    The retry is defensive, not the remedy: Windows can also refuse a delete
-    while an unrelated handle (a scanner, an indexer) is still open on a file
-    the manager just wrote, and that window is short.
+    It is also not what produced the reported ``[WinError 5]``.  On the
+    operator host the refusal came from a still-live ``git cat-file --batch``
+    holding the copied ``pack-*.idx`` mapped: ``_ObjectReader.read`` short-read
+    its stdout pipe, so the child never exited (BUG-260806-1bwq2z).  Windows
+    has no unlink-while-open, so the delete failed and the bare
+    ``PermissionError`` masked the real admission diagnostic.
+
+    The retry is therefore defensive, not the remedy.  It covers a refusal by a
+    handle that is closing but not yet closed, whichever one holds it; it
+    cannot outlast a handle that is still owned, and it is not a substitute for
+    closing the reader.
     """
     last: OSError | None = None
     for attempt in range(_CLEANUP_ATTEMPTS):

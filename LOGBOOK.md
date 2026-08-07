@@ -1135,3 +1135,39 @@ containment, symlink/reparse, and `go.mod` checks. The shared identifier grammar
 is unchanged, so traversal, absolute paths, backslashes, and embedded dot
 components remain rejected. Focused schema, go-v1, pipeline, and native external
 install tests cover root-module/nested-source and root-package forms.
+
+## 2026-08-07 — BUG-260807-1r5oz9 verified natively, and the two Windows admission bugs were entangled
+
+The operator Windows host (10.0.19045.6466, Python 3.14.4, Go 1.25.5, Git
+2.50.1.windows.1) is reachable over SSH, so the local-admission fix was verified
+on the machine that produced the original reproducer rather than by construction.
+
+The two reported signatures had one shared chain. `_ObjectReader.read` issued a
+single `self._stdout.read(size)` against a pipe; on Windows that returns short,
+so `git cat-file --batch` blocked writing into a full stdout pipe and could not
+exit when stdin closed, and `close()` raised `object reader did not terminate`
+after its ten-second wait. The still-live process kept `pack-*.idx` mapped, so
+`TemporaryDirectory` cleanup was refused with `[WinError 5]` — and that bare
+`PermissionError` replaced the real diagnostic. The partial-read fix
+(`BUG-260806-1bwq2z`) addresses the first link; `_remove_private_root` addresses
+the last, so the admission diagnostic survives instead of being masked. Neither
+alone completes the lifecycle; together `csk install` exits 0 for
+`skill-bi@e9fa203d` with `bi-cli@e0f05112` from a local exact snapshot.
+
+`_remove_private_root`'s docstring records this: on this host the removal
+refusal comes from the live `git cat-file` handle, not from
+`FILE_ATTRIBUTE_READONLY`. Unsealing remains correct for the POSIX `0o500`/`0o400`
+seal, and READONLY defeating `shutil.rmtree` on Windows follows by construction —
+but it has never been observed here, so it must not be cited as evidence.
+
+Getting that far exposed a further defect, tracked as `BUG-260807-1it17m`. The
+external build cache publishes its artifact under the extensionless name
+`artifact` (`src/csk/build_repository_pipeline.py:341`) while `go_v1` builds
+`<command>.exe` (`src/csk/builds/go_v1.py:6691`), and the Windows launcher calls
+that target directly (`src/csk/shims.py:894`). `cmd.exe` resolves executables
+through `PATHEXT`, so an extensionless PE cannot be run: the same 9507840-byte
+`MZ` image fails as `artifact` in both sealed and plain directories and succeeds
+as `artifact.exe`. Every `windows-latest` leg stays green because
+`tests/test_install_external_repository.py` asserts only that the shim exists and
+mentions the artifacts path, never executes it, and stubs the toolchain so the
+cached artifact is not a real PE.
