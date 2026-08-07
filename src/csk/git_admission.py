@@ -78,14 +78,16 @@ def _unseal_tree(root: Path) -> None:
 def _remove_private_root(root: Path) -> OSError | None:
     """Remove the private admission root and report, never raise, a failure.
 
-    ``_seal_object_store`` leaves 0o400 files under 0o500 directories.  On POSIX
-    a plain ``rmtree`` cannot unlink inside a directory without write
-    permission; on Windows the same ``chmod`` sets FILE_ATTRIBUTE_READONLY and
-    ``DeleteFile`` refuses the entry, so both platforms need the tree unsealed
-    first.  Windows additionally refuses to delete a file another handle still
-    maps: a just-terminated ``git cat-file`` leaves its pack index mapped for a
-    short moment, which surfaces as ERROR_ACCESS_DENIED on ``pack-*.idx``.  That
-    window is transient, so retry with a short backoff before giving up.
+    ``_seal_object_store`` leaves 0o400 files under 0o500 directories, and that
+    is what defeats removal on both platforms.  On POSIX a plain ``rmtree``
+    cannot unlink inside a directory without write permission.  On Windows the
+    same ``chmod`` sets FILE_ATTRIBUTE_READONLY, and removal then fails with
+    ERROR_ACCESS_DENIED — reproduced natively against the copied
+    ``pack-*.idx``.  So the tree is unsealed first, every attempt.
+
+    The retry is defensive, not the remedy: Windows can also refuse a delete
+    while an unrelated handle (a scanner, an indexer) is still open on a file
+    the manager just wrote, and that window is short.
     """
     last: OSError | None = None
     for attempt in range(_CLEANUP_ATTEMPTS):

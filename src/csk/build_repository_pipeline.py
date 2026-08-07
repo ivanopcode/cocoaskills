@@ -707,15 +707,17 @@ def _read_tree(
     protected: bool,
 ) -> tuple[SnapshotFile, ...]:
     files: list[SnapshotFile] = []
-    # Order by the relative POSIX path, which is the identity the admitted
-    # snapshot is framed in (git_admission._prove_repository sorts on the UTF-8
-    # bytes of that same path, and UTF-8 preserves code point order).  Sorting
-    # Path objects instead is not platform-independent: PurePath compares
+    # Order by the UTF-8 bytes of the relative POSIX path, which is by
+    # construction the order the admitted snapshot is framed in
+    # (git_admission._prove_repository sorts on exactly that key).  Sorting Path
+    # objects instead is not platform-independent: PurePath compares
     # _parts_normcase, so Windows case-folds the components and every flavour
     # orders "foo/bar" before "foo.go" where the framed bytes order "foo.go"
     # first.  Both divergences make the materialized bytes differ from the
     # admitted bytes for the same commit.
-    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+    for path in sorted(
+        root.rglob("*"), key=lambda item: item.relative_to(root).as_posix().encode("utf-8")
+    ):
         info = path.lstat()
         directory = stat.S_ISDIR(info.st_mode)
         if os.name == "nt":
