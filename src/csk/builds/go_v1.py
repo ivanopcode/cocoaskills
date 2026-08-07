@@ -829,6 +829,10 @@ def _validate_package_inputs(
             f"package {import_path!r} has an invalid directory",
         ) from exc
 
+    # The single vendored-exception predicate of decision 0005: a package is
+    # audited-by-vendoring only when it lives below the checked-in vendor tree.
+    vendored = _strictly_below(package_dir, build_root / "vendor")
+
     if _string_list(item.get("SysoFiles"), "SysoFiles"):
         raise GoV1Error(
             "go_syso_forbidden",
@@ -865,7 +869,7 @@ def _validate_package_inputs(
         # regular file below the build root.
         assembly_files = _string_list(item.get("SFiles"), "SFiles")
         if assembly_files:
-            if not _strictly_below(package_dir, build_root / "vendor"):
+            if not vendored:
                 raise GoV1Error(
                     "go_assembly_forbidden",
                     f"package {import_path!r} contains non-standard assembly",
@@ -923,7 +927,7 @@ def _validate_package_inputs(
                 f"package {import_path!r} has an invalid source input",
             ) from exc
         if not trusted_standard and name in go_files:
-            _scan_source_directives(path, import_path)
+            _scan_source_directives(path, import_path, vendored=vendored)
 
     for name in _string_list(item.get("EmbedFiles"), "EmbedFiles"):
         try:
@@ -1037,11 +1041,17 @@ def _allows_cgo_import_dynamic(import_path: str) -> bool:
     )
 
 
-def _scan_source_directives(path: Path, import_path: str) -> None:
-    # //go:generate is inert: vendor is already materialized and neither
+def _scan_source_directives(
+    path: Path,
+    import_path: str,
+    *,
+    vendored: bool,
+) -> None:
+    allows_cgo_import_dynamic = _allows_cgo_import_dynamic(import_path)
+    # Audited by vendoring: vendor is already materialized and neither
     # go list -mod=vendor nor go build -mod=vendor runs generators, so the
-    # directive is not scanned for at all.
-    allowed = _allows_cgo_import_dynamic(import_path)
+    # directive is inert there. First-party sources keep the strict profile.
+    allows_go_generate = vendored
     try:
         with path.open("rb", buffering=0) as handle:
             carry = b""
@@ -1050,11 +1060,19 @@ def _scan_source_directives(path: Path, import_path: str) -> None:
                 if not chunk:
                     return
                 window = carry + chunk
-                if not allowed and b"//go:cgo_import_dynamic" in window:
+                if (
+                    not allows_cgo_import_dynamic
+                    and b"//go:cgo_import_dynamic" in window
+                ):
                     raise GoV1Error(
                         "go_forbidden_compiler_directive",
                         f"package {import_path!r} contains "
                         "//go:cgo_import_dynamic",
+                    )
+                if not allows_go_generate and b"//go:generate" in window:
+                    raise GoV1Error(
+                        "go_generator_forbidden",
+                        f"package {import_path!r} contains an active generator",
                     )
                 carry = window[-31:]
     except GoV1Error:

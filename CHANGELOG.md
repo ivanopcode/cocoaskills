@@ -58,7 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   и префиксом импорта `vendor/` остаются trusted; `SFiles` разрешены только
   для vendored packages без cgo/C/SWIG-входов и host objects, где каждый
   файл — regular file под build root; `//go:cgo_import_dynamic` разрешён
-  только для `golang.org/x/sys` и его subpackages; `//go:generate` инертен.
+  только для `golang.org/x/sys` и его subpackages; `//go:generate` инертен
+  в vendored `GoFiles` и по-прежнему отклоняется вне `vendor/`.
   Профиль остаётся закрытым и vendor-only, исполнение при install не
   добавляется.
 

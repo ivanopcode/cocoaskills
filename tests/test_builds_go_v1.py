@@ -2895,13 +2895,8 @@ def test_cgo_import_dynamic_allowlist_stays_narrow(
     assert raised.value.code == "go_forbidden_compiler_directive"
 
 
-def test_go_generate_directive_is_inert(tmp_path: Path):
+def test_go_generate_directive_is_inert_when_vendored(tmp_path: Path):
     root = tmp_path / "build"
-    package = _root_package(root)
-    (root / "cmd" / "main.go").write_text(
-        "package main\n//go:generate sh -c poison\nfunc main() {}\n",
-        encoding="utf-8",
-    )
     dependency = _vendored_dependency(
         root,
         import_path="github.com/clipperhouse/displaywidth",
@@ -2909,11 +2904,29 @@ def test_go_generate_directive_is_inert(tmp_path: Path):
     )
 
     go_v1.validate_package_graph(
-        _encode_packages([package, dependency]),
+        _encode_packages([_root_package(root), dependency]),
         build_root=root,
         source_dir=root / "cmd",
         goroot=tmp_path / "goroot",
     )
+
+
+def test_go_generate_stays_forbidden_outside_vendor(tmp_path: Path):
+    root = tmp_path / "build"
+    package = _root_package(root)
+    (root / "cmd" / "main.go").write_text(
+        "package main\n//go:generate sh -c poison\nfunc main() {}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(go_v1.GoV1Error) as raised:
+        go_v1.validate_package_graph(
+            _encode_packages([package]),
+            build_root=root,
+            source_dir=root / "cmd",
+            goroot=tmp_path / "goroot",
+        )
+    assert raised.value.code == "go_generator_forbidden"
 
 
 def test_poisoned_compiler_environment_is_rejected(tmp_path: Path):

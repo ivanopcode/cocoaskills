@@ -439,9 +439,11 @@ without widening that boundary (`curator-spec` decision 0005):
 - `//go:cgo_import_dynamic` stays rejected in every non-standard `GoFiles`
   entry except the audited `golang.org/x/sys` module and its subpackages
   (`zsyscall` syscall trampolines);
-- `//go:generate` is inert. Neither `go list -mod=vendor` nor
-  `go build -mod=vendor` runs generators, vendor is already materialized, and
-  csk never invokes `go generate`, so the comment does not fail preflight.
+- `//go:generate` is inert in a vendored `GoFiles` entry. Neither
+  `go list -mod=vendor` nor `go build -mod=vendor` runs generators, vendor is
+  already materialized, and csk never invokes `go generate`, so the comment
+  does not fail preflight there. Outside `vendor/` the directive is still
+  rejected as an active generator.
 
 Source-aware `go-v1` is supported on macOS and Windows. On any other host it
 fails closed before launching a worker or Go process. Linux support is an
