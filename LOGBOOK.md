@@ -1171,3 +1171,17 @@ as `artifact.exe`. Every `windows-latest` leg stays green because
 `tests/test_install_external_repository.py` asserts only that the shim exists and
 mentions the artifacts path, never executes it, and stubs the toolchain so the
 cached artifact is not a real PE.
+
+Both WB Draft pairs now complete the narrow lifecycle on that host, but only
+with three fixes stacked. `skill-bi@e9fa203d` + `bi-cli@e0f05112` needs this fix
+plus the partial-pipe-read fix (`BUG-260806-1bwq2z`). `skill-band@7b83aba1` +
+`band-cli@0956c621` additionally needs the raised GOROOT fingerprint deadline
+(`BUG-260807-3me1d5`): before it, band died at `dry-run` with
+`go-v1 toolchain_timeout` and never reached admission at all, which is why the
+band leg said nothing about admission ordering for two rounds. On a wheel
+carrying all three, band runs audit -> dry-run -> install
+(`would-preflight-and-build`, real Go build) -> repeat install (`cache-hit`) ->
+`status --check` -> drift detected -> repair -> remove -> reconcile, with
+neither reported signature anywhere and no patching of the installed manager.
+The lesson worth keeping: a Windows leg that dies before admission is not
+evidence about admission, in either direction.
