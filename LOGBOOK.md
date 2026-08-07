@@ -1,5 +1,35 @@
 # Logbook
 
+## 2026-08-07 — BUG-260807-1it17m external artifacts take the name their receipt declares
+
+The protected external-build store wrote every artifact to a fixed literal
+`artifact`, while `_artifact_path` already declared `bin/<command>.exe` in the
+receipt for a `windows` target.  The generated `.cmd` launcher calls the stored
+path, and Windows will not execute a file with no executable extension, so a
+native Windows `go-repository-v1` install produced a launcher that could not
+run — the build, snapshot, cache key, and argument forwarding were all correct.
+
+Four resolvers derived that literal independently: the store's read side, the
+installer's published path, `status`, and the shim's manager-derived path
+check.  A new `builds.metadata.derived_cache_artifact_name` takes the receipt's
+artifact path and returns `artifact` or `artifact.exe`; all four now go through
+it, so the store name and the receipt cannot drift apart.  macOS and Linux keep
+`artifact`.  An existing Windows entry is quarantined and rebuilt on the next
+`install` or `repair`, which is harmless because no Windows entry could ever
+have produced a runnable launcher.
+
+Sealing no longer recognizes the artifact by name.  `_seal_tree` preserves the
+execute bit the staged file already carries on POSIX and takes the artifact's
+name from the caller on Windows.  That also repairs a latent defect: an
+executable file inside a snapshot was demoted to `0o400` by sealing and then
+failed `load_snapshot`'s `executable` metadata comparison.
+
+Verified on the native Windows host (Windows 10 19045.6466, Go 1.25.5
+windows/amd64, Python 3.14.4) with a real Go build and no stubbed compiler:
+`install` exit 0, the entry holds `artifact.exe` (a 2,308,608-byte `MZ` image),
+the `.cmd` names it, `--help` exits 0, and `status` is clean.  The same harness
+on macOS arm64 keeps `artifact` and still launches.
+
 ## 2026-08-04 — BUG-260803-2sqyqy current-status observer gains causal provenance
 
 Hosted Windows Python 3.12 at signed head `a361899d` returned the correct
