@@ -64,6 +64,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Исправлено
 
+- Deadline toolchain fingerprint для `go-v1` измеряется часами, разрешения
+  которых хватает на deadline, который он же и обещает. `time.monotonic()` —
+  разные часы на разных платформах: в Windows CPython до 3.13 это
+  `GetTickCount64()` с тиком 15.625 мс, поэтому два отсчёта внутри одного
+  тика равны, и deadline короче тика ненаблюдаем — уже исчерпанный deadline
+  читался как недостигнутый и молча пропускал работу, которую обязан был
+  отклонить. Модуль перешёл на `time.perf_counter()`: это
+  `QueryPerformanceCounter()` на всех поддерживаемых Windows CPython и
+  `CLOCK_MONOTONIC` на остальных платформах, так что deadline означает одно и
+  то же на каждой ноге матрицы. Направление проверки не изменилось:
+  превышение deadline по-прежнему отклоняет toolchain и никогда не допускает.
 - Deadline toolchain fingerprint для `go-v1` больше не зажат жёстко на 120
   секунд: default поднят до 600 секунд, caller задаёт его через
   `ToolchainConfig(fingerprint_timeout=...)` или аргумент `timeout` у

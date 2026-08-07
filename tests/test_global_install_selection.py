@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -62,14 +63,27 @@ def _make_command_skill(skills_root: Path, name: str, command: str) -> None:
                         command: {
                             "type": "script",
                             "unix_path": f"scripts/{command}",
+                            "win_path": f"scripts/{command}.cmd",
                         }
                     },
                 }
             ),
             f"scripts/{command}": f"#!/bin/sh\necho {name}\n",
+            f"scripts/{command}.cmd": f"@echo off\r\necho {name}\r\n",
         },
         tag="v1",
     )
+
+
+def _shim(csk_home: Path, command: str) -> Path:
+    """The global shim under the name the host platform publishes it as.
+
+    Windows shims carry the ``.cmd`` suffix that makes them runnable from
+    ``cmd.exe`` and PowerShell; POSIX shims keep the bare command name.
+    """
+
+    suffix = ".cmd" if sys.platform == "win32" else ""
+    return csk_home / "global" / "bin" / f"{command}{suffix}"
 
 
 def _record_git_traffic(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[str]]:
@@ -239,8 +253,8 @@ def test_global_install_only_preserves_previously_installed_skills(
 
     assert (installed / "skill-kept").is_dir()
     assert (installed / "skill-target").is_dir()
-    assert (csk_home / "global" / "bin" / "kept-tool").exists()
-    assert (csk_home / "global" / "bin" / "target-tool").exists()
+    assert _shim(csk_home, "kept-tool").exists()
+    assert _shim(csk_home, "target-tool").exists()
     assert (
         csk_home / "runtime" / "skill-kept" / kept_commit
     ).is_dir()
@@ -272,11 +286,13 @@ def test_global_install_only_rejects_a_command_taken_by_a_retained_skill(
                         "shared-tool": {
                             "type": "script",
                             "unix_path": "scripts/shared-tool",
+                            "win_path": "scripts/shared-tool.cmd",
                         }
                     },
                 }
             ),
             "scripts/shared-tool": "#!/bin/sh\necho skill-target\n",
+            "scripts/shared-tool.cmd": "@echo off\r\necho skill-target\r\n",
         },
     )
     commit_all(target_repo, "export shared-tool")
@@ -296,7 +312,7 @@ def test_global_install_only_rejects_a_command_taken_by_a_retained_skill(
         "Command collision for 'shared-tool'" in error
         for error in result.errors
     )
-    assert (csk_home / "global" / "bin" / "shared-tool").exists()
+    assert _shim(csk_home, "shared-tool").exists()
 
 
 def test_global_install_only_warns_about_retained_dependents(

@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -1091,3 +1092,26 @@ def test_caller_deadline_overrides_an_unusably_small_operator_value(
         timeout=toolchain.MAX_FINGERPRINT_TIMEOUT,
     )
     assert identity.algorithm == toolchain.TOOLCHAIN_ALGORITHM
+
+
+def test_the_deadline_clock_outresolves_the_deadlines_it_enforces(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The deadline clock must see a deadline smaller than one platform tick.
+
+    Windows CPython before 3.13 backs ``time.monotonic()`` with
+    ``GetTickCount64()``, which advances once every 15.625 ms.  A deadline
+    built from that clock and checked inside the same tick compares equal to
+    itself, so an exhausted deadline reads as unreached and admits the work
+    it exists to refuse -- and a fingerprint pass over a small GOROOT finishes
+    well inside one tick.  Pin both halves of the fix here: the module reads
+    ``perf_counter``, and that clock is monotonic and fine-grained on the host
+    running this test.  Reverting to ``monotonic`` fails this on Windows.
+    """
+
+    monkeypatch.setattr(toolchain.time, "perf_counter", lambda: 4321.0)
+    assert toolchain._elapsed() == 4321.0
+
+    info = time.get_clock_info("perf_counter")
+    assert info.monotonic
+    assert info.resolution <= 1e-06

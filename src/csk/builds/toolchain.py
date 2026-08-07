@@ -305,7 +305,7 @@ class SubprocessProbeRunner:
         stderr_thread.start()
 
         timed_out = False
-        deadline = time.monotonic() + timeout
+        deadline = _elapsed() + timeout
         while process.poll() is None:
             if stop_requested.wait(timeout=0.01):
                 try:
@@ -313,7 +313,7 @@ class SubprocessProbeRunner:
                 except OSError:
                     pass
                 break
-            if time.monotonic() >= deadline:
+            if _elapsed() >= deadline:
                 timed_out = True
                 try:
                     process.kill()
@@ -1937,17 +1937,34 @@ def _bounded_timeout(value: float, maximum: float) -> float:
     return value
 
 
+def _elapsed() -> float:
+    """Read the one clock this module measures every deadline with.
+
+    ``time.monotonic()`` is not the same clock on every platform: Windows
+    CPython before 3.13 backs it with ``GetTickCount64()``, whose tick is
+    15.625 ms.  Two readings taken inside one tick are equal, so a deadline
+    shorter than a tick is unobservable — an already-exhausted deadline
+    reads as unreached and silently admits the work it was meant to refuse.
+    ``time.perf_counter()`` is ``QueryPerformanceCounter()`` on every
+    supported Windows CPython and ``CLOCK_MONOTONIC`` elsewhere, so a
+    deadline means the same thing on every platform.  This is a refusal
+    boundary, and a coarse clock must never round it into an admission.
+    """
+
+    return time.perf_counter()
+
+
 def _deadline(timeout: float) -> float:
     if timeout <= 0:
         raise ToolchainError(
             "toolchain_timeout",
             "toolchain fingerprint timeout must be positive",
         )
-    return time.monotonic() + timeout
+    return _elapsed() + timeout
 
 
 def _check_deadline(deadline: float) -> None:
-    if time.monotonic() > deadline:
+    if _elapsed() > deadline:
         error = ToolchainError(
             "toolchain_timeout",
             "toolchain fingerprint deadline exceeded",
