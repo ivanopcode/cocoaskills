@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   раскладка `<csk-home>/builds/go-v1/...` остаётся деталью csk.
   Installed-tree `content_sha256` отделён от raw build-source identity, а
   receipt consistency — от protected-state provenance.
+- Драйвер `go-v1` реализует четыре узких vendored-исключения из
+  `curator-spec` decision 0005: `GOROOT/src/vendor` packages с пустым `Root`
+  и префиксом импорта `vendor/` остаются trusted; `SFiles` разрешены только
+  для vendored packages без cgo/C/SWIG-входов и host objects, где каждый
+  файл — regular file под build root; `//go:cgo_import_dynamic` разрешён
+  только для `golang.org/x/sys` и его subpackages; `//go:generate` инертен.
+  Профиль остаётся закрытым и vendor-only, исполнение при install не
+  добавляется.
 
 ### Безопасность
 

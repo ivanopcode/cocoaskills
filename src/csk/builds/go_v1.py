@@ -168,6 +168,10 @@ BUILD_ARGUMENT_PREFIX: Final[tuple[str, ...]] = (
     "-o",
 )
 
+# The single audited module allowed to carry ``//go:cgo_import_dynamic`` in a
+# vendored, non-standard ``GoFiles`` entry (``zsyscall`` syscall trampolines).
+_CGO_IMPORT_DYNAMIC_MODULE: Final = "golang.org/x/sys"
+
 WORKER_MODE: Final = "__csk-go-worker-v1"
 
 # The one fixed interpreter argument vector for the hidden worker.  ``-S`` and
@@ -781,7 +785,12 @@ def _validate_package_inputs(
                 "go_standard_input_escape",
                 f"standard package {import_path!r} carries module metadata",
             )
-        if _optional_string(item.get("Root")) != os.fspath(goroot):
+        item_root = _optional_string(item.get("Root"))
+        # Go 1.25 reports GOROOT/src/vendor packages with an empty Root and a
+        # "vendor/" import prefix. They stay trusted only because the directory
+        # check below still pins them below the fingerprinted GOROOT.
+        goroot_vendored = not item_root and import_path.startswith("vendor/")
+        if item_root != os.fspath(goroot) and not goroot_vendored:
             raise GoV1Error(
                 "go_standard_input_escape",
                 f"standard package {import_path!r} has an unexpected Root",
@@ -849,11 +858,32 @@ def _validate_package_inputs(
                 "go_native_input_forbidden",
                 f"package {import_path!r} contains {field_name}",
             )
-        if _string_list(item.get("SFiles"), "SFiles"):
-            raise GoV1Error(
-                "go_assembly_forbidden",
-                f"package {import_path!r} contains non-standard assembly",
-            )
+        # Pure Go assembly is allowed only for vendored dependencies. SysoFiles
+        # and every cgo/C/C++/ObjC/Fortran/SWIG field were already rejected
+        # above, so reaching here means the package carries no host objects.
+        # curator-build-source-v1 hashes each entry because it must be a
+        # regular file below the build root.
+        assembly_files = _string_list(item.get("SFiles"), "SFiles")
+        if assembly_files:
+            if not _strictly_below(package_dir, build_root / "vendor"):
+                raise GoV1Error(
+                    "go_assembly_forbidden",
+                    f"package {import_path!r} contains non-standard assembly",
+                )
+            for name in assembly_files:
+                try:
+                    _validate_regular_input(
+                        package_dir,
+                        name,
+                        build_root,
+                        allow_toolchain_links=False,
+                    )
+                except (OSError, ValueError) as exc:
+                    raise GoV1Error(
+                        "go_assembly_forbidden",
+                        f"package {import_path!r} contains "
+                        "an invalid assembly input",
+                    ) from exc
 
     active_fields = ["GoFiles", "CompiledGoFiles"]
     if trusted_standard:
@@ -999,7 +1029,19 @@ def _validate_module(
             ) from exc
 
 
+def _allows_cgo_import_dynamic(import_path: str) -> bool:
+    # Audited allowlist: the x/sys zsyscall trampolines are the only vendored
+    # source permitted to carry the directive.
+    return import_path == _CGO_IMPORT_DYNAMIC_MODULE or import_path.startswith(
+        f"{_CGO_IMPORT_DYNAMIC_MODULE}/"
+    )
+
+
 def _scan_source_directives(path: Path, import_path: str) -> None:
+    # //go:generate is inert: vendor is already materialized and neither
+    # go list -mod=vendor nor go build -mod=vendor runs generators, so the
+    # directive is not scanned for at all.
+    allowed = _allows_cgo_import_dynamic(import_path)
     try:
         with path.open("rb", buffering=0) as handle:
             carry = b""
@@ -1008,16 +1050,11 @@ def _scan_source_directives(path: Path, import_path: str) -> None:
                 if not chunk:
                     return
                 window = carry + chunk
-                if b"//go:cgo_import_dynamic" in window:
+                if not allowed and b"//go:cgo_import_dynamic" in window:
                     raise GoV1Error(
                         "go_forbidden_compiler_directive",
                         f"package {import_path!r} contains "
                         "//go:cgo_import_dynamic",
-                    )
-                if b"//go:generate" in window:
-                    raise GoV1Error(
-                        "go_generator_forbidden",
-                        f"package {import_path!r} contains an active generator",
                     )
                 carry = window[-31:]
     except GoV1Error:

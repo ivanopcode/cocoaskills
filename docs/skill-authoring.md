@@ -418,12 +418,30 @@ linking without libgcc. These package-controlled features are prohibited:
 - workspace mode or toolchain switching;
 - cross-compilation, cgo, PGO, external linking, or libgcc fallback;
 - generators, tests, plugins, or overlays;
-- package-selected assembly or host object files;
+- package-selected host object files;
 - a shell, VCS command, module download, extra program, hook, or post-build
   action.
 
 Generator comments and PGO paths remain inert bytes. They do not authorize csk
 to run anything.
+
+Four narrow vendored exceptions keep audited real-world dependencies buildable
+without widening that boundary (`curator-spec` decision 0005):
+
+- `GOROOT/src/vendor` packages that report `Standard`, `Goroot`, an empty
+  `Root`, and a `vendor/` import prefix stay trusted, because their directory
+  is still pinned below the fingerprinted `GOROOT`;
+- pure Go assembly (`SFiles`) is accepted only for a vendored package that
+  carries no cgo, C, C++, Objective-C, Fortran, SWIG, or host-object input and
+  whose every `SFiles` entry is a regular file below the build root, so
+  `curator-build-source-v1` already hashes it — for example the
+  `coder/websocket` masks;
+- `//go:cgo_import_dynamic` stays rejected in every non-standard `GoFiles`
+  entry except the audited `golang.org/x/sys` module and its subpackages
+  (`zsyscall` syscall trampolines);
+- `//go:generate` is inert. Neither `go list -mod=vendor` nor
+  `go build -mod=vendor` runs generators, vendor is already materialized, and
+  csk never invokes `go generate`, so the comment does not fail preflight.
 
 Source-aware `go-v1` is supported on macOS and Windows. On any other host it
 fails closed before launching a worker or Go process. Linux support is an
