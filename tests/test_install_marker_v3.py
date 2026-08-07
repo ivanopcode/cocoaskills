@@ -211,6 +211,71 @@ def test_external_activation_checks_hash_link_count_and_manager_path(tmp_path) -
         )
 
 
+def test_windows_external_activation_resolves_the_suffixed_cache_artifact(tmp_path) -> None:
+    home = tmp_path / "home"
+    entry = home / "external-builds" / "artifacts" / ("5" * 64)
+    entry.mkdir(parents=True)
+    artifact = entry / "artifact.exe"
+    artifact.write_bytes(b"MZ-artifact")
+    digest = "sha256:" + hashlib.sha256(b"MZ-artifact").hexdigest()
+    receipt = protocol_json.canonical_bytes(
+        {
+            "schema_version": 2,
+            "cache_key": "sha256:" + "5" * 64,
+            "input": {
+                "schema_version": 2,
+                "driver": "go-repository-v1",
+                "command": "tool",
+                "target": {"goos": "windows"},
+            },
+            "artifact": {"path": "bin/tool.exe", "sha256": digest, "size": 11},
+        }
+    )
+    marker = install_marker.InstallMarkerBuildV3(
+        driver="go-repository-v1",
+        receipt_schema_version=2,
+        execution_policy="manager-worker-v1",
+        repository="tools",
+        declared_identity=install_marker.MarkerRepositoryIdentity("network-git", "example.com/tools"),
+        declared_locked_commit=install_marker.MarkerRepositoryCommit("sha1", "a" * 40),
+        effective_identity=install_marker.MarkerRepositoryIdentity("network-git", "example.com/tools"),
+        object_format="sha1",
+        commit="a" * 40,
+        substituted=False,
+        build_source=install_marker.BuildSourceIdentity("curator-build-source-v1", "sha256:" + "b" * 64),
+        descriptor_target="tool",
+        cache_key="sha256:" + "5" * 64,
+        receipt_sha256="sha256:" + hashlib.sha256(receipt).hexdigest(),
+        artifact_sha256=digest,
+        artifact_path="bin/tool.exe",
+    )
+    command = CommandSpec("tool", "build", driver="go-repository-v1", repository="tools", target="tool")
+
+    activation = shims.select_external_build_activation(
+        csk_home=home,
+        command=command,
+        marker_build=marker,
+        receipt_bytes=receipt,
+        artifact_path=artifact,
+        platform_name=shims.WINDOWS_PLATFORM,
+    )
+    assert activation.artifact_path == artifact
+
+    # The suffix-less name is what the launcher used to be pointed at, and
+    # Windows cannot execute it.
+    unsuffixed = entry / "artifact"
+    unsuffixed.write_bytes(b"MZ-artifact")
+    with pytest.raises(shims.ShimError, match="manager-derived external cache path"):
+        shims.select_external_build_activation(
+            csk_home=home,
+            command=command,
+            marker_build=marker,
+            receipt_bytes=receipt,
+            artifact_path=unsuffixed,
+            platform_name=shims.WINDOWS_PLATFORM,
+        )
+
+
 def test_external_gc_uses_only_marker_derived_snapshot_and_artifact_roots(tmp_path) -> None:
     home = tmp_path / "home"
     root = home / "external-builds"

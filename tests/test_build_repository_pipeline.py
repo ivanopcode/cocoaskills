@@ -16,9 +16,13 @@ from csk.build_repository_pipeline import (
     EffectiveState,
     ExistingGoV1Session,
     ExternalBuildError,
+    OBJECT_SEMANTICS_INVALID,
     Operation,
     PipelineRequest,
     SubstitutionState,
+    _frame_snapshot,
+    _read_tree,
+    _validate_materialized,
     run_pipeline,
     snapshot_key,
 )
@@ -383,6 +387,62 @@ def test_substitution_has_distinct_snapshot_and_artifact_identity(tmp_path: Path
     assert plain.cache_key != changed.cache_key
 
 
+@pytest.mark.parametrize(
+    ("goos", "goarch", "stored_name", "receipt_path"),
+    [
+        ("darwin", "arm64", "artifact", "bin/tool"),
+        ("linux", "amd64", "artifact", "bin/tool"),
+        ("windows", "amd64", "artifact.exe", "bin/tool.exe"),
+    ],
+)
+def test_stored_artifact_carries_the_suffix_its_receipt_declares(
+    tmp_path: Path,
+    goos: str,
+    goarch: str,
+    stored_name: str,
+    receipt_path: str,
+) -> None:
+    # A Windows launcher can only run a name Windows recognizes as executable,
+    # so the stored file has to follow the receipt rather than a fixed literal.
+    store = DiskProtectedStore(tmp_path / "external-cache")
+    compiler = _Compiler(
+        [],
+        identity=CompilerIdentity(
+            content_sha256="sha256:" + "a" * 64,
+            go_version="go1.25.1",
+            go_relpath="bin/go",
+            goos=goos,
+            goarch=goarch,
+            tuning={},
+        ),
+    )
+    first = run_pipeline(
+        _request(tmp_path, Operation.INSTALL, [], compiler, store=store)
+    )
+
+    assert first.cache_key is not None and first.receipt is not None
+    entry = store.root / "artifacts" / first.cache_key.removeprefix("sha256:")
+    assert sorted(path.name for path in entry.iterdir()) == [
+        stored_name,
+        "receipt.json",
+    ]
+    assert (entry / stored_name).read_bytes() == b"compiled-tool"
+    receipt = protocol_json.loads_canonical(first.receipt)
+    assert isinstance(receipt, dict)
+    assert receipt["artifact"] == {
+        "path": receipt_path,
+        "sha256": "sha256:" + hashlib.sha256(b"compiled-tool").hexdigest(),
+        "size": len(b"compiled-tool"),
+    }
+
+    second = run_pipeline(
+        _request(tmp_path, Operation.INSTALL, [], compiler, store=store)
+    )
+    assert second.state == "cache-hit"
+    assert compiler.calls == 1
+    assert not (store.root / "quarantine").exists()
+
+
 def test_corrupt_artifact_is_quarantined_before_rebuild(tmp_path: Path) -> None:
     store = DiskProtectedStore(tmp_path / "external-cache")
     events: list[str] = []
@@ -558,3 +618,93 @@ def test_receipt_binds_policy_declared_and_effective_identity(tmp_path: Path) ->
         "content_sha256": result.build_source,
     }
     assert receipt["input"]["policy"]["source_kind"] == "locked-external-git-v1"
+
+
+# Regression fixture for BUG-260807.  Names chosen so that both orderings the
+# fix removes are observable in one tree:
+#   * "README.md" vs "cmd..." separates only under Windows case folding;
+#   * "cmd.go" vs "cmd/tool.go" separates only under Path component ordering,
+#     which puts the directory "cmd" — and therefore "cmd/tool.go" — before the
+#     sibling file "cmd.go" on every platform.
+# The admitted order is the one git_admission._prove_repository frames: sorted
+# on the UTF-8 bytes of the relative POSIX path.
+_ORDERING_TREE = (
+    ("README.md", b"readme\n"),
+    ("cmd.go", b"package main\n"),
+    ("cmd/tool.go", b"package cmd\n"),
+    ("go.mod", b"module example.test/tool\n"),
+)
+_ADMITTED_ORDER = ["README.md", "cmd.go", "cmd/tool.go", "go.mod"]
+_PATH_COMPONENT_ORDER = ["README.md", "cmd/tool.go", "cmd.go", "go.mod"]
+_WINDOWS_CASE_FOLDED_ORDER = ["cmd/tool.go", "cmd.go", "go.mod", "README.md"]
+
+
+def _ordering_snapshot(order: list[str] | None = None) -> Snapshot:
+    contents = dict(_ORDERING_TREE)
+    if order is None:
+        order = sorted(contents, key=lambda path: path.encode("utf-8"))
+    files = tuple(SnapshotFile(path, contents[path]) for path in order)
+    canonical = _frame(files)
+    return Snapshot(
+        object_format="sha1",
+        commit=COMMIT,
+        files=files,
+        canonical_bytes=canonical,
+        digest="sha256:" + hashlib.sha256(canonical).hexdigest(),
+    )
+
+
+def test_materialized_order_matches_admitted_order_for_colliding_names(
+    tmp_path: Path,
+) -> None:
+    """Regression for BUG-260807: reading a materialized tree must not reorder it."""
+    snapshot = _ordering_snapshot()
+    assert [item.path for item in snapshot.files] == _ADMITTED_ORDER
+    root = tmp_path / "snapshot"
+    snapshot.materialize(root)
+
+    read = _read_tree(root, lambda _info, _directory: True, protected=False)
+
+    assert [item.path for item in read] == _ADMITTED_ORDER
+    assert _frame_snapshot(read) == snapshot.canonical_bytes
+    _validate_materialized(root, snapshot)
+
+
+def test_path_object_ordering_would_break_the_materialized_digest(
+    tmp_path: Path,
+) -> None:
+    """Both orderings the fix removes reproduce the reported install signature."""
+    root = tmp_path / "snapshot"
+    _ordering_snapshot().materialize(root)
+
+    # What sorting Path objects yields, spelled out rather than taken from
+    # sorted(Path): PurePath compares _parts_normcase, and which of these two
+    # the running flavour picks is itself the platform dependency under test.
+    def ordering(fold: bool) -> list[str]:
+        def key(item: Path) -> tuple[str, ...]:
+            parts = item.relative_to(root).parts
+            return tuple(part.lower() for part in parts) if fold else parts
+
+        return [
+            item.relative_to(root).as_posix()
+            for item in sorted(root.rglob("*"), key=key)
+            if item.is_file()
+        ]
+
+    component_order = ordering(fold=False)
+    case_folded_order = ordering(fold=True)
+    native_order = [
+        item.relative_to(root).as_posix()
+        for item in sorted(root.rglob("*"))
+        if item.is_file()
+    ]
+    assert component_order == _PATH_COMPONENT_ORDER
+    assert case_folded_order == _WINDOWS_CASE_FOLDED_ORDER
+    # Whichever flavour is running, sorting Path objects is the wrong order.
+    assert native_order in (_PATH_COMPONENT_ORDER, _WINDOWS_CASE_FOLDED_ORDER)
+    assert native_order != _ADMITTED_ORDER
+
+    for order in (component_order, case_folded_order):
+        with pytest.raises(ExternalBuildError) as captured:
+            _validate_materialized(root, _ordering_snapshot(order))
+        assert captured.value.code == OBJECT_SEMANTICS_INVALID

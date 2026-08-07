@@ -1,5 +1,35 @@
 # Logbook
 
+## 2026-08-07 — BUG-260807-1it17m external artifacts take the name their receipt declares
+
+The protected external-build store wrote every artifact to a fixed literal
+`artifact`, while `_artifact_path` already declared `bin/<command>.exe` in the
+receipt for a `windows` target.  The generated `.cmd` launcher calls the stored
+path, and Windows will not execute a file with no executable extension, so a
+native Windows `go-repository-v1` install produced a launcher that could not
+run — the build, snapshot, cache key, and argument forwarding were all correct.
+
+Four resolvers derived that literal independently: the store's read side, the
+installer's published path, `status`, and the shim's manager-derived path
+check.  A new `builds.metadata.derived_cache_artifact_name` takes the receipt's
+artifact path and returns `artifact` or `artifact.exe`; all four now go through
+it, so the store name and the receipt cannot drift apart.  macOS and Linux keep
+`artifact`.  An existing Windows entry is quarantined and rebuilt on the next
+`install` or `repair`, which is harmless because no Windows entry could ever
+have produced a runnable launcher.
+
+Sealing no longer recognizes the artifact by name.  `_seal_tree` preserves the
+execute bit the staged file already carries on POSIX and takes the artifact's
+name from the caller on Windows.  That also repairs a latent defect: an
+executable file inside a snapshot was demoted to `0o400` by sealing and then
+failed `load_snapshot`'s `executable` metadata comparison.
+
+Verified on the native Windows host (Windows 10 19045.6466, Go 1.25.5
+windows/amd64, Python 3.14.4) with a real Go build and no stubbed compiler:
+`install` exit 0, the entry holds `artifact.exe` (a 2,308,608-byte `MZ` image),
+the `.cmd` names it, `--help` exits 0, and `status` is clean.  The same harness
+on macOS arm64 keeps `artifact` and still launches.
+
 ## 2026-08-04 — BUG-260803-2sqyqy current-status observer gains causal provenance
 
 Hosted Windows Python 3.12 at signed head `a361899d` returned the correct
@@ -1135,3 +1165,53 @@ containment, symlink/reparse, and `go.mod` checks. The shared identifier grammar
 is unchanged, so traversal, absolute paths, backslashes, and embedded dot
 components remain rejected. Focused schema, go-v1, pipeline, and native external
 install tests cover root-module/nested-source and root-package forms.
+
+## 2026-08-07 — BUG-260807-1r5oz9 verified natively, and the two Windows admission bugs were entangled
+
+The operator Windows host (10.0.19045.6466, Python 3.14.4, Go 1.25.5, Git
+2.50.1.windows.1) is reachable over SSH, so the local-admission fix was verified
+on the machine that produced the original reproducer rather than by construction.
+
+The two reported signatures had one shared chain. `_ObjectReader.read` issued a
+single `self._stdout.read(size)` against a pipe; on Windows that returns short,
+so `git cat-file --batch` blocked writing into a full stdout pipe and could not
+exit when stdin closed, and `close()` raised `object reader did not terminate`
+after its ten-second wait. The still-live process kept `pack-*.idx` mapped, so
+`TemporaryDirectory` cleanup was refused with `[WinError 5]` — and that bare
+`PermissionError` replaced the real diagnostic. The partial-read fix
+(`BUG-260806-1bwq2z`) addresses the first link; `_remove_private_root` addresses
+the last, so the admission diagnostic survives instead of being masked. Neither
+alone completes the lifecycle; together `csk install` exits 0 for
+`skill-bi@e9fa203d` with `bi-cli@e0f05112` from a local exact snapshot.
+
+`_remove_private_root`'s docstring records this: on this host the removal
+refusal comes from the live `git cat-file` handle, not from
+`FILE_ATTRIBUTE_READONLY`. Unsealing remains correct for the POSIX `0o500`/`0o400`
+seal, and READONLY defeating `shutil.rmtree` on Windows follows by construction —
+but it has never been observed here, so it must not be cited as evidence.
+
+Getting that far exposed a further defect, tracked as `BUG-260807-1it17m`. The
+external build cache publishes its artifact under the extensionless name
+`artifact` (`src/csk/build_repository_pipeline.py:341`) while `go_v1` builds
+`<command>.exe` (`src/csk/builds/go_v1.py:6691`), and the Windows launcher calls
+that target directly (`src/csk/shims.py:894`). `cmd.exe` resolves executables
+through `PATHEXT`, so an extensionless PE cannot be run: the same 9507840-byte
+`MZ` image fails as `artifact` in both sealed and plain directories and succeeds
+as `artifact.exe`. Every `windows-latest` leg stays green because
+`tests/test_install_external_repository.py` asserts only that the shim exists and
+mentions the artifacts path, never executes it, and stubs the toolchain so the
+cached artifact is not a real PE.
+
+Both WB Draft pairs now complete the narrow lifecycle on that host, but only
+with three fixes stacked. `skill-bi@e9fa203d` + `bi-cli@e0f05112` needs this fix
+plus the partial-pipe-read fix (`BUG-260806-1bwq2z`). `skill-band@7b83aba1` +
+`band-cli@0956c621` additionally needs the raised GOROOT fingerprint deadline
+(`BUG-260807-3me1d5`): before it, band died at `dry-run` with
+`go-v1 toolchain_timeout` and never reached admission at all, which is why the
+band leg said nothing about admission ordering for two rounds. On a wheel
+carrying all three, band runs audit -> dry-run -> install
+(`would-preflight-and-build`, real Go build) -> repeat install (`cache-hit`) ->
+`status --check` -> drift detected -> repair -> remove -> reconcile, with
+neither reported signature anywhere and no patching of the installed manager.
+The lesson worth keeping: a Windows leg that dies before admission is not
+evidence about admission, in either direction.

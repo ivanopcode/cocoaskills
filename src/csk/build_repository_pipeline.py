@@ -15,6 +15,7 @@ from typing import NoReturn, Protocol
 from . import protocol_json
 from .build_repository import BuildRepository, BuildTarget, DESCRIPTOR_NAME, load_skill_build
 from .builds import go_v1
+from .builds import metadata as build_metadata
 from .builds import source as build_source
 from .builds import toolchain
 from .git_admission import (
@@ -283,9 +284,12 @@ class DiskProtectedStore:
             if protocol_json.canonical_bytes(raw.get("input")) != protocol_json.canonical_bytes(expected_input):
                 raise ValueError("receipt input differs")
             corruption_code = ARTIFACT_INVALID
-            artifact = self._read_protected(entry / "artifact", _MAX_ARTIFACT)
-            metadata = raw.get("artifact")
             path = _artifact_path(expected_input)
+            artifact = self._read_protected(
+                entry / build_metadata.derived_cache_artifact_name(path),
+                _MAX_ARTIFACT,
+            )
+            metadata = raw.get("artifact")
             if not isinstance(metadata, dict) or metadata != {
                 "path": path,
                 "sha256": "sha256:" + hashlib.sha256(artifact).hexdigest(),
@@ -336,9 +340,10 @@ class DiskProtectedStore:
             hit = self.lookup_artifact(key, input_value, mutate=True)
             if hit is not None:
                 return hit.receipt
+        path = _artifact_path(input_value)
         stage = Path(tempfile.mkdtemp(prefix=".stage-", dir=parent))
         try:
-            artifact_file = stage / "artifact"
+            artifact_file = stage / build_metadata.derived_cache_artifact_name(path)
             artifact_file.write_bytes(artifact)
             if os.name != "nt":
                 artifact_file.chmod(0o500)
@@ -348,14 +353,14 @@ class DiskProtectedStore:
                     "cache_key": key,
                     "input": dict(input_value),
                     "artifact": {
-                        "path": _artifact_path(input_value),
+                        "path": path,
                         "sha256": "sha256:" + hashlib.sha256(artifact).hexdigest(),
                         "size": len(artifact),
                     },
                 }
             )
             (stage / "receipt.json").write_bytes(receipt)
-            _seal_tree(stage, seal_root=False)
+            _seal_tree(stage, seal_root=False, executable=artifact_file.name)
             os.replace(stage, final)
             _seal_root(final)
             return receipt
@@ -707,7 +712,17 @@ def _read_tree(
     protected: bool,
 ) -> tuple[SnapshotFile, ...]:
     files: list[SnapshotFile] = []
-    for path in sorted(root.rglob("*")):
+    # Order by the UTF-8 bytes of the relative POSIX path, which is by
+    # construction the order the admitted snapshot is framed in
+    # (git_admission._prove_repository sorts on exactly that key).  Sorting Path
+    # objects instead is not platform-independent: PurePath compares
+    # _parts_normcase, so Windows case-folds the components and every flavour
+    # orders "foo/bar" before "foo.go" where the framed bytes order "foo.go"
+    # first.  Both divergences make the materialized bytes differ from the
+    # admitted bytes for the same commit.
+    for path in sorted(
+        root.rglob("*"), key=lambda item: item.relative_to(root).as_posix().encode("utf-8")
+    ):
         info = path.lstat()
         directory = stat.S_ISDIR(info.st_mode)
         if os.name == "nt":
@@ -741,15 +756,30 @@ def _frame_snapshot(files: tuple[SnapshotFile, ...]) -> bytes:
     return bytes(framed)
 
 
-def _seal_tree(root: Path, *, seal_root: bool = True) -> None:
+def _seal_tree(root: Path, *, seal_root: bool = True, executable: str = "") -> None:
+    """Seal a staged tree read-only without demoting what has to stay runnable.
+
+    ``executable`` names the one file an artifact entry may execute. Windows
+    carries no mode bit to preserve, so only that branch needs the name; POSIX
+    keeps whatever the staged file already has, which also leaves an executable
+    snapshot input exactly as materialization wrote it.
+    """
+
     if os.name == "nt":
         for path in sorted(root.rglob("*"), reverse=True):
-            _secure_windows_path(path, directory=path.is_dir(), sealed=True)
+            directory = path.is_dir()
+            _secure_windows_path(
+                path,
+                directory=directory,
+                sealed=True,
+                artifact=not directory and path.name == executable,
+            )
         if seal_root:
             _secure_windows_path(root, directory=True, sealed=True)
         return
     for path in sorted(root.rglob("*"), reverse=True):
-        path.chmod(0o500 if path.is_dir() or path.name == "artifact" else 0o400)
+        runnable = path.is_dir() or bool(path.lstat().st_mode & stat.S_IXUSR)
+        path.chmod(0o500 if runnable else 0o400)
     if seal_root:
         root.chmod(0o500)
 
@@ -761,7 +791,9 @@ def _seal_root(root: Path) -> None:
         root.chmod(0o500)
 
 
-def _secure_windows_path(path: Path, *, directory: bool, sealed: bool) -> None:
+def _secure_windows_path(
+    path: Path, *, directory: bool, sealed: bool, artifact: bool = False
+) -> None:
     from .builds import cache_windows
 
     if directory:
@@ -770,7 +802,7 @@ def _secure_windows_path(path: Path, *, directory: bool, sealed: bool) -> None:
             if sealed
             else cache_windows._MUTABLE_DIRECTORY
         )
-    elif sealed and path.name == "artifact":
+    elif sealed and artifact:
         profile = cache_windows._SEALED_ARTIFACT
     elif sealed:
         profile = cache_windows._SEALED_RECEIPT

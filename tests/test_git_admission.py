@@ -133,6 +133,46 @@ def _fixture(
     return GitFixture(work=work, bare=bare, commit=commit)
 
 
+def _packed_fixture(tmp_path: Path, object_format: str) -> GitFixture:
+    """A loose-object fixture reshaped into the packed layout admission meets.
+
+    The operator flow that found BUG-260807 transferred the source as a Git
+    bundle and cloned it, so the admitted object store is a single
+    ``pack-*.pack``/``pack-*.idx`` pair rather than the loose objects every
+    other fixture here produces.  Only that layout makes ``git cat-file`` map a
+    pack index inside the private root, which is what Windows refuses to delete.
+    """
+    loose = _fixture(tmp_path / "loose", object_format)
+    work = tmp_path / "packed"
+    _run_git(
+        None,
+        "-c",
+        "pack.writeReverseIndex=false",
+        "clone",
+        "--quiet",
+        "--no-local",
+        "--template=",
+        "--",
+        os.fspath(loose.work),
+        os.fspath(work),
+    )
+    _run_git(work, "checkout", "--quiet", "--detach", loose.commit)
+    # The operator harness reduces a transferred clone to the state local
+    # admission supports; _validate_local_administration enforces exactly this.
+    _run_git(work, "remote", "remove", "origin")
+    for target in (work / ".git").iterdir():
+        if target.name in {"HEAD", "config", "index", "objects", "refs", "packed-refs"}:
+            continue
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+    packs = sorted((work / ".git" / "objects" / "pack").glob("*.idx"))
+    assert len(packs) == 1, packs
+    assert not any((work / ".git" / "objects").glob("??/*"))
+    return GitFixture(work=work, bare=loose.bare, commit=loose.commit)
+
+
 def _fake_http_tool(
     tmp_path: Path, repository: Path
 ) -> tuple[git_admission.GitTool, Path]:
@@ -427,6 +467,124 @@ def test_local_source_race_fails_closed(tmp_path: Path) -> None:
     with pytest.raises(git_admission.GitAdmissionError) as captured:
         git_admission.admit_local(fixture.work, _real_tool(), after_object_copy=mutate)
     assert captured.value.code == git_admission.LOCAL_LAYOUT_UNSAFE
+
+
+def _private_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    base = tmp_path / "private-base"
+    base.mkdir(parents=True)
+    monkeypatch.setattr(tempfile, "tempdir", os.fspath(base))
+    return base
+
+
+def _private_roots(base: Path) -> list[Path]:
+    return sorted(base.glob("csk-buildrepo-local-*"))
+
+
+@pytest.mark.parametrize("object_format", ["sha1", "sha256"])
+def test_packed_local_admission_leaves_no_private_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, object_format: str
+) -> None:
+    """Regression for BUG-260807: the sealed private root must always be removed.
+
+    ``_seal_object_store`` chmods the copied pack to 0o400 inside a 0o500
+    directory, which a plain rmtree cannot unlink on POSIX and which Windows
+    turns into FILE_ATTRIBUTE_READONLY.
+    """
+    fixture = _packed_fixture(tmp_path / "fixture", object_format)
+    base = _private_base(tmp_path, monkeypatch)
+
+    snapshot = git_admission.admit_local(fixture.work, _real_tool())
+
+    assert snapshot.commit == fixture.commit
+    assert snapshot.canonical_bytes == _expected_frame()
+    assert _private_roots(base) == []
+
+
+def test_local_admission_cleanup_failure_is_a_typed_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A private root that cannot be removed must not escape as a PermissionError."""
+    fixture = _packed_fixture(tmp_path / "fixture", "sha1")
+    base = _private_base(tmp_path, monkeypatch)
+    remove = shutil.rmtree
+
+    def refuse(*_arguments: object, **_keywords: object) -> None:
+        raise PermissionError(13, "Access is denied", "repo.git/objects/pack/pack.idx")
+
+    monkeypatch.setattr(git_admission.shutil, "rmtree", refuse)
+    monkeypatch.setattr(git_admission.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(git_admission.GitAdmissionError) as captured:
+        git_admission.admit_local(fixture.work, _real_tool())
+
+    assert captured.value.code == git_admission.LOCAL_CLEANUP_FAILED
+    assert isinstance(captured.value.__cause__, PermissionError)
+    leaked = _private_roots(base)
+    assert len(leaked) == 1
+    for path in (*leaked[0].rglob("*"), leaked[0]):
+        path.chmod(0o700)
+    remove(leaked[0])
+
+
+def test_local_admission_cleanup_failure_cannot_mask_an_admission_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _packed_fixture(tmp_path / "fixture", "sha1")
+    base = _private_base(tmp_path, monkeypatch)
+    remove = shutil.rmtree
+
+    def mutate() -> None:
+        (fixture.work / ".git" / "config").write_text(
+            "[core]\nrepositoryformatversion = 0\nbare = false\n# raced\n",
+            encoding="utf-8",
+        )
+
+    def refuse(*_arguments: object, **_keywords: object) -> None:
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(git_admission.shutil, "rmtree", refuse)
+    monkeypatch.setattr(git_admission.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(git_admission.GitAdmissionError) as captured:
+        git_admission.admit_local(fixture.work, _real_tool(), after_object_copy=mutate)
+
+    assert captured.value.code == git_admission.LOCAL_LAYOUT_UNSAFE
+    for leaked in _private_roots(base):
+        for path in (*leaked.rglob("*"), leaked):
+            path.chmod(0o700)
+        remove(leaked)
+
+
+def test_local_admission_retries_a_transient_cleanup_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refusal that clears on its own must not fail the admission.
+
+    Synthetic: no native run has shown a self-clearing refusal here.  The
+    observed Windows one came from a reader that never exited at all, which no
+    retry can outlast — see ``_remove_private_root``.  This pins the retry's
+    contract, not a reproduction.
+    """
+    fixture = _packed_fixture(tmp_path / "fixture", "sha1")
+    base = _private_base(tmp_path, monkeypatch)
+    remove = shutil.rmtree
+    attempts = 0
+
+    def flaky(target: object, *arguments: object, **keywords: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 2:
+            raise PermissionError(13, "Access is denied")
+        remove(target, *arguments, **keywords)
+
+    monkeypatch.setattr(git_admission.shutil, "rmtree", flaky)
+    monkeypatch.setattr(git_admission.time, "sleep", lambda _seconds: None)
+
+    snapshot = git_admission.admit_local(fixture.work, _real_tool())
+
+    assert attempts == 3
+    assert snapshot.canonical_bytes == _expected_frame()
+    assert _private_roots(base) == []
 
 
 def test_source_controlled_filters_and_attributes_cannot_transform_snapshot_bytes(

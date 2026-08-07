@@ -66,9 +66,33 @@ def _external_repository(tmp_path: Path) -> tuple[Path, str]:
             ),
             "go.mod": "module example.test/external-tool\n\ngo 1.25\n",
             "cmd/external-tool/main.go": "package main\nfunc main() {}\n",
+            # BUG-260807-1r5oz9: "README.md" separates from "cmd..." only under
+            # Windows case folding, and "cmd.md" separates from "cmd/..." only
+            # under Path component ordering, so this tree exercises both orders
+            # the snapshot must not be read in.
+            "README.md": "external tool\n",
+            "cmd.md": "the cmd tree\n",
         },
     )
     commit = commit_all(repository, "external tool")
+    # The operator transfers the source as a bundle and clones it, so admission
+    # meets a packed object store, not the loose objects git init leaves here.
+    subprocess.run(
+        (
+            os.fspath(_git_tool().executable),
+            "-c",
+            "repack.updateServerInfo=false",
+            "-c",
+            "pack.writeReverseIndex=false",
+            "repack",
+            "-a",
+            "-d",
+            "--quiet",
+        ),
+        cwd=repository,
+        check=True,
+        capture_output=True,
+    )
     for child in list((repository / ".git").iterdir()):
         if child.name in {"HEAD", "config", "index", "objects", "refs", "packed-refs"}:
             continue
@@ -191,8 +215,10 @@ def test_project_external_build_install_offline_repair_activation_and_uninstall(
         csk_home
         / "external-builds/artifacts"
         / build.cache_key.removeprefix("sha256:")
-        / "artifact"
+        / ("artifact.exe" if os.name == "nt" else "artifact")
     )
+    assert artifact.is_file()
+    assert artifact.name in shim.read_text(encoding="utf-8")
     artifact.chmod(0o700)
     artifact.write_bytes(b"corrupt")
     corrupt = status.collect_status(config)[0]

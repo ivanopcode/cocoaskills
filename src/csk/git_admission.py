@@ -5,12 +5,14 @@ import json
 import os
 import re
 import shlex
+import shutil
 import stat
 import struct
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unicodedata
 import zlib
 from dataclasses import dataclass
@@ -38,6 +40,7 @@ LOCAL_LINKED_UNSUPPORTED = "build_repository_local_linked_worktree_unsupported"
 LOCAL_LAYOUT_UNSAFE = "build_repository_local_layout_unsafe"
 LOCAL_FORMAT_UNSUPPORTED = "build_repository_local_format_unsupported"
 LOCAL_OBJECT_FORMAT_UNSUPPORTED = "build_repository_local_object_format_unsupported"
+LOCAL_CLEANUP_FAILED = "build_repository_local_cleanup_failed"
 SSH_CREDENTIAL_MISSING = "build_repository_ssh_credential_missing"
 
 OPERATOR_SSH_IDENTITY_ENV = "CSK_BUILD_SSH_IDENTITY"
@@ -57,6 +60,69 @@ class GitAdmissionError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
+
+
+_CLEANUP_ATTEMPTS = 5
+_CLEANUP_BACKOFF_SECONDS = 0.1
+
+
+def _unseal_tree(root: Path) -> None:
+    # Symlinks are skipped rather than chmodded: os.chmod follows them, and
+    # rmtree unlinks them without following, so the target is never ours to
+    # touch.  Failures are ignored here because rmtree reports them precisely.
+    for directory, directories, files in os.walk(root, topdown=True):
+        parent = Path(directory)
+        for name in (*directories, *files):
+            child = parent / name
+            try:
+                if not child.is_symlink():
+                    os.chmod(child, stat.S_IRWXU)
+            except OSError:
+                pass
+    try:
+        os.chmod(root, stat.S_IRWXU)
+    except OSError:
+        pass
+
+
+def _remove_private_root(root: Path) -> OSError | None:
+    """Remove the private admission root and report, never raise, a failure.
+
+    ``_seal_object_store`` leaves 0o400 files under 0o500 directories, which
+    ``TemporaryDirectory`` used to absorb — its ``_rmtree`` resets permissions
+    on refusal.  A plain ``shutil.rmtree`` does not, so the tree is unsealed
+    first, on every attempt.  On POSIX that is required and demonstrated: the
+    seal alone stops the unlink.  On Windows the same ``chmod`` sets
+    FILE_ATTRIBUTE_READONLY, which ``rmtree`` also refuses — that follows by
+    construction and has *not* been reproduced natively; do not cite it as an
+    observation.
+
+    It is also not what produced the reported ``[WinError 5]``.  On the
+    operator host the refusal came from a still-live ``git cat-file --batch``
+    holding the copied ``pack-*.idx`` mapped: ``_ObjectReader.read`` short-read
+    its stdout pipe, so the child never exited (BUG-260806-1bwq2z).  Windows
+    has no unlink-while-open, so the delete failed and the bare
+    ``PermissionError`` masked the real admission diagnostic.
+
+    The retry is therefore defensive, not the remedy.  It covers a refusal by a
+    handle that is closing but not yet closed, whichever one holds it; it
+    cannot outlast a handle that is still owned, and it is not a substitute for
+    closing the reader.
+    """
+    last: OSError | None = None
+    for attempt in range(_CLEANUP_ATTEMPTS):
+        _unseal_tree(root)
+        try:
+            shutil.rmtree(root)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            last = exc
+        else:
+            return None
+        if attempt + 1 < _CLEANUP_ATTEMPTS:
+            time.sleep(_CLEANUP_BACKOFF_SECONDS * (attempt + 1))
+    return last
 
 
 @dataclass(frozen=True)
@@ -1482,8 +1548,9 @@ def admit_local(
     object_format = _parse_local_config(config_data)
     selected, ref_proofs = _read_local_head(git_dir, object_format)
     proofs = [config_proof, *ref_proofs]
-    with tempfile.TemporaryDirectory(prefix="csk-buildrepo-local-") as raw_root:
-        paths = _make_private_paths(Path(raw_root))
+    private_root = Path(tempfile.mkdtemp(prefix="csk-buildrepo-local-"))
+    try:
+        paths = _make_private_paths(private_root)
         environment = _clean_git_environment(paths, tool, "")
         _run_git(
             tool,
@@ -1520,7 +1587,16 @@ def admit_local(
         )
         for proof in proofs:
             _recheck_proof(proof)
-        return snapshot
+    finally:
+        # Reporting instead of raising keeps a failed removal from replacing an
+        # admission diagnostic that is already propagating out of the body.
+        cleanup_failure = _remove_private_root(private_root)
+    if cleanup_failure is not None:
+        raise GitAdmissionError(
+            LOCAL_CLEANUP_FAILED,
+            f"private local admission state could not be removed: {cleanup_failure}",
+        ) from cleanup_failure
+    return snapshot
 
 
 def _looks_bare(path: Path) -> bool:

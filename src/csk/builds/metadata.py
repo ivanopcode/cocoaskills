@@ -67,6 +67,7 @@ FIXED_GO_BUILD_POLICY: Final[Mapping[str, str | bool]] = MappingProxyType(
 GO_BUILD_POLICY_MEMBERS: Final[tuple[str, ...]] = (*FIXED_GO_BUILD_POLICY, "execution_policy")
 
 _ARTIFACT_DIRECTORY: Final = "bin"
+_CACHE_ARTIFACT_NAME: Final = "artifact"
 _WINDOWS_GOOS: Final = "windows"
 _WINDOWS_ARTIFACT_SUFFIX: Final = ".exe"
 _SHA256_PREFIX: Final = "sha256:"
@@ -264,6 +265,25 @@ def derived_artifact_path(command: str, *, goos: str) -> str:
     _require_identifier(command, "build command")
     suffix = _WINDOWS_ARTIFACT_SUFFIX if goos == _WINDOWS_GOOS else ""
     return f"{_ARTIFACT_DIRECTORY}/{command}{suffix}"
+
+
+def derived_cache_artifact_name(artifact_path: str) -> str:
+    """Name a protected cache entry gives one derived artifact on disk.
+
+    An entry holds a single artifact, so the stem never varies. The suffix has
+    to: Windows will not execute a file that carries no executable extension,
+    so a launcher aimed at a suffix-less name cannot run it.
+    """
+    directory, separator, name = artifact_path.partition("/")
+    if directory != _ARTIFACT_DIRECTORY or not separator or "/" in name:
+        raise BuildMetadataError(
+            "build_input_invalid",
+            f"artifact path {artifact_path!r} is not manager derived",
+        )
+    windows = name.endswith(_WINDOWS_ARTIFACT_SUFFIX)
+    command = name[: -len(_WINDOWS_ARTIFACT_SUFFIX)] if windows else name
+    _require_identifier(command, "build command")
+    return _CACHE_ARTIFACT_NAME + (_WINDOWS_ARTIFACT_SUFFIX if windows else "")
 
 
 def canonical_input_bytes(build_input: GoBuildInput) -> bytes:
