@@ -16,9 +16,13 @@ from csk.build_repository_pipeline import (
     EffectiveState,
     ExistingGoV1Session,
     ExternalBuildError,
+    OBJECT_SEMANTICS_INVALID,
     Operation,
     PipelineRequest,
     SubstitutionState,
+    _frame_snapshot,
+    _read_tree,
+    _validate_materialized,
     run_pipeline,
     snapshot_key,
 )
@@ -558,3 +562,86 @@ def test_receipt_binds_policy_declared_and_effective_identity(tmp_path: Path) ->
         "content_sha256": result.build_source,
     }
     assert receipt["input"]["policy"]["source_kind"] == "locked-external-git-v1"
+
+
+# Regression fixture for BUG-260807.  Names chosen so that both orderings the
+# fix removes are observable in one tree:
+#   * "README.md" vs "cmd..." separates only under Windows case folding;
+#   * "cmd.go" vs "cmd/tool.go" separates only under Path component ordering,
+#     which puts the directory "cmd" — and therefore "cmd/tool.go" — before the
+#     sibling file "cmd.go" on every platform.
+# The admitted order is the one git_admission._prove_repository frames: sorted
+# on the UTF-8 bytes of the relative POSIX path.
+_ORDERING_TREE = (
+    ("README.md", b"readme\n"),
+    ("cmd.go", b"package main\n"),
+    ("cmd/tool.go", b"package cmd\n"),
+    ("go.mod", b"module example.test/tool\n"),
+)
+_ADMITTED_ORDER = ["README.md", "cmd.go", "cmd/tool.go", "go.mod"]
+_PATH_COMPONENT_ORDER = ["README.md", "cmd/tool.go", "cmd.go", "go.mod"]
+_WINDOWS_CASE_FOLDED_ORDER = ["cmd/tool.go", "cmd.go", "go.mod", "README.md"]
+
+
+def _ordering_snapshot(order: list[str] | None = None) -> Snapshot:
+    contents = dict(_ORDERING_TREE)
+    if order is None:
+        order = sorted(contents, key=lambda path: path.encode("utf-8"))
+    files = tuple(SnapshotFile(path, contents[path]) for path in order)
+    canonical = _frame(files)
+    return Snapshot(
+        object_format="sha1",
+        commit=COMMIT,
+        files=files,
+        canonical_bytes=canonical,
+        digest="sha256:" + hashlib.sha256(canonical).hexdigest(),
+    )
+
+
+def test_materialized_order_matches_admitted_order_for_colliding_names(
+    tmp_path: Path,
+) -> None:
+    """Regression for BUG-260807: reading a materialized tree must not reorder it."""
+    snapshot = _ordering_snapshot()
+    assert [item.path for item in snapshot.files] == _ADMITTED_ORDER
+    root = tmp_path / "snapshot"
+    snapshot.materialize(root)
+
+    read = _read_tree(root, lambda _info, _directory: True, protected=False)
+
+    assert [item.path for item in read] == _ADMITTED_ORDER
+    assert _frame_snapshot(read) == snapshot.canonical_bytes
+    _validate_materialized(root, snapshot)
+
+
+def test_path_object_ordering_would_break_the_materialized_digest(
+    tmp_path: Path,
+) -> None:
+    """Both orderings the fix removes reproduce the reported install signature."""
+    root = tmp_path / "snapshot"
+    _ordering_snapshot().materialize(root)
+
+    # What sorting Path objects yields here, and what the same sort yields with
+    # the Windows flavour, which lowercases every component before comparing.
+    component_order = [
+        item.relative_to(root).as_posix()
+        for item in sorted(root.rglob("*"))
+        if item.is_file()
+    ]
+    case_folded_order = [
+        item.relative_to(root).as_posix()
+        for item in sorted(
+            root.rglob("*"),
+            key=lambda item: tuple(
+                part.lower() for part in item.relative_to(root).parts
+            ),
+        )
+        if item.is_file()
+    ]
+    assert component_order == _PATH_COMPONENT_ORDER
+    assert case_folded_order == _WINDOWS_CASE_FOLDED_ORDER
+
+    for order in (component_order, case_folded_order):
+        with pytest.raises(ExternalBuildError) as captured:
+            _validate_materialized(root, _ordering_snapshot(order))
+        assert captured.value.code == OBJECT_SEMANTICS_INVALID
