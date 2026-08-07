@@ -1,5 +1,36 @@
 # Logbook
 
+## 2026-08-07 — BUG-260807-l2ymv3 a deadline is only as real as the clock that reads it
+
+`time.monotonic()` is not the same clock on every platform.  Windows CPython
+before 3.13 backs it with `GetTickCount64()`, whose tick is 15.625 ms; CPython
+3.13 moved it to `QueryPerformanceCounter()`.  Two readings inside one tick
+compare equal, so `_check_deadline` evaluated `t > t + 0.000001` as false and
+the go-v1 fingerprint deadline was never observed.  A fingerprint pass over a
+small GOROOT finishes well inside one tick, so an already-exhausted deadline
+read as unreached and admitted work it exists to refuse.  Measured on the host:
+Python 3.12.10 reports `monotonic` resolution `0.015625` and `perf_counter`
+resolution `1e-07`; Python 3.14.4 reports `1e-07` for both.  That split is
+exactly why CI failed on windows 3.11 and 3.12 and passed on 3.13 and 3.14.
+
+The module now routes every deadline — `_deadline`, `_check_deadline`, and the
+`SubprocessProbeRunner` timeout loop — through one `_elapsed()` reading
+`time.perf_counter()`, which is `QueryPerformanceCounter()` on every supported
+Windows CPython and `CLOCK_MONOTONIC` elsewhere.  The consequence is wider than
+the three red tests: on those interpreters any `CSK_GO_FINGERPRINT_TIMEOUT`
+below 15.625 ms was silently unenforceable and every deadline was quantised to
+the tick.  A deadline is a refusal boundary; a coarse clock must never round it
+into an admission.  Anywhere else in this codebase that measures a short
+duration should read `perf_counter`, not `monotonic`.
+
+The same red run carried a second, unrelated Windows failure worth naming: a
+`global install` fixture exported a script command with `unix_path` only and
+asserted exit 0 on any host.  `docs/mvp-design.md` states that a missing
+platform path fails installation, and the shim writer enforces it, so the test
+was wrong and the product was right.  Both defects reached `main` because their
+branches were delivered as branch pushes without pull requests to save CI
+budget — neither had ever run on a non-macOS leg.
+
 ## 2026-08-07 — BUG-260807-1it17m external artifacts take the name their receipt declares
 
 The protected external-build store wrote every artifact to a fixed literal
