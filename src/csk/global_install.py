@@ -4,7 +4,7 @@ import json
 import os
 import shutil
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -67,6 +67,168 @@ def global_skills_root(csk_home: Path) -> Path:
 
 def global_bin_dir(csk_home: Path) -> Path:
     return global_root(csk_home) / "bin"
+
+
+@dataclass(frozen=True)
+class RetainedGlobalSkills:
+    """Installed global skills that a selective run must leave untouched.
+
+    A selective run resolves only the requested closure, so every other
+    installed skill is invisible to the plan.  Reconciliation removes what the
+    plan does not claim, so the retained set is what keeps an unselected skill,
+    its shims, its runtime tree and its adapter entries alive.
+    """
+
+    names: frozenset[str] = frozenset()
+    context_names: tuple[str, ...] = ()
+    commands: Mapping[str, str] = field(default_factory=dict)
+    references: frozenset[tuple[str, str]] = frozenset()
+
+
+def _select_declarations(
+    global_manifest: manifest.ProjectManifest,
+    only: Sequence[str] | None,
+) -> list[manifest.SkillDecl]:
+    """Narrow declared global skills to the requested names.
+
+    Requirements of a selected skill still join the closure; only the direct
+    declarations are filtered here.
+    """
+
+    if not only:
+        return list(global_manifest.skills)
+    requested = list(dict.fromkeys(only))
+    declared = {decl.name: decl for decl in global_manifest.skills}
+    unknown = [name for name in requested if name not in declared]
+    if unknown:
+        available = ", ".join(sorted(declared)) or "none"
+        raise GlobalInstallError(
+            "Global skill not declared: "
+            + ", ".join(unknown)
+            + f"\n  Declared global skills: {available}"
+        )
+    return [declared[name] for name in requested]
+
+
+def _collect_retained(
+    csk_home: Path,
+    selected_names: Iterable[str],
+) -> RetainedGlobalSkills:
+    """Read the installed state of every global skill outside the selection."""
+
+    skills_root = global_skills_root(csk_home)
+    if not skills_root.exists():
+        return RetainedGlobalSkills()
+    selected = set(selected_names)
+    names: set[str] = set()
+    context_names: list[str] = []
+    commands: dict[str, str] = {}
+    references: set[tuple[str, str]] = set()
+    for child in sorted(skills_root.iterdir()):
+        if child.name.startswith(".") or child.name in selected:
+            continue
+        if not child.is_dir() and not child.is_symlink():
+            continue
+        # A directory with an unreadable marker is still retained: a selective
+        # run must never delete state it did not resolve.
+        names.add(child.name)
+        marker = _read_installed_marker(child / ".csk-install.json")
+        if marker is None:
+            continue
+        references.add((marker.name, marker.commit))
+        activation = marker.activation
+        active_commands = (
+            activation.commands if activation is not None else marker.commands
+        )
+        if activation is None or activation.context:
+            context_names.append(child.name)
+        for command in active_commands:
+            commands[command] = child.name
+    return RetainedGlobalSkills(
+        names=frozenset(names),
+        context_names=tuple(sorted(context_names)),
+        commands=commands,
+        references=frozenset(references),
+    )
+
+
+def _read_installed_marker(path: Path) -> install_marker.InstallMarker | None:
+    try:
+        return install_marker.read_install_marker(path.read_bytes())
+    except (OSError, install_marker.InstallMarkerError):
+        return None
+
+
+def _retained_requirers(
+    csk_home: Path,
+    nodes: list[closure.ClosureNode],
+    retained: RetainedGlobalSkills,
+) -> list[str]:
+    """Retained skills that require a skill this run reinstalls.
+
+    A selective run resolves only its own closure, so a retained consumer keeps
+    a marker written against the provider commit that was current before this
+    run.  The provider's live marker still names its requirers, which is where
+    that edge is readable without resolving the consumer.
+    """
+
+    skills_root = global_skills_root(csk_home)
+    stale: set[str] = set()
+    for node in nodes:
+        marker = _read_installed_marker(
+            skills_root / node.name / ".csk-install.json"
+        )
+        if marker is None or not marker.requirers:
+            continue
+        stale.update(set(marker.requirers) & retained.names)
+    return sorted(stale)
+
+
+def _selection_messages(
+    csk_home: Path,
+    nodes: list[closure.ClosureNode],
+    retained: RetainedGlobalSkills,
+    only: Sequence[str] | None,
+) -> list[str]:
+    if not only:
+        return []
+    selected = sorted(node.name for node in nodes)
+    messages = [
+        "global: selective run over "
+        + (", ".join(selected) or "no skills")
+        + "; "
+        + (
+            f"{len(retained.names)} installed skill(s) left untouched"
+            if retained.names
+            else "nothing else is installed"
+        )
+    ]
+    stale = _retained_requirers(csk_home, nodes, retained)
+    if stale:
+        messages.append(
+            "global: warning: "
+            + ", ".join(stale)
+            + " require a skill this run reinstalled and were not revalidated;"
+            " run 'csk global status' or a full 'csk global install'"
+        )
+    return messages
+
+
+def _check_retained_command_collisions(
+    nodes: list[closure.ClosureNode],
+    retained: RetainedGlobalSkills,
+) -> None:
+    if not retained.commands:
+        return
+    for node in nodes:
+        commands = node.active_commands() | installer._active_build_command_names(node)
+        for name in sorted(commands):
+            owner = retained.commands.get(name)
+            if owner is not None:
+                raise installer.InstallError(
+                    f"Command collision for {name!r}: exported by {owner} "
+                    f"(installed, outside this selective run) and {node.name}"
+                )
 
 
 def init(csk_home: Path, *, default_agents: list[str] | None = None) -> Path:
@@ -154,7 +316,12 @@ def list_declared(csk_home: Path) -> str:
     return "\n".join(lines)
 
 
-def install(config: GlobalConfig, *, options: installer.InstallOptions | None = None) -> GlobalResult:
+def install(
+    config: GlobalConfig,
+    *,
+    options: installer.InstallOptions | None = None,
+    only: Sequence[str] | None = None,
+) -> GlobalResult:
     options = options or installer.InstallOptions()
     operator_search_path = build_toolchain.capture_operator_search_path()
     operator_ssh_credentials = installer._capture_operator_ssh_credentials(options)
@@ -177,6 +344,7 @@ def install(config: GlobalConfig, *, options: installer.InstallOptions | None = 
                     operator_ssh_credentials=operator_ssh_credentials,
                     generation_probe=generation_probe,
                     expected_generation=expected_generation,
+                    only=only,
                 )
                 break
             except build_planner.BuildPlanningError as exc:
@@ -218,6 +386,7 @@ def _install_once(
     operator_ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
     generation_probe: build_planner.GenerationProbe,
     expected_generation: Mapping[str, str],
+    only: Sequence[str] | None = None,
 ) -> GlobalResult:
     result = GlobalResult()
     csk_home = config.path.parent
@@ -225,13 +394,27 @@ def _install_once(
         global_manifest = load_manifest(csk_home)
         agents = global_manifest.agents or config.default_agents
         effective_locale = global_manifest.locale or config.preferred_locale
+        selected_manifest = replace(
+            global_manifest,
+            skills=_select_declarations(global_manifest, only),
+        )
         with ExitStack() as stack:
             nodes = _build_nodes(
                 config,
-                global_manifest,
+                selected_manifest,
                 options=options,
                 stack=stack,
                 result=result,
+            )
+            # Only a selective run has anything to retain: a full run resolves
+            # every declared skill, so its closure already covers the world.
+            retained = (
+                _collect_retained(csk_home, (node.name for node in nodes))
+                if only
+                else RetainedGlobalSkills()
+            )
+            result.messages.extend(
+                _selection_messages(csk_home, nodes, retained, only)
             )
             plans = [
                 installer.SkillPlan(
@@ -256,9 +439,13 @@ def _install_once(
             installer._check_skill_validation_errors(validation_issues)
             build_providers = installer._freeze_build_providers(nodes, stack)
             closure.detect_active_command_collisions(nodes)
+            _check_retained_command_collisions(nodes, retained)
             build_planner.detect_command_collisions(
                 build_providers,
-                occupied=installer._active_script_owners(nodes),
+                occupied={
+                    **retained.commands,
+                    **installer._active_script_owners(nodes),
+                },
             )
             plans = _plans_with_available_dependencies(plans, result)
             if result.errors:
@@ -365,6 +552,7 @@ def _install_once(
                 config,
                 nodes,
                 agents,
+                retained=retained,
             )
             target_preimages = installer._capture_target_preimages(
                 materialization_targets
@@ -418,6 +606,7 @@ def _install_once(
                     expected_generation=expected_generation,
                     engine=engine,
                     home_lock=home_lock,
+                    retained=retained,
                 )
             result.messages.extend(messages)
             result.messages.extend(publication_messages)
@@ -442,6 +631,8 @@ def _global_materialization_targets(
     config: GlobalConfig,
     nodes: list[closure.ClosureNode],
     agents: list[str],
+    *,
+    retained: RetainedGlobalSkills = RetainedGlobalSkills(),
 ) -> tuple[
     tuple[installer._MaterializationTarget, ...],
     tuple[adapters.AdapterTarget, ...],
@@ -468,7 +659,7 @@ def _global_materialization_targets(
     targets.extend(
         installer._stale_entry_targets(
             skills_root,
-            expected_names,
+            expected_names | set(retained.names),
             identifier_prefix="context/global",
         )
     )
@@ -486,7 +677,11 @@ def _global_materialization_targets(
                 kind="entry",
             )
         )
-    runtime_references = _global_runtime_references_for_plan(config, nodes)
+    runtime_references = _global_runtime_references_for_plan(
+        config,
+        nodes,
+        retained=retained,
+    )
     if runtime_root.exists():
         for skill_dir in runtime_root.iterdir():
             if not skill_dir.is_dir() or skill_dir.is_symlink():
@@ -509,7 +704,8 @@ def _global_materialization_targets(
 
     command_names = installer._active_command_names(nodes)
     expected_shims = {
-        shims.shim_path(bin_dir, name) for name in command_names
+        shims.shim_path(bin_dir, name)
+        for name in command_names | set(retained.commands)
     }
     for name in sorted(command_names):
         targets.append(
@@ -545,7 +741,10 @@ def _global_materialization_targets(
         )
 
     context_names = tuple(
-        sorted(node.name for node in nodes if node.context_active)
+        sorted(
+            {node.name for node in nodes if node.context_active}
+            | set(retained.context_names)
+        )
     )
     adapter_targets = adapters.plan_global_adapter_targets(
         csk_home,
@@ -563,7 +762,10 @@ def _global_materialization_targets(
     )
 
     user_bin_targets, publication_messages = (
-        global_bins.plan_user_bin_targets(csk_home, command_names)
+        global_bins.plan_user_bin_targets(
+            csk_home,
+            command_names | set(retained.commands),
+        )
     )
     targets.extend(
         installer._MaterializationTarget(
@@ -590,10 +792,13 @@ def _global_materialization_targets(
 def _global_runtime_references_for_plan(
     config: GlobalConfig,
     nodes: list[closure.ClosureNode],
+    *,
+    retained: RetainedGlobalSkills = RetainedGlobalSkills(),
 ) -> set[tuple[str, str]]:
     references = {
         (node.name, node.resolved.commit) for node in nodes
     }
+    references.update(retained.references)
     csk_home = config.path.parent
     references.update(
         installer._marker_references(csk_home / "hybrid" / "skills")
@@ -643,6 +848,7 @@ def _commit_global_materialization(
     expected_generation: Mapping[str, str],
     engine: transactions.TransactionEngine,
     home_lock: locking.ManagerHomeLock,
+    retained: RetainedGlobalSkills = RetainedGlobalSkills(),
 ) -> list[str]:
     csk_home = config.path.parent
     staging_parents = tuple(
@@ -682,6 +888,7 @@ def _commit_global_materialization(
             materialization_targets=materialization_targets,
             adapter_targets=adapter_targets,
             user_bin_targets=user_bin_targets,
+            retained=retained,
         )
         installer._commit_transaction_targets(
             transaction_prefix="global-install",
@@ -716,6 +923,7 @@ def _stage_global_materialization(
     ],
     adapter_targets: tuple[adapters.AdapterTarget, ...],
     user_bin_targets: tuple[global_bins.UserBinTarget, ...],
+    retained: RetainedGlobalSkills = RetainedGlobalSkills(),
 ) -> tuple[dict[tuple[str, str], Path | None], list[str]]:
     csk_home = Path(os.path.abspath(config.path.parent))
     staged_home = staging_root / "home"
@@ -883,9 +1091,12 @@ def _stage_global_materialization(
 
     installer._cleanup_removed_skills_root(
         staged_skills,
-        {node.name for node in nodes},
+        {node.name for node in nodes} | set(retained.names),
     )
-    shims.remove_stale_global_shims(staged_home, expected_commands)
+    shims.remove_stale_global_shims(
+        staged_home,
+        expected_commands | set(retained.commands),
+    )
     env_files.write_global_env_files(
         staged_home,
         activation_home=csk_home,
@@ -894,6 +1105,7 @@ def _stage_global_materialization(
         config,
         nodes,
         staged_home / "runtime",
+        retained=retained,
     )
     desired.update(
         adapters.stage_project_adapter_targets(
@@ -942,8 +1154,14 @@ def _prune_staged_global_runtime(
     config: GlobalConfig,
     nodes: list[closure.ClosureNode],
     staged_runtime: Path,
+    *,
+    retained: RetainedGlobalSkills = RetainedGlobalSkills(),
 ) -> None:
-    references = _global_runtime_references_for_plan(config, nodes)
+    references = _global_runtime_references_for_plan(
+        config,
+        nodes,
+        retained=retained,
+    )
     if not staged_runtime.exists():
         return
     for skill_dir in list(staged_runtime.iterdir()):
@@ -960,11 +1178,15 @@ def _prune_staged_global_runtime(
             skill_dir.rmdir()
 
 
-def update(config: GlobalConfig) -> GlobalResult:
+def update(
+    config: GlobalConfig,
+    *,
+    only: Sequence[str] | None = None,
+) -> GlobalResult:
     result = GlobalResult()
     try:
         global_manifest = load_manifest(config.path.parent)
-        for decl in global_manifest.skills:
+        for decl in _select_declarations(global_manifest, only):
             try:
                 repo = installer._ensure_skill_repo(config, decl, use_persistent_clone=True, stack=None)
                 git_ops.fetch_repo(repo)

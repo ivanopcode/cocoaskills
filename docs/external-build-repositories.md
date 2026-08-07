@@ -151,6 +151,14 @@ csk global status
 csk gc
 ```
 
+A global Skillfile that mixes reachable and unreachable repositories does not
+have to be installed as a whole: `csk global install --only <name>` (repeatable)
+restricts the run to one declaration and its required closure, so an unselected
+private repository is never cloned or fetched, and installed skills outside the
+selection keep their markers, shims, and adapter entries. Combine it with the
+operator SSH options above to install exactly the private build repository the
+operator holds credentials for.
+
 To uninstall, remove the skill declaration from the project or global
 `Skillfile.json` and run the matching install command; reconciliation removes
 the stale marker and shim transactionally.

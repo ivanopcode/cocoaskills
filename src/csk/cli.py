@@ -406,6 +406,22 @@ def _add_install(sub: argparse._SubParsersAction[argparse.ArgumentParser], name:
     _add_build_ssh_arguments(parser)
 
 
+def _add_global_only_argument(parser: argparse.ArgumentParser) -> None:
+    """Selector that narrows a global operation to the named declared skills."""
+
+    parser.add_argument(
+        "--only",
+        action="append",
+        metavar="NAME",
+        dest="only",
+        help=(
+            "restrict the operation to this declared global skill (repeatable); "
+            "its required skills still join the closure, every other installed "
+            "skill is left untouched"
+        ),
+    )
+
+
 def _add_build_ssh_arguments(parser: argparse.ArgumentParser) -> None:
     """Operator SSH surface for private external build repositories."""
 
@@ -452,6 +468,7 @@ def _add_global(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
             "  csk global init\n"
             "  csk global add skill-metrics --git git@example.com:skills/skill-metrics.git --tag v1.0.0\n"
             "  csk global install\n"
+            "  csk global install --only skill-metrics\n"
             "  csk global upgrade\n"
         ),
     )
@@ -493,8 +510,10 @@ def _add_global(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         choices=["advisory", "strict"],
         help="run audit gate for this install (default mode: advisory)",
     )
+    _add_global_only_argument(install)
     _add_build_ssh_arguments(install)
-    global_sub.add_parser("update", help="fetch global skill source repositories")
+    update = global_sub.add_parser("update", help="fetch global skill source repositories")
+    _add_global_only_argument(update)
     upgrade = global_sub.add_parser("upgrade", help="fetch global skill sources, then install")
     upgrade.add_argument("--dry-run", action="store_true", help="validate install without modifying installed files")
     upgrade.add_argument("--verbose", action="store_true", help="print detailed progress")
@@ -506,6 +525,7 @@ def _add_global(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         choices=["advisory", "strict"],
         help="run audit gate for this install (default mode: advisory)",
     )
+    _add_global_only_argument(upgrade)
     _add_build_ssh_arguments(upgrade)
 
 
@@ -711,12 +731,12 @@ def _dispatch_global(args: argparse.Namespace) -> int:
     config.validate_skills_root_for_work(cfg)
     if args.global_command == "update":
         with GlobalLock(cfg.path.parent):
-            return _cmd_global_update(cfg)
+            return _cmd_global_update(cfg, args)
     if args.global_command == "install":
         return _cmd_global_install(cfg, args)
     if args.global_command == "upgrade":
         with GlobalLock(cfg.path.parent):
-            update_code = _cmd_global_update(cfg)
+            update_code = _cmd_global_update(cfg, args)
         install_code = _cmd_global_install(cfg, args)
         return install_code if install_code != EXIT_OK else update_code
     raise ValueError(f"Unknown global command: {args.global_command}")
@@ -940,8 +960,16 @@ def _cmd_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
     return EXIT_PARTIAL_FAIL if failed else EXIT_OK
 
 
-def _cmd_global_update(cfg: config.GlobalConfig) -> int:
-    result = global_install.update(cfg)
+def _global_only(args: argparse.Namespace | None) -> list[str] | None:
+    selected = getattr(args, "only", None) if args is not None else None
+    return list(selected) if selected else None
+
+
+def _cmd_global_update(
+    cfg: config.GlobalConfig,
+    args: argparse.Namespace | None = None,
+) -> int:
+    result = global_install.update(cfg, only=_global_only(args))
     for message in result.messages:
         print(message)
     for error in result.errors:
@@ -963,7 +991,7 @@ def _cmd_global_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> i
         ssh_known_hosts=getattr(args, "build_ssh_known_hosts", None),
     )
     cfg = _cfg_with_audit_override(cfg, args)
-    result = global_install.install(cfg, options=options)
+    result = global_install.install(cfg, options=options, only=_global_only(args))
     for message in result.messages:
         print(message)
     for error in result.errors:
