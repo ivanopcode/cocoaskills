@@ -387,6 +387,62 @@ def test_substitution_has_distinct_snapshot_and_artifact_identity(tmp_path: Path
     assert plain.cache_key != changed.cache_key
 
 
+@pytest.mark.parametrize(
+    ("goos", "goarch", "stored_name", "receipt_path"),
+    [
+        ("darwin", "arm64", "artifact", "bin/tool"),
+        ("linux", "amd64", "artifact", "bin/tool"),
+        ("windows", "amd64", "artifact.exe", "bin/tool.exe"),
+    ],
+)
+def test_stored_artifact_carries_the_suffix_its_receipt_declares(
+    tmp_path: Path,
+    goos: str,
+    goarch: str,
+    stored_name: str,
+    receipt_path: str,
+) -> None:
+    # A Windows launcher can only run a name Windows recognizes as executable,
+    # so the stored file has to follow the receipt rather than a fixed literal.
+    store = DiskProtectedStore(tmp_path / "external-cache")
+    compiler = _Compiler(
+        [],
+        identity=CompilerIdentity(
+            content_sha256="sha256:" + "a" * 64,
+            go_version="go1.25.1",
+            go_relpath="bin/go",
+            goos=goos,
+            goarch=goarch,
+            tuning={},
+        ),
+    )
+    first = run_pipeline(
+        _request(tmp_path, Operation.INSTALL, [], compiler, store=store)
+    )
+
+    assert first.cache_key is not None and first.receipt is not None
+    entry = store.root / "artifacts" / first.cache_key.removeprefix("sha256:")
+    assert sorted(path.name for path in entry.iterdir()) == [
+        stored_name,
+        "receipt.json",
+    ]
+    assert (entry / stored_name).read_bytes() == b"compiled-tool"
+    receipt = protocol_json.loads_canonical(first.receipt)
+    assert isinstance(receipt, dict)
+    assert receipt["artifact"] == {
+        "path": receipt_path,
+        "sha256": "sha256:" + hashlib.sha256(b"compiled-tool").hexdigest(),
+        "size": len(b"compiled-tool"),
+    }
+
+    second = run_pipeline(
+        _request(tmp_path, Operation.INSTALL, [], compiler, store=store)
+    )
+    assert second.state == "cache-hit"
+    assert compiler.calls == 1
+    assert not (store.root / "quarantine").exists()
+
+
 def test_corrupt_artifact_is_quarantined_before_rebuild(tmp_path: Path) -> None:
     store = DiskProtectedStore(tmp_path / "external-cache")
     events: list[str] = []

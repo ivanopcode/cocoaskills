@@ -25,7 +25,11 @@ from pathlib import Path, PurePosixPath
 from .builds.cache import CacheEntryStatus, CacheInspection
 from . import protocol_json
 from .build_repository import GO_REPOSITORY_V1_DRIVER
-from .builds.metadata import GO_V1_DRIVER, derived_artifact_path
+from .builds.metadata import (
+    GO_V1_DRIVER,
+    derived_artifact_path,
+    derived_cache_artifact_name,
+)
 from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_portable_path
 from .install_marker import InstallMarkerBuildV3, MarkerBuild
 from .skillspec import CommandSpec
@@ -395,6 +399,7 @@ def select_external_build_activation(
         artifact_path,
         command_name=command.name,
         cache_key=marker_build.cache_key,
+        expected_relative=expected_relative,
         expected_size=size,
         platform=platform,
     )
@@ -417,11 +422,18 @@ def _require_external_cache_artifact(
     *,
     command_name: str,
     cache_key: str,
+    expected_relative: str,
     expected_size: int,
     platform: str,
 ) -> None:
     _require_sha256(cache_key, "external build cache_key")
-    expected = Path(csk_home) / "external-builds" / "artifacts" / cache_key.removeprefix("sha256:") / "artifact"
+    expected = (
+        Path(csk_home)
+        / "external-builds"
+        / "artifacts"
+        / cache_key.removeprefix("sha256:")
+        / derived_cache_artifact_name(expected_relative)
+    )
     if artifact_path != expected:
         raise ShimError(f"Command {command_name!r} artifact is not the manager-derived external cache path")
     _require_cache_artifact_shape(

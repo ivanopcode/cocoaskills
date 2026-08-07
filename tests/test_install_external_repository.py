@@ -210,8 +210,10 @@ def test_project_external_build_install_offline_repair_activation_and_uninstall(
         csk_home
         / "external-builds/artifacts"
         / build.cache_key.removeprefix("sha256:")
-        / "artifact"
+        / ("artifact.exe" if os.name == "nt" else "artifact")
     )
+    assert artifact.is_file()
+    assert artifact.name in shim.read_text(encoding="utf-8")
     artifact.chmod(0o700)
     artifact.write_bytes(b"corrupt")
     corrupt = status.collect_status(config)[0]

@@ -1013,7 +1013,7 @@ def _publish_external_builds(
             store.root
             / "artifacts"
             / result.cache_key.removeprefix("sha256:")
-            / "artifact"
+            / build_metadata.derived_cache_artifact_name(artifact_relative)
         )
         published.setdefault(node.name, {})[name] = _PublishedBuild(
             plan=None,

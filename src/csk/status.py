@@ -24,6 +24,7 @@ from . import (
 from .builds import cache as build_cache
 from .builds import currentness as build_currentness
 from .builds import go_v1
+from .builds import metadata as build_metadata
 from .builds import planner as build_planner
 from .builds import source as build_source
 from .builds import toolchain as build_toolchain
@@ -857,7 +858,7 @@ def _classify_external_build(
         store.root
         / "artifacts"
         / recorded.cache_key.removeprefix("sha256:")
-        / "artifact"
+        / build_metadata.derived_cache_artifact_name(recorded.artifact_path)
     )
     try:
         activation = shims.select_external_build_activation(
