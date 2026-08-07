@@ -17,6 +17,7 @@ from . import (
     dev_substitutions,
     env_files,
     gc,
+    git_admission,
     git_ops,
     global_bins,
     installer,
@@ -156,6 +157,7 @@ def list_declared(csk_home: Path) -> str:
 def install(config: GlobalConfig, *, options: installer.InstallOptions | None = None) -> GlobalResult:
     options = options or installer.InstallOptions()
     operator_search_path = build_toolchain.capture_operator_search_path()
+    operator_ssh_credentials = installer._capture_operator_ssh_credentials(options)
     generation_probe = _global_generation_probe(config)
     csk_home = config.path.parent
     attempts = 2 if options.dry_run else 3
@@ -172,6 +174,7 @@ def install(config: GlobalConfig, *, options: installer.InstallOptions | None = 
                     config,
                     options=options,
                     operator_search_path=operator_search_path,
+                    operator_ssh_credentials=operator_ssh_credentials,
                     generation_probe=generation_probe,
                     expected_generation=expected_generation,
                 )
@@ -212,6 +215,7 @@ def _install_once(
     *,
     options: installer.InstallOptions,
     operator_search_path: build_toolchain.OperatorSearchPath,
+    operator_ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
     generation_probe: build_planner.GenerationProbe,
     expected_generation: Mapping[str, str],
 ) -> GlobalResult:
@@ -331,6 +335,7 @@ def _install_once(
                     build_repository_substitutions={},
                 ),
                 operator_search_path=operator_search_path,
+                ssh_credentials=operator_ssh_credentials,
                 stack=stack,
                 dry_run=options.dry_run,
                 marker_roots=(global_skills_root(csk_home),),

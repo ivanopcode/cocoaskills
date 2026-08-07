@@ -12,6 +12,7 @@ from conftest import commit_all, init_git_repo, make_config, make_project, make_
 from test_install import _stub_trusted_toolchain
 
 from csk import git_admission, global_install, install_marker, installer, status
+from csk.builds import toolchain as build_toolchain
 
 
 pytestmark = pytest.mark.skipif(
@@ -78,7 +79,11 @@ def _external_repository(tmp_path: Path) -> tuple[Path, str]:
     return repository, commit
 
 
-def _skill_repository(skills_root: Path, commit: str) -> None:
+def _skill_repository(
+    skills_root: Path,
+    commit: str,
+    git: str = "https://example.test/external-tool.git",
+) -> None:
     make_skill_repo(
         skills_root,
         "external-skill",
@@ -89,7 +94,7 @@ def _skill_repository(skills_root: Path, commit: str) -> None:
                     "capabilities": {},
                     "build_repositories": {
                         "tools": {
-                            "git": "https://example.test/external-tool.git",
+                            "git": git,
                             "locked_commit": {
                                 "object_format": "sha1",
                                 "hex": commit,
@@ -245,3 +250,56 @@ def test_global_external_build_uses_direct_managed_shim(
     assert str(csk_home / "external-builds" / "artifacts") in shim.read_text(
         encoding="utf-8"
     )
+
+
+def test_ssh_external_build_without_operator_credentials_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+) -> None:
+    """A private SSH build repository must not silently fall back to ambient state."""
+
+    project = make_project(tmp_path)
+    _external, commit = _external_repository(tmp_path)
+    _skill_repository(
+        skills_root, commit, git="git@gitlab.fixture.test:portals/external-tool.git"
+    )
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [{"name": "external-skill", "tag": "v1"}],
+        },
+    )
+    commit_all(project, "external declaration")
+    config = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    _stub_trusted_toolchain(monkeypatch)
+    # The Go stub pins a fixture search path; git and ssh must still resolve so
+    # the run reaches the credential boundary rather than tool discovery.
+    monkeypatch.setattr(
+        build_toolchain,
+        "capture_operator_search_path",
+        lambda: build_toolchain.OperatorSearchPath(
+            tuple(os.environ.get("PATH", "").split(os.pathsep))
+        ),
+    )
+    for name in (
+        git_admission.OPERATOR_SSH_IDENTITY_ENV,
+        git_admission.OPERATOR_SSH_AGENT_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    result = installer.install(config)[0]
+
+    assert result.errors
+    assert any(
+        git_admission.SSH_CREDENTIAL_MISSING in error for error in result.errors
+    ), result.errors
+    shim = project / ".agents/bin" / (
+        "external-tool.cmd" if os.name == "nt" else "external-tool"
+    )
+    assert not shim.exists()
+    assert not (csk_home / "external-builds" / "artifacts").exists()
+    assert not (project / ".agents/skills/external-skill/.csk-install.json").exists()

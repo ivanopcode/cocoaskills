@@ -72,6 +72,50 @@ rehashes the complete snapshot, validates `skill-build.json`, and runs the
 independent external audit before any protected artifact lookup or compiler
 call.
 
+## Private SSH build repositories
+
+An SSH build repository fetch runs in a private empty `HOME` with an empty
+`PATH` and no inherited agent socket, so it never adopts the operator's
+`~/.ssh/config`, ambient `GIT_SSH_COMMAND`, or a repository-selected wrapper.
+Credentials therefore have to be named explicitly. Nothing is inherited
+implicitly, and an SSH source with no selection fails closed with
+`build_repository_ssh_credential_missing` before any launcher, snapshot, or
+cache artifact is written.
+
+| Surface | Flag | Environment variable |
+| --- | --- | --- |
+| Identity | `--build-ssh-identity PATH` | `CSK_BUILD_SSH_IDENTITY` |
+| Agent socket | `--build-ssh-agent [SOCKET]` | `CSK_BUILD_SSH_AGENT` |
+| Host keys | `--build-ssh-known-hosts PATH` | `CSK_BUILD_SSH_KNOWN_HOSTS` |
+
+Flags win over the environment. `--build-ssh-agent` with no value, or the value
+`auto`, adopts the operator's live `SSH_AUTH_SOCK`. Host keys default to the
+operator home's `.ssh/known_hosts` because the fetch pins
+`StrictHostKeyChecking=yes`; the file is copied into the private root, so a
+fetch cannot rewrite operator state. All three accept symbolic links and are
+admitted as their resolved targets.
+
+Three selections are accepted:
+
+```sh
+# Unencrypted key on disk.
+csk install --build-ssh-identity ~/.ssh/id_ed25519
+
+# Agent holds the key, and the public key pins which agent key is offered.
+# Prefer this for passphrase-protected keys.
+csk install --build-ssh-agent --build-ssh-identity ~/.ssh/id_ed25519.pub
+
+# Agent only. Every loaded key is offered in turn, so a populated agent can
+# exhaust the server's MaxAuthTries budget before reaching the right one.
+csk install --build-ssh-agent
+```
+
+CocoaSkills writes a private wrapper carrying one pinned `ssh` argv and points
+`GIT_SSH_COMMAND` at it. The wrapper refuses to run unless Git hands it exactly
+the host and `git-upload-pack` invocation that argv was pinned to, so no
+repository value can add an option, change the host, or reach another path. The
+operator's own `ssh` on `PATH` is used unchanged and never has to be shadowed.
+
 For a declared tag, the fetched tag must still terminate at `locked_commit`.
 A moved tag, missing tag/object, inaccessible source, malformed raw object, or
 failed audit stops without publishing a shim or marker. An untagged source may
