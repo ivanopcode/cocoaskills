@@ -252,6 +252,10 @@ def test_global_external_build_uses_direct_managed_shim(
     )
 
 
+@pytest.mark.skipif(
+    shutil.which("ssh") is None,
+    reason="the credential boundary is reached only once an operator ssh resolves",
+)
 def test_ssh_external_build_without_operator_credentials_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
