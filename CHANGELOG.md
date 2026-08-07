@@ -32,6 +32,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Installed-tree `content_sha256` отделён от raw build-source identity, а
   receipt consistency — от protected-state provenance.
 
+### Исправлено
+
+- Deadline toolchain fingerprint для `go-v1` больше не зажат жёстко на 120
+  секунд: default поднят до 600 секунд, caller задаёт его через
+  `ToolchainConfig(fingerprint_timeout=...)` или аргумент `timeout` у
+  `fingerprint_toolchain`, а оператор — через `CSK_GO_FINGERPRINT_TIMEOUT`.
+  Раньше любой caller override выше default молча схлопывался обратно, поэтому
+  холодный `GOROOT` за on-access антивирусом падал на первом install и
+  проходил только на прогретом retry. Bound остаётся liveness-ограничением с
+  потолком 3600 секунд: security gate не изменён, превышение deadline
+  по-прежнему отклоняет toolchain.
+
 ### Безопасность
 
 - Portable policy `manager-worker-v1` фиксирует manager-owned worker,

@@ -969,3 +969,125 @@ def test_explicit_executable_and_goroot_must_agree(tmp_path: Path):
     with pytest.raises(toolchain.ToolchainError) as raised:
         toolchain.establish_toolchain(config)
     _assert_code("toolchain_executable_mismatch", raised)
+
+
+def test_caller_may_raise_the_fingerprint_deadline_above_the_default():
+    raised = toolchain.DEFAULT_FINGERPRINT_TIMEOUT * 2
+    assert toolchain.resolve_fingerprint_timeout(raised) == raised
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (1.0, 1.0),
+        (toolchain.MAX_FINGERPRINT_TIMEOUT, toolchain.MAX_FINGERPRINT_TIMEOUT),
+        (toolchain.MAX_FINGERPRINT_TIMEOUT * 10, toolchain.MAX_FINGERPRINT_TIMEOUT),
+        (float("inf"), toolchain.MAX_FINGERPRINT_TIMEOUT),
+        (0.0, toolchain.DEFAULT_FINGERPRINT_TIMEOUT),
+        (-5.0, toolchain.DEFAULT_FINGERPRINT_TIMEOUT),
+        (float("nan"), toolchain.DEFAULT_FINGERPRINT_TIMEOUT),
+    ],
+)
+def test_fingerprint_deadline_stays_inside_its_supported_band(
+    value: float,
+    expected: float,
+):
+    assert toolchain.resolve_fingerprint_timeout(value) == expected
+
+
+def test_operator_environment_sets_the_fingerprint_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv(toolchain.FINGERPRINT_TIMEOUT_ENV, raising=False)
+    assert toolchain.resolve_fingerprint_timeout() == (
+        toolchain.DEFAULT_FINGERPRINT_TIMEOUT
+    )
+    monkeypatch.setenv(toolchain.FINGERPRINT_TIMEOUT_ENV, "900")
+    assert toolchain.resolve_fingerprint_timeout() == 900.0
+    assert toolchain.resolve_fingerprint_timeout(300.0) == 300.0
+
+
+@pytest.mark.parametrize("raw", ["", "  ", "later", "12s", "None"])
+def test_unusable_operator_deadline_degrades_to_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+    raw: str,
+):
+    monkeypatch.setenv(toolchain.FINGERPRINT_TIMEOUT_ENV, raw)
+    assert toolchain.resolve_fingerprint_timeout() == (
+        toolchain.DEFAULT_FINGERPRINT_TIMEOUT
+    )
+
+
+def test_operator_deadline_from_environment_is_also_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv(toolchain.FINGERPRINT_TIMEOUT_ENV, "0")
+    assert toolchain.resolve_fingerprint_timeout() == (
+        toolchain.DEFAULT_FINGERPRINT_TIMEOUT
+    )
+    monkeypatch.setenv(
+        toolchain.FINGERPRINT_TIMEOUT_ENV,
+        str(toolchain.MAX_FINGERPRINT_TIMEOUT * 100),
+    )
+    assert toolchain.resolve_fingerprint_timeout() == (
+        toolchain.MAX_FINGERPRINT_TIMEOUT
+    )
+
+
+def test_exhausted_fingerprint_deadline_names_the_operator_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    config, _runner, _goroot, _private_base = _setup(tmp_path)
+    monkeypatch.setenv(toolchain.FINGERPRINT_TIMEOUT_ENV, "0.000001")
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.establish_toolchain(config)
+    _assert_code("toolchain_timeout", raised)
+    assert str(raised.value) == (
+        "go-v1 toolchain_timeout: toolchain fingerprint deadline exceeded"
+    )
+    assert any(
+        toolchain.FINGERPRINT_TIMEOUT_ENV in note
+        for note in raised.value.__notes__
+    )
+
+
+def test_a_slow_first_fingerprint_completes_once_the_operator_raises_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    config, _runner, goroot, private_base = _setup(tmp_path)
+    monkeypatch.setenv(toolchain.FINGERPRINT_TIMEOUT_ENV, "0.000001")
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.establish_toolchain(config)
+    _assert_code("toolchain_timeout", raised)
+
+    monkeypatch.setenv(
+        toolchain.FINGERPRINT_TIMEOUT_ENV,
+        str(toolchain.MAX_FINGERPRINT_TIMEOUT),
+    )
+    with toolchain.establish_toolchain(config) as session:
+        assert session.goroot == goroot.resolve(strict=True)
+        session.verify()
+    assert not any(private_base.iterdir())
+
+
+def test_caller_deadline_overrides_an_unusably_small_operator_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    goroot = _make_goroot(tmp_path / "trusted-go")
+    stdout = b"go version go1.25.5 %s/%s\n" % (
+        toolchain._native_host().goos.encode("ascii"),
+        toolchain._native_host().goarch.encode("ascii"),
+    )
+    monkeypatch.setenv(toolchain.FINGERPRINT_TIMEOUT_ENV, "0.000001")
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.fingerprint_toolchain(goroot, stdout)
+    _assert_code("toolchain_timeout", raised)
+    identity = toolchain.fingerprint_toolchain(
+        goroot,
+        stdout,
+        timeout=toolchain.MAX_FINGERPRINT_TIMEOUT,
+    )
+    assert identity.algorithm == toolchain.TOOLCHAIN_ALGORITHM

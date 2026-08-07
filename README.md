@@ -418,8 +418,14 @@ handoff evidence. The current CocoaSkills implementation accepts Go family
 accepts every Go family from 1.23 onward.
 
 The selected Go installation must be a fingerprintable, operator-provided
-native toolchain. CocoaSkills builds exactly one `package main` executable for
-the host `GOOS` and `GOARCH`. It switches Go telemetry off, uses private Go
+native toolchain. Hashing the complete `GOROOT` is bounded by a deadline of 600
+seconds per pass, which operators raise up to 3600 seconds with
+`CSK_GO_FINGERPRINT_TIMEOUT` when a cold Go directory reads slowly — typically
+on Windows, behind on-access antivirus. Exceeding the deadline refuses the
+toolchain with `go-v1 toolchain_timeout`; raising the deadline never admits a
+toolchain that would otherwise be refused. CocoaSkills builds exactly one
+`package main` executable for the host `GOOS` and `GOARCH`. It switches Go
+telemetry off, uses private Go
 configuration/cache/temporary roots, fixes `GOTOOLCHAIN=local`, `GOENV=off`,
 `GOWORK=off`, `CGO_ENABLED=0`, and `GO_EXTLINK_ENABLED=0`, and runs only these
 source-aware shapes from the declared `source_dir`:

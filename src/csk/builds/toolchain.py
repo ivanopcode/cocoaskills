@@ -71,7 +71,9 @@ TUNING_VARIABLES: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 DEFAULT_PROBE_TIMEOUT: Final = 15.0
-DEFAULT_FINGERPRINT_TIMEOUT: Final = 120.0
+DEFAULT_FINGERPRINT_TIMEOUT: Final = 600.0
+MAX_FINGERPRINT_TIMEOUT: Final = 3600.0
+FINGERPRINT_TIMEOUT_ENV: Final = "CSK_GO_FINGERPRINT_TIMEOUT"
 DEFAULT_OUTPUT_LIMIT: Final = 64 * 1024
 MAX_VERSION_OUTPUT: Final = 4096
 
@@ -124,6 +126,44 @@ def capture_operator_search_path(
     if not raw:
         return OperatorSearchPath(())
     return OperatorSearchPath(tuple(raw.split(os.pathsep)))
+
+
+def resolve_fingerprint_timeout(
+    timeout: float | None = None,
+    environment: Mapping[str, str] | None = None,
+) -> float:
+    """Resolve the toolchain fingerprint deadline for one hashing pass.
+
+    Precedence is caller, then operator, then default: an explicit ``timeout``
+    wins, otherwise ``CSK_GO_FINGERPRINT_TIMEOUT`` is read from the process
+    environment, otherwise :data:`DEFAULT_FINGERPRINT_TIMEOUT` applies.  The
+    result is always clamped to ``(0, MAX_FINGERPRINT_TIMEOUT]`` so the pass
+    keeps a liveness bound no input can remove, and an unusable operator value
+    degrades to the default instead of failing the install.
+
+    This deadline bounds how long hashing a complete GOROOT may take; it is not
+    a trust decision.  A cold toolchain directory behind on-access antivirus is
+    slow to read the first time, so the bound must be raisable without weakening
+    any check: exceeding it still refuses the toolchain, never admits it.
+    """
+
+    if timeout is not None:
+        return _bounded_fingerprint_timeout(timeout)
+    source = os.environ if environment is None else environment
+    raw = source.get(FINGERPRINT_TIMEOUT_ENV)
+    if raw is None:
+        return DEFAULT_FINGERPRINT_TIMEOUT
+    try:
+        parsed = float(raw)
+    except ValueError:
+        return DEFAULT_FINGERPRINT_TIMEOUT
+    return _bounded_fingerprint_timeout(parsed)
+
+
+def _bounded_fingerprint_timeout(value: float) -> float:
+    if not value > 0:  # also rejects NaN, which would disable the deadline
+        return DEFAULT_FINGERPRINT_TIMEOUT
+    return min(value, MAX_FINGERPRINT_TIMEOUT)
 
 
 @dataclass(frozen=True)
@@ -313,7 +353,7 @@ class ToolchainConfig:
     runner: ProbeRunner | None = None
     probe_timeout: float = DEFAULT_PROBE_TIMEOUT
     output_limit: int = DEFAULT_OUTPUT_LIMIT
-    fingerprint_timeout: float = DEFAULT_FINGERPRINT_TIMEOUT
+    fingerprint_timeout: float | None = None
 
 
 @dataclass(frozen=True)
@@ -647,13 +687,18 @@ def fingerprint_toolchain(
     goroot: Path,
     go_version_stdout: bytes,
     *,
-    timeout: float = DEFAULT_FINGERPRINT_TIMEOUT,
+    timeout: float | None = None,
 ) -> ToolchainIdentity:
-    """Compute ``curator-go-toolchain-v1`` over a complete real GOROOT."""
+    """Compute ``curator-go-toolchain-v1`` over a complete real GOROOT.
+
+    ``timeout`` bounds this single hashing pass; leave it unset to accept the
+    operator surface described by :func:`resolve_fingerprint_timeout`.
+    """
 
     version = normalize_go_version(go_version_stdout)
     root = _canonical_directory(goroot, "toolchain_unreadable", "GOROOT is unavailable")
-    digest, _ = _fingerprint_normalized(root, version, deadline=_deadline(timeout))
+    deadline = _deadline(resolve_fingerprint_timeout(timeout))
+    digest, _ = _fingerprint_normalized(root, version, deadline=deadline)
     return ToolchainIdentity(
         algorithm=TOOLCHAIN_ALGORITHM,
         content_sha256=digest,
@@ -664,10 +709,7 @@ def fingerprint_toolchain(
 
 def _establish_toolchain(config: ToolchainConfig, host: _Host) -> ToolchainSession:
     probe_timeout = _bounded_timeout(config.probe_timeout, DEFAULT_PROBE_TIMEOUT)
-    fingerprint_timeout = _bounded_timeout(
-        config.fingerprint_timeout,
-        DEFAULT_FINGERPRINT_TIMEOUT,
-    )
+    fingerprint_timeout = resolve_fingerprint_timeout(config.fingerprint_timeout)
     output_limit = config.output_limit
     if output_limit <= 0 or output_limit > DEFAULT_OUTPUT_LIMIT:
         output_limit = DEFAULT_OUTPUT_LIMIT
@@ -1906,7 +1948,17 @@ def _deadline(timeout: float) -> float:
 
 def _check_deadline(deadline: float) -> None:
     if time.monotonic() > deadline:
-        raise ToolchainError(
+        error = ToolchainError(
             "toolchain_timeout",
             "toolchain fingerprint deadline exceeded",
         )
+        # The detail is the cross-implementation protocol string; the operator
+        # hint rides along as a note so it cannot drift from that contract.
+        error.add_note(
+            "hashing the Go toolchain did not finish in time; set "
+            f"{FINGERPRINT_TIMEOUT_ENV} to a larger number of seconds "
+            f"(default {DEFAULT_FINGERPRINT_TIMEOUT:g}, maximum "
+            f"{MAX_FINGERPRINT_TIMEOUT:g}) on hosts where a cold GOROOT reads "
+            "slowly, for example behind on-access antivirus"
+        )
+        raise error
