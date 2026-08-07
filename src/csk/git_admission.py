@@ -57,11 +57,16 @@ _CLEANUP_BACKOFF_SECONDS = 0.1
 
 
 def _unseal_tree(root: Path) -> None:
+    # Symlinks are skipped rather than chmodded: os.chmod follows them, and
+    # rmtree unlinks them without following, so the target is never ours to
+    # touch.  Failures are ignored here because rmtree reports them precisely.
     for directory, directories, files in os.walk(root, topdown=True):
         parent = Path(directory)
         for name in (*directories, *files):
+            child = parent / name
             try:
-                os.chmod(parent / name, stat.S_IRWXU)
+                if not child.is_symlink():
+                    os.chmod(child, stat.S_IRWXU)
             except OSError:
                 pass
     try:
