@@ -1807,14 +1807,14 @@ def test_global_upgrade_releases_update_lock_before_install_and_preserves_option
         def __exit__(self, *args):
             lock_state["held"] = False
 
-    def update(_cfg):
+    def update(_cfg, *, only=None):
         assert lock_state["held"]
         return global_install.GlobalResult(
             status="failed",
             errors=["forced update failure"],
         )
 
-    def install(_cfg, *, options):
+    def install(_cfg, *, options, only=None):
         assert not lock_state["held"]
         observed.append(options)
         return global_install.GlobalResult()

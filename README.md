@@ -226,6 +226,32 @@ csk global add skill-metrics \
 csk global install
 ```
 
+### Selective global operations
+
+`csk global install`, `csk global update`, and `csk global upgrade` operate on
+every declared global skill by default. `--only <name>` narrows the run to one
+declaration; repeat the flag to select several:
+
+```bash
+csk global install --only skill-metrics
+csk global upgrade --only skill-metrics --only skill-lint
+```
+
+A selected skill still pulls its required skills into the closure, so a
+dependency is installed even when it was not named. Everything else is left
+exactly as it was: an unselected declaration is never cloned or fetched, and an
+already installed skill outside the selection keeps its context, shims, runtime
+tree, and agent adapter entries. That makes `--only` the way to install one
+skill when another declaration points at a repository this machine cannot
+reach — for a private build repository, combine it with the operator SSH
+surface described in
+[docs/external-build-repositories.md](docs/external-build-repositories.md).
+
+Reconciliation is therefore scoped too: a plain `csk global install` still
+removes skills that are no longer declared, while `--only` removes nothing
+outside the selected closure. A name that is not declared in the global
+Skillfile is an error, not a silent no-op.
+
 Global commands are exposed through `~/.cocoaskills/global/bin`. During
 `csk global install`, CocoaSkills also publishes forwarding shims into a safe
 user bin that is already on `PATH`, such as `~/.local/bin`, so global commands
@@ -724,9 +750,9 @@ air-gapped bundle import for closed networks, is
 | `csk global init` | Create the user-wide global `Skillfile.json`, global skill context, bin, and env files. |
 | `csk global add <name> --tag/--branch/--revision ...` | Add or replace a global skill declaration. |
 | `csk global remove <name>` | Remove a global declaration; the next global install cleans generated files. |
-| `csk global install` | Install all globally declared skills without fetching. |
-| `csk global update` | Fetch source repositories for globally declared skills. |
-| `csk global upgrade` | Run global update, then global install. `--dry-run` skips the update and performs a non-persistent install plan. |
+| `csk global install` | Install all globally declared skills without fetching. `--only <name>` (repeatable) restricts the run to that declaration and its required closure. |
+| `csk global update` | Fetch source repositories for globally declared skills. `--only <name>` (repeatable) fetches just that declaration. |
+| `csk global upgrade` | Run global update, then global install. `--dry-run` skips the update and performs a non-persistent install plan. `--only <name>` (repeatable) restricts both phases. |
 | `csk global status` | Show global manifest and compiled-build state; supports `--json` and `--check`. |
 | `csk global list` | List global skill declarations. |
 | `csk config show` | Print resolved config path and contents. |
