@@ -704,7 +704,20 @@ class _ObjectReader:
         return self
 
     def __exit__(self, _type: object, _value: object, _traceback: object) -> None:
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            if _value is None:
+                raise
+
+    def _read_exact(self, size: int) -> bytes:
+        data = bytearray()
+        while len(data) < size:
+            chunk = self._stdout.read(size - len(data))
+            if not chunk:
+                break
+            data.extend(chunk)
+        return bytes(data)
 
     def read(self, oid: str) -> _RawObject:
         cached = self._cache.get(oid)
@@ -745,8 +758,8 @@ class _ObjectReader:
             or self._expanded + size > self._limits.max_expanded_bytes
         ):
             raise GitAdmissionError(INCOMPLETE_SOURCE, "object size limit exceeded")
-        data = self._stdout.read(size)
-        terminator = self._stdout.read(1)
+        data = self._read_exact(size)
+        terminator = self._read_exact(1)
         if len(data) != size or terminator != b"\n":
             raise GitAdmissionError(INCOMPLETE_SOURCE, "truncated or malformed object")
         if _compute_oid(self._format, parts[1], data) != oid:

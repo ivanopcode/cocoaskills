@@ -66,7 +66,13 @@ def _real_tool() -> git_admission.GitTool:
     )
 
 
-def _fixture(tmp_path: Path, object_format: str, *, tag: bool = False) -> GitFixture:
+def _fixture(
+    tmp_path: Path,
+    object_format: str,
+    *,
+    tag: bool = False,
+    large_blob: bytes | None = None,
+) -> GitFixture:
     work = tmp_path / "work"
     bare = tmp_path / "remote.git"
     template = tmp_path / "template"
@@ -87,7 +93,11 @@ def _fixture(tmp_path: Path, object_format: str, *, tag: bool = False) -> GitFix
     (work / "bin" / "tool").write_bytes(b"tool\n")
     (work / "bin" / "tool").chmod(0o755)
     (work / "empty").write_bytes(b"")
-    _run_git(work, "add", "--", ".gitattributes", "README.md", "bin/tool", "empty")
+    tracked = [".gitattributes", "README.md", "bin/tool", "empty"]
+    if large_blob is not None:
+        (work / "large.bin").write_bytes(large_blob)
+        tracked.append("large.bin")
+    _run_git(work, "add", "--", *tracked)
     _run_git(
         work,
         "-c",
@@ -214,6 +224,37 @@ def test_network_and_local_raw_snapshot_bytes_are_identical(
         "--version" in call or "init" in call or "fetch" in call or "cat-file" in call
         for call in calls
     )
+
+
+def test_local_admission_reads_large_cat_file_payload_across_partial_pipe_reads(
+    tmp_path: Path,
+) -> None:
+    large_blob = bytes(range(256)) * 256
+    fixture = _fixture(tmp_path / "fixture", "sha1", large_blob=large_blob)
+
+    snapshot = git_admission.admit_local(fixture.work, _real_tool())
+
+    admitted = next(item for item in snapshot.files if item.path == "large.bin")
+    assert len(admitted.content) > 16 << 10
+    assert admitted.content == large_blob
+
+
+def test_object_reader_close_does_not_mask_primary_read_error(monkeypatch) -> None:
+    reader = object.__new__(git_admission._ObjectReader)
+    primary = git_admission.GitAdmissionError(
+        git_admission.INCOMPLETE_SOURCE, "truncated or malformed object"
+    )
+
+    def fail_close() -> None:
+        raise git_admission.GitAdmissionError(
+            git_admission.INCOMPLETE_SOURCE,
+            "object reader did not terminate cleanly",
+        )
+
+    monkeypatch.setattr(reader, "close", fail_close)
+    with pytest.raises(git_admission.GitAdmissionError) as captured, reader:
+        raise primary
+    assert captured.value is primary
 
 
 @pytest.mark.parametrize("object_format", ["sha1", "sha256"])
