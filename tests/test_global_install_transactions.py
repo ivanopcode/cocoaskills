@@ -7,6 +7,7 @@ import platform
 import stat
 import subprocess
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -79,6 +80,7 @@ def _install_fake_build_pipeline(
     *,
     events: list[str],
     fail_command: str | None = None,
+    fail_error: BaseException | None = None,
 ) -> None:
     target = _native_target()
     identity = build_toolchain.ToolchainIdentity(
@@ -107,6 +109,8 @@ def _install_fake_build_pipeline(
         assert locking._STATE.home is None
         events.append(f"build:{request.command}:home-unlocked")
         if request.command == fail_command:
+            if fail_error is not None:
+                raise fail_error
             raise go_v1.GoV1Error(
                 "fixture_build_failure",
                 f"forced failure for {request.command}",
@@ -144,6 +148,14 @@ def _install_fake_build_pipeline(
     )
     monkeypatch.setattr(build_toolchain, "establish_toolchain", FakeSession)
     monkeypatch.setattr(go_v1, "build", fake_build)
+
+
+def _exhausted_fingerprint_deadline() -> build_toolchain.ToolchainError:
+    """The error the product raises on a missed deadline, notes and all."""
+
+    with pytest.raises(build_toolchain.ToolchainError) as raised:
+        build_toolchain._check_deadline(time.monotonic() - 1.0)
+    return raised.value
 
 
 def _build_skill_files(
@@ -432,6 +444,46 @@ def test_global_build_or_publication_failure_preserves_prior_install(
     assert result.errors == [expected]
     assert events == ["build:tool:home-unlocked"]
     assert _tree_state(watched) == before
+
+
+@POSIX_BUILD_VECTOR
+def test_global_boundary_reports_the_operator_remedy_a_failure_carries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+) -> None:
+    """The global boundary renders a failure's remedy like the project one."""
+
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "compiled",
+        _build_skill_files("tool", revision="one"),
+        tag="v1",
+    )
+    _write_global_skillfile(csk_home, [{"name": "compiled", "tag": "v1"}])
+    cfg = replace(
+        make_config(csk_home, skills_root, project),
+        adapter_mode="copy",
+    )
+    monkeypatch.setenv("CSK_GLOBAL_USER_BIN", str(tmp_path / "user-bin"))
+    events: list[str] = []
+    _install_fake_build_pipeline(
+        monkeypatch,
+        events=events,
+        fail_command="tool",
+        fail_error=_exhausted_fingerprint_deadline(),
+    )
+
+    result = global_install.install(cfg)
+
+    assert result.status == "failed"
+    reported = result.errors[0]
+    assert reported.splitlines()[0] == (
+        "go-v1 toolchain_timeout: toolchain fingerprint deadline exceeded"
+    )
+    assert build_toolchain.FINGERPRINT_TIMEOUT_ENV in reported
 
 
 @pytest.mark.parametrize(

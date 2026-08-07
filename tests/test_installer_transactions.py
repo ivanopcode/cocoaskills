@@ -7,6 +7,7 @@ import platform
 import stat
 import subprocess
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from conftest import (
     write_skillfile,
 )
 
-from csk import consumers, hybrid, installer, transactions
+from csk import cli, consumers, hybrid, installer, transactions
 from csk.audit import pipeline as audit_pipeline
 from csk.builds import go_v1
 from csk.builds import metadata as build_metadata
@@ -59,6 +60,7 @@ def _install_fake_build_pipeline(
     *,
     events: list[str],
     fail_command: str | None = None,
+    fail_error: BaseException | None = None,
 ) -> None:
     target = _native_target()
     identity = build_toolchain.ToolchainIdentity(
@@ -86,6 +88,8 @@ def _install_fake_build_pipeline(
     def fake_build(request: go_v1.BuildRequest) -> go_v1.BuildResult:
         events.append(f"build:{request.command}")
         if request.command == fail_command:
+            if fail_error is not None:
+                raise fail_error
             raise go_v1.GoV1Error(
                 "fixture_build_failure",
                 f"forced failure for {request.command}",
@@ -130,6 +134,14 @@ def _install_fake_build_pipeline(
     monkeypatch.setattr(build_toolchain, "preflight_toolchain", lambda _config: None)
     monkeypatch.setattr(build_toolchain, "establish_toolchain", FakeSession)
     monkeypatch.setattr(go_v1, "build", fake_build)
+
+
+def _exhausted_fingerprint_deadline() -> build_toolchain.ToolchainError:
+    """The error the product raises on a missed deadline, notes and all."""
+
+    with pytest.raises(build_toolchain.ToolchainError) as raised:
+        build_toolchain._check_deadline(time.monotonic() - 1.0)
+    return raised.value
 
 
 def _build_skill_files(
@@ -369,6 +381,133 @@ def test_build_failure_preserves_every_live_materialization_surface(
     assert result.errors == ["go-v1 fixture_build_failure: forced failure for broken"]
     assert events[-1] == "build:broken"
     assert _tree_state(watched) == before
+
+
+@POSIX_BUILD_VECTOR
+def test_project_boundary_reports_the_operator_remedy_a_failure_carries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+) -> None:
+    """A missed fingerprint deadline names its override where an operator reads.
+
+    The project boundary records failures as strings, so a remedy attached to
+    the exception only reaches the operator if the boundary renders it.
+    """
+
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "compiled",
+        _build_skill_files("broken"),
+        tag="v1",
+    )
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [{"name": "compiled", "tag": "v1"}],
+        },
+    )
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    events: list[str] = []
+    _install_fake_build_pipeline(
+        monkeypatch,
+        events=events,
+        fail_command="broken",
+        fail_error=_exhausted_fingerprint_deadline(),
+    )
+
+    result = installer.install(cfg)[0]
+
+    assert result.status == "failed"
+    reported = result.errors[0]
+    # The cross-implementation protocol string stays the first line, byte for
+    # byte; the remedy follows it instead of replacing it.
+    assert reported.splitlines()[0] == (
+        "go-v1 toolchain_timeout: toolchain fingerprint deadline exceeded"
+    )
+    assert build_toolchain.FINGERPRINT_TIMEOUT_ENV in reported
+
+
+@POSIX_BUILD_VECTOR
+def test_csk_install_prints_the_operator_remedy_to_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """What an operator actually reads when the deadline is exhausted.
+
+    Drives the whole chain the reported Windows failure took: the build driver
+    raises, the project boundary records it, and `csk install` prints it.
+    """
+
+    project = make_project(tmp_path)
+    make_skill_repo(
+        skills_root,
+        "compiled",
+        _build_skill_files("broken"),
+        tag="v1",
+    )
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [{"name": "compiled", "tag": "v1"}],
+        },
+    )
+    cfg_path = csk_home / "config.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "projects": {"app": {"path": str(project), "agents": ["codex_cli"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+    monkeypatch.chdir(project)
+    events: list[str] = []
+    _install_fake_build_pipeline(
+        monkeypatch,
+        events=events,
+        fail_command="broken",
+        fail_error=_exhausted_fingerprint_deadline(),
+    )
+
+    code = cli.main(["install"])
+    captured = capsys.readouterr()
+
+    assert code == cli.EXIT_PARTIAL_FAIL
+    printed = captured.err.splitlines()
+    reported = next(
+        index
+        for index, line in enumerate(printed)
+        if line.endswith(
+            ": go-v1 toolchain_timeout: toolchain fingerprint deadline exceeded"
+        )
+    )
+    # The remedy lands on the line after the protocol string, not inside it.
+    assert build_toolchain.FINGERPRINT_TIMEOUT_ENV in printed[reported + 1]
+
+
+def test_failure_text_renders_notes_and_leaves_plain_failures_alone() -> None:
+    plain = RuntimeError("forced failure for broken")
+    assert installer.failure_text(plain) == "forced failure for broken"
+
+    annotated = RuntimeError("primary failure")
+    annotated.add_note("first remedy")
+    annotated.add_note("second remedy")
+    assert installer.failure_text(annotated) == (
+        "primary failure\nfirst remedy\nsecond remedy"
+    )
 
 
 @POSIX_BUILD_VECTOR

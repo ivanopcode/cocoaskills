@@ -170,6 +170,43 @@ from a newly proved source. Project/global marker and shim publication uses the
 existing transaction engine, so a build, collision, crash, or consumer-marker
 failure leaves the prior complete installation current or recoverable.
 
+## Toolchain fingerprint deadline
+
+Every build session hashes the complete selected GOROOT to pin the toolchain
+identity, and each hashing pass is bounded by a deadline. Reading a cold Go
+installation is much slower than reading a warm one, especially on Windows,
+where on-access antivirus scans each file the first time it is touched. When
+the pass does not finish in time the install fails closed with:
+
+```text
+csk install
+app: go-v1 toolchain_timeout: toolchain fingerprint deadline exceeded
+hashing the Go toolchain did not finish in time; set
+CSK_GO_FINGERPRINT_TIMEOUT to a larger number of seconds (default 600, maximum
+3600) on hosts where a cold GOROOT reads slowly, for example behind on-access
+antivirus
+```
+
+The first line is the cross-implementation protocol string and never changes;
+the remedy follows it. Operators raise the bound with
+`CSK_GO_FINGERPRINT_TIMEOUT`, a number of seconds:
+
+```bash
+CSK_GO_FINGERPRINT_TIMEOUT=1800 csk install
+```
+
+The default is 600 seconds and the accepted range is 0 exclusive to 3600
+seconds inclusive; a larger value is clamped to 3600 and a missing, empty, or
+unparseable value falls back to the default rather than failing the install.
+The deadline is a liveness bound, not a trust decision: raising it never admits
+a toolchain that would otherwise be refused, and it can never be removed
+entirely. Callers embedding CocoaSkills set the same bound in code through
+`ToolchainConfig(fingerprint_timeout=...)` or the `timeout` argument of
+`fingerprint_toolchain`, which take precedence over the environment.
+
+Prefer raising this bound over retrying a failed install. A retry only appears
+to help because the first attempt warmed the operating system cache.
+
 ## Development substitutions
 
 `Skillfile.dev.json` schema 2 may replace one declared repository for local

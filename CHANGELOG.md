@@ -62,6 +62,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Профиль остаётся закрытым и vendor-only, исполнение при install не
   добавляется.
 
+### Исправлено
+
+- Deadline toolchain fingerprint для `go-v1` больше не зажат жёстко на 120
+  секунд: default поднят до 600 секунд, caller задаёт его через
+  `ToolchainConfig(fingerprint_timeout=...)` или аргумент `timeout` у
+  `fingerprint_toolchain`, а оператор — через `CSK_GO_FINGERPRINT_TIMEOUT`.
+  Раньше любой caller override выше default молча схлопывался обратно, поэтому
+  холодный `GOROOT` за on-access антивирусом падал на первом install и
+  проходил только на прогретом retry. Bound остаётся liveness-ограничением с
+  потолком 3600 секунд: security gate не изменён, превышение deadline
+  по-прежнему отклоняет toolchain.
+- Границы install теперь печатают заметки (`__notes__`), которые несёт
+  упавшее исключение, а не только его сообщение. Первая строка остаётся
+  прежней protocol-строкой, а под ней оператор видит подсказку — например,
+  как поднять deadline toolchain fingerprint, — и вторичные диагностики
+  вроде неудавшегося teardown, которые раньше пропадали.
+
 ### Безопасность
 
 - Portable policy `manager-worker-v1` фиксирует manager-owned worker,
