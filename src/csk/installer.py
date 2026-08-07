@@ -91,6 +91,20 @@ class ProjectResult:
         return bool(self.errors)
 
 
+def failure_text(exc: BaseException) -> str:
+    """Operator-visible text for a failure recorded at an install boundary.
+
+    Install boundaries report failures as strings, and ``str(exc)`` drops the
+    notes an exception carries.  Notes hold the part an operator acts on -- the
+    remedy for a missed toolchain fingerprint deadline, the secondary failure
+    behind a cleanup -- so render them under the message rather than lose them.
+    The first line stays the exception's own message, which for build-driver
+    errors is the cross-implementation protocol string.
+    """
+
+    return "\n".join([str(exc), *getattr(exc, "__notes__", ())])
+
+
 @dataclass(frozen=True)
 class SkillPlan:
     decl: manifest.SkillDecl
@@ -208,7 +222,7 @@ def _install_project(
                         path=project.path,
                         status="failed",
                     )
-                    result.errors.append(str(exc))
+                    result.errors.append(failure_text(exc))
                     return result
                 if attempt + 1 < attempts:
                     continue
@@ -217,7 +231,7 @@ def _install_project(
                     path=project.path,
                     status="failed",
                 )
-                result.errors.append(str(exc))
+                result.errors.append(failure_text(exc))
                 return result
     raise AssertionError("unreachable project planning retry state")
 
@@ -556,7 +570,7 @@ def _install_project_once(
         if exc.code == "concurrent_state_change":
             raise
         result.status = "failed"
-        result.errors.append(str(exc))
+        result.errors.append(failure_text(exc))
         return result
     except locking.LockError:
         # Lock failures are process-coordination outcomes.  Preserve them for
@@ -565,7 +579,7 @@ def _install_project_once(
         raise
     except Exception as exc:  # noqa: BLE001 - project boundary reports stable failures
         result.status = "failed"
-        result.errors.append(str(exc))
+        result.errors.append(failure_text(exc))
         return result
 
 

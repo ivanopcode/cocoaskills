@@ -127,11 +127,17 @@ where on-access antivirus scans each file the first time it is touched. When
 the pass does not finish in time the install fails closed with:
 
 ```text
-go-v1 toolchain_timeout: toolchain fingerprint deadline exceeded
+csk install
+app: go-v1 toolchain_timeout: toolchain fingerprint deadline exceeded
+hashing the Go toolchain did not finish in time; set
+CSK_GO_FINGERPRINT_TIMEOUT to a larger number of seconds (default 600, maximum
+3600) on hosts where a cold GOROOT reads slowly, for example behind on-access
+antivirus
 ```
 
-Operators raise the bound with `CSK_GO_FINGERPRINT_TIMEOUT`, a number of
-seconds:
+The first line is the cross-implementation protocol string and never changes;
+the remedy follows it. Operators raise the bound with
+`CSK_GO_FINGERPRINT_TIMEOUT`, a number of seconds:
 
 ```bash
 CSK_GO_FINGERPRINT_TIMEOUT=1800 csk install

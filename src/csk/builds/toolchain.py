@@ -1952,8 +1952,10 @@ def _check_deadline(deadline: float) -> None:
             "toolchain_timeout",
             "toolchain fingerprint deadline exceeded",
         )
-        # The detail is the cross-implementation protocol string; the operator
-        # hint rides along as a note so it cannot drift from that contract.
+        # The detail is the cross-implementation protocol string, byte for
+        # byte; the operator remedy rides along as a note so it cannot drift
+        # from that contract.  Install boundaries render notes through
+        # ``installer.failure_text``, so the operator reads both.
         error.add_note(
             "hashing the Go toolchain did not finish in time; set "
             f"{FINGERPRINT_TIMEOUT_ENV} to a larger number of seconds "

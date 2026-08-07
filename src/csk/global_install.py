@@ -421,7 +421,7 @@ def _install_once(
         if exc.code == "concurrent_state_change":
             raise
         result.status = "failed"
-        result.errors.append(str(exc))
+        result.errors.append(installer.failure_text(exc))
         return result
     except locking.LockError:
         # Keep manager-home coordination failures distinct from ordinary
@@ -429,7 +429,7 @@ def _install_once(
         raise
     except Exception as exc:  # noqa: BLE001 - global boundary reports stable failures
         result.status = "failed"
-        result.errors.append(str(exc))
+        result.errors.append(installer.failure_text(exc))
         return result
 
 
@@ -998,7 +998,7 @@ def _build_plans(
                 )
             )
         except Exception as exc:  # noqa: BLE001 - preserve per-source diagnostics
-            result.errors.append(f"{decl.name}: {exc}")
+            result.errors.append(f"{decl.name}: {installer.failure_text(exc)}")
     return plans
 
 

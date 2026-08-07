@@ -383,8 +383,9 @@ contract или смешать artifacts, построенные с разной
 deadline в 600 секунд на проход; оператор поднимает его до 3600 секунд через
 `CSK_GO_FINGERPRINT_TIMEOUT`, когда холодный каталог Go читается медленно —
 обычно на Windows, за on-access антивирусом. Превышение deadline отклоняет
-toolchain с `go-v1 toolchain_timeout`; поднятие deadline никогда не допускает
-toolchain, который был бы отклонён иначе. CocoaSkills собирает ровно один
+toolchain с `go-v1 toolchain_timeout` и называет эту переменную в
+сообщении об ошибке; поднятие deadline никогда не допускает toolchain,
+который был бы отклонён иначе. CocoaSkills собирает ровно один
 исполняемый `package main` для host `GOOS` и `GOARCH`. Менеджер выключает
 телеметрию Go, использует приватные корни конфигурации, кэша и временных
 файлов, фиксирует `GOTOOLCHAIN=local`, `GOENV=off`, `GOWORK=off`,
