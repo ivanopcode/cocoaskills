@@ -621,25 +621,32 @@ def test_path_object_ordering_would_break_the_materialized_digest(
     root = tmp_path / "snapshot"
     _ordering_snapshot().materialize(root)
 
-    # What sorting Path objects yields here, and what the same sort yields with
-    # the Windows flavour, which lowercases every component before comparing.
-    component_order = [
+    # What sorting Path objects yields, spelled out rather than taken from
+    # sorted(Path): PurePath compares _parts_normcase, and which of these two
+    # the running flavour picks is itself the platform dependency under test.
+    def ordering(fold: bool) -> list[str]:
+        def key(item: Path) -> tuple[str, ...]:
+            parts = item.relative_to(root).parts
+            return tuple(part.lower() for part in parts) if fold else parts
+
+        return [
+            item.relative_to(root).as_posix()
+            for item in sorted(root.rglob("*"), key=key)
+            if item.is_file()
+        ]
+
+    component_order = ordering(fold=False)
+    case_folded_order = ordering(fold=True)
+    native_order = [
         item.relative_to(root).as_posix()
         for item in sorted(root.rglob("*"))
         if item.is_file()
     ]
-    case_folded_order = [
-        item.relative_to(root).as_posix()
-        for item in sorted(
-            root.rglob("*"),
-            key=lambda item: tuple(
-                part.lower() for part in item.relative_to(root).parts
-            ),
-        )
-        if item.is_file()
-    ]
     assert component_order == _PATH_COMPONENT_ORDER
     assert case_folded_order == _WINDOWS_CASE_FOLDED_ORDER
+    # Whichever flavour is running, sorting Path objects is the wrong order.
+    assert native_order in (_PATH_COMPONENT_ORDER, _WINDOWS_CASE_FOLDED_ORDER)
+    assert native_order != _ADMITTED_ORDER
 
     for order in (component_order, case_folded_order):
         with pytest.raises(ExternalBuildError) as captured:
