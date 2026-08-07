@@ -2652,12 +2652,6 @@ def test_package_graph_rejection_surface(case: str, expected: str, tmp_path: Pat
             "go_forbidden_compiler_directive",
         ),
         (
-            "attempted-go-generate",
-            "package main\n//go:generate sh -c poison\nfunc main() {}\n",
-            False,
-            "go_generator_forbidden",
-        ),
-        (
             "default-pgo",
             "package main\nfunc main() {}\n",
             True,
@@ -2686,6 +2680,240 @@ def test_compiler_directive_and_pgo_guards(
             goroot=tmp_path / "goroot",
         )
     assert raised.value.code == expected
+
+
+def _goroot_vendor_package(
+    package_dir: Path,
+    import_path: str,
+) -> dict[str, object]:
+    package_dir.mkdir(parents=True, exist_ok=True)
+    (package_dir / "chacha.go").write_text("package chacha20\n", encoding="utf-8")
+    return {
+        "Dir": str(package_dir),
+        "ImportPath": import_path,
+        "Name": "chacha20",
+        "Root": "",
+        "Standard": True,
+        "Goroot": True,
+        "DepOnly": True,
+        "GoFiles": ["chacha.go"],
+    }
+
+
+def _vendored_dependency(
+    root: Path,
+    *,
+    import_path: str,
+    module_path: str | None = None,
+    source: str = "dep.go",
+    text: str = "package dep\n",
+) -> dict[str, object]:
+    module_path = module_path or import_path
+    package_dir = root.joinpath("vendor", *import_path.split("/"))
+    package_dir.mkdir(parents=True, exist_ok=True)
+    (package_dir / source).write_text(text, encoding="utf-8")
+    (root / "vendor" / "modules.txt").write_text(
+        f"# {module_path} v1.0.0\n## explicit\n{import_path}\n",
+        encoding="utf-8",
+    )
+    return {
+        "Dir": str(package_dir),
+        "ImportPath": import_path,
+        "Name": "dep",
+        "Root": str(root),
+        "DepOnly": True,
+        "Module": {
+            "Path": module_path,
+            "Version": "v1.0.0",
+            "Dir": str(root.joinpath("vendor", *module_path.split("/"))),
+        },
+        "GoFiles": [source],
+    }
+
+
+def test_goroot_src_vendor_package_stays_trusted(tmp_path: Path):
+    root = tmp_path / "build"
+    goroot = tmp_path / "goroot"
+    import_path = "vendor/golang.org/x/crypto/chacha20"
+    vendored = _goroot_vendor_package(
+        goroot.joinpath("src", *import_path.split("/")),
+        import_path,
+    )
+
+    go_v1.validate_package_graph(
+        _encode_packages([_root_package(root), vendored]),
+        build_root=root,
+        source_dir=root / "cmd",
+        goroot=goroot,
+    )
+
+
+_GOROOT_VENDOR_NARROWNESS = (
+    "missing-vendor-import-prefix",
+    "directory-outside-goroot",
+    "foreign-root",
+)
+
+
+@pytest.mark.parametrize("case", _GOROOT_VENDOR_NARROWNESS)
+def test_goroot_vendor_exception_stays_narrow(case: str, tmp_path: Path):
+    root = tmp_path / "build"
+    goroot = tmp_path / "goroot"
+    import_path = "vendor/golang.org/x/crypto/chacha20"
+    package_dir = goroot.joinpath("src", *import_path.split("/"))
+    if case == "directory-outside-goroot":
+        package_dir = tmp_path / "outside" / "chacha20"
+    if case == "missing-vendor-import-prefix":
+        import_path = "golang.org/x/crypto/chacha20"
+    vendored = _goroot_vendor_package(package_dir, import_path)
+    if case == "foreign-root":
+        vendored["Root"] = str(tmp_path / "elsewhere")
+
+    with pytest.raises(go_v1.GoV1Error) as raised:
+        go_v1.validate_package_graph(
+            _encode_packages([_root_package(root), vendored]),
+            build_root=root,
+            source_dir=root / "cmd",
+            goroot=goroot,
+        )
+    assert raised.value.code == "go_standard_input_escape"
+
+
+def test_vendored_pure_go_assembly_is_accepted(tmp_path: Path):
+    root = tmp_path / "build"
+    dependency = _vendored_dependency(
+        root,
+        import_path="github.com/coder/websocket",
+    )
+    package_dir = Path(str(dependency["Dir"]))
+    (package_dir / "mask_arm64.s").write_text("// pure Go asm\n", encoding="utf-8")
+    dependency["SFiles"] = ["mask_arm64.s"]
+
+    go_v1.validate_package_graph(
+        _encode_packages([_root_package(root), dependency]),
+        build_root=root,
+        source_dir=root / "cmd",
+        goroot=tmp_path / "goroot",
+    )
+
+
+_ASSEMBLY_NARROWNESS = (
+    ("assembly-escaping-build-root", "go_assembly_forbidden"),
+    ("assembly-missing-file", "go_assembly_forbidden"),
+    ("assembly-with-host-input", "go_native_input_forbidden"),
+    ("assembly-with-host-object", "go_syso_forbidden"),
+)
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    _ASSEMBLY_NARROWNESS,
+    ids=[item[0] for item in _ASSEMBLY_NARROWNESS],
+)
+def test_vendored_assembly_exception_stays_narrow(
+    case: str,
+    expected: str,
+    tmp_path: Path,
+):
+    root = tmp_path / "build"
+    dependency = _vendored_dependency(
+        root,
+        import_path="github.com/coder/websocket",
+    )
+    package_dir = Path(str(dependency["Dir"]))
+    (package_dir / "mask_arm64.s").write_text("// pure Go asm\n", encoding="utf-8")
+    dependency["SFiles"] = ["mask_arm64.s"]
+
+    if case == "assembly-escaping-build-root":
+        outside = tmp_path / "outside.s"
+        outside.write_text("// escaped\n", encoding="utf-8")
+        dependency["SFiles"] = [str(outside)]
+    elif case == "assembly-missing-file":
+        dependency["SFiles"] = ["mask_amd64.s"]
+    elif case == "assembly-with-host-input":
+        dependency["CFiles"] = ["mask.c"]
+    elif case == "assembly-with-host-object":
+        dependency["SysoFiles"] = ["mask.syso"]
+
+    with pytest.raises(go_v1.GoV1Error) as raised:
+        go_v1.validate_package_graph(
+            _encode_packages([_root_package(root), dependency]),
+            build_root=root,
+            source_dir=root / "cmd",
+            goroot=tmp_path / "goroot",
+        )
+    assert raised.value.code == expected
+
+
+_CGO_IMPORT_DYNAMIC_SOURCE = (
+    "package unix\n"
+    '//go:cgo_import_dynamic libc_getcwd getcwd "/usr/lib/libSystem.B.dylib"\n'
+)
+
+
+def test_cgo_import_dynamic_is_allowed_for_vendored_x_sys(tmp_path: Path):
+    root = tmp_path / "build"
+    dependency = _vendored_dependency(
+        root,
+        import_path="golang.org/x/sys/unix",
+        module_path="golang.org/x/sys",
+        source="zsyscall_darwin_arm64.go",
+        text=_CGO_IMPORT_DYNAMIC_SOURCE,
+    )
+
+    go_v1.validate_package_graph(
+        _encode_packages([_root_package(root), dependency]),
+        build_root=root,
+        source_dir=root / "cmd",
+        goroot=tmp_path / "goroot",
+    )
+
+
+@pytest.mark.parametrize(
+    "import_path",
+    ["golang.org/x/sysfake", "golang.org/x/sysfake/unix", "example.test/dep"],
+)
+def test_cgo_import_dynamic_allowlist_stays_narrow(
+    import_path: str,
+    tmp_path: Path,
+):
+    root = tmp_path / "build"
+    dependency = _vendored_dependency(
+        root,
+        import_path=import_path,
+        source="zsyscall_darwin_arm64.go",
+        text=_CGO_IMPORT_DYNAMIC_SOURCE,
+    )
+
+    with pytest.raises(go_v1.GoV1Error) as raised:
+        go_v1.validate_package_graph(
+            _encode_packages([_root_package(root), dependency]),
+            build_root=root,
+            source_dir=root / "cmd",
+            goroot=tmp_path / "goroot",
+        )
+    assert raised.value.code == "go_forbidden_compiler_directive"
+
+
+def test_go_generate_directive_is_inert(tmp_path: Path):
+    root = tmp_path / "build"
+    package = _root_package(root)
+    (root / "cmd" / "main.go").write_text(
+        "package main\n//go:generate sh -c poison\nfunc main() {}\n",
+        encoding="utf-8",
+    )
+    dependency = _vendored_dependency(
+        root,
+        import_path="github.com/clipperhouse/displaywidth",
+        text="package dep\n//go:generate go run ./gen\n",
+    )
+
+    go_v1.validate_package_graph(
+        _encode_packages([package, dependency]),
+        build_root=root,
+        source_dir=root / "cmd",
+        goroot=tmp_path / "goroot",
+    )
 
 
 def test_poisoned_compiler_environment_is_rejected(tmp_path: Path):
