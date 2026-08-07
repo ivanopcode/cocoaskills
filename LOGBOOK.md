@@ -1,5 +1,44 @@
 # Logbook
 
+## 2026-08-07 — BUG-260807-29evfj a relaxation is only as safe as the scope it is written to
+
+`70e9ca2` ported the four vendored exceptions of `curator-spec` decision 0005
+into `go-v1` and got three of them right.  Point 4 it implemented in the one
+form the decision names and rejects.  The decision relaxes `//go:generate` for
+*vendored* `GoFiles` — "the presence of the comment in vendored `GoFiles` does
+not fail preflight" — and its Alternatives section says outright: "Broad
+`if false` for `SFiles`/`go:generate` in both managers: rejected, expands trust
+boundary beyond the vendored, audited cases."  The port deleted the needle from
+`_scan_source_directives` entirely and left a comment claiming the directive is
+"not scanned for at all".  A first-party `cmd/main.go` carrying
+`//go:generate sh -c poison` became a clean package.
+
+The protocol caught it before a human did.  `attempted-go-generate` in
+`conformance/v1/vectors/build-drivers.json` expects `reject` with
+`go_generator_forbidden`, and CI run 31204463946 turned it red on every
+Python 3.14 leg with `DID NOT RAISE`.  Worth naming the temptation that
+follows: a red conformance case after a deliberate behaviour change reads like
+a stale vector, and the cheap green is to bump the `curator-spec` pin.  The
+vector was right and the implementation was wrong.  The pin is the thing that
+made the over-broad relaxation visible at all — bumping it would have bought a
+green run by deleting the only witness.
+
+The fix (`src/csk/builds/go_v1.py:832`, `:1044`) restores the scan and gates it
+on `_strictly_below(package_dir, build_root / "vendor")`, the same predicate
+that already scoped the `SFiles` exception inline four lines up; it is now
+computed once and shared.  That mirrors `_allows_cgo_import_dynamic`, which
+scopes point 3 to `golang.org/x/sys` by import path.  All four exceptions now
+hang off an explicit vendored-or-allowlisted predicate rather than off the
+absence of a check, so the next reader can see the boundary instead of
+inferring it from a deleted line.  `skill-project-management` — the skill the
+decision was written for — still passes: `tools/board-tui` carries 13 vendored
+`GoFiles` with `//go:generate` and preflight accepts every one.
+
+The general shape: when a spec grants an exception, port the *scope* first and
+the *relaxation* second.  Dropping the check is never the same change as
+narrowing it, and the diff that removes a rule looks smaller than the one that
+qualifies it precisely when it is larger.
+
 ## 2026-08-07 — BUG-260807-l2ymv3 a deadline is only as real as the clock that reads it
 
 `time.monotonic()` is not the same clock on every platform.  Windows CPython
