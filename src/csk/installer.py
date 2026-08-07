@@ -75,6 +75,11 @@ class InstallOptions:
     strict_tags: bool = False
     verbose: bool = False
     fetch: bool = False
+    # Operator SSH selection for external build repositories, exactly as the
+    # operator wrote it. Resolved once per run by capture_operator_ssh_credentials.
+    ssh_identity: str | None = None
+    ssh_agent: str | None = None
+    ssh_known_hosts: str | None = None
 
 
 @dataclass
@@ -128,6 +133,7 @@ def install(config: GlobalConfig, *, alias: str | None = None, options: InstallO
     results: list[ProjectResult] = []
     fetched_repos: set[Path] = set()
     operator_search_path = build_toolchain.capture_operator_search_path()
+    operator_ssh_credentials = _capture_operator_ssh_credentials(options)
     for project in selected:
         results.append(
             _install_project(
@@ -136,6 +142,7 @@ def install(config: GlobalConfig, *, alias: str | None = None, options: InstallO
                 options,
                 fetched_repos=fetched_repos,
                 operator_search_path=operator_search_path,
+                operator_ssh_credentials=operator_ssh_credentials,
             )
         )
     if (
@@ -163,6 +170,21 @@ def install(config: GlobalConfig, *, alias: str | None = None, options: InstallO
     return results
 
 
+def _capture_operator_ssh_credentials(
+    options: InstallOptions,
+) -> git_admission.OperatorSSHCredentials:
+    """Resolve the operator SSH surface once, before any project work begins."""
+
+    try:
+        return git_admission.capture_operator_ssh_credentials(
+            identity=options.ssh_identity,
+            agent=options.ssh_agent,
+            known_hosts=options.ssh_known_hosts,
+        )
+    except git_admission.GitAdmissionError as exc:
+        raise InstallError(str(exc)) from exc
+
+
 def _selected_projects(config: GlobalConfig, alias: str | None) -> list[ProjectConfig]:
     if alias is None:
         return list(config.projects.values())
@@ -179,6 +201,7 @@ def _install_project(
     *,
     fetched_repos: set[Path],
     operator_search_path: build_toolchain.OperatorSearchPath | None,
+    operator_ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
 ) -> ProjectResult:
     generation_probe = _project_generation_probe(config, project)
     attempts = 2 if options.dry_run else 3
@@ -198,6 +221,7 @@ def _install_project(
                     options,
                     fetched_repos=fetched_repos,
                     operator_search_path=operator_search_path,
+                    operator_ssh_credentials=operator_ssh_credentials,
                     generation_probe=generation_probe,
                     expected_generation=expected_generation,
                 )
@@ -280,6 +304,7 @@ def _install_project_once(
     *,
     fetched_repos: set[Path],
     operator_search_path: build_toolchain.OperatorSearchPath | None,
+    operator_ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
     generation_probe: build_planner.GenerationProbe | None,
     expected_generation: Mapping[str, str] | None,
 ) -> ProjectResult:
@@ -453,6 +478,7 @@ def _install_project_once(
                 nodes=nodes,
                 substitutions=dev_manifest,
                 operator_search_path=operator_search_path,
+                ssh_credentials=operator_ssh_credentials,
                 stack=stack,
                 dry_run=options.dry_run,
                 marker_roots=(
@@ -680,6 +706,7 @@ def _external_git_tool(
     operator_search_path: build_toolchain.OperatorSearchPath,
     *,
     require_ssh: bool,
+    ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
 ) -> git_admission.GitTool:
     executable = _operator_program("git", operator_search_path)
     try:
@@ -707,13 +734,15 @@ def _external_git_tool(
     # Public HTTPS never invokes askpass. If authentication is requested,
     # Python exits without yielding a credential rather than consulting a
     # repository-selected helper. SSH is likewise the frozen operator binary;
-    # package data never supplies a wrapper or its options.
+    # package data never supplies a wrapper or its options, and the identity
+    # material comes only from the operator surface captured at process entry.
     return git_admission.GitTool(
         executable=executable,
         exec_path=exec_path,
         allowed_versions=(version,),
         askpass=Path(sys.executable).resolve(strict=True),
-        ssh_wrapper=ssh,
+        ssh=ssh,
+        ssh_credentials=ssh_credentials,
     )
 
 
@@ -824,6 +853,7 @@ def _publish_external_builds(
     stack: ExitStack,
     dry_run: bool,
     marker_roots: tuple[Path, ...],
+    ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
 ) -> tuple[dict[str, dict[str, _PublishedBuild]], list[str]]:
     selected = [
         (node, name)
@@ -848,7 +878,9 @@ def _publish_external_builds(
         for node, name in selected
     )
     git_tool = _external_git_tool(
-        operator_search_path, require_ssh=require_ssh
+        operator_search_path,
+        require_ssh=require_ssh,
+        ssh_credentials=ssh_credentials,
     )
     private_base = Path(
         stack.enter_context(

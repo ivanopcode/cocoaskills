@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Добавлено
 
+- Добавлена first-class операторская поверхность SSH для приватных external
+  build repositories: `--build-ssh-identity`, `--build-ssh-agent`,
+  `--build-ssh-known-hosts` и переменные `CSK_BUILD_SSH_IDENTITY`,
+  `CSK_BUILD_SSH_AGENT`, `CSK_BUILD_SSH_KNOWN_HOSTS`. `SSHPolicy` и
+  `exact_ssh_command` теперь подключены к реальному fetch: менеджер пишет
+  приватный wrapper с одним закреплённым argv и указывает на него
+  `GIT_SSH_COMMAND`. Operator-provided `ssh` на `PATH` используется как есть и
+  не требует подмены. Identity и agent можно указать вместе — agent хранит
+  ключ, identity закрепляет, какой именно ключ предлагается, иначе заполненный
+  agent исчерпывает лимит `MaxAuthTries` на сервере. SSH-источник без выбранных
+  credentials завершается с `build_repository_ssh_credential_missing` до
+  создания launcher, snapshot или cache artifact.
 - Добавлен authoring-контракт `agent-skill.json` schema 6: исключённые из
   контекста `build_roots` и закрытые команды
   `{"type":"build","driver":"go-v1","source_dir":"..."}` рядом с

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
+import shlex
 import stat
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import unicodedata
@@ -35,12 +38,19 @@ LOCAL_LINKED_UNSUPPORTED = "build_repository_local_linked_worktree_unsupported"
 LOCAL_LAYOUT_UNSAFE = "build_repository_local_layout_unsafe"
 LOCAL_FORMAT_UNSUPPORTED = "build_repository_local_format_unsupported"
 LOCAL_OBJECT_FORMAT_UNSUPPORTED = "build_repository_local_object_format_unsupported"
+SSH_CREDENTIAL_MISSING = "build_repository_ssh_credential_missing"
+
+OPERATOR_SSH_IDENTITY_ENV = "CSK_BUILD_SSH_IDENTITY"
+OPERATOR_SSH_AGENT_ENV = "CSK_BUILD_SSH_AGENT"
+OPERATOR_SSH_KNOWN_HOSTS_ENV = "CSK_BUILD_SSH_KNOWN_HOSTS"
+OPERATOR_SSH_AGENT_AUTO = "auto"
 
 _HEX_BY_FORMAT = {
     "sha1": re.compile(r"^[0-9a-f]{40}$"),
     "sha256": re.compile(r"^[0-9a-f]{64}$"),
 }
 _CONFIG_TOKEN = re.compile(r"^[A-Za-z][A-Za-z0-9-]*$")
+_MAX_KNOWN_HOSTS_BYTES = 1 << 20
 
 
 class GitAdmissionError(RuntimeError):
@@ -62,12 +72,32 @@ class Limits:
 
 
 @dataclass(frozen=True)
+class OperatorSSHCredentials:
+    """Operator-selected SSH material for external build repository fetches.
+
+    The operator names this material explicitly (``csk install`` flags or the
+    ``CSK_BUILD_SSH_*`` variables).  Skill manifests and package data never
+    reach these fields, and nothing here is inherited from the ambient
+    environment except through a capture the operator asked for.
+    """
+
+    identity: Path | None = None
+    agent_socket: Path | None = None
+    known_hosts: Path | None = None
+
+    @property
+    def selected(self) -> bool:
+        return self.identity is not None or self.agent_socket is not None
+
+
+@dataclass(frozen=True)
 class GitTool:
     executable: Path
     exec_path: Path
     allowed_versions: tuple[str, ...]
     askpass: Path | None = None
-    ssh_wrapper: Path | None = None
+    ssh: Path | None = None
+    ssh_credentials: OperatorSSHCredentials | None = None
 
 
 @dataclass(frozen=True)
@@ -145,6 +175,7 @@ class _PrivatePaths:
     template: Path
     hooks: Path
     empty_path: Path
+    ssh: Path
 
 
 @dataclass(frozen=True)
@@ -167,6 +198,130 @@ class _RawObject:
 
 def error_code(error: BaseException | None) -> str:
     return error.code if isinstance(error, GitAdmissionError) else ""
+
+
+def capture_operator_ssh_credentials(
+    environment: Mapping[str, str] | None = None,
+    *,
+    identity: str | None = None,
+    agent: str | None = None,
+    known_hosts: str | None = None,
+) -> OperatorSSHCredentials:
+    """Capture the operator's SSH selection for external build repositories.
+
+    Command-line values win over ``CSK_BUILD_SSH_*``.  ``agent`` accepts the
+    literal ``auto`` to adopt the operator's live ``SSH_AUTH_SOCK``; every other
+    value is an absolute socket path.  ``known_hosts`` defaults to the operator
+    home's ``.ssh/known_hosts`` because the fetch pins
+    ``StrictHostKeyChecking=yes`` and has no other source of truth for host keys.
+
+    Callers must invoke this at process entry, before any project-owned state
+    can influence the environment.
+    """
+
+    source = os.environ if environment is None else environment
+    raw_identity = identity if identity is not None else source.get(
+        OPERATOR_SSH_IDENTITY_ENV
+    )
+    raw_agent = agent if agent is not None else source.get(OPERATOR_SSH_AGENT_ENV)
+    raw_known_hosts = known_hosts if known_hosts is not None else source.get(
+        OPERATOR_SSH_KNOWN_HOSTS_ENV
+    )
+    if raw_agent == OPERATOR_SSH_AGENT_AUTO:
+        raw_agent = source.get("SSH_AUTH_SOCK")
+        if not raw_agent:
+            raise GitAdmissionError(
+                SSH_CREDENTIAL_MISSING,
+                "SSH agent was requested but SSH_AUTH_SOCK is not set",
+            )
+    resolved = OperatorSSHCredentials(
+        identity=Path(raw_identity) if raw_identity else None,
+        agent_socket=Path(raw_agent) if raw_agent else None,
+        known_hosts=(
+            Path(raw_known_hosts)
+            if raw_known_hosts
+            else _operator_known_hosts_default(source)
+        ),
+    )
+    if not resolved.selected:
+        return resolved
+    return validate_operator_ssh_credentials(resolved)
+
+
+def validate_operator_ssh_credentials(
+    credentials: OperatorSSHCredentials,
+) -> OperatorSSHCredentials:
+    """Resolve every operator-named path and prove it is the admitted kind.
+
+    Operator paths are resolved rather than rejected for being symbolic links:
+    a live agent socket is conventionally a stable symlink onto a per-session
+    rendezvous point.  What must hold is that the resolved target exists and is
+    the right kind of object.
+    """
+
+    admitted: dict[str, Path | None] = {}
+    for field, label, kind in (
+        ("identity", "SSH identity", "file"),
+        ("agent_socket", "SSH agent socket", "socket"),
+        ("known_hosts", "SSH known hosts", "file"),
+    ):
+        path: Path | None = getattr(credentials, field)
+        if path is None:
+            admitted[field] = None
+            continue
+        if not path.is_absolute():
+            raise GitAdmissionError(IDENTITY_INVALID, f"{label} path must be absolute")
+        try:
+            target = path.resolve(strict=True)
+            info = target.lstat()
+        except OSError as exc:
+            raise GitAdmissionError(
+                IDENTITY_INVALID, f"{label} is unavailable"
+            ) from exc
+        valid = (
+            stat.S_ISSOCK(info.st_mode)
+            if kind == "socket"
+            else stat.S_ISREG(info.st_mode)
+        )
+        if not valid:
+            raise GitAdmissionError(
+                IDENTITY_INVALID, f"{label} is not an admitted {kind}"
+            )
+        admitted[field] = target
+    return OperatorSSHCredentials(**admitted)
+
+
+def _operator_known_hosts_default(environment: Mapping[str, str]) -> Path | None:
+    for name in ("HOME", "USERPROFILE"):
+        home = environment.get(name)
+        if not home:
+            continue
+        candidate = Path(home) / ".ssh" / "known_hosts"
+        if candidate.is_absolute() and candidate.is_file():
+            return candidate
+    return None
+
+
+def ssh_endpoint(source: RepositorySource) -> tuple[str, str]:
+    """Derive the exact ``(host, path)`` pair Git hands to the SSH program.
+
+    Git passes ``user@host`` verbatim and quotes the path exactly as written:
+    ``ssh://`` sources keep their leading slash, scp-like sources do not.
+    """
+
+    raw = source.git
+    if raw.startswith("ssh://"):
+        remainder = raw[len("ssh://") :]
+        boundary = remainder.find("/")
+        if boundary <= 0:
+            raise GitAdmissionError(
+                IDENTITY_INVALID, "SSH source has no repository path"
+            )
+        return remainder[:boundary], remainder[boundary:]
+    host, colon, path = raw.partition(":")
+    if not colon or not host or not path:
+        raise GitAdmissionError(IDENTITY_INVALID, "SSH source has no repository path")
+    return host, path
 
 
 def exact_ssh_command(policy: SSHPolicy, argv: Sequence[str]) -> tuple[str, ...]:
@@ -250,11 +405,30 @@ def exact_ssh_command(policy: SSHPolicy, argv: Sequence[str]) -> tuple[str, ...]
         "-o",
         f"ConnectTimeout={policy.connect_timeout}",
     ]
-    if (
-        policy.identity is not None
-        and policy.agent_socket is None
-        and policy.identity.is_absolute()
+    identity = policy.identity
+    agent_socket = policy.agent_socket
+    if (identity is not None and not identity.is_absolute()) or (
+        agent_socket is not None and not agent_socket.is_absolute()
     ):
+        raise GitAdmissionError(
+            IDENTITY_INVALID, "SSH authentication material must be absolute"
+        )
+    if identity is not None and agent_socket is not None:
+        # The agent holds the private key, and the identity pins which agent key
+        # is offered.  Without the pin a populated agent walks every loaded key
+        # and the server closes the connection on MaxAuthTries before reaching
+        # the one that authenticates.
+        command.extend(
+            (
+                "-o",
+                "IdentitiesOnly=yes",
+                "-o",
+                f"IdentityAgent={agent_socket}",
+                "-i",
+                os.fspath(identity),
+            )
+        )
+    elif identity is not None:
         command.extend(
             (
                 "-o",
@@ -262,14 +436,10 @@ def exact_ssh_command(policy: SSHPolicy, argv: Sequence[str]) -> tuple[str, ...]
                 "-o",
                 "IdentityAgent=none",
                 "-i",
-                os.fspath(policy.identity),
+                os.fspath(identity),
             )
         )
-    elif (
-        policy.agent_socket is not None
-        and policy.identity is None
-        and policy.agent_socket.is_absolute()
-    ):
+    elif agent_socket is not None:
         command.extend(
             (
                 "-o",
@@ -277,12 +447,13 @@ def exact_ssh_command(policy: SSHPolicy, argv: Sequence[str]) -> tuple[str, ...]
                 "-o",
                 "IdentityFile=none",
                 "-o",
-                f"IdentityAgent={policy.agent_socket}",
+                f"IdentityAgent={agent_socket}",
             )
         )
     else:
         raise GitAdmissionError(
-            IDENTITY_INVALID, "SSH authentication policy must select exactly one mode"
+            IDENTITY_INVALID,
+            "SSH authentication policy must select an identity, an agent, or both",
         )
     command.extend((policy.expected_host, expected_command))
     return tuple(command)
@@ -306,7 +477,7 @@ def validate_git_tool(tool: GitTool) -> None:
             )
     for label, optional_path in (
         ("credential broker", tool.askpass),
-        ("SSH wrapper", tool.ssh_wrapper),
+        ("operator SSH program", tool.ssh),
     ):
         if optional_path is None:
             continue
@@ -376,9 +547,18 @@ def acquire_network(
         raise GitAdmissionError(
             IDENTITY_INVALID, "HTTPS requires a manager credential broker"
         )
-    if source.transport == "ssh" and tool.ssh_wrapper is None:
+    if source.transport == "ssh" and tool.ssh is None:
         raise GitAdmissionError(
-            IDENTITY_INVALID, "SSH requires the exact manager wrapper"
+            IDENTITY_INVALID, "SSH requires the operator-provided ssh program"
+        )
+    if source.transport == "ssh" and not (
+        tool.ssh_credentials is not None and tool.ssh_credentials.selected
+    ):
+        raise GitAdmissionError(
+            SSH_CREDENTIAL_MISSING,
+            "SSH build repositories require an operator identity or agent; "
+            f"pass --build-ssh-identity/--build-ssh-agent or set "
+            f"{OPERATOR_SSH_IDENTITY_ENV}/{OPERATOR_SSH_AGENT_ENV}",
         )
     if source.transport not in {"https", "ssh"} or (
         tag is not None and not is_valid_ref_name(tag)
@@ -388,7 +568,14 @@ def acquire_network(
         )
     with tempfile.TemporaryDirectory(prefix="csk-buildrepo-") as raw_root:
         paths = _make_private_paths(Path(raw_root))
-        environment = _clean_git_environment(paths, tool, source.transport)
+        ssh_command = (
+            _materialize_ssh_wrapper(paths, tool, source)
+            if source.transport == "ssh"
+            else None
+        )
+        environment = _clean_git_environment(
+            paths, tool, source.transport, ssh_command=ssh_command
+        )
         _run_git(
             tool,
             paths,
@@ -441,6 +628,7 @@ def _make_private_paths(root: Path) -> _PrivatePaths:
         template=root / "empty-template",
         hooks=root / "empty-hooks",
         empty_path=root / "empty-path",
+        ssh=root / "ssh",
     )
     for path in (
         paths.work,
@@ -449,6 +637,7 @@ def _make_private_paths(root: Path) -> _PrivatePaths:
         paths.template,
         paths.hooks,
         paths.empty_path,
+        paths.ssh,
     ):
         path.mkdir(mode=0o700)
     for name in ("global.gitconfig", "system.gitconfig"):
@@ -465,8 +654,102 @@ def _clean_discovery_environment() -> dict[str, str]:
     return environment
 
 
+def _write_private_file(path: Path, data: bytes) -> Path:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
+            stream.write(data)
+            stream.flush()
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return path
+
+
+def _wrapper_interpreter() -> Path:
+    try:
+        interpreter = Path(sys.executable).resolve(strict=True)
+        info = interpreter.lstat()
+    except OSError as exc:
+        raise GitAdmissionError(
+            IDENTITY_INVALID, "manager interpreter is unavailable"
+        ) from exc
+    if not interpreter.is_absolute() or not stat.S_ISREG(info.st_mode):
+        raise GitAdmissionError(
+            IDENTITY_INVALID, "manager interpreter is not an admitted regular file"
+        )
+    return interpreter
+
+
+def _materialize_ssh_wrapper(
+    paths: _PrivatePaths, tool: GitTool, source: RepositorySource
+) -> tuple[str, ...]:
+    """Write the protected SSH wrapper and return the argv prefix Git must run.
+
+    The wrapper carries the argv :func:`exact_ssh_command` produced at
+    materialization time and refuses to exec unless Git hands it exactly the
+    invocation that argv was pinned to.  Nothing is resolved inside the child.
+    """
+
+    credentials = tool.ssh_credentials
+    if tool.ssh is None or credentials is None or not credentials.selected:
+        raise GitAdmissionError(
+            SSH_CREDENTIAL_MISSING, "SSH fetch requires operator identity material"
+        )
+    credentials = validate_operator_ssh_credentials(credentials)
+    if credentials.known_hosts is None:
+        raise GitAdmissionError(
+            SSH_CREDENTIAL_MISSING,
+            "SSH build repositories pin StrictHostKeyChecking and require operator "
+            f"host keys; pass --build-ssh-known-hosts or set "
+            f"{OPERATOR_SSH_KNOWN_HOSTS_ENV}",
+        )
+    try:
+        host_keys = credentials.known_hosts.read_bytes()
+    except OSError as exc:
+        raise GitAdmissionError(
+            IDENTITY_INVALID, "operator known hosts file is unreadable"
+        ) from exc
+    if len(host_keys) > _MAX_KNOWN_HOSTS_BYTES:
+        raise GitAdmissionError(
+            IDENTITY_INVALID, "operator known hosts file exceeds the admitted size"
+        )
+    host, repository_path = ssh_endpoint(source)
+    script = paths.ssh / "ssh-wrapper.py"
+    policy = SSHPolicy(
+        wrapper=script,
+        ssh=tool.ssh,
+        expected_host=host,
+        repository_path=repository_path,
+        empty_config=_write_private_file(paths.ssh / "config", b""),
+        known_hosts=_write_private_file(paths.ssh / "known_hosts", host_keys),
+        empty_known_hosts=_write_private_file(paths.ssh / "empty_known_hosts", b""),
+        identity=credentials.identity,
+        agent_socket=credentials.agent_socket,
+    )
+    expected = [os.fspath(script), host, f"git-upload-pack '{repository_path}'"]
+    command = list(exact_ssh_command(policy, expected))
+    _write_private_file(
+        script,
+        (
+            "import os, sys\n"
+            f"EXPECTED = {json.dumps(expected)}\n"
+            f"COMMAND = {json.dumps(command)}\n"
+            "if sys.argv != EXPECTED:\n"
+            "    sys.stderr.write('csk: refused unexpected ssh invocation\\n')\n"
+            "    raise SystemExit(1)\n"
+            "os.execv(COMMAND[0], COMMAND)\n"
+        ).encode("utf-8"),
+    )
+    return (os.fspath(_wrapper_interpreter()), os.fspath(script))
+
+
 def _clean_git_environment(
-    paths: _PrivatePaths, tool: GitTool, transport: str
+    paths: _PrivatePaths,
+    tool: GitTool,
+    transport: str,
+    *,
+    ssh_command: Sequence[str] | None = None,
 ) -> dict[str, str]:
     environment = _clean_discovery_environment()
     environment.update(
@@ -490,9 +773,18 @@ def _clean_git_environment(
     )
     if transport == "https" and tool.askpass is not None:
         environment["GIT_ASKPASS"] = os.fspath(tool.askpass)
-    if transport == "ssh" and tool.ssh_wrapper is not None:
+    if transport == "ssh" and ssh_command is not None:
+        # GIT_SSH_COMMAND rather than GIT_SSH: Git runs it through its
+        # compiled-in shell and appends the host and upload-pack arguments as
+        # real argv, so the wrapper observes exactly the invocation
+        # exact_ssh_command pinned, on both macOS and Windows.  GIT_SSH would
+        # need a per-platform executable stub and a shebang the empty PATH
+        # cannot resolve.
         environment.update(
-            {"GIT_SSH": os.fspath(tool.ssh_wrapper), "GIT_SSH_VARIANT": "ssh"}
+            {
+                "GIT_SSH_COMMAND": " ".join(shlex.quote(part) for part in ssh_command),
+                "GIT_SSH_VARIANT": "ssh",
+            }
         )
     return environment
 

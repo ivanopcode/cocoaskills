@@ -17,6 +17,7 @@ from . import (
     deprecation,
     dev_substitutions,
     gc,
+    git_admission,
     git_ops,
     gitignore_gate,
     global_install,
@@ -402,6 +403,41 @@ def _add_install(sub: argparse._SubParsersAction[argparse.ArgumentParser], name:
         choices=["advisory", "strict"],
         help="run audit gate for this install (default mode: advisory)",
     )
+    _add_build_ssh_arguments(parser)
+
+
+def _add_build_ssh_arguments(parser: argparse.ArgumentParser) -> None:
+    """Operator SSH surface for private external build repositories."""
+
+    parser.add_argument(
+        "--build-ssh-identity",
+        metavar="PATH",
+        help=(
+            "SSH identity for private build repositories; a private key, or the "
+            "matching public key when combined with --build-ssh-agent "
+            f"(env: {git_admission.OPERATOR_SSH_IDENTITY_ENV})"
+        ),
+    )
+    parser.add_argument(
+        "--build-ssh-agent",
+        nargs="?",
+        const=git_admission.OPERATOR_SSH_AGENT_AUTO,
+        metavar="SOCKET",
+        help=(
+            "SSH agent socket for private build repositories; bare flag or "
+            "'auto' adopts SSH_AUTH_SOCK "
+            f"(env: {git_admission.OPERATOR_SSH_AGENT_ENV})"
+        ),
+    )
+    parser.add_argument(
+        "--build-ssh-known-hosts",
+        metavar="PATH",
+        help=(
+            "known_hosts file pinning build repository host keys "
+            f"(default: operator home .ssh/known_hosts; env: "
+            f"{git_admission.OPERATOR_SSH_KNOWN_HOSTS_ENV})"
+        ),
+    )
 
 
 def _add_global(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -457,6 +493,7 @@ def _add_global(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         choices=["advisory", "strict"],
         help="run audit gate for this install (default mode: advisory)",
     )
+    _add_build_ssh_arguments(install)
     global_sub.add_parser("update", help="fetch global skill source repositories")
     upgrade = global_sub.add_parser("upgrade", help="fetch global skill sources, then install")
     upgrade.add_argument("--dry-run", action="store_true", help="validate install without modifying installed files")
@@ -469,6 +506,7 @@ def _add_global(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         choices=["advisory", "strict"],
         help="run audit gate for this install (default mode: advisory)",
     )
+    _add_build_ssh_arguments(upgrade)
 
 
 def _add_audit(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -881,6 +919,9 @@ def _cmd_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
         strict_tags=args.strict_tags,
         verbose=args.verbose,
         fetch=args.command == "upgrade" and not args.dry_run,
+        ssh_identity=getattr(args, "build_ssh_identity", None),
+        ssh_agent=getattr(args, "build_ssh_agent", None),
+        ssh_known_hosts=getattr(args, "build_ssh_known_hosts", None),
     )
     cfg = _cfg_with_audit_override(cfg, args)
     results = installer.install(cfg, alias=args.alias, options=options)
@@ -917,6 +958,9 @@ def _cmd_global_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> i
             getattr(args, "global_command", None) == "upgrade"
             and not getattr(args, "dry_run", False)
         ),
+        ssh_identity=getattr(args, "build_ssh_identity", None),
+        ssh_agent=getattr(args, "build_ssh_agent", None),
+        ssh_known_hosts=getattr(args, "build_ssh_known_hosts", None),
     )
     cfg = _cfg_with_audit_override(cfg, args)
     result = global_install.install(cfg, options=options)
