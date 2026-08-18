@@ -1,0 +1,9 @@
+{
+  "mode": "local",
+  "local": {
+    "board_dir": "../cocoaskills-taskboard/.task-board"
+  },
+  "spawn": {
+    "max_parallel": 20
+  }
+}
