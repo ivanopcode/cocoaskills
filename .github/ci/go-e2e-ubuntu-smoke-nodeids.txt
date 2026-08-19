@@ -1,0 +1,4 @@
+tests/test_go_build_e2e.py::test_portable_script_install_and_launch[project]
+tests/test_go_build_e2e.py::test_portable_script_install_and_launch[global]
+tests/test_go_build_e2e.py::test_go_install_fails_closed_without_native_control[project]
+tests/test_go_build_e2e.py::test_go_install_fails_closed_without_native_control[global]

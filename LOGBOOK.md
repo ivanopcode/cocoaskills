@@ -1285,3 +1285,60 @@ carrying all three, band runs audit -> dry-run -> install
 neither reported signature anywhere and no patching of the installed manager.
 The lesson worth keeping: a Windows leg that dies before admission is not
 evidence about admission, in either direction.
+
+## 2026-08-19 — CI cost fell by half, but the Windows critical path did not
+
+The Python-3.14 heavy-suite split achieved its cost objective without achieving
+its feedback objective. Across eight comparable successful runs, median raw
+job time fell from the reviewed 678.3 runner-minutes to 297.98 (−56.1%), while
+median workflow wall remains 146.05 minutes. The Windows/Python 3.14 job still
+serializes ordinary tests (15.53-minute median), protocol conformance (102.17
+minutes), and Go E2E (26.79 minutes), then releases the small build job. Current
+exact collection is 2,602 nodes: 1,537 ordinary, 1,045 protocol, and 20 Go E2E.
+The workflow's pinned and candidate curator-spec commits have different SHAs
+but byte-identical `conformance/v1` manifests declaring rc.6, so the apparent
+pin difference is not a protocol-content mismatch.
+
+The architecture decision in
+`.research/260819_radical-ci-feedback-architecture.md` recommends retaining
+Python 3.11–3.14, introducing stable required fast/merge aggregates, and using
+fail-closed deterministic hybrid job/worker shards plus serial/reverse nightly
+canaries. Dropping Python 3.11 saves 29.52 median raw minutes but no
+critical-path time; dependency caching can save less than the 0.86-minute p95
+Windows package-install step. `uv.lock` remains intentionally ignored and
+untracked; making a universal lock authoritative in CI requires a separate
+policy decision rather than being folded into the speed work.
+Mojo 1.0.0 shipped on 2026-08-11 but still lacks native Windows. Two current
+local sequential ordinary runs both passed 1,475 tests with 62 skips but varied
+from 344.69 to 458.94 pytest seconds; both emitted 24 non-empty-temp cleanup
+warnings. The same selection passed in 118.99 seconds with four xdist workers
+and an OS-level temp root, an observed 2.90–3.86× range rather than a stable p95.
+Deterministic hybrid sharding, immutable seed fixtures, and Windows filesystem
+churn are therefore the valid profiling targets.
+
+## 2026-08-19 — Fast PR and full main CI lanes are now event-separated
+
+`TASK-260819-2bow35` split the workflow into a Python 3.14 pull-request lane
+behind `CI / fast` and the preserved 12-cell Python 3.11–3.14 main matrix behind
+`CI / merge`. Both aggregates inspect the complete direct `needs` map under
+`always()` and accept only an exact expected child set whose results are all
+`success`; missing, failed, cancelled, and skipped children fail closed.
+
+The pull-request lane uses four explicit `pytest-xdist` workers with `loadfile`
+and runner-temporary pytest roots. Checked-in manifests select 10 protocol
+sentinels, five native Go E2E smoke nodes, and all four Ubuntu portable
+fail-closed nodes. Main still runs all 1,045 protocol nodes and the accepted
+16-native/4-Ubuntu Go selections on every supported platform. At the
+implementation head, ordinary collection is 1,541 nodes (four more than the
+research baseline because the CI contract tests grew from two to six). Local
+macOS evidence is 1,479 passed/62 skipped in 78.14 seconds for the four-worker
+ordinary lane, 10/10 protocol sentinels in 0.45 seconds, and 5/5 native Go smoke
+nodes in 235.02 seconds. Hosted Ubuntu/macOS/Windows canary evidence remains a
+post-push requirement because this task explicitly forbids pushing.
+
+The first two local Go smoke attempts failed closed before running builds: the
+shell resolved the global `csk` 0.9.0 instead of the task `.venv` installation,
+so worker identity could not resolve exactly one matching package tree. After
+installing the task wheel and prepending `.venv/bin`—the same script-resolution
+shape provided by `setup-python` in CI—the exact smoke selection passed without
+changing code, tests, or the identity guard.

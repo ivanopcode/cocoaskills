@@ -7,12 +7,320 @@ on:
     branches: [main]
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Tests / Python ${{ matrix.python-version }} on ${{ matrix.os }}
+  typecheck:
+    name: Type check / mypy strict
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run mypy
+        run: python -m mypy
+
+  build:
+    name: Build artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Verify metadata
+        run: twine check dist/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  fast_ordinary:
+    name: Fast ordinary / Python 3.14 on ${{ matrix.os }}
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout Curator Protocol conformance suite
+        uses: actions/checkout@v4
+        with:
+          repository: relux-works/curator-spec
+          ref: 0c81c1f8d5321d822be2a2817b05aea03e656e15
+          path: protocol-spec
+
+      - name: Set up Go 1.25.5
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25.5"
+          cache: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          allow-prereleases: true
+
+      - name: Configure git (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+
+      - name: Configure git (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+          git config --global core.autocrlf false
+          git config --global core.symlinks false
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+
+      - name: Run fast ordinary tests
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec/conformance/v1
+        run: >-
+          python -m pytest -v
+          --ignore=tests/test_protocol_conformance.py
+          --ignore=tests/test_go_build_e2e.py
+          -n 4 --dist=loadfile
+          --basetemp="${{ runner.temp }}/csk-ordinary"
+          -o cache_dir="${{ runner.temp }}/csk-pytest-cache"
+
+  fast_protocol:
+    name: Fast protocol sentinels / Python 3.14 on ${{ matrix.os }}
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout Curator Protocol conformance suite
+        uses: actions/checkout@v4
+        with:
+          repository: relux-works/curator-spec
+          ref: 0c81c1f8d5321d822be2a2817b05aea03e656e15
+          path: protocol-spec
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          allow-prereleases: true
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+
+      - name: Collect protocol sentinel node IDs
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec/conformance/v1
+        run: >-
+          python -m pytest --collect-only -q
+          "@.github/ci/protocol-fast-nodeids.txt"
+          > protocol-fast-nodeids.txt
+
+      - name: Run protocol sentinels
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec/conformance/v1
+        run: >-
+          python -m pytest -q
+          "@.github/ci/protocol-fast-nodeids.txt"
+          --junitxml=protocol-fast-results.xml
+
+      - name: Upload protocol sentinel evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-fast-${{ matrix.os }}-py314
+          path: |
+            protocol-fast-nodeids.txt
+            protocol-fast-results.xml
+          if-no-files-found: error
+
+  fast_go_e2e:
+    name: Fast Go E2E smoke / Python 3.14 on ${{ matrix.os }}
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout caller-supplied rc.6 candidate
+        uses: actions/checkout@v4
+        with:
+          repository: relux-works/curator-spec
+          ref: ${{ vars.CSK_E2E_CURATOR_SPEC_SHA }}
+          path: protocol-spec-candidate
+
+      - name: Set up Go 1.25.5
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25.5"
+          cache: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          allow-prereleases: true
+
+      - name: Configure git (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+
+      - name: Configure git (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+          git config --global core.autocrlf false
+          git config --global core.symlinks false
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+
+      - name: Authenticate caller-supplied rc.6 candidate
+        env:
+          CANDIDATE_CHECKOUT: ${{ github.workspace }}/protocol-spec-candidate
+          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
+        run: >-
+          python -c "import hashlib, os, pathlib, subprocess;
+          checkout=pathlib.Path(os.environ['CANDIDATE_CHECKOUT']);
+          root=pathlib.Path(os.environ['CURATOR_CONFORMANCE_ROOT']);
+          head=subprocess.run(['git','-C',str(checkout),'rev-parse','HEAD'],check=True,text=True,capture_output=True).stdout.strip();
+          digest=hashlib.sha256((root/'manifest.json').read_bytes()).hexdigest();
+          assert head == '432eb2ee1fe2d6b271e37269f867c8851c325539', head;
+          assert digest == '12e58b82579645ba1ccafba49d3e2dd3216005ddf37ae63c68a9fafd46773071', digest"
+
+      - name: Collect Go E2E smoke node IDs
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
+          CSK_GO_V1_MANAGER_EXECUTABLE: csk
+          CSK_GO_V1_GO_EXECUTABLE: go
+          CSK_E2E_REQUIRED_PLATFORM: ${{ runner.os == 'macOS' && 'macos_native' || runner.os == 'Windows' && 'windows_native' || 'ubuntu_portable_fail_closed' }}
+        run: >-
+          python -m pytest --collect-only -q
+          "@.github/ci/${{ runner.os == 'Linux' && 'go-e2e-ubuntu-smoke-nodeids.txt' || 'go-e2e-native-smoke-nodeids.txt' }}"
+          -m "${{ runner.os == 'Linux' && 'csk_e2e_ubuntu' || 'csk_e2e_native' }}"
+          > csk-e2e-smoke-nodeids.txt
+
+      - name: Run Go E2E smoke selection
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
+          CSK_GO_V1_MANAGER_EXECUTABLE: csk
+          CSK_GO_V1_GO_EXECUTABLE: go
+          CSK_E2E_REQUIRED_PLATFORM: ${{ runner.os == 'macOS' && 'macos_native' || runner.os == 'Windows' && 'windows_native' || 'ubuntu_portable_fail_closed' }}
+        run: >-
+          python -m pytest -q
+          "@.github/ci/${{ runner.os == 'Linux' && 'go-e2e-ubuntu-smoke-nodeids.txt' || 'go-e2e-native-smoke-nodeids.txt' }}"
+          -m "${{ runner.os == 'Linux' && 'csk_e2e_ubuntu' || 'csk_e2e_native' }}"
+          --basetemp="${{ runner.temp }}/csk-e2e-smoke"
+          --junitxml=csk-e2e-smoke-results.xml
+
+      - name: Upload Go E2E smoke evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: csk-e2e-smoke-${{ matrix.os }}-py314
+          path: |
+            csk-e2e-smoke-nodeids.txt
+            csk-e2e-smoke-results.xml
+          if-no-files-found: error
+
+  fast:
+    name: fast
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    needs: [typecheck, build, fast_ordinary, fast_protocol, fast_go_e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every fast child
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          expected = {"typecheck", "build", "fast_ordinary", "fast_protocol", "fast_go_e2e"}
+          actual = json.loads(os.environ["NEEDS_JSON"])
+          if set(actual) != expected:
+              raise SystemExit(f"required CI child mismatch: expected={sorted(expected)} actual={sorted(actual)}")
+          bad = {name: value.get("result") for name, value in actual.items() if value.get("result") != "success"}
+          if bad:
+              raise SystemExit(f"required CI children did not succeed: {bad}")
+          PY
+
+  merge_ordinary:
+    name: Merge ordinary / Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -31,14 +339,6 @@ jobs:
           repository: relux-works/curator-spec
           ref: 0c81c1f8d5321d822be2a2817b05aea03e656e15
           path: protocol-spec
-
-      - name: Checkout caller-supplied rc.6 candidate
-        if: matrix.python-version == '3.14'
-        uses: actions/checkout@v4
-        with:
-          repository: relux-works/curator-spec
-          ref: ${{ vars.CSK_E2E_CURATOR_SPEC_SHA }}
-          path: protocol-spec-candidate
 
       - name: Set up Go 1.25.5
         uses: actions/setup-go@v7
@@ -74,8 +374,133 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ".[dev]"
 
+      - name: Run full ordinary tests
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec/conformance/v1
+        run: >-
+          python -m pytest -v
+          --ignore=tests/test_protocol_conformance.py
+          --ignore=tests/test_go_build_e2e.py
+          -n 4 --dist=loadfile
+          --basetemp="${{ runner.temp }}/csk-ordinary"
+          -o cache_dir="${{ runner.temp }}/csk-pytest-cache"
+
+  merge_protocol:
+    name: Merge protocol / Python 3.14 on ${{ matrix.os }}
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout Curator Protocol conformance suite
+        uses: actions/checkout@v4
+        with:
+          repository: relux-works/curator-spec
+          ref: 0c81c1f8d5321d822be2a2817b05aea03e656e15
+          path: protocol-spec
+
+      - name: Set up Go 1.25.5
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25.5"
+          cache: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          allow-prereleases: true
+
+      - name: Configure git (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+
+      - name: Configure git (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+          git config --global core.autocrlf false
+          git config --global core.symlinks false
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+
+      - name: Run full protocol conformance suite
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec/conformance/v1
+        run: python -m pytest -v tests/test_protocol_conformance.py
+
+  merge_go_e2e:
+    name: Merge Go E2E / Python 3.14 on ${{ matrix.os }}
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout caller-supplied rc.6 candidate
+        uses: actions/checkout@v4
+        with:
+          repository: relux-works/curator-spec
+          ref: ${{ vars.CSK_E2E_CURATOR_SPEC_SHA }}
+          path: protocol-spec-candidate
+
+      - name: Set up Go 1.25.5
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25.5"
+          cache: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          allow-prereleases: true
+
+      - name: Configure git (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+
+      - name: Configure git (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+          git config --global core.autocrlf false
+          git config --global core.symlinks false
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+
       - name: Authenticate caller-supplied rc.6 candidate
-        if: matrix.python-version == '3.14'
         env:
           CANDIDATE_CHECKOUT: ${{ github.workspace }}/protocol-spec-candidate
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
@@ -88,22 +513,7 @@ jobs:
           assert head == '432eb2ee1fe2d6b271e37269f867c8851c325539', head;
           assert digest == '12e58b82579645ba1ccafba49d3e2dd3216005ddf37ae63c68a9fafd46773071', digest"
 
-      - name: Run ordinary tests
-        env:
-          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec/conformance/v1
-        run: >-
-          python -m pytest -v
-          --ignore=tests/test_protocol_conformance.py
-          --ignore=tests/test_go_build_e2e.py
-
-      - name: Run protocol conformance suite
-        if: matrix.python-version == '3.14'
-        env:
-          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec/conformance/v1
-        run: python -m pytest -v tests/test_protocol_conformance.py
-
       - name: Collect accepted Go E2E node IDs
-        if: matrix.python-version == '3.14'
         env:
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
           CSK_GO_V1_MANAGER_EXECUTABLE: csk
@@ -115,7 +525,6 @@ jobs:
           > csk-e2e-nodeids.txt
 
       - name: Run accepted Go E2E selection
-        if: matrix.python-version == '3.14'
         env:
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
           CSK_GO_V1_MANAGER_EXECUTABLE: csk
@@ -128,7 +537,6 @@ jobs:
           --junitxml=csk-e2e-results.xml
 
       - name: Upload accepted Go E2E evidence
-        if: matrix.python-version == '3.14'
         uses: actions/upload-artifact@v4
         with:
           name: csk-e2e-${{ matrix.os }}-py314
@@ -137,57 +545,25 @@ jobs:
             csk-e2e-results.xml
           if-no-files-found: error
 
-  typecheck:
-    name: Type check / mypy strict
+  merge:
+    name: merge
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    needs: [typecheck, build, merge_ordinary, merge_protocol, merge_go_e2e]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install package
+      - name: Require every merge child
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python - <<'PY'
+          import json
+          import os
 
-      - name: Run mypy
-        run: python -m mypy
-
-  build:
-    name: Build artifacts
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install build tools
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install build twine
-
-      - name: Build sdist and wheel
-        run: python -m build
-
-      - name: Verify metadata
-        run: twine check dist/*
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/
-          if-no-files-found: error
+          expected = {"typecheck", "build", "merge_ordinary", "merge_protocol", "merge_go_e2e"}
+          actual = json.loads(os.environ["NEEDS_JSON"])
+          if set(actual) != expected:
+              raise SystemExit(f"required CI child mismatch: expected={sorted(expected)} actual={sorted(actual)}")
+          bad = {name: value.get("result") for name, value in actual.items() if value.get("result") != "success"}
+          if bad:
+              raise SystemExit(f"required CI children did not succeed: {bad}")
+          PY
