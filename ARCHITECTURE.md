@@ -1,10 +1,11 @@
 # Architecture
 
-Translations: [Русский](ARCHITECTURE.ru.md). English is the source of truth.
+For vulnerability reporting procedures and platform hardening checklists, see
+[SECURITY.md](SECURITY.md). English is the source of truth.
 
 This document maps the codebase for contributors: the core concepts, the
 install pipeline, the module layout, the storage locations, and the security
-boundaries. Design decisions live in the RFCs under [docs/](docs/); this
+model. Design decisions live in the RFCs under [docs/](docs/); this
 document points at them where relevant.
 
 ## Core concepts
@@ -41,6 +42,18 @@ command shims by project/global scope and never address a `runtime_root` or
 `build_root` relative to `SKILL.md`. This remains true when an adapter mirrors
 context by copy instead of symlink, and it removes any dependency on
 zsh/bash/PowerShell profile initialization.
+
+The installer applies a whitelist stripped layout to protect agent context
+windows. Repository assets such as tests, CI configurations, and git metadata
+increase prompt token count when read by an agent. The whitelist strips
+non-essential files during copy so only required skill instructions reach prompt
+context.
+
+CocoaSkills maintains one canonical `.agents/skills/` root with per-agent
+adapters, unifying skill instructions across multiple AI coding tools. Agent
+platforms expect distinct directory paths such as `.claude/skills/` or
+`.cursor/rules/`. Each adapter tracks managed entries within its agent directory
+and mirrors context files by symlink or copy as required by the target platform.
 
 `skillspec.py` accepts manifest schemas 1 through 6. Schema 6 adds
 `build_roots` and the closed build command
@@ -94,6 +107,23 @@ driver fallback.
     remain for later GC.
 11. Run locked fail-safe garbage collection (`gc.py`). Hybrid materialization
     for a targeted project participates in the same project transaction.
+
+Content-hashed installs and pinned commit references preserve reproducibility
+across machines. Stage 3 resolves branch names and mutable tags to exact
+immutable commit hashes before the installer takes a raw snapshot. Following
+materialization, the installer records a SHA-256 digest of the installed file
+tree in the marker to detect local workspace modifications.
+
+Stage 5 evaluates every package against static security rules through an audit
+gate before materialization. Skill packages can request unsafe MCP servers,
+declare broad system permissions, or specify external dependencies. The audit
+gate rejects non-compliant closures before the pipeline copies files or launches
+compilers.
+
+Fail-closed installs enforce security guarantees across every execution stage.
+Fallback mechanisms and permissive error handling would allow unverified skills
+to materialize when checks fail. The pipeline terminates immediately whenever a
+driver, signature, audit policy, or platform control check fails.
 
 Global installation follows the same ordering in `global_install.py` and uses
 one all-or-rollback transaction for its contexts, marker-only nodes, runtimes,
@@ -243,6 +273,11 @@ Untrusted state is a miss: real install rebuilds into fresh protected state,
 dry-run reports `would-rebuild-untrusted-cache`, and status is non-current.
 Neither a marker nor matching hashes authenticate an unprotected cache.
 
+Protected build cache entries isolate compiled binaries from local file
+modifications. User-writable storage locations allow local scripts to overwrite
+binary entrypoints. The manager verifies file ownership, POSIX permissions, and
+Windows DACLs before it adopts cached bytes into an active installation.
+
 ### Fixed Go and process graph
 
 The protocol floor is Go 1.23, but the manager accepts only its
@@ -278,6 +313,12 @@ One operation carries manager-owned bounds of 120 seconds, 8 MiB combined
 output, 128 MiB artifact, 512 MiB per file, 1 GiB private storage, 2 GiB
 memory, and 64 processes. Native facilities determine which file/memory/process
 bounds are applied; they are not a hard aggregate descendant guarantee.
+
+Manager-owned execution isolates binary compilation from package-supplied
+instructions. In a conventional build, third-party build scripts or custom
+Makefiles execute arbitrary host commands. CocoaSkills controls the worker
+process hierarchy, toolchain environment, and compiler flags directly without
+executing package build hooks.
 
 ### Platform controls and evidence
 
@@ -343,7 +384,38 @@ Windows `.cmd` launchers call the quoted absolute `.exe`, pass `%*`, and
 preserve its exit status. Agent-facing resolution is project launcher, global
 launcher, then validated bare command; activation profiles are optional.
 
-## Security boundaries
+## Security model
+
+The CocoaSkills security model treats skill repositories and network remotes as
+untrusted third-party input. Refer to [SECURITY.md](SECURITY.md) for vulnerability
+disclosure procedures and platform hardening checklists.
+
+Untrusted skill repositories can request dangerous MCP capabilities, expose
+invalid manifests, or declare unsafe tool dependencies. The audit gate evaluates
+the transitive dependency graph against static security policies before writing
+files to disk or launching compilers. Source allowlists restrict git clone
+operations to approved host identity paths.
+
+Remote git branches and tags can be reassigned to malicious commits after initial
+inspection. Stage 3 ref resolution pins git references to explicit commit hashes
+and stores raw content in content-addressed snapshot paths. Following materialization,
+content-hashed install trees record file digests in `.csk-install.json` markers
+to detect workspace drift.
+
+Skill repositories can include extraneous documentation, test suites, or hidden
+files designed to manipulate agent prompt behavior. The whitelist stripped layout
+filters non-essential repository assets during materialization. Only prompt-facing
+instructions and references reach the agent context window.
+
+Untrusted packages can attempt command execution during build or runtime phases.
+Manager-owned execution enforces a closed Go compilation pipeline with fixed
+process bounds, isolated toolchains, and a protected build cache. Package descriptors
+cannot execute arbitrary build scripts or inject toolchain options.
+
+### Enforced boundaries
+
+CocoaSkills enforces specific security boundaries across installation,
+compilation, and materialization:
 
 - Names that become filesystem paths pass a safe identifier rule
   (`identifiers.py`), so third-party manifests cannot write outside their

@@ -434,8 +434,8 @@ without widening that boundary (`curator-spec` decision 0005):
 - pure Go assembly (`SFiles`) is accepted only for a vendored package that
   carries no cgo, C, C++, Objective-C, Fortran, SWIG, or host-object input and
   whose every `SFiles` entry is a regular file below the build root, so
-  `curator-build-source-v1` already hashes it — for example the
-  `coder/websocket` masks;
+  `curator-build-source-v1` already hashes it (for example the
+  `coder/websocket` masks);
 - `//go:cgo_import_dynamic` stays rejected in every non-standard `GoFiles`
   entry except the audited `golang.org/x/sys` module and its subpackages
   (`zsyscall` syscall trampolines);

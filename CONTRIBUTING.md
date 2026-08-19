@@ -51,11 +51,13 @@ history is indexed in [ARCHITECTURE.md](ARCHITECTURE.md#design-history).
 
 ## Documentation
 
-- English documents are the source of truth; Russian translations live next
-  to them with a `.ru.md` suffix and a header pointing at the original.
+- All documentation must follow [docs/prose-style.md](docs/prose-style.md).
+- `README.md` is the Russian entry point. `README.en.md` covers everything
+  in the Russian README and adds reference material (install matrix, CLI
+  reference, manifest specs); each file links the other in the first screen.
+- `ARCHITECTURE.md`, `SECURITY.md`, and `CONTRIBUTING.md` are English and the source of truth; a Russian translation, where one exists, uses the `.ru.md` suffix and a header pointing at the original.
 - Code blocks in a translation stay identical to the original.
-- The style avoids em dashes, guillemet quotes, and rhetorical antitheses;
-  state what things are.
+- The style avoids em dashes, guillemet quotes, and rhetorical antitheses; state what things are.
 
 ## Releases
 

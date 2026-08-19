@@ -1,6 +1,8 @@
 # Security Policy
 
-Translations: [Русский](SECURITY.ru.md). English is the source of truth.
+For the threat model mapping threats to architecture boundaries, see
+[Security model in ARCHITECTURE.md](ARCHITECTURE.md#security-model). English is
+the source of truth.
 
 ## Supported versions
 
@@ -131,9 +133,9 @@ descendant write confinement, and manager-owned bounds are not hard aggregate
 limits over every descendant.
 
 Logical build inputs, canonical receipt bytes, and artifact-relative
-bytes/hash/size form the portability boundary. CocoaSkills' physical
-`<csk-home>/builds/go-v1/<key>/` layout—with `csk-receipt.ccj.json` and
-`bin/<command>` or Windows `bin/<command>.exe`—and native protection backend do
+bytes/hash/size form the portability boundary. The physical layout under
+`<csk-home>/builds/go-v1/<key>/` (which contains `csk-receipt.ccj.json` and
+`bin/<command>` or Windows `bin/<command>.exe`) and the native protection backend do
 not. An untrusted boundary is reported as `would-rebuild-untrusted-cache` by
 dry-run rather than being adopted.
 
@@ -155,7 +157,7 @@ older than 24 hours; uncertain state is retained.
 
 The threat model treats skill repositories as third-party input. The
 boundaries are described in
-[ARCHITECTURE.md, Security boundaries](ARCHITECTURE.md#security-boundaries),
+[ARCHITECTURE.md, Security model](ARCHITECTURE.md#security-model),
 and the audit subsystem is specified in
 [docs/audit-design.md](docs/audit-design.md) and
 [docs/v0.8-design.md](docs/v0.8-design.md).
