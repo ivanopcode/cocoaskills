@@ -86,6 +86,13 @@ fragments. Short enumerations (two to four items) stay inline with commas.
 Numbered steps are for procedures the reader executes. Each step names the
 command and its observable result.
 
+Comparative overviews may use a structured breakdown (table or per-item
+lead-ins with short points) when readers need to scan; reasoning inside each
+item stays prose.
+
+Collapsible `<details>` blocks are allowed for parallel variants (install
+methods, command groups); the summary line names the variant exactly.
+
 ## Tone
 
 State facts flatly. No marketing register: no "powerful", "seamless",
