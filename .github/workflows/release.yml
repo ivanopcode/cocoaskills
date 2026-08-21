@@ -179,7 +179,14 @@ jobs:
     name: Bump Homebrew tap formula
     needs: [build, publish-pypi]
     runs-on: ubuntu-latest
-    if: needs.build.outputs.prerelease == 'false'
+    # publish-testpypi is skipped on stable releases, and a skipped job in the
+    # transitive needs chain skips dependents unless the condition opts out of
+    # the implicit success() with always(); require the direct needs
+    # explicitly instead.
+    if: >-
+      ${{ always() && needs.build.result == 'success' &&
+          needs.publish-pypi.result == 'success' &&
+          needs.build.outputs.prerelease == 'false' }}
     permissions:
       contents: read
     steps:
