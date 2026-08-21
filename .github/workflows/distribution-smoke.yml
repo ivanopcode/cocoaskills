@@ -13,9 +13,9 @@ on:
         required: true
         type: string
       include_homebrew:
-        description: "Also test the Homebrew tap. Enable after the tap formula is bumped."
+        description: "Also test the Homebrew tap. The Release workflow bumps the formula automatically."
         required: false
-        default: false
+        default: true
         type: boolean
 
 permissions:
@@ -313,9 +313,13 @@ jobs:
     name: homebrew / macos-latest
     needs: resolve-version
     runs-on: macos-latest
+    # The Release workflow bumps the tap in its own final job, so the formula is
+    # only guaranteed current once that whole run has completed. The `release:
+    # published` event fires before the bump, so this lane skips it.
     if: >-
-      ${{ github.event_name == 'workflow_dispatch' && inputs.include_homebrew &&
-          needs.resolve-version.outputs.prerelease == 'false' }}
+      ${{ needs.resolve-version.outputs.prerelease == 'false' &&
+          github.event_name != 'release' &&
+          (github.event_name != 'workflow_dispatch' || inputs.include_homebrew) }}
     defaults:
       run:
         shell: bash
