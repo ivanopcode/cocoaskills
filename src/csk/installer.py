@@ -21,6 +21,7 @@ from typing import Any, Protocol
 from . import (
     adapters,
     audit_registry,
+    build_ssh as build_ssh_module,
     closure,
     consumers,
     dev_substitutions,
@@ -49,7 +50,7 @@ from . import build_repository_pipeline
 from . import source_identity as source_identity_mod
 from .audit import detectors as audit_detectors
 from .audit.capabilities import CapabilityManifest
-from .audit.model import Severity
+from .audit.model import Finding as AuditFinding, Severity
 from .audit import pipeline as audit_pipeline
 from .builds import cache as build_cache
 from .builds import go_v1
@@ -57,6 +58,7 @@ from .builds import metadata as build_metadata
 from .builds import planner as build_planner
 from .builds import source as build_source
 from .builds import toolchain as build_toolchain
+from . import config as config_module
 from .config import GlobalConfig, ProjectConfig
 from .skillspec import CommandSpec
 
@@ -80,6 +82,9 @@ class InstallOptions:
     ssh_identity: str | None = None
     ssh_agent: str | None = None
     ssh_known_hosts: str | None = None
+    # True only when the CLI runs on an operator terminal; enables the
+    # build-SSH precheck prompt. Never enabled for scripted runs.
+    interactive: bool = False
 
 
 @dataclass
@@ -493,6 +498,7 @@ def _install_project_once(
                 substitutions=dev_manifest,
                 operator_search_path=operator_search_path,
                 ssh_credentials=operator_ssh_credentials,
+                interactive=options.interactive and not options.dry_run,
                 stack=stack,
                 dry_run=options.dry_run,
                 marker_roots=(
@@ -760,6 +766,33 @@ def _external_git_tool(
     )
 
 
+def _vendored_inert_text(snapshot_root: Path, finding: AuditFinding) -> bool:
+    """True for a high finding in non-executable text below a vendored module.
+
+    The external build session runs exactly ``go list`` and ``go build`` with
+    hooks, generators, and helpers denied, so prose in a vendored dependency
+    (a third-party Makefile or README) never executes.  Such text stays an
+    advisory finding but does not block the install; an executable file below
+    ``vendor/`` and every critical finding still block.
+    """
+
+    if finding.severity is not Severity.HIGH:
+        return False
+    if finding.location is None:
+        return False
+    segments = finding.location.file.split("/")
+    if "vendor" not in segments[:-1]:
+        return False
+    target = snapshot_root.joinpath(*segments)
+    try:
+        info = target.lstat()
+    except OSError:
+        return False
+    if not stat.S_ISREG(info.st_mode):
+        return False
+    return not info.st_mode & 0o111
+
+
 def _external_static_audit(subject: build_repository_pipeline.AuditSubject) -> None:
     findings = audit_detectors.detect_snapshot(
         subject.snapshot_root, CapabilityManifest.implicit_none()
@@ -768,6 +801,7 @@ def _external_static_audit(subject: build_repository_pipeline.AuditSubject) -> N
         finding
         for finding in findings
         if finding.severity in {Severity.HIGH, Severity.CRITICAL}
+        and not _vendored_inert_text(subject.snapshot_root, finding)
     ]
     if blocked:
         raise InstallError(
@@ -857,6 +891,182 @@ def _external_effective_state(
     )
 
 
+def _rule_credentials(
+    rule: build_ssh_module.BuildSSHRule,
+    canonical_identity: str,
+) -> git_admission.OperatorSSHCredentials:
+    """Materialize one configured scope into validated operator credentials."""
+
+    try:
+        return git_admission.capture_operator_ssh_credentials(
+            identity=(
+                os.fspath(Path(rule.identity).expanduser())
+                if rule.identity
+                else None
+            ),
+            agent=rule.agent,
+            known_hosts=(
+                os.fspath(Path(rule.known_hosts).expanduser())
+                if rule.known_hosts
+                else None
+            ),
+        )
+    except git_admission.GitAdmissionError as exc:
+        raise InstallError(
+            f"build_ssh scope {rule.scope!r} selected for {canonical_identity}: {exc}"
+        ) from exc
+
+
+def _prompt_build_ssh_rule(
+    skill_name: str,
+    command: str,
+    canonical_identity: str,
+) -> tuple[build_ssh_module.BuildSSHRule | None, bool]:
+    """Ask the operator for credentials for one unmatched SSH build repository.
+
+    Returns (rule, persist). The rule is None when the operator declines; the
+    caller then fails closed with the non-interactive remedy. Nothing is
+    persisted without the explicit scope choice.
+    """
+
+    namespace = build_ssh_module.default_scope(canonical_identity)
+    host = canonical_identity.split("/")[0]
+    print(
+        f"Skill {skill_name!r} builds {command!r} from the private SSH repository\n"
+        f"  {canonical_identity}\n"
+        "No build-SSH credentials are configured for this scope."
+    )
+    agent_answer = input("Use your ssh-agent (SSH_AUTH_SOCK)? [Y/n] ").strip().lower()
+    agent = "auto" if agent_answer in {"", "y", "yes"} else None
+    identity_raw = input(
+        "Identity file (a .pub pins which agent key is offered; empty for none): "
+    ).strip()
+    identity = identity_raw or None
+    if agent is None and identity is None:
+        return None, False
+    scope_answer = input(
+        "Persist to config for future installs?\n"
+        f"  [1] {namespace}   (default)\n"
+        f"  [2] {host}\n"
+        "  [3] this run only\n"
+        "  or type a custom scope: "
+    ).strip()
+    persist = True
+    if scope_answer in {"", "1"}:
+        scope = namespace
+    elif scope_answer == "2":
+        scope = host
+    elif scope_answer == "3":
+        scope, persist = namespace, False
+    else:
+        scope = scope_answer
+    try:
+        build_ssh_module.validate_scope(scope)
+        rule = build_ssh_module.BuildSSHRule(
+            scope=scope, agent=agent, identity=identity, known_hosts=None
+        )
+        if not build_ssh_module.match((rule,), canonical_identity):
+            raise build_ssh_module.BuildSSHError(
+                f"scope {scope!r} does not cover {canonical_identity}"
+            )
+    except build_ssh_module.BuildSSHError as exc:
+        print(f"Rejected: {exc}")
+        return None, False
+    return rule, persist
+
+
+def _resolve_build_ssh_credentials(
+    config: GlobalConfig,
+    selected: list[tuple[closure.ClosureNode, str]],
+    substitutions: dev_substitutions.DevManifest,
+    *,
+    run_wide: git_admission.OperatorSSHCredentials | None,
+    interactive: bool,
+    messages: list[str],
+    dry_run: bool,
+) -> dict[tuple[str, str], git_admission.OperatorSSHCredentials | None]:
+    """Select operator SSH credentials for every external build repository.
+
+    Precedence: an explicit run-wide selection (flags or CSK_BUILD_SSH_*)
+    covers every repository; otherwise the longest matching ``build_ssh``
+    config scope covers its repositories; an interactive terminal may fill a
+    gap on the spot; anything still unselected fails closed with the exact
+    command that would fix it. Package data never reaches this choice: the
+    match key is the canonical identity the manifest is already locked to.
+    """
+
+    run_selected = run_wide if run_wide is not None and run_wide.selected else None
+    rules = config.build_ssh
+    persisted: list[build_ssh_module.BuildSSHRule] = []
+    selection: dict[
+        tuple[str, str], git_admission.OperatorSSHCredentials | None
+    ] = {}
+    missing: list[tuple[str, str, str]] = []
+    for node, name in selected:
+        key = (node.name, name)
+        command = node.spec.commands[name]
+        repository = node.spec.build_repositories[command.repository or ""]
+        substitution = substitutions.build_repository_substitution(
+            node.name, repository.name
+        )
+        if substitution is not None and substitution.path is not None:
+            selection[key] = None
+            continue
+        git = repository.git if substitution is None else substitution.git
+        assert git is not None
+        source = build_repository_model.parse_repository_source(git)
+        if source.transport != "ssh":
+            selection[key] = None
+            continue
+        if run_selected is not None:
+            selection[key] = run_selected
+            if dry_run:
+                messages.append(
+                    f"external build ssh: {source.identity} <- operator flags/env"
+                )
+            continue
+        rule = build_ssh_module.match(rules, source.identity)
+        if rule is None and interactive:
+            rule, persist = _prompt_build_ssh_rule(node.name, name, source.identity)
+            if rule is not None:
+                rules = rules + (rule,)
+                if persist:
+                    persisted.append(rule)
+        if rule is None:
+            missing.append((node.name, name, source.identity))
+            continue
+        selection[key] = _rule_credentials(rule, source.identity)
+        if dry_run:
+            messages.append(
+                f"external build ssh: {source.identity} <- config scope {rule.scope!r}"
+            )
+    if persisted:
+        config_module.save_config(replace(config, build_ssh=rules))
+        for rule in persisted:
+            messages.append(
+                f"build_ssh scope {rule.scope!r} saved to {config.path}"
+            )
+    if missing:
+        lines = [
+            f"{git_admission.SSH_CREDENTIAL_MISSING}: "
+            "external build repositories need SSH credentials:",
+        ]
+        for skill_name, name, identity in missing:
+            lines.append(f"  {identity} (command {name!r} of skill {skill_name!r})")
+        first = missing[0][2]
+        lines.append(
+            "select credentials with: csk config build-ssh add "
+            f"{build_ssh_module.default_scope(first)} --agent auto "
+            "--identity ~/.ssh/<key>.pub"
+        )
+        lines.append(
+            "or pass --build-ssh-agent/--build-ssh-identity, "
+            "or set CSK_BUILD_SSH_AGENT/CSK_BUILD_SSH_IDENTITY"
+        )
+        raise InstallError("\n".join(lines))
+    return selection
+
+
 def _publish_external_builds(
     config: GlobalConfig,
     *,
@@ -868,7 +1078,9 @@ def _publish_external_builds(
     dry_run: bool,
     marker_roots: tuple[Path, ...],
     ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
+    interactive: bool = False,
 ) -> tuple[dict[str, dict[str, _PublishedBuild]], list[str]]:
+    messages: list[str] = []
     selected = [
         (node, name)
         for node in nodes
@@ -881,21 +1093,32 @@ def _publish_external_builds(
             "go-repository-v1 is supported only on macOS and Windows; "
             "Linux qualification is deferred"
         )
+    ssh_selection = _resolve_build_ssh_credentials(
+        config,
+        selected,
+        substitutions,
+        run_wide=ssh_credentials,
+        interactive=interactive,
+        messages=messages,
+        dry_run=dry_run,
+    )
     require_ssh = any(
-        (
-            substitutions.build_repository_substitution(
-                node.name, node.spec.commands[name].repository or ""
+        credentials is not None for credentials in ssh_selection.values()
+    )
+    git_tools: dict[
+        git_admission.OperatorSSHCredentials | None, git_admission.GitTool
+    ] = {}
+
+    def _git_tool_for(
+        credentials: git_admission.OperatorSSHCredentials | None,
+    ) -> git_admission.GitTool:
+        if credentials not in git_tools:
+            git_tools[credentials] = _external_git_tool(
+                operator_search_path,
+                require_ssh=credentials is not None,
+                ssh_credentials=credentials,
             )
-            or node.spec.build_repositories[node.spec.commands[name].repository or ""]
-        ).transport
-        == "ssh"
-        for node, name in selected
-    )
-    git_tool = _external_git_tool(
-        operator_search_path,
-        require_ssh=require_ssh,
-        ssh_credentials=ssh_credentials,
-    )
+        return git_tools[credentials]
     private_base = Path(
         stack.enter_context(
             tempfile.TemporaryDirectory(prefix="csk-external-build-operation-")
@@ -925,7 +1148,6 @@ def _publish_external_builds(
     )
     project_identity = locking.canonical_project_identity(project_root)
     published: dict[str, dict[str, _PublishedBuild]] = {}
-    messages: list[str] = []
     for node, name in selected:
         command = node.spec.commands[name]
         assert command.repository is not None and command.target is not None
@@ -936,11 +1158,13 @@ def _publish_external_builds(
         effective = _external_effective_state(
             project_identity, repository, substitution
         )
+        git_tool = _git_tool_for(ssh_selection[(node.name, name)])
 
         def acquire(
             repository: build_repository_model.BuildRepository = repository,
             substitution: dev_substitutions.BuildRepositorySubstitution | None = substitution,
             effective: build_repository_pipeline.EffectiveState = effective,
+            git_tool: git_admission.GitTool = git_tool,
         ) -> git_admission.Snapshot:
             if substitution is not None and substitution.path is not None:
                 return git_admission.admit_local(substitution.path, git_tool)
@@ -2294,7 +2518,13 @@ def _build_plans(
             git_ops.archive(repo, resolved.commit, snap)
         if git_ops.repository_has_submodules(snap):
             raise InstallError(f"Submodules are unsupported in MVP: {decl.source}")
-        spec = skillspec.load_skill_spec(snap)
+        try:
+            spec = skillspec.load_skill_spec(snap)
+        except skillspec.SkillSpecError as exc:
+            raise InstallError(
+                f"Invalid skill manifest for {decl.name} "
+                f"{resolved.kind} {resolved.ref}: {exc}"
+            ) from exc
         plans.append(SkillPlan(decl=decl, resolved=resolved, repo=repo, snapshot=snap, spec=spec))
     return plans
 

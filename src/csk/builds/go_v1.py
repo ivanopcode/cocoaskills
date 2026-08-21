@@ -3031,7 +3031,19 @@ def _manager_package_root(launcher: Path) -> Path:
             candidate = Path(child.path) / "site-packages" / "csk"
             if candidate.exists():
                 candidates.append(candidate)
-    distinct = tuple(dict.fromkeys(candidates))
+    # A relocated prefix may expose the same tree under aliased library
+    # roots (virtualenv writes ``lib64`` as a symlink to ``lib``), so compare
+    # candidates by their canonical identity, not by spelling.
+    resolved: list[Path] = []
+    for candidate in candidates:
+        try:
+            resolved.append(candidate.resolve(strict=True))
+        except (OSError, RuntimeError) as exc:
+            raise GoV1Error(
+                CODE_WORKER_IDENTITY_INVALID,
+                "cannot inspect the installed manager Python prefix",
+            ) from exc
+    distinct = tuple(dict.fromkeys(resolved))
     if len(distinct) != 1:
         raise GoV1Error(
             CODE_WORKER_IDENTITY_INVALID,
@@ -3626,8 +3638,20 @@ def _manager_executable_from_argv0(
         # distlib's Windows console-script __main__ removes the .exe suffix
         # from sys.argv[0].  Restore only that fixed sibling suffix; resolution
         # and identity verification still fail closed on absence or replacement.
-        return result.with_name(result.name + ".exe")
-    return result
+        result = result.with_name(result.name + ".exe")
+    # Operators legitimately start the manager through a package-manager
+    # symlink (Homebrew bin/, pipx and uv ~/.local/bin shims).  The protocol
+    # requires the *resolved* launcher to be a canonical regular installed
+    # file, so canonicalize the operator-owned argv0 here, before identity
+    # verification; every substitution control downstream still fails closed
+    # on the resolved path (lstat link/nlink checks and the open-time
+    # device/inode proof).
+    try:
+        return result.resolve(strict=True)
+    except (OSError, RuntimeError):
+        # Leave a non-resolvable path untouched; identity verification
+        # rejects it with its own fail-closed error.
+        return result
 
 
 def _manager_identity_from_mapping(

@@ -174,3 +174,49 @@ jobs:
           python .github/scripts/release_contract.py verify-published
           --tag "${{ needs.build.outputs.tag }}"
           --repo "${{ github.repository }}"
+
+  bump-homebrew-tap:
+    name: Bump Homebrew tap formula
+    needs: [build, publish-pypi]
+    runs-on: ubuntu-latest
+    if: needs.build.outputs.prerelease == 'false'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout release contract
+        uses: actions/checkout@v4
+
+      - name: Download checksums
+        uses: actions/download-artifact@v4
+        with:
+          name: checksums
+          path: dist
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.HOMEBREW_TAP_REPOSITORY || 'ivanopcode/homebrew-csk' }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Rewrite tap formula from verified checksums
+        id: formula
+        run: >-
+          python .github/scripts/bump_homebrew_formula.py
+          --tag "${{ needs.build.outputs.tag }}"
+          --repo "${{ github.repository }}"
+          --checksums dist/SHA256SUMS
+          --formula homebrew-tap/Formula/cocoaskills.rb
+
+      - name: Commit and push tap bump
+        if: steps.formula.outputs.changed == 'true'
+        working-directory: homebrew-tap
+        env:
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/cocoaskills.rb
+          git commit -m "Bump cocoaskills to ${RELEASE_TAG}"
+          git push

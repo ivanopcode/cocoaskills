@@ -250,7 +250,16 @@ def _resolve_node(
     )
     if git_ops.repository_has_submodules(snap):
         raise ClosureError(f"Submodules are unsupported in MVP: {item.source}")
-    spec = skillspec.load_skill_spec(snap)
+    try:
+        spec = skillspec.load_skill_spec(snap)
+    except skillspec.SkillSpecError as exc:
+        # Name the closure node that carries the broken manifest: without the
+        # provenance the error surfaces under the root declaration and reads
+        # as if the declaring skill itself were invalid.
+        raise ClosureError(
+            f"Invalid skill manifest for {item.name} "
+            f"{resolved.kind} {resolved.ref} (via {item.chain}): {exc}"
+        ) from exc
     identity = canonical_source_identity(item.git) if item.git else None
     decl = manifest.SkillDecl(
         name=item.name,
