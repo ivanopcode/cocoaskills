@@ -342,6 +342,9 @@ jobs:
       - name: Install with Homebrew
         run: |
           brew tap ivanopcode/csk
+          # Homebrew 6 refuses to load formulae from non-official taps until
+          # the operator trusts them explicitly.
+          brew trust --tap ivanopcode/csk
           brew install cocoaskills
 
       - name: Verify installed CLI version
