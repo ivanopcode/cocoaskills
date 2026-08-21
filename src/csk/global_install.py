@@ -523,6 +523,7 @@ def _install_once(
                 ),
                 operator_search_path=operator_search_path,
                 ssh_credentials=operator_ssh_credentials,
+                interactive=options.interactive and not options.dry_run,
                 stack=stack,
                 dry_run=options.dry_run,
                 marker_roots=(global_skills_root(csk_home),),

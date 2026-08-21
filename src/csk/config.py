@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import ipaddress
 import os
@@ -12,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import build_ssh as build_ssh_module
 from . import identifiers, protocol_json
 from .audit import backend_config
 from .audit.source_policy import SourcePolicy, SourcePolicyError, parse_source_policy
@@ -56,6 +58,7 @@ MANAGER_KEYS = frozenset(
         "allowed_sources",
         "audit",
         "audit_registries",
+        "build_ssh",
         "disable_builtin_registries",
     }
 )
@@ -127,6 +130,10 @@ class GlobalConfig:
     # entries unless the defaults are disabled (RFC 0008).
     audit_registries: tuple[RegistryConfig, ...] = ()
     disable_builtin_registries: bool = False
+    # Operator-scoped SSH selections for external build repositories: canonical
+    # identity prefixes mapped to credential material. Flags and CSK_BUILD_SSH_*
+    # keep precedence; see build_ssh.parse_rules for the closed grammar.
+    build_ssh: tuple[build_ssh_module.BuildSSHRule, ...] = ()
 
     def trusted_registries(self) -> tuple[RegistryConfig, ...]:
         """Effective registries: built-in defaults plus configured entries.
@@ -287,6 +294,10 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
         raise ConfigError("Global config field 'allowed_sources' must be a list of non-empty strings")
 
     audit_registries = _parse_audit_registries(data.get("audit_registries"))
+    try:
+        build_ssh_rules = build_ssh_module.parse_rules(data.get("build_ssh"))
+    except build_ssh_module.BuildSSHError as exc:
+        raise ConfigError(f"Global config field 'build_ssh' is invalid: {exc}") from exc
     disable_builtin = data.get("disable_builtin_registries", False)
     if not isinstance(disable_builtin, bool):
         raise ConfigError("Global config field 'disable_builtin_registries' must be a boolean")
@@ -343,6 +354,7 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
         allowed_sources=tuple(allowed_sources_raw),
         audit_registries=audit_registries,
         disable_builtin_registries=disable_builtin,
+        build_ssh=build_ssh_rules,
     )
 
 
@@ -381,6 +393,8 @@ def save_config(config: GlobalConfig) -> None:
         ]
     if config.disable_builtin_registries:
         data["disable_builtin_registries"] = True
+    if config.build_ssh:
+        data["build_ssh"] = build_ssh_module.serialize_rules(config.build_ssh)
     _write_json_atomic(config.path, data)
 
 
@@ -430,19 +444,9 @@ def add_project(
         project_alias=project_alias or alias,
         checkout_alias=checkout_alias or alias,
     )
-    return GlobalConfig(
-        path=config.path,
-        skills_root=config.skills_root,
-        preferred_locale=config.preferred_locale,
-        default_agents=list(config.default_agents),
-        adapter_mode=config.adapter_mode,
-        worktree_alias_pattern=config.worktree_alias_pattern,
-        projects=projects,
-        audit=config.audit,
-        allowed_sources=config.allowed_sources,
-        audit_registries=config.audit_registries,
-        disable_builtin_registries=config.disable_builtin_registries,
-    )
+    # dataclasses.replace keeps every other field, so a new config field can
+    # never be silently dropped by project registration again.
+    return dataclasses.replace(config, projects=projects)
 
 
 def validate_skills_root_for_work(config: GlobalConfig) -> None:

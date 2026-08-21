@@ -110,6 +110,43 @@ csk install --build-ssh-agent --build-ssh-identity ~/.ssh/id_ed25519.pub
 csk install --build-ssh-agent
 ```
 
+### Persistent scoped selection
+
+Instead of repeating flags or environment values, the operator may store the
+selection in the global config, keyed by a canonical-identity prefix:
+
+```json
+"build_ssh": {
+  "gitlab.example.com": {"identity": "~/.ssh/personal"},
+  "gitlab.example.com/portals/infra": {
+    "agent": "auto",
+    "identity": "~/.ssh/work.pub"
+  }
+}
+```
+
+A scope is a segment prefix of the schema-7 canonical repository identity
+(`host/path`): matching happens only on whole `/` boundaries, and the longest
+matching scope wins, so a key granted to one namespace never reaches a
+repository outside it. Flags win over `CSK_BUILD_SSH_*`, and both win over
+every configured scope. Manage the map with:
+
+```sh
+csk config build-ssh add gitlab.example.com/portals/infra \
+    --agent auto --identity ~/.ssh/work.pub
+csk config build-ssh list
+csk config build-ssh remove gitlab.example.com/portals/infra
+```
+
+Before any fetch, the install resolves credentials for every declared SSH
+build repository. On an operator terminal an unmatched repository prompts for
+a selection — the prompt names the requesting skill and the full repository
+identity, and persists only with an explicit scope choice. A non-interactive
+run fails closed with `build_repository_ssh_credential_missing` and the exact
+`csk config build-ssh add` command that would fix it. `csk install --dry-run`
+reports which source — flags, environment, or a config scope — covered each
+repository.
+
 CocoaSkills writes a private wrapper carrying one pinned `ssh` argv and points
 `GIT_SSH_COMMAND` at it. The wrapper refuses to run unless Git hands it exactly
 the host and `git-upload-pack` invocation that argv was pinned to, so no

@@ -13,6 +13,7 @@ from . import (
     adapters,
     attest,
     audit_registry,
+    build_ssh,
     config,
     deprecation,
     dev_substitutions,
@@ -246,6 +247,49 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Example:\n  csk config show",
     )
+    build_ssh_parser = config_sub.add_parser(
+        "build-ssh",
+        help="Manage operator SSH credential scopes for external build repositories.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "A scope is a canonical-identity prefix (host or host/namespace);\n"
+            "the longest matching scope selects the credentials for a build\n"
+            "repository. Flags and CSK_BUILD_SSH_* still win over every scope.\n\n"
+            "Examples:\n"
+            "  csk config build-ssh add gitlab.example.com/portals/infra \\\n"
+            "      --agent auto --identity ~/.ssh/work.pub\n"
+            "  csk config build-ssh list\n"
+            "  csk config build-ssh remove gitlab.example.com/portals/infra"
+        ),
+    )
+    build_ssh_sub = build_ssh_parser.add_subparsers(
+        dest="build_ssh_command", required=True
+    )
+    build_ssh_add = build_ssh_sub.add_parser(
+        "add", help="Add or replace one credential scope."
+    )
+    build_ssh_add.add_argument("scope", help="canonical-identity prefix, e.g. gitlab.example.com/group")
+    build_ssh_add.add_argument(
+        "--agent",
+        nargs="?",
+        const="auto",
+        default=None,
+        metavar="SOCKET",
+        help="use the operator ssh-agent; bare flag or 'auto' adopts SSH_AUTH_SOCK",
+    )
+    build_ssh_add.add_argument(
+        "--identity", default=None, metavar="PATH",
+        help="identity file; a .pub pins which agent key is offered",
+    )
+    build_ssh_add.add_argument(
+        "--known-hosts", default=None, metavar="PATH",
+        help="known_hosts override for this scope",
+    )
+    build_ssh_sub.add_parser("list", help="List configured credential scopes.")
+    build_ssh_remove = build_ssh_sub.add_parser(
+        "remove", help="Remove one credential scope."
+    )
+    build_ssh_remove.add_argument("scope")
 
     shell = sub.add_parser(
         "shell-init",
@@ -576,6 +620,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return _cmd_init(args)
     if args.command == "config" and args.config_command == "show":
         return _cmd_config_show()
+    if args.command == "config" and args.config_command == "build-ssh":
+        return _cmd_config_build_ssh(args)
     if args.command == "project" and args.project_command == "add":
         return _cmd_project_add(args.alias, Path(args.path))
     if args.command == "project" and args.project_command == "resolve":
@@ -829,6 +875,35 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
     if default_agents_raw is None and not non_interactive:
         default_agents_raw = input("default_agents comma-separated [codex_cli]: ").strip()
     default_agents = [item.strip() for item in (default_agents_raw or "").split(",") if item.strip()] or ["codex_cli"]
+    build_ssh_rules: tuple[build_ssh.BuildSSHRule, ...] = ()
+    if not non_interactive:
+        wants_ssh = input(
+            "Configure SSH credentials for private build repositories now? [y/N] "
+        ).strip().lower()
+        if wants_ssh in {"y", "yes"}:
+            scope_raw = input("Scope (host or host/namespace): ").strip()
+            agent_answer = input("Use your ssh-agent (SSH_AUTH_SOCK)? [Y/n] ").strip().lower()
+            agent = "auto" if agent_answer in {"", "y", "yes"} else None
+            identity_raw = input(
+                "Identity file (a .pub pins which agent key is offered; empty for none): "
+            ).strip()
+            try:
+                build_ssh.validate_scope(scope_raw)
+                if agent is None and not identity_raw:
+                    raise build_ssh.BuildSSHError(
+                        "select at least one of agent or identity"
+                    )
+                build_ssh_rules = (
+                    build_ssh.BuildSSHRule(
+                        scope=scope_raw,
+                        agent=agent,
+                        identity=identity_raw or None,
+                        known_hosts=None,
+                    ),
+                )
+            except build_ssh.BuildSSHError as exc:
+                print(f"Skipping build-ssh setup: {exc}")
+                print("You can configure it later with: csk config build-ssh add")
     cfg = config.GlobalConfig(
         path=path,
         skills_root=Path(skills_root).expanduser(),
@@ -837,6 +912,7 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
         adapter_mode="auto",
         worktree_alias_pattern=config.DEFAULT_WORKTREE_ALIAS_PATTERN,
         projects={},
+        build_ssh=build_ssh_rules,
     )
     config.save_config(cfg)
     print(f"Wrote {path}")
@@ -893,6 +969,56 @@ def _cmd_config_show() -> int:
     return EXIT_OK
 
 
+def _cmd_config_build_ssh(args: argparse.Namespace) -> int:
+    cfg = config.load_config()
+    if args.build_ssh_command == "list":
+        if not cfg.build_ssh:
+            print("No build-ssh scopes configured")
+            return EXIT_OK
+        for rule in sorted(cfg.build_ssh, key=lambda item: item.scope):
+            parts = []
+            if rule.agent is not None:
+                parts.append(f"agent={rule.agent}")
+            if rule.identity is not None:
+                parts.append(f"identity={rule.identity}")
+            if rule.known_hosts is not None:
+                parts.append(f"known_hosts={rule.known_hosts}")
+            print(f"{rule.scope}: " + " ".join(parts))
+        return EXIT_OK
+    if args.build_ssh_command == "remove":
+        remaining = tuple(
+            rule for rule in cfg.build_ssh if rule.scope != args.scope
+        )
+        if len(remaining) == len(cfg.build_ssh):
+            print(f"No build-ssh scope {args.scope!r}", file=sys.stderr)
+            return EXIT_CONFIG
+        config.save_config(replace(cfg, build_ssh=remaining))
+        print(f"Removed build-ssh scope {args.scope}")
+        return EXIT_OK
+    # add
+    if args.agent is None and args.identity is None:
+        print(
+            "build-ssh add requires at least one of --agent or --identity",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG
+    try:
+        build_ssh.validate_scope(args.scope)
+        rule = build_ssh.BuildSSHRule(
+            scope=args.scope,
+            agent=args.agent,
+            identity=args.identity,
+            known_hosts=args.known_hosts,
+        )
+    except build_ssh.BuildSSHError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_CONFIG
+    others = tuple(r for r in cfg.build_ssh if r.scope != args.scope)
+    config.save_config(replace(cfg, build_ssh=others + (rule,)))
+    print(f"Configured build-ssh scope {args.scope}")
+    return EXIT_OK
+
+
 def _cmd_project_add(alias: str, path: Path) -> int:
     cfg = config.load_config()
     updated = config.add_project(cfg, alias, path)
@@ -942,6 +1068,7 @@ def _cmd_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
         ssh_identity=getattr(args, "build_ssh_identity", None),
         ssh_agent=getattr(args, "build_ssh_agent", None),
         ssh_known_hosts=getattr(args, "build_ssh_known_hosts", None),
+        interactive=sys.stdin.isatty() and sys.stdout.isatty(),
     )
     cfg = _cfg_with_audit_override(cfg, args)
     results = installer.install(cfg, alias=args.alias, options=options)
@@ -989,6 +1116,7 @@ def _cmd_global_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> i
         ssh_identity=getattr(args, "build_ssh_identity", None),
         ssh_agent=getattr(args, "build_ssh_agent", None),
         ssh_known_hosts=getattr(args, "build_ssh_known_hosts", None),
+        interactive=sys.stdin.isatty() and sys.stdout.isatty(),
     )
     cfg = _cfg_with_audit_override(cfg, args)
     result = global_install.install(cfg, options=options, only=_global_only(args))
