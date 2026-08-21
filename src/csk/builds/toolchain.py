@@ -1034,10 +1034,19 @@ def _select_toolchain(
             f"selected executable is not {expected_name}",
         )
     if not _path_name_matches(resolved_launcher.parent.name, "bin", host):
-        raise ToolchainError(
+        error = ToolchainError(
             "toolchain_executable_mismatch",
             "selected Go executable is not below a GOROOT bin directory",
         )
+        # The detail is the cross-implementation protocol string; the operator
+        # remedy rides along as a note (see the toolchain_timeout pattern).
+        error.add_note(
+            "version-manager shims (goenv, asdf, mise) are wrapper scripts "
+            "outside the fingerprinted toolchain tree and are never accepted; "
+            "put the real <GOROOT>/bin on PATH first, for example "
+            "PATH=\"$(go env GOROOT)/bin:$PATH\""
+        )
+        raise error
     goroot = resolved_launcher.parent.parent
     try:
         goroot = goroot.resolve(strict=True)
