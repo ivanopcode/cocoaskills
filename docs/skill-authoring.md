@@ -1,13 +1,10 @@
-# CocoaSkills Skill Authoring Guide
+# Руководство по созданию скиллов CocoaSkills
 
-This guide defines the recommended contract for CocoaSkills-compatible skill
-repositories. It is the practical author-facing companion to
-[RFC 0003](v0.5-design.md) and the current
-[accepted rc.5 Curator Protocol core](https://github.com/relux-works/curator-spec/blob/v1.0.0-rc.5/protocol/core.md).
+Это руководство определяет рекомендуемый контракт для репозиториев скиллов CocoaSkills. Документ служит практическим руководством для авторов к [RFC 0003](v0.5-design.md) и текущему [принятому ядру протокола Curator rc.5](https://github.com/relux-works/curator-spec/blob/v1.0.0-rc.5/protocol/core.md).
 
-## 1. Repository Layout
+## 1. Структура репозитория
 
-Recommended layout:
+Рекомендуемая структура каталогов:
 
 ```text
 skill-example/
@@ -23,44 +20,39 @@ skill-example/
   .skill_triggers/
 ```
 
-Installed prompt context is intentionally stripped. CocoaSkills copies only
-skill-facing content into `<project>/.agents/skills/<skill>/`.
+Установщик намеренно отфильтровывает контекст промпта. CocoaSkills копирует в `<project>/.agents/skills/<skill>/` только файлы для агента.
 
-Runtime-only files belong in `runtime_roots` and are copied to:
+Файлы только для runtime относятся к `runtime_roots`. Установщик копирует их в каталог:
 
 ```text
 ~/.cocoaskills/runtime/<skill>/<commit>/
 ```
 
-Do not rely on README files, tests, build files, virtualenvs, package metadata,
-or CI files being available to the agent after install.
+Не рассчитывайте на доступность агенту после установки файлов README, тестов, файлов сборки, virtualenv, метаданных пакетов или файлов CI.
 
-## 2. Required Files
+## 2. Обязательные файлы
 
-Every installable skill must contain:
+Каждый устанавливаемый скилл содержит файл:
 
 ```text
 SKILL.md
 ```
 
-`SKILL.md` is the agent-facing contract. It should describe how the agent uses
-the skill, which commands are available, and what inputs/outputs those commands
-expect.
+`SKILL.md` определяет контракт для агента. Файл описывает использование скилла агентом, доступные команды и ожидаемые входные и выходные данные команд.
 
-If the skill exports commands, add:
+Если скилл экспортирует команды, добавьте файл:
 
 ```text
 agent-skill.json
 ```
 
-`agent-skill.json` is the machine-readable runtime manifest. It declares command
-entrypoints exported by the skill and dependencies consumed by the skill.
+`agent-skill.json` определяет машиночитаемый манифест runtime. Манифест объявляет экспортируемые скиллом точки входа команд и используемые скиллом зависимости.
 
-## 3. `agent-skill.json` Schema Versions
+## 3. Версии схем `agent-skill.json`
 
-### Schema v1
+### Схема v1
 
-Schema v1 is the compatibility mode:
+Схема v1 обеспечивает режим совместимости:
 
 ```json
 {
@@ -74,16 +66,15 @@ Schema v1 is the compatibility mode:
 }
 ```
 
-Use schema v1 only for single-file scripts that do not depend on sibling files.
-CocoaSkills copies each script command as one file into:
+Используйте схему v1 только для однофайловых скриптов без зависимостей от соседних файлов. CocoaSkills копирует каждую скриптовую команду как отдельный файл в каталог:
 
 ```text
 ~/.cocoaskills/runtime/<skill>/<commit>/bin/<command>
 ```
 
-### Schema v2
+### Схема v2
 
-Schema v2 is the runtime format for multi-file command skills:
+Схема v2 определяет формат runtime для скиллов с многофайловыми командами:
 
 ```json
 {
@@ -98,12 +89,11 @@ Schema v2 is the runtime format for multi-file command skills:
 }
 ```
 
-Use schema v2 when a command depends on sibling files, libraries, Python
-modules, shell helpers, or other runtime assets.
+Используйте схему v2, когда команда зависит от соседних файлов, библиотек, модулей Python, вспомогательных шелл-скриптов или других ресурсов runtime.
 
-### Schema v3
+### Схема v3
 
-Schema v3 adds an explicit capability envelope for audit:
+Схема v3 добавляет явный конверт возможностей для аудита:
 
 ```json
 {
@@ -135,27 +125,20 @@ Schema v3 adds an explicit capability envelope for audit:
 }
 ```
 
-Use schema v3 for skills that should pass strict audit. Schema v1 and v2 remain
-installable, but strict audit treats them as undeclared: the skill must either
-move to schema v3 or be explicitly pinned by content hash when the trust
-workflow is used.
+Используйте схему v3 для скиллов, проходящих строгий аудит. Схемы v1 и v2 остаются устанавливаемыми. Строгий аудит считает их необъявленными: при использовании рабочего процесса доверия скилл либо переходит на схему v3, либо фиксируется по content-hash.
 
-Capability fields:
+Поля возможностей:
 
-- `network`: `"none"` or host globs the skill code may contact.
-- `filesystem`: `"repo"`, `"home-config"`, or explicit paths.
-- `exec`: `"none"` or executable names the skill may call.
-- `secrets`: `"none"` or secret/keyring names the skill may read.
-- `env_read`: environment variables the skill may read.
-- `prompt_scope`: one sentence describing what the prompt is allowed to ask the
-  agent to do.
+- `network`: `"none"` или маски хостов для сетевых подключений кода скилла.
+- `filesystem`: `"repo"`, `"home-config"` или явные пути.
+- `exec`: `"none"` или имена исполняемых файлов, вызываемых скиллом.
+- `secrets`: `"none"` или имена секретов и связок ключей, читаемых скиллом.
+- `env_read`: переменные окружения, читаемые скиллом.
+- `prompt_scope`: одно предложение с описанием разрешенных действий агента по промпту.
 
-### Schema v4
+### Схема v4
 
-Schema v4 adds skill-to-skill requirements. A skill declares the skills it
-builds on under `dependencies.skills`; csk resolves the transitive closure and
-installs the providers. The full design is
-[RFC 0007](v0.9-design.md).
+Схема v4 добавляет требования скилла к скиллам. Скилл объявляет используемые скиллы в секции `dependencies.skills`. csk разрешает транзитивное замыкание и устанавливает провайдеров. Полный дизайн описан в [RFC 0007](v0.9-design.md).
 
 ```json
 {
@@ -184,34 +167,19 @@ installs the providers. The full design is
 }
 ```
 
-Requirement rules:
+Правила требований:
 
-- `git` and `ref` are required; an entry is self-contained.
-- `ref.kind` is `tag` or `revision`. Branch refs and version ranges are parse
-  errors.
-- `mode` selects what the provider contributes to the consumer:
-  `full` (default) activates the prompt context and all exported commands,
-  `runtime` activates commands only, `context` activates the prompt context
-  only. The optional `commands` list narrows a `runtime` requirement to the
-  named exports.
-- Within one install closure a skill name resolves to one commit and one
-  canonical source; disagreeing requirements fail the install.
-- A workflow is a skill that declares requirements and exports no commands.
-  Consumers install it with a single `Skillfile.json` entry.
-- For development, `Skillfile.dev.json` next to the project `Skillfile.json`
-  substitutes providers locally (a `path` to a checkout, or `git` with any ref
-  kind, branches included). The file belongs to the managed `.gitignore`
-  block; strict audit fails while substitutions are active.
-- Organizations restrict where skills may be fetched from with
-  `allowed_sources` in `~/.cocoaskills/config.json`: a list of canonical
-  `host/path` prefixes checked before any clone or fetch.
+- Поля `git` и `ref` обязательны; запись самодостаточна.
+- Поле `ref.kind` принимает значения `tag` или `revision`. Ссылки на ветки и диапазоны версий вызывают ошибку разбора.
+- Поле `mode` выбирает передаваемые потребителю компоненты провайдера: `full` (по умолчанию) активирует контекст промпта и все экспортируемые команды, `runtime` активирует только команды, `context` активирует только контекст промпта. Необязательный список `commands` ограничивает требование `runtime` указанными экспортами.
+- В рамках одного замыкания установки имя скилла разрешается в один commit и один канонический источник. Несогласованные требования прерывают установку.
+- Workflow представляет собой скилл с объявленными требованиями без экспорта команд. Потребители устанавливают workflow одной записью в `Skillfile.json`.
+- Для разработки файл `Skillfile.dev.json` рядом с проектным `Skillfile.json` подменяет провайдеров локально (указывает `path` к рабочей копии или `git` с любым типом ref, включая ветки). Файл входит в управляемый блок `.gitignore`. Строгий аудит завершается ошибкой при активных подменах.
+- Организации ограничивают источники скачивания скиллов с помощью `allowed_sources` в `~/.cocoaskills/config.json`: списка канонических префиксов `host/path`, проверяемого перед операциями clone или fetch.
 
-### Schema v5
+### Схема v5
 
-Schema v5 adds MCP server dependencies. A skill declares the MCP servers it
-relies on under `dependencies.mcp_servers`; `csk install` verifies that each
-server is configured in the target agent environments before the skill
-lands. csk never provisions MCP servers, the check is read-only.
+Схема v5 добавляет зависимости от MCP-серверов. Скилл объявляет используемые MCP-серверы в секции `dependencies.mcp_servers`. `csk install` проверяет конфигурацию каждого сервера в целевых окружениях агентов перед доставкой скилла. csk только читает конфигурацию и не настраивает MCP-серверы.
 
 ```json
 {
@@ -229,27 +197,17 @@ lands. csk never provisions MCP servers, the check is read-only.
 }
 ```
 
-MCP dependency rules:
+Правила зависимостей MCP:
 
-- `hint` is required and tells the operator how to connect the server.
-- `transport` is optional documentation: `stdio` or `http`.
-- `required_in` selects the check semantics: `any` (default) requires the
-  server in at least one target agent environment, `all` requires it in
-  every one.
-- Configuration surfaces checked per agent: Claude Code (`<project>/.mcp.json`,
-  `~/.claude.json`), Codex CLI (`~/.codex/config.toml`), Cursor
-  (`<project>/.cursor/mcp.json`, `~/.cursor/mcp.json`), Gemini
-  (`~/.gemini/settings.json`). Missing or malformed files count as
-  configuring no servers.
-- A failed check stops the install with the hint; install markers record
-  where each server was found.
+- Поле `hint` обязательно и объясняет оператору подключение сервера.
+- Необязательное поле `transport` документирует транспорт: `stdio` или `http`.
+- Поле `required_in` выбирает семантику проверки: `any` (по умолчанию) требует сервер хотя бы в одном целевом окружении агента, `all` требует сервер во всех окружениях.
+- Проверяемые конфигурации агентов: Claude Code (`<project>/.mcp.json`, `~/.claude.json`), Codex CLI (`~/.codex/config.toml`), Cursor (`<project>/.cursor/mcp.json`, `~/.cursor/mcp.json`), Gemini (`~/.gemini/settings.json`). Отсутствующие или некорректные файлы считаются отсутствием настроенных серверов.
+- Неуспешная проверка останавливает установку и выводит подсказку. Маркеры установки фиксируют найденные места расположения серверов.
 
-### Schema v6
+### Схема v6
 
-Schema v6 adds context-excluded build roots and compiled commands. The manifest
-below is a complete mixed example: one compiled command, one script command,
-and one operator-provided system command in its accepted compatibility
-location.
+Схема v6 добавляет исключенные из контекста корни сборки и скомпилированные команды. Приведенный ниже манифест показывает смешанный пример: одну скомпилированную команду, одну скриптовую команду и одну системную команду оператора в совместимом расположении.
 
 ```json
 {
@@ -289,7 +247,7 @@ location.
 }
 ```
 
-Its repository contains at least:
+Репозиторий содержит как минимум следующие файлы:
 
 ```text
 SKILL.md
@@ -301,36 +259,89 @@ build/cmd/repo-report/main.go
 build/vendor/                    checked-in modules when non-standard packages are imported
 ```
 
-`repo-report` must be a single `package main`. `build/go.mod` is the direct and
-nearest module file for its source directory. Build-only source remains in the
-validated raw snapshot but is not copied into installed prompt context or the
-script runtime store. The generated command artifact is not stored in the
-skill repository; csk builds and activates it from protected manager state.
-The example deliberately demonstrates the protocol-accepted `type: system`
-compatibility shape under `commands`. csk checks its presence but does not
-create a launcher for it. New skills put a consumed system command under
-`dependencies.commands` instead.
+Команда `repo-report` представляет собой один `package main`. Файл `build/go.mod` служит прямым и ближайшим файлом модуля для каталога исходного кода. Исходный код сборки остается в проверенном снапшоте исходников, но не копируется в контекст промпта и в хранилище runtime скриптов. Скомпилированный артефакт команды не хранится в репозитории скилла; csk собирает и активирует артефакт из защищенного состояния менеджера. Пример специально демонстрирует совместимую форму `type: system` в секции `commands`. csk проверяет наличие команды, но не создает для нее лаунчер. Новые скиллы размещают используемые системные команды в `dependencies.commands`.
 
-## 4. Runtime Roots
+### Схема v7: внешние репозитории сборки
 
-`runtime_roots` lists directories that are runtime-only. CocoaSkills copies
-them into the global runtime store and excludes them from installed prompt
-context.
+Схема v7 добавляет `build_repositories`: команду собирают из отдельно
+запиненного внешнего Git-репозитория, а не из корня сборки внутри скилла.
+Пакет скилла объявляет каноничный сетевой источник, точный объект и
+(опционально) точный тег; выбор кредов, тулчейна, вывода и подписи остаётся
+за оператором и менеджером.
 
-Rules:
+```json
+{
+  "schema_version": 7,
+  "capabilities": {
+    "network": ["gitlab.example.com"],
+    "filesystem": "repo",
+    "exec": "none",
+    "secrets": "none",
+    "env_read": [],
+    "prompt_scope": "Read-only documentation lookups."
+  },
+  "build_repositories": {
+    "tool-cli": {
+      "git": "git@gitlab.example.com:group/tool-cli.git",
+      "locked_commit": {
+        "object_format": "sha1",
+        "hex": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "tag": "v1.2.0"
+    }
+  },
+  "commands": {
+    "tool": {
+      "type": "build",
+      "driver": "go-repository-v1",
+      "repository": "tool-cli",
+      "target": "tool"
+    }
+  }
+}
+```
 
-- `runtime_roots` is optional. Default: `[]`.
-- Each root is a relative POSIX path inside the skill repository.
-- No leading `/`.
-- No `..`.
-- No empty path component.
-- The root must exist.
-- The root must be a directory.
-- Roots must be unique after stripping trailing slashes.
-- Roots must be disjoint: `["scripts", "scripts/lib"]` is invalid.
-- Comparison is case-sensitive.
+Внешний репозиторий обязан содержать в корне закрытый дескриптор
+`skill-build.json`:
 
-Good:
+```json
+{
+  "schema_version": 1,
+  "targets": {
+    "tool": {
+      "driver": "go-repository-v1",
+      "build_root": ".",
+      "source_dir": "cmd/tool"
+    }
+  }
+}
+```
+
+`build_root` содержит `go.mod`; модули вендорятся (`go mod vendor`), сборка
+идёт без сети. Скомпилированный артефакт никогда не коммитится ни в скилл,
+ни во внешний репозиторий. Приватные SSH-источники требуют явного выбора
+кредов оператором; полный контракт, включая скоупы `build_ssh` в глобальном
+конфиге, описан в `docs/external-build-repositories.md`. `go-repository-v1`
+поддерживается только на macOS и Windows.
+
+## 4. Runtime-корни
+
+Секция `runtime_roots` перечисляет каталоги только для runtime. CocoaSkills копирует их в глобальное хранилище runtime и исключает из установленного контекста промпта.
+
+Правила:
+
+- Поле `runtime_roots` необязательно. Значение по умолчанию: `[]`.
+- Каждый корень представляет собой относительный путь POSIX внутри репозитория скилла.
+- Запрещен начальный `/`.
+- Запрещен элемент `..`.
+- Запрещены пустые компоненты пути.
+- Корень должен существовать.
+- Корень должен быть каталогом.
+- Корни должны оставаться уникальными после удаления замыкающих слэшей.
+- Корни не должны пересекаться: список `["scripts", "scripts/lib"]` некорректен.
+- Сравнение выполняется с учетом регистра.
+
+Корректный пример:
 
 ```json
 {
@@ -339,7 +350,7 @@ Good:
 }
 ```
 
-Bad (three independent fragments):
+Некорректные примеры (три независимых фрагмента):
 
 ```text
 {"runtime_roots": ["/scripts"]}
@@ -347,34 +358,22 @@ Bad (three independent fragments):
 {"runtime_roots": ["scripts", "scripts/lib"]}
 ```
 
-## 5. Build Roots and Compiled Commands
+## 5. Корни сборки и скомпилированные команды
 
-Schema-7 skills may also select a locked external Git source with the closed
-`go-repository-v1` command shape. The package declares identity and an exact
-commit; it cannot provide Git helpers, credentials, hooks, build arguments,
-environment, output paths, or signing behavior. The external repository owns a
-separate `skill-build.json` descriptor. See
-[External build repositories](external-build-repositories.md) for complete
-examples and lifecycle rules. This source-aware mode is supported on macOS and
-Windows; Linux remains outside the qualified platform set.
+Скиллы схемы 7 могут также выбирать зафиксированный внешний источник Git с закрытой формой команд `go-repository-v1`. Пакет объявляет идентичность и точный commit; пакет не может передавать вспомогательные скрипты Git, учетные данные, хуки, аргументы сборки, переменные окружения, пути вывода или настройки подписи. Внешний репозиторий содержит отдельный дескриптор `skill-build.json`. Смотрите [Внешние репозитории сборки](external-build-repositories.md) для полных примеров и правил жизненного цикла. Этот режим с поддержкой исходного кода работает на macOS и Windows; Linux не входит в квалифицированный набор платформ.
 
-`build_roots` names source-only directories that csk validates and hashes but
-never copies into installed prompt context or script runtime storage.
+Поле `build_roots` задает каталоги только с исходным кодом. csk проверяет и хэширует их, но не копирует в установленный контекст промпта или хранилище runtime скриптов.
 
-Build-root rules:
+Правила корней сборки:
 
-- `build_roots` requires schema 6. Default: `[]`.
-- Every root is a non-dot portable relative POSIX path to a real, link-free
-  directory in the raw skill snapshot.
-- Roots are unique and disjoint and cannot contain or be contained by a
-  `runtime_roots` entry.
-- Every root is used by at least one active `build` command.
-- A build command's `source_dir` is a real, link-free directory below exactly
-  one root. It may equal the root.
-- The containing build root has `go.mod` directly. No closer directory between
-  it and `source_dir` may contain another `go.mod`.
+- Поле `build_roots` требует схему 6. Значение по умолчанию: `[]`.
+- Каждый корень представляет собой относительный путь POSIX без точечных элементов к реальному каталогу без ссылок в снапшоте скилла.
+- Корни уникальны, не пересекаются и не могут содержать записи из `runtime_roots` или содержаться в них.
+- Каждый корень используется хотя бы одной активной командой `build`.
+- Каталог `source_dir` команды сборки расположен внутри ровно одного корня сборки и не содержит ссылок. Каталог может совпадать с корнем.
+- Содержащий корень сборки содержит `go.mod` напрямую. Никакой промежуточный каталог между корнем и `source_dir` не может содержать другой `go.mod`.
 
-The command object is closed:
+Объект команды закрыт:
 
 ```json
 {
@@ -384,78 +383,36 @@ The command object is closed:
 }
 ```
 
-Only `type`, `driver`, and `source_dir` are allowed. Authors cannot set a
-program, arbitrary arguments, environment variables, build tags or flags,
-toolchain, target, output, script, hook, plugin, generator, post-build action,
-or command arguments. `go-v1` is the only accepted driver. Any other driver or
-extra field fails closed instead of falling back to a local build convention.
-That refusal prevents package data from selecting an unimplemented execution
-contract or aliasing artifacts built under different cache semantics.
-The sole artifact path is derived from the exported command name:
-`bin/<command>` on Unix and `bin/<command>.exe` on Windows.
+Спецификация разрешает только поля `type`, `driver` и `source_dir`. Авторы не могут настраивать программу, произвольные аргументы, переменные окружения, теги или флаги сборки, тулчейн, целевую платформу, путь вывода, скрипты, хуки, плагины, генераторы, действия после сборки или аргументы команды. Драйвер `go-v1` остается единственным допустимым драйвером. Любой другой драйвер или лишнее поле вызывают отказ вместо отката к локальной сборке. Этот отказ предотвращает выбор нереализованного контракта выполнения или подмену артефактов под другими семантиками кэша. Единственный путь артефакта вычисляется из имени экспортируемой команды: `bin/<command>` на Unix и `bin/<command>.exe` на Windows.
 
-### Go source prerequisites
+### Требования к исходному коду Go
 
-The protocol permits a Go driver only at Go 1.23 or newer, then requires each
-manager to accept only its operator-trusted family. The current csk allowlist
-is family 1.25. An installed Go 1.23 toolchain therefore satisfies the protocol
-floor but is not accepted by this implementation; authors and operators need
-the 1.25 family on `PATH`.
+Протокол разрешает драйвер Go версии 1.23 или новее, а затем требует от менеджера приема только разрешенного оператором семейства. Текущая версия `csk` допускает семейство 1.25. Установленный тулчейн Go 1.23 удовлетворяет нижнему порогу протокола, но отвергается данной реализацией; авторам и операторам требуется семейство 1.25 в `PATH`.
 
-`go-v1` builds one native executable for the host `GOOS`/`GOARCH`. The declared
-source directory must be exactly one non-test `package main`. All non-standard
-imports resolve from checked-in vendor data; csk runs fixed `-mod=vendor`
-commands with dependency network access disabled. Standard-library compiler
-inputs come only from the fingerprinted `GOROOT`, and all remaining active
-inputs stay below the build root.
+Драйвер `go-v1` собирает один нативный исполняемый файл для хостовых `GOOS`/`GOARCH`. Объявленный каталог исходного кода содержит ровно один нетестовый `package main`. Нестандартные импорты разрешаются из закоммиченных вендорных файлов; csk выполняет фиксированные команды `-mod=vendor` с отключенным сетевым доступом для зависимостей. Входные данные компилятора из стандартной библиотеки поступают только из проверенного `GOROOT`, а остальные активные входные данные находятся строго внутри корня сборки.
 
-The driver turns Go telemetry off in private state and fixes private
-configuration, cache, temporary, staging, and output roots. It also fixes
-`GOTOOLCHAIN=local`, `GOENV=off`, `GOWORK=off`, `CGO_ENABLED=0`,
-`GO_EXTLINK_ENABLED=0`, the gc compiler, PGO off, native target, and internal
-linking without libgcc. These package-controlled features are prohibited:
+Драйвер отключает телеметрию Go в приватном состоянии и фиксирует приватные конфигурации, кэш, временные каталоги и каталоги вывода. Драйвер фиксирует `GOTOOLCHAIN=local`, `GOENV=off`, `GOWORK=off`, `CGO_ENABLED=0`, `GO_EXTLINK_ENABLED=0`, компилятор gc, отключение PGO, нативную целевую платформу и внутреннюю линковку без libgcc. Следующие возможности пакетов запрещены:
 
-- workspace mode or toolchain switching;
-- cross-compilation, cgo, PGO, external linking, or libgcc fallback;
-- generators, tests, plugins, or overlays;
-- package-selected host object files;
-- a shell, VCS command, module download, extra program, hook, or post-build
-  action.
+- режим workspace или переключение тулчейна;
+- кросс-компиляция, cgo, PGO, внешняя линковка или откат к libgcc;
+- генераторы, тесты, плагины или оверлеи;
+- выбираемые пакетом объектные файлы хоста;
+- шелл, команды VCS, скачивание модулей, дополнительные программы, хуки или действия после сборки.
 
-Generator comments and PGO paths remain inert bytes. They do not authorize csk
-to run anything.
+Комментарии генераторов и пути PGO остаются инертными байтами. Они не дают csk права запускать процессы.
 
-Four narrow vendored exceptions keep audited real-world dependencies buildable
-without widening that boundary (`curator-spec` decision 0005):
+Четыре узких исключения для вендоринга позволяют собирать проверенные реальные зависимости без расширения границ безопасности (решение `curator-spec` 0005):
 
-- `GOROOT/src/vendor` packages that report `Standard`, `Goroot`, an empty
-  `Root`, and a `vendor/` import prefix stay trusted, because their directory
-  is still pinned below the fingerprinted `GOROOT`;
-- pure Go assembly (`SFiles`) is accepted only for a vendored package that
-  carries no cgo, C, C++, Objective-C, Fortran, SWIG, or host-object input and
-  whose every `SFiles` entry is a regular file below the build root, so
-  `curator-build-source-v1` already hashes it (for example the
-  `coder/websocket` masks);
-- `//go:cgo_import_dynamic` stays rejected in every non-standard `GoFiles`
-  entry except the audited `golang.org/x/sys` module and its subpackages
-  (`zsyscall` syscall trampolines);
-- `//go:generate` is inert in a vendored `GoFiles` entry. Neither
-  `go list -mod=vendor` nor `go build -mod=vendor` runs generators, vendor is
-  already materialized, and csk never invokes `go generate`, so the comment
-  does not fail preflight there. Outside `vendor/` the directive is still
-  rejected as an active generator.
+- Пакеты `GOROOT/src/vendor` с признаками `Standard`, `Goroot`, пустым `Root` и префиксом импорта `vendor/` остаются доверенными, так как их каталог зафиксирован под проверенным `GOROOT`.
+- Ассемблер Go (`SFiles`) допускается только для вендорных пакетов без cgo, C, C++, Objective-C, Fortran, SWIG или объектных файлов хоста, где каждая запись `SFiles` является обычным файлом внутри корня сборки, хэшируемым `curator-build-source-v1` (например, маски `coder/websocket`).
+- Директива `//go:cgo_import_dynamic` отвергается во всех нестандартных записях `GoFiles`, кроме проверенного модуля `golang.org/x/sys` и его подпакетов (трамплины системных вызовов `zsyscall`).
+- Директива `//go:generate` инертна в вендорных записях `GoFiles`. Ни `go list -mod=vendor`, ни `go build -mod=vendor` не запускают генераторы, вендор уже материализован, а csk не вызывает `go generate`, поэтому комментарий не вызовет ошибку предварительной проверки. За пределами `vendor/` директива отвергается как активный генератор.
 
-Source-aware `go-v1` is supported on macOS and Windows. On any other host it
-fails closed before launching a worker or Go process. Linux support is an
-explicit follow-up owned by `TASK-260728-1skseh` and
-`TASK-260728-1e6811`; this does not change Linux support for script/system
-skills.
+Режим `go-v1` с поддержкой исходного кода работает на macOS и Windows. На любой другой хост-системе режим завершается ошибкой до запуска воркера или процессов Go. Поддержка Linux вынесена в отдельные задачи `TASK-260728-1skseh` и `TASK-260728-1e6811`; это не меняет поддержку Linux для скриптовых и системных скиллов.
 
-### Manager-owned execution
+### Выполнение под управлением менеджера
 
-`manager-worker-v1` is fixed protocol identity, not a manifest field,
-operator preference, or optional sandbox. It is a normative cache, receipt,
-marker-currentness, and claim input. Its process graph contains only:
+Протокольная идентичность `manager-worker-v1` зафиксирована и не является полем манифеста, настройкой оператора или опциональным песочным окружением. Идентичность служит нормативным входом для кэша, квитка, актуальности маркера и утверждений. Дерево процессов содержит только следующие элементы:
 
 ```text
 manager parent
@@ -464,88 +421,39 @@ manager parent
             -> fingerprinted regular children below <GOROOT>/pkg/tool/
 ```
 
-The manager verifies the worker before launch; the worker proves its identity
-against a fresh nonce. One session runs one fixed `go list`, pauses while the
-parent validates the complete package graph, receives one authenticated build
-permit, then runs one fixed `go build`. Any retry, extra message, executable,
-download, generator, test, or run request tears the worker domain down. The
-source snapshot, worker, and full Go toolchain are reverified after execution,
-and the entire worker domain is terminated and joined before publication.
+Менеджер проверяет воркер перед запуском; воркер доказывает подлинность с помощью свежего nonce. Сессия выполняет один фиксированный вызов `go list`, приостанавливается на время проверки родительским процессом полного графа пакетов, получает один аутентифицированный пропуск на сборку и выполняет один фиксированный вызов `go build`. Повторные попытки, лишние сообщения, исполняемые файлы, скачивания, генераторы, тесты или запросы на запуск уничтожают домен воркера. Снапшот исходного кода, воркер и тулчейн Go повторно проверяются после выполнения; весь домен воркера завершается и присоединяется перед публикацией.
 
-The manager bounds one operation to 120 seconds, 8 MiB combined output, a
-128 MiB artifact, 512 MiB per file, 1 GiB private build storage, 2 GiB memory,
-and 64 active processes. File, memory, and process facilities vary by platform:
+Менеджер ограничивает одну операцию лимитами: 120 секунд времени, 8 МиБ суммарного вывода, 128 МиБ на артефакт, 512 МиБ на файл, 1 ГиБ приватного хранилища сборки, 2 ГиБ памяти и 64 активных процесса. Средства ограничения файлов, памяти и процессов зависят от платформы:
 
-| `rc5-native-control-inventory-v1` control | macOS | Windows |
+| Элемент управления `rc5-native-control-inventory-v1` | macOS | Windows |
 |---|---|---|
-| `descendant-domain-termination` | available: process-group/session teardown | available: Job Object kill-on-close |
-| `active-process-count-limit` | unavailable | available: Job Object limit |
-| `aggregate-memory-limit` | unavailable | available: Job Object process/job memory limits |
-| `per-file-size-limit` | available: `RLIMIT_FSIZE` | unavailable |
-| `inherited-handle-restriction` | available: close-on-exec plus descriptor release | available: explicit handle inheritance list |
+| `descendant-domain-termination` | доступно: завершение группы процессов/сессии | доступно: завершение Job Object при закрытии |
+| `active-process-count-limit` | недоступно | доступно: лимит Job Object |
+| `aggregate-memory-limit` | недоступно | доступно: лимиты памяти процесса/job в Job Object |
+| `per-file-size-limit` | доступно: `RLIMIT_FSIZE` | недоступно |
+| `inherited-handle-restriction` | доступно: close-on-exec плюс освобождение дескрипторов | доступно: явный список наследования хэндлов |
 
-Each source-aware execution operation returns one closed
-`capability-evidence-v1` record with exactly one entry per inventory control,
-probed before worker launch. Unavailable inventory controls are recorded as
-unavailable and do not reject a build. If a mandatory portable control cannot
-be applied, csk returns `build_execution_control_unavailable` before the
-worker or Go starts and publishes nothing.
+Каждая операция выполнения возвращает один закрытый документ `capability-evidence-v1` с ровно одной записью на каждый элемент inventory control, проверенный перед запуском воркера. Недоступные элементы управления фиксируются как недоступные и не отменяют сборку. Если обязательный портативный элемент управления невозможно применить, csk возвращает ошибку `build_execution_control_unavailable` до старта воркера или Go и ничего не публикует.
 
-Capability evidence is result-only: it is not a cache-key, receipt, marker,
-claim, or currentness input. The portable policy also does not provide or claim
-`total-network-denial`, `read-only-source-and-toolchain`,
-`private-build-root-only-writes`,
-`hard-aggregate-descendant-resource-bounds`,
-`exact-executable-allowlisting`, or
-`fail-closed-capability-preflight`. Those are deferred hardened guarantees.
-For example, fixed offline Go behavior is not kernel network isolation, and
-manager-enforced bounds are not hard aggregate descendant bounds.
+Документ capability evidence содержит только результаты: он не является ключом кэша, квитком, маркером, входом актуальности или входом для утверждений. Портативная политика также не обеспечивает и не декларирует `total-network-denial`, `read-only-source-and-toolchain`, `private-build-root-only-writes`, `hard-aggregate-descendant-resource-bounds`, `exact-executable-allowlisting` или `fail-closed-capability-preflight`. Это отложенные усиленные гарантии. Например, фиксированное офлайн-поведение Go не является сетевой изоляцией ядра, а ограничения менеджера не являются жесткими агрегированными лимитами потомков.
 
-The manager verifies but never executes a newly compiled artifact during
-validation, install, dry-run, status, repair, rollback, or GC. It becomes
-executable to the user or agent only through an activated command launcher.
+Менеджер проверяет, но никогда не выполняет только что скомпилированный артефакт во время проверки, установки, dry-run, status, repair, rollback или GC. Артефакт становится исполняемым для пользователя или агента только через активированный лаунчер команд.
 
-### Operator lifecycle authors should test
+### Жизненный цикл оператора для тестирования авторами
 
-Dry-run validates and hashes the frozen build source, establishes the trusted
-toolchain and native target, and inspects cache state without invoking
-`go list`, `go build`, a compiler, or linker. It creates no persistent cache,
-snapshot, mutation lock, or transaction journal. Per-command outcomes are
-`cache-hit`, `would-preflight-and-build`,
-`would-rebuild-untrusted-cache`, `corrupt`, and `unsupported`.
+Команда dry-run проверяет и хэширует зафиксированный исходный код сборки, определяет доверенный тулчейн и нативную целевую платформу, а также проверяет состояние кэша без вызова `go list`, `go build`, компилятора или линкера. Операция не создает постоянный кэш, снапшот, блокировки изменений или журнал транзакций. Результаты по командам включают `cache-hit`, `would-preflight-and-build`, `would-rebuild-untrusted-cache`, `corrupt` и `unsupported`.
 
-Real project, global, and targeted hybrid installs validate and audit before
-building. Misses compile in operation-private staging; protected cache
-publication and the complete context/runtime/shim/adapter/marker transaction
-happen under the manager-home lock. A failure rolls the prior installation
-back. A safely published unreferenced entry may remain for locked GC, which
-removes only validated entries older than 24 hours and conservatively retains
-uncertain state.
+Реальная установка в проект, глобальная установка или гибридная установка выполняют проверку и аудит перед сборкой. Промахи кэша компилируются в приватном временном каталоге операции; публикация в защищенном кэше и транзакция контекста/runtime/shim/адаптера/маркера происходят под блокировкой home менеджера. Сбой откатывает предыдущую установку. Безопасно опубликованная запись без ссылок может остаться для GC под блокировкой. GC удаляет проверенные записи старше 24 часов и сохраняет неопределенные состояния.
 
-`csk status --json --check` and `csk global status --json --check` verify the
-descriptor, raw source identity, native target, toolchain, execution policy,
-key, protected receipt/artifact, marker, and shim without mutating them.
-`--check` exits 1 for any non-current build. Repair is ordinary reinstall:
-on a supported platform, `csk install` or `csk global install` rebuilds
-missing, corrupt, wrong-input, legacy/unsupported-identity, or untrusted
-candidates into fresh protected state and never adopts their bytes. An
-unsupported platform remains fail-closed.
+Команды `csk status --json --check` и `csk global status --json --check` проверяют дескриптор, идентичность исходников, целевую платформу, тулчейн, политику выполнения, ключ, защищенный квиток/артефакт, маркер и shim без их изменения. Флаг `--check` завершается с кодом 1 при неактуальной сборке. Восстановление выполняется обычной переустановкой: на поддерживаемой платформе `csk install` или `csk global install` пересобирает отсутствующие, поврежденные, несоответствующие, устаревшие или недоверенные кандидаты в новое защищенное состояние без применения их байтов. Неподдерживаемая платформа сохраняет состояние сбоя.
 
-Do not equate installed `content_sha256` with
-`curator-build-source-v1`: only the latter covers the full validated raw source
-including build-only files. Do not treat a self-consistent receipt as protected
-provenance either; reuse also requires csk's independently verified
-manager-created ownership, permission/DACL, containment, file-type, and link
-boundary. Physical `<csk-home>/builds/go-v1/...` paths are csk-specific; only
-logical inputs, canonical receipt bytes, artifact-relative path, and artifact
-bytes/hash/size are portable.
+Не приравнивайте установленный `content_sha256` к `curator-build-source-v1`: только последний охватывает полный проверенный исходный код, включая файлы только для сборки. Не считайте согласованный квиток защищенной provenance; повторное использование требует также независимо проверенного менеджером владения, разрешений/DACL, изоляции, типа файла и границ ссылок. Физические пути `<csk-home>/builds/go-v1/...` специфичны для csk; портативными являются только логические входы, канонические байты квитка, путь относительно артефакта и байты/хэш/размер артефакта.
 
-## 6. Script Commands
+## 6. Скриптовые команды
 
-Script commands expose skill-owned executables through project-local
-`<project>/.agents/bin`.
+Скриптовые команды предоставляют исполняемые файлы скилла через проектный каталог `<project>/.agents/bin`.
 
-Example:
+Пример:
 
 ```json
 {
@@ -561,72 +469,38 @@ Example:
 }
 ```
 
-Schema v2-and-newer script rules:
+Правила для скриптов схемы v2 и новее:
 
-- Allowed fields: `type`, `unix_path`, `win_path`.
-- At least one platform path is required.
-- Paths must be relative POSIX paths.
-- Paths must not contain `..`.
-- If `runtime_roots` is non-empty, every script path must be inside one of
-  those roots.
-- The path must exist and must be a file.
+- Разрешенные поля: `type`, `unix_path`, `win_path`.
+- Требуется минимум один путь для платформы.
+- Пути должны быть относительными путями POSIX.
+- Пути не должны содержать `..`.
+- При непустом `runtime_roots` каждый путь скрипта должен находиться внутри одного из этих корней.
+- Путь должен существовать и указывать на файл.
 
-### Agent-facing command resolution
+### Разрешение команд для агента
 
-`runtime_roots` are intentionally absent from installed prompt context. A
-`SKILL.md` or prompt-visible reference must therefore never assume that a
-manifest path such as `scripts/tool` exists next to the installed skill. The
-same resolver applies to schema-6 build commands: their artifact remains in
-the protected cache and is never present beside `SKILL.md`.
+Каталоги `runtime_roots` намеренно отсутствуют в установленном контексте промпта. Файл `SKILL.md` и ссылки в промпте не должны предполагать существование путей манифеста (таких как `scripts/tool`) рядом с установленным скиллом. Тот же резолвер применяется к командам сборки схемы 6: их артефакт остается в защищенном кэше и не присутствует рядом с `SKILL.md`.
 
-Define placeholders such as `<tool-command>` and resolve each exported command
-once, before its first invocation:
+Определите плейсхолдеры (например, `<tool-command>`) и разрешайте каждую экспортируемую команду один раз перед первым вызовом:
 
-1. When `.csk-install.json` is present next to `SKILL.md`, search upward from
-   the current working directory, then from the physical `SKILL.md` path, for
-   the nearest `<ancestor>/.agents/bin/<command>` (`.cmd` on Windows).
-2. If there is no project shim, use `<csk-home>/global/bin/<command>`
-   (`<command>.cmd` on Windows), where `<csk-home>` is the parent of
-   `CSK_CONFIG` or `~/.cocoaskills` by default.
-3. Use a bare command only as a final fallback after `command -v` or
-   `Get-Command` confirms it exists.
-4. When `.csk-install.json` is absent, treat the skill as a source checkout.
-   For a script command, read its platform entrypoint from `agent-skill.json`
-   and resolve that path relative to the physical skill directory. A build
-   command has no source-tree executable: require an installed csk shim or a
-   separately documented human-only development command; never execute its
-   source directory.
-5. If no declared command can be found, report an incomplete installation and
-   stop. Do not guess a runtime path or execute one relative to the current
-   working directory.
+1. При наличии `.csk-install.json` рядом с `SKILL.md` ищите вверх от текущего рабочего каталога, затем от физического пути `SKILL.md`, ближайший файл `<ancestor>/.agents/bin/<command>` (`.cmd` на Windows).
+2. При отсутствии проектного shim используйте `<csk-home>/global/bin/<command>` (`<command>.cmd` на Windows), где `<csk-home>` по умолчанию является родителем `CSK_CONFIG` или `~/.cocoaskills`.
+3. Используйте имя команды без пути только как конечный запасной вариант после подтверждения существования через `command -v` или `Get-Command`.
+4. При отсутствии `.csk-install.json` считайте скилл рабочей копией исходников. Для скриптовой команды прочитайте точку входа платформы из `agent-skill.json` и разрешите путь относительно физического каталога скилла. Команда сборки не имеет исполняемого файла в дереве исходников: требуйте установленного csk shim или отдельно задокументированной команды только для человека (без выполнения собственного исходного каталога).
+5. Если ни одна объявленная команда не найдена, сообщите о неполной установке и остановите работу. Не угадывайте путь runtime и не выполняйте файлы относительно текущего рабочего каталога.
 
-The search from both the working directory and the physical skill path matters:
-agent adapters can be symlinks or copies, while project-local commands must
-still shadow global commands. Do not derive the command solely as a fixed
-number of `..` components from an adapter-visible `SKILL.md` path.
+Поиск из рабочего каталога и из физического пути скилла важен: адаптеры агентов могут быть симлинками или копиями, а проектные команды должны перекрывать глобальные. Не вычисляйте команду как фиксированное число компонентов `..` от пути `SKILL.md`, видимого адаптеру.
 
-Apply the same rule to workflow skills that consume commands from
-`dependencies.skills` or legacy `dependencies.commands` entries. Their own
-`runtime_roots` may be empty, but provider source paths are still unavailable
-after installation.
+Применяйте это же правило к скиллам-workflow, использующим команды из `dependencies.skills` или устаревших записей `dependencies.commands`. Их собственный `runtime_roots` может быть пустым, но пути к исходникам провайдеров недоступны после установки.
 
-Shell activation is never a prerequisite for agent execution. Authors must
-keep the explicit project/global resolver even when their own interactive shell
-already exposes the command through `PATH`; `csk skill check` warns when a
-managed command lacks this shell-neutral contract.
+Активация шелла не является пререквизитом для выполнения агентом. Авторы должны сохранять явный проектный или глобальный резолвер, даже если интерактивный шелл уже предоставляет команду через `PATH`. `csk skill check` выдает предупреждение, когда управляемой команде не хватает этого независимого от оболочки контракта.
 
-On Unix the installed compiled launcher directly `exec`s the absolute
-protected artifact and forwards all arguments. On Windows `<command>.cmd`
-calls the absolute `.exe`, forwards all arguments, and preserves its exit
-status. Authors should not add a second platform wrapper around this managed
-launcher.
+На Unix установленный скомпилированный лаунчер напрямую вызывает `exec` для абсолютного пути к защищенному артефакту и передает аргументы. На Windows лаунчер `<command>.cmd` вызывает абсолютный `.exe`, передает аргументы и сохраняет код выхода. Авторам не следует добавлять второй платформенный оберточный скрипт вокруг этого лаунчера.
 
-`csk skill check` warns when prompt-visible Markdown refers to a runtime-only
-root or guesses a provider's source runtime. Human-only source development
-commands belong in `README.md`, which is not copied into prompt context.
+`csk skill check` выдает предупреждение, когда доступный промпту Markdown ссылается на корень только для runtime или угадывает исходный runtime провайдера. Команды разработки для человека следует размещать в `README.md`, который не копируется в контекст промпта.
 
-Command entrypoints should resolve their own directory before loading sibling
-files. For POSIX shell scripts:
+Точки входа команд должны определять собственный каталог перед загрузкой соседних файлов. Для скриптов POSIX shell:
 
 ```bash
 #!/usr/bin/env bash
@@ -646,24 +520,19 @@ script_dir="$(cd -P -- "$(dirname -- "$source_path")" && pwd)"
 exec python3 "$script_dir/main.py" "$@"
 ```
 
-This pattern works when project `.agents/bin/<command>` is a symlink to the
-runtime store.
+Этот шаблон работает, когда `.agents/bin/<command>` проекта является симлинком на хранилище runtime.
 
-## 7. Dependencies
+## 7. Зависимости
 
-`commands` is only for commands exported by the current skill. Dependencies
-belong under `dependencies.commands`.
+Секция `commands` предназначена только для команд, экспортируемых текущим скиллом. Зависимости размещаются в `dependencies.commands`.
 
-Do not declare a command in `commands` merely because the skill calls it. That
-turns the command name into an exported CocoaSkills command and can collide with
-the skill that actually provides it.
+Не объявляйте команду в `commands` только потому, что скилл вызывает ее. Это превращает имя команды в экспортируемую команду CocoaSkills и может вызвать конфликт со скиллом, предоставляющим ее.
 
-### System command dependencies
+### Зависимости от системных команд
 
-System command dependencies are commands the skill needs but does not own and
-that are installed by the machine or project bootstrap.
+Зависимости от системных команд представляют собой команды, необходимые скиллу, но не принадлежащие ему и устанавливаемые в систему или проект инструментами подготовки проекта.
 
-Example:
+Пример:
 
 ```json
 {
@@ -680,16 +549,16 @@ Example:
 }
 ```
 
-Rules:
+Правила:
 
-- Allowed fields: `type`, `command`, `hint`.
-- `command` is required.
-- `hint` is optional.
-- CocoaSkills checks presence with `shutil.which(command)`.
-- CocoaSkills never installs system dependencies.
-- CocoaSkills never executes manifest-provided checks.
+- Разрешенные поля: `type`, `command`, `hint`.
+- Поле `command` обязательно.
+- Поле `hint` необязательно.
+- CocoaSkills проверяет наличие с помощью `shutil.which(command)`.
+- CocoaSkills никогда не устанавливает системные зависимости.
+- CocoaSkills никогда не выполняет проверки из манифеста.
 
-Forbidden fields:
+Запрещенные поля:
 
 - `install`
 - `check`
@@ -697,18 +566,15 @@ Forbidden fields:
 - `script`
 - `command_args`
 
-If a system dependency is missing, `csk install` fails before writing runtime
-files, project context, or shims for that skill.
+При отсутствии системной зависимости `csk install` завершается с ошибкой до записи файлов runtime, контекста проекта или shims для этого скилла.
 
-Project bootstrap tooling owns system dependencies. In demo-ios this means
-Mise, Make, or a project bootstrap script, not the skill manager.
+Инструменты подготовки проекта управляют системными зависимостями. В demo-ios это Mise, Make или скрипт подготовки проекта, но не менеджер скиллов.
 
-### Skill command dependencies
+### Зависимости от команд скиллов
 
-Skill command dependencies are commands exported by another skill in the same
-`Skillfile.json`.
+Зависимости от команд скиллов представляют собой команды, экспортируемые другим скиллом в том же `Skillfile.json`.
 
-Example:
+Пример:
 
 ```json
 {
@@ -726,22 +592,18 @@ Example:
 }
 ```
 
-Rules:
+Правила:
 
-- Allowed fields: `type`, `skill`, `command`, `hint`.
-- `skill` is the provider skill name from `Skillfile.json`. Consumers must
-  declare the provider under this exact canonical name.
-- `command` is the script command exported by that provider skill.
-- The `dependencies.commands` map key is a local dependency id used in markers
-  and diagnostics. For skill command dependencies, keep it equal to `command`
-  unless a dependency needs a distinct local name.
-- `hint` is optional.
-- The provider skill must be in the same install plan.
-- The provider must export the requested command as a `script` command.
-- Skill command dependencies are not installed as new shims by the consuming
-  skill and do not participate in command collision detection.
+- Разрешенные поля: `type`, `skill`, `command`, `hint`.
+- Поле `skill` задает имя скилла-провайдера из `Skillfile.json`. Потребители должны объявлять провайдера под этим каноническим именем.
+- Поле `command` задает скриптовую команду, экспортируемую скиллом-провайдером.
+- Ключ словаря `dependencies.commands` служит локальным идентификатором зависимости для маркеров и диагностики. Для зависимостей от команд скиллов сохраняйте его равным `command`, если зависимости не требуется отдельное локальное имя.
+- Поле `hint` необязательно.
+- Скилл-провайдер должен находиться в том же плане установки.
+- Провайдер должен экспортировать запрашиваемую команду как команду `script`.
+- Зависимости от команд скиллов не устанавливаются как новые shims вызывающим скиллом и не участвуют в обнаружении конфликтов команд.
 
-Good:
+Корректный пример:
 
 ```json
 {
@@ -759,7 +621,7 @@ Good:
 }
 ```
 
-Bad:
+Некорректный пример:
 
 ```json
 {
@@ -774,31 +636,22 @@ Bad:
 }
 ```
 
-`type: system` under `commands` remains an accepted compatibility shape,
-including in schema 6, but it is not an exported launcher. csk only checks the
-operator-provided command with `shutil.which`. New skills put a consumed system
-tool under `dependencies.commands` instead.
+Тип `type: system` в секции `commands` остается допустимой формой совместимости (включая схему 6), но не является экспортируемым лаунчером. csk только проверяет предоставленную оператором команду через `shutil.which`. Новые скиллы размещают используемый системный инструмент в секции `dependencies.commands`.
 
-## 8. Localization Contract
+## 8. Контракт локализации
 
-Localization is optional. If the skill ships no `locales/metadata.json` and no
-`.skill_triggers/` directory, installs are unaffected regardless of the
-project's `locale` setting.
+Локализация необязательна. Если скилл не содержит `locales/metadata.json` и `.skill_triggers/`, установка выполняется одинаково независимо от настройки `locale` проекта.
 
-Once the skill ships either of them, a locale is considered consistent only
-when it appears in both:
+При наличии одного из указанных элементов локализация считается согласованной только при присутствии в обоих местах:
 
-- `locales/metadata.json` with a `locales.<locale>` object (its `description`
-  replaces the `SKILL.md` frontmatter description);
-- `.skill_triggers/<locale>.md` with the trigger catalog for that locale.
+- `locales/metadata.json` с объектом `locales.<locale>` (поле `description` заменяет описание из frontmatter `SKILL.md`);
+- `.skill_triggers/<locale>.md` с каталогом триггеров для этой локали.
 
-At least one consistent locale is required when localization is present. If the
-selected locale is missing but another locale is consistent, CocoaSkills
-installs the source `SKILL.md` with a warning instead of failing.
+При наличии локализации требуется минимум одна согласованная локаль. Если выбранная локаль отсутствует, но другая локаль согласована, CocoaSkills устанавливает исходный `SKILL.md` с предупреждением вместо ошибки.
 
-## 9. Validate a Skill
+## 9. Проверка скилла
 
-Use `csk skill check` before tagging a skill:
+Используйте `csk skill check` перед созданием тега скилла:
 
 ```bash
 csk skill check .
@@ -806,33 +659,19 @@ csk skill check . --locale ru
 csk skill check . --json
 ```
 
-The command validates intrinsic skill requirements in the working tree:
-`SKILL.md`, `agent-skill.json`, runtime/build roots, command shape, Go module
-containment, and locale catalog consistency. It also warns when prompt-visible
-Markdown points into a runtime- or build-only source directory that will be
-absent after install. It does not require `~/.cocoaskills/config.json`,
-`Skillfile.json`, project setup, or a Go toolchain, and it does not compile.
+Команда проверяет внутренние требования к скиллу в рабочей копии: `SKILL.md`, `agent-skill.json`, корни runtime и сборки, форму команд, корректность Go-модуля и согласованность каталогов локализаций. Команда также предупреждает, если доступный промпту Markdown указывает на каталог только для runtime или сборки, который будет отсутствовать после установки. Команда не требует `~/.cocoaskills/config.json`, `Skillfile.json`, настройки проекта или тулчейн Go и не выполняет компиляцию.
 
-`csk skill check` reads the working tree as-is. `csk install` validates the
-committed git snapshot resolved from a consuming project's `Skillfile.json`, so
-uncommitted local files can make the two commands differ.
+Команда `csk skill check` читает рабочую копию как есть. `csk install` проверяет закоммиченный снапшот git из `Skillfile.json` проекта, поэтому незакоммиченные файлы могут вызывать различия между командами.
 
-System command presence is environment-specific and remains an install-time
-check. `csk skill check` validates that `dependencies.commands` entries are
-declared correctly, but it does not require system commands to exist on the
-author's machine.
+Наличие системных команд зависит от окружения и проверяется при установке. Команда `csk skill check` проверяет правильность объявления записей в `dependencies.commands`, но не требует наличия системных команд на машине автора.
 
-Locale catalogs are valid when at least one locale appears in both
-`locales/metadata.json` and `.skill_triggers/<locale>.md`. When a selected
-locale is missing but another locale is consistent, CocoaSkills installs the
-source `SKILL.md` with a warning instead of failing.
+Каталоги локалей корректны, когда минимум одна локаль присутствует и в `locales/metadata.json`, и в `.skill_triggers/<locale>.md`. Если выбранная локаль отсутствует, но другая локаль согласована, CocoaSkills устанавливает исходный `SKILL.md` с предупреждением вместо сбоя.
 
-Do not add `dependencies.json`. It is no longer copied by CocoaSkills.
-Dependencies belong in `agent-skill.json` under `dependencies.commands`.
+Не добавляйте `dependencies.json`. CocoaSkills больше не копирует этот файл. Зависимости указываются в `agent-skill.json` в секции `dependencies.commands`.
 
-## 10. Prompt Context Contract
+## 10. Контракт контекста промпта
 
-Agent-facing files should be placed in prompt context roots:
+Размещайте предназначенные для агента файлы в корнях контекста промпта:
 
 - `SKILL.md`
 - `agents/`
@@ -843,16 +682,11 @@ Agent-facing files should be placed in prompt context roots:
 - `examples/`
 - `data/`
 
-Runtime-only code should be placed under `runtime_roots`, usually `scripts/`.
-Compiled source belongs under schema-6 `build_roots`; those directories are
-also absent from installed prompt context and must not overlap runtime roots.
+Размещайте код только для runtime в `runtime_roots` (обычно `scripts/`). Скомпилированные исходники размещайте в `build_roots` схемы 6; эти каталоги отсутствуют в контексте промпта и не должны пересекаться с корнями runtime.
 
-One legacy exception: a skill that declares no commands at all gets its
-`scripts/` directory copied into prompt context, because nothing marks those
-files as runtime-only. Declare commands (or schema v2 `runtime_roots`) to keep
-scripts out of the agent's context window.
+Одно исключение для совместимости: скилл без объявления команд копирует каталог `scripts/` в контекст промпта, так как ничто не помечает эти файлы как относящиеся только к runtime. Объявляйте команды (или `runtime_roots` в схеме v2) для исключения скриптов из контекста агента.
 
-Do not assume these are copied into prompt context:
+Не рассчитывайте на копирование в контекст промпта следующих файлов:
 
 - `README*`
 - `CHANGELOG*`
@@ -866,10 +700,9 @@ Do not assume these are copied into prompt context:
 - `requirements*.txt`
 - `Makefile`
 
-If the agent needs operational information, put it in `SKILL.md` or
-`references/`, not in `README.md`.
+Помещайте оперативную информацию для агента в `SKILL.md` или `references/`, а не в `README.md`.
 
-## 11. Example Skill Manifests
+## 11. Примеры манифестов скиллов
 
 ### skill-tracker
 
@@ -942,15 +775,14 @@ If the agent needs operational information, put it in `SKILL.md` or
 }
 ```
 
-## 12. Global and Project Installation
+## 12. Глобальная и проектная установка
 
-Skill authors do not need a separate manifest for global use. The same
-`SKILL.md` and `agent-skill.json` are valid when the skill is installed:
+Авторам скиллов не требуется отдельный манифест для глобального использования. Те же файлы `SKILL.md` и `agent-skill.json` действуют при установке:
 
-- into a project through `csk install`;
-- globally through `csk global install`.
+- в проект через `csk install`;
+- глобально через `csk global install`.
 
-Global installation changes only the target scope:
+Глобальная установка меняет только целевой каталог:
 
 ```text
 project scope: <project>/.agents/skills/<skill>/
@@ -959,60 +791,44 @@ runtime:       ~/.cocoaskills/runtime/<skill>/<commit>/
 compiled:      <csk-home>/builds/go-v1/<64-hex-key>/
 ```
 
-The runtime and protected compiled stores are shared. A project can select a
-different commit of the same skill; project-local commands and agent adapters
-shadow global ones inside that checkout. Compiled artifacts stay in the
-protected cache rather than being copied into either scope.
+Хранилища runtime и скомпилированных артефактов являются общими. Проект может выбирать другой commit того же скилла. Проектные команды и адаптеры агентов перекрывают глобальные внутри рабочей копии. Скомпилированные артефакты остаются в защищенном кэше и не копируются ни в одну область видимости.
 
-Do not make a skill depend on being global. Project `Skillfile.json`
-declarations remain the source of truth for project behavior.
+Не создавайте зависимость скилла от глобальной установки. Объявления в проектном `Skillfile.json` остаются единственным источником правды для поведения проекта.
 
-## 13. Release Checklist
+## 13. Чек-лист перед релизом
 
-Before tagging a skill release:
+Перед созданием тега релиза скилла:
 
-1. Validate the working tree with `csk skill check . --locale <locale>`.
-2. Validate `agent-skill.json` by running `csk install` in a real project or
-   disposable fixture project.
-3. For schema 6, confirm every build root is used, disjoint from runtime roots,
-   contains the nearest direct `go.mod`, and is absent from
-   `.agents/skills/<skill>/`.
-4. Confirm runtime roots are absent from `.agents/skills/<skill>/`.
-5. Confirm runtime files are present under
-   `~/.cocoaskills/runtime/<skill>/<commit>/`.
-6. Confirm project commands are available through `.agents/bin`.
-7. For compiled commands, inspect `csk install --dry-run`, run a real install
-   with the trusted Go family on a supported host, and require
-   `csk status --json --check` to report the build current.
-8. Confirm command resolution still works when `.agents/bin` is not already on
-   `PATH`, including copied adapter mode.
-9. Confirm `SKILL.md` and prompt-visible references contain no executable path
-   into a runtime or build root.
-10. Confirm missing system dependencies fail with a clear hint.
-11. Confirm `SKILL.md` and `references/` contain all agent-facing instructions.
-12. Tag the skill repository.
-13. Update consuming project `Skillfile.json` to the new tag.
-14. Run `csk install` and `csk status --check`.
+1. Проверьте рабочую копию командой `csk skill check . --locale <locale>`.
+2. Проверьте `agent-skill.json`, запустив `csk install` в реальном или тестовом проекте.
+3. Для схемы 6 убедитесь, что каждый корень сборки используется, не пересекается с корнями runtime, содержит ближайший прямой `go.mod` и отсутствует в `.agents/skills/<skill>/`.
+4. Убедитесь в отсутствии корней runtime в `.agents/skills/<skill>/`.
+5. Убедитесь в наличии файлов runtime в `~/.cocoaskills/runtime/<skill>/<commit>/`.
+6. Убедитесь в доступности команд проекта через `.agents/bin`.
+7. Для скомпилированных команд проверьте `csk install --dry-run`, выполните реальную установку с доверенным семейством Go на поддерживаемом хосте и убедитесь, что `csk status --json --check` сообщает об актуальности сборки.
+8. Убедитесь в работоспособности разрешения команд, когда `.agents/bin` отсутствует в `PATH`, включая режим скопированного адаптера.
+9. Убедитесь, что `SKILL.md` и доступные промпту ссылки не содержат путей к исполняемым файлам в корнях runtime или сборки.
+10. Убедитесь, что отсутствие системных зависимостей вызывает сбой с понятной подсказкой.
+11. Убедитесь, что `SKILL.md` и `references/` содержат все инструкции для агента.
+12. Создайте тег в репозитории скилла.
+13. Обновите `Skillfile.json` в проекте-потребителе до нового тега.
+14. Выполните `csk install` и `csk status --check`.
 
-## 14. Migration Notes
+## 14. Заметки по миграции
 
-For existing skills with `csk-skill.json`:
+Для существующих скиллов с `csk-skill.json`:
 
-1. Rename it to `agent-skill.json` without changing the JSON value.
-2. Update documentation and automation to emit only `agent-skill.json`.
-3. If a staged rollout temporarily needs both files, keep their decoded JSON
-   values equal. CocoaSkills rejects a mismatch with
-   `conflicting_skill_manifests`.
+1. Переименуйте файл в `agent-skill.json` без изменения значений JSON.
+2. Обновите документацию и автоматизацию для использования только `agent-skill.json`.
+3. Если при поэтапном внедрении временно требуются оба файла, сохраняйте равенство декодированных значений JSON. CocoaSkills отвергает расхождение ошибкой `conflicting_skill_manifests`.
 
-The legacy filename remains readable throughout protocol 1.x, so consumers do
-not need a flag day.
+Устаревшее имя файла поддерживается во всем протоколе 1.x, поэтому потребителям не требуется одновременный переход.
 
-For existing skills with `agents/runtime.json`:
+Для существующих скиллов с `agents/runtime.json`:
 
-1. Add `agent-skill.json` schema v2.
-2. Keep `agents/runtime.json` during the first rollout.
-3. Release and consume the new tag in a real project.
-4. After observation, remove legacy `agents/runtime.json`.
+1. Добавьте `agent-skill.json` схемы v2.
+2. Сохраните `agents/runtime.json` во время первого внедрения.
+3. Выпустите новый тег и подключите его в реальном проекте.
+4. После проверки удалите устаревший файл `agents/runtime.json`.
 
-`agents/runtime.json` is read only when neither `agent-skill.json` nor the
-legacy `csk-skill.json` exists.
+Файл `agents/runtime.json` читается только при отсутствии `agent-skill.json` и устаревшего `csk-skill.json`.
