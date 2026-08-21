@@ -612,3 +612,29 @@ def test_go_install_fails_closed_without_native_control(
     assert not _marker(csk_home, project, scope).exists()
     assert not _shim(csk_home, project, scope, "argv-exit").exists()
     assert not (csk_home / "builds" / "go-v1").exists()
+
+
+@NATIVE
+def test_manager_identity_resolves_through_operator_symlink(
+    required_go_e2e_host: tuple[Path, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Homebrew/pipx-style symlink launcher must resolve to the real manager.
+
+    The harness fixture pre-resolves argv0, which is exactly why the original
+    symlink rejection was never caught end to end; this test hands the
+    unresolved symlink to the argv0 recovery path instead.
+    """
+
+    manager, _ = required_go_e2e_host
+    shim_dir = tmp_path / "local-bin"
+    shim_dir.mkdir()
+    shim = shim_dir / manager.name
+    shim.symlink_to(manager)
+
+    launcher = go_v1._manager_executable_from_argv0(str(shim))
+    assert launcher == manager
+
+    identity = go_v1._resolve_manager_identity(launcher)
+    assert identity.launcher.path == manager
