@@ -1,5 +1,31 @@
 # Logbook
 
+## 2026-08-22 - BUG-260821-p628cq: homebrew-bump-test-mismatch fixed by asserting semantics, not formatting
+
+`e9d6785` (ci: run the tap bump after a skipped TestPyPI lane) rewrote the
+`bump-homebrew-tap` job's `if:` in `.github/workflows/release.yml` from a
+single-line condition to a multi-line `always()`-guarded block, to survive
+`publish-pypi` being skipped on stable tags when the TestPyPI lane is skipped.
+The semantic condition is correct; `tests/test_homebrew_bump.py` still
+asserted the old exact single-line substring, so main went red for everyone
+(flagged by reviewer RUN-260821-1418aa).
+
+- ROOT CAUSE: exact-substring test assertion coupled to `if:` line formatting;
+  a semantically-equivalent reformat broke the test even though the CI guard
+  itself was correct.
+- FIX: `tests/test_homebrew_bump.py::test_release_workflow_bumps_the_tap_on_stable_tags_only`
+  now extracts the `if:` block via regex, normalizes whitespace, and asserts
+  on the semantic pieces (`needs.build.result == 'success'`,
+  `needs.publish-pypi.result == 'success'`,
+  `needs.build.outputs.prerelease == 'false'`, `always()`) instead of the
+  exact single-line string. `release.yml` left untouched.
+- DECISION: chose the "update the test" branch over "restore single-line
+  if:", per task's preferred option and because the multi-line `always()`
+  guard is intentional (comment in `release.yml` explains why `success()`
+  alone would wrongly skip the job).
+- STATUS: resolved. `uv run pytest tests/test_homebrew_bump.py -q` -> 12
+  passed, exit 0.
+
 ## 2026-08-21 - TASK-260821-2c7ter review 3: accepted; a relocation beats a drop list
 
 Accepted the `README.en.md` removal after the round-3 rework (RUN-260821-e15140),
