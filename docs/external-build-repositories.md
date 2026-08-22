@@ -72,6 +72,14 @@ rehashes the complete snapshot, validates `skill-build.json`, and runs the
 independent external audit before any protected artifact lookup or compiler
 call.
 
+Non-executable text below `vendor/` in a third-party module (such as a
+dependency's README or Makefile) does not block installation: the fixed
+build session runs only `go list` and `go build`, hooks and generators are
+forbidden, so such text is never executed. CocoaSkills does not report such a
+finding: it neither blocks the install nor appears in install output.
+Executable files below `vendor/` and any critical findings still block as
+before.
+
 ## Private SSH build repositories
 
 An SSH build repository fetch runs in a private empty `HOME` with an empty

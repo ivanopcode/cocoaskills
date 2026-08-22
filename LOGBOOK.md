@@ -1,5 +1,129 @@
 # Logbook
 
+## 2026-08-22 - TASK-260822-3tvw34 review 1: CHANGELOG rehoming holds, README overclaims compiled commands
+
+The CHANGELOG half of the task is right and was verified two ways rather than trusted. Forward:
+`git log v0.13.0..v0.14.0` is eight commits, and the only non-CI ones are `e66c0c8`, `b2d3d14` and
+their test commit `d8d3529`, so nothing in the old Unreleased block could belong to 0.14.0.
+Backward: `git log -S <token> --all | tail -1` plus `git tag --contains` puts the `--build-ssh-*`
+flag surface (`76e07f07`), `CSK_GO_FINGERPRINT_TIMEOUT` (`15401942`) and `manager-worker-v1`
+(`495ad021`) all at or below `v0.13.0`. Moving the whole block under `## [0.13.0] - 2026-08-08` was
+correct.
+
+Date convention worth keeping: this file dates a release by the annotated tag date, not the tagged
+commit date. `v0.13.0` points at a commit authored 2026-08-07 23:41 +0400 but was tagged 2026-08-08
+02:14 +0400, and the heading says 2026-08-08, consistent with `v0.12.5` and every earlier entry.
+Read it with `git for-each-ref --format='%(taggerdate:short)' refs/tags/vX.Y.Z`, not `git log -1`.
+
+The blocking finding is one sentence in `README.md:146`: "Скиллы со скомпилированными командами
+собираются из отдельно запиненных git-репозиториев". That makes the external build repository the
+universal case. `docs/skill-authoring.md:367` says schema 7 skills "могут также" select a pinned
+external Git source, and the base form is schema 6 `build_roots` plus an in-package `source_dir`
+(`docs/reference.md:142`). Line 146 is the only description of compiled commands anywhere in
+`README.md`, so the overclaim is the definition a reader takes away. The wording came verbatim from
+the owner TZ draft, which is how it passed the producer: the draft is not a source of truth about
+the code.
+
+Second finding, same line: "csk считывает обнаруженные варианты". The precheck prints
+`Detected candidates:` and a numbered menu (`src/csk/installer.py:961-965`), so the verb is
+"показывает". The TZ draft had it right and the producer changed it to something circular.
+
+Note on the heading "за один Enter", kept because the owner mandated it: the happy path is two
+prompts, the candidate choice at `src/csk/installer.py:965` and the persistence scope at :986-991.
+The commit message of `2bb2772` scoped the one-Enter phrase to the candidate prompt only. The README
+body describes both steps, so the mechanics are not misrepresented.
+
+Suite green on the reviewed tree: 1465 passed, 244 skipped in 346s.
+
+Process: the agy implementer run for this task exited 1 (board notes, RUN-260822-de7f10) yet the
+`README.md` and `CHANGELOG.md` edits are present and coherent. A non-zero producer exit on this
+board does not imply lost edits; review the tree, not the exit code.
+
+## 2026-08-22 - TASK-260822-1jns5p review 5: accepted after five cycles
+
+`docs/troubleshooting.md` (new, 67 lines) and the two `CONTRIBUTING.ru.md` releaser paragraphs are
+accepted. W1 closed with the one-word fix: `:49` now says "замыкание зависимостей", and no
+occurrence of "закрытие" survives in the docs tree outside the unrelated
+`docs/skill-authoring.md:436` ("при закрытии Job Object"). `CONTRIBUTING.ru.md` is byte-identical to
+the tree verdict 4 reviewed (sha256 `7b8309d8...`), which is what that verdict asked for.
+
+Re-verified from scratch rather than trusting the previous cycles: all six error strings against
+`src/csk`, all remedies against live `csk 0.14.1`, both releaser facts against `release.yml` and
+`distribution-smoke.yml`, and the marker version band via `git log -S "microsecond=0"` plus
+`git tag --contains 76f89d8` -> `v0.12.1`. The full suite is green on the reviewed tree: 1465
+passed, 244 skipped in 281s (`.temp/TASK-260822-1jns5p/pytest-01.log`).
+
+One fact worth keeping about symptom 2. `unsafe transaction tree entry`
+(`src/csk/transactions.py:1737`) is the `else` branch after the directory and regular-file cases at
+:1730-1736, so a symlink entry is precisely what raises it. That is why a `.venv` bootstrapped into
+the runtime tree trips the transaction: its `bin/python` is a symlink, not a regular file.
+
+Process note: five reviewer cycles for a two-file docs task, each closing its predecessor's findings
+and surfacing one new defect at a smaller scale (rendering, then attribution, then version facts,
+then terminology). Cycles 3-5 each found exactly one blocking issue, all of them factual claims the
+producer could not have checked without reading `src/csk` or `git log`. Handing a docs producer the
+verification commands up front, not just the draft, would have collapsed this into two cycles.
+
+Commit scope for the mover: `docs/troubleshooting.md` (new) and `CONTRIBUTING.ru.md:71-74`. This
+reviewer run supplied no `commit_ack`. The other modified paths in the tree belong to sibling tasks
+of STORY-260822-318s44.
+
+## 2026-08-22 - TASK-260822-1jns5p review 4: dependency closure has one Russian name in this repo, and it is "замыкание"
+
+Fourth review of `docs/troubleshooting.md` and the `CONTRIBUTING.ru.md` releaser note closed all
+four findings of cycle 3 and found one blocking terminology defect introduced by the fix for V3.
+
+`docs/troubleshooting.md:49` calls the dependency closure "закрытие зависимостей". It is the only
+occurrence of that word in the repo: `docs/reference.md:109`, `docs/cli.md:485`,
+`docs/skill-authoring.md:147,181`, `docs/v0.9-design.ru.md` and `CHANGELOG.md:16,20,223` all say
+"замыкание зависимостей". `docs/prose-style.md` forbids rotating synonyms, and the acceptance
+criteria require prose-style clean, so the page ships a second name for the installer's central
+concept. One-word remedy, routed back as `to-dev`.
+
+Two facts worth keeping from the re-verification. First, V1's version band is independently
+reproducible in two commands: `git log -S "microsecond=0" -- src/csk/installer.py` gives `76f89d8`,
+and `git tag --contains 76f89d8` gives `v0.12.1` as the earliest tag, so csk through 0.12.0 wrote
+microsecond markers. `src/csk/installer.py:3175` is the single writer, shared by project and global
+installs. Second, an invalid marker never blocks the reinstall remedy: `_marker_is_current`
+(`src/csk/installer.py:3237`) catches `InstallMarkerError` at :3266 and returns `False`, and
+`SUPPORTED_INSTALL_MARKER_SCHEMA_VERSIONS` (`src/csk/install_marker.py:29`) still accepts v1 and v2,
+so an old marker fails validation rather than tripping `Unsupported installed marker schema`.
+
+Process note: `docs/troubleshooting.md` and `CONTRIBUTING.ru.md` were still being written when this
+run started, and the first read caught the pre-rework-4 bytes. Everything in the verdict was
+re-verified against the sha256 pair recorded in `TASK-260822-1jns5p_review-verdict-4.md`. A reviewer
+spawned back-to-back with its producer should hash the reviewed files and cite the hashes.
+
+## 2026-08-22 - TASK-260822-3o5iw2 review round 2: accepted
+
+Reviewer run RUN-260822-aefcf9 re-verified the four findings from RUN-260822-ebd1e8
+against live csk 0.14.1 and the source tree. All four fixes landed; no new blocking
+finding. Two facts worth keeping:
+
+- `csk skill check` exits 0 even when a warning fires. `csk skill check --help` states
+  "Exit codes: 0 no errors, 1 one or more strict errors", and a fixture skill with the
+  resolution template prints `<path>: ok` while the same fixture without it prints only
+  the `skill.command_resolution_contract_missing` warning; both exit 0. A green exit code
+  is therefore not evidence of zero warnings, which is what release checklist item 1 in
+  `docs/skill-authoring.md` now says.
+- The external build repository audit has no advisory output surface. `_external_static_audit`
+  (`src/csk/installer.py:796`) filters `detect_snapshot` findings, raises `InstallError` on the
+  blocking set, and discards the rest; the pipeline hook is typed
+  `Callable[[AuditSubject], None]` (`src/csk/build_repository_pipeline.py:162`). The docstring
+  of `_vendored_inert_text` (`src/csk/installer.py:769`) still calls such a finding "advisory",
+  which is where the first draft of the doc paragraph took the claim from. The docstring is now
+  the only place in the tree carrying that wording; a future reader of the code will hit it again.
+
+## 2026-08-22 - TASK-260822-3o5iw2: authoring-and-audit-deltas
+
+Landed documentation deltas for CocoaSkills 0.14.1 in `docs/external-build-repositories.md` and `docs/skill-authoring.md` per TZ items 5.1 and 6.
+
+- `docs/external-build-repositories.md`: Added vendor-advisory paragraph to audit section clarifying that non-executable text under `vendor/` is advisory and does not block builds, while executable files and critical findings continue to block. Left spec#22 wording untouched per TZ deferral.
+- `docs/skill-authoring.md`:
+  - Section 1: Added `### Чего пакет скилла не делает` with three antipatterns (committing compiled binaries, writing into skill runtime tree, retaining legacy `agents/runtime.json`).
+  - Section 6: Added copy-paste resolution template with `<tool>` placeholder, verified against live `csk` 0.14.1 to silence `skill.command_resolution_contract_missing`.
+  - Section 13: Extended release checklist item 1 to require `csk skill check .` displaying zero warnings (`ноль warnings`).
+
 ## 2026-08-22 - BUG-260821-p628cq: homebrew-bump-test-mismatch fixed by asserting semantics, not formatting
 
 `e9d6785` (ci: run the tap bump after a skipped TestPyPI lane) rewrote the
@@ -2124,3 +2248,198 @@ Completed English README removal and Russian-first documentation transition:
 5. Updated language policy in both `CONTRIBUTING.md` and `CONTRIBUTING.ru.md` to record Russian-first policy (`README.md`, `docs/skill-authoring.md`, `docs/cli.md` in Russian; `ARCHITECTURE.md` and `SECURITY.md` in English).
 6. Swept codebase and verified 0 dangling `README.en.md` links.
 7. Verified full test suite (`pytest`): `1430 passed, 243 skipped, 24 warnings in 266.80s`. Exit code 0.
+
+
+## 2026-08-22 — TASK-260822-1jns5p: troubleshooting-and-releaser-note
+
+Created `docs/troubleshooting.md` and added release notes to `CONTRIBUTING.ru.md`:
+1. `docs/troubleshooting.md`: Created new diagnostic guide containing six symptom-cause-command entries (microsecond install markers, `.venv` in runtime tree, goenv/asdf/mise toolchain mismatch, `build_repository_ssh_credential_missing`, `Needed a single revision`, `.agents/bin` not on PATH). All six error strings verified against codebase (`src/csk`) and remedy commands verified against live `csk 0.14.1` `--help`.
+2. `CONTRIBUTING.ru.md`: Added two releaser paragraphs under `## Релизы` regarding `bump-homebrew-tap` job `always()` check in `release.yml` and `distribution-smoke` Homebrew lane requiring `brew trust --tap` before `brew install` on Homebrew 6.
+3. Prose style compliance: Strictly adhered to `docs/prose-style.md` (zero em-dashes `—`, zero en-dashes `–`, zero guillemet quotes `«»`, Russian-first engineering prose).
+
+
+## 2026-08-22 - TASK-260822-1jns5p review: markdown headings strip bare placeholders
+
+Review of `docs/troubleshooting.md` found a rendering defect worth remembering repo-wide.
+A heading like `## unsafe transaction tree entry: .../runtime/<skill>/<commit>/.venv/...`
+keeps `<skill>` and `<commit>` as raw inline HTML under CommonMark (verified with
+`markdown_it` locally), and GitHub's sanitizer then drops both unknown tags. The heading
+renders as `.../runtime///.venv/...` and its anchor collapses to
+`#unsafe-transaction-tree-entry-runtimevenv`, which silently breaks any cross-doc link.
+Every other doc in the repo already backticks such placeholders
+(`docs/mvp-design.md:588,742`, `docs/skill-authoring.md:23`, `docs/audit-design.md:113`);
+treat backticking angle-bracket placeholders in headings and prose as mandatory.
+
+Verdict recorded on the board as changes requested; full evidence in the task-scoped
+`TASK-260822-1jns5p_review-verdict.md` outcome resource.
+
+
+## 2026-08-22 - TASK-260822-3ah6pu review: new feature docs left the old flag table stale and contradictory
+
+Review of the `csk config build-ssh` block in `docs/cli.md` and the `build_ssh` section in
+`docs/reference.md` found a repo-wide pattern worth remembering. Documenting a feature in a
+new section does not retire the flag tables that already describe the same feature elsewhere
+in the file. `docs/cli.md` now carries the 0.14.1 pinned-agent form in the new section
+(`--identity` with a `.pub` while `--agent` is set) while four untouched flag tables at lines
+242/243, 300/301, 486/487, 543/544 still describe `--build-ssh-identity` as a private key path
+only and drop "bare flag or 'auto' adopts SSH_AUTH_SOCK" from `--build-ssh-agent`. Live
+`csk 0.14.1` help for `install`, `upgrade`, `global install`, and `global upgrade` says both.
+One document therefore contradicts itself on the recommended credential form. When a docs task
+adds a section for a flag family, sweep every existing occurrence of that family in the same
+file against live help before calling it done.
+
+Second anomaly, same class as the one the task's tooling note already warned about. The agy
+implementer run exited 1, its file edits did land, but its outcome resource claimed a flag
+description update that is absent from the diff and presented a "Repository File Grep
+Verification" block whose content is a hand-written summary with `...` elisions, not the output
+of the `grep -n -C 3` it is labelled with. The live-help transcripts in the same resource were
+genuine and matched the binary byte for byte. Treat unverifiable-looking evidence blocks in an
+outcome resource as unverified: re-run the command rather than reading the paste.
+
+Verdict recorded on the board as changes requested; full evidence in the task-scoped
+`TASK-260822-3ah6pu_review-verdict.md` outcome resource.
+
+
+## 2026-08-22 — TASK-260822-1jns5p rework: troubleshooting markdown headings and releaser note
+
+Rework completed for `docs/troubleshooting.md` and `CONTRIBUTING.ru.md`:
+1. `docs/troubleshooting.md`: Wrapped placeholders in heading 9 (`.../runtime/<skill>/<commit>/.venv/...`) in backticks so GitHub CommonMark parser does not strip them as raw HTML tags. Updated heading 5 to follow elision convention (`invalid install marker ... installed_at is not a UTC second timestamp`). Replaced repetitive lead-ins and empty interpretation sentences with concrete, observable outcome descriptions following `docs/prose-style.md`.
+2. `CONTRIBUTING.ru.md`: Restored prescriptive rule (`обязано начинаться с always()`) and cited the 0.14.0 incident where transitive skip silently killed the Homebrew tap bump.
+3. Verified zero em-dashes, en-dashes, or guillemets across all edited documentation files.
+
+
+## 2026-08-22 — TASK-260822-3ah6pu rework: CLI build-ssh documentation and reference sections
+
+Rework completed for `docs/cli.md` and `docs/reference.md`:
+1. `docs/cli.md`: Updated `--build-ssh-identity` and `--build-ssh-agent` flag descriptions across all four commands (`csk install`, `csk upgrade`, `csk global install`, `csk global upgrade`) to match live 0.14.1 CLI help semantics. Clarified that candidate precheck selections in `csk install` and `csk global install` are persisted to `config.json` only after explicit scope selection. Flattened subcommand heading levels (`csk config build-ssh add`, `list`, `remove`) from `####` to `###` to align with file conventions. Added `-h, --help` to the parent `csk config build-ssh` section options.
+2. `docs/reference.md`: Documented `build_ssh` global config section with scope grammar, longest-prefix matching, segment-boundary matching, precedence rules, pinned-agent Curator Protocol 3rd form, fail-closed loading on invalid entries, and cross-link to `docs/external-build-repositories.md`.
+3. Outcome Resource: Regenerated `TASK-260822-3ah6pu_results.md` with literal, unedited outputs from live 0.14.1 help, `grep`, and `git diff`.
+
+
+## 2026-08-22 - TASK-260822-3ah6pu review cycle 2: accepted, and how the evidence was checked
+
+All five findings from the first review cycle are fixed. The flag tables for
+`--build-ssh-identity` and `--build-ssh-agent` now carry 0.14.1 semantics in all
+four commands, the persistence qualifier is back in both precheck paragraphs, the
+subcommand headings are flat `###`, and `-h, --help` is listed in the parent
+section.
+
+The useful part of this cycle is the verification method. Cycle 1 was burned by an
+outcome resource whose "grep verification" block was a hand-written summary rather
+than command output. Rather than reading the regenerated blocks, I extracted each
+fenced block from the resource programmatically and diffed it against freshly
+captured output: the 160-line `grep -n -C 3` block and the 209-line
+`git diff` block came back byte-identical, and all six live-help transcripts
+matched the installed binary exactly. That check costs one short script and turns
+"looks plausible" into a fact. Use it whenever an outcome resource claims pasted
+command output.
+
+One cosmetic defect ships: a stray ASCII space before a semicolon at
+`docs/cli.md:220` (`` `~/.ssh`) ; выбор ``). It violates no rule in
+`docs/prose-style.md` and changes nothing for the reader, so it did not justify a
+third rework cycle; it is recorded in the verdict resource with the exact fix for
+whoever next touches the file.
+
+Verdict recorded on the board as accepted; full evidence in the task-scoped
+`TASK-260822-3ah6pu_review-verdict-cycle2.md` outcome resource.
+
+
+## 2026-08-22 - TASK-260822-1jns5p review 2: remedy prose must name the command that acts, and error strings carry their driver prefix
+
+Second review of `docs/troubleshooting.md` closed all five findings of the first cycle and found
+two accuracy defects worth remembering for every diagnostics page.
+
+The `build_repository_ssh_credential_missing` section ends with "Инсталлятор сохранит запись в
+`~/.cocoaskills/config.json` и повторит сборку", but `_cmd_config_build_ssh`
+(`src/csk/cli.py:1017`) writes the config itself, prints `Configured build-ssh scope <scope>` and
+exits. Verified live against a throwaway `CSK_CONFIG`. The installer persists a scope only on the
+interactive precheck path (`src/csk/installer.py:1082-1087`), which is precisely the branch this
+section does not document, and nothing re-runs the build: the operator must run `csk install`
+again. In a symptom-cause-remedy page, the sentence after a command block is load-bearing; it must
+name the command that acts and state the step that still remains.
+
+Second: `ToolchainError.__str__` is `f"go-v1 {code}: {detail}"` (`src/csk/builds/toolchain.py:105`),
+so the emitted line is `go-v1 toolchain_executable_mismatch: selected Go executable is not below a
+GOROOT bin directory`, contiguous. The doc heading dropped the `go-v1` prefix and inserted `...`
+between code and detail, which is where the previous cycle's elision convention was over-applied.
+An elision marker in a heading is a claim that variable text sits there; when the message is
+contiguous, the marker breaks the operator's paste-and-search lookup. Mark elisions only where the
+runtime actually substitutes a path or value.
+
+Verdict recorded on the board as changes requested; full evidence in the task-scoped
+`TASK-260822-1jns5p_review-verdict-2.md` outcome resource.
+
+## 2026-08-22 - TASK-260822-1jns5p rework 3: fixed non-TTY build-ssh remedy, verbatim toolchain heading, and actor naming
+
+Rework cycle 3 applied all R1-R3 findings from review cycle 2:
+1. R1 (blocking): Corrected `build_repository_ssh_credential_missing` remedy to state that `csk config build-ssh add` writes the scope to config and prints `Configured build-ssh scope <scope>`, and instructed the reader to re-run installation.
+2. R2 (non-blocking): Updated heading 3 to exact verbatim `## go-v1 toolchain_executable_mismatch: selected Go executable is not below a GOROOT bin directory` without elision markers or dropped prefixes.
+3. R3 (non-blocking): Named software/command actors (`csk`, `csk upgrade`) as subjects in interpreting sentences.
+
+Verified markdown HTML rendering via CommonMark parser. No README edits made.
+
+## 2026-08-22 - TASK-260822-1jns5p review 3: the microsecond install marker survived to 0.12.0, not 0.9
+
+Third review of `docs/troubleshooting.md` closed all three findings of cycle 2 and found one
+blocking factual error inherited straight from the owner TZ draft.
+
+The doc said microsecond `installed_at` markers were written by csk `<=0.9`. There is exactly one
+writer (`_marker_payload`, `src/csk/installer.py:3173`, shared by project installs and by global
+installs through `global_install.py:1068 -> installer._install_marker_only`) and it changed exactly
+once: `76f89d8` "Consume the authoritative Curator protocol suite" (2026-07-13) added
+`.replace(microsecond=0)`. The earliest tag containing that commit is `v0.12.1`; `v0.12.0` and
+everything before it wrote microseconds. The validation that turns such a marker into
+`installed_at is not a UTC second timestamp` (`_TIMESTAMP_RE`, `src/csk/install_marker.py:42`)
+landed later still, in `v0.13.0`.
+
+Two lessons worth keeping. First, an owner TZ draft is a source of claims to verify, not a source
+of truth: this one shipped a version band that was wrong by three minor releases and no earlier
+cycle checked it because the error string itself verified clean. Second, when a doc states a
+version boundary, `git log -S` on the single writer plus `git tag --contains` on the changing
+commit settles it in two commands; the CHANGELOG did not name the change explicitly (it rides under
+"нормализованные install markers" in 0.12.1).
+
+Also caught: `docs/troubleshooting.md` was the only file in the repo translating `symlink` into
+Russian, against the explicit must-stay-English list in `docs/prose-style.md`, and the releaser
+note in `CONTRIBUTING.ru.md` called `publish-testpypi` a step when the transitive-skip mechanism it
+teaches only applies to jobs in `needs`.
+
+Verdict routed to `to-dev`. Full evidence in the `TASK-260822-1jns5p_review-verdict-3.md` outcome
+resource.
+
+## 2026-08-22 — TASK-260822-1jns5p: Rework 2 addressing verdict RUN-260822-8f8ecf
+
+Addressed findings R1-R3 in `docs/troubleshooting.md`:
+- R1: Clarified that `csk config build-ssh add` writes to `~/.cocoaskills/config.json` and outputs `Configured build-ssh scope <scope>`, and explicitly instructed the operator to repeat `csk install`.
+- R2: Verified verbatim heading 3 format `## go-v1 toolchain_executable_mismatch: selected Go executable is not below a GOROOT bin directory`.
+- R3: Fixed grammatical subjects to explicitly state `csk` as actor in section 35 and 55.
+
+Verified file contents via `grep`/`head`. Outcome resource `TASK-260822-1jns5p_results.md` updated on board.
+
+## 2026-08-22 — TASK-260822-1jns5p: Rework 4 addressing verdict-3 RUN-260822-0d11f0 and directive 4
+
+Addressed V1-V4 findings in docs/troubleshooting.md and CONTRIBUTING.ru.md:
+- V1: Corrected microsecond install marker version boundary from <=0.9 to "до 0.12.0 включительно" (0.12.1 is the first version writing UTC second markers).
+- V2a/V2b: Standardized English technical terms "symlink" and "refs" in Russian documentation per docs/prose-style.md.
+- V3: Replaced inaccurate "индекс репозиториев" concept in symptom 5 lead-in with "Скачайте новые refs и переустановите закрытие зависимостей:".
+- V4: Fixed terminology in CONTRIBUTING.ru.md: publish-testpypi is a "джоба", not a "шаг".
+
+Verified file contents via grep output matching exact directive requirements.
+
+## 2026-08-22 — TASK-260822-1jns5p: Rework 5 addressing verdict RUN-260822-9eb0cd (W1 fix)
+
+Addressed W1 finding in docs/troubleshooting.md:
+- Replaced "закрытие зависимостей" with "замыкание зависимостей" at line 49 to maintain project-wide terminology consistency.
+- Verified zero occurrences of "закрытие зависимостей" across docs via grep.
+
+
+## 2026-08-22 - TASK-260822-3tvw34: README quickstart, troubleshooting link, and CHANGELOG 0.14.0/0.14.1 rehoming
+
+Completed doc updates for README.md and CHANGELOG.md per TZ items 3 and 4 and prose-style guidelines:
+1. Added product quickstart section `### Приватные репозитории сборки: за один Enter` to README.md under `## Быстрый старт`, complying with 6-8 lines format, style guide (no em-dashes), and verifying live build-SSH precheck wording.
+2. Added link to `docs/troubleshooting.md` in the `## Дальше` section of README.md.
+3. Rehomed existing `[Unreleased]` entries in CHANGELOG.md into `## [0.13.0] - 2026-08-08` (verified via `git tag --contains` for commits in `v0.12.5..v0.13.0`).
+4. Added `## [0.14.0] - 2026-08-21` and `## [0.14.1] - 2026-08-22` release sections with accurate claims matching git history (`v0.13.0..v0.14.0` and `v0.14.0..v0.14.1`).
+5. Updated comparison links at the bottom of CHANGELOG.md for `[Unreleased]`, `[0.14.1]`, `[0.14.0]`, and `[0.13.0]`.
+6. Verified markdown relative links across all documentation files (`All markdown links verified successfully!`).
+7. Ran test suite via `uv run pytest` (1465 passed).

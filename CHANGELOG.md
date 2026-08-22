@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-08-22
+
+### Добавлено
+
+- Precheck build-SSH показывает обнаруженных кандидатов: живой ssh-agent (с числом загруженных ключей) и `*.pub` из `~/.ssh` в виде интерактивного меню с дефолтом "агент + пин ключа" и в виде готовых команд `csk config build-ssh add` в fail-closed сообщении. Обнаружение только перечисляет материал; использование остаётся явным выбором оператора, а сохранение выполняется только с явным скоупом.
+
+## [0.14.0] - 2026-08-21
+
+### Исправлено
+
+- Лаунчер менеджера, вызванный через симлинк пакетного менеджера (Homebrew, pipx, uv), канонизируется до проверки идентичности; раньше любая такая установка падала на go-repository-v1 с `build_execution_worker_identity_invalid`.
+- Псевдоним `lib64 -> lib` в префиксе virtualenv больше не читается как два дерева пакета csk.
+- Внешний статический аудит не блокирует установку на неисполняемом тексте внутри `vendor/` сторонних модулей (например, `curl | sh` в Makefile завендоренной cobra); исполняемые файлы в vendor и все critical-находки блокируют по-прежнему.
+- Ошибка манифеста скилла из замыкания зависимостей называет скилл и реф-источник (`Invalid skill manifest for <skill> tag <ref> (via ...)`).
+- `config.add_project` сохраняет все поля конфига (`dataclasses.replace` вместо ручной пересборки).
+- `toolchain_executable_mismatch` для шимов goenv/asdf/mise дополнена подсказкой: положить в PATH настоящий `$(go env GOROOT)/bin`.
+
+### Добавлено
+
+- Скоупы `build_ssh` в глобальном конфиге: выбор SSH-кредов по префиксу канонической идентичности билд-репозитория, longest-prefix, пер-репо применение. Сабкоманда `csk config build-ssh add/list/remove`, precheck перед первым fetch (интерактивный промпт на TTY, fail-closed с готовой командой без TTY), таблица источников кредов в `--dry-run`, опциональный вопрос в `csk bootstrap`.
+
+## [0.13.0] - 2026-08-08
+
 ### Добавлено
 
 - Добавлен селектор `--only <name>` (повторяемый) для `csk global install`,
@@ -596,7 +619,10 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.5...main
+[Unreleased]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.14.1...main
+[0.14.1]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.14.0...v0.14.1
+[0.14.0]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.13.0...v0.14.0
+[0.13.0]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.5...v0.13.0
 [0.12.5]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.4...v0.12.5
 [0.12.4]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.3...v0.12.4
 [0.12.3]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.2...v0.12.3
