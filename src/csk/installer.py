@@ -936,12 +936,51 @@ def _prompt_build_ssh_rule(
         f"  {canonical_identity}\n"
         "No build-SSH credentials are configured for this scope."
     )
-    agent_answer = input("Use your ssh-agent (SSH_AUTH_SOCK)? [Y/n] ").strip().lower()
-    agent = "auto" if agent_answer in {"", "y", "yes"} else None
-    identity_raw = input(
-        "Identity file (a .pub pins which agent key is offered; empty for none): "
-    ).strip()
-    identity = identity_raw or None
+    candidates = build_ssh_module.discover_candidates()
+    options: list[tuple[str, str | None, str | None]] = []
+    if candidates.agent_socket is not None and candidates.public_keys:
+        first = candidates.public_keys[0]
+        loaded = (
+            f" ({candidates.agent_key_count} keys loaded)"
+            if candidates.agent_key_count is not None
+            else ""
+        )
+        options.append(
+            (f"ssh-agent{loaded} + pin {first}", "auto", first)
+        )
+    if candidates.agent_socket is not None:
+        loaded = (
+            f" ({candidates.agent_key_count} keys loaded)"
+            if candidates.agent_key_count is not None
+            else ""
+        )
+        options.append((f"ssh-agent{loaded}, no pin", "auto", None))
+    for pub in candidates.public_keys[:5]:
+        options.append((pub, None, pub))
+    options.append(("enter a path manually", None, "__manual__"))
+    print("Detected candidates:")
+    for index, (label, _, _) in enumerate(options, start=1):
+        marker = "   <- default" if index == 1 and len(options) > 1 else ""
+        print(f"  [{index}] {label}{marker}")
+    choice_raw = input(f"Select [1-{len(options)}, empty=1, n=abort]: ").strip().lower()
+    if choice_raw in {"n", "no"}:
+        return None, False
+    try:
+        choice = int(choice_raw) if choice_raw else 1
+        label, agent, identity = options[choice - 1]
+    except (ValueError, IndexError):
+        print("Rejected: not a listed candidate")
+        return None, False
+    if identity == "__manual__":
+        identity_raw = input(
+            "Identity file (a .pub pins which agent key is offered; empty for none): "
+        ).strip()
+        identity = identity_raw or None
+        if agent is None and identity is None:
+            agent_answer = input(
+                "Use your ssh-agent (SSH_AUTH_SOCK)? [Y/n] "
+            ).strip().lower()
+            agent = "auto" if agent_answer in {"", "y", "yes"} else None
     if agent is None and identity is None:
         return None, False
     scope_answer = input(
@@ -1054,11 +1093,18 @@ def _resolve_build_ssh_credentials(
         for skill_name, name, identity in missing:
             lines.append(f"  {identity} (command {name!r} of skill {skill_name!r})")
         first = missing[0][2]
-        lines.append(
-            "select credentials with: csk config build-ssh add "
-            f"{build_ssh_module.default_scope(first)} --agent auto "
-            "--identity ~/.ssh/<key>.pub"
+        scope = build_ssh_module.default_scope(first)
+        commands = build_ssh_module.candidate_commands(
+            scope, build_ssh_module.discover_candidates()
         )
+        if commands:
+            lines.append("select credentials with one of:")
+            lines.extend(f"  {command}" for command in commands)
+        else:
+            lines.append(
+                "select credentials with: csk config build-ssh add "
+                f"{scope} --agent auto --identity ~/.ssh/<key>.pub"
+            )
         lines.append(
             "or pass --build-ssh-agent/--build-ssh-identity, "
             "or set CSK_BUILD_SSH_AGENT/CSK_BUILD_SSH_IDENTITY"

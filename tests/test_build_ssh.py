@@ -264,3 +264,121 @@ def test_add_project_preserves_build_ssh(tmp_path: Path) -> None:
     )
     updated = config.add_project(cfg, "probe", tmp_path / "probe")
     assert updated.build_ssh == cfg.build_ssh
+
+
+# --- candidate discovery -----------------------------------------------------
+
+
+def test_discover_candidates_lists_pub_files_only(tmp_path: Path) -> None:
+    ssh_dir = tmp_path / ".ssh"
+    ssh_dir.mkdir()
+    (ssh_dir / "work.pub").write_text("ssh-ed25519 AAAA a\n")
+    (ssh_dir / "personal.pub").write_text("ssh-ed25519 AAAA b\n")
+    (ssh_dir / "work").write_text("PRIVATE\n")
+    (ssh_dir / "config").write_text("Host *\n")
+
+    found = build_ssh.discover_candidates(environment={}, home=str(tmp_path))
+
+    assert found.agent_socket is None
+    assert [Path(p).name for p in found.public_keys] == ["personal.pub", "work.pub"]
+
+
+def test_discover_candidates_reports_agent_socket(tmp_path: Path) -> None:
+    found = build_ssh.discover_candidates(
+        environment={"SSH_AUTH_SOCK": str(tmp_path / "sock"), "PATH": ""},
+        home=str(tmp_path),
+    )
+    # ssh-add is unreachable with an empty PATH; the socket still lists as a
+    # candidate with an unknown key count.
+    assert found.agent_socket == str(tmp_path / "sock")
+    assert found.agent_key_count is None
+
+
+def test_candidate_commands_prefer_pinned_agent(tmp_path: Path) -> None:
+    candidates = build_ssh.DiscoveredCandidates(
+        agent_socket="/tmp/sock",
+        agent_key_count=5,
+        public_keys=(str(tmp_path / "work.pub"), str(tmp_path / "b.pub")),
+    )
+    commands = build_ssh.candidate_commands("gitlab.example.com/portals", candidates)
+    assert commands[0] == (
+        "csk config build-ssh add gitlab.example.com/portals "
+        f"--agent auto --identity {tmp_path / 'work.pub'}"
+    )
+    assert commands[1] == "csk config build-ssh add gitlab.example.com/portals --agent auto"
+    assert any("--identity" in c and ".pub" not in c.split("--identity ")[1] for c in commands[2:])
+
+
+def test_candidate_commands_without_agent(tmp_path: Path) -> None:
+    candidates = build_ssh.DiscoveredCandidates(
+        agent_socket=None, public_keys=(str(tmp_path / "k.pub"),)
+    )
+    commands = build_ssh.candidate_commands("gitlab.example.com", candidates)
+    assert commands == [
+        f"csk config build-ssh add gitlab.example.com --identity {tmp_path / 'k'}"
+    ]
+
+
+def test_missing_credentials_message_lists_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    node = _node("skill-a", "git@gitlab.example.com:portals/infra/tool.git")
+    monkeypatch.setattr(
+        build_ssh,
+        "discover_candidates",
+        lambda *a, **k: build_ssh.DiscoveredCandidates(
+            agent_socket="/tmp/sock",
+            agent_key_count=2,
+            public_keys=(str(tmp_path / "work.pub"),),
+        ),
+    )
+    with pytest.raises(installer.InstallError) as excinfo:
+        installer._resolve_build_ssh_credentials(
+            _config_with_rules(tmp_path, ()),
+            [(node, "tool")],
+            _empty_dev_manifest(),
+            run_wide=None,
+            interactive=False,
+            messages=[],
+            dry_run=False,
+        )
+    text = str(excinfo.value)
+    assert "--agent auto --identity" in text
+    assert str(tmp_path / "work.pub") in text
+
+
+def test_prompt_selects_default_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        build_ssh,
+        "discover_candidates",
+        lambda *a, **k: build_ssh.DiscoveredCandidates(
+            agent_socket="/tmp/sock",
+            agent_key_count=3,
+            public_keys=(str(tmp_path / "work.pub"),),
+        ),
+    )
+    answers = iter(["", ""])  # Enter on the menu, Enter on the scope choice
+    monkeypatch.setattr("builtins.input", lambda *_: next(answers))
+    rule, persist = installer._prompt_build_ssh_rule(
+        "skill-a", "tool", "gitlab.example.com/portals/infra/tool"
+    )
+    assert rule is not None
+    assert persist is True
+    assert rule.agent == "auto"
+    assert rule.identity == str(tmp_path / "work.pub")
+    assert rule.scope == "gitlab.example.com/portals/infra"
+
+
+def test_prompt_abort(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        build_ssh,
+        "discover_candidates",
+        lambda *a, **k: build_ssh.DiscoveredCandidates(),
+    )
+    monkeypatch.setattr("builtins.input", lambda *_: "n")
+    rule, persist = installer._prompt_build_ssh_rule(
+        "skill-a", "tool", "gitlab.example.com/x/y"
+    )
+    assert rule is None and persist is False

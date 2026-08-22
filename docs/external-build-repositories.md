@@ -129,7 +129,21 @@ A scope is a segment prefix of the schema-7 canonical repository identity
 (`host/path`): matching happens only on whole `/` boundaries, and the longest
 matching scope wins, so a key granted to one namespace never reaches a
 repository outside it. Flags win over `CSK_BUILD_SSH_*`, and both win over
-every configured scope. Manage the map with:
+every configured scope.
+
+A scope needs at least one of `agent` or `identity`; each alone is a complete
+selection:
+
+- `{"agent": "auto"}` — agent-only. The install adopts the operator's live
+  `SSH_AUTH_SOCK` at run time and the agent signs with its loaded keys in
+  turn. No key file is named, so a populated agent can exhaust the server's
+  `MaxAuthTries` budget before reaching the right key.
+- `{"identity": "~/.ssh/key"}` — identity-file only, for an unencrypted key
+  on disk (`IdentityAgent=none`).
+- both — the recommended form for passphrase-protected keys: the agent holds
+  the private key and the named `.pub` pins which single key is offered.
+
+Manage the map with:
 
 ```sh
 csk config build-ssh add gitlab.example.com/portals/infra \
@@ -139,11 +153,14 @@ csk config build-ssh remove gitlab.example.com/portals/infra
 ```
 
 Before any fetch, the install resolves credentials for every declared SSH
-build repository. On an operator terminal an unmatched repository prompts for
-a selection — the prompt names the requesting skill and the full repository
-identity, and persists only with an explicit scope choice. A non-interactive
-run fails closed with `build_repository_ssh_credential_missing` and the exact
-`csk config build-ssh add` command that would fix it. `csk install --dry-run`
+build repository. On an operator terminal an unmatched repository prompts with
+a menu of **detected candidates** — the live agent socket (with its loaded key
+count) and the `.pub` files below `~/.ssh` — so the usual answer is a single
+Enter on the default "agent + pinned key" entry. Discovery only lists what
+exists; nothing is ever used without the operator's explicit selection, and
+nothing persists without the explicit scope choice. A non-interactive run
+fails closed with `build_repository_ssh_credential_missing` and ready-to-run
+`csk config build-ssh add` commands built from the same detected candidates. `csk install --dry-run`
 reports which source — flags, environment, or a config scope — covered each
 repository.
 
