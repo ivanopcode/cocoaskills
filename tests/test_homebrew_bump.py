@@ -188,7 +188,17 @@ def test_release_workflow_bumps_the_tap_on_stable_tags_only() -> None:
     job = match.group(0)
 
     assert "needs: [build, publish-pypi]" in job
-    assert "if: needs.build.outputs.prerelease == 'false'" in job
+
+    if_match = re.search(r"(?ms)^\s*if:\s*(.*?)\n(?=\s*\S+:)", job)
+    assert if_match is not None, "bump-homebrew-tap job is missing an if: condition"
+    condition = " ".join(if_match.group(1).split())
+    assert "needs.build.result == 'success'" in condition
+    assert "needs.publish-pypi.result == 'success'" in condition
+    assert "needs.build.outputs.prerelease == 'false'" in condition
+    # publish-pypi is skipped on stable tags when the TestPyPI lane is
+    # skipped, so the guard must opt out of the implicit success() via always().
+    assert "always()" in condition
+
     # The digest comes from the artifact the release contract already verified.
     assert "name: checksums" in job
     assert "--checksums dist/SHA256SUMS" in job
