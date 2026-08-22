@@ -150,3 +150,90 @@ def default_scope(canonical_identity: str) -> str:
     if len(segments) <= 2:
         return canonical_identity
     return "/".join(segments[:-1])
+
+
+@dataclass(frozen=True)
+class DiscoveredCandidates:
+    """Operator credential material visible on this machine.
+
+    Discovery only ever *lists* what exists — an agent socket and public key
+    files — so the operator can pick with one keystroke.  Nothing here is used
+    without an explicit selection; silent use of everything below ``~/.ssh``
+    would hand every operator key to whatever host a skill manifest names.
+    """
+
+    agent_socket: str | None = None
+    agent_key_count: int | None = None
+    public_keys: tuple[str, ...] = ()
+
+
+def discover_candidates(
+    environment: "dict[str, str] | None" = None,
+    home: "str | None" = None,
+) -> DiscoveredCandidates:
+    import os
+    import subprocess
+    from pathlib import Path
+
+    env = dict(environment) if environment is not None else dict(os.environ)
+    agent_socket = env.get("SSH_AUTH_SOCK") or None
+    agent_key_count: int | None = None
+    if agent_socket:
+        try:
+            probe = subprocess.run(
+                ("ssh-add", "-l"),
+                env={"SSH_AUTH_SOCK": agent_socket, "PATH": env.get("PATH", "")},
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if probe.returncode == 0:
+                agent_key_count = len(
+                    [line for line in probe.stdout.splitlines() if line.strip()]
+                )
+            elif probe.returncode == 1:
+                agent_key_count = 0
+            else:
+                agent_socket = None
+        except (OSError, subprocess.SubprocessError):
+            # ssh-add being unavailable only degrades the listing, never the
+            # selection surfaces themselves.
+            agent_key_count = None
+    ssh_dir = Path(home).expanduser() / ".ssh" if home else Path.home() / ".ssh"
+    public_keys: list[str] = []
+    try:
+        public_keys = sorted(
+            str(path)
+            for path in ssh_dir.glob("*.pub")
+            if path.is_file()
+        )
+    except OSError:
+        public_keys = []
+    return DiscoveredCandidates(
+        agent_socket=agent_socket,
+        agent_key_count=agent_key_count,
+        public_keys=tuple(public_keys),
+    )
+
+
+def candidate_commands(
+    scope: str,
+    candidates: DiscoveredCandidates,
+    limit: int = 3,
+) -> list[str]:
+    """Ready-to-run ``csk config build-ssh add`` lines for a missing scope."""
+
+    commands: list[str] = []
+    pubs = candidates.public_keys[:limit]
+    if candidates.agent_socket is not None and pubs:
+        commands.append(
+            f"csk config build-ssh add {scope} --agent auto --identity {pubs[0]}"
+        )
+    if candidates.agent_socket is not None:
+        commands.append(f"csk config build-ssh add {scope} --agent auto")
+    for pub in pubs:
+        private = pub[:-4]
+        commands.append(f"csk config build-ssh add {scope} --identity {private}")
+        if len(commands) >= limit + 1:
+            break
+    return commands[: limit + 1]
