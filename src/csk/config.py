@@ -29,6 +29,9 @@ if os.name == "nt":
 else:
     DEFAULT_SYSTEM_CONFIG_PATH = Path("/etc/cocoaskills/config.json")
 # Top-level keys an organization may lock from the system config.
+# build_ssh is deliberately absent: operator credential selections are never
+# lockable by a system configuration (ratified 2026-08-23; spec manager
+# profile, system-configuration clause).
 LOCKABLE_KEYS = frozenset(
     {"audit_registries", "disable_builtin_registries", "allowed_sources", "audit"}
 )
