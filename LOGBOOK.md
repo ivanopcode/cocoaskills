@@ -1,5 +1,21 @@
 # Logbook
 
+## 2026-08-23 - macOS worker-domain teardown convergence
+
+The macOS Go E2E canary exposed a fork race in worker-domain teardown. The
+manager sent `SIGKILL` to the private process group once and then used signal
+`0` while waiting for the group to disappear. A descendant that completed
+`fork(2)` after the first signal selected its targets inherited the worker PGID
+without inheriting the pending signal, so the fail-closed join correctly timed
+out even though every originally observed member had been terminated.
+
+The bounded join now keeps sending `SIGKILL` until Darwin reports `ESRCH` for
+the group. This preserves the existing deadline and the requirement to prove
+complete domain absence while closing the late-descendant race. The PR fast
+topology uses a checked-in, one-node macOS worker-domain E2E inventory; Windows
+retains the broader native smoke inventory and Ubuntu retains its portable
+fail-closed inventory.
+
 ## 2026-08-22 - TASK-260822-3tvw34 review 1: CHANGELOG rehoming holds, README overclaims compiled commands
 
 The CHANGELOG half of the task is right and was verified two ways rather than trusted. Forward:
