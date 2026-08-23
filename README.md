@@ -279,6 +279,24 @@ csk shell-init                      # Генерирует или устанав
 
 Полное описание команд, флагов, позиционных аргументов и примеров использования находится в файле [`docs/cli.md`](docs/cli.md).
 
+## Development tools
+
+- `uv` installs the development environment and builds release artifacts. Run
+  `uv sync --extra dev` and `uv build --out-dir .temp/dist`; build outputs stay
+  under `.temp/dist/`.
+- `pytest` and `pytest-xdist` run the test suite. Run `uv run pytest -q` for the
+  full suite or focused test paths; temporary output belongs under `.temp/` or
+  an external short-lived temp directory.
+- `mypy` performs strict source type checking. Run `uv run mypy`; it writes no
+  persistent artifact unless output is redirected to `.temp/`.
+- `actionlint` validates GitHub Actions workflows. Run
+  `actionlint .github/workflows/ci.yml`; validation logs belong under `.temp/`.
+- GitHub Actions runs the cross-platform CI matrices. The merge protocol lane
+  keeps full Linux/macOS coverage and uses the checked-in `.research/` manifest,
+  classification, and verifier for six deterministic Windows shards. Each
+  Windows shard uploads its collected inventory, selected node IDs, verifier
+  provenance, and JUnit XML as a workflow artifact.
+
 ## Дальше
 
 Документация и справочные материалы CocoaSkills:

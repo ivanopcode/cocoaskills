@@ -386,13 +386,54 @@ jobs:
           -o cache_dir="${{ runner.temp }}/csk-pytest-cache"
 
   merge_protocol:
-    name: Merge protocol / Python 3.14 on ${{ matrix.os }}
+    name: Merge protocol / Python 3.14 / ${{ matrix.label }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            label: ubuntu-full
+            shard: full
+            temp_tag: full
+            timeout_minutes: 360
+          - os: macos-latest
+            label: macos-full
+            shard: full
+            temp_tag: full
+            timeout_minutes: 360
+          - os: windows-latest
+            label: windows-p00-contract-and-registry
+            shard: p00-contract-and-registry
+            temp_tag: p00
+            timeout_minutes: 5
+          - os: windows-latest
+            label: windows-p01-lifecycle-cached-baseline
+            shard: p01-lifecycle-cached-baseline
+            temp_tag: p01
+            timeout_minutes: 30
+          - os: windows-latest
+            label: windows-p02-lifecycle-sabotage-a
+            shard: p02-lifecycle-sabotage-a
+            temp_tag: p02
+            timeout_minutes: 45
+          - os: windows-latest
+            label: windows-p03-lifecycle-sabotage-b
+            shard: p03-lifecycle-sabotage-b
+            temp_tag: p03
+            timeout_minutes: 45
+          - os: windows-latest
+            label: windows-p04-lifecycle-sabotage-c
+            shard: p04-lifecycle-sabotage-c
+            temp_tag: p04
+            timeout_minutes: 45
+          - os: windows-latest
+            label: windows-p05-lifecycle-sabotage-d
+            shard: p05-lifecycle-sabotage-d
+            temp_tag: p05
+            timeout_minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -440,10 +481,66 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ".[dev]"
 
+      - name: Relocate Windows protocol checkout and create evidence directory
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Move-Item -LiteralPath "${{ github.workspace }}/protocol-spec" -Destination "${{ runner.temp }}/protocol-spec"
+          New-Item -ItemType Directory -Force -Path "${{ runner.temp }}/protocol-${{ matrix.temp_tag }}" | Out-Null
+
       - name: Run full protocol conformance suite
+        if: runner.os != 'Windows'
+        timeout-minutes: ${{ matrix.timeout_minutes }}
         env:
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec/conformance/v1
-        run: python -m pytest -v tests/test_protocol_conformance.py
+        run: >-
+          python -m pytest -v tests/test_protocol_conformance.py
+          --basetemp="${{ runner.temp }}/csk-protocol-full"
+          -o cache_dir="${{ runner.temp }}/csk-protocol-full-cache"
+
+      - name: Collect canonical Windows protocol inventory
+        if: runner.os == 'Windows'
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ runner.temp }}/protocol-spec/conformance/v1
+        run: >-
+          python -m pytest --collect-only -q tests/test_protocol_conformance.py
+          > "${{ runner.temp }}/protocol-${{ matrix.temp_tag }}/collected-nodeids.txt"
+
+      - name: Verify and select deterministic Windows protocol shard
+        if: runner.os == 'Windows'
+        run: >-
+          python .research/TASK-260803-2ol7ok_verify-protocol-shards.py
+          --classification .research/TASK-260803-2ol7ok_protocol-isolation-classification.json
+          --manifest .research/TASK-260803-2ol7ok_protocol-shards.json
+          --collected "${{ runner.temp }}/protocol-${{ matrix.temp_tag }}/collected-nodeids.txt"
+          --source-checkout .
+          --protocol-checkout "${{ runner.temp }}/protocol-spec"
+          --shard-id "${{ matrix.shard }}"
+          --nodeids-out "${{ runner.temp }}/protocol-${{ matrix.temp_tag }}/shard-nodeids.txt"
+          > "${{ runner.temp }}/protocol-${{ matrix.temp_tag }}/verification.json"
+
+      - name: Run deterministic Windows protocol shard
+        if: runner.os == 'Windows'
+        timeout-minutes: ${{ matrix.timeout_minutes }}
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ runner.temp }}/protocol-spec/conformance/v1
+        run: >-
+          python -m pytest -vv "@${{ runner.temp }}/protocol-${{ matrix.temp_tag }}/shard-nodeids.txt"
+          --basetemp="${{ runner.temp }}/csk-${{ matrix.temp_tag }}"
+          -o cache_dir="${{ runner.temp }}/csk-cache-${{ matrix.temp_tag }}"
+          --junitxml="${{ runner.temp }}/protocol-${{ matrix.temp_tag }}/results.xml"
+
+      - name: Upload Windows protocol shard evidence
+        if: ${{ always() && runner.os == 'Windows' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-${{ matrix.shard }}-windows-py314
+          path: |
+            ${{ runner.temp }}/protocol-${{ matrix.temp_tag }}/collected-nodeids.txt
+            ${{ runner.temp }}/protocol-${{ matrix.temp_tag }}/shard-nodeids.txt
+            ${{ runner.temp }}/protocol-${{ matrix.temp_tag }}/verification.json
+            ${{ runner.temp }}/protocol-${{ matrix.temp_tag }}/results.xml
+          if-no-files-found: error
 
   merge_go_e2e:
     name: Merge Go E2E / Python 3.14 on ${{ matrix.os }}

@@ -2459,3 +2459,71 @@ Completed doc updates for README.md and CHANGELOG.md per TZ items 3 and 4 and pr
 5. Updated comparison links at the bottom of CHANGELOG.md for `[Unreleased]`, `[0.14.1]`, `[0.14.0]`, and `[0.13.0]`.
 6. Verified markdown relative links across all documentation files (`All markdown links verified successfully!`).
 7. Ran test suite via `uv run pytest` (1465 passed).
+
+## 2026-08-23 - TASK-260803-2ol7ok: current-main protocol shard isolation revalidation
+
+Recollected 1,045 protocol nodes at clean CocoaSkills `2bfe3d64` and pinned
+curator-spec `0c81c1f8`. The two nodes added since the reviewed 1,043-node
+package both belong to the indivisible lifecycle cache region, increasing p01
+from 442 to 444 nodes without changing any other boundary. Regenerated the
+exhaustive classification and exact six-shard manifest (`565/444/9/9/10/8`),
+updated four audited harness hashes, and retained 83 atomic clusters.
+
+The checkout-aware verifier passed with overlap 0 and gap 0. Deliberate gap,
+overlap, timeout-drift, and wrong-checkout probes each exited 1 with the exact
+diagnostic. Six simultaneous macOS shard processes and a separate reverse-order
+p01 repetition all exited 0. GitHub-hosted Windows protocol job 96055135893
+passed 1,036 tests and skipped 9 in 6,807.51s. Its hosted head differs, but the
+four audited files are byte-identical to current main. The overall workflow was
+truthfully red because of an unrelated macOS Go-E2E job.
+
+Hosted timestamps attribute 29.05 minutes to the slowest proposed shard, so the
+machine-readable bounded policy is 5 minutes for p00, 30 for p01, and 45 for
+each sabotage shard. Full findings and command exits are in
+`.research/260823_protocol-shard-isolation-current-main.md`; no product, test,
+or workflow file changed.
+
+## 2026-08-23 - TASK-260803-21lw4t: deterministic Windows protocol shards
+
+Implemented the accepted six-shard Windows protocol partition in the merge CI
+lane while retaining full protocol runs on Linux and macOS. Every Windows row
+first collects the canonical 1,045-node inventory, verifies the accepted
+classification/manifest and pinned provenance fail-closed, then writes and runs
+one exact response file with a unique short temp/cache tag. The merge aggregate
+continues to require the whole matrix, and every shard uploads collection,
+selection, verifier, and JUnit evidence.
+
+The runtime verifier now permits audited-base descendants while hashing all four
+audited harness files, requires the exact clean curator-spec commit, emits both
+audit and execution heads, and rejects inventory, selector, cluster, partition,
+and timeout drift before selection. A native Windows probe exposed two
+portability details: PowerShell 5 collection redirection is UTF-16, so collection
+decoding is BOM-aware; long basetemp names can hit WinError 206, so CI uses
+`p00` through `p05` only for temp/cache paths while retaining full shard IDs
+everywhere else.
+
+Local focused tests passed 14/14, the non-protocol/non-Go-E2E suite passed 1,472
+with 94 platform skips, mypy and actionlint passed, and sdist/wheel build passed.
+The isolated `ssh win` probe passed the 14 focused tests and all 565 p00 nodes.
+Existing hosted Windows protocol jobs are green on the exact source base and on
+an independently audited byte-identical predecessor, but this unstaged workflow
+cannot itself run on GitHub until the required later commit/push.
+
+Reviewer rework restored fail-closed source-checkout cleanliness while retaining
+audited-base descendant acceptance. Windows protocol checkout, collection,
+selection, verifier JSON, JUnit, cache, and basetemp now live outside the source
+checkout. The accepted 5/30/45-minute bounds apply to the protocol test step,
+while a separate 360-minute job guard allows the `always()` evidence upload to
+run after a timed-out test step. Focused tests now exercise clean descendants,
+non-descendants, tracked dirtiness, and untracked dirtiness with real temporary
+Git repositories.
+
+Native `ssh win` evidence covers every exact shard. A six-way shared-host run
+executed all 1,045 nodes exactly once (`1,036 passed`, `9 skipped`) with every
+pytest exit 0; contention exceeded p01/p02 bounds, so that aggregate remained
+truthfully red. CI-equivalent isolated reruns put p01 at 853.239s under its
+30-minute bound and p02 at 1,598.497s under its 45-minute bound, both exit 0.
+The implemented workflow still has no hosted run because this worktree must
+remain uncommitted/unpushed; branch lookup and hosted-run lookup both returned
+empty. A commit-owning mover must publish the scope and attach two green hosted
+runs before the task can satisfy its hosted acceptance gate.

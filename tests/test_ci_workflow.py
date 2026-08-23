@@ -97,7 +97,7 @@ def test_fast_selections_are_exact_checked_in_node_inventories() -> None:
     assert "csk_e2e_native" in go_job
 
 
-def test_main_lane_preserves_full_matrix_protocol_and_go_evidence() -> None:
+def test_main_lane_preserves_full_platform_coverage_and_go_evidence() -> None:
     workflow = _workflow()
 
     ordinary = _job(workflow, "merge_ordinary")
@@ -109,10 +109,12 @@ def test_main_lane_preserves_full_matrix_protocol_and_go_evidence() -> None:
 
     protocol = _job(workflow, "merge_protocol")
     assert "python -m pytest -v tests/test_protocol_conformance.py" in protocol
-    assert "@.github/ci/" not in protocol
     assert "actions/setup-go@v7" in protocol
     assert "Configure git (POSIX)" in protocol
     assert "Configure git (Windows)" in protocol
+    assert "ubuntu-full" in protocol
+    assert "macos-full" in protocol
+    assert protocol.count("os: windows-latest") == 6
 
     go_e2e = _job(workflow, "merge_go_e2e")
     assert "tests/test_go_build_e2e.py" in go_e2e
@@ -120,6 +122,54 @@ def test_main_lane_preserves_full_matrix_protocol_and_go_evidence() -> None:
     assert "csk_e2e_native" in go_e2e
     assert "Collect accepted Go E2E node IDs" in go_e2e
     assert "Upload accepted Go E2E evidence" in go_e2e
+
+
+def test_windows_protocol_shards_are_static_bounded_and_fail_closed() -> None:
+    protocol = _job(_workflow(), "merge_protocol")
+    expected_timeouts = {
+        "p00-contract-and-registry": 5,
+        "p01-lifecycle-cached-baseline": 30,
+        "p02-lifecycle-sabotage-a": 45,
+        "p03-lifecycle-sabotage-b": 45,
+        "p04-lifecycle-sabotage-c": 45,
+        "p05-lifecycle-sabotage-d": 45,
+    }
+    for shard_id, timeout in expected_timeouts.items():
+        row = re.search(
+            rf"(?ms)^          - os: windows-latest\n"
+            rf"            label: windows-{re.escape(shard_id)}\n"
+            rf"            shard: {re.escape(shard_id)}\n"
+            rf"            temp_tag: p\d{{2}}\n"
+            rf"            timeout_minutes: (?P<timeout>\d+)$",
+            protocol,
+        )
+        assert row is not None
+        assert int(row.group("timeout")) == timeout
+
+    collect = protocol.index("Collect canonical Windows protocol inventory")
+    verify = protocol.index("Verify and select deterministic Windows protocol shard")
+    execute = protocol.index("Run deterministic Windows protocol shard")
+    upload = protocol.index("Upload Windows protocol shard evidence")
+    assert collect < verify < execute < upload
+    assert "timeout-minutes: 360" in protocol[:collect]
+    assert (
+        "Run deterministic Windows protocol shard\n"
+        "        if: runner.os == 'Windows'\n"
+        "        timeout-minutes: ${{ matrix.timeout_minutes }}"
+    ) in protocol
+    assert "--collect-only -q tests/test_protocol_conformance.py" in protocol
+    assert "Relocate Windows protocol checkout and create evidence directory" in protocol
+    assert 'Move-Item -LiteralPath "${{ github.workspace }}/protocol-spec"' in protocol
+    assert "--classification .research/TASK-260803-2ol7ok_protocol-isolation-classification.json" in protocol
+    assert "--manifest .research/TASK-260803-2ol7ok_protocol-shards.json" in protocol
+    assert '--shard-id "${{ matrix.shard }}"' in protocol
+    assert 'python -m pytest -vv "@${{ runner.temp }}/protocol-${{ matrix.temp_tag }}/shard-nodeids.txt"' in protocol
+    assert '${{ runner.temp }}/csk-${{ matrix.temp_tag }}' in protocol
+    assert '${{ runner.temp }}/csk-cache-${{ matrix.temp_tag }}' in protocol
+    assert '${{ runner.temp }}/protocol-${{ matrix.temp_tag }}/collected-nodeids.txt' in protocol
+    assert '${{ runner.temp }}/protocol-${{ matrix.temp_tag }}/verification.json' in protocol
+    assert '${{ runner.temp }}/protocol-${{ matrix.temp_tag }}/results.xml' in protocol
+    assert "if-no-files-found: error" in protocol
 
 
 def test_stable_aggregates_always_run_and_fail_closed() -> None:
