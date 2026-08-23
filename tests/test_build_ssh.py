@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -283,7 +284,13 @@ def test_discover_candidates_lists_pub_files_only(tmp_path: Path) -> None:
     assert [Path(p).name for p in found.public_keys] == ["personal.pub", "work.pub"]
 
 
-def test_discover_candidates_reports_agent_socket(tmp_path: Path) -> None:
+def test_discover_candidates_reports_agent_socket(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unavailable(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
     found = build_ssh.discover_candidates(
         environment={"SSH_AUTH_SOCK": str(tmp_path / "sock"), "PATH": ""},
         home=str(tmp_path),

