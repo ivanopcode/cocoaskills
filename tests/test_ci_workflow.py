@@ -68,19 +68,30 @@ def test_fast_selections_are_exact_checked_in_node_inventories() -> None:
     workflow = _workflow()
     protocol = _nodeids("protocol-fast-nodeids.txt")
     native = _nodeids("go-e2e-native-smoke-nodeids.txt")
+    macos_worker_domain = _nodeids("go-e2e-macos-worker-domain-nodeids.txt")
     ubuntu = _nodeids("go-e2e-ubuntu-smoke-nodeids.txt")
 
     assert len(protocol) == 10
     assert len(native) == 5
+    assert macos_worker_domain == [
+        "tests/test_go_build_e2e.py::test_real_go_cache_hit_and_relevant_source_mutation"
+    ]
     assert len(ubuntu) == 4
     assert all(node.startswith("tests/test_protocol_conformance.py::") for node in protocol)
-    assert all(node.startswith("tests/test_go_build_e2e.py::") for node in native + ubuntu)
+    assert all(
+        node.startswith("tests/test_go_build_e2e.py::")
+        for node in native + macos_worker_domain + ubuntu
+    )
 
     protocol_job = _job(workflow, "fast_protocol")
     assert protocol_job.count("@.github/ci/protocol-fast-nodeids.txt") == 2
 
     go_job = _job(workflow, "fast_go_e2e")
-    for name in ("go-e2e-native-smoke-nodeids.txt", "go-e2e-ubuntu-smoke-nodeids.txt"):
+    for name in (
+        "go-e2e-native-smoke-nodeids.txt",
+        "go-e2e-macos-worker-domain-nodeids.txt",
+        "go-e2e-ubuntu-smoke-nodeids.txt",
+    ):
         assert go_job.count(name) == 2
     assert "csk_e2e_ubuntu" in go_job
     assert "csk_e2e_native" in go_job

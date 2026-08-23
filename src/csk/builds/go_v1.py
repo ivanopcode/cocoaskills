@@ -5534,7 +5534,12 @@ class _NativeControlDomain:
             deadline = time.monotonic() + _WORKER_SHUTDOWN_GRACE
             while True:
                 try:
-                    os.killpg(process.pid, 0)
+                    # A descendant can finish fork(2) after the first group
+                    # signal selected its targets. Such a child inherits the
+                    # worker PGID but not the pending SIGKILL. Keep driving
+                    # the bounded domain toward quiescence; ESRCH remains the
+                    # proof that no member remains to execute or be joined.
+                    os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     break
                 except OSError as exc:

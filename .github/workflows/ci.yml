@@ -269,7 +269,7 @@ jobs:
           CSK_E2E_REQUIRED_PLATFORM: ${{ runner.os == 'macOS' && 'macos_native' || runner.os == 'Windows' && 'windows_native' || 'ubuntu_portable_fail_closed' }}
         run: >-
           python -m pytest --collect-only -q
-          "@.github/ci/${{ runner.os == 'Linux' && 'go-e2e-ubuntu-smoke-nodeids.txt' || 'go-e2e-native-smoke-nodeids.txt' }}"
+          "@.github/ci/${{ runner.os == 'Linux' && 'go-e2e-ubuntu-smoke-nodeids.txt' || runner.os == 'macOS' && 'go-e2e-macos-worker-domain-nodeids.txt' || 'go-e2e-native-smoke-nodeids.txt' }}"
           -m "${{ runner.os == 'Linux' && 'csk_e2e_ubuntu' || 'csk_e2e_native' }}"
           > csk-e2e-smoke-nodeids.txt
 
@@ -281,7 +281,7 @@ jobs:
           CSK_E2E_REQUIRED_PLATFORM: ${{ runner.os == 'macOS' && 'macos_native' || runner.os == 'Windows' && 'windows_native' || 'ubuntu_portable_fail_closed' }}
         run: >-
           python -m pytest -q
-          "@.github/ci/${{ runner.os == 'Linux' && 'go-e2e-ubuntu-smoke-nodeids.txt' || 'go-e2e-native-smoke-nodeids.txt' }}"
+          "@.github/ci/${{ runner.os == 'Linux' && 'go-e2e-ubuntu-smoke-nodeids.txt' || runner.os == 'macOS' && 'go-e2e-macos-worker-domain-nodeids.txt' || 'go-e2e-native-smoke-nodeids.txt' }}"
           -m "${{ runner.os == 'Linux' && 'csk_e2e_ubuntu' || 'csk_e2e_native' }}"
           --basetemp="${{ runner.temp }}/csk-e2e-smoke"
           --junitxml=csk-e2e-smoke-results.xml

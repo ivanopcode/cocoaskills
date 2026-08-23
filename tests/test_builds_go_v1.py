@@ -2382,12 +2382,46 @@ def test_macos_process_group_success_is_terminated_and_joined(
     def terminate_then_absent(pid: int, selected_signal: int) -> None:
         assert pid == process.pid
         calls.append(selected_signal)
-        if selected_signal == 0:
+        if len(calls) == 2:
             raise ProcessLookupError
 
     monkeypatch.setattr(go_v1.os, "killpg", terminate_then_absent)
     domain.terminate(process)  # type: ignore[arg-type]
-    assert calls == [int(signal.SIGKILL), 0]
+    assert calls == [int(signal.SIGKILL), int(signal.SIGKILL)]
+    assert domain.terminated
+    assert process.returncode is not None
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "killpg"),
+    reason="the macOS process-group API is unavailable",
+)
+def test_macos_process_group_rekills_late_descendant_before_join(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    domain = _bare_domain(go_v1.PLATFORM_MACOS)
+    process = _FakeDomainProcess()
+    calls: list[int] = []
+    clock = 0.0
+
+    def advancing_clock() -> float:
+        nonlocal clock
+        clock += 1.0
+        return clock
+
+    def late_descendant_then_absent(pid: int, selected_signal: int) -> None:
+        assert pid == process.pid
+        calls.append(selected_signal)
+        if calls.count(int(signal.SIGKILL)) == 3:
+            raise ProcessLookupError
+
+    monkeypatch.setattr(go_v1.time, "monotonic", advancing_clock)
+    monkeypatch.setattr(go_v1.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(go_v1.os, "killpg", late_descendant_then_absent)
+
+    domain.terminate(process)  # type: ignore[arg-type]
+
+    assert calls == [int(signal.SIGKILL)] * 3
     assert domain.terminated
     assert process.returncode is not None
 
