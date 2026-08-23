@@ -159,6 +159,10 @@ def test_windows_protocol_shards_are_static_bounded_and_fail_closed() -> None:
     ) in protocol
     assert "--collect-only -q tests/test_protocol_conformance.py" in protocol
     assert "Relocate Windows protocol checkout and create evidence directory" in protocol
+    configure_windows = protocol.index("Configure git (Windows)")
+    normalize_checkout = protocol.index("git reset --hard HEAD", configure_windows)
+    install = protocol.index("Install package", normalize_checkout)
+    assert configure_windows < normalize_checkout < install < collect
     assert 'Move-Item -LiteralPath "${{ github.workspace }}/protocol-spec"' in protocol
     assert "--classification .research/TASK-260803-2ol7ok_protocol-isolation-classification.json" in protocol
     assert "--manifest .research/TASK-260803-2ol7ok_protocol-shards.json" in protocol
