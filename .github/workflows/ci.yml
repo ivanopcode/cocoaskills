@@ -38,7 +38,19 @@ env:
   # lane runs against this revision. The candidate suite never appears here; it
   # enters only through .github/ci/candidate-suite.json or the workflow_dispatch
   # inputs above, and never replaces this pin.
-  RELEASED_SUITE_PIN: 0c81c1f8d5321d822be2a2817b05aea03e656e15
+  #
+  # 0ed5c691 is the v1.0.0-rc.9 release commit on relux-works/curator-spec
+  # main, and it publishes the suite this manager qualified against on all
+  # three runners. Advancing it is fail-closed by construction:
+  # tests/test_protocol_conformance.py and tests/test_build_metadata.py
+  # authenticate the released manifest digest before reading a single suite
+  # byte, and the Windows shard verifier pins this revision too, so a
+  # half-advanced pin goes red at collection rather than silently
+  # re-baselining. The digest itself is deliberately NOT repeated here:
+  # test_no_rc6_literal_survives_outside_the_declaration forbids the candidate
+  # declaration's identity from appearing in this file, and since rc.9 publishes
+  # the qualified candidate's bytes the two digests are now the same string.
+  RELEASED_SUITE_PIN: 0ed5c691e9208eea52f21db2fc05e226ce3516fd
 
 jobs:
   typecheck:

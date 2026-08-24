@@ -73,8 +73,16 @@ pytestmark = pytest.mark.skipif(not ROOT_TEXT, reason="CURATOR_CONFORMANCE_ROOT 
 
 # rc.5 carries the separately versioned external-repository corpus consumed by
 # test_rc5_external_repository_conformance.py.  This module intentionally binds
-# the later rc.6 manager/build corpus; do not make an rc.5 root fail collection
-# merely because both authenticated consumers share the conventional root env.
+# the released manager/build corpus at RELEASED_SUITE_PIN -- 1.0.0-rc.9 since
+# the schema-8 landing -- so do not make an rc.5 root fail collection merely
+# because both authenticated consumers share the conventional root env.
+#
+# The test names keep their historical rc6_ prefix on purpose.  The Windows
+# protocol lane pins an ORDERED node-id baseline in
+# .research/TASK-260803-2ol7ok_protocol-shards.json together with a per-node
+# isolation classification; renaming the functions would rewrite every one of
+# those rows for no behavioural gain and is a separate change.  What the module
+# authenticates is the identity below, not the prefix.
 if ROOT_TEXT:
     _candidate_manifest = Path(ROOT_TEXT) / "manifest.json"
     if _candidate_manifest.is_file() and hashlib.sha256(
@@ -86,9 +94,9 @@ if ROOT_TEXT:
         )
 
 EXPECTED_CANDIDATE_MANIFEST_SHA256 = (
-    "sha256:12e58b82579645ba1ccafba49d3e2dd3216005ddf37ae63c68a9fafd46773071"
+    "sha256:803918bf8672f76cf990985e51db213b826674cd5bb54fbf47731b8404b44403"
 )
-EXPECTED_CANDIDATE_PROTOCOL_VERSION = "1.0.0-rc.6"
+EXPECTED_CANDIDATE_PROTOCOL_VERSION = "1.0.0-rc.9"
 EXPECTED_BUILD_DRIVER_FILES = (
     "build-input.ccj.json",
     "build-source-sha256.txt",
@@ -200,7 +208,7 @@ def _golden_bytes(relative: str) -> bytes:
 def _repository_root() -> Path:
     repository = _root().parent.parent
     assert (repository / "schemas" / "v1").is_dir()
-    assert (repository / "release" / "1.0.0-rc.6.json").is_file()
+    assert (repository / "release" / "1.0.0-rc.9.json").is_file()
     return repository
 
 
@@ -390,7 +398,7 @@ def test_rc6_candidate_manifest_and_release_record_are_exact_non_release_evidenc
     manifest_digest = "sha256:" + hashlib.sha256(manifest_raw).hexdigest()
     manifest = json.loads(manifest_raw)
     release = json.loads(
-        (_repository_root() / "release" / "1.0.0-rc.6.json").read_text(
+        (_repository_root() / "release" / "1.0.0-rc.9.json").read_text(
             encoding="utf-8"
         )
     )
@@ -408,8 +416,10 @@ def test_rc6_candidate_manifest_and_release_record_are_exact_non_release_evidenc
     )
     assert release["downstream_consumption"]["environment"] == "CURATOR_CONFORMANCE_ROOT"
     assert release["downstream_consumption"]["committed_release_pin_advanced"] is False
-    assert release["claim_v3"]["claims_emitted"] == []
-    assert release["claim_v3"]["rc6_claim_schema"] is None
+    assert release["claim_v5"]["claims_emitted"] == []
+    assert release["claim_v5"]["claim_protocol_version"] == (
+        EXPECTED_CANDIDATE_PROTOCOL_VERSION
+    )
 
 
 def test_rc6_in_scope_vector_inventory_is_exhaustive() -> None:
@@ -417,16 +427,20 @@ def test_rc6_in_scope_vector_inventory_is_exhaustive() -> None:
         schema: sum(entry["schema"] == schema for entry in SCHEMA_CASES)
         for schema in IN_SCOPE_SCHEMA_NAMES
     }
+    # rc.9 adds four invalid-v8-* cases to each of the two v6 manifest families
+    # -- a v6 schema must keep rejecting the schema-8 execution_policy and
+    # interpreter fields, top level and per command. Every other in-scope family
+    # is byte-for-byte the rc.6 inventory.
     assert schema_counts == {
-        "agent-skill-v6.schema.json": 24,
+        "agent-skill-v6.schema.json": 28,
         "build-receipt-v1.schema.json": 18,
         "conformance-claim-v1.schema.json": 2,
         "conformance-claim-v2.schema.json": 7,
         "conformance-claim-v3.schema.json": 13,
-        "csk-skill-v6.schema.json": 24,
+        "csk-skill-v6.schema.json": 28,
         "install-marker-v2.schema.json": 14,
     }
-    assert len(SCHEMA_CASES) == 102
+    assert len(SCHEMA_CASES) == 110
     assert len(BUILD_DRIVER_VECTORS["positive_cases"]) == 8
     assert len(BUILD_DRIVER_VECTORS["rejection_cases"]) == 77
     assert set(_BUILD_REJECTION_BINDINGS) == {
@@ -974,7 +988,9 @@ def test_rc6_claim_v3_schema_stays_on_rc5_and_requires_build_drivers() -> None:
     ids=lambda rule: rule["name"],
 )
 def test_rc6_claim_qualification_rule(rule: dict[str, Any]) -> None:
-    assert CLAIM_QUALIFICATION_VECTORS["protocol_version"] == "1.0.0-rc.6"
+    assert CLAIM_QUALIFICATION_VECTORS["protocol_version"] == (
+        EXPECTED_CANDIDATE_PROTOCOL_VERSION
+    )
     assert CLAIM_QUALIFICATION_VECTORS["claim_schema_version"] == 3
     assert CLAIM_QUALIFICATION_VECTORS["candidate_claims_emitted"] == []
     if rule["name"] == "schema-valid-is-not-qualified":
