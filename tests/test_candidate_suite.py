@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import commit_all, init_git_repo, load_candidate_suite, write_files
+from candidate_suite_support import load_candidate_suite
+from conftest import commit_all, init_git_repo, write_files
 
 
 candidate_suite = load_candidate_suite()
