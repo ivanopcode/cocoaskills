@@ -246,6 +246,19 @@ cannot insert a hook or script between them. See
 external-build boundary is qualified only for macOS and Windows; this document
 makes no Linux support claim.
 
+Schema 8 keeps that session byte-identical and adds one declaration to the
+local `go-v1` command: `modules`, the first-party Go modules of the same package
+that the build root replaces. The package states a claim and the manager checks
+it against the frozen snapshot before the fixed `go list`, then reconciles it
+against the effective replace set read only from `<build root>/vendor/modules.txt`
+after `go list` and before `go build`. Nothing else moves: the logical build
+input, the cache key, the receipt, and the artifact-relative path are unchanged,
+and a schema-8 installation is recorded by install marker v4, which carries
+marker-v3 meaning over a schema-8 manifest. `script-worker-v1` is a separate
+schema-8 addition this manager does not implement; a command selecting it is
+rejected with `script_execution_policy_unsupported` rather than installed
+declared-only.
+
 This architecture boundary follows the accepted
 [rc.5 protocol core](https://github.com/relux-works/curator-spec/blob/v1.0.0-rc.5/protocol/core.md).
 Later protocol revisions are outside this document's scope.

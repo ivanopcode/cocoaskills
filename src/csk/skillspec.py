@@ -16,11 +16,12 @@ from .build_repository import (
     parse_repository_source,
 )
 from .builds import GO_V1_DRIVER
+from .builds.module_roots import ModuleRootError, validate_declaration
 from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_portable_path
 
 
 SCHEMA_VERSION = 1
-SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6, 7}
+SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6, 7, 8}
 CANONICAL_MANIFEST = "agent-skill.json"
 LEGACY_MANIFEST = "csk-skill.json"
 RUNTIME_FALLBACK = "agents/runtime.json"
@@ -33,9 +34,42 @@ REQUIREMENT_MODES = {"full", "runtime", "context"}
 REQUIREMENT_REF_KINDS = {"tag", "revision"}
 _RANGE_MARKERS = ("^", "~", ">", "<", "*", " ")
 _SCHEMA_V1_RESERVED_TOP_LEVEL_FIELDS = frozenset(
-    {"build_roots", "build_repositories", "driver", "repository", "target"}
+    {
+        "build_roots",
+        "build_repositories",
+        "driver",
+        "repository",
+        "target",
+        "modules",
+        "execution_policy",
+        "interpreter",
+    }
 )
-_SCHEMA_V1_RESERVED_COMMAND_FIELDS = frozenset({"driver", "source_dir", "repository", "target"})
+_SCHEMA_V1_RESERVED_COMMAND_FIELDS = frozenset(
+    {
+        "driver",
+        "source_dir",
+        "repository",
+        "target",
+        "modules",
+        "execution_policy",
+        "interpreter",
+    }
+)
+
+# Protocol 1.0 defines exactly one script execution policy and exactly two
+# interpreter identifiers. Both value spaces are closed: a manifest that names
+# anything else is invalid, never a forward-compatible extension.
+SCRIPT_WORKER_V1_POLICY = "script-worker-v1"
+SCRIPT_EXECUTION_POLICIES = frozenset({SCRIPT_WORKER_V1_POLICY})
+SCRIPT_INTERPRETERS = frozenset({"node-v1", "python3-v1"})
+
+# csk does not implement ``script-worker-v1``. Protocol Core section 4.1.1
+# requires such a manager to reject an enforced command outright: installing it
+# declared-only, downgrading it, or ignoring the field would publish a shim
+# that runs package code the manifest says is contained.
+SCRIPT_EXECUTION_POLICIES_IMPLEMENTED: frozenset[str] = frozenset()
+SCRIPT_EXECUTION_POLICY_UNSUPPORTED = "script_execution_policy_unsupported"
 
 MCP_TRANSPORTS = {"stdio", "http"}
 MCP_REQUIRED_IN = {"any", "all"}
@@ -58,6 +92,9 @@ class CommandSpec:
     source_dir: str | None = None
     repository: str | None = None
     target: str | None = None
+    execution_policy: str | None = None
+    interpreter: str | None = None
+    modules: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -224,7 +261,13 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
         command_type = raw.get("type")
         if command_type == "script":
             if schema >= 2:
-                _reject_unknown_fields(raw, {"type", "unix_path", "win_path"}, f"commands.{name}")
+                allowed_script_fields = {"type", "unix_path", "win_path"}
+                if schema >= 8:
+                    allowed_script_fields |= {"execution_policy", "interpreter"}
+                _reject_unknown_fields(raw, allowed_script_fields, f"commands.{name}")
+            execution_policy, interpreter = _parse_script_execution_policy(
+                raw, schema=schema, label=f"commands.{name}"
+            )
             unix_path = raw.get("unix_path")
             win_path = raw.get("win_path")
             if schema >= 2 and unix_path is None and win_path is None:
@@ -250,6 +293,8 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
                 type="script",
                 unix_path=unix_path,
                 win_path=win_path,
+                execution_policy=execution_policy,
+                interpreter=interpreter,
                 source=source_file,
             )
         elif command_type == "system":
@@ -273,18 +318,27 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
                 source=source_file,
             )
         elif command_type == "build" and schema >= 6 and raw.get("driver") == GO_V1_DRIVER:
-            _reject_unknown_fields(raw, {"type", "driver", "source_dir"}, f"commands.{name}")
+            allowed_build_fields = {"type", "driver", "source_dir"}
+            if schema >= 8:
+                allowed_build_fields.add("modules")
+            _reject_unknown_fields(raw, allowed_build_fields, f"commands.{name}")
             driver = raw.get("driver")
             source_dir = _validate_relative_path(
                 raw.get("source_dir"),
                 field=f"commands.{name}.source_dir",
                 strict_posix=True,
             )
+            modules = (
+                _parse_declared_modules(raw["modules"], label=f"commands.{name}")
+                if "modules" in raw
+                else ()
+            )
             commands[name] = CommandSpec(
                 name=name,
                 type="build",
                 driver=driver,
                 source_dir=source_dir,
+                modules=modules,
                 source=source_file,
             )
         elif command_type == "build" and schema >= 7 and raw.get("driver") == GO_REPOSITORY_V1_DRIVER:
@@ -313,7 +367,7 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
         else:
             raise SkillSpecError(f"Command {name!r} has unsupported type {command_type!r}")
     if schema >= 6:
-        _validate_build_layout(path.parent, build_roots, commands)
+        _validate_build_layout(path.parent, build_roots, runtime_roots, commands, schema=schema)
     if schema >= 7:
         _validate_repository_commands(build_repositories, commands)
     dependencies, requirements, mcp_servers = _parse_dependencies(
@@ -697,10 +751,71 @@ def _overlapping_roots(roots: list[str] | tuple[str, ...]) -> tuple[str, str] | 
     return None
 
 
+def _parse_script_execution_policy(
+    raw: dict[str, Any], *, schema: int, label: str
+) -> tuple[str | None, str | None]:
+    """Parse the schema-8 opt-in into the enforced script execution policy.
+
+    ``execution_policy`` and ``interpreter`` are co-required. A manifest that
+    declares one without the other is invalid, and a manager must not resolve
+    the missing field to a default or install the command declared-only.
+    """
+
+    if schema < 8:
+        return None, None
+    has_policy = "execution_policy" in raw
+    has_interpreter = "interpreter" in raw
+    if not has_policy and not has_interpreter:
+        return None, None
+    if not has_policy or not has_interpreter:
+        missing = "interpreter" if not has_interpreter else "execution_policy"
+        raise SkillSpecError(
+            f"{label} declares an execution policy without {missing!r}; "
+            "the two fields are co-required"
+        )
+    execution_policy = raw["execution_policy"]
+    interpreter = raw["interpreter"]
+    if not isinstance(execution_policy, str) or execution_policy not in SCRIPT_EXECUTION_POLICIES:
+        admitted = ", ".join(repr(value) for value in sorted(SCRIPT_EXECUTION_POLICIES))
+        raise SkillSpecError(
+            f"{label}.execution_policy must be {admitted}, got {execution_policy!r}"
+        )
+    if not isinstance(interpreter, str) or interpreter not in SCRIPT_INTERPRETERS:
+        admitted = ", ".join(repr(value) for value in sorted(SCRIPT_INTERPRETERS))
+        raise SkillSpecError(
+            f"{label}.interpreter must be one of {admitted}, got {interpreter!r}"
+        )
+    return execution_policy, interpreter
+
+
+def _parse_declared_modules(raw: Any, *, label: str) -> tuple[str, ...]:
+    """Parse a present schema-8 ``modules`` member before snapshot validation.
+
+    Absence is the default; an explicit ``null`` is not a spelling of absence
+    and never reaches here.
+    """
+
+    if not isinstance(raw, list):
+        raise SkillSpecError(f"{label}.modules must be a list of portable relative paths")
+    modules: list[str] = []
+    for index, value in enumerate(raw):
+        modules.append(
+            _validate_relative_path(
+                value,
+                field=f"{label}.modules[{index}]",
+                strict_posix=True,
+            )
+        )
+    return tuple(modules)
+
+
 def _validate_build_layout(
     snapshot: Path,
     build_roots: tuple[str, ...],
+    runtime_roots: tuple[str, ...],
     commands: dict[str, CommandSpec],
+    *,
+    schema: int,
 ) -> None:
     used_roots: set[str] = set()
     for name in sorted(commands):
@@ -719,6 +834,18 @@ def _validate_build_layout(
         field = f"commands.{name}.source_dir"
         _validate_link_free_directory(snapshot, source_dir, field=field, noun="source directory")
         _validate_nearest_go_module(snapshot, build_root, source_dir, field=field)
+        if schema >= 8:
+            try:
+                validate_declaration(
+                    snapshot,
+                    command.modules,
+                    build_root=build_root,
+                    build_roots=build_roots,
+                    runtime_roots=runtime_roots,
+                    label=f"commands.{name}",
+                )
+            except ModuleRootError as exc:
+                raise SkillSpecError(str(exc)) from exc
         used_roots.add(build_root)
 
     for index, root in enumerate(build_roots):
@@ -791,3 +918,29 @@ def _reject_unknown_fields(data: dict[str, Any], allowed: set[str], label: str) 
     if unknown:
         joined = ", ".join(repr(item) for item in unknown)
         raise SkillSpecError(f"{label} has unsupported field(s): {joined}")
+
+
+def enforced_script_commands(spec: SkillSpec) -> tuple[CommandSpec, ...]:
+    """Return every script command selecting an unimplemented execution policy."""
+    return tuple(
+        command
+        for _, command in sorted(spec.commands.items())
+        if command.type == "script"
+        and command.execution_policy is not None
+        and command.execution_policy not in SCRIPT_EXECUTION_POLICIES_IMPLEMENTED
+    )
+
+
+def script_execution_policy_rejection(spec: SkillSpec) -> str | None:
+    """Return the fail-closed diagnostic text, or ``None`` when installable."""
+    unsupported = enforced_script_commands(spec)
+    if not unsupported:
+        return None
+    listed = ", ".join(
+        f"{command.name} ({command.execution_policy})" for command in unsupported
+    )
+    return (
+        f"{SCRIPT_EXECUTION_POLICY_UNSUPPORTED}: this manager does not implement "
+        f"the selected script execution policy, so it refuses to install "
+        f"{listed}. The command is not downgraded to a declared-only shim."
+    )
