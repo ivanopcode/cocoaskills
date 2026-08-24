@@ -1,5 +1,37 @@
 # Logbook
 
+## 2026-08-24 - TASK-260824-2h0vjy EPERM is not a verdict about a process group
+
+`Merge Go E2E / Python 3.14 on macos-latest` rejected an install with
+`build_execution_control_unavailable: cannot prove complete worker-domain termination and join`.
+The same seam had been patched a day earlier for a late-fork race, so the first question was whether
+that fix was incomplete. It was, but not in the direction the symptom suggested.
+
+The diagnostic could not answer the question, because it discarded its own cause: every observation
+the join can make, a permission error, a wait timeout, an empty-group timeout, printed the same
+sentence. Three earlier cycles on this task had already been spent on a guard whose message was more
+confident than its evidence, so the first change was to make the rejection name what it saw.
+
+With the cause visible, an isolated probe over real process groups, 800 teardowns of a leader with
+four children, reproduced it in 58 of them. In every case `os.killpg` answered `EPERM`, and in every
+case a tight retry loop saw `ESRCH` between 440 and 700 microseconds later. The group was already
+empty; Darwin was reporting the last member on its way off the process table.
+
+Darwin's `killpg` walks the group and answers `ESRCH` only when it finds no member at all. A member
+that has exited but has not yet left the table is still found and cannot be signalled, so the call
+answers `EPERM`. That is a converging state, not a verdict: nothing in it can execute, but it is not
+the complete absence the join requires. The join now keeps driving the bounded domain through
+`EPERM` with `ESRCH` still the only accepted proof, so a group that genuinely never leaves the table
+is still rejected at the deadline. Any other `errno` still rejects immediately.
+
+The teardown order is what exposes it: the leader exits and is reaped before the join starts, so the
+last members are routinely mid-exit when the first group signal is sent. The regression test drives
+40 real groups through that exact order, which was enough to fail on every run of the old code.
+
+The failure never reproduced on the fast tier because it is a per-teardown dice roll of roughly one
+in fourteen, and each E2E job performs a handful of teardowns. Re-running the red job turned it
+green, which is the shape a flake has and the shape a broken merge does not.
+
 ## 2026-08-24 - TASK-260824-2h0vjy a byte pin needs a byte-stable checkout
 
 The fast-tier guard from PR #39 turned `main` red on `Merge ordinary / windows-latest` across all
