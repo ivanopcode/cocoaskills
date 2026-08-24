@@ -1,5 +1,41 @@
 # Logbook
 
+## 2026-08-24 - TASK-260824-2h0vjy a byte pin needs a byte-stable checkout
+
+The fast-tier guard from PR #39 turned `main` red on `Merge ordinary / windows-latest` across all
+four Python versions, and only there. All four audited files failed at once, including the three the
+PR never touched. That shape is the answer: a change to one file cannot move the digest of three
+others, so the drift was not in the tree.
+
+Git converts line endings on checkout. GitHub's Windows runners ship `core.autocrlf=true`, so a
+pristine Windows checkout materializes every `.py` file with CRLF, and the sha256 of those bytes is
+not the sha256 of the committed bytes. The audit book was correct throughout: on `main`,
+`sha256(tests/conftest.py)` is `2de2c199...` with LF and `44d403ba...` with CRLF, and the Windows job
+measured exactly `44d403ba...`. The merge-tier shards stayed green because `merge_protocol` already
+carries a `Normalize Windows source checkout` step, `git reset --hard HEAD` after
+`core.autocrlf false`, added in `5add1a4` for this very reason. `merge_ordinary` has no such step,
+and PR #39 put a byte-exact measurement into the suite that job runs.
+
+The trap is that the failure message named the CRLF digest and told the reader to re-pin to it. That
+instruction is wrong in a way that looks authoritative: re-pinning the Windows digest would have
+turned Linux, macOS and all six Windows protocol shards red instead. A fail-closed gate that
+volunteers a remediation must be sure the remediation is the right one; when it cannot be sure, it
+should describe the observation and stop.
+
+The fix is to remove the ambiguity rather than to normalize it away a second time. `.gitattributes`
+now pins `*.py text eol=lf`, so the working tree carries the committed bytes on every platform
+regardless of `core.autocrlf`, which is the invariant the byte pins always assumed. No tracked blob
+holds CR today, so `git add --renormalize .` is a no-op and no digest moves. The guard now
+distinguishes the two cases: if LF-normalizing the measured bytes reproduces the pinned digest, the
+checkout is at fault and the message says so and says not to re-pin; otherwise the original
+re-audit instruction stands. A companion test asserts the LF rule covers the whole audited surface
+and that no audited file carries CR after checkout, so deleting `.gitattributes` fails loudly with a
+message that names the cause.
+
+Reproducing this off CI takes one command and no Windows machine:
+`git -c core.autocrlf=true clone --no-local . <dir>` gives a byte-identical simulation of the runner
+checkout. Against `8233485` it reproduces the five failures exactly; against the fix it is green.
+
 ## 2026-08-24 - TASK-260824-2h0vjy the audited protocol surface is a merge-tier tripwire
 
 `.research/TASK-260803-2ol7ok_protocol-isolation-classification.json` pins the sha256 of four test
