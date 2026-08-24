@@ -10,6 +10,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Добавлено
 
 - Аутентификация приватных HTTPS build-репозиториев через manager credential broker. Скоупы `build_https` в глобальном конфиге хранят источник токена (`git-credentials`, `keyring`, `token_env`), никогда сам токен; та же longest-prefix грамматика канонической идентичности, что у `build_ssh`, применение пер-репо. Сабкоманды `csk config build-https add/login/list/remove`, интерактивный precheck с обнаруженными кандидатами перед первым fetch, run-wide override `CSK_BUILD_HTTPS_TOKEN` (с необязательными `CSK_BUILD_HTTPS_USERNAME` и пином хоста `CSK_BUILD_HTTPS_HOST`; без пина токен уходит каждому HTTPS-хосту замыкания). Креды читает менеджер до fetch через `git credential fill/approve/reject` при отключённых интерактивных запросах; брокер отвечает только на два промпта Git и только для запиненного хоста, любой другой ввод завершается fail-closed. Helper, который молча ничего не сохранил, обнаруживается обратным чтением. Анонимный HTTPS остаётся рабочим транспортом, когда ни один скоуп не совпал.
+- Authoring-контракт `agent-skill.json` schema 8 (`csk-skill.json` тоже): опциональный
+  список `modules` на локальной команде `go-v1` и опциональная пара
+  `execution_policy` + `interpreter` на script-команде. Схемы 1-7 отклоняют оба
+  поля и на верхнем уровне, и на каждой команде.
+- Declared first-party module roots для `go-v1`: менеджер проверяет объявленные
+  каталоги модулей по замороженному снапшоту до фиксированного `go list`
+  (portable relative path, не `.`, уникальность, реальный link-free каталог,
+  `go.mod` прямо внутри, попарная непересекаемость с другими объявленными
+  модулями, build roots и runtime roots под точным и platform-path сравнением),
+  затем после `go list` и до `go build` читает эффективный replace-set только из
+  `<build root>/vendor/modules.txt`, сверяет selection-аннотации с
+  unversioned-left директивами, отклоняет версию с любой стороны и
+  module-to-module redirect и проверяет биекцию в обе стороны. Пакеты
+  заменённого модуля допускаются ровно на этом множестве, поверхность сканирования
+  расширена на объявленные каталоги и их vendor-копии, а послабление для
+  аудированного стороннего vendor-кода к заменённым модулям не применяется.
+  Диагностики: `build_module_root_declaration_invalid`,
+  `build_module_root_containment_invalid`,
+  `build_module_root_directive_form_unsupported`,
+  `build_module_root_directive_undeclared`,
+  `build_module_root_declaration_unused`.
+- Install marker schema 4: та же форма и та же семантика записей сборки, что и у
+  marker v3, но описывает установку schema-8. Мутация установки schema 8
+  записывает marker v4, schema 7 по-прежнему marker v3, схемы 1-6 по-прежнему
+  marker v2. Читаются marker-схемы 1, 2, 3 и 4.
+
+### Исправлено
+
+- Fail-closed отказ `script_execution_policy_unsupported`: csk не реализует
+  `script-worker-v1`, поэтому script-команда, выбравшая эту политику,
+  отклоняется на установке и в `csk check` и никогда не публикуется как
+  declared-only shim.
 
 ### Исправлено
 
