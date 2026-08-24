@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import hashlib
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -13,10 +15,21 @@ from csk import deprecation, locking
 from csk.config import GlobalConfig, ProjectConfig
 
 
-E2E_CANDIDATE_SHA = "432eb2ee1fe2d6b271e37269f867c8851c325539"
-E2E_CANDIDATE_MANIFEST_SHA256 = (
-    "12e58b82579645ba1ccafba49d3e2dd3216005ddf37ae63c68a9fafd46773071"
+CANDIDATE_SUITE_SCRIPT = (
+    Path(__file__).parents[1] / ".github" / "scripts" / "candidate_suite.py"
 )
+
+
+def load_candidate_suite() -> ModuleType:
+    """Load the CI candidate-suite contract the E2E lanes authenticate against."""
+    spec = importlib.util.spec_from_file_location(
+        "candidate_suite", CANDIDATE_SUITE_SCRIPT
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def run(cmd: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -180,19 +193,25 @@ def required_go_e2e_host(monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
 
 @pytest.fixture
 def authenticated_e2e_candidate_root() -> Path:
-    """Authenticate the explicitly supplied rc.6 candidate without pinning it."""
+    """Authenticate the explicitly declared candidate suite without pinning it.
+
+    The expected identity is whatever the candidate declaration resolves to, so
+    a new candidate is qualified by declaring it, never by editing an assertion
+    here.
+    """
     root_value = os.environ.get("CURATOR_CONFORMANCE_ROOT")
     required = os.environ.get("CSK_E2E_REQUIRED_PLATFORM")
     if not root_value:
         if required:
             pytest.fail("required Go E2E run lacks CURATOR_CONFORMANCE_ROOT")
-        pytest.skip("rc.6 candidate root is not configured")
+        pytest.skip("candidate conformance root is not configured")
     root = Path(root_value).resolve(strict=True)
-    checkout = root.parent.parent
-    head = run(["git", "rev-parse", "HEAD"], checkout).stdout.strip()
-    if head != E2E_CANDIDATE_SHA:
-        pytest.fail(f"wrong rc.6 candidate HEAD: {head}")
-    digest = hashlib.sha256((root / "manifest.json").read_bytes()).hexdigest()
-    if digest != E2E_CANDIDATE_MANIFEST_SHA256:
-        pytest.fail(f"wrong rc.6 candidate manifest SHA-256: {digest}")
+    candidate_suite = load_candidate_suite()
+    try:
+        candidate = candidate_suite.resolve()
+        candidate_suite.authenticate(
+            candidate, checkout=root.parent.parent, root=root
+        )
+    except candidate_suite.CandidateError as exc:
+        pytest.fail(str(exc))
     return root
