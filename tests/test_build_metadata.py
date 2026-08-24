@@ -25,12 +25,13 @@ from csk.builds import (
 from csk.builds.toolchain import NativeTarget
 
 
-# The 1.0.0-rc.6 candidate suite that publishes expected/marker-v2.json, the
-# marker-v2 writer golden this manager's own marker output is compared against.
-# The rc.5 suite (sha256:b6f56aac...) carries no writer golden, so no single root
-# can satisfy both this digest and the conformance consumer.
+# The released suite at RELEASED_SUITE_PIN -- 1.0.0-rc.9 since the schema-8
+# landing -- publishes expected/marker-v2.json, the marker-v2 writer golden this
+# manager's own marker output is compared against.  The rc.5 suite
+# (sha256:b6f56aac...) carries no writer golden, so no single root can satisfy
+# both this digest and the conformance consumer.
 EXPECTED_MANIFEST_SHA256 = (
-    "sha256:12e58b82579645ba1ccafba49d3e2dd3216005ddf37ae63c68a9fafd46773071"
+    "sha256:803918bf8672f76cf990985e51db213b826674cd5bb54fbf47731b8404b44403"
 )
 NON_UTF8_ENCODINGS = (
     "utf-16",
