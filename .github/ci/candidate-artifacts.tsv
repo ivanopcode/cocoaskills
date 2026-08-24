@@ -1,0 +1,26 @@
+# Which candidate-root artefacts each consumer's unguarded reads require.
+#
+# `.github/scripts/candidate_consumption.py` reads this table and the root it
+# is given, and partitions the consumers:
+#
+#   served    every declared artefact is published by the root -- the consumer
+#             runs, and its reads are unguarded;
+#   deferred  at least one declared artefact is absent -- the consumer takes
+#             the module-level skip it already implements, and the exact
+#             missing artefact is named in the skip reason.
+#
+# The partition is DERIVED FROM THE ROOT, never from the lane. The default
+# protocol lanes run against the released suite pin, which publishes no
+# schema-8 family, so the schema-8 consumer defers there and says so. The
+# candidate lane runs `candidate_consumption.py require`, which asserts the
+# deferred set is empty: a candidate that publishes a family this manager
+# never reads can never be reported as qualified.
+#
+# An artefact is one published path or a family directory, which counts as
+# present when the manifest publishes at least one file below it.
+#
+# Columns are TAB separated:
+#   consumer  artefact[,artefact...]  note
+#
+# consumer	artefacts	note
+tests/test_schema8_candidate_conformance.py	schema-cases/index.json,schema-cases/agent-skill-v8,schema-cases/csk-skill-v8,schema-cases/install-marker-v4,vectors/module-roots.json,vectors/script-host-execution-policy.json	the three schema-8 schema-case families and both schema-8 behavioural vector families

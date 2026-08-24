@@ -1,0 +1,36 @@
+# Consumption ledger for the schema-8 candidate families.
+#
+# Presence in a conformance root is not evidence that anything read it, and a
+# green lane is not evidence that a named case still runs. This table names the
+# cases the candidate lane must OBSERVE PASSING on each runner, and
+# `.github/scripts/candidate_consumption.py gate` enforces it against the real
+# `--junitxml` stream of that run:
+#
+#   * a row listing this platform in `must_run_on` must be observed passing. A
+#     rename, a deletion, a selection matching nothing, a module-level skip or
+#     an unset conformance root fails here BY NAME instead of quietly shrinking
+#     the run;
+#   * a row names a test function and covers every parameterization it
+#     produces, so a family that stops generating cases fails as loudly as a
+#     family that starts failing them.
+#
+# `.github/ci/candidate-artifacts.tsv` answers the other half: whether the root
+# published what these cases read.
+#
+# Columns are TAB separated:
+#   nodeid  must_run_on  note
+#
+# `must_run_on` takes a comma separated subset of {linux,darwin,windows}.
+#
+# nodeid	must_run_on	note
+tests/test_schema8_candidate_conformance.py::test_every_declared_schema8_artefact_is_published	linux,darwin,windows	the presence ledger is decided against the candidate manifest inside the run that consumes it
+tests/test_schema8_candidate_conformance.py::test_both_manifest_families_are_consumed_in_full	linux,darwin,windows	every published agent-skill-v8 and csk-skill-v8 case is collected, and neither family is empty
+tests/test_schema8_candidate_conformance.py::test_schema8_manifest_case	linux,darwin,windows	every published schema-8 manifest case decides acceptance through the real skill-spec loader
+tests/test_schema8_candidate_conformance.py::test_the_marker_v4_family_is_consumed_in_full	linux,darwin,windows	every published install-marker-v4 case is collected, and the family is not empty
+tests/test_schema8_candidate_conformance.py::test_marker_v4_case	linux,darwin,windows	every published install-marker-v4 case is read back through the marker reader and round-trips
+tests/test_schema8_candidate_conformance.py::test_module_root_sections_are_all_classified	linux,darwin,windows	every section of the published module-roots family is classified, so a new one cannot be ignored
+tests/test_schema8_candidate_conformance.py::test_module_root_case	linux,darwin,windows	every published module-roots case drives the go-v1 driver to its own declared failure boundary
+tests/test_schema8_candidate_conformance.py::test_script_policy_sections_are_all_classified	linux,darwin,windows	every section of the published script-worker family is classified, so a new one cannot be ignored
+tests/test_schema8_candidate_conformance.py::test_script_policy_identity_matches_the_suite	linux,darwin,windows	the closed policy identity and interpreter set this build hard-codes are the suite's own
+tests/test_schema8_candidate_conformance.py::test_script_policy_opt_in_case	linux,darwin,windows	every published opt-in case decides manifest acceptance and the enforced/declared-only classification
+tests/test_schema8_candidate_conformance.py::test_a_refusal_precedes_every_worker_surface	linux,darwin,windows	every enforced shape the suite declares is refused with script_execution_policy_unsupported before any install mutation

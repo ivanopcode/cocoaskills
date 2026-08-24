@@ -119,6 +119,15 @@ _IDENTITY_MEMBERS: Final[frozenset[str]] = frozenset({"kind", "value"})
 _LOCKED_COMMIT_MEMBERS: Final[frozenset[str]] = frozenset({"object_format", "hex"})
 _SUBSTITUTION_MEMBERS: Final[frozenset[str]] = frozenset({"type", "ref"})
 _SUBSTITUTION_REF_MEMBERS: Final[frozenset[str]] = frozenset({"kind", "value"})
+# Core section 4.2 admits exactly three structured substitution refs: a full
+# object ID for the effective repository object format, a tag, or a branch.
+_SUBSTITUTION_REF_KINDS: Final[frozenset[str]] = frozenset({"revision", "tag", "branch"})
+# A local substitution names an operator working tree; a network substitution
+# names another Git remote. The effective identity kind states which one the
+# build actually compiled, so the two must agree.
+_SUBSTITUTION_IDENTITY_KINDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"local-path": "operator-local-git", "network-git": "network-git"}
+)
 _EXECUTION_POLICY: Final = "manager-worker-v1"
 _ACTIVATION_MEMBERS: Final[frozenset[str]] = frozenset({"context", "commands"})
 _ATTESTATION_REQUIRED_MEMBERS: Final[frozenset[str]] = frozenset({"registry", "status"})
@@ -250,8 +259,9 @@ class MarkerRepositoryRef:
     value: str
 
     def __post_init__(self) -> None:
-        if self.kind not in {"tag", "revision"}:
-            raise InstallMarkerError("install_marker_invalid", "repository substitution ref kind must be tag or revision")
+        if self.kind not in _SUBSTITUTION_REF_KINDS:
+            admitted = ", ".join(sorted(_SUBSTITUTION_REF_KINDS))
+            raise InstallMarkerError("install_marker_invalid", f"repository substitution ref kind must be one of {admitted}")
         _require_non_empty_string(self.value, "repository substitution ref value")
 
     def to_json(self) -> dict[str, str]:
@@ -278,6 +288,40 @@ class MarkerRepositorySubstitution:
         if self.ref is not None:
             result["ref"] = self.ref.to_json()
         return result
+
+
+def _validate_substitution_agreement(
+    substitution: MarkerRepositorySubstitution,
+    *,
+    effective_identity: MarkerRepositoryIdentity,
+    object_format: str,
+) -> None:
+    """Bind a substitution record to the effective source it claims to describe.
+
+    Core section 4.2 states the two halves separately: a local substitution has
+    effective identity kind ``operator-local-git`` and a network substitution
+    has ``network-git``, and a structured ``revision`` ref is a full object ID
+    *for the effective repository object format*. A marker that satisfies the
+    JSON Schema can still contradict either rule, so both are decided here
+    rather than left to the schema.
+    """
+
+    expected_kind = _SUBSTITUTION_IDENTITY_KINDS[substitution.type]
+    if effective_identity.kind != expected_kind:
+        raise InstallMarkerError(
+            "install_marker_invalid",
+            f"{substitution.type} substitution requires effective identity kind "
+            f"{expected_kind!r}, got {effective_identity.kind!r}",
+        )
+    ref = substitution.ref
+    if ref is None or ref.kind != "revision":
+        return
+    width = 40 if object_format == "sha1" else 64
+    if len(ref.value) != width or not set(ref.value) <= _SHA256_DIGITS:
+        raise InstallMarkerError(
+            "install_marker_invalid",
+            f"substitution revision must be a full lowercase {object_format} object id",
+        )
 
 
 @dataclass(frozen=True)
@@ -352,6 +396,12 @@ class InstallMarkerBuildV3:
             raise InstallMarkerError("install_marker_invalid", "declared repository identity must be network-git")
         if self.substituted != (self.substitution is not None):
             raise InstallMarkerError("install_marker_invalid", "substitution must be present exactly when substituted is true")
+        if self.substitution is not None:
+            _validate_substitution_agreement(
+                self.substitution,
+                effective_identity=self.effective_identity,
+                object_format=self.object_format,
+            )
         if not self.substituted and (
             self.effective_identity != self.declared_identity
             or self.object_format != self.declared_locked_commit.object_format
