@@ -1,5 +1,39 @@
 # Logbook
 
+## 2026-08-24 - TASK-260824-2h0vjy the audited protocol surface is a merge-tier tripwire
+
+`.research/TASK-260803-2ol7ok_protocol-isolation-classification.json` pins the sha256 of four test
+files under `audited_files_sha256`, and the deterministic Windows shard verifier fails closed on any
+drift. Three of those four files are obviously protocol files. The fourth, `tests/conftest.py`, is
+the shared fixture module every test in the repository imports, so any change anywhere in the test
+scaffolding can trip a protocol-shard gate that has nothing to do with the change.
+
+That is exactly what happened to `3ab8d2a`. It rewrote `tests/conftest.py` to generalize the
+candidate-lane input, the pin was not updated, and all six `Merge protocol / windows-*` shards failed
+at "Verify and select deterministic Windows protocol shard" in run 32714035208. The PR run was green,
+because `merge_protocol` was gated on `github.event_name == 'push' && github.ref == 'refs/heads/main'`
+and reported `SKIPPED`. The tripwire was invisible until after the merge, by construction.
+
+Three things follow, all landed in PR #39. The Go E2E fixture `authenticated_e2e_candidate_root` and
+its loader moved out of `tests/conftest.py` into `tests/test_go_build_e2e.py` and
+`tests/candidate_suite_support.py`, so candidate-lane work no longer touches an audited file at all.
+`tests/test_protocol_shard_audit.py` runs the verifier's own `verify_audited_hashes` from the
+ordinary suite, which the fast tier executes on the pull request, so drift now fails before a merge
+rather than after one. `merge_protocol` is reachable through `workflow_dispatch`, so the shard
+verifier can be exercised on a branch.
+
+Worth keeping: the pin can be re-audited, it is not immutable, but a bare digest bump is not the
+work. The classification now carries an `audit_revisions` record naming the change and why it is
+isolation-neutral. For this one the argument is checkable: every classified node is a
+`tests/test_protocol_conformance.py` node, that module never requests the removed fixture nor reads
+the removed constants, and a fresh collection still produces the pinned 1045-node ordered baseline.
+
+The verifier is fully reproducible off CI. With a `curator-spec` worktree pinned at `0c81c1f8` and a
+committed source checkout, `python3 .research/TASK-260803-2ol7ok_verify-protocol-shards.py
+--source-checkout . --protocol-checkout <spec> --shard-id <id> --nodeids-out <path>` reproduces the
+failing merge-tier step in about a second. There is no reason to discover this class of breakage from
+a red `main`.
+
 ## 2026-08-23 - macOS worker-domain teardown convergence
 
 The macOS Go E2E canary exposed a fork race in worker-domain teardown. The
