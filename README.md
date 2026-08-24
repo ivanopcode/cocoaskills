@@ -150,7 +150,15 @@ csk config build-ssh add gitlab.example.com/portals/infra \
     --agent auto --identity ~/.ssh/work.pub
 ```
 
-Пакет скилла выбрать креды не может: выбор делает только оператор и только явно.
+Приватный репозиторий сборки работает и по SSH, и по HTTPS. Для HTTPS ничего заводить не нужно, если вы уже клонируете по HTTPS: `csk` предложит переиспользовать ваши собственные креды Git при первой установке за один Enter. Для неинтерактивного случая выполните команду:
+
+```bash
+csk config build-https add gitlab.example.com/portals/infra --token git-credentials
+```
+
+В CI задайте переменную `CSK_BUILD_HTTPS_TOKEN` (и `CSK_BUILD_HTTPS_HOST`, если репозитории сборки живут на разных хостах).
+
+Пакет скилла выбрать креды не может: выбор делает только оператор и только явно. Подробности устройства брокеров кредов и скоупов описаны в [`docs/external-build-repositories.md`](docs/external-build-repositories.md).
 
 ## Режимы установки скиллов
 
@@ -303,6 +311,7 @@ csk shell-init                      # Генерирует или устанав
 
 - [`docs/cli.md`](docs/cli.md): справочник команд `csk`, флагов и кодов завершения.
 - [`docs/reference.md`](docs/reference.md): справочник по матрице установки, зависимостям скиллов, манифестам и аудиту безопасности.
+- [`docs/external-build-repositories.md`](docs/external-build-repositories.md): устройство внешних репозиториев сборки, брокеров кредов SSH/HTTPS и моделей доступа.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): описание внутренней архитектуры, схемы работы конвейера установки, формата хранилищ и модели безопасности.
 - [`SECURITY.md`](SECURITY.md): политика безопасности, границы изоляции и рекомендации по настройке.
 - [`docs/skill-authoring.md`](docs/skill-authoring.md): руководство по структурированию пакетов скиллов, объявлению команд и настройке манифеста `agent-skill.json`.

@@ -325,10 +325,17 @@ build/vendor/                    checked-in modules when non-standard packages a
 
 `build_root` содержит `go.mod`; модули вендорятся (`go mod vendor`), сборка
 идёт без сети. Скомпилированный артефакт никогда не коммитится ни в скилл,
-ни во внешний репозиторий. Приватные SSH-источники требуют явного выбора
-кредов оператором; полный контракт, включая скоупы `build_ssh` в глобальном
-конфиге, описан в `docs/external-build-repositories.md`. `go-repository-v1`
-поддерживается только на macOS и Windows.
+ни во внешний репозиторий. Поле `build_repositories.*.git` принимает обе формы
+адреса: `git@host:path.git` и `https://host/path.git`. Приватный репозиторий
+требует явного выбора учётных данных оператором через скоупы `build_ssh` для SSH
+и `build_https` для HTTPS. Выбор транспорта не определяет доступность установки:
+SSH требует SSH-ключ, HTTPS требует сохранённые учётные данные Git или токен.
+Адрес HTTPS в манифесте обязан содержать суффикс `.git`. Без суффикса `.git`
+сервис GitLab отвечает 301, fetch выполняется с `http.followRedirects=false`, и
+установка завершается ошибкой `build_repository_source_unavailable`. Полный
+контракт работы с внешними репозиториями описан в
+`docs/external-build-repositories.md`. `go-repository-v1` поддерживается только
+на macOS и Windows.
 
 ### Схема v8: корни first-party модулей и политика выполнения script-команд
 
