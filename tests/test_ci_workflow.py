@@ -281,3 +281,64 @@ def test_the_released_suite_pin_is_declared_once_and_never_inlined() -> None:
 def test_xdist_is_a_bounded_dev_dependency() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert '"pytest-xdist>=3.8,<4"' in pyproject
+
+
+def test_the_candidate_lane_requires_and_gates_schema8_consumption() -> None:
+    """Both halves of the false-green hole are closed in both candidate jobs.
+
+    Checking out a candidate suite and matching its digest proves the lane read
+    the right bytes, not that it read them at all. Every candidate job must
+    therefore assert the root serves the declared consumers, run the consumer,
+    and gate the declared cases against that run's own result stream.
+    """
+    workflow = _workflow()
+
+    for job_id in ("fast_go_e2e", "merge_go_e2e"):
+        job = _job(workflow, job_id)
+        assert "candidate_consumption.py require" in job
+        assert "tests/test_schema8_candidate_conformance.py" in job
+        assert 'CSK_REQUIRE_FULL_CANDIDATE_ROOT: "1"' in job
+        assert "--junitxml=csk-schema8-results.xml" in job
+        assert "candidate_consumption.py gate" in job
+        assert "--results csk-schema8-results.xml" in job
+        # The gate runs against the stream the consumer just produced, and the
+        # stream is uploaded as evidence rather than discarded.
+        assert job.index("candidate_suite.py record") < job.index(
+            "candidate_consumption.py require"
+        )
+        assert job.index("candidate_consumption.py require") < job.index(
+            "--junitxml=csk-schema8-results.xml"
+        )
+        assert job.index("--junitxml=csk-schema8-results.xml") < job.index(
+            "candidate_consumption.py gate"
+        )
+        assert job.count("csk-schema8-results.xml") == 3
+        for platform in ("linux", "darwin", "windows"):
+            assert f"'{platform}'" in job
+
+
+def test_the_declared_candidate_is_one_immutable_qualified_identity() -> None:
+    descriptor = json.loads(
+        (CI_CONFIG / "candidate-suite.json").read_text(encoding="utf-8")
+    )
+    assert descriptor["repository"] == "relux-works/curator-spec"
+    assert re.fullmatch(r"[0-9a-f]{40}", descriptor["revision"])
+    for field in ("manifest_sha256", "tree_sha256"):
+        assert re.fullmatch(r"sha256:[0-9a-f]{64}", descriptor[field])
+    # A candidate never equals the released pin, which is what keeps candidate
+    # evidence from impersonating the qualified suite.
+    pin = re.findall(r"^  RELEASED_SUITE_PIN: ([0-9a-f]{40})$", _workflow(), re.MULTILINE)
+    assert descriptor["revision"] != pin[0]
+
+
+def test_the_consumption_ledgers_are_declared_and_reachable() -> None:
+    for name in ("candidate-artifacts.tsv", "candidate-cases.tsv"):
+        path = CI_CONFIG / name
+        assert path.is_file(), f"missing consumption ledger: {name}"
+        rows = [
+            line
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        assert rows, f"{name} declares no row"
+        assert all(len(line.split("\t")) == 3 for line in rows)
