@@ -29,6 +29,7 @@ import hashlib
 import json
 import os
 import posixpath
+import re
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -68,9 +69,14 @@ REFUSED_BEFORE_REACHED = (
     "unreachable: this manager refuses enforced script commands before any worker surface"
 )
 # Real surface this build does not carry. Named with its owner so the gap is
-# declared rather than silent.
+# declared rather than silent. The owner is the story that scopes the missing
+# surface -- declared-only audit labeling for legacy schemas -- not whichever
+# story happened to add this consumer; a gap parked on a story that never owned
+# it and is about to close is a silent gap wearing a label.
+DECLARED_GAP_PREFIX = "not implemented: "
+DECLARED_GAP_OWNER = re.compile(r"\bSTORY-\d{6}-[0-9a-z]{6}\b")
 NOT_IMPLEMENTED_YET = (
-    "not implemented: script-command audit warning classes, owned by STORY-260822-27ze8z"
+    "not implemented: script-command audit warning classes, owned by STORY-260822-2evh3p"
 )
 
 SCRIPT_POLICY_SECTIONS = {
@@ -460,6 +466,19 @@ def test_script_policy_sections_are_all_classified() -> None:
     )
     assert any(
         reason == CONSUMED_HERE for reason in SCRIPT_POLICY_SECTIONS.values()
+    )
+    unowned = sorted(
+        {
+            reason
+            for reason in SCRIPT_POLICY_SECTIONS.values()
+            if reason.startswith(DECLARED_GAP_PREFIX)
+            and not DECLARED_GAP_OWNER.search(reason)
+        }
+    )
+    assert not unowned, (
+        f"these classifications declare a gap without naming the story that owns "
+        f"the missing surface: {unowned}. An unowned gap is never scheduled, so "
+        f"it is a silent gap with extra ceremony."
     )
 
 
