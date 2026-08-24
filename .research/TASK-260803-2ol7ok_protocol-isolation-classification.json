@@ -7,8 +7,19 @@
     "tests/test_protocol_conformance.py": "62a4c207bc82b87fa85116c9a10ace4a821f351d373c94eaf767c712ac6da718",
     "tests/protocol_conformance_adapters.py": "ee933fa93c93145de754654b1b3e2d17f57d792adfa5170cae32e23ea5701a07",
     "tests/protocol_lifecycle_observations.py": "21e08f59921f199362c4ad13cf03ce6f97c7383a98489aebe142e1dd098bf3bd",
-    "tests/conftest.py": "4c8ce0208c1528dc6af4bee98b62c0535b9ff65d412e275fd9edecde7cba133f"
+    "tests/conftest.py": "2de2c199e54a4fef8321aeefac1448699adc4428276ade7c361d1bbd1d905533"
   },
+  "audit_revisions": [
+    {
+      "task_id": "TASK-260824-2h0vjy",
+      "file": "tests/conftest.py",
+      "previous_sha256": "4c8ce0208c1528dc6af4bee98b62c0535b9ff65d412e275fd9edecde7cba133f",
+      "sha256": "2de2c199e54a4fef8321aeefac1448699adc4428276ade7c361d1bbd1d905533",
+      "change": "removed the E2E_CANDIDATE_SHA / E2E_CANDIDATE_MANIFEST_SHA256 constants and the authenticated_e2e_candidate_root fixture; the fixture now lives in tests/test_go_build_e2e.py beside its only consumer",
+      "isolation_neutral": true,
+      "rationale": "The removed names were consumed only by tests/test_go_build_e2e.py, which no shard contains: every classified node is a tests/test_protocol_conformance.py node, and that module never requests authenticated_e2e_candidate_root nor reads the removed constants. Nothing the protocol suite reaches from conftest changed, so no node footprint, atomic cluster or shard assignment moves. Moving the fixture out also takes candidate-lane work off the audited surface: a later candidate declaration no longer edits an audited file."
+    }
+  ],
   "method": {
     "node_source": "exact pytest --collect-only -q at the pinned commits",
     "footprint": "conservative transitive lexical scan of test functions and locally reachable helpers across the protocol test, adapters, lifecycle observers, and conftest",

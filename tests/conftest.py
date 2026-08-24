@@ -1,35 +1,15 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 
 from csk import deprecation, locking
 from csk.config import GlobalConfig, ProjectConfig
-
-
-CANDIDATE_SUITE_SCRIPT = (
-    Path(__file__).parents[1] / ".github" / "scripts" / "candidate_suite.py"
-)
-
-
-def load_candidate_suite() -> ModuleType:
-    """Load the CI candidate-suite contract the E2E lanes authenticate against."""
-    spec = importlib.util.spec_from_file_location(
-        "candidate_suite", CANDIDATE_SUITE_SCRIPT
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 def run(cmd: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -190,28 +170,3 @@ def required_go_e2e_host(monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     monkeypatch.setenv("PATH", os.pathsep.join((str(go.parent), os.environ.get("PATH", ""))))
     return manager, go
 
-
-@pytest.fixture
-def authenticated_e2e_candidate_root() -> Path:
-    """Authenticate the explicitly declared candidate suite without pinning it.
-
-    The expected identity is whatever the candidate declaration resolves to, so
-    a new candidate is qualified by declaring it, never by editing an assertion
-    here.
-    """
-    root_value = os.environ.get("CURATOR_CONFORMANCE_ROOT")
-    required = os.environ.get("CSK_E2E_REQUIRED_PLATFORM")
-    if not root_value:
-        if required:
-            pytest.fail("required Go E2E run lacks CURATOR_CONFORMANCE_ROOT")
-        pytest.skip("candidate conformance root is not configured")
-    root = Path(root_value).resolve(strict=True)
-    candidate_suite = load_candidate_suite()
-    try:
-        candidate = candidate_suite.resolve()
-        candidate_suite.authenticate(
-            candidate, checkout=root.parent.parent, root=root
-        )
-    except candidate_suite.CandidateError as exc:
-        pytest.fail(str(exc))
-    return root
