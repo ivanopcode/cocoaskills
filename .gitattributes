@@ -1,0 +1,7 @@
+# The Windows protocol shard audit pins the sha256 of raw source bytes
+# (.research/TASK-260803-2ol7ok_protocol-isolation-classification.json). A
+# checkout-time CRLF conversion changes those bytes without changing the commit,
+# which makes a pristine Windows checkout look like undeclared drift. Pin every
+# Python source file to LF so the working tree matches the committed bytes on
+# every platform, independent of core.autocrlf.
+*.py text eol=lf
