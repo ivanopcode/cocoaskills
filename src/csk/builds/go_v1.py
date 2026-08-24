@@ -5297,6 +5297,22 @@ def _probe_windows_control(name: str, limits: ResourceLimits) -> bool:
     raise ValueError(f"no Windows mechanism for inventory control {name!r}")
 
 
+def _is_inconclusive_group_signal(error: OSError) -> bool:
+    """Report whether a group signal observed neither absence nor a live member.
+
+    Darwin walks the process group and answers ``ESRCH`` only when it finds
+    no member at all. When it finds members but signals none of them it
+    answers ``EPERM``, which for a manager-owned worker group is the few
+    hundred microseconds in which the last member has exited and has not yet
+    left the process table. That answer settles nothing: it is not the
+    complete absence the join requires, and it is not evidence that anything
+    can still execute. Callers keep waiting on it and let their deadline
+    decide.
+    """
+
+    return error.errno == errno.EPERM
+
+
 class _NativeControlDomain:
     def __init__(
         self,
@@ -5498,14 +5514,16 @@ class _NativeControlDomain:
                 except ProcessLookupError:
                     group_absent = True
                 except OSError as exc:
-                    failure = exc
+                    if not _is_inconclusive_group_signal(exc):
+                        failure = exc
             if failure is None and not group_absent:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
                 except OSError as exc:
-                    failure = exc
+                    if not _is_inconclusive_group_signal(exc):
+                        failure = exc
         if process is not None:
             try:
                 process.wait(timeout=_WORKER_SHUTDOWN_GRACE)
@@ -5543,8 +5561,12 @@ class _NativeControlDomain:
                 except ProcessLookupError:
                     break
                 except OSError as exc:
-                    failure = exc
-                    break
+                    # An inconclusive answer is not a verdict: keep driving
+                    # the bounded domain and let the deadline reject a group
+                    # that never leaves the process table.
+                    if not _is_inconclusive_group_signal(exc):
+                        failure = exc
+                        break
                 if time.monotonic() >= deadline:
                     failure = TimeoutError(
                         "macOS worker process group did not become empty"
@@ -5566,7 +5588,8 @@ class _NativeControlDomain:
                     )
             raise GoV1Error(
                 CODE_CONTROL_UNAVAILABLE,
-                "cannot prove complete worker-domain termination and join",
+                "cannot prove complete worker-domain termination and join: "
+                f"{type(failure).__name__}: {failure}",
             ) from failure
         self.terminated = True
 
