@@ -42,12 +42,12 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Any, BinaryIO, Final, Protocol, cast
 
 from ..identifiers import is_valid_identifier, is_valid_portable_path
-from . import source, toolchain
+from . import module_roots, source, toolchain
 
 
 # Stable execution-boundary diagnostics from Protocol Core 4.2.1.
@@ -346,6 +346,12 @@ class BuildRequest:
     source_dir: str
     command: str
     limits: ResourceLimits = field(default_factory=ResourceLimits)
+    # Schema-8 declaration surface. ``modules`` names the first-party Go
+    # modules this build root replaces; the two root lists exist only so the
+    # driver can repeat the containment comparison the manifest already made.
+    modules: tuple[str, ...] = ()
+    build_roots: tuple[str, ...] = ()
+    runtime_roots: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -628,8 +634,15 @@ def validate_package_graph(
     build_root: Path,
     source_dir: Path,
     goroot: Path,
+    replaced_modules: frozenset[str] = frozenset(),
 ) -> None:
-    """Parse the complete ``go list`` stream and constrain every active input."""
+    """Parse the complete ``go list`` stream and constrain every active input.
+
+    ``replaced_modules`` names the module paths the schema-8 bijection admitted.
+    A vendored package whose module carries a replacement is first-party code,
+    so it is admitted here but loses every allowance the profile grants to
+    audited third-party vendored dependencies.
+    """
 
     try:
         _validate_package_graph(
@@ -637,6 +650,7 @@ def validate_package_graph(
             build_root=build_root,
             source_dir=source_dir,
             goroot=goroot,
+            replaced_modules=replaced_modules,
         )
     except GoV1Error as exc:
         if exc.code != CODE_WORKER_PROTOCOL_INVALID:
@@ -653,6 +667,7 @@ def _validate_package_graph(
     build_root: Path,
     source_dir: Path,
     goroot: Path,
+    replaced_modules: frozenset[str] = frozenset(),
 ) -> None:
     packages = _decode_json_stream(payload)
     if not packages:
@@ -715,6 +730,7 @@ def _validate_package_graph(
             item,
             build_root=build_root,
             goroot=goroot,
+            replaced_modules=replaced_modules,
         )
 
     if has_vendored_module:
@@ -770,6 +786,7 @@ def _validate_package_inputs(
     *,
     build_root: Path,
     goroot: Path,
+    replaced_modules: frozenset[str] = frozenset(),
 ) -> None:
     import_path = _optional_string(item.get("ImportPath"))
     trusted_standard = (
@@ -796,7 +813,7 @@ def _validate_package_inputs(
                 f"standard package {import_path!r} has an unexpected Root",
             )
     else:
-        _validate_module(item, module, build_root)
+        _validate_module(item, module, build_root, replaced_modules)
         item_root = _optional_string(item.get("Root"))
         if item_root:
             try:
@@ -831,7 +848,12 @@ def _validate_package_inputs(
 
     # The single vendored-exception predicate of decision 0005: a package is
     # audited-by-vendoring only when it lives below the checked-in vendor tree.
-    vendored = _strictly_below(package_dir, build_root / "vendor")
+    # Protocol Core 4.2.3 withholds that allowance from a module carrying a
+    # replacement, because a replaced module is the package's own first-party
+    # code that merely compiles from its vendor copy.
+    vendored = _strictly_below(package_dir, build_root / "vendor") and not _carries_replacement(
+        module, replaced_modules
+    )
 
     if _string_list(item.get("SysoFiles"), "SysoFiles"):
         raise GoV1Error(
@@ -967,17 +989,37 @@ def _validate_package_inputs(
                 )
 
 
+def _carries_replacement(
+    module: Mapping[str, object] | None,
+    replaced_modules: frozenset[str],
+) -> bool:
+    """Return whether this package resolves through an admitted replacement."""
+    if module is None or module.get("Replace") is None:
+        return False
+    return _optional_string(module.get("Path")) in replaced_modules
+
+
 def _validate_module(
     item: Mapping[str, object],
     module: Mapping[str, object] | None,
     build_root: Path,
+    replaced_modules: frozenset[str] = frozenset(),
 ) -> None:
     import_path = _optional_string(item.get("ImportPath"))
     if (
         module is None
         or not _optional_string(module.get("Path"))
         or module.get("Error") is not None
-        or module.get("Replace") is not None
+    ):
+        raise GoV1Error(
+            "vendor_metadata_inconsistent",
+            f"non-standard package {import_path!r} has invalid module metadata",
+        )
+    # A replacement is admitted only on the exact set the bijection proved
+    # against vendor/modules.txt. Module.Replace is never the source of that
+    # set, and Module.Replace.Dir and .GoMod are never evidence a path exists.
+    if module.get("Replace") is not None and not _carries_replacement(
+        module, replaced_modules
     ):
         raise GoV1Error(
             "vendor_metadata_inconsistent",
@@ -6744,6 +6786,9 @@ def build(
         request.build_root,
         request.source_dir,
     )
+    # Protocol Core 4.2.3 step 1: the declaration is validated against the
+    # frozen snapshot alone, before the fixed go list starts a single process.
+    _validate_declared_module_roots(request, source_root)
     _emit_state(_state_observer, SESSION_STATES[0])
 
     platform, probes = probe_native_controls(
@@ -6847,12 +6892,18 @@ def build(
             request.toolchain_session.operation_root,
             limits.disk_bytes,
         )
+        # Protocol Core 4.2.3 step 3: the effective replace set is read from
+        # vendor/modules.txt only, reconciled, and checked against the
+        # declaration in both directions before go build.
+        replaced_modules = _resolve_module_root_bijection(request, build_root)
         validate_package_graph(
             list_result.stdout,
             build_root=build_root,
             source_dir=source_dir,
             goroot=request.toolchain_session.goroot,
+            replaced_modules=replaced_modules,
         )
+        _scan_declared_module_roots(request, source_root)
         _emit_state(_state_observer, SESSION_STATES[7])
 
         _emit_state(_state_observer, SESSION_STATES[8])
@@ -6946,7 +6997,10 @@ def _validate_package_command_surface(request: BuildRequest) -> None:
                 "package build command has a non-string field",
             )
         keys.append(key)
-    extra = sorted(set(keys) - {"type", "driver", "source_dir"})
+    closed_surface = {"type", "driver", "source_dir"}
+    if request.modules:
+        closed_surface.add("modules")
+    extra = sorted(set(keys) - closed_surface)
     if extra:
         surfaces = {
             "executable": "worker, Go launcher, or GOROOT tool program",
@@ -6971,7 +7025,7 @@ def _validate_package_command_surface(request: BuildRequest) -> None:
             CODE_PACKAGE_INFLUENCE_FORBIDDEN,
             f"package field {extra[0]!r} selects the {surface}",
         )
-    if set(keys) != {"type", "driver", "source_dir"}:
+    if set(keys) != closed_surface:
         raise GoV1Error(
             CODE_PACKAGE_INFLUENCE_FORBIDDEN,
             "package build command is not the exact closed surface",
@@ -6981,6 +7035,11 @@ def _validate_package_command_surface(request: BuildRequest) -> None:
         or request.command_object.get("driver") != "go-v1"
         or request.command_object.get("source_dir") != request.source_dir
     ):
+        raise GoV1Error(
+            CODE_PACKAGE_INFLUENCE_FORBIDDEN,
+            "package build command differs from the validated go-v1 command",
+        )
+    if request.modules and list(request.modules) != request.command_object.get("modules"):
         raise GoV1Error(
             CODE_PACKAGE_INFLUENCE_FORBIDDEN,
             "package build command differs from the validated go-v1 command",
@@ -7053,6 +7112,170 @@ def _normalize_limits(limits: ResourceLimits) -> ResourceLimits:
             "go-v1 resource limits are outside manager bounds",
         )
     return values
+
+
+# Go's own package loader ignores these directory names outright, so a file
+# below one of them can never be an active input of a declared module.
+_IGNORED_MODULE_SUBTREES: Final[frozenset[str]] = frozenset({"testdata", "vendor"})
+
+# Every native-input extension Go reports as CgoFiles, CFiles, CXXFiles,
+# MFiles, HFiles, FFiles, SwigFiles, SwigCXXFiles, SFiles, or SysoFiles. A
+# declared module directory is first-party code and carries none of them.
+_FORBIDDEN_MODULE_INPUT_SUFFIXES: Final[tuple[str, ...]] = (
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cxx",
+    ".f",
+    ".for",
+    ".f90",
+    ".h",
+    ".hh",
+    ".hpp",
+    ".hxx",
+    ".m",
+    ".mm",
+    ".s",
+    ".swig",
+    ".swigcxx",
+    ".syso",
+)
+
+
+def _module_root_failure(exc: module_roots.ModuleRootError) -> GoV1Error:
+    return GoV1Error(exc.code, exc.detail)
+
+
+def _validate_declared_module_roots(
+    request: BuildRequest,
+    source_root: Path,
+) -> None:
+    """Validate the schema-8 declaration before the fixed ``go list`` runs."""
+    if not request.modules:
+        return
+    build_roots = request.build_roots or (request.build_root,)
+    try:
+        module_roots.validate_declaration(
+            source_root,
+            request.modules,
+            build_root=request.build_root,
+            build_roots=build_roots,
+            runtime_roots=request.runtime_roots,
+            label=f"commands.{request.command}",
+        )
+    except module_roots.ModuleRootError as exc:
+        raise _module_root_failure(exc) from exc
+
+
+def _resolve_module_root_bijection(
+    request: BuildRequest,
+    build_root: Path,
+) -> frozenset[str]:
+    """Check the declaration against the effective replace set both ways."""
+    try:
+        replacements = module_roots.parse_effective_replacements(
+            module_roots.read_vendor_modules_text(build_root)
+        )
+        return module_roots.resolve_bijection(
+            request.modules,
+            replacements,
+            build_root=request.build_root,
+        )
+    except module_roots.ModuleRootError as exc:
+        raise _module_root_failure(exc) from exc
+
+
+def _scan_declared_module_roots(
+    request: BuildRequest,
+    source_root: Path,
+) -> None:
+    """Extend the scan surface of section 4.2 over every declared module.
+
+    ``go list`` never reports the declared directory, only its vendor copy, so
+    the manager walks the directory itself. The walk is deliberately a superset
+    of Go's active-input set: it can reject a first-party module, never admit
+    one the fixed ``go list`` would have rejected.
+    """
+
+    for relative in request.modules:
+        root = source_root.joinpath(*PurePosixPath(relative).parts)
+        _reject_module_root_toolchain_directive(root / "go.mod", relative)
+        for directory, names, files in os.walk(root, topdown=True, followlinks=False):
+            names[:] = sorted(
+                name
+                for name in names
+                if not name.startswith((".", "_")) and name not in _IGNORED_MODULE_SUBTREES
+            )
+            if "go.work" in files:
+                raise GoV1Error(
+                    "workspace_dependency_forbidden",
+                    f"declared module {relative!r} contains a forbidden go.work",
+                )
+            for name in sorted(files):
+                if name.startswith((".", "_")):
+                    continue
+                path = Path(directory) / name
+                lowered = name.lower()
+                if lowered.endswith(_FORBIDDEN_MODULE_INPUT_SUFFIXES):
+                    code = (
+                        "go_syso_forbidden"
+                        if lowered.endswith(".syso")
+                        else "go_assembly_forbidden"
+                        if lowered.endswith(".s")
+                        else "go_native_input_forbidden"
+                    )
+                    raise GoV1Error(
+                        code,
+                        f"declared module {relative!r} contains the native input "
+                        f"{name!r}",
+                    )
+                if lowered.endswith(".go"):
+                    _scan_module_root_source(path, relative)
+
+
+def _reject_module_root_toolchain_directive(go_mod: Path, relative: str) -> None:
+    """Keep a declared module from selecting a toolchain the manager did not pin."""
+    try:
+        payload = go_mod.read_bytes()
+    except OSError as exc:
+        raise GoV1Error(
+            "build_module_missing",
+            f"declared module {relative!r} go.mod is unreadable",
+        ) from exc
+    for line in payload.splitlines():
+        fields = line.split()
+        if fields and fields[0] == b"toolchain":
+            raise GoV1Error(
+                "toolchain_switch_forbidden",
+                f"declared module {relative!r} go.mod contains a "
+                "package-selected toolchain directive",
+            )
+
+
+def _scan_module_root_source(path: Path, relative: str) -> None:
+    """Apply the exact-bytes ``//go:cgo_import_dynamic`` scan to one file."""
+    try:
+        with path.open("rb", buffering=0) as handle:
+            carry = b""
+            while True:
+                chunk = handle.read(64 * 1024)
+                if not chunk:
+                    return
+                window = carry + chunk
+                if b"//go:cgo_import_dynamic" in window:
+                    raise GoV1Error(
+                        "go_forbidden_compiler_directive",
+                        f"declared module {relative!r} contains "
+                        "//go:cgo_import_dynamic",
+                    )
+                carry = window[-31:]
+    except GoV1Error:
+        raise
+    except (OSError, ValueError) as exc:
+        raise GoV1Error(
+            "go_source_unreadable",
+            f"cannot read an active Go file in declared module {relative!r}",
+        ) from exc
 
 
 def _canonical_build_directories(

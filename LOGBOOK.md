@@ -1,5 +1,49 @@
 # Logbook
 
+## 2026-08-24 - TASK-260824-2i5yqw: marker v4 inherits four pre-existing marker-v3 conformance gaps
+
+Marker v4 is marker v3 with a different manifest band, so `InstallMarkerV3` and the new
+`InstallMarkerV4` were folded onto one `_InstallMarkerExternalCapable` body in
+`src/csk/install_marker.py`. Running the candidate `install-marker-v4` schema cases through
+`install_marker.read_install_marker` showed 4 of 27 disagreeing, and running the
+`install-marker-v3` cases from both the candidate root and the ref CI pins today
+(curator-spec `0c81c1f`) showed the identical 4 of 27. The gaps are pre-existing schema-7
+external-repository substitution semantics, not something schema 8 introduced, and marker v4
+inherits them exactly because it inherits v3's body.
+
+- `valid-network-substitution-branch`: csk rejects a substitution ref of kind `branch` with
+  `repository substitution ref kind must be tag or revision`; the corpus expects it valid.
+- `invalid-marker-local-identity-kind-mismatch`: a `local-path` substitution against a
+  `network-git` effective identity is accepted; the corpus expects it rejected.
+- `invalid-marker-sha1-effective-revision-width` and its sha256 twin: a substitution revision
+  whose hex width contradicts `object_format` is accepted; the corpus expects both rejected.
+
+CI does not surface this today. `tests/test_protocol_conformance.py` drives schema cases only for
+the names in `IN_SCOPE_SCHEMA_NAMES` (agent-skill-v6, build-receipt-v1, conformance-claim-v1..v3,
+csk-skill-v6, install-marker-v2), so no install-marker-v3 case is executed at all. The full suite
+with `CURATOR_CONFORMANCE_ROOT` set to the pinned root is green: 2735 passed, 84 skipped, exit 0.
+
+Deliberately left out of the schema-8 branch. Fixing them means changing schema-7 substitution
+validation, a different manifest band with its own corpus, and the correct expectations live in the
+rc.9 candidate suite that TASK-260824-31y75t consumes. Recorded here so the qualification task picks
+it up instead of rediscovering it.
+
+## 2026-08-24 - TASK-260824-2i5yqw: `go list -mod=vendor` reports a replaced module through `Module.Replace` only
+
+Probed a real two-module vendored tree before touching `src/csk/builds/go_v1.py`. For
+`replace example.com/board => ../../pkg/board`, `go mod vendor` writes both
+`# example.com/board v0.0.0 => ../../pkg/board` (selection) and
+`# example.com/board => ../../pkg/board` (the effective directive), which is exactly the
+reconciliation Protocol Core 4.2.3 relies on to reject a versioned left side without parsing
+`go.mod`.
+
+The `go list` package entry for the replaced module carries `Module.Path`, `Module.Version`, and a
+`Module.Replace` object with `Path`, `Dir`, `GoMod`, `GoVersion`, but no top-level `Module.Dir` or
+`Module.GoMod`. `Module.Replace.Dir` points outside the build root, into the snapshot. That is why
+`_validate_module` keys admission on `Module.Path` against the bijected set rather than on any path
+in the stream: the spec forbids treating `Replace.Dir` or `Replace.GoMod` as evidence a path exists,
+and under `-mod=vendor` Go does not stat them.
+
 ## 2026-08-24 - TASK-260824-2h0vjy EPERM is not a verdict about a process group
 
 `Merge Go E2E / Python 3.14 on macos-latest` rejected an install with

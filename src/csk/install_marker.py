@@ -1,4 +1,4 @@
-"""Typed install-marker schemas 1, 2, and 3.
+"""Typed install-marker schemas 1, 2, 3, and 4.
 
 The marker records portable installation state only. Physical build-cache,
 receipt, lock, quarantine, and manager-home paths are deliberately absent from
@@ -26,11 +26,13 @@ from .identifiers import is_valid_identifier, is_valid_locale, is_valid_portable
 INSTALL_MARKER_V1_SCHEMA_VERSION: Final = 1
 INSTALL_MARKER_V2_SCHEMA_VERSION: Final = 2
 INSTALL_MARKER_V3_SCHEMA_VERSION: Final = 3
+INSTALL_MARKER_V4_SCHEMA_VERSION: Final = 4
 SUPPORTED_INSTALL_MARKER_SCHEMA_VERSIONS: Final[frozenset[int]] = frozenset(
     {
         INSTALL_MARKER_V1_SCHEMA_VERSION,
         INSTALL_MARKER_V2_SCHEMA_VERSION,
         INSTALL_MARKER_V3_SCHEMA_VERSION,
+        INSTALL_MARKER_V4_SCHEMA_VERSION,
     }
 )
 
@@ -83,6 +85,11 @@ _V2_MEMBERS: Final[frozenset[str]] = (
 )
 _V3_REQUIRED_MEMBERS: Final[frozenset[str]] = _V2_REQUIRED_MEMBERS
 _V3_MEMBERS: Final[frozenset[str]] = _V2_MEMBERS
+# Marker v4 carries marker-v3 meaning unchanged and only widens the manifest
+# band it may describe: schema 8 changes which manifests a marker may describe,
+# not what a marker records.
+_V4_REQUIRED_MEMBERS: Final[frozenset[str]] = _V3_REQUIRED_MEMBERS
+_V4_MEMBERS: Final[frozenset[str]] = _V3_MEMBERS
 _BUILD_SOURCE_MEMBERS: Final[frozenset[str]] = frozenset({"algorithm", "content_sha256"})
 _BUILD_RECORD_MEMBERS: Final[frozenset[str]] = frozenset(
     {"driver", "cache_key", "receipt_sha256", "artifact_sha256", "artifact_path"}
@@ -636,20 +643,27 @@ class InstallMarkerV2(_InstallMarkerCommon):
 
 
 @dataclass(frozen=True, kw_only=True)
-class InstallMarkerV3(_InstallMarkerCommon):
-    """Schema-7 marker supporting local and external compiled commands."""
+class _InstallMarkerExternalCapable(_InstallMarkerCommon):
+    """Shared marker body for local, external, and mixed command sets."""
 
+    schema_version: int
     build_roots: tuple[str, ...]
     builds: Mapping[str, InstallMarkerBuildV3]
     build_source: BuildSourceIdentity | None = None
-    schema_version: Literal[3] = INSTALL_MARKER_V3_SCHEMA_VERSION
 
-    def __post_init__(self) -> None:
-        if self.schema_version != INSTALL_MARKER_V3_SCHEMA_VERSION:
-            raise InstallMarkerError("unsupported_install_marker_schema", f"marker v3 schema_version must be 3, got {self.schema_version!r}")
-        self._validate_common(maximum_skill_schema=7)
-        if self.skill_schema_version != 7:
-            raise InstallMarkerError("install_marker_invalid", "marker v3 requires skill_schema_version 7")
+    def _validate_external_capable(self, *, marker_version: int, skill_schema: int) -> None:
+        if self.schema_version != marker_version:
+            raise InstallMarkerError(
+                "unsupported_install_marker_schema",
+                f"marker v{marker_version} schema_version must be {marker_version}, "
+                f"got {self.schema_version!r}",
+            )
+        self._validate_common(maximum_skill_schema=skill_schema)
+        if self.skill_schema_version != skill_schema:
+            raise InstallMarkerError(
+                "install_marker_invalid",
+                f"marker v{marker_version} requires skill_schema_version {skill_schema}",
+            )
         object.__setattr__(self, "build_roots", _freeze_path_set(self.build_roots, "build_roots"))
         object.__setattr__(self, "builds", _freeze_builds_v3(self.builds))
         local_builds = [build for build in self.builds.values() if build.driver == GO_V1_DRIVER]
@@ -659,14 +673,17 @@ class InstallMarkerV3(_InstallMarkerCommon):
         if self.build_source is not None:
             _validate_build_source(self.build_source)
         if local_builds and not self.build_roots:
-            raise InstallMarkerError("install_marker_invalid", "local marker-v3 builds require build_roots")
+            raise InstallMarkerError(
+                "install_marker_invalid",
+                f"local marker-v{marker_version} builds require build_roots",
+            )
         for name, build in self.builds.items():
             if name not in self.commands:
                 raise InstallMarkerError("install_marker_invalid", f"build {name!r} is not present in commands")
             _validate_build_artifact_path(name, build.artifact_path)
 
-    def to_json(self) -> dict[str, Any]:
-        result = self._common_json(INSTALL_MARKER_V3_SCHEMA_VERSION)
+    def _external_capable_json(self, marker_version: int) -> dict[str, Any]:
+        result = self._common_json(marker_version)
         result["build_roots"] = list(self.build_roots)
         result["builds"] = {name: build.to_json() for name, build in self.builds.items()}
         if self.build_source is not None:
@@ -677,8 +694,47 @@ class InstallMarkerV3(_InstallMarkerCommon):
         return result
 
 
+@dataclass(frozen=True, kw_only=True)
+class InstallMarkerV3(_InstallMarkerExternalCapable):
+    """Schema-7 marker supporting local and external compiled commands."""
+
+    schema_version: Literal[3] = INSTALL_MARKER_V3_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        self._validate_external_capable(
+            marker_version=INSTALL_MARKER_V3_SCHEMA_VERSION,
+            skill_schema=7,
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return self._external_capable_json(INSTALL_MARKER_V3_SCHEMA_VERSION)
+
+
+@dataclass(frozen=True, kw_only=True)
+class InstallMarkerV4(_InstallMarkerExternalCapable):
+    """Schema-8 marker: marker-v3 meaning over a schema-8 manifest.
+
+    An enforced ``script-worker-v1`` command produces no build entry and adds
+    no marker member, so the object shape, the build-entry semantics, and the
+    top-level ``build_source`` and ``build_roots`` rules are marker-v3's.
+    """
+
+    schema_version: Literal[4] = INSTALL_MARKER_V4_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        self._validate_external_capable(
+            marker_version=INSTALL_MARKER_V4_SCHEMA_VERSION,
+            skill_schema=8,
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return self._external_capable_json(INSTALL_MARKER_V4_SCHEMA_VERSION)
+
+
 MarkerBuild: TypeAlias = InstallMarkerBuild | InstallMarkerBuildV3
-InstallMarker: TypeAlias = InstallMarkerV1 | InstallMarkerV2 | InstallMarkerV3
+InstallMarker: TypeAlias = (
+    InstallMarkerV1 | InstallMarkerV2 | InstallMarkerV3 | InstallMarkerV4
+)
 
 
 def serialize_install_marker(payload: Mapping[str, Any]) -> bytes:
@@ -704,7 +760,7 @@ def read_install_marker(raw: bytes | str) -> InstallMarker:
 
 
 def parse_install_marker(value: Any) -> InstallMarker:
-    """Parse one decoded marker schema 1, 2, or 3 and freeze set ordering."""
+    """Parse one decoded marker schema 1 through 4 and freeze set ordering."""
     body = _require_object(value, "marker")
     schema_version = body.get("schema_version")
     if (
@@ -737,8 +793,22 @@ def parse_install_marker(value: Any) -> InstallMarker:
             schema_version=INSTALL_MARKER_V2_SCHEMA_VERSION,
         )
 
-    _validate_object_shape(body, _V3_REQUIRED_MEMBERS, _V3_MEMBERS, "marker v3")
-    return InstallMarkerV3(
+    if schema_version == INSTALL_MARKER_V3_SCHEMA_VERSION:
+        _validate_object_shape(body, _V3_REQUIRED_MEMBERS, _V3_MEMBERS, "marker v3")
+        return InstallMarkerV3(
+            **_parse_common(body),
+            build_roots=_parse_array(body["build_roots"], "build_roots"),
+            builds=_parse_builds_v3(body["builds"]),
+            build_source=(
+                _parse_build_source(body["build_source"])
+                if "build_source" in body
+                else None
+            ),
+            schema_version=INSTALL_MARKER_V3_SCHEMA_VERSION,
+        )
+
+    _validate_object_shape(body, _V4_REQUIRED_MEMBERS, _V4_MEMBERS, "marker v4")
+    return InstallMarkerV4(
         **_parse_common(body),
         build_roots=_parse_array(body["build_roots"], "build_roots"),
         builds=_parse_builds_v3(body["builds"]),
@@ -747,7 +817,7 @@ def parse_install_marker(value: Any) -> InstallMarker:
             if "build_source" in body
             else None
         ),
-        schema_version=INSTALL_MARKER_V3_SCHEMA_VERSION,
+        schema_version=INSTALL_MARKER_V4_SCHEMA_VERSION,
     )
 
 
@@ -767,7 +837,9 @@ def marker_can_be_current(
         return 0 <= skill_schema_version <= 5
     if isinstance(marker, InstallMarkerV2):
         return 0 <= skill_schema_version <= 6
-    return skill_schema_version == 7
+    if isinstance(marker, InstallMarkerV3):
+        return skill_schema_version == 7
+    return skill_schema_version == 8
 
 
 def _parse_common(body: dict[str, Any]) -> dict[str, Any]:

@@ -40,6 +40,16 @@ def validate_skill(skill_dir: Path, *, locale_value: str | None = None) -> list[
         )
 
     if spec is not None:
+        rejection = skillspec.script_execution_policy_rejection(spec)
+        if rejection is not None:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "skill.script_execution_policy_unsupported",
+                    _skill_spec_path(skill_dir),
+                    rejection,
+                )
+            )
         issues.extend(_runtime_root_reference_warnings(skill_dir, spec))
         issues.extend(_command_resolution_warnings(skill_dir, spec))
 

@@ -874,7 +874,10 @@ def _existing_external_snapshot_key(
             marker = install_marker.read_install_marker(path.read_bytes())
         except (OSError, install_marker.InstallMarkerError):
             continue
-        if not isinstance(marker, install_marker.InstallMarkerV3):
+        if not isinstance(
+            marker,
+            (install_marker.InstallMarkerV3, install_marker.InstallMarkerV4),
+        ):
             continue
         build = marker.builds.get(command)
         if (
@@ -2164,19 +2167,26 @@ def _build_private_misses(
             def run_build(
                 frozen: build_source.FrozenSnapshot,
                 command_spec: build_planner.BuildCommand = command,
+                provider_spec: build_planner.BuildProvider = provider,
             ) -> go_v1.BuildResult:
+                command_object: dict[str, Any] = {
+                    "type": "build",
+                    "driver": command_spec.driver,
+                    "source_dir": command_spec.source_dir,
+                }
+                if command_spec.modules:
+                    command_object["modules"] = list(command_spec.modules)
                 return go_v1.build(
                     go_v1.BuildRequest(
                         toolchain_session=session,
                         source_snapshot=frozen,
-                        command_object={
-                            "type": "build",
-                            "driver": command_spec.driver,
-                            "source_dir": command_spec.source_dir,
-                        },
+                        command_object=command_object,
                         build_root=command_spec.build_root,
                         source_dir=command_spec.source_dir,
                         command=command_spec.name,
+                        modules=command_spec.modules,
+                        build_roots=provider_spec.build_roots,
+                        runtime_roots=provider_spec.runtime_roots,
                     )
                 )
 
@@ -3271,6 +3281,12 @@ def install_runtime_commands(
     activation_bin_dir: Path | None = None,
 ) -> set[str]:
     commands: set[str] = set()
+    # Fail closed at the single shim publication point. A manager that does not
+    # implement the selected script execution policy must never publish the
+    # command's shim, not even declared-only.
+    rejection = skillspec.script_execution_policy_rejection(plan.spec)
+    if rejection is not None:
+        raise InstallError(f"{plan.decl.name}: {rejection}")
     final_home = csk_home if activation_home is None else activation_home
     final_bin = bin_dir if activation_bin_dir is None else activation_bin_dir
     path_entries = _runtime_path_entries(plan, final_bin)
@@ -3548,7 +3564,7 @@ def _marker_payload(
         requirers=tuple(requirers) if requirers else None,
         substituted=substituted,
     )
-    if plan.spec.schema_version == 7:
+    if plan.spec.schema_version >= 7:
         marker_builds: dict[str, install_marker.InstallMarkerBuildV3] = {}
         for name, build in (builds or {}).items():
             if isinstance(build, install_marker.InstallMarkerBuildV3):
@@ -3563,12 +3579,23 @@ def _marker_payload(
                     artifact_sha256=build.artifact_sha256,
                     artifact_path=build.artifact_path,
                 )
-        marker: install_marker.InstallMarker = install_marker.InstallMarkerV3(
-            **common,
-            build_roots=plan.spec.build_roots,
-            builds=marker_builds,
-            build_source=build_source_identity,
-        )
+        # Marker v3 records a schema-7 installation and marker v4 a schema-8
+        # one. The two shapes are identical; only the manifest band differs.
+        marker: install_marker.InstallMarker
+        if plan.spec.schema_version == 7:
+            marker = install_marker.InstallMarkerV3(
+                **common,
+                build_roots=plan.spec.build_roots,
+                builds=marker_builds,
+                build_source=build_source_identity,
+            )
+        else:
+            marker = install_marker.InstallMarkerV4(
+                **common,
+                build_roots=plan.spec.build_roots,
+                builds=marker_builds,
+                build_source=build_source_identity,
+            )
     else:
         local_builds = {
             name: build
@@ -3576,7 +3603,7 @@ def _marker_payload(
             if isinstance(build, install_marker.InstallMarkerBuild)
         }
         if len(local_builds) != len(builds or {}):
-            raise InstallError("external marker state requires skill schema 7")
+            raise InstallError("external marker state requires skill schema 7 or newer")
         marker = install_marker.InstallMarkerV2(
             **common,
             build_roots=plan.spec.build_roots,

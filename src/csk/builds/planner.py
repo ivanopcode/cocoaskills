@@ -41,6 +41,7 @@ class BuildCommand:
     driver: str
     build_root: str
     source_dir: str
+    modules: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -67,6 +68,8 @@ class BuildProvider:
     name: str
     snapshot: source.FrozenSnapshot
     commands: tuple[BuildCommand, ...]
+    build_roots: tuple[str, ...] = ()
+    runtime_roots: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -239,9 +242,16 @@ def provider_from_spec(
                 driver=command.driver,
                 build_root=containing[0],
                 source_dir=command.source_dir,
+                modules=command.modules,
             )
         )
-    return BuildProvider(name=name, snapshot=snapshot, commands=tuple(commands))
+    return BuildProvider(
+        name=name,
+        snapshot=snapshot,
+        commands=tuple(commands),
+        build_roots=spec.build_roots,
+        runtime_roots=spec.runtime_roots,
+    )
 
 
 def detect_command_collisions(

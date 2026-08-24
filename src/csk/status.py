@@ -726,7 +726,14 @@ def _node_build_statuses(
     bin_dir: Path,
 ) -> tuple[build_currentness.BuildStatus, ...]:
     marker_builds: Mapping[str, install_marker.MarkerBuild] = {}
-    if isinstance(marker_inspection.marker, (install_marker.InstallMarkerV2, install_marker.InstallMarkerV3)):
+    if isinstance(
+        marker_inspection.marker,
+        (
+            install_marker.InstallMarkerV2,
+            install_marker.InstallMarkerV3,
+            install_marker.InstallMarkerV4,
+        ),
+    ):
         marker_builds = marker_inspection.marker.builds
     active = installer._active_build_command_names(node)
     commands = sorted(active | set(marker_builds))
@@ -1068,7 +1075,14 @@ def _unavailable_recorded_builds(
             marker = install_marker.read_install_marker(marker_path.read_bytes())
         except Exception:  # noqa: BLE001 - the scope error is already reported
             continue
-        if not isinstance(marker, (install_marker.InstallMarkerV2, install_marker.InstallMarkerV3)):
+        if not isinstance(
+            marker,
+            (
+                install_marker.InstallMarkerV2,
+                install_marker.InstallMarkerV3,
+                install_marker.InstallMarkerV4,
+            ),
+        ):
             continue
         for name, recorded in marker.builds.items():
             result.append(
