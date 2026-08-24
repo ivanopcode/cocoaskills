@@ -60,7 +60,8 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
 
     for job_id in ("fast_protocol", "fast_go_e2e"):
         job = _job(workflow, job_id)
-        assert "if: github.event_name == 'pull_request'" in job
+        assert "github.event_name == 'pull_request'" in job
+        assert "refs/heads/main" not in job
         assert "timeout-minutes: 20" in job
 
 
@@ -210,17 +211,60 @@ def test_stable_aggregates_always_run_and_fail_closed() -> None:
             assert subprocess.run([sys.executable, "-c", script], env=env, check=False).returncode != 0
 
 
+def test_candidate_input_is_an_explicit_dispatch_contract() -> None:
+    workflow = _workflow()
+    trigger = re.search(r"(?ms)^  workflow_dispatch:\n(.*?)(?=^concurrency:)", workflow)
+    assert trigger is not None
+
+    inputs = trigger.group(1)
+    for name in (
+        "candidate_ref",
+        "candidate_manifest_sha256",
+        "candidate_protocol_version",
+    ):
+        assert f"      {name}:" in inputs
+        assert f'{name}:\n        description' in inputs
+    assert inputs.count('default: ""') == 3
+
+
 def test_candidate_authentication_is_identical_in_fast_and_merge_go_jobs() -> None:
     workflow = _workflow()
-    expected_sha = "432eb2ee1fe2d6b271e37269f867c8851c325539"
-    expected_manifest = "12e58b82579645ba1ccafba49d3e2dd3216005ddf37ae63c68a9fafd46773071"
 
     for job_id in ("fast_go_e2e", "merge_go_e2e"):
         job = _job(workflow, job_id)
-        assert "ref: ${{ vars.CSK_E2E_CURATOR_SPEC_SHA }}" in job
-        assert expected_sha in job
-        assert expected_manifest in job
+        assert "github.event_name == 'workflow_dispatch'" in job
+        # The candidate identity is resolved once, before it can be fetched, and
+        # every later step of the job reads the same override environment.
+        for name in (
+            "CANDIDATE_REF: ${{ inputs.candidate_ref }}",
+            "CANDIDATE_MANIFEST_SHA256: ${{ inputs.candidate_manifest_sha256 }}",
+            "CANDIDATE_PROTOCOL_VERSION: ${{ inputs.candidate_protocol_version }}",
+        ):
+            assert job.count(name) == 1
+        assert job.index("candidate_suite.py resolve") < job.index(
+            "ref: ${{ steps.candidate.outputs.revision }}"
+        )
+        assert "repository: ${{ steps.candidate.outputs.repository }}" in job
+        assert "candidate_suite.py record" in job
+        assert "--evidence candidate-suite-identity.txt" in job
+        assert job.count("candidate-suite-identity.txt") == 2
         assert "CSK_E2E_REQUIRED_PLATFORM:" in job
+
+
+def test_the_released_suite_pin_is_declared_once_and_never_inlined() -> None:
+    workflow = _workflow()
+    pin = re.findall(r"^  RELEASED_SUITE_PIN: ([0-9a-f]{40})$", workflow, re.MULTILINE)
+    assert pin == ["0c81c1f8d5321d822be2a2817b05aea03e656e15"]
+    assert workflow.count("ref: ${{ env.RELEASED_SUITE_PIN }}") == 4
+
+    for job_id in ("fast_ordinary", "fast_protocol", "merge_protocol"):
+        assert pin[0] not in _job(workflow, job_id)
+
+    # The candidate lanes never see the released pin, and no lane still reads
+    # the retired repository variable.
+    for job_id in ("fast_go_e2e", "merge_go_e2e"):
+        assert "RELEASED_SUITE_PIN" not in _job(workflow, job_id)
+    assert "CSK_E2E_CURATOR_SPEC_SHA" not in workflow
 
 
 def test_xdist_is_a_bounded_dev_dependency() -> None:
