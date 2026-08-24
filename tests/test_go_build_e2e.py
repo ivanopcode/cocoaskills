@@ -12,6 +12,7 @@ from typing import Callable
 
 import pytest
 
+from candidate_suite_support import load_candidate_suite
 from conftest import (
     commit_all,
     init_git_repo,
@@ -36,6 +37,31 @@ UBUNTU = pytest.mark.skipif(
 
 class SimulatedCrash(BaseException):
     pass
+
+
+@pytest.fixture
+def authenticated_e2e_candidate_root() -> Path:
+    """Authenticate the explicitly declared candidate suite without pinning it.
+
+    The expected identity is whatever the candidate declaration resolves to, so
+    a new candidate is qualified by declaring it, never by editing an assertion
+    here. The fixture lives beside its only consumer instead of in
+    `tests/conftest.py`, which is part of the audited protocol surface.
+    """
+    root_value = os.environ.get("CURATOR_CONFORMANCE_ROOT")
+    required = os.environ.get("CSK_E2E_REQUIRED_PLATFORM")
+    if not root_value:
+        if required:
+            pytest.fail("required Go E2E run lacks CURATOR_CONFORMANCE_ROOT")
+        pytest.skip("candidate conformance root is not configured")
+    root = Path(root_value).resolve(strict=True)
+    candidate_suite = load_candidate_suite()
+    try:
+        candidate = candidate_suite.resolve()
+        candidate_suite.authenticate(candidate, checkout=root.parent.parent, root=root)
+    except candidate_suite.CandidateError as exc:
+        pytest.fail(str(exc))
+    return root
 
 
 @pytest.fixture(autouse=True)

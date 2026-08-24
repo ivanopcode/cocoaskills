@@ -177,6 +177,17 @@ def test_windows_protocol_shards_are_static_bounded_and_fail_closed() -> None:
     assert "if-no-files-found: error" in protocol
 
 
+def test_the_shard_verifier_is_reachable_before_a_merge() -> None:
+    """merge_protocol must be dispatchable, otherwise it is unverifiable on a branch."""
+    protocol = _job(_workflow(), "merge_protocol")
+    assert (
+        "    if: >-\n"
+        "      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||\n"
+        "      github.event_name == 'workflow_dispatch'\n"
+    ) in protocol
+    assert "Verify and select deterministic Windows protocol shard" in protocol
+
+
 def test_stable_aggregates_always_run_and_fail_closed() -> None:
     workflow = _workflow()
 
