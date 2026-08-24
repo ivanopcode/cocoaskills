@@ -1,8 +1,8 @@
 {
-  "note": "Explicit candidate protocol suite consumed by the Go E2E lanes. This is candidate input: not a published release, not a release pin and not a conformance claim. The released suite pin is RELEASED_SUITE_PIN in .github/workflows/ci.yml and is never changed by this file. Qualifying a new candidate means replacing revision, manifest_sha256, tree_sha256 and protocol_version together, or supplying candidate_ref and candidate_manifest_sha256 to a workflow_dispatch run.",
+  "note": "Explicit candidate protocol suite consumed by the Go E2E lanes and by the schema-8 consumption lane. This is candidate input: not a published release, not a release pin and not a conformance claim. The released suite pin is RELEASED_SUITE_PIN in .github/workflows/ci.yml and is never changed by this file. Qualifying a new candidate means replacing revision, manifest_sha256, tree_sha256 and protocol_version together, or supplying candidate_ref and candidate_manifest_sha256 to a workflow_dispatch run. Which families a candidate must actually be READ for is declared in .github/ci/candidate-artifacts.tsv.",
   "repository": "relux-works/curator-spec",
-  "revision": "432eb2ee1fe2d6b271e37269f867c8851c325539",
-  "manifest_sha256": "sha256:12e58b82579645ba1ccafba49d3e2dd3216005ddf37ae63c68a9fafd46773071",
-  "tree_sha256": "sha256:327df66b8f437b5cc45ad459fd3d557743d8a041142a9c6f3e79a0027e96b76d",
-  "protocol_version": "1.0.0-rc.6"
+  "revision": "6001dc33281b94a4ec7442ab15278550dd0f51d9",
+  "manifest_sha256": "sha256:803918bf8672f76cf990985e51db213b826674cd5bb54fbf47731b8404b44403",
+  "tree_sha256": "sha256:d2c9d3df5c71d3f38cbf5eadb4ddc3e3e347a66540adfb7289fa7cbc93ed2656",
+  "protocol_version": "1.0.0-rc.9"
 }

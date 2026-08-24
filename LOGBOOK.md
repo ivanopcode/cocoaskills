@@ -1,5 +1,52 @@
 # Logbook
 
+## 2026-08-24 - TASK-260824-31y75t: the candidate lane had never measured a different suite
+
+The candidate protocol suite the Go E2E lanes authenticated, `432eb2ee`, publishes a
+`conformance/v1/manifest.json` whose sha256 is `12e58b82...` - byte-identical to the released pin
+`0c81c1f8`. Two immutable revisions, one conformance suite. Every "candidate" run since the lane was
+generalized had therefore measured exactly the corpus the default protocol lanes already measure,
+and no assertion anywhere could have noticed: identity authentication proves you read the right
+bytes, never that the bytes differ from the pin or that anything read them at all.
+
+Schema 8 then landed with its corpora unread. `IN_SCOPE_SCHEMA_NAMES` in
+`tests/test_protocol_conformance.py` is rc.6-era, and that module is pinned to the released manifest
+anyway, so `agent-skill-v8`, `csk-skill-v8`, `install-marker-v4`, `vectors/module-roots.json` and
+`vectors/script-host-execution-policy.json` were all published into the checkout and never opened.
+A schema-8 candidate could have been qualified green while the whole surface sat unread.
+
+Presence in a root is not consumption, and a green run is not evidence a named case still runs.
+Those are two separate claims and they need two separate ledgers, which is what curator PR 37
+concluded for the Go implementation and what `.github/ci/candidate-artifacts.tsv` (checked against
+the candidate manifest before pytest starts) and `.github/ci/candidate-cases.tsv` (checked against
+the run's own junit stream afterwards) now do here. The second one earns its keep immediately:
+deselecting one declared case leaves pytest exiting 0 with 173 passed, and the gate still fails by
+name.
+
+The partition has to be derived from the root rather than from the lane, or the consumer becomes a
+lane-shaped special case. A root that publishes none of the declared surface defers the consumer and
+names what was absent; the candidate lane additionally exports
+`CSK_REQUIRE_FULL_CANDIDATE_ROOT=1`, which turns a partly-published surface from a quieter run into
+a failure.
+
+## 2026-08-24 - TASK-260824-31y75t: the four marker gaps were reader bugs, not schema-7 semantics
+
+TASK-260824-2i5yqw logged four `install-marker-v4` cases as inherited schema-7 substitution
+semantics to be decided later. Reading the rc.9 and released-pin schemas side by side settled it in
+the other direction: `repositoryStructuredRef` in `common.schema.json` admits `revision`, `tag` and
+`branch` identically on **both** pins, so `branch` was never a schema-8 addition and the reader was
+simply rejecting a protocol-valid marker. The other three are normative prose, not schema:
+Core 4.2 binds a `local-path` substitution to effective identity kind `operator-local-git` and a
+`network-git` substitution to `network-git`, and states that a structured `revision` is "a full
+lowercase object ID for the effective repository object format". A marker can satisfy the JSON
+Schema and still contradict both rules, and the reader was accepting exactly those.
+
+So this was one fail-closed-too-hard bug and three fail-open ones, all in
+`src/csk/install_marker.py`, and none of them specific to marker v4. Fixing the reader takes
+`install-marker-v4` to 27/27 and also takes `install-marker-v3` from 23/27 to 27/27 against the
+released pin, which is the tell that these were never schema-8 gaps: the released corpus had been
+disagreeing with the reader the whole time, and nothing consumed it.
+
 ## 2026-08-24 - TASK-260824-2i5yqw: marker v4 inherits four pre-existing marker-v3 conformance gaps
 
 Marker v4 is marker v3 with a different manifest band, so `InstallMarkerV3` and the new

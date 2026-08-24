@@ -299,6 +299,26 @@ jobs:
           --root "${{ github.workspace }}/protocol-spec-candidate/conformance/v1"
           --evidence candidate-suite-identity.txt
 
+      - name: Require the candidate root to serve every declared consumer
+        run: >-
+          python .github/scripts/candidate_consumption.py require
+          --root "${{ github.workspace }}/protocol-spec-candidate/conformance/v1"
+
+      - name: Run the schema-8 candidate consumption suite
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
+          CSK_REQUIRE_FULL_CANDIDATE_ROOT: "1"
+        run: >-
+          python -m pytest -q tests/test_schema8_candidate_conformance.py
+          --basetemp="${{ runner.temp }}/csk-schema8"
+          --junitxml=csk-schema8-results.xml
+
+      - name: Gate the declared schema-8 consumption cases
+        run: >-
+          python .github/scripts/candidate_consumption.py gate
+          --results csk-schema8-results.xml
+          --platform "${{ runner.os == 'Linux' && 'linux' || runner.os == 'macOS' && 'darwin' || 'windows' }}"
+
       - name: Collect Go E2E smoke node IDs
         env:
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
@@ -330,6 +350,7 @@ jobs:
           name: csk-e2e-smoke-${{ matrix.os }}-py314
           path: |
             candidate-suite-identity.txt
+            csk-schema8-results.xml
             csk-e2e-smoke-nodeids.txt
             csk-e2e-smoke-results.xml
           if-no-files-found: error
@@ -671,6 +692,26 @@ jobs:
           --root "${{ github.workspace }}/protocol-spec-candidate/conformance/v1"
           --evidence candidate-suite-identity.txt
 
+      - name: Require the candidate root to serve every declared consumer
+        run: >-
+          python .github/scripts/candidate_consumption.py require
+          --root "${{ github.workspace }}/protocol-spec-candidate/conformance/v1"
+
+      - name: Run the schema-8 candidate consumption suite
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
+          CSK_REQUIRE_FULL_CANDIDATE_ROOT: "1"
+        run: >-
+          python -m pytest -q tests/test_schema8_candidate_conformance.py
+          --basetemp="${{ runner.temp }}/csk-schema8"
+          --junitxml=csk-schema8-results.xml
+
+      - name: Gate the declared schema-8 consumption cases
+        run: >-
+          python .github/scripts/candidate_consumption.py gate
+          --results csk-schema8-results.xml
+          --platform "${{ runner.os == 'Linux' && 'linux' || runner.os == 'macOS' && 'darwin' || 'windows' }}"
+
       - name: Collect accepted Go E2E node IDs
         env:
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec-candidate/conformance/v1
@@ -700,6 +741,7 @@ jobs:
           name: csk-e2e-${{ matrix.os }}-py314
           path: |
             candidate-suite-identity.txt
+            csk-schema8-results.xml
             csk-e2e-nodeids.txt
             csk-e2e-results.xml
           if-no-files-found: error
