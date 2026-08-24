@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Добавлено
+
+- Аутентификация приватных HTTPS build-репозиториев через manager credential broker. Скоупы `build_https` в глобальном конфиге хранят источник токена (`git-credentials`, `keyring`, `token_env`), никогда сам токен; та же longest-prefix грамматика канонической идентичности, что у `build_ssh`, применение пер-репо. Сабкоманды `csk config build-https add/login/list/remove`, интерактивный precheck с обнаруженными кандидатами перед первым fetch, run-wide override `CSK_BUILD_HTTPS_TOKEN` (с необязательными `CSK_BUILD_HTTPS_USERNAME` и пином хоста `CSK_BUILD_HTTPS_HOST`; без пина токен уходит каждому HTTPS-хосту замыкания). Креды читает менеджер до fetch через `git credential fill/approve/reject` при отключённых интерактивных запросах; брокер отвечает только на два промпта Git и только для запиненного хоста, любой другой ввод завершается fail-closed. Helper, который молча ничего не сохранил, обнаруживается обратным чтением. Анонимный HTTPS остаётся рабочим транспортом, когда ни один скоуп не совпал.
+
 ## [0.14.1] - 2026-08-22
 
 ### Добавлено

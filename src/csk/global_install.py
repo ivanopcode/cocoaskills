@@ -386,7 +386,7 @@ def _install_once(
     options: installer.InstallOptions,
     operator_search_path: build_toolchain.OperatorSearchPath,
     operator_ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
-    operator_https_token: "tuple[str, str] | None" = None,
+    operator_https_token: installer.OperatorHTTPSToken | None = None,
     generation_probe: build_planner.GenerationProbe,
     expected_generation: Mapping[str, str],
     only: Sequence[str] | None = None,

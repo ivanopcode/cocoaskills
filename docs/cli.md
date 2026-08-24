@@ -855,6 +855,112 @@ usage: csk config build-ssh remove [-h] scope
 * `scope`: префикс канонической идентичности удаляемого скоупа.
 * `-h`, `--help`: выводит краткое справочное сообщение.
 
+### csk config build-https
+
+Управляет скоупами HTTPS-токенов для внешних репозиториев сборки (`go-repository-v1`).
+
+Скоупы используют ту же грамматику, что и `build-ssh`: префикс канонической идентичности, сопоставление по границам сегментов `/`, побеждает самый длинный совпавший скоуп. Конфигурация хранит источник токена, а не сам токен. Переменная окружения `CSK_BUILD_HTTPS_TOKEN` перекрывает любой скоуп на один запуск; переменная `CSK_BUILD_HTTPS_HOST` ограничивает это перекрытие одним хостом.
+
+**Синопсис:**
+
+```bash
+usage: csk config build-https [-h] {add,login,list,remove} ...
+```
+
+**Аргументы и флаги:**
+
+* `-h`, `--help`: выводит краткое справочное сообщение.
+* `add`: добавляет или перезаписывает скоуп источника токена.
+* `login`: сохраняет токен через Git credential helper оператора и выбирает его для скоупа.
+* `list`: выводит список настроенных скоупов.
+* `remove`: удаляет скоуп и связанную запись keyring.
+
+**Примеры использования:**
+
+```bash
+# Использовать существующие HTTPS-креды Git для хоста
+csk config build-https add gitlab.example.com/portals/infra --token git-credentials
+
+# Сохранить personal access token через credential helper (скрытый ввод)
+csk config build-https login gitlab.example.com/vendor
+
+# Читать токен из переменной окружения (CI и headless)
+csk config build-https add ci.example.com --token-env MY_CI_TOKEN
+
+# Просмотр и удаление
+csk config build-https list
+csk config build-https remove gitlab.example.com/vendor
+```
+
+Команда управляет правилами в секции `build_https` файла `~/.cocoaskills/config.json`.
+
+### csk config build-https add
+
+Добавляет или обновляет источник токена для указанного скоупа.
+
+**Синопсис:**
+
+```bash
+usage: csk config build-https add [-h] [--token {git-credentials,keyring}]
+                                  [--token-env NAME] [--username NAME]
+                                  scope
+```
+
+**Аргументы и флаги:**
+
+* `scope`: префикс канонической идентичности, например `gitlab.example.com/group`.
+* `-h`, `--help`: выводит краткое справочное сообщение.
+* `--token {git-credentials,keyring}`: источник токена. `git-credentials` читает существующую HTTPS-запись оператора для хоста; `keyring` читает токен, сохраненный командой `login`.
+* `--token-env NAME`: имя переменной окружения, из которой токен читается на входе в процесс.
+* `--username NAME`: имя пользователя HTTPS (по умолчанию `token`).
+
+Требуется ровно один из флагов `--token` или `--token-env`. Литеральный токен не принимается ни одним флагом.
+
+### csk config build-https login
+
+Сохраняет personal access token через Git credential helper оператора под неймспейснутым именем пользователя `csk-build-https:<scope>` и выбирает источник `keyring` для скоупа. Ввод скрытый; при отсутствии TTY токен читается из stdin. Запись проверяется обратным чтением: helper, который молча ничего не сохранил, приводит к ошибке с платформенной подсказкой.
+
+**Синопсис:**
+
+```bash
+usage: csk config build-https login [-h] [--username NAME] scope
+```
+
+**Аргументы и флаги:**
+
+* `scope`: префикс канонической идентичности.
+* `-h`, `--help`: выводит краткое справочное сообщение.
+* `--username NAME`: имя пользователя HTTPS, предъявляемое при fetch (по умолчанию `token`).
+
+### csk config build-https list
+
+Выводит список всех настроенных скоупов; для источника `keyring` дополнительно показывает, сохранен ли токен (`stored=yes` или `stored=NO`).
+
+**Синопсис:**
+
+```bash
+usage: csk config build-https list [-h]
+```
+
+**Аргументы и флаги:**
+
+* `-h`, `--help`: выводит краткое справочное сообщение.
+
+### csk config build-https remove
+
+Удаляет скоуп из конфигурации и связанную запись keyring, если она существует.
+
+**Синопсис:**
+
+```bash
+usage: csk config build-https remove [-h] scope
+```
+
+**Аргументы и флаги:**
+
+* `scope`: префикс канонической идентичности удаляемого скоупа.
+* `-h`, `--help`: выводит краткое справочное сообщение.
+
 ### csk shell-init
 
 Генерирует код интеграции с оболочкой или устанавливает хук автоматического добавления `.agents/bin` в PATH.

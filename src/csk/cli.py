@@ -303,7 +303,9 @@ def build_parser() -> argparse.ArgumentParser:
             "                           secret store already holds for the host\n"
             "  --token keyring          use the token 'build-https login' saved\n"
             "  --token-env NAME         read the token from an environment variable\n\n"
-            "CSK_BUILD_HTTPS_TOKEN overrides every scope for one run.\n\n"
+            "CSK_BUILD_HTTPS_TOKEN overrides every scope for one run; it is\n"
+            "sent to every HTTPS build repository host in the closure unless\n"
+            "CSK_BUILD_HTTPS_HOST pins it to one host.\n\n"
             "Examples:\n"
             "  csk config build-https add gitlab.example.com/group --token git-credentials\n"
             "  csk config build-https login gitlab.example.com/group\n"
@@ -1106,11 +1108,16 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
             print(f"No build-https scope {args.scope!r}", file=sys.stderr)
             return EXIT_CONFIG
         config.save_config(replace(cfg, build_https=remaining))
-        if build_https.delete_namespaced_token(
-            args.scope,
-            build_https.scope_host(args.scope),
-            home=build_https.resolve_operator_home(),
-        ):
+        # "git credential reject" exits 0 whether or not an entry existed, so
+        # the message only claims a token removal after a read proved one.
+        host = build_https.scope_host(args.scope)
+        home = build_https.resolve_operator_home()
+        had_token = (
+            build_https.read_namespaced_token(args.scope, host, home=home)
+            is not None
+        )
+        build_https.delete_namespaced_token(args.scope, host, home=home)
+        if had_token:
             print(f"Removed build-https scope {args.scope} and its stored token")
         else:
             print(f"Removed build-https scope {args.scope}")

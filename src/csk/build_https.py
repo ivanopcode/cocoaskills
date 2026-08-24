@@ -23,7 +23,10 @@ package and repository data can never select a credential (Curator core
 
 Flags do not exist for this surface; the run-wide environment override
 ``CSK_BUILD_HTTPS_TOKEN`` (with optional ``CSK_BUILD_HTTPS_USERNAME``) keeps
-precedence over every configured scope, mirroring the SSH surface.
+precedence over every configured scope, mirroring the SSH surface.  Because
+HTTPS basic auth transmits the token to whichever host a manifest names,
+the optional ``CSK_BUILD_HTTPS_HOST`` pins the override to one host;
+repositories on any other host resolve as if the override were absent.
 """
 
 from __future__ import annotations

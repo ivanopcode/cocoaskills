@@ -10,10 +10,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from csk import build_https, config, git_admission, https_broker
+from csk import build_repository as build_repository_model
+from csk import (
+    build_https,
+    config,
+    dev_substitutions,
+    git_admission,
+    https_broker,
+    installer,
+    skillspec,
+)
 
 
 # --- grammar ----------------------------------------------------------------
@@ -208,6 +218,374 @@ def test_serialized_rules_carry_no_secret_material() -> None:
     assert serialized == {
         "gitlab.example.com": {"token": "keyring", "username": "oauth2"}
     }
+
+
+# --- per-repository resolution ----------------------------------------------
+
+
+def _node(name: str, git: str) -> SimpleNamespace:
+    source = build_repository_model.parse_repository_source(git)
+    repository = build_repository_model.BuildRepository(
+        name="tool-repo",
+        git=git,
+        identity=source.identity,
+        transport=source.transport,
+        locked_commit=build_repository_model.LockedCommit("sha1", "0" * 40),
+    )
+    command = skillspec.CommandSpec(
+        name="tool",
+        type="build",
+        driver="go-repository-v1",
+        repository="tool-repo",
+        target="tool",
+        source="agent-skill.json",
+    )
+    spec = SimpleNamespace(
+        commands={"tool": command},
+        build_repositories={"tool-repo": repository},
+    )
+    return SimpleNamespace(name=name, spec=spec)
+
+
+def _empty_dev_manifest() -> dev_substitutions.DevManifest:
+    return dev_substitutions.DevManifest(
+        schema_version=1, substitutions={}, build_repository_substitutions={}
+    )
+
+
+def _https_config(
+    tmp_path: Path, rules: tuple[build_https.BuildHTTPSRule, ...]
+) -> config.GlobalConfig:
+    return config.GlobalConfig(
+        path=tmp_path / "config.json",
+        skills_root=tmp_path / "skills",
+        preferred_locale=None,
+        default_agents=["claude_code"],
+        adapter_mode="auto",
+        worktree_alias_pattern=config.DEFAULT_WORKTREE_ALIAS_PATTERN,
+        projects={},
+        build_https=rules,
+    )
+
+
+def test_resolver_prefers_the_run_wide_token_over_a_matching_scope(
+    tmp_path: Path,
+) -> None:
+    # The scope names an unset variable, so consulting it would raise: the
+    # run-wide override must win before the scope is ever resolved.
+    node = _node("skill-a", "https://gitlab.example.com/portals/infra/tool")
+    messages: list[str] = []
+    selection = installer._resolve_build_https_credentials(
+        _https_config(
+            tmp_path,
+            (
+                build_https.BuildHTTPSRule(
+                    scope="gitlab.example.com", token_env="CSK_TEST_UNSET_PROOF"
+                ),
+            ),
+        ),
+        [(node, "tool")],
+        _empty_dev_manifest(),
+        run_wide=installer.OperatorHTTPSToken(username="oauth2", token="s3cret"),
+        interactive=False,
+        messages=messages,
+        dry_run=True,
+    )
+    credentials = selection[("skill-a", "tool")]
+    assert credentials is not None
+    assert credentials.source == "env"
+    assert credentials.token_value == "s3cret"
+    assert any("operator environment" in message for message in messages)
+
+
+def test_resolver_host_pin_limits_the_run_wide_token(tmp_path: Path) -> None:
+    # HTTPS basic auth transmits the token to whichever host receives the
+    # fetch, so the pinned override must never reach a foreign host.
+    pinned = _node("skill-a", "https://gitlab.example.com/x/tool")
+    foreign = _node("skill-b", "https://other.example.com/y/tool")
+    messages: list[str] = []
+    selection = installer._resolve_build_https_credentials(
+        _https_config(tmp_path, ()),
+        [(pinned, "tool"), (foreign, "tool")],
+        _empty_dev_manifest(),
+        run_wide=installer.OperatorHTTPSToken(
+            username="oauth2", token="s3cret", host="gitlab.example.com"
+        ),
+        interactive=False,
+        messages=messages,
+        dry_run=True,
+    )
+    credentials = selection[("skill-a", "tool")]
+    assert credentials is not None
+    assert credentials.host == "gitlab.example.com"
+    assert credentials.token_value == "s3cret"
+    assert selection[("skill-b", "tool")] is None
+    assert any("anonymous" in message for message in messages)
+
+
+def test_capture_reads_the_optional_host_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CSK_BUILD_HTTPS_TOKEN", "s3cret")
+    monkeypatch.setenv("CSK_BUILD_HTTPS_USERNAME", "oauth2")
+    monkeypatch.setenv("CSK_BUILD_HTTPS_HOST", " GitLab.Example.Com ")
+    captured = installer._capture_operator_https_token()
+    assert captured == installer.OperatorHTTPSToken(
+        username="oauth2", token="s3cret", host="gitlab.example.com"
+    )
+    assert "s3cret" not in repr(captured)
+
+
+def test_resolver_stays_anonymous_when_nothing_matches(tmp_path: Path) -> None:
+    node = _node("skill-a", "https://gitlab.example.com/portals/tool")
+    messages: list[str] = []
+    selection = installer._resolve_build_https_credentials(
+        _https_config(
+            tmp_path,
+            (
+                build_https.BuildHTTPSRule(
+                    scope="ci.example.com", token_env="CSK_TEST_UNSET_PROOF"
+                ),
+            ),
+        ),
+        [(node, "tool")],
+        _empty_dev_manifest(),
+        run_wide=None,
+        interactive=False,
+        messages=messages,
+        dry_run=True,
+    )
+    assert selection[("skill-a", "tool")] is None
+    assert any("anonymous" in message for message in messages)
+
+
+def test_resolver_skips_ssh_repositories(tmp_path: Path) -> None:
+    # The transport check precedes even the run-wide override.
+    node = _node("skill-a", "git@gitlab.example.com:portals/tool.git")
+    selection = installer._resolve_build_https_credentials(
+        _https_config(tmp_path, ()),
+        [(node, "tool")],
+        _empty_dev_manifest(),
+        run_wide=installer.OperatorHTTPSToken(username="oauth2", token="s3cret"),
+        interactive=False,
+        messages=[],
+        dry_run=False,
+    )
+    assert selection[("skill-a", "tool")] is None
+
+
+def test_resolver_selects_the_longest_config_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CSK_TEST_CI_TOKEN", "s3cret")
+    node = _node("skill-a", "https://gitlab.example.com/portals/infra/tool")
+    messages: list[str] = []
+    selection = installer._resolve_build_https_credentials(
+        _https_config(
+            tmp_path,
+            (
+                build_https.BuildHTTPSRule(
+                    scope="gitlab.example.com", token_env="CSK_TEST_UNSET_PROOF"
+                ),
+                build_https.BuildHTTPSRule(
+                    scope="gitlab.example.com/portals",
+                    token_env="CSK_TEST_CI_TOKEN",
+                    username="oauth2",
+                ),
+            ),
+        ),
+        [(node, "tool")],
+        _empty_dev_manifest(),
+        run_wide=None,
+        interactive=False,
+        messages=messages,
+        dry_run=True,
+    )
+    credentials = selection[("skill-a", "tool")]
+    assert credentials is not None
+    assert credentials.token_value == "s3cret"
+    assert credentials.username == "oauth2"
+    assert credentials.host == "gitlab.example.com"
+    assert any(
+        "config scope 'gitlab.example.com/portals'" in message
+        for message in messages
+    )
+
+
+def test_rule_credentials_fail_closed_on_an_unset_token_env() -> None:
+    rule = build_https.BuildHTTPSRule(
+        scope="h.example.com", token_env="CSK_TEST_UNSET_PROOF"
+    )
+    with pytest.raises(installer.InstallError) as excinfo:
+        installer._https_rule_credentials(rule, "h.example.com/x/tool")
+    text = str(excinfo.value)
+    assert git_admission.CREDENTIAL_POLICY_INVALID in text
+    assert "unset" in text
+
+
+def test_rule_credentials_fail_closed_on_an_absent_keyring_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(build_https, "read_namespaced_token", lambda *a, **k: None)
+    rule = build_https.BuildHTTPSRule(scope="h.example.com", token="keyring")
+    with pytest.raises(installer.InstallError) as excinfo:
+        installer._https_rule_credentials(rule, "h.example.com/x/tool")
+    text = str(excinfo.value)
+    assert git_admission.CREDENTIAL_POLICY_INVALID in text
+    assert "csk config build-https login h.example.com" in text
+
+
+def test_rule_credentials_fail_closed_on_an_absent_host_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(build_https, "read_host_credentials", lambda *a, **k: None)
+    rule = build_https.BuildHTTPSRule(scope="h.example.com", token="git-credentials")
+    with pytest.raises(installer.InstallError) as excinfo:
+        installer._https_rule_credentials(rule, "h.example.com/x/tool")
+    text = str(excinfo.value)
+    assert git_admission.CREDENTIAL_POLICY_INVALID in text
+    assert "clone once over HTTPS" in text
+
+
+def test_a_run_only_prompt_choice_never_reaches_the_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two prompts in one run: only the persisted answer may be saved."""
+
+    node_a = _node("skill-a", "https://one.example.com/x/tool")
+    node_b = _node("skill-b", "https://two.example.com/y/tool")
+    prompted = iter(
+        [
+            (
+                build_https.BuildHTTPSRule(
+                    scope="one.example.com/x", token="git-credentials"
+                ),
+                False,
+            ),
+            (
+                build_https.BuildHTTPSRule(
+                    scope="two.example.com/y", token="git-credentials"
+                ),
+                True,
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        installer, "_prompt_build_https_rule", lambda *a, **k: next(prompted)
+    )
+    dummy = git_admission.OperatorHTTPSCredentials(
+        scope="s", host="h", source="git-credentials", username="u", token_value="t"
+    )
+    monkeypatch.setattr(installer, "_https_rule_credentials", lambda *a, **k: dummy)
+    saved: list[config.GlobalConfig] = []
+    monkeypatch.setattr(installer.config_module, "save_config", saved.append)
+    installer._resolve_build_https_credentials(
+        _https_config(tmp_path, ()),
+        [(node_a, "tool"), (node_b, "tool")],
+        _empty_dev_manifest(),
+        run_wide=None,
+        interactive=True,
+        messages=[],
+        dry_run=False,
+    )
+    assert len(saved) == 1
+    assert [rule.scope for rule in saved[0].build_https] == ["two.example.com/y"]
+
+
+# --- interactive precheck ----------------------------------------------------
+
+
+def test_prompt_selects_the_default_candidate(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        build_https,
+        "discover_host_material",
+        lambda *a, **k: build_https.HostMaterial(
+            host_credentials=True, host_username="oauth2"
+        ),
+    )
+    answers = iter(["", ""])  # Enter on the menu, Enter on the scope choice
+    monkeypatch.setattr("builtins.input", lambda *_: next(answers))
+    rule, persist = installer._prompt_build_https_rule(
+        "skill-a", "tool", "gitlab.example.com/portals/infra/tool"
+    )
+    assert rule is not None
+    assert persist is True
+    assert rule.token == "git-credentials"
+    assert rule.scope == "gitlab.example.com/portals/infra"
+    assert "Detected candidates" in capsys.readouterr().out
+
+
+def test_prompt_this_run_only_does_not_persist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        build_https,
+        "discover_host_material",
+        lambda *a, **k: build_https.HostMaterial(
+            host_credentials=True, host_username="oauth2"
+        ),
+    )
+    answers = iter(["1", "3"])
+    monkeypatch.setattr("builtins.input", lambda *_: next(answers))
+    rule, persist = installer._prompt_build_https_rule(
+        "skill-a", "tool", "gitlab.example.com/portals/infra/tool"
+    )
+    assert rule is not None
+    assert persist is False
+    assert rule.scope == "gitlab.example.com/portals/infra"
+
+
+def test_prompt_abort(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        build_https,
+        "discover_host_material",
+        lambda *a, **k: build_https.HostMaterial(),
+    )
+    monkeypatch.setattr("builtins.input", lambda *_: "n")
+    rule, persist = installer._prompt_build_https_rule(
+        "skill-a", "tool", "gitlab.example.com/x/tool"
+    )
+    assert rule is None and persist is False
+
+
+# --- broker materialization --------------------------------------------------
+
+
+def test_materialize_broker_rejects_a_foreign_host(tmp_path: Path) -> None:
+    paths = git_admission._make_private_paths(tmp_path)
+    source = build_repository_model.parse_repository_source(
+        "https://gitlab.example.com/x/tool"
+    )
+    credentials = git_admission.OperatorHTTPSCredentials(
+        scope="other.example.com",
+        host="other.example.com",
+        source="env",
+        username="oauth2",
+        token_value="s3cret",
+    )
+    with pytest.raises(git_admission.GitAdmissionError) as excinfo:
+        git_admission._materialize_https_broker(paths, source, credentials)
+    assert excinfo.value.code == git_admission.CREDENTIAL_POLICY_INVALID
+
+
+def test_broker_state_carries_only_host_and_username(tmp_path: Path) -> None:
+    paths = git_admission._make_private_paths(tmp_path)
+    source = build_repository_model.parse_repository_source(
+        "https://gitlab.example.com/x/tool"
+    )
+    credentials = git_admission.OperatorHTTPSCredentials(
+        scope="gitlab.example.com",
+        host="gitlab.example.com",
+        source="keyring",
+        username="oauth2",
+        token_value="s3cret",
+    )
+    wrapper = git_admission._materialize_https_broker(paths, source, credentials)
+    state = json.loads((paths.https / "broker-state.json").read_text())
+    assert state == {"host": "gitlab.example.com", "username": "oauth2"}
+    assert "s3cret" not in wrapper.read_text()
 
 
 # --- cross-platform credential mechanism ------------------------------------
