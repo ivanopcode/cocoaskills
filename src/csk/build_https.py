@@ -16,10 +16,9 @@ package and repository data can never select a credential (Curator core
 12.2), and the map never stores a secret:
 
 - ``token: "git-credentials"`` reads the operator's existing Git HTTPS entry
-  for the repository host from the OS secret store (the material the
-  ``osxkeychain``/``wincred``/``libsecret`` helpers maintain);
+  for the repository host through the operator's own credential helper;
 - ``token: "keyring"`` reads the entry ``csk config build-https login`` stored
-  under the manager's own service name, keyed by the scope;
+  through that same helper under a manager-namespaced username;
 - ``token_env`` names an environment variable read at process entry.
 
 Flags do not exist for this surface; the run-wide environment override
@@ -31,8 +30,8 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .build_ssh import default_scope, scope_matches, validate_scope
@@ -40,29 +39,26 @@ from .build_ssh import default_scope, scope_matches, validate_scope
 __all__ = [
     "BuildHTTPSError",
     "BuildHTTPSRule",
-    "KEYRING_SERVICE",
+    "HostMaterial",
     "TOKEN_SOURCES",
     "default_scope",
-    "delete_keyring_token",
+    "delete_namespaced_token",
     "discover_host_material",
     "match",
+    "namespace_username",
     "parse_rules",
-    "probe_keyring_token",
-    "read_keyring_token",
-    "resolve_secret_store",
-    "resolve_secret_tool",
+    "read_host_credentials",
+    "read_namespaced_token",
+    "resolve_operator_home",
+    "scope_host",
     "serialize_rules",
-    "store_keyring_token",
+    "store_namespaced_token",
 ]
 
 
 class BuildHTTPSError(ValueError):
     pass
 
-
-# The manager-owned secret-store service name. Entries are keyed by scope so
-# two accounts on one host stay distinct selections.
-KEYRING_SERVICE = "csk-build-https"
 
 TOKEN_SOURCES = ("git-credentials", "keyring")
 
@@ -164,298 +160,208 @@ def match(rules: tuple[BuildHTTPSRule, ...], canonical_identity: str) -> BuildHT
     return best
 
 
-# --- operator secret-store access -------------------------------------------
+# --- operator credential access ---------------------------------------------
 #
-# Presence probes never read the secret; the broker reads it once, inside the
-# fetch operation, after the operator's explicit scope selection.  Everything
-# shells out to the platform's own tool so the manager keeps zero runtime
-# dependencies; an unsupported platform degrades to "absent" and the caller's
-# fail-closed message names the working alternatives.
+# Every read goes through the operator's own Git credential machinery
+# (``git credential fill|approve|reject``).  That is the one mechanism which
+# exists identically on macOS, Windows, and Linux, speaks to whichever helper
+# the operator already configured — osxkeychain, wincred, libsecret, GCM — and
+# needs no runtime dependency.  The helper is selected by the operator's Git
+# configuration, never by a repository or a manifest, and the manager runs it
+# outside the fetch: the broker itself only ever reads what the manager put in
+# front of it.
+#
+# Presence probes and reads use the same call; a probe simply discards the
+# secret it received.
+
+NAMESPACE_PREFIX = "csk-build-https:"
+
+_GIT_TIMEOUT = 15
 
 
-def resolve_secret_tool() -> str | None:
-    """Resolve the platform secret-store tool to an absolute path.
+def namespace_username(scope: str) -> str:
+    """The username under which a manager-stored token lives for ``scope``.
 
-    Resolved by the manager, at manager PATH, and pinned into the broker
-    state: the fetch environment deliberately carries an empty PATH, so the
-    broker must never look a tool up itself.
+    Storing under a distinct username keeps the manager entry separate from
+    the operator's own credential for the same host, so neither overwrites
+    the other.
     """
 
-    import shutil
-
-    if sys.platform == "darwin":
-        candidates = ("security",)
-        fallbacks = ("/usr/bin/security",)
-    elif sys.platform.startswith("linux"):
-        candidates = ("secret-tool",)
-        fallbacks = ("/usr/bin/secret-tool", "/bin/secret-tool")
-    else:
-        return None
-    for name in candidates:
-        found = shutil.which(name)
-        if found:
-            return os.path.realpath(found)
-    for path in fallbacks:
-        if os.path.isfile(path) and os.access(path, os.X_OK):
-            return path
-    return None
+    return f"{NAMESPACE_PREFIX}{scope}"
 
 
-def _tool_argv(tool: str | None, default: str) -> str:
-    return tool or default
+def _credential_environment(home: str | None) -> dict[str, str]:
+    environment = dict(os.environ)
+    if home:
+        # The fetch owns a private HOME, and a credential helper is configured
+        # in the operator's Git configuration, so the operator home is pinned
+        # by the manager and restored for this one call.
+        environment["HOME"] = home
+        environment["USERPROFILE"] = home
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    environment["GCM_INTERACTIVE"] = "never"
+    return environment
 
 
-def resolve_secret_store() -> str | None:
-    """Resolve the operator's default secret store to an absolute path.
-
-    macOS resolves the login keychain relative to ``HOME``, and the fetch
-    environment deliberately owns a private ``HOME`` — so the store, like the
-    tool, is resolved by the manager and pinned into the broker state.
-    """
-
-    if sys.platform != "darwin":
-        return None
-    tool = resolve_secret_tool()
-    probe = _run_quiet((_tool_argv(tool, "security"), "list-keychains", "-d", "user"))
-    if probe is None or probe.returncode != 0:
-        return None
-    for line in probe.stdout.decode("utf-8", "replace").splitlines():
-        candidate = line.strip().strip('"')
-        if candidate.endswith("login.keychain-db") or candidate.endswith("login.keychain"):
-            return candidate
-    return None
-
-
-def _store_argv(store: str | None) -> tuple[str, ...]:
-    return (store,) if store else ()
-
-
-def _run_quiet(argv: tuple[str, ...]) -> subprocess.CompletedProcess[bytes] | None:
+def _run_credential(
+    action: str,
+    request: dict[str, str],
+    git: str | None = None,
+    home: str | None = None,
+) -> dict[str, str] | None:
+    payload = "".join(f"{key}={value}\n" for key, value in request.items()) + "\n"
     try:
-        return subprocess.run(
-            argv,
+        completed = subprocess.run(
+            (git or "git", "credential", action),
+            input=payload.encode("utf-8"),
             capture_output=True,
-            timeout=10,
+            timeout=_GIT_TIMEOUT,
+            env=_credential_environment(home),
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
+    if completed.returncode != 0:
+        return None
+    answer: dict[str, str] = {}
+    for line in completed.stdout.decode("utf-8", "replace").splitlines():
+        if "=" in line:
+            key, _, value = line.partition("=")
+            answer[key] = value
+    return answer
+
+
+def read_host_credentials(
+    host: str,
+    git: str | None = None,
+    home: str | None = None,
+) -> tuple[str, str] | None:
+    """Read the operator's own HTTPS credential for ``host``.
+
+    Returns (username, secret), or None when the operator's helpers hold
+    nothing for the host.  Interactive prompting is disabled, so an absent
+    credential degrades rather than blocking on a dialog.
+    """
+
+    answer = _run_credential("fill", {"protocol": "https", "host": host}, git, home)
+    if not answer:
+        return None
+    password = answer.get("password")
+    if not password:
+        return None
+    return (answer.get("username") or "token", password)
+
+
+def read_namespaced_token(
+    scope: str,
+    host: str,
+    git: str | None = None,
+    home: str | None = None,
+) -> str | None:
+    """Read the token ``store_namespaced_token`` saved for ``scope``."""
+
+    answer = _run_credential(
+        "fill",
+        {"protocol": "https", "host": host, "username": namespace_username(scope)},
+        git,
+        home,
+    )
+    if not answer:
+        return None
+    return answer.get("password") or None
+
+
+def store_namespaced_token(
+    scope: str,
+    host: str,
+    token: str,
+    git: str | None = None,
+    home: str | None = None,
+) -> None:
+    """Save a token through the operator's helper, and prove it was saved.
+
+    ``git credential approve`` reports success even when the helper failed to
+    persist anything — Git Credential Manager does exactly that when its
+    Windows Credential Manager store is unreachable, which is the normal state
+    in a session without an interactive desktop logon.  So the write is always
+    verified by reading it back; a silent failure must not look like a
+    configured scope that later fails mid-install.
+    """
+
+    answer = _run_credential(
+        "approve",
+        {
+            "protocol": "https",
+            "host": host,
+            "username": namespace_username(scope),
+            "password": token,
+        },
+        git,
+        home,
+    )
+    if answer is None or read_namespaced_token(scope, host, git, home) != token:
+        raise BuildHTTPSError(
+            "your Git credential helper did not persist the token. Configure a "
+            "working store — 'git config --global credential.helper osxkeychain' "
+            "on macOS, 'libsecret' on Linux, and on Windows either use an "
+            "interactive session or 'git config --global credential.credentialStore "
+            "dpapi' — or select token_env instead"
+        )
+
+
+def delete_namespaced_token(
+    scope: str,
+    host: str,
+    git: str | None = None,
+    home: str | None = None,
+) -> bool:
+    answer = _run_credential(
+        "reject",
+        {"protocol": "https", "host": host, "username": namespace_username(scope)},
+        git,
+        home,
+    )
+    return answer is not None
+
+
+def scope_host(scope: str) -> str:
+    return scope.split("/", 1)[0]
 
 
 @dataclass(frozen=True)
 class HostMaterial:
     """Presence-only view of operator HTTPS material for one host."""
 
-    git_credentials: bool = False
-    git_username: str | None = None
-    keyring_scopes: tuple[str, ...] = field(default_factory=tuple)
+    host_credentials: bool = False
+    host_username: str | None = None
+    namespaced_scopes: tuple[str, ...] = field(default_factory=tuple)
 
 
 def discover_host_material(
     host: str,
     scopes: tuple[str, ...] = (),
-    tool: str | None = None,
-    store: str | None = None,
+    git: str | None = None,
+    home: str | None = None,
 ) -> HostMaterial:
-    """List, without reading, the operator material a host could use."""
+    """List, without retaining, the operator material a host could use."""
 
-    git_credentials = False
-    git_username: str | None = None
-    if sys.platform == "darwin":
-        probe = _run_quiet(
-            (
-                _tool_argv(tool, "security"),
-                "find-internet-password",
-                "-s",
-                host,
-                "-r",
-                "htps",
-            )
-            + _store_argv(store)
-        )
-        if probe is not None and probe.returncode == 0:
-            git_credentials = True
-            for line in probe.stdout.decode("utf-8", "replace").splitlines():
-                line = line.strip()
-                if line.startswith('"acct"') and "=" in line:
-                    value = line.split("=", 1)[1].strip()
-                    if value.startswith("<blob>"):
-                        value = value[len("<blob>") :]
-                    git_username = value.strip('"') or None
-                    break
-    present_scopes = tuple(
-        scope for scope in scopes if probe_keyring_token(scope, tool, store)
+    own = read_host_credentials(host, git, home)
+    present = tuple(
+        scope
+        for scope in scopes
+        if read_namespaced_token(scope, host, git, home) is not None
     )
     return HostMaterial(
-        git_credentials=git_credentials,
-        git_username=git_username,
-        keyring_scopes=present_scopes,
+        host_credentials=own is not None,
+        host_username=own[0] if own else None,
+        namespaced_scopes=present,
     )
 
 
-def probe_keyring_token(
-    scope: str, tool: str | None = None, store: str | None = None
-) -> bool:
-    """True when the manager keyring entry for ``scope`` exists (no read)."""
+def resolve_operator_home() -> str | None:
+    """The operator home whose Git configuration selects the helper."""
 
-    if sys.platform == "darwin":
-        probe = _run_quiet(
-            (
-                _tool_argv(tool, "security"),
-                "find-generic-password",
-                "-s",
-                KEYRING_SERVICE,
-                "-a",
-                scope,
-            )
-            + _store_argv(store)
-        )
-        return probe is not None and probe.returncode == 0
-    if sys.platform.startswith("linux"):
-        probe = _run_quiet(
-            (
-                _tool_argv(tool, "secret-tool"),
-                "search",
-                "service",
-                KEYRING_SERVICE,
-                "scope",
-                scope,
-            )
-        )
-        return probe is not None and probe.returncode == 0 and bool(probe.stdout.strip())
-    return False
-
-
-def store_keyring_token(scope: str, token: str) -> None:
-    """Store one manager keyring entry; the secret travels via stdin only."""
-
-    if sys.platform == "darwin":
-        completed = _run_quiet(
-            (
-                "security",
-                "add-generic-password",
-                "-U",
-                "-s",
-                KEYRING_SERVICE,
-                "-a",
-                scope,
-                "-w",
-                token,
-            )
-        )
-        # ``security`` has no stdin mode for -w; the argument is visible to
-        # `ps` for the call's duration.  Documented; the login flow warns.
-        if completed is None or completed.returncode != 0:
-            raise BuildHTTPSError("the macOS keychain refused to store the token")
-        return
-    if sys.platform.startswith("linux"):
-        try:
-            completed = subprocess.run(
-                (
-                    "secret-tool",
-                    "store",
-                    "--label",
-                    f"{KEYRING_SERVICE} {scope}",
-                    "service",
-                    KEYRING_SERVICE,
-                    "scope",
-                    scope,
-                ),
-                input=token.encode("utf-8"),
-                capture_output=True,
-                timeout=10,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise BuildHTTPSError("secret-tool is unavailable") from exc
-        if completed.returncode != 0:
-            raise BuildHTTPSError("the Secret Service refused to store the token")
-        return
-    raise BuildHTTPSError(
-        "manager keyring storage is not supported on this platform; use "
-        "token=git-credentials or token_env instead"
-    )
-
-
-def read_keyring_token(
-    scope: str, tool: str | None = None, store: str | None = None
-) -> str | None:
-    """Read the manager keyring entry for ``scope``; None when absent."""
-
-    if sys.platform == "darwin":
-        probe = _run_quiet(
-            (
-                _tool_argv(tool, "security"),
-                "find-generic-password",
-                "-w",
-                "-s",
-                KEYRING_SERVICE,
-                "-a",
-                scope,
-            )
-            + _store_argv(store)
-        )
-        if probe is None or probe.returncode != 0:
-            return None
-        return probe.stdout.decode("utf-8", "replace").rstrip("\n") or None
-    if sys.platform.startswith("linux"):
-        probe = _run_quiet(
-            (
-                _tool_argv(tool, "secret-tool"),
-                "lookup",
-                "service",
-                KEYRING_SERVICE,
-                "scope",
-                scope,
-            )
-        )
-        if probe is None or probe.returncode != 0:
-            return None
-        return probe.stdout.decode("utf-8", "replace").rstrip("\n") or None
-    return None
-
-
-def delete_keyring_token(scope: str) -> bool:
-    if sys.platform == "darwin":
-        probe = _run_quiet(
-            ("security", "delete-generic-password", "-s", KEYRING_SERVICE, "-a", scope)
-        )
-        return probe is not None and probe.returncode == 0
-    if sys.platform.startswith("linux"):
-        probe = _run_quiet(
-            ("secret-tool", "clear", "service", KEYRING_SERVICE, "scope", scope)
-        )
-        return probe is not None and probe.returncode == 0
-    return False
-
-
-def read_git_credentials(
-    host: str, tool: str | None = None, store: str | None = None
-) -> tuple[str, str] | None:
-    """Read the operator's Git HTTPS entry for ``host``: (username, secret).
-
-    This reads the same OS store the Git credential helpers maintain — the
-    operator's own material — directly, never by running a configured helper.
-    """
-
-    if sys.platform == "darwin":
-        secret = _run_quiet(
-            (
-                _tool_argv(tool, "security"),
-                "find-internet-password",
-                "-w",
-                "-s",
-                host,
-                "-r",
-                "htps",
-            )
-            + _store_argv(store)
-        )
-        if secret is None or secret.returncode != 0:
-            return None
-        material = discover_host_material(host, tool=tool, store=store)
-        token = secret.stdout.decode("utf-8", "replace").rstrip("\n")
-        if not token:
-            return None
-        return (material.git_username or "oauth2", token)
-    return None
+    try:
+        return os.fspath(Path.home())
+    except (OSError, RuntimeError):
+        return None
