@@ -80,6 +80,67 @@ finding: it neither blocks the install nor appears in install output.
 Executable files below `vendor/` and any critical findings still block as
 before.
 
+## Приватные HTTPS-репозитории сборки
+
+HTTPS-фетч приватного репозитория аутентифицируется через **manager credential
+broker** — слот, который manager profile описывает как OPTIONAL-участника
+разрешённого графа процессов. Брокер запускает сам менеджер: приватная
+обёртка рядом с SSH-обёрткой, запиненная на один хост, с `GIT_ASKPASS`
+и `core.askPass`, указывающими на неё. Репозиторий не может ни выбрать
+креды, ни увести их: fetch идёт на один TLS-проверенный URL без редиректов,
+а брокер отвечает только на два промпта Git и только для запиненного хоста —
+любой другой промпт означает выход без единого байта.
+
+Конфиг хранит **источник токена, а не токен**:
+
+```json
+"build_https": {
+  "gitlab.example.com/portals/infra": {"token": "git-credentials"},
+  "gitlab.example.com/vendor": {"token": "keyring", "username": "oauth2"},
+  "ci.example.com": {"token_env": "CI_TOKEN"}
+}
+```
+
+Скоупы — та же грамматика, что у `build_ssh`: сегментные префиксы канонической
+идентичности, совпадение по границам `/`, побеждает самый длинный. Источники:
+
+| Источник | Что читает | Кому подходит |
+| --- | --- | --- |
+| `git-credentials` | существующая HTTPS-запись оператора в системном хранилище — та, что ведут `osxkeychain`/`wincred`/`libsecret` | тем, кто уже клонирует по HTTPS: новый секрет не заводится |
+| `keyring` | запись, которую кладёт `csk config build-https login <scope>` под собственным именем службы менеджера | тем, у кого нет ни SSH, ни истории HTTPS |
+| `token_env` | переменная окружения, прочитанная на входе в процесс | CI и headless |
+
+Управление:
+
+```sh
+csk config build-https add gitlab.example.com/portals/infra --token git-credentials
+csk config build-https login gitlab.example.com/vendor      # скрытый ввод PAT
+csk config build-https list
+csk config build-https remove gitlab.example.com/vendor     # снимает и запись keyring
+```
+
+`CSK_BUILD_HTTPS_TOKEN` (и необязательный `CSK_BUILD_HTTPS_USERNAME`)
+перекрывает любой скоуп на один запуск — так же, как `CSK_BUILD_SSH_*`
+перекрывает SSH-скоупы. Токен никогда не принимается флагом.
+
+Как и на SSH-поверхности, precheck перед первым fetch показывает на терминале
+обнаруженных кандидатов (существующие git-креды для хоста, ввод нового PAT) и
+сохраняет выбор только после явного выбора скоупа. Отсутствие выбора для
+HTTPS не является ошибкой: анонимный HTTPS остаётся полноценным транспортом,
+и публичный репозиторий выкачивается ровно как раньше.
+
+Две детали среды, которые менеджер разрешает за оператора и **пинит** в
+состояние брокера, потому что окружение fetch намеренно чистое: абсолютный
+путь инструмента хранилища (в `PATH` fetch пусто) и путь самого хранилища
+(на macOS login-keychain резолвится относительно `HOME`, а `HOME` у fetch
+приватный). Ни то, ни другое не приходит из репозитория или из окружения
+пакета.
+
+Токен не попадает ни в конфиг, ни во флаг, ни в лог, ни в диагностику: для
+env-источника он живёт только в окружении дочерних процессов fetch, для
+остальных читается брокером внутри операции. `token_value` исключён из
+`repr` — spec 11.1 запрещает broker values в receipt, marker и диагностике.
+
 ## Private SSH build repositories
 
 An SSH build repository fetch runs in a private empty `HOME` with an empty

@@ -325,6 +325,7 @@ def install(
     options = options or installer.InstallOptions()
     operator_search_path = build_toolchain.capture_operator_search_path()
     operator_ssh_credentials = installer._capture_operator_ssh_credentials(options)
+    operator_https_token = installer._capture_operator_https_token()
     generation_probe = _global_generation_probe(config)
     csk_home = config.path.parent
     attempts = 2 if options.dry_run else 3
@@ -342,6 +343,7 @@ def install(
                     options=options,
                     operator_search_path=operator_search_path,
                     operator_ssh_credentials=operator_ssh_credentials,
+                    operator_https_token=operator_https_token,
                     generation_probe=generation_probe,
                     expected_generation=expected_generation,
                     only=only,
@@ -384,6 +386,7 @@ def _install_once(
     options: installer.InstallOptions,
     operator_search_path: build_toolchain.OperatorSearchPath,
     operator_ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
+    operator_https_token: "tuple[str, str] | None" = None,
     generation_probe: build_planner.GenerationProbe,
     expected_generation: Mapping[str, str],
     only: Sequence[str] | None = None,
@@ -523,6 +526,7 @@ def _install_once(
                 ),
                 operator_search_path=operator_search_path,
                 ssh_credentials=operator_ssh_credentials,
+                https_token=operator_https_token,
                 interactive=options.interactive and not options.dry_run,
                 stack=stack,
                 dry_run=options.dry_run,

@@ -13,6 +13,7 @@ from . import (
     adapters,
     attest,
     audit_registry,
+    build_https,
     build_ssh,
     config,
     deprecation,
@@ -290,6 +291,60 @@ def build_parser() -> argparse.ArgumentParser:
         "remove", help="Remove one credential scope."
     )
     build_ssh_remove.add_argument("scope")
+
+    build_https_parser = config_sub.add_parser(
+        "build-https",
+        help="Manage operator HTTPS token scopes for external build repositories.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Scopes use the same canonical-identity grammar as build-ssh.\n"
+            "The config stores the token SOURCE, never a token:\n"
+            "  --token git-credentials  reuse the Git HTTPS entry your OS\n"
+            "                           secret store already holds for the host\n"
+            "  --token keyring          use the entry 'build-https login' stores\n"
+            "  --token-env NAME         read the token from an environment variable\n\n"
+            "CSK_BUILD_HTTPS_TOKEN overrides every scope for one run.\n\n"
+            "Examples:\n"
+            "  csk config build-https add gitlab.example.com/group --token git-credentials\n"
+            "  csk config build-https login gitlab.example.com/group\n"
+            "  csk config build-https list"
+        ),
+    )
+    build_https_sub = build_https_parser.add_subparsers(
+        dest="build_https_command", required=True
+    )
+    build_https_add = build_https_sub.add_parser(
+        "add", help="Add or replace one token scope."
+    )
+    build_https_add.add_argument("scope")
+    build_https_add.add_argument(
+        "--token",
+        choices=list(build_https.TOKEN_SOURCES),
+        default=None,
+        help="token source: git-credentials or keyring",
+    )
+    build_https_add.add_argument(
+        "--token-env", default=None, metavar="NAME",
+        help="environment variable holding the token",
+    )
+    build_https_add.add_argument(
+        "--username", default=None, metavar="NAME",
+        help="HTTPS username to present (default: token, or the stored account)",
+    )
+    build_https_login = build_https_sub.add_parser(
+        "login",
+        help="Store a token in the OS keyring for one scope and select it.",
+    )
+    build_https_login.add_argument("scope")
+    build_https_login.add_argument(
+        "--username", default=None, metavar="NAME",
+        help="HTTPS username to present (default: token)",
+    )
+    build_https_sub.add_parser("list", help="List configured token scopes.")
+    build_https_remove = build_https_sub.add_parser(
+        "remove", help="Remove one token scope (and its keyring entry)."
+    )
+    build_https_remove.add_argument("scope")
 
     shell = sub.add_parser(
         "shell-init",
@@ -622,6 +677,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return _cmd_config_show()
     if args.command == "config" and args.config_command == "build-ssh":
         return _cmd_config_build_ssh(args)
+    if args.command == "config" and args.config_command == "build-https":
+        return _cmd_config_build_https(args)
     if args.command == "project" and args.project_command == "add":
         return _cmd_project_add(args.alias, Path(args.path))
     if args.command == "project" and args.project_command == "resolve":
@@ -1016,6 +1073,91 @@ def _cmd_config_build_ssh(args: argparse.Namespace) -> int:
     others = tuple(r for r in cfg.build_ssh if r.scope != args.scope)
     config.save_config(replace(cfg, build_ssh=others + (rule,)))
     print(f"Configured build-ssh scope {args.scope}")
+    return EXIT_OK
+
+
+def _cmd_config_build_https(args: argparse.Namespace) -> int:
+    cfg = config.load_config()
+    if args.build_https_command == "list":
+        if not cfg.build_https:
+            print("No build-https scopes configured")
+            return EXIT_OK
+        for rule in sorted(cfg.build_https, key=lambda item: item.scope):
+            parts = []
+            if rule.token is not None:
+                parts.append(f"token={rule.token}")
+            if rule.token_env is not None:
+                parts.append(f"token_env={rule.token_env}")
+            parts.append(f"username={rule.username}")
+            if rule.token == "keyring":
+                stored = build_https.probe_keyring_token(rule.scope)
+                parts.append("stored=yes" if stored else "stored=NO")
+            print(f"{rule.scope}: " + " ".join(parts))
+        return EXIT_OK
+    if args.build_https_command == "remove":
+        remaining = tuple(
+            rule for rule in cfg.build_https if rule.scope != args.scope
+        )
+        if len(remaining) == len(cfg.build_https):
+            print(f"No build-https scope {args.scope!r}", file=sys.stderr)
+            return EXIT_CONFIG
+        config.save_config(replace(cfg, build_https=remaining))
+        if build_https.delete_keyring_token(args.scope):
+            print(f"Removed build-https scope {args.scope} and its keyring entry")
+        else:
+            print(f"Removed build-https scope {args.scope}")
+        return EXIT_OK
+    if args.build_https_command == "login":
+        import getpass
+
+        try:
+            build_ssh.validate_scope(args.scope)
+        except build_ssh.BuildSSHError as exc:
+            print(str(exc), file=sys.stderr)
+            return EXIT_CONFIG
+        if sys.stdin.isatty():
+            token = getpass.getpass("Personal access token (hidden): ").strip()
+        else:
+            token = sys.stdin.readline().strip()
+        if not token:
+            print("No token supplied", file=sys.stderr)
+            return EXIT_CONFIG
+        try:
+            build_https.store_keyring_token(args.scope, token)
+        except build_https.BuildHTTPSError as exc:
+            print(str(exc), file=sys.stderr)
+            return EXIT_CONFIG
+        rule = build_https.BuildHTTPSRule(
+            scope=args.scope,
+            token="keyring",
+            username=args.username or "token",
+        )
+        others = tuple(r for r in cfg.build_https if r.scope != args.scope)
+        config.save_config(replace(cfg, build_https=others + (rule,)))
+        print(f"Stored a token for {args.scope} in the OS keyring")
+        return EXIT_OK
+    # add
+    if (args.token is None) == (args.token_env is None):
+        print(
+            "build-https add requires exactly one of --token or --token-env",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG
+    try:
+        build_ssh.validate_scope(args.scope)
+        rule = build_https.BuildHTTPSRule(
+            scope=args.scope,
+            token=args.token,
+            token_env=args.token_env,
+            username=args.username or "token",
+        )
+        build_https.parse_rules(build_https.serialize_rules((rule,)))
+    except (build_ssh.BuildSSHError, build_https.BuildHTTPSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_CONFIG
+    others = tuple(r for r in cfg.build_https if r.scope != args.scope)
+    config.save_config(replace(cfg, build_https=others + (rule,)))
+    print(f"Configured build-https scope {args.scope}")
     return EXIT_OK
 
 

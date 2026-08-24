@@ -21,6 +21,7 @@ from typing import Any, Protocol
 from . import (
     adapters,
     audit_registry,
+    build_https as build_https_module,
     build_ssh as build_ssh_module,
     closure,
     consumers,
@@ -153,6 +154,7 @@ def install(config: GlobalConfig, *, alias: str | None = None, options: InstallO
     fetched_repos: set[Path] = set()
     operator_search_path = build_toolchain.capture_operator_search_path()
     operator_ssh_credentials = _capture_operator_ssh_credentials(options)
+    operator_https_token = _capture_operator_https_token()
     for project in selected:
         results.append(
             _install_project(
@@ -162,6 +164,7 @@ def install(config: GlobalConfig, *, alias: str | None = None, options: InstallO
                 fetched_repos=fetched_repos,
                 operator_search_path=operator_search_path,
                 operator_ssh_credentials=operator_ssh_credentials,
+                operator_https_token=operator_https_token,
             )
         )
     if (
@@ -187,6 +190,26 @@ def install(config: GlobalConfig, *, alias: str | None = None, options: InstallO
                 f"skipped: {exc}"
             )
     return results
+
+
+OPERATOR_HTTPS_TOKEN_ENV = "CSK_BUILD_HTTPS_TOKEN"
+OPERATOR_HTTPS_USERNAME_ENV = "CSK_BUILD_HTTPS_USERNAME"
+
+
+def _capture_operator_https_token() -> tuple[str, str] | None:
+    """Capture the run-wide HTTPS token selection at process entry.
+
+    Returns (username, token) when the operator set the environment override,
+    None otherwise.  Captured once, before any project-owned state can
+    influence the environment; the value itself only ever reaches the fetch
+    children's environment through the broker path.
+    """
+
+    token = os.environ.get(OPERATOR_HTTPS_TOKEN_ENV)
+    if not token:
+        return None
+    username = os.environ.get(OPERATOR_HTTPS_USERNAME_ENV) or "token"
+    return (username, token)
 
 
 def _capture_operator_ssh_credentials(
@@ -221,6 +244,7 @@ def _install_project(
     fetched_repos: set[Path],
     operator_search_path: build_toolchain.OperatorSearchPath | None,
     operator_ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
+    operator_https_token: "tuple[str, str] | None" = None,
 ) -> ProjectResult:
     generation_probe = _project_generation_probe(config, project)
     attempts = 2 if options.dry_run else 3
@@ -241,6 +265,7 @@ def _install_project(
                     fetched_repos=fetched_repos,
                     operator_search_path=operator_search_path,
                     operator_ssh_credentials=operator_ssh_credentials,
+                    operator_https_token=operator_https_token,
                     generation_probe=generation_probe,
                     expected_generation=expected_generation,
                 )
@@ -324,6 +349,7 @@ def _install_project_once(
     fetched_repos: set[Path],
     operator_search_path: build_toolchain.OperatorSearchPath | None,
     operator_ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
+    operator_https_token: "tuple[str, str] | None" = None,
     generation_probe: build_planner.GenerationProbe | None,
     expected_generation: Mapping[str, str] | None,
 ) -> ProjectResult:
@@ -498,6 +524,7 @@ def _install_project_once(
                 substitutions=dev_manifest,
                 operator_search_path=operator_search_path,
                 ssh_credentials=operator_ssh_credentials,
+                https_token=operator_https_token,
                 interactive=options.interactive and not options.dry_run,
                 stack=stack,
                 dry_run=options.dry_run,
@@ -727,6 +754,7 @@ def _external_git_tool(
     *,
     require_ssh: bool,
     ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
+    https_credentials: git_admission.OperatorHTTPSCredentials | None = None,
 ) -> git_admission.GitTool:
     executable = _operator_program("git", operator_search_path)
     try:
@@ -763,6 +791,7 @@ def _external_git_tool(
         askpass=Path(sys.executable).resolve(strict=True),
         ssh=ssh,
         ssh_credentials=ssh_credentials,
+        https_credentials=https_credentials,
     )
 
 
@@ -1113,6 +1142,239 @@ def _resolve_build_ssh_credentials(
     return selection
 
 
+def _https_rule_credentials(
+    rule: build_https_module.BuildHTTPSRule,
+    canonical_identity: str,
+) -> git_admission.OperatorHTTPSCredentials:
+    """Materialize one configured scope into a broker selection, fail closed.
+
+    Presence is verified here so a missing keyring entry or store surfaces at
+    precheck time with the fixing command, not as a bare Git authentication
+    failure mid-fetch.  The secret itself is read only by the broker, inside
+    the fetch.
+    """
+
+    host = canonical_identity.split("/", 1)[0]
+    if rule.token_env is not None:
+        value = os.environ.get(rule.token_env)
+        if not value:
+            raise InstallError(
+                f"{git_admission.CREDENTIAL_POLICY_INVALID}: build_https scope "
+                f"{rule.scope!r} names environment variable {rule.token_env!r}, "
+                "which is unset"
+            )
+        return git_admission.OperatorHTTPSCredentials(
+            scope=rule.scope,
+            host=host,
+            source="env",
+            username=rule.username,
+            token_value=value,
+        )
+    if rule.token == "keyring":
+        if not build_https_module.probe_keyring_token(rule.scope):
+            raise InstallError(
+                f"{git_admission.CREDENTIAL_POLICY_INVALID}: build_https scope "
+                f"{rule.scope!r} selects the manager keyring, but no entry is "
+                f"stored; run: csk config build-https login {rule.scope}"
+            )
+        return git_admission.OperatorHTTPSCredentials(
+            scope=rule.scope,
+            host=host,
+            source="keyring",
+            username=rule.username,
+            secret_tool=build_https_module.resolve_secret_tool(),
+            secret_store=build_https_module.resolve_secret_store(),
+        )
+    material = build_https_module.discover_host_material(host)
+    if not material.git_credentials:
+        raise InstallError(
+            f"{git_admission.CREDENTIAL_POLICY_INVALID}: build_https scope "
+            f"{rule.scope!r} selects the operator Git credentials, but the OS "
+            f"secret store has no HTTPS entry for {host!r}"
+        )
+    username = material.git_username or rule.username
+    return git_admission.OperatorHTTPSCredentials(
+        scope=rule.scope,
+        host=host,
+        source="git-credentials",
+        username=username,
+        secret_tool=build_https_module.resolve_secret_tool(),
+        secret_store=build_https_module.resolve_secret_store(),
+    )
+
+
+def _prompt_build_https_rule(
+    skill_name: str,
+    command: str,
+    canonical_identity: str,
+) -> tuple[build_https_module.BuildHTTPSRule | None, bool]:
+    """Ask the operator for a token selection for one unmatched HTTPS repository.
+
+    Returns (rule, persist).  Discovery only lists what exists; entering a
+    token stores it in the manager keyring immediately so the config itself
+    never carries a secret.
+    """
+
+    namespace = build_https_module.default_scope(canonical_identity)
+    host = canonical_identity.split("/", 1)[0]
+    print(
+        f"Skill {skill_name!r} builds {command!r} from the private HTTPS repository\n"
+        f"  {canonical_identity}\n"
+        "No build-HTTPS credentials are configured for this scope."
+    )
+    material = build_https_module.discover_host_material(host)
+    options: list[tuple[str, str]] = []
+    if material.git_credentials:
+        shown = material.git_username or "?"
+        options.append(
+            (f"reuse your Git HTTPS credentials for {host} (user {shown})", "git-credentials")
+        )
+    options.append(("enter a personal access token now (stored in the OS keyring)", "login"))
+    print("Detected candidates:")
+    for index, (label, _) in enumerate(options, start=1):
+        marker = "   <- default" if index == 1 and len(options) > 1 else ""
+        print(f"  [{index}] {label}{marker}")
+    choice_raw = input(f"Select [1-{len(options)}, empty=1, n=abort]: ").strip().lower()
+    if choice_raw in {"n", "no"}:
+        return None, False
+    try:
+        choice = int(choice_raw) if choice_raw else 1
+        _, kind = options[choice - 1]
+    except (ValueError, IndexError):
+        print("Rejected: not a listed candidate")
+        return None, False
+    scope_answer = input(
+        "Persist to config for future installs?\n"
+        f"  [1] {namespace}   (default)\n"
+        f"  [2] {host}\n"
+        "  [3] this run only\n"
+        "  or type a custom scope: "
+    ).strip()
+    persist = True
+    if scope_answer in {"", "1"}:
+        scope = namespace
+    elif scope_answer == "2":
+        scope = host
+    elif scope_answer == "3":
+        scope, persist = namespace, False
+    else:
+        scope = scope_answer
+    try:
+        build_ssh_module.validate_scope(scope)
+        if not build_ssh_module.scope_matches(scope, canonical_identity):
+            raise build_https_module.BuildHTTPSError(
+                f"scope {scope!r} does not cover {canonical_identity}"
+            )
+    except (ValueError, build_https_module.BuildHTTPSError) as exc:
+        print(f"Rejected: {exc}")
+        return None, False
+    if kind == "login":
+        import getpass
+
+        token = getpass.getpass("Personal access token (hidden): ").strip()
+        if not token:
+            return None, False
+        try:
+            build_https_module.store_keyring_token(scope, token)
+        except build_https_module.BuildHTTPSError as exc:
+            print(f"Rejected: {exc}")
+            return None, False
+        rule = build_https_module.BuildHTTPSRule(scope=scope, token="keyring")
+    else:
+        rule = build_https_module.BuildHTTPSRule(scope=scope, token="git-credentials")
+    return rule, persist
+
+
+def _resolve_build_https_credentials(
+    config: GlobalConfig,
+    selected: list[tuple[closure.ClosureNode, str]],
+    substitutions: dev_substitutions.DevManifest,
+    *,
+    run_wide: "tuple[str, str] | None",
+    interactive: bool,
+    messages: list[str],
+    dry_run: bool,
+) -> dict[tuple[str, str], git_admission.OperatorHTTPSCredentials | None]:
+    """Select operator HTTPS tokens for every external build repository.
+
+    Same shape and precedence as the SSH resolver: the run-wide
+    ``CSK_BUILD_HTTPS_TOKEN`` capture covers every HTTPS repository, then the
+    longest matching ``build_https`` scope, then an interactive prompt, then a
+    fail-closed message carrying the exact fixing commands.  Public HTTPS
+    repositories (no selection anywhere) keep fetching anonymously exactly as
+    before — absence of a rule is not an error for HTTPS the way it is for
+    SSH, because anonymous HTTPS is a real transport; the fail-closed path
+    triggers only when a fetch would otherwise die on authentication, which
+    Git reports and the operator retries after selecting credentials.
+    """
+
+    rules = config.build_https
+    persisted: list[build_https_module.BuildHTTPSRule] = []
+    selection: dict[
+        tuple[str, str], git_admission.OperatorHTTPSCredentials | None
+    ] = {}
+    for node, name in selected:
+        key = (node.name, name)
+        command = node.spec.commands[name]
+        repository = node.spec.build_repositories[command.repository or ""]
+        substitution = substitutions.build_repository_substitution(
+            node.name, repository.name
+        )
+        if substitution is not None and substitution.path is not None:
+            selection[key] = None
+            continue
+        git = repository.git if substitution is None else substitution.git
+        assert git is not None
+        source = build_repository_model.parse_repository_source(git)
+        if source.transport != "https":
+            selection[key] = None
+            continue
+        host = source.identity.split("/", 1)[0]
+        if run_wide is not None:
+            username, token = run_wide
+            selection[key] = git_admission.OperatorHTTPSCredentials(
+                scope=host,
+                host=host,
+                source="env",
+                username=username,
+                token_value=token,
+            )
+            if dry_run:
+                messages.append(
+                    f"external build https: {source.identity} <- operator environment"
+                )
+            continue
+        rule = build_https_module.match(rules, source.identity)
+        if rule is None and interactive:
+            rule, persist = _prompt_build_https_rule(node.name, name, source.identity)
+            if rule is not None:
+                rules = rules + (rule,)
+                if persist:
+                    persisted.append(rule)
+        if rule is None:
+            # Anonymous HTTPS stays a first-class transport: no selection
+            # means an unauthenticated fetch, which public repositories
+            # satisfy and private ones fail closed inside the pinned fetch.
+            selection[key] = None
+            if dry_run:
+                messages.append(
+                    f"external build https: {source.identity} <- anonymous"
+                )
+            continue
+        selection[key] = _https_rule_credentials(rule, source.identity)
+        if dry_run:
+            messages.append(
+                f"external build https: {source.identity} <- config scope {rule.scope!r}"
+            )
+    if persisted:
+        config_module.save_config(replace(config, build_https=rules))
+        for rule in persisted:
+            messages.append(
+                f"build_https scope {rule.scope!r} saved to {config.path}"
+            )
+    return selection
+
+
 def _publish_external_builds(
     config: GlobalConfig,
     *,
@@ -1124,6 +1386,7 @@ def _publish_external_builds(
     dry_run: bool,
     marker_roots: tuple[Path, ...],
     ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
+    https_token: "tuple[str, str] | None" = None,
     interactive: bool = False,
 ) -> tuple[dict[str, dict[str, _PublishedBuild]], list[str]]:
     messages: list[str] = []
@@ -1148,23 +1411,39 @@ def _publish_external_builds(
         messages=messages,
         dry_run=dry_run,
     )
+    https_selection = _resolve_build_https_credentials(
+        config,
+        selected,
+        substitutions,
+        run_wide=https_token,
+        interactive=interactive,
+        messages=messages,
+        dry_run=dry_run,
+    )
     require_ssh = any(
         credentials is not None for credentials in ssh_selection.values()
     )
     git_tools: dict[
-        git_admission.OperatorSSHCredentials | None, git_admission.GitTool
+        tuple[
+            git_admission.OperatorSSHCredentials | None,
+            git_admission.OperatorHTTPSCredentials | None,
+        ],
+        git_admission.GitTool,
     ] = {}
 
     def _git_tool_for(
         credentials: git_admission.OperatorSSHCredentials | None,
+        https: git_admission.OperatorHTTPSCredentials | None = None,
     ) -> git_admission.GitTool:
-        if credentials not in git_tools:
-            git_tools[credentials] = _external_git_tool(
+        key = (credentials, https)
+        if key not in git_tools:
+            git_tools[key] = _external_git_tool(
                 operator_search_path,
                 require_ssh=credentials is not None,
                 ssh_credentials=credentials,
+                https_credentials=https,
             )
-        return git_tools[credentials]
+        return git_tools[key]
     private_base = Path(
         stack.enter_context(
             tempfile.TemporaryDirectory(prefix="csk-external-build-operation-")
@@ -1204,7 +1483,9 @@ def _publish_external_builds(
         effective = _external_effective_state(
             project_identity, repository, substitution
         )
-        git_tool = _git_tool_for(ssh_selection[(node.name, name)])
+        git_tool = _git_tool_for(
+            ssh_selection[(node.name, name)], https_selection[(node.name, name)]
+        )
 
         def acquire(
             repository: build_repository_model.BuildRepository = repository,

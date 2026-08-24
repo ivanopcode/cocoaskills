@@ -125,10 +125,15 @@ def serialize_rules(rules: tuple[BuildSSHRule, ...]) -> dict[str, dict[str, str]
     return data
 
 
-def _scope_matches(scope: str, identity: str) -> bool:
+def scope_matches(scope: str, identity: str) -> bool:
+    """True when ``scope`` covers ``identity`` on whole ``/`` boundaries."""
+
     if identity == scope:
         return True
     return identity.startswith(scope + "/")
+
+
+_scope_matches = scope_matches
 
 
 def match(rules: tuple[BuildSSHRule, ...], canonical_identity: str) -> BuildSSHRule | None:
