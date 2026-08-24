@@ -15,7 +15,7 @@ import threading
 import time
 import unicodedata
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Callable, Mapping, Sequence
 
@@ -42,6 +42,8 @@ LOCAL_FORMAT_UNSUPPORTED = "build_repository_local_format_unsupported"
 LOCAL_OBJECT_FORMAT_UNSUPPORTED = "build_repository_local_object_format_unsupported"
 LOCAL_CLEANUP_FAILED = "build_repository_local_cleanup_failed"
 SSH_CREDENTIAL_MISSING = "build_repository_ssh_credential_missing"
+CREDENTIAL_POLICY_INVALID = "build_repository_credential_policy_invalid"
+HTTPS_BROKER_TOKEN_ENV = "CSK_HTTPS_BROKER_TOKEN"
 
 OPERATOR_SSH_IDENTITY_ENV = "CSK_BUILD_SSH_IDENTITY"
 OPERATOR_SSH_AGENT_ENV = "CSK_BUILD_SSH_AGENT"
@@ -157,6 +159,30 @@ class OperatorSSHCredentials:
 
 
 @dataclass(frozen=True)
+class OperatorHTTPSCredentials:
+    """Operator-selected HTTPS token routing for one build repository fetch.
+
+    Carries the *selection*, not the secret — except ``token_value``, which is
+    present only for the environment source, captured at process entry, and
+    excluded from ``repr`` so it can never reach a diagnostic (spec 11.1:
+    broker values must not enter a receipt, marker, or diagnostic).
+    """
+
+    scope: str
+    host: str
+    source: str  # "keyring" | "git-credentials" | "env"
+    username: str
+    token_value: str | None = field(default=None, repr=False)
+    # Absolute path of the platform secret-store tool, resolved by the manager
+    # at manager PATH: the fetch environment carries an empty PATH, so the
+    # broker must never resolve a tool itself.
+    secret_tool: str | None = None
+    # Absolute path of the operator's secret store, when the platform resolves
+    # it relative to HOME (macOS login keychain); the fetch owns a private HOME.
+    secret_store: str | None = None
+
+
+@dataclass(frozen=True)
 class GitTool:
     executable: Path
     exec_path: Path
@@ -164,6 +190,7 @@ class GitTool:
     askpass: Path | None = None
     ssh: Path | None = None
     ssh_credentials: OperatorSSHCredentials | None = None
+    https_credentials: OperatorHTTPSCredentials | None = None
 
 
 @dataclass(frozen=True)
@@ -242,6 +269,7 @@ class _PrivatePaths:
     hooks: Path
     empty_path: Path
     ssh: Path
+    https: Path
 
 
 @dataclass(frozen=True)
@@ -639,8 +667,22 @@ def acquire_network(
             if source.transport == "ssh"
             else None
         )
+        https_broker = (
+            _materialize_https_broker(paths, source, tool.https_credentials)
+            if source.transport == "https" and tool.https_credentials is not None
+            else None
+        )
         environment = _clean_git_environment(
-            paths, tool, source.transport, ssh_command=ssh_command
+            paths,
+            tool,
+            source.transport,
+            ssh_command=ssh_command,
+            https_broker=https_broker,
+            https_token=(
+                tool.https_credentials.token_value
+                if https_broker is not None and tool.https_credentials is not None
+                else None
+            ),
         )
         _run_git(
             tool,
@@ -663,7 +705,9 @@ def acquire_network(
             tool,
             paths,
             environment,
-            *_strict_fetch_args(paths, tool, source, f"{source_ref}:{destination}"),
+            *_strict_fetch_args(
+                paths, tool, source, f"{source_ref}:{destination}", https_broker
+            ),
             limits=limits,
         )
         _validate_private_repository(paths.repository, lock.object_format)
@@ -695,6 +739,7 @@ def _make_private_paths(root: Path) -> _PrivatePaths:
         hooks=root / "empty-hooks",
         empty_path=root / "empty-path",
         ssh=root / "ssh",
+        https=root / "https",
     )
     for path in (
         paths.work,
@@ -704,6 +749,7 @@ def _make_private_paths(root: Path) -> _PrivatePaths:
         paths.hooks,
         paths.empty_path,
         paths.ssh,
+        paths.https,
     ):
         path.mkdir(mode=0o700)
     for name in ("global.gitconfig", "system.gitconfig"):
@@ -810,12 +856,81 @@ def _materialize_ssh_wrapper(
     return (os.fspath(_wrapper_interpreter()), os.fspath(script))
 
 
+def _materialize_https_broker(
+    paths: _PrivatePaths, source: RepositorySource, credentials: OperatorHTTPSCredentials
+) -> Path:
+    """Write the manager credential broker for one pinned HTTPS fetch.
+
+    The wrapper and its state file are manager-owned and pinned to one host;
+    the state carries the selection, never a secret.  The broker itself is
+    :mod:`csk.https_broker`, executed by the admitted manager interpreter, so
+    the fingerprinted-or-pinned requirement of the manager profile is met the
+    same way the SSH wrapper meets it.
+    """
+
+    host = source.identity.split("/", 1)[0]
+    if credentials.host != host:
+        raise GitAdmissionError(
+            CREDENTIAL_POLICY_INVALID,
+            "HTTPS credential selection is pinned to another host",
+        )
+    if credentials.source not in {"keyring", "git-credentials", "env"}:
+        raise GitAdmissionError(
+            CREDENTIAL_POLICY_INVALID, "HTTPS credential source is not admitted"
+        )
+    state = _write_private_file(
+        paths.https / "broker-state.json",
+        json.dumps(
+            {
+                "scope": credentials.scope,
+                "host": credentials.host,
+                "source": credentials.source,
+                "username": credentials.username,
+                "tool": credentials.secret_tool,
+                "store": credentials.secret_store,
+            },
+            sort_keys=True,
+        ).encode("utf-8"),
+    )
+    interpreter = _wrapper_interpreter()
+    # The fetch environment is deliberately clean, so the wrapper names the
+    # manager's own package root rather than relying on an inherited
+    # PYTHONPATH.  The root is derived from this module's location — manager
+    # state, never a repository or environment value — so an installed
+    # manager and a source checkout both resolve the broker.
+    package_root = Path(__file__).resolve().parent.parent
+    if os.name == "nt":
+        wrapper = paths.https / "askpass-broker.bat"
+        _write_private_file(
+            wrapper,
+            (
+                "@echo off\r\n"
+                f'set "PYTHONPATH={package_root}"\r\n'
+                f'"{interpreter}" -m csk.https_broker "{state}" %1\r\n'
+            ).encode("utf-8"),
+        )
+    else:
+        wrapper = paths.https / "askpass-broker.sh"
+        _write_private_file(
+            wrapper,
+            (
+                "#!/bin/sh\n"
+                f'PYTHONPATH="{package_root}" exec "{interpreter}" '
+                f'-m csk.https_broker "{state}" "$1"\n'
+            ).encode("utf-8"),
+        )
+    os.chmod(wrapper, 0o700)
+    return wrapper
+
+
 def _clean_git_environment(
     paths: _PrivatePaths,
     tool: GitTool,
     transport: str,
     *,
     ssh_command: Sequence[str] | None = None,
+    https_broker: Path | None = None,
+    https_token: str | None = None,
 ) -> dict[str, str]:
     environment = _clean_discovery_environment()
     environment.update(
@@ -837,8 +952,16 @@ def _clean_git_environment(
             "PATH": os.fspath(paths.empty_path),
         }
     )
-    if transport == "https" and tool.askpass is not None:
-        environment["GIT_ASKPASS"] = os.fspath(tool.askpass)
+    if transport == "https":
+        if https_broker is not None:
+            environment["GIT_ASKPASS"] = os.fspath(https_broker)
+            if https_token is not None:
+                # The env-source token rides only in the fetch children's
+                # environment — the standard askpass shape.  It never reaches
+                # a compiler environment, receipt, marker, or diagnostic.
+                environment[HTTPS_BROKER_TOKEN_ENV] = https_token
+        elif tool.askpass is not None:
+            environment["GIT_ASKPASS"] = os.fspath(tool.askpass)
     if transport == "ssh" and ssh_command is not None:
         # GIT_SSH_COMMAND rather than GIT_SSH: Git runs it through its
         # compiled-in shell and appends the host and upload-pack arguments as
@@ -856,9 +979,17 @@ def _clean_git_environment(
 
 
 def _strict_fetch_args(
-    paths: _PrivatePaths, tool: GitTool, source: RepositorySource, refspec: str
+    paths: _PrivatePaths,
+    tool: GitTool,
+    source: RepositorySource,
+    refspec: str,
+    https_broker: Path | None = None,
 ) -> tuple[str, ...]:
-    askpass = "" if tool.askpass is None else os.fspath(tool.askpass)
+    # core.askPass overrides GIT_ASKPASS, so the broker must win here too.
+    if https_broker is not None:
+        askpass = os.fspath(https_broker)
+    else:
+        askpass = "" if tool.askpass is None else os.fspath(tool.askpass)
     return (
         f"--git-dir={paths.repository}",
         "--no-replace-objects",

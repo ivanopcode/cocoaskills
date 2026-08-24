@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import build_https as build_https_module
 from . import build_ssh as build_ssh_module
 from . import identifiers, protocol_json
 from .audit import backend_config
@@ -29,9 +30,9 @@ if os.name == "nt":
 else:
     DEFAULT_SYSTEM_CONFIG_PATH = Path("/etc/cocoaskills/config.json")
 # Top-level keys an organization may lock from the system config.
-# build_ssh is deliberately absent: operator credential selections are never
-# lockable by a system configuration (ratified 2026-08-23; spec manager
-# profile, system-configuration clause).
+# build_ssh and build_https are deliberately absent: operator credential
+# selections are never lockable by a system configuration (ratified
+# 2026-08-23; spec manager profile, system-configuration clause).
 LOCKABLE_KEYS = frozenset(
     {"audit_registries", "disable_builtin_registries", "allowed_sources", "audit"}
 )
@@ -61,6 +62,7 @@ MANAGER_KEYS = frozenset(
         "allowed_sources",
         "audit",
         "audit_registries",
+        "build_https",
         "build_ssh",
         "disable_builtin_registries",
     }
@@ -137,6 +139,10 @@ class GlobalConfig:
     # identity prefixes mapped to credential material. Flags and CSK_BUILD_SSH_*
     # keep precedence; see build_ssh.parse_rules for the closed grammar.
     build_ssh: tuple[build_ssh_module.BuildSSHRule, ...] = ()
+    # Operator-scoped HTTPS token selections for external build repositories:
+    # canonical identity prefixes mapped to a token *source* (never a secret).
+    # The run-wide CSK_BUILD_HTTPS_TOKEN environment value keeps precedence.
+    build_https: tuple[build_https_module.BuildHTTPSRule, ...] = ()
 
     def trusted_registries(self) -> tuple[RegistryConfig, ...]:
         """Effective registries: built-in defaults plus configured entries.
@@ -301,6 +307,10 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
         build_ssh_rules = build_ssh_module.parse_rules(data.get("build_ssh"))
     except build_ssh_module.BuildSSHError as exc:
         raise ConfigError(f"Global config field 'build_ssh' is invalid: {exc}") from exc
+    try:
+        build_https_rules = build_https_module.parse_rules(data.get("build_https"))
+    except build_https_module.BuildHTTPSError as exc:
+        raise ConfigError(f"Global config field 'build_https' is invalid: {exc}") from exc
     disable_builtin = data.get("disable_builtin_registries", False)
     if not isinstance(disable_builtin, bool):
         raise ConfigError("Global config field 'disable_builtin_registries' must be a boolean")
@@ -358,6 +368,7 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
         audit_registries=audit_registries,
         disable_builtin_registries=disable_builtin,
         build_ssh=build_ssh_rules,
+        build_https=build_https_rules,
     )
 
 
@@ -398,6 +409,8 @@ def save_config(config: GlobalConfig) -> None:
         data["disable_builtin_registries"] = True
     if config.build_ssh:
         data["build_ssh"] = build_ssh_module.serialize_rules(config.build_ssh)
+    if config.build_https:
+        data["build_https"] = build_https_module.serialize_rules(config.build_https)
     _write_json_atomic(config.path, data)
 
 
