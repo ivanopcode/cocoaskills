@@ -265,7 +265,7 @@ def test_candidate_authentication_is_identical_in_fast_and_merge_go_jobs() -> No
 def test_the_released_suite_pin_is_declared_once_and_never_inlined() -> None:
     workflow = _workflow()
     pin = re.findall(r"^  RELEASED_SUITE_PIN: ([0-9a-f]{40})$", workflow, re.MULTILINE)
-    assert pin == ["0c81c1f8d5321d822be2a2817b05aea03e656e15"]
+    assert pin == ["0ed5c691e9208eea52f21db2fc05e226ce3516fd"]
     assert workflow.count("ref: ${{ env.RELEASED_SUITE_PIN }}") == 4
 
     for job_id in ("fast_ordinary", "fast_protocol", "merge_protocol"):

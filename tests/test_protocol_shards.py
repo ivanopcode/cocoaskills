@@ -92,12 +92,12 @@ def test_accepted_manifest_is_exhaustive_disjoint_and_bounded() -> None:
     assert isinstance(shards, list)
     flattened = [node for shard in shards for node in shard["nodes"]]
 
-    assert len(baseline) == 1045
+    assert len(baseline) == 1053
     assert set(flattened) == set(baseline)
     assert len(flattened) == len(set(flattened))
     assert {shard["id"]: shard["timeout_minutes"] for shard in shards} == EXPECTED_TIMEOUTS
     assert {shard["id"]: shard["node_count"] for shard in shards} == {
-        "p00-contract-and-registry": 565,
+        "p00-contract-and-registry": 573,
         "p01-lifecycle-cached-baseline": 444,
         "p02-lifecycle-sabotage-a": 9,
         "p03-lifecycle-sabotage-b": 9,
@@ -114,7 +114,7 @@ def test_verifier_accepts_the_exact_inventory(accepted_inputs: tuple[ModuleType,
     evidence = _verified_without_git(module, manifest_path, collected)
 
     assert evidence["ok"] is True
-    assert evidence["baseline_nodes"] == 1045
+    assert evidence["baseline_nodes"] == 1053
     assert evidence["overlap"] == 0
     assert evidence["gap"] == 0
 

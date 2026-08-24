@@ -15,7 +15,11 @@ from typing import Any
 
 TASK_ID = "TASK-260803-2ol7ok"
 EXPECTED_SOURCE = "2bfe3d64e9142d62e8ea3f92558eeee331f4578a"
-EXPECTED_PROTOCOL = "0c81c1f8d5321d822be2a2817b05aea03e656e15"
+EXPECTED_PROTOCOL = "0ed5c691e9208eea52f21db2fc05e226ce3516fd"
+# The released suite at EXPECTED_PROTOCOL decides this number: rc.9 publishes
+# eight schema cases that rc.6 did not, each of which parametrises one more
+# test_rc6_generated_schema_case_is_consumed node. 1045 was the rc.6 figure.
+EXPECTED_BASELINE_COUNT = 1053
 EXPECTED_TIMEOUT_MINUTES = {
     "p00-contract-and-registry": 5,
     "p01-lifecycle-cached-baseline": 30,
@@ -150,8 +154,11 @@ def verify(
     baseline = exact_nodes(manifest.get("baseline_nodes"), "manifest.baseline_nodes")
     if manifest.get("baseline_count") != len(baseline):
         fail("manifest.baseline_count does not equal baseline_nodes length")
-    if len(baseline) != 1045:
-        fail(f"manifest baseline must contain 1045 nodes, found {len(baseline)}")
+    if len(baseline) != EXPECTED_BASELINE_COUNT:
+        fail(
+            f"manifest baseline must contain {EXPECTED_BASELINE_COUNT} nodes, "
+            f"found {len(baseline)}"
+        )
     if collected_path is not None and collected_nodes(collected_path) != baseline:
         fail("fresh collection differs from the pinned ordered baseline")
 
