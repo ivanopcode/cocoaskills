@@ -42,6 +42,53 @@ csk config build-ssh add <host>/<namespace> --agent auto --identity ~/.ssh/<key>
 
 Команда записывает скоуп в `~/.cocoaskills/config.json` и печатает `Configured build-ssh scope <scope>`. Повторите установку: инсталлятор возьмёт креды из скоупа.
 
+## build_repository_credential_policy_invalid
+
+Скоуп аутентификации `build_https` совпал в конфигурации, но выбранный источник токена не вернул данные. Текст ошибки называет конкретный случай из трёх возможных:
+
+1. Правило `token_env` указывает незаданную переменную окружения (`build_https scope '<scope>' names environment variable '<token_env>', which is unset`). Экспортируйте значение переменной из хранилища перед запуском:
+
+   ```bash
+   export CI_TOKEN="$(pass show ci/gitlab)"
+   csk install
+   ```
+
+2. Правило `token: keyring` не находит токен в хранилище ключей (`build_https scope '<scope>' selects a stored token, but none is saved`). Сохраните токен командой входа:
+
+   ```bash
+   csk config build-https login <scope>
+   ```
+
+3. Правило `token: git-credentials` не находит запись у helper Git для хоста (`build_https scope '<scope>' selects your Git credentials, but no helper holds one for '<host>'`). Склонируйте целевой репозиторий по HTTPS один раз через системный Git или сохраните токен через `login`:
+
+   ```bash
+   csk config build-https login <scope>
+   ```
+
+На платформе Windows команда `git credential approve` рапортует об успехе даже при недоступности службы Windows Credential Manager (например, в неинтерактивной сессии без графического входа). Команда `csk config build-https login` перечитывает токен после записи и при отказе сохранения выводит ошибку `your Git credential helper did not persist the token`. Для решения запустите команду в интерактивной сессии или настройте хранилище Git:
+
+```bash
+git config --global credential.credentialStore dpapi
+```
+
+## build_repository_source_unavailable / fatal: ... The requested URL returned error: 301
+
+Адрес HTTPS в поле `build_repositories.*.git` не содержит обязательного суффикса `.git`. Сервис GitLab или Git-хост возвращает ответ 301 Redirect, но установщик выполняет `git fetch` с `http.followRedirects=false` и не следует перенаправлениям по соображениям безопасности. Установщик выводит ошибку `build_repository_source_unavailable: exact external source is unavailable`. Запуск команды `git -c http.followRedirects=false ls-remote <url>` вручную воспроизводит подробное сообщение `fatal: ... The requested URL returned error: 301`.
+
+Добавьте суффикс `.git` к адресу репозитория в поле `build_repositories.*.git` манифеста `agent-skill.json`:
+
+```json
+{
+  "build_repositories": {
+    "core": {
+      "git": "https://gitlab.example.com/portals/infra.git"
+    }
+  }
+}
+```
+
+Установщик при повторном запуске выполнит `git fetch` по прямому каноническому адресу без HTTP-редиректа.
+
 ## Cannot resolve tag '...' ... Needed a single revision
 
 Локальный клон репозитория в `skills_root` не содержит указанного тега. Команда `csk install` работает по локальным refs и не выполняет сетевой fetch.

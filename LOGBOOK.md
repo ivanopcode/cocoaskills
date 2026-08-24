@@ -122,6 +122,28 @@ last members are routinely mid-exit when the first group signal is sent. The reg
 The failure never reproduced on the fast tier because it is a per-teardown dice roll of roughly one
 in fourteen, and each E2E job performs a handful of teardowns. Re-running the red job turned it
 green, which is the shape a flake has and the shape a broken merge does not.
+## 2026-08-24 - TASK-260824-2rzwqa troubleshooting entries for build_https and reference matrix fix
+
+Added two troubleshooting entries in `docs/troubleshooting.md` following the symptom-cause-remedy format and updated `docs/reference.md` installation matrix:
+
+1. `build_repository_credential_policy_invalid`: documents the three branches (`token_env` with missing env var, `keyring` with no stored token, `git-credentials` with no helper entry) and their resolution commands. Includes the Windows note attributing token verification failure to `csk config build-https login` when Windows Credential Manager is unavailable (`your Git credential helper did not persist the token`), with remedies for interactive sessions and DPAPI (`git config --global credential.credentialStore dpapi`).
+2. `build_repository_source_unavailable / fatal: ... The requested URL returned error: 301`: documents HTTPS URL missing `.git` suffix causing HTTP 301 redirects, `http.followRedirects=false` behavior, and remedy of appending `.git` to `build_repositories.*.git`. Findable by both error codes.
+3. `docs/reference.md`: updated the installation matrix line to state that compiled commands `go-repository-v1` are supported only on macOS and Windows, and on Linux the installer rejects skills with such commands before checking credentials or launching worker processes.
+
+All error strings were verified against `src/csk` source files (`installer.py`, `build_https.py`, `git_admission.py`). Formatting strictly adheres to prose style rules (active voice, no em-dashes or en-dashes, no guillemets, clean list blocks).
+
+## 2026-08-24 - TASK-260824-1d7zbo README HTTPS quickstart for private build repositories
+
+The quickstart section for private build repositories in `README.md` previously documented only SSH credentials. With the merge of `feat/build-https-broker` into `main`, private build repositories are also supported over HTTPS.
+
+A 7-line HTTPS quickstart block was added right next to the SSH block, in matching tone and style:
+- States that private build repositories work over both SSH and HTTPS.
+- Explains that readers cloning over HTTPS need no extra setup: `csk` offers to reuse their Git credentials at first install with one Enter.
+- Documents the non-interactive CLI command: `csk config build-https add gitlab.example.com/portals/infra --token git-credentials`.
+- Documents CI environment variables `CSK_BUILD_HTTPS_TOKEN` and `CSK_BUILD_HTTPS_HOST`.
+- Concludes with the rule that a skill package can never choose credentials (only the operator chooses explicitly).
+
+All commands and environment variables were verified against `.venv/bin/csk config build-https --help`. The block strictly follows the documentation prose style (active voice, no em-dashes, colon introducing code block, no secret values).
 
 ## 2026-08-24 - TASK-260824-2h0vjy a byte pin needs a byte-stable checkout
 
@@ -2720,3 +2742,8 @@ The implemented workflow still has no hosted run because this worktree must
 remain uncommitted/unpushed; branch lookup and hosted-run lookup both returned
 empty. A commit-owning mover must publish the scope and attach two green hosted
 runs before the task can satisfy its hosted acceptance gate.
+
+
+## 2026-08-24 TASK-260824-3gv521: Schema v7 Build Repository Transport Documentation
+
+Updated `docs/skill-authoring.md` section 3 (schema v7) to document support for both `git@host:path.git` and `https://host/path.git` transport forms in `build_repositories.*.git`. Clarified that credential selection is required for private repositories in both cases (`build_ssh` and `build_https` scopes), and that choice of transport does not dictate installation access. Stated explicitly that HTTPS URLs must carry the `.git` suffix to avoid GitLab 301 redirects failing under `http.followRedirects=false` with `build_repository_source_unavailable`. Verified error identifier in `src/csk/git_admission.py` and ran `tests/test_git_admission.py` green (exit 0).
