@@ -259,6 +259,41 @@ def test_resolver_skips_https_and_local_repositories(tmp_path: Path) -> None:
     assert selection[("skill-a", "tool")] is None
 
 
+def test_a_run_only_prompt_choice_never_reaches_the_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two prompts in one run: only the persisted answer may be saved."""
+
+    node_a = _node("skill-a", "git@one.example.com:x/tool.git")
+    node_b = _node("skill-b", "git@two.example.com:y/tool.git")
+    prompted = iter(
+        [
+            (build_ssh.BuildSSHRule(scope="one.example.com/x", agent="auto"), False),
+            (build_ssh.BuildSSHRule(scope="two.example.com/y", agent="auto"), True),
+        ]
+    )
+    monkeypatch.setattr(
+        installer, "_prompt_build_ssh_rule", lambda *a, **k: next(prompted)
+    )
+    dummy = git_admission.OperatorSSHCredentials(
+        identity=None, agent_socket=tmp_path / "agent.sock", known_hosts=None
+    )
+    monkeypatch.setattr(installer, "_rule_credentials", lambda *a, **k: dummy)
+    saved: list[config.GlobalConfig] = []
+    monkeypatch.setattr(installer.config_module, "save_config", saved.append)
+    installer._resolve_build_ssh_credentials(
+        _config_with_rules(tmp_path, ()),
+        [(node_a, "tool"), (node_b, "tool")],
+        _empty_dev_manifest(),
+        run_wide=None,
+        interactive=True,
+        messages=[],
+        dry_run=False,
+    )
+    assert len(saved) == 1
+    assert [rule.scope for rule in saved[0].build_ssh] == ["two.example.com/y"]
+
+
 def test_add_project_preserves_build_ssh(tmp_path: Path) -> None:
     cfg = _config_with_rules(
         tmp_path, (build_ssh.BuildSSHRule(scope="gitlab.example.com", agent="auto"),)

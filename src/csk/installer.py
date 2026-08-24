@@ -194,12 +194,35 @@ def install(config: GlobalConfig, *, alias: str | None = None, options: InstallO
 
 OPERATOR_HTTPS_TOKEN_ENV = "CSK_BUILD_HTTPS_TOKEN"
 OPERATOR_HTTPS_USERNAME_ENV = "CSK_BUILD_HTTPS_USERNAME"
+OPERATOR_HTTPS_HOST_ENV = "CSK_BUILD_HTTPS_HOST"
 
 
-def _capture_operator_https_token() -> tuple[str, str] | None:
+@dataclass(frozen=True)
+class OperatorHTTPSToken:
+    """The run-wide HTTPS override, captured once at process entry.
+
+    ``token`` is excluded from ``repr`` for the same reason
+    ``OperatorHTTPSCredentials.token_value`` is: an override that reaches a
+    diagnostic is a disclosure.  ``host`` is the optional disclosure pin:
+    unlike SSH, HTTPS basic auth *transmits* the secret to whichever host the
+    manifest names, so an unpinned override trusts every build repository
+    host in the closure.  With ``host`` set, only repositories on that host
+    receive the token; every other repository resolves as if the override
+    were absent.
+    """
+
+    username: str
+    token: str = field(repr=False)
+    host: str | None = None
+
+    def covers(self, host: str) -> bool:
+        return self.host is None or self.host == host
+
+
+def _capture_operator_https_token() -> OperatorHTTPSToken | None:
     """Capture the run-wide HTTPS token selection at process entry.
 
-    Returns (username, token) when the operator set the environment override,
+    Returns the override when the operator set ``CSK_BUILD_HTTPS_TOKEN``,
     None otherwise.  Captured once, before any project-owned state can
     influence the environment; the value itself only ever reaches the fetch
     children's environment through the broker path.
@@ -209,7 +232,8 @@ def _capture_operator_https_token() -> tuple[str, str] | None:
     if not token:
         return None
     username = os.environ.get(OPERATOR_HTTPS_USERNAME_ENV) or "token"
-    return (username, token)
+    host = (os.environ.get(OPERATOR_HTTPS_HOST_ENV) or "").strip().lower() or None
+    return OperatorHTTPSToken(username=username, token=token, host=host)
 
 
 def _capture_operator_ssh_credentials(
@@ -244,7 +268,7 @@ def _install_project(
     fetched_repos: set[Path],
     operator_search_path: build_toolchain.OperatorSearchPath | None,
     operator_ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
-    operator_https_token: "tuple[str, str] | None" = None,
+    operator_https_token: OperatorHTTPSToken | None = None,
 ) -> ProjectResult:
     generation_probe = _project_generation_probe(config, project)
     attempts = 2 if options.dry_run else 3
@@ -349,7 +373,7 @@ def _install_project_once(
     fetched_repos: set[Path],
     operator_search_path: build_toolchain.OperatorSearchPath | None,
     operator_ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
-    operator_https_token: "tuple[str, str] | None" = None,
+    operator_https_token: OperatorHTTPSToken | None = None,
     generation_probe: build_planner.GenerationProbe | None,
     expected_generation: Mapping[str, str] | None,
 ) -> ProjectResult:
@@ -1109,7 +1133,11 @@ def _resolve_build_ssh_credentials(
                 f"external build ssh: {source.identity} <- config scope {rule.scope!r}"
             )
     if persisted:
-        config_module.save_config(replace(config, build_ssh=rules))
+        # ``rules`` also carries this run's "this run only" answers; only the
+        # rules the operator explicitly marked persist may reach the config.
+        config_module.save_config(
+            replace(config, build_ssh=config.build_ssh + tuple(persisted))
+        )
         for rule in persisted:
             messages.append(
                 f"build_ssh scope {rule.scope!r} saved to {config.path}"
@@ -1224,12 +1252,15 @@ def _prompt_build_https_rule(
     skill_name: str,
     command: str,
     canonical_identity: str,
+    git_executable: str | None = None,
 ) -> tuple[build_https_module.BuildHTTPSRule | None, bool]:
     """Ask the operator for a token selection for one unmatched HTTPS repository.
 
     Returns (rule, persist).  Discovery only lists what exists; entering a
     token stores it in the manager keyring immediately so the config itself
-    never carries a secret.
+    never carries a secret.  Credential calls use the same pinned operator
+    Git as ``_https_rule_credentials``, so the prompt sees exactly the
+    material the later resolution will read.
     """
 
     namespace = build_https_module.default_scope(canonical_identity)
@@ -1240,7 +1271,7 @@ def _prompt_build_https_rule(
         "No build-HTTPS credentials are configured for this scope."
     )
     material = build_https_module.discover_host_material(
-        host, home=build_https_module.resolve_operator_home()
+        host, git=git_executable, home=build_https_module.resolve_operator_home()
     )
     options: list[tuple[str, str]] = []
     if material.host_credentials:
@@ -1300,6 +1331,7 @@ def _prompt_build_https_rule(
                 scope,
                 build_https_module.scope_host(scope),
                 token,
+                git=git_executable,
                 home=build_https_module.resolve_operator_home(),
             )
         except build_https_module.BuildHTTPSError as exc:
@@ -1316,7 +1348,7 @@ def _resolve_build_https_credentials(
     selected: list[tuple[closure.ClosureNode, str]],
     substitutions: dev_substitutions.DevManifest,
     *,
-    run_wide: "tuple[str, str] | None",
+    run_wide: OperatorHTTPSToken | None,
     interactive: bool,
     messages: list[str],
     dry_run: bool,
@@ -1325,8 +1357,11 @@ def _resolve_build_https_credentials(
     """Select operator HTTPS tokens for every external build repository.
 
     Same shape and precedence as the SSH resolver: the run-wide
-    ``CSK_BUILD_HTTPS_TOKEN`` capture covers every HTTPS repository, then the
-    longest matching ``build_https`` scope, then an interactive prompt, then a
+    ``CSK_BUILD_HTTPS_TOKEN`` capture covers every HTTPS repository (or, with
+    ``CSK_BUILD_HTTPS_HOST`` set, exactly the repositories on that one host,
+    because basic auth discloses the token to whichever host receives it),
+    then the longest matching ``build_https`` scope, then an interactive
+    prompt, then a
     fail-closed message carrying the exact fixing commands.  Public HTTPS
     repositories (no selection anywhere) keep fetching anonymously exactly as
     before — absence of a rule is not an error for HTTPS the way it is for
@@ -1358,14 +1393,13 @@ def _resolve_build_https_credentials(
             selection[key] = None
             continue
         host = source.identity.split("/", 1)[0]
-        if run_wide is not None:
-            username, token = run_wide
+        if run_wide is not None and run_wide.covers(host):
             selection[key] = git_admission.OperatorHTTPSCredentials(
                 scope=host,
                 host=host,
                 source="env",
-                username=username,
-                token_value=token,
+                username=run_wide.username,
+                token_value=run_wide.token,
             )
             if dry_run:
                 messages.append(
@@ -1374,7 +1408,9 @@ def _resolve_build_https_credentials(
             continue
         rule = build_https_module.match(rules, source.identity)
         if rule is None and interactive:
-            rule, persist = _prompt_build_https_rule(node.name, name, source.identity)
+            rule, persist = _prompt_build_https_rule(
+                node.name, name, source.identity, git_executable
+            )
             if rule is not None:
                 rules = rules + (rule,)
                 if persist:
@@ -1397,7 +1433,11 @@ def _resolve_build_https_credentials(
                 f"external build https: {source.identity} <- config scope {rule.scope!r}"
             )
     if persisted:
-        config_module.save_config(replace(config, build_https=rules))
+        # ``rules`` also carries this run's "this run only" answers; only the
+        # rules the operator explicitly marked persist may reach the config.
+        config_module.save_config(
+            replace(config, build_https=config.build_https + tuple(persisted))
+        )
         for rule in persisted:
             messages.append(
                 f"build_https scope {rule.scope!r} saved to {config.path}"
@@ -1416,7 +1456,7 @@ def _publish_external_builds(
     dry_run: bool,
     marker_roots: tuple[Path, ...],
     ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
-    https_token: "tuple[str, str] | None" = None,
+    https_token: OperatorHTTPSToken | None = None,
     interactive: bool = False,
 ) -> tuple[dict[str, dict[str, _PublishedBuild]], list[str]]:
     messages: list[str] = []

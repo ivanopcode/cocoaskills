@@ -80,18 +80,18 @@ finding: it neither blocks the install nor appears in install output.
 Executable files below `vendor/` and any critical findings still block as
 before.
 
-## Приватные HTTPS-репозитории сборки
+## Private HTTPS build repositories
 
-HTTPS-фетч приватного репозитория аутентифицируется через **manager credential
-broker** — слот, который manager profile описывает как OPTIONAL-участника
-разрешённого графа процессов. Брокер запускает сам менеджер: приватная
-обёртка рядом с SSH-обёрткой, запиненная на один хост, с `GIT_ASKPASS`
-и `core.askPass`, указывающими на неё. Репозиторий не может ни выбрать
-креды, ни увести их: fetch идёт на один TLS-проверенный URL без редиректов,
-а брокер отвечает только на два промпта Git и только для запиненного хоста —
-любой другой промпт означает выход без единого байта.
+A private HTTPS repository fetch authenticates through the **manager
+credential broker**, the slot the manager profile describes as an OPTIONAL
+member of the allowed process graph. The manager launches the broker itself:
+a private wrapper beside the SSH wrapper, pinned to one host, named by both
+`GIT_ASKPASS` and `core.askPass`. A repository can neither select credentials
+nor divert them. The fetch goes to a single TLS-verified URL with redirects
+disabled, and the broker answers only the two prompts Git asks and only for
+the pinned host; any other prompt exits without printing a byte.
 
-Конфиг хранит **источник токена, а не токен**:
+The config stores the token source, never a token:
 
 ```json
 "build_https": {
@@ -101,56 +101,65 @@ broker** — слот, который manager profile описывает как 
 }
 ```
 
-Скоупы — та же грамматика, что у `build_ssh`: сегментные префиксы канонической
-идентичности, совпадение по границам `/`, побеждает самый длинный. Источники:
+Scopes use the `build_ssh` grammar: segment prefixes of the canonical
+identity, matched on `/` boundaries, longest match wins. Three sources
+exist:
 
-| Источник | Что читает | Кому подходит |
+| Source | What it reads | Who it suits |
 | --- | --- | --- |
-| `git-credentials` | существующую HTTPS-запись оператора — ту, что уже ведёт его собственный credential helper | тем, кто хоть раз клонировал по HTTPS: новый секрет не заводится |
-| `keyring` | токен, который кладёт `csk config build-https login <scope>` через тот же helper под неймспейснутым именем пользователя | тем, у кого нет ни SSH, ни истории HTTPS |
-| `token_env` | переменную окружения, прочитанную на входе в процесс | CI и headless |
+| `git-credentials` | the operator's existing HTTPS entry, the one their own credential helper already serves | anyone who has cloned over HTTPS once: no new secret is created |
+| `keyring` | the token `csk config build-https login <scope>` stores through that same helper under a namespaced username | operators with neither SSH nor HTTPS history |
+| `token_env` | an environment variable read at process entry | CI and headless runs |
 
-Читает креды не брокер, а **менеджер** — до fetch, вне его графа процессов,
-командами `git credential fill|approve|reject`. Это единственный механизм,
-который существует одинаково на macOS, Windows и Linux, говорит с тем
-helper'ом, который оператор уже настроил (`osxkeychain`, `wincred`,
-`libsecret`, GCM), и не требует ни одной рантайм-зависимости. Helper выбирает
-конфигурация Git оператора, а не репозиторий и не манифест. Интерактивные
-запросы выключены (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`):
-отсутствующий credential деградирует, а не вешает установку диалогом.
+The manager reads the credentials, not the broker. The read happens before
+the fetch, outside its process graph, through `git credential
+fill|approve|reject`. That is the one mechanism which exists identically on
+macOS, Windows and Linux, speaks to whichever helper the operator already
+configured (`osxkeychain`, `wincred`, `libsecret`, GCM), and needs no runtime
+dependency. The operator's Git configuration selects the helper, never a
+repository or a manifest. Interactive prompting is disabled
+(`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`), so an absent credential
+degrades instead of hanging the install on a dialog.
 
-Токен, сохранённый через `build-https login`, живёт под именем пользователя
-`csk-build-https:<scope>` — отдельно от собственной записи оператора для того
-же хоста, так что они не перетирают друг друга.
+A token saved through `build-https login` lives under the username
+`csk-build-https:<scope>`, separate from the operator's own entry for the
+same host, so neither overwrites the other.
 
-Управление:
+Manage the scopes with the subcommands:
 
 ```sh
 csk config build-https add gitlab.example.com/portals/infra --token git-credentials
-csk config build-https login gitlab.example.com/vendor      # скрытый ввод PAT
+csk config build-https login gitlab.example.com/vendor      # hidden PAT input
 csk config build-https list
-csk config build-https remove gitlab.example.com/vendor     # снимает и запись keyring
+csk config build-https remove gitlab.example.com/vendor     # also drops the keyring entry
 ```
 
-`CSK_BUILD_HTTPS_TOKEN` (и необязательный `CSK_BUILD_HTTPS_USERNAME`)
-перекрывает любой скоуп на один запуск — так же, как `CSK_BUILD_SSH_*`
-перекрывает SSH-скоупы. Токен никогда не принимается флагом.
+`CSK_BUILD_HTTPS_TOKEN` (with the optional `CSK_BUILD_HTTPS_USERNAME`)
+overrides every scope for one run, exactly as `CSK_BUILD_SSH_*` overrides the
+SSH scopes. A token is never accepted as a flag. The unpinned override trusts
+the entire closure: HTTPS basic auth transmits the token to whichever host a
+manifest names, so every HTTPS build repository host in the closure can
+receive it. Set `CSK_BUILD_HTTPS_HOST` to pin the override to one host; a
+repository on any other host then resolves as if the override were absent.
+Use the unpinned form only when every build repository host in the closure is
+trusted.
 
-Как и на SSH-поверхности, precheck перед первым fetch показывает на терминале
-обнаруженных кандидатов (существующие git-креды для хоста, ввод нового PAT) и
-сохраняет выбор только после явного выбора скоупа. Отсутствие выбора для
-HTTPS не является ошибкой: анонимный HTTPS остаётся полноценным транспортом,
-и публичный репозиторий выкачивается ровно как раньше.
+As on the SSH surface, a precheck before the first fetch lists the detected
+candidates on a terminal (the existing Git credentials for the host, or a new
+PAT entered on the spot) and saves a choice only after an explicit scope
+selection. A missing selection is not an error for HTTPS: anonymous HTTPS
+stays a first-class transport, and a public repository fetches exactly as
+before.
 
-Окружение fetch намеренно чистое — пустой `PATH` и приватный `HOME`, — поэтому
-чтение helper'а выполняется менеджером при его собственных `PATH` и `HOME`, с
-абсолютным путём того самого Git, который менеджер уже зафиксировал. Брокеру
-достаётся только результат, и он остаётся чистой функцией ответа, одинаковой
-на всех платформах.
+The fetch environment is deliberately clean (an empty `PATH`, a private
+`HOME`), so the manager performs the helper read at its own `PATH` and
+`HOME`, with the absolute path of the Git executable it already admitted. The
+broker receives only the result and stays a pure answer function, identical
+on every platform.
 
-Токен не попадает ни в конфиг, ни во флаг, ни в лог, ни в диагностику: он
-живёт только в окружении дочерних процессов fetch. `token_value` исключён из
-`repr` — spec 11.1 запрещает broker values в receipt, marker и диагностике.
+The token never lands in the config, a flag, a log, or a diagnostic: it lives
+only in the environment of the fetch children. `token_value` is excluded from
+`repr`; spec 11.1 forbids broker values in receipts, markers and diagnostics.
 
 ## Private SSH build repositories
 
