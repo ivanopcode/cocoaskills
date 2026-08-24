@@ -1142,19 +1142,34 @@ def _resolve_build_ssh_credentials(
     return selection
 
 
+def _operator_git_path(
+    operator_search_path: "build_toolchain.OperatorSearchPath | None",
+) -> str | None:
+    """The operator Git the manager already trusts, as an absolute path."""
+
+    if operator_search_path is None:
+        return None
+    try:
+        return os.fspath(_operator_program("git", operator_search_path))
+    except InstallError:
+        return None
+
+
 def _https_rule_credentials(
     rule: build_https_module.BuildHTTPSRule,
     canonical_identity: str,
+    git_executable: str | None = None,
 ) -> git_admission.OperatorHTTPSCredentials:
-    """Materialize one configured scope into a broker selection, fail closed.
+    """Resolve one configured scope into a concrete secret, fail closed.
 
-    Presence is verified here so a missing keyring entry or store surfaces at
-    precheck time with the fixing command, not as a bare Git authentication
-    failure mid-fetch.  The secret itself is read only by the broker, inside
-    the fetch.
+    Reading the operator's credential helper is manager work: it happens here,
+    before the fetch, at the operator's own HOME and PATH.  The broker then
+    only answers with what it was handed, which is why every platform Git
+    supports works the same way.
     """
 
     host = canonical_identity.split("/", 1)[0]
+    home = build_https_module.resolve_operator_home()
     if rule.token_env is not None:
         value = os.environ.get(rule.token_env)
         if not value:
@@ -1171,35 +1186,37 @@ def _https_rule_credentials(
             token_value=value,
         )
     if rule.token == "keyring":
-        if not build_https_module.probe_keyring_token(rule.scope):
+        token = build_https_module.read_namespaced_token(
+            rule.scope, host, git_executable, home
+        )
+        if not token:
             raise InstallError(
                 f"{git_admission.CREDENTIAL_POLICY_INVALID}: build_https scope "
-                f"{rule.scope!r} selects the manager keyring, but no entry is "
-                f"stored; run: csk config build-https login {rule.scope}"
+                f"{rule.scope!r} selects a stored token, but none is saved; run: "
+                f"csk config build-https login {rule.scope}"
             )
         return git_admission.OperatorHTTPSCredentials(
             scope=rule.scope,
             host=host,
             source="keyring",
             username=rule.username,
-            secret_tool=build_https_module.resolve_secret_tool(),
-            secret_store=build_https_module.resolve_secret_store(),
+            token_value=token,
         )
-    material = build_https_module.discover_host_material(host)
-    if not material.git_credentials:
+    material = build_https_module.read_host_credentials(host, git_executable, home)
+    if material is None:
         raise InstallError(
             f"{git_admission.CREDENTIAL_POLICY_INVALID}: build_https scope "
-            f"{rule.scope!r} selects the operator Git credentials, but the OS "
-            f"secret store has no HTTPS entry for {host!r}"
+            f"{rule.scope!r} selects your Git credentials, but no helper holds "
+            f"one for {host!r}; clone once over HTTPS, or run: "
+            f"csk config build-https login {rule.scope}"
         )
-    username = material.git_username or rule.username
+    username, token = material
     return git_admission.OperatorHTTPSCredentials(
         scope=rule.scope,
         host=host,
         source="git-credentials",
         username=username,
-        secret_tool=build_https_module.resolve_secret_tool(),
-        secret_store=build_https_module.resolve_secret_store(),
+        token_value=token,
     )
 
 
@@ -1222,14 +1239,18 @@ def _prompt_build_https_rule(
         f"  {canonical_identity}\n"
         "No build-HTTPS credentials are configured for this scope."
     )
-    material = build_https_module.discover_host_material(host)
+    material = build_https_module.discover_host_material(
+        host, home=build_https_module.resolve_operator_home()
+    )
     options: list[tuple[str, str]] = []
-    if material.git_credentials:
-        shown = material.git_username or "?"
+    if material.host_credentials:
+        shown = material.host_username or "?"
         options.append(
             (f"reuse your Git HTTPS credentials for {host} (user {shown})", "git-credentials")
         )
-    options.append(("enter a personal access token now (stored in the OS keyring)", "login"))
+    options.append(
+        ("enter a personal access token now (saved by your Git helper)", "login")
+    )
     print("Detected candidates:")
     for index, (label, _) in enumerate(options, start=1):
         marker = "   <- default" if index == 1 and len(options) > 1 else ""
@@ -1275,7 +1296,12 @@ def _prompt_build_https_rule(
         if not token:
             return None, False
         try:
-            build_https_module.store_keyring_token(scope, token)
+            build_https_module.store_namespaced_token(
+                scope,
+                build_https_module.scope_host(scope),
+                token,
+                home=build_https_module.resolve_operator_home(),
+            )
         except build_https_module.BuildHTTPSError as exc:
             print(f"Rejected: {exc}")
             return None, False
@@ -1294,6 +1320,7 @@ def _resolve_build_https_credentials(
     interactive: bool,
     messages: list[str],
     dry_run: bool,
+    operator_search_path: build_toolchain.OperatorSearchPath | None = None,
 ) -> dict[tuple[str, str], git_admission.OperatorHTTPSCredentials | None]:
     """Select operator HTTPS tokens for every external build repository.
 
@@ -1309,6 +1336,7 @@ def _resolve_build_https_credentials(
     """
 
     rules = config.build_https
+    git_executable = _operator_git_path(operator_search_path)
     persisted: list[build_https_module.BuildHTTPSRule] = []
     selection: dict[
         tuple[str, str], git_admission.OperatorHTTPSCredentials | None
@@ -1361,7 +1389,9 @@ def _resolve_build_https_credentials(
                     f"external build https: {source.identity} <- anonymous"
                 )
             continue
-        selection[key] = _https_rule_credentials(rule, source.identity)
+        selection[key] = _https_rule_credentials(
+            rule, source.identity, git_executable
+        )
         if dry_run:
             messages.append(
                 f"external build https: {source.identity} <- config scope {rule.scope!r}"
@@ -1419,6 +1449,7 @@ def _publish_external_builds(
         interactive=interactive,
         messages=messages,
         dry_run=dry_run,
+        operator_search_path=operator_search_path,
     )
     require_ssh = any(
         credentials is not None for credentials in ssh_selection.values()

@@ -301,7 +301,7 @@ def build_parser() -> argparse.ArgumentParser:
             "The config stores the token SOURCE, never a token:\n"
             "  --token git-credentials  reuse the Git HTTPS entry your OS\n"
             "                           secret store already holds for the host\n"
-            "  --token keyring          use the entry 'build-https login' stores\n"
+            "  --token keyring          use the token 'build-https login' saved\n"
             "  --token-env NAME         read the token from an environment variable\n\n"
             "CSK_BUILD_HTTPS_TOKEN overrides every scope for one run.\n\n"
             "Examples:\n"
@@ -333,7 +333,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     build_https_login = build_https_sub.add_parser(
         "login",
-        help="Store a token in the OS keyring for one scope and select it.",
+        help="Save a token through your Git credential helper and select it.",
     )
     build_https_login.add_argument("scope")
     build_https_login.add_argument(
@@ -1090,7 +1090,11 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
                 parts.append(f"token_env={rule.token_env}")
             parts.append(f"username={rule.username}")
             if rule.token == "keyring":
-                stored = build_https.probe_keyring_token(rule.scope)
+                stored = build_https.read_namespaced_token(
+                    rule.scope,
+                    build_https.scope_host(rule.scope),
+                    home=build_https.resolve_operator_home(),
+                )
                 parts.append("stored=yes" if stored else "stored=NO")
             print(f"{rule.scope}: " + " ".join(parts))
         return EXIT_OK
@@ -1102,8 +1106,12 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
             print(f"No build-https scope {args.scope!r}", file=sys.stderr)
             return EXIT_CONFIG
         config.save_config(replace(cfg, build_https=remaining))
-        if build_https.delete_keyring_token(args.scope):
-            print(f"Removed build-https scope {args.scope} and its keyring entry")
+        if build_https.delete_namespaced_token(
+            args.scope,
+            build_https.scope_host(args.scope),
+            home=build_https.resolve_operator_home(),
+        ):
+            print(f"Removed build-https scope {args.scope} and its stored token")
         else:
             print(f"Removed build-https scope {args.scope}")
         return EXIT_OK
@@ -1123,7 +1131,12 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
             print("No token supplied", file=sys.stderr)
             return EXIT_CONFIG
         try:
-            build_https.store_keyring_token(args.scope, token)
+            build_https.store_namespaced_token(
+                args.scope,
+                build_https.scope_host(args.scope),
+                token,
+                home=build_https.resolve_operator_home(),
+            )
         except build_https.BuildHTTPSError as exc:
             print(str(exc), file=sys.stderr)
             return EXIT_CONFIG
@@ -1134,7 +1147,7 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
         )
         others = tuple(r for r in cfg.build_https if r.scope != args.scope)
         config.save_config(replace(cfg, build_https=others + (rule,)))
-        print(f"Stored a token for {args.scope} in the OS keyring")
+        print(f"Stored a token for {args.scope} through your Git credential helper")
         return EXIT_OK
     # add
     if (args.token is None) == (args.token_env is None):

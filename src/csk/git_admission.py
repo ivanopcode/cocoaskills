@@ -162,24 +162,19 @@ class OperatorSSHCredentials:
 class OperatorHTTPSCredentials:
     """Operator-selected HTTPS token routing for one build repository fetch.
 
-    Carries the *selection*, not the secret — except ``token_value``, which is
-    present only for the environment source, captured at process entry, and
-    excluded from ``repr`` so it can never reach a diagnostic (spec 11.1:
-    broker values must not enter a receipt, marker, or diagnostic).
+    The manager resolves the operator's selection into a concrete secret
+    before the fetch begins — reading a credential helper is manager work,
+    not broker work — and hands the broker only what one pinned host needs.
+    ``token_value`` is excluded from ``repr`` so it can never reach a
+    diagnostic (spec 11.1: broker values must not enter a receipt, marker, or
+    diagnostic); ``source`` is kept for provenance in messages.
     """
 
     scope: str
     host: str
-    source: str  # "keyring" | "git-credentials" | "env"
+    source: str  # "git-credentials" | "keyring" | "env" — provenance only
     username: str
     token_value: str | None = field(default=None, repr=False)
-    # Absolute path of the platform secret-store tool, resolved by the manager
-    # at manager PATH: the fetch environment carries an empty PATH, so the
-    # broker must never resolve a tool itself.
-    secret_tool: str | None = None
-    # Absolute path of the operator's secret store, when the platform resolves
-    # it relative to HOME (macOS login keychain); the fetch owns a private HOME.
-    secret_store: str | None = None
 
 
 @dataclass(frozen=True)
@@ -878,17 +873,15 @@ def _materialize_https_broker(
         raise GitAdmissionError(
             CREDENTIAL_POLICY_INVALID, "HTTPS credential source is not admitted"
         )
+    if not credentials.token_value:
+        raise GitAdmissionError(
+            CREDENTIAL_POLICY_INVALID,
+            "HTTPS credential selection resolved to no secret",
+        )
     state = _write_private_file(
         paths.https / "broker-state.json",
         json.dumps(
-            {
-                "scope": credentials.scope,
-                "host": credentials.host,
-                "source": credentials.source,
-                "username": credentials.username,
-                "tool": credentials.secret_tool,
-                "store": credentials.secret_store,
-            },
+            {"host": credentials.host, "username": credentials.username},
             sort_keys=True,
         ).encode("utf-8"),
     )
@@ -956,9 +949,9 @@ def _clean_git_environment(
         if https_broker is not None:
             environment["GIT_ASKPASS"] = os.fspath(https_broker)
             if https_token is not None:
-                # The env-source token rides only in the fetch children's
-                # environment — the standard askpass shape.  It never reaches
-                # a compiler environment, receipt, marker, or diagnostic.
+                # The secret rides only in the fetch children's environment —
+                # the standard askpass shape.  It never reaches a compiler
+                # environment, receipt, marker, or diagnostic.
                 environment[HTTPS_BROKER_TOKEN_ENV] = https_token
         elif tool.askpass is not None:
             environment["GIT_ASKPASS"] = os.fspath(tool.askpass)
