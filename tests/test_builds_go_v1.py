@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import ctypes
+import errno
 import io
 import json
 import os
@@ -9,6 +10,7 @@ import shutil
 import signal
 import stat
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -2359,13 +2361,151 @@ def test_macos_process_group_kill_failure_rejects_teardown(
     process = _FakeDomainProcess()
 
     def denied(_pid: int, _signal: int) -> None:
-        raise PermissionError("killpg denied")
+        raise OSError(errno.EINVAL, "killpg rejected the request")
 
     monkeypatch.setattr(go_v1.os, "killpg", denied)
     with pytest.raises(go_v1.GoV1Error) as raised:
         domain.terminate(process)  # type: ignore[arg-type]
     assert raised.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
+    assert "killpg rejected the request" in str(raised.value)
     assert not domain.terminated
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "killpg"),
+    reason="the macOS process-group API is unavailable",
+)
+def test_macos_exiting_group_is_joined_once_it_leaves_the_process_table(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A member on its way out answers EPERM, which is not a verdict."""
+
+    domain = _bare_domain(go_v1.PLATFORM_MACOS)
+    process = _FakeDomainProcess()
+    calls: list[int] = []
+
+    def exiting_then_absent(pid: int, selected_signal: int) -> None:
+        assert pid == process.pid
+        calls.append(selected_signal)
+        if len(calls) < 3:
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+        raise ProcessLookupError
+
+    monkeypatch.setattr(go_v1.os, "killpg", exiting_then_absent)
+    domain.terminate(process)  # type: ignore[arg-type]
+
+    assert calls == [int(signal.SIGKILL)] * 3
+    assert domain.terminated
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "killpg"),
+    reason="the macOS process-group API is unavailable",
+)
+def test_macos_exiting_group_probe_never_reads_as_an_absent_group(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """EPERM on the presence probe must not skip the group signal."""
+
+    domain = _bare_domain(go_v1.PLATFORM_MACOS)
+    process = _FakeDomainProcess()
+    process.returncode = 0
+    calls: list[int] = []
+
+    def exiting_then_absent(pid: int, selected_signal: int) -> None:
+        assert pid == process.pid
+        calls.append(selected_signal)
+        if len(calls) < 3:
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+        raise ProcessLookupError
+
+    monkeypatch.setattr(go_v1.os, "killpg", exiting_then_absent)
+    domain.terminate(process)  # type: ignore[arg-type]
+
+    assert calls[0] == 0
+    assert calls[1:] == [int(signal.SIGKILL)] * 2
+    assert domain.terminated
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "killpg"),
+    reason="the macOS process-group API is unavailable",
+)
+def test_macos_group_that_never_leaves_the_process_table_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Tolerating EPERM must not become an unbounded wait or a free pass."""
+
+    domain = _bare_domain(go_v1.PLATFORM_MACOS)
+    process = _FakeDomainProcess()
+    clock = 0.0
+
+    def advancing_clock() -> float:
+        nonlocal clock
+        clock += 1.0
+        return clock
+
+    def always_exiting(_pid: int, _signal: int) -> None:
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(go_v1.time, "monotonic", advancing_clock)
+    monkeypatch.setattr(go_v1.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(go_v1.os, "killpg", always_exiting)
+
+    with pytest.raises(go_v1.GoV1Error) as raised:
+        domain.terminate(process)  # type: ignore[arg-type]
+
+    assert raised.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
+    assert "TimeoutError" in str(raised.value)
+    assert "did not become empty" in str(raised.value)
+    assert not domain.terminated
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="the exiting-group window is a Darwin process-table behavior",
+)
+def test_macos_real_worker_domain_is_joined_after_its_leader_exits() -> None:
+    """Drive real process groups through the join the way teardown does.
+
+    The group leader exits before the join starts, which is the teardown
+    order, so the last members are routinely still on the process table when
+    the first group signal is sent. Before an inconclusive group signal was
+    told apart from a verdict, roughly one join in fourteen was rejected here.
+    """
+
+    leader_source = (
+        "import subprocess, sys\n"
+        "kids = [\n"
+        "    subprocess.Popen(\n"
+        "        [sys.executable, '-c', 'import time\\nwhile True: time.sleep(0.01)']\n"
+        "    )\n"
+        "    for _ in range(4)\n"
+        "]\n"
+        "sys.stdout.write('up\\n')\n"
+        "sys.stdout.flush()\n"
+    )
+    for _ in range(40):
+        process = subprocess.Popen(
+            [sys.executable, "-c", leader_source],
+            stdout=subprocess.PIPE,
+            start_new_session=True,
+        )
+        assert process.stdout is not None
+        try:
+            assert process.stdout.readline() == b"up\n"
+            process.wait(timeout=go_v1._WORKER_SHUTDOWN_GRACE)
+            domain = _bare_domain(go_v1.PLATFORM_MACOS)
+            domain.terminate(process)  # type: ignore[arg-type]
+            assert domain.terminated
+        finally:
+            # A rejected join leaves the group running; never leak it into the
+            # rest of the suite.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            process.stdout.close()
 
 
 @pytest.mark.skipif(
