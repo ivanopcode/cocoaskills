@@ -38,3 +38,5 @@ src/csk/_version.py
 .codex/skills/
 .gemini/skills/
 .cursor/rules/
+# CocoaSkill
+Skillfile.dev.json
