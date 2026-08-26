@@ -17,6 +17,11 @@ pytestmark = pytest.mark.skipif(
     reason="CURATOR_EXTERNAL_REPOSITORY_CORPUS_ROOT is not set",
 )
 
+# This corpus is versioned separately from the Curator Protocol revision this
+# manager accepts (build_repository.PROTOCOL_VERSION, now 1.0.0-rc.10).  Its
+# bytes are pinned by ACCEPTED_MANIFEST_SHA256 below and they declare
+# 1.0.0-rc.5, so advancing the value here would assert something the pinned
+# bytes contradict.  It moves only when the corpus itself is republished.
 PROTOCOL = "1.0.0-rc.5"
 CORPUS_VERSION = "rc5-external-repository-interop-v1"
 ACCEPTED_MANIFEST_SHA256 = (
