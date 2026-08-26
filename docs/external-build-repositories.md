@@ -1,20 +1,20 @@
 # External build repositories
 
-CocoaSkills implements the Curator Protocol `1.0.0-rc.5` schema-7
+CocoaSkills implements the Curator Protocol `1.0.0-rc.10` schema-8
 `go-repository-v1` boundary. It builds an executable from a separately locked
 Git repository while keeping the skill package unable to select credentials,
 Git configuration, hooks, compiler flags, output paths, wrappers, or signing.
 
 The accepted protocol revision is
-`f5d7673039226ab81de2f4f87e2155ae995c4df3`; its `conformance/v1/manifest.json`
+`b8b03d597ac83d158a0eadd9d0b25d2e883de1a3`; its `conformance/v1/manifest.json`
 SHA-256 is
-`b6f56aacc0e37dcc6692f73f641bff761e89b645adfe20a47a06d81c6fda204c`.
+`803918bf8672f76cf990985e51db213b826674cd5bb54fbf47731b8404b44403`.
 The external-repository corpus is supplied to tests independently, so the csk
 consumer imports no Curator implementation package or internal fixture value.
 
 ## Skill declaration
 
-An `agent-skill.json` schema-7 declaration binds a canonical network identity,
+An `agent-skill.json` schema-7 or schema-8 declaration binds a canonical network identity,
 an exact Git object ID, and optionally an exact tag:
 
 ```json
@@ -214,7 +214,7 @@ selection in the global config, keyed by a canonical-identity prefix:
 }
 ```
 
-A scope is a segment prefix of the schema-7 canonical repository identity
+A scope is a segment prefix of the schema-7 or schema-8 canonical repository identity
 (`host/path`): matching happens only on whole `/` boundaries, and the longest
 matching scope wins, so a key granted to one namespace never reaches a
 repository outside it. Flags win over `CSK_BUILD_SSH_*`, and both win over
@@ -223,14 +223,15 @@ every configured scope.
 A scope needs at least one of `agent` or `identity`; each alone is a complete
 selection:
 
-- `{"agent": "auto"}` — agent-only. The install adopts the operator's live
+- `{"agent": "auto"}`: agent-only. The install adopts the operator's live
   `SSH_AUTH_SOCK` at run time and the agent signs with its loaded keys in
   turn. No key file is named, so a populated agent can exhaust the server's
   `MaxAuthTries` budget before reaching the right key.
-- `{"identity": "~/.ssh/key"}` — identity-file only, for an unencrypted key
+- `{"identity": "~/.ssh/key"}`: identity-file only, for an unencrypted key
   on disk (`IdentityAgent=none`).
-- both — the recommended form for passphrase-protected keys: the agent holds
-  the private key and the named `.pub` pins which single key is offered.
+- both: pinned-agent form. The third canonical authentication-tail form,
+  RECOMMENDED, per curator-spec#22. The agent holds the private key and the
+  named `.pub` pins which single key is offered.
 
 Manage the map with:
 
@@ -243,14 +244,14 @@ csk config build-ssh remove gitlab.example.com/portals/infra
 
 Before any fetch, the install resolves credentials for every declared SSH
 build repository. On an operator terminal an unmatched repository prompts with
-a menu of **detected candidates** — the live agent socket (with its loaded key
-count) and the `.pub` files below `~/.ssh` — so the usual answer is a single
+a menu of **detected candidates** (the live agent socket with its loaded key
+count and the `.pub` files below `~/.ssh`), so the usual answer is a single
 Enter on the default "agent + pinned key" entry. Discovery only lists what
 exists; nothing is ever used without the operator's explicit selection, and
 nothing persists without the explicit scope choice. A non-interactive run
 fails closed with `build_repository_ssh_credential_missing` and ready-to-run
 `csk config build-ssh add` commands built from the same detected candidates. `csk install --dry-run`
-reports which source — flags, environment, or a config scope — covered each
+reports which source (flags, environment, or a config scope) covered each
 repository.
 
 CocoaSkills writes a private wrapper carrying one pinned `ssh` argv and points
@@ -271,8 +272,8 @@ The fixed Go contract is the same `manager-worker-v1` session documented in the
 main README: native toolchain, vendored modules, no network, no workspace, no
 cgo, internal linking, and manager-derived output. External builds use a
 receipt-v2 cache below `<csk-home>/external-builds`; schema-7 installations use
-marker v3 and may contain local receipt-v1 and external receipt-v2 commands
-together.
+marker v3 and schema-8 installations use marker v4; both may contain local
+receipt-v1 and external receipt-v2 commands together.
 
 Project install publishes `.agents/bin/<command>`; global install publishes
 `<csk-home>/global/bin/<command>`. Both managed launchers point directly at the

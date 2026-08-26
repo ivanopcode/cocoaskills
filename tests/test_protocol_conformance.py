@@ -71,11 +71,18 @@ from protocol_lifecycle_observations import (
 ROOT_TEXT = os.environ.get("CURATOR_CONFORMANCE_ROOT")
 pytestmark = pytest.mark.skipif(not ROOT_TEXT, reason="CURATOR_CONFORMANCE_ROOT is not set")
 
-# rc.5 carries the separately versioned external-repository corpus consumed by
-# test_rc5_external_repository_conformance.py.  This module intentionally binds
-# the released manager/build corpus at RELEASED_SUITE_PIN -- 1.0.0-rc.9 since
-# the schema-8 landing -- so do not make an rc.5 root fail collection merely
-# because both authenticated consumers share the conventional root env.
+# This module binds the released manager/build corpus at RELEASED_SUITE_PIN.
+# The corpus that revision publishes declares protocol_version 1.0.0-rc.9 and is
+# republished byte for byte at the accepted revision 1.0.0-rc.10
+# (build_repository.PROTOCOL_VERSION), so the digest below authenticates both.
+#
+# The retired rc.5 corpus (sha256:b6f56aac...) used to be routed past this
+# module with a module-level skip.  Nothing consumes an rc.5 conformance root
+# any more -- the separately versioned external-repository corpus consumed by
+# test_rc5_external_repository_conformance.py has its own digest and its own
+# CURATOR_EXTERNAL_REPOSITORY_CORPUS_ROOT env -- so a root this module cannot
+# authenticate is now a wrong root and fails in _root() instead of silently
+# skipping an entire conformance consumer.
 #
 # The test names keep their historical rc6_ prefix on purpose.  The Windows
 # protocol lane pins an ORDERED node-id baseline in
@@ -83,16 +90,6 @@ pytestmark = pytest.mark.skipif(not ROOT_TEXT, reason="CURATOR_CONFORMANCE_ROOT 
 # isolation classification; renaming the functions would rewrite every one of
 # those rows for no behavioural gain and is a separate change.  What the module
 # authenticates is the identity below, not the prefix.
-if ROOT_TEXT:
-    _candidate_manifest = Path(ROOT_TEXT) / "manifest.json"
-    if _candidate_manifest.is_file() and hashlib.sha256(
-        _candidate_manifest.read_bytes()
-    ).hexdigest() == "b6f56aacc0e37dcc6692f73f641bff761e89b645adfe20a47a06d81c6fda204c":
-        pytest.skip(
-            "rc.5 root is handled by the external-repository consumer",
-            allow_module_level=True,
-        )
-
 EXPECTED_CANDIDATE_MANIFEST_SHA256 = (
     "sha256:803918bf8672f76cf990985e51db213b826674cd5bb54fbf47731b8404b44403"
 )
@@ -954,14 +951,20 @@ def test_rc6_native_control_inventory_is_closed_and_exhaustive() -> None:
 
 
 def test_rc6_claim_versions_remain_separate() -> None:
+    # Every claim version the corpus ships, not a prefix of them: a claim
+    # version that silently re-pointed at a newer protocol revision is exactly
+    # the drift this asserts against, and only checking v1..v3 would let the
+    # schema-8 landing's v4 and v5 drift unobserved.
     claims = [
         _json(f"schema-cases/conformance-claim-v{version}/valid.json")
-        for version in (1, 2, 3)
+        for version in (1, 2, 3, 4, 5)
     ]
     assert [(claim["schema_version"], claim["protocol_version"]) for claim in claims] == [
         (1, "1.0.0-rc.3"),
         (2, "1.0.0-rc.4"),
         (3, "1.0.0-rc.5"),
+        (4, "1.0.0-rc.8"),
+        (5, "1.0.0-rc.9"),
     ]
     assert "build_drivers" not in claims[0]
     assert "build_drivers" not in claims[1]
