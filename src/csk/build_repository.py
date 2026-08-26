@@ -15,8 +15,23 @@ from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_portable
 
 DESCRIPTOR_NAME = "skill-build.json"
 GO_REPOSITORY_V1_DRIVER = "go-repository-v1"
-PROTOCOL_VERSION = "1.0.0-rc.5"
-CONFORMANCE_MANIFEST_SHA256 = "b6f56aacc0e37dcc6692f73f641bff761e89b645adfe20a47a06d81c6fda204c"
+
+# The accepted Curator Protocol revision for the go-repository-v1 boundary.
+# 1.0.0-rc.10 is relux-works/curator-spec
+# b8b03d597ac83d158a0eadd9d0b25d2e883de1a3 (curator-spec#22), the revision that
+# admits the pinned-agent authentication tail this manager emits
+# (git_admission.py) as the RECOMMENDED third canonical form.
+#
+# rc.10 republishes the rc.9 conformance corpus byte for byte -- #22 changed
+# profiles/manager.md only -- so the corpus at the accepted revision still
+# declares protocol_version 1.0.0-rc.9 and the spec publishes no
+# release/1.0.0-rc.10.json.  The accepted revision and the corpus identity are
+# two different facts, so they are declared separately here and asserted
+# separately in tests/test_schema_v7_repository.py: a pin move that advances one
+# without the other goes red instead of silently collapsing the two.
+PROTOCOL_VERSION = "1.0.0-rc.10"
+CONFORMANCE_MANIFEST_SHA256 = "803918bf8672f76cf990985e51db213b826674cd5bb54fbf47731b8404b44403"
+CONFORMANCE_CORPUS_PROTOCOL_VERSION = "1.0.0-rc.9"
 
 _HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
 _SSH_USER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -97,7 +112,9 @@ def parse_repository_source(raw: str) -> RepositorySource:
         or any(character in raw for character in "%?#\\")
         or any(character.isspace() or unicodedata.category(character) == "Cc" for character in raw)
     ):
-        raise BuildRepositoryError("repository git source is not in the released rc.5 grammar")
+        raise BuildRepositoryError(
+            f"repository git source is not in the released {PROTOCOL_VERSION} grammar"
+        )
 
     host: str
     repository_path: str

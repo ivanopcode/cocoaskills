@@ -2747,3 +2747,109 @@ runs before the task can satisfy its hosted acceptance gate.
 ## 2026-08-24 TASK-260824-3gv521: Schema v7 Build Repository Transport Documentation
 
 Updated `docs/skill-authoring.md` section 3 (schema v7) to document support for both `git@host:path.git` and `https://host/path.git` transport forms in `build_repositories.*.git`. Clarified that credential selection is required for private repositories in both cases (`build_ssh` and `build_https` scopes), and that choice of transport does not dictate installation access. Stated explicitly that HTTPS URLs must carry the `.git` suffix to avoid GitLab 301 redirects failing under `http.followRedirects=false` with `build_repository_source_unavailable`. Verified error identifier in `src/csk/git_admission.py` and ran `tests/test_git_admission.py` green (exit 0).
+
+
+## 2026-08-26 TASK-260826-29y82b: Spec22 Pin Delta Documentation Update
+
+Updated `docs/external-build-repositories.md` header block to reflect protocol advancement to Curator Protocol `1.0.0-rc.9` schema-8, accepted protocol revision commit `0ed5c691e9208eea52f21db2fc05e226ce3516fd`, and derived `conformance/v1/manifest.json` SHA-256 `803918bf8672f76cf990985e51db213b826674cd5bb54fbf47731b8404b44403`. Derived manifest digest by cloning `relux-works/curator-spec` at commit `0ed5c691` in `.temp/` and calculating `shasum -a 256 conformance/v1/manifest.json`. Revised credential selection section (around line 232) so the pinned-agent form (`both`) cites `curator-spec#22` as its source (the third canonical authentication-tail form, RECOMMENDED), removing any remaining implication that `csk` goes beyond the spec. Obeyed prose style rules by replacing em-dashes with colons.
+
+
+## 2026-08-26 TASK-260826-29y82b review: the rc.9 header advance contradicts the rc.5 boundary it documents
+
+The repository holds two protocol pins on purpose and the delta collapsed them into one.
+`src/csk/build_repository.py:18-19` still declares `PROTOCOL_VERSION = "1.0.0-rc.5"` and
+`CONFORMANCE_MANIFEST_SHA256 = "b6f56aac..."` for the `go-repository-v1` boundary, enforced green by
+`tests/test_schema_v7_repository.py::test_rc5_contract_pin`. The candidate and released suite moved
+to rc.9 with manifest `803918bf...` (`tests/test_protocol_conformance.py:97-100`), and that module
+skips itself on the rc.5 root with the reason stated at `:91`: "rc.5 root is handled by the
+external-repository consumer". `docs/external-build-repositories.md` documents the consumer, so
+advancing its header to rc.9 asserts something a passing assertion denies. Whichever pin the header
+is meant to carry, it cannot carry both silently.
+
+`curator-spec#22` has not landed and cannot be cited. At the pinned revision `0ed5c691`,
+`profiles/manager.md:1384-1387` says the authentication tail is exactly either
+`IdentitiesOnly=yes IdentityAgent=none -i <identity>` or
+`IdentitiesOnly=no IdentityFile=none IdentityAgent=<socket>`. There is no third form, no
+RECOMMENDED, and no `#22` anywhere in the spec's files or merged history, which reaches `#27`,
+`#28`, `#29`. `.research/260822_tz-docs-0.14.md:194` made the delta conditional on that issue
+landing. Meanwhile `src/csk/git_admission.py:505-519` emits a third tail
+(`IdentitiesOnly=yes` with both `IdentityAgent=<socket>` and `-i <identity>`) that the pinned spec
+does not admit, so the caveat that csk goes beyond the spec was accurate when it was removed.
+
+The manifest digest itself is sound. An independent clone at `0ed5c691` reproduces
+`803918bf8672f76cf990985e51db213b826674cd5bb54fbf47731b8404b44403` for `conformance/v1/manifest.json`.
+
+Board note: the Change Request delta was empty because the story worktree at
+`.temp/STORY-260824-3rzqxr/worktree` belongs to `cocoaskills-taskboard` and has no `docs/`, while the
+task's tooling note pinned the work directory to this repository. The edits live here uncommitted.
+
+
+## 2026-08-27 TASK-260827-d319oi: rc.10 is a revision move, not a corpus move
+
+Advanced the accepted Curator Protocol revision for the `go-repository-v1` boundary from
+`1.0.0-rc.5` to `1.0.0-rc.10` (`relux-works/curator-spec` `b8b03d597ac83d158a0eadd9d0b25d2e883de1a3`,
+tag `v1.0.0-rc.10`, curator-spec#22), which is what makes the pinned-agent authentication tail
+`src/csk/git_admission.py` already emits a spec-admitted RECOMMENDED third canonical form and unblocks
+the header that TASK-260826-29y82b review rejected.
+
+The finding that shaped the change: **rc.10 does not republish a new corpus.**
+`git diff v1.0.0-rc.9..v1.0.0-rc.10` touches `profiles/manager.md` only. `conformance/v1/manifest.json`
+hashes to `803918bf8672f76cf990985e51db213b826674cd5bb54fbf47731b8404b44403` at *both* `0ed5c691`
+(rc.9) and `b8b03d59` (rc.10); that corpus still **declares** `protocol_version` `1.0.0-rc.9`; and the
+spec publishes **no** `release/1.0.0-rc.10.json` — the newest release descriptor is `1.0.0-rc.9.json`.
+So the accepted revision and the corpus identity are two different facts at rc.10, and the pair
+(`1.0.0-rc.10`, `sha256:803918bf`) is only coherent if they are declared separately. They now are:
+`build_repository.CONFORMANCE_CORPUS_PROTOCOL_VERSION = "1.0.0-rc.9"` sits beside `PROTOCOL_VERSION`,
+`tests/test_schema_v7_repository.py::test_accepted_contract_pin` asserts they are *not* equal, and
+`test_released_accepted_schema_cases` now asserts the authenticated root's declared version as well as
+its digest. Collapsing the two is exactly the failure the previous review caught.
+
+Verified rather than string-replaced, and therefore left alone:
+`tests/test_rc5_external_repository_conformance.py` `PROTOCOL` stays `1.0.0-rc.5` (separate corpus,
+byte-pinned at `cc9e9c0f`, whose own manifest declares rc.5 — advancing it would assert what the
+pinned bytes deny); `conformance-claim-v3` stays on rc.5 in both the corpus valid case and the schema
+`const` at rc.10; `go_v1.NATIVE_CONTROL_INVENTORY_VERSION` stays `rc5-native-control-inventory-v1`
+because that literal is still in the rc.10 host-policy vectors.
+
+Fail-closed surface grew, not shrank. The module-level `pytest.skip` in
+`tests/test_protocol_conformance.py` that routed an rc.5 root (`sha256:b6f56aac`) past the whole
+module is gone: no consumer of an rc.5 conformance root remains, so such a root is now simply wrong
+and fails in `_root()` at import instead of silently skipping a conformance consumer. The corpus's
+new `invalid-v8-*` cases are consumed: the schemas-1-through-6 sweep went 96 -> 144 rows (132 of them
+rejections, counted separately so a corpus that stopped shipping the newer-field cases cannot pass as
+a full sweep), and the v7 sweep went 95 -> 103. `test_rc6_claim_versions_remain_separate` went from
+v1..v3 to v1..v5 so the schema-8 landing's claim versions cannot drift unobserved.
+
+`RELEASED_SUITE_PIN` and `.github/ci/candidate-suite.json` were deliberately **not** moved. They are a
+different pin with different semantics and their own three-runner qualification evidence, and they
+already serve the identical corpus digest.
+
+Evidence: `python -m mypy` exit 0 (75 files). Full `pytest` exit 0. Root-gated reruns with
+`CURATOR_SCHEMA_V7_ROOT` and `CURATOR_CONFORMANCE_ROOT` pointed at the rc.10 checkout, plus an
+expected-red mutant that hands the retired rc.5 corpus to the accepted-revision gate and fails on the
+digest (exit 1). `.research/TASK-260803-2ol7ok_protocol-isolation-classification.json` re-audited to
+`666c712dc4e9f2784b2c1f26aa1f313e22bf764e2d2b8e82661e225ad1a71e5a` with an isolation-neutral
+rationale: no node id added, removed or renamed.
+
+## 2026-08-27 TASK-260827-d319oi finalization: a green full suite is not evidence for the corpus pins
+
+Verifying the rc.10 pin move surfaced a measurement trap worth recording. The conformance consumers
+are `skipif`-gated on `CURATOR_CONFORMANCE_ROOT` / `CURATOR_SCHEMA_V7_ROOT`, and those variables are
+set only in CI. Run the required subset with no roots in the environment and it reports
+`40 passed, 168 skipped` — **168 of 208**. Every corpus assertion this task turns on (the manifest
+digest, the corpus's declared `protocol_version`, the 103 / 144 / 132 case counts) is inside that
+skipped set.
+
+So the orchestrator's `1797 passed, 245 skipped` full-suite run, executed without `CURATOR_*` in its
+environment, is green *and* silent about the pins it was taken as confirming. Rerunning
+`tests/test_schema_v7_repository.py` with `CURATOR_SCHEMA_V7_ROOT` pointed at an extracted `b8b03d5`
+tree gives `43 passed, 0 skipped` — that is the run that actually exercises them.
+
+Two mutants confirm the new bounds bind rather than decorate: narrowing `case_count == 103` to `102`
+fails with `assert 103 == 102` (the real corpus does ship 103), and flipping
+`ACCEPTED_CORPUS_PROTOCOL_VERSION` to `1.0.0-rc.10` fails with
+`assert '1.0.0-rc.9' == '1.0.0-rc.10'` — the exact rc.10/rc.9 conflation this pin move exists to
+prevent, proven red rather than argued.
+
+Takeaway for the next pin move: when reporting corpus-pin evidence, cite a run whose skip count shows
+the corpus consumers were reached. A full-suite pass with the roots unset proves nothing about them.

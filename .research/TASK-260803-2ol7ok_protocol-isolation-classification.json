@@ -4,7 +4,7 @@
   "source_commit": "2bfe3d64e9142d62e8ea3f92558eeee331f4578a",
   "protocol_commit": "0ed5c691e9208eea52f21db2fc05e226ce3516fd",
   "audited_files_sha256": {
-    "tests/test_protocol_conformance.py": "0be1178f57ee6b174359fb5317d41b2ff311f78be09cf590bb5a09d57400368a",
+    "tests/test_protocol_conformance.py": "666c712dc4e9f2784b2c1f26aa1f313e22bf764e2d2b8e82661e225ad1a71e5a",
     "tests/protocol_conformance_adapters.py": "ee933fa93c93145de754654b1b3e2d17f57d792adfa5170cae32e23ea5701a07",
     "tests/protocol_lifecycle_observations.py": "21e08f59921f199362c4ad13cf03ce6f97c7383a98489aebe142e1dd098bf3bd",
     "tests/conftest.py": "2de2c199e54a4fef8321aeefac1448699adc4428276ade7c361d1bbd1d905533"
@@ -27,6 +27,15 @@
       "change": "rebound the module from the rc.6 released suite (0c81c1f8, manifest sha256:12e58b82) to the rc.9 one (0ed5c691, manifest sha256:803918bf): the two identity constants, the release record it reads (release/1.0.0-rc.9.json and its claim_v5 block), and the qualification vector's protocol_version, which rc.9 moved in lockstep; and advanced the in-scope inventory counts the module pins for exhaustiveness -- agent-skill-v6 and csk-skill-v6 go 24 -> 28 cases each and SCHEMA_CASES 102 -> 110, because rc.9 adds four invalid-v8-* cases to each of those two v6 families; every other pinned count is unchanged",
       "isolation_neutral": true,
       "rationale": "No test function was added, removed, renamed or restructured, and no helper's reachable state changed: the edit replaces literal expectations inside existing bodies and the module-level identity block. What moved is the SUITE, not the code -- rc.9 is a strict superset of rc.6 (0 files removed, 6 changed, 243 added), and the only collection effect is 8 more test_rc6_generated_schema_case_is_consumed parametrisations from the 8 invalid-v8 cases rc.9 adds under agent-skill-v6 and csk-skill-v6. Those inherit the footprint, atomic cluster and shard of the 102 existing rows of that same function, which are uniform. Every other node keeps its footprint, cluster and shard; only source_line shifts, because the audited file gained lines above them."
+    },
+    {
+      "task_id": "TASK-260827-d319oi",
+      "file": "tests/test_protocol_conformance.py",
+      "previous_sha256": "0be1178f57ee6b174359fb5317d41b2ff311f78be09cf590bb5a09d57400368a",
+      "sha256": "666c712dc4e9f2784b2c1f26aa1f313e22bf764e2d2b8e82661e225ad1a71e5a",
+      "change": "advanced the accepted Curator Protocol revision to 1.0.0-rc.10 (b8b03d597ac83d158a0eadd9d0b25d2e883de1a3, curator-spec#22): rewrote the module header to state that rc.10 republishes the rc.9 corpus byte for byte so the pinned manifest digest sha256:803918bf authenticates a root served by either revision; deleted the module-level pytest.skip that routed an rc.5 root (sha256:b6f56aac) past this module; and extended test_rc6_claim_versions_remain_separate from claim v1..v3 to v1..v5. No identity constant, count or expectation value changed.",
+      "isolation_neutral": true,
+      "rationale": "No test function was added, removed, renamed or restructured, and no parametrisation source moved: SCHEMA_CASES, BUILD_DRIVER_VECTORS, HOST_POLICY_VECTORS, CLAIM_QUALIFICATION_VECTORS and MANAGER_LIFECYCLE_VECTORS all read the same suite bytes as before, because rc.10 changed profiles/manager.md only and left conformance/v1 identical to rc.9 (manifest sha256:803918bf at both revisions). The node-id set is therefore unchanged and every node keeps its footprint, atomic cluster and shard; only source_line shifts, because the header grew and the skip block shrank. The claim-versions edit adds two read-only _json() reads of schema-cases/conformance-claim-v4 and -v5 inside an existing body whose cluster already covers authenticated corpus reads, and touches no process, filesystem or environment state. Deleting the rc.5 skip removes a code path, it does not add one: with the skip gone an rc.5 root fails in _root() at module import instead of skipping the whole module, which is strictly louder and cannot make a shard's node set larger."
     }
   ],
   "method": {

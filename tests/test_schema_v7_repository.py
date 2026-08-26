@@ -10,7 +10,12 @@ import pytest
 from csk import build_repository, dev_substitutions, skillspec
 
 
-RC5_MANIFEST_SHA256 = "b6f56aacc0e37dcc6692f73f641bff761e89b645adfe20a47a06d81c6fda204c"
+# The conformance corpus published at the accepted revision (1.0.0-rc.10,
+# curator-spec b8b03d59).  rc.10 republishes the rc.9 corpus byte for byte, so
+# the digest below is the rc.9 digest and the corpus still declares
+# protocol_version 1.0.0-rc.9.  Both facts are pinned separately on purpose.
+ACCEPTED_MANIFEST_SHA256 = "803918bf8672f76cf990985e51db213b826674cd5bb54fbf47731b8404b44403"
+ACCEPTED_CORPUS_PROTOCOL_VERSION = "1.0.0-rc.9"
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -48,9 +53,19 @@ def _repository_manifest(**command_overrides: object) -> dict[str, object]:
     }
 
 
-def test_rc5_contract_pin() -> None:
-    assert build_repository.PROTOCOL_VERSION == "1.0.0-rc.5"
-    assert build_repository.CONFORMANCE_MANIFEST_SHA256 == RC5_MANIFEST_SHA256
+def test_accepted_contract_pin() -> None:
+    assert build_repository.PROTOCOL_VERSION == "1.0.0-rc.10"
+    assert build_repository.CONFORMANCE_MANIFEST_SHA256 == ACCEPTED_MANIFEST_SHA256
+    # The accepted revision is not the corpus identity.  rc.10 carries the rc.9
+    # corpus unchanged, and conflating the two is what a stale pin move does.
+    assert (
+        build_repository.CONFORMANCE_CORPUS_PROTOCOL_VERSION
+        == ACCEPTED_CORPUS_PROTOCOL_VERSION
+    )
+    assert (
+        build_repository.CONFORMANCE_CORPUS_PROTOCOL_VERSION
+        != build_repository.PROTOCOL_VERSION
+    )
 
 
 def test_schema_v7_parses_declared_repository_and_command(tmp_path: Path) -> None:
@@ -138,7 +153,7 @@ def test_repository_source_canonicalization(raw: str, identity: str, transport: 
         "https://git.example.com/a\u0085b",
     ],
 )
-def test_repository_source_rejects_non_rc5_forms(raw: str) -> None:
+def test_repository_source_rejects_non_released_forms(raw: str) -> None:
     with pytest.raises(build_repository.BuildRepositoryError):
         build_repository.parse_repository_source(raw)
 
@@ -306,13 +321,20 @@ def test_local_selector_normalization_is_idempotent() -> None:
         assert "//" not in normalized
 
 
-def test_released_rc5_schema_cases(tmp_path: Path) -> None:
+def test_released_accepted_schema_cases(tmp_path: Path) -> None:
     root_text = os.environ.get("CURATOR_SCHEMA_V7_ROOT")
     if root_text is None:
         pytest.skip("CURATOR_SCHEMA_V7_ROOT is not set")
     root = Path(root_text)
     manifest = root / "manifest.json"
-    assert hashlib.sha256(manifest.read_bytes()).hexdigest() == RC5_MANIFEST_SHA256
+    raw_manifest = manifest.read_bytes()
+    assert hashlib.sha256(raw_manifest).hexdigest() == ACCEPTED_MANIFEST_SHA256
+    # Authenticating the bytes proves which corpus was read; asserting the
+    # version it declares proves the corpus is the one the accepted revision
+    # republishes rather than a later one that happens to be handed over.
+    assert (
+        json.loads(raw_manifest)["protocol_version"] == ACCEPTED_CORPUS_PROTOCOL_VERSION
+    )
 
     case_count = 0
     for suite, manifest_name in (("agent-skill-v7", "agent-skill.json"), ("csk-skill-v7", "csk-skill.json")):
@@ -342,19 +364,28 @@ def test_released_rc5_schema_cases(tmp_path: Path) -> None:
         else:
             with pytest.raises(dev_substitutions.DevSubstitutionError):
                 dev_substitutions.parse_manifest(case_path.read_bytes(), tmp_path)
-    assert case_count == 95
+    # 103 at the accepted revision: the schema-8 landing added the four
+    # invalid-v8-* rejection cases to each of the two v7 suites.
+    assert case_count == 103
 
 
-def test_released_schemas_1_through_6_do_not_accept_v7_fields(tmp_path: Path) -> None:
+def test_released_schemas_1_through_6_do_not_accept_v7_or_v8_fields(
+    tmp_path: Path,
+) -> None:
     root_text = os.environ.get("CURATOR_SCHEMA_V7_ROOT")
     if root_text is None:
         pytest.skip("CURATOR_SCHEMA_V7_ROOT is not set")
     cases_root = Path(root_text) / "schema-cases"
     case_count = 0
+    rejected = 0
     for version in range(1, 7):
         for prefix, manifest_name in (("agent-skill", "agent-skill.json"), ("csk-skill", "csk-skill.json")):
             suite = cases_root / f"{prefix}-v{version}"
-            selected = [suite / "valid.json", *sorted(suite.glob("invalid-v7-*.json"))]
+            selected = [
+                suite / "valid.json",
+                *sorted(suite.glob("invalid-v7-*.json")),
+                *sorted(suite.glob("invalid-v8-*.json")),
+            ]
             for case_path in selected:
                 case_count += 1
                 snapshot = tmp_path / f"{prefix}-v{version}" / case_path.stem
@@ -363,9 +394,15 @@ def test_released_schemas_1_through_6_do_not_accept_v7_fields(tmp_path: Path) ->
                 if case_path.name == "valid.json":
                     skillspec.load_skill_spec(snapshot)
                 else:
+                    rejected += 1
                     with pytest.raises(skillspec.SkillSpecError):
                         skillspec.load_skill_spec(snapshot)
-    assert case_count == 96
+    # 96 v7-rejection rows plus the 48 invalid-v8-* rows the schema-8 landing
+    # added (6 versions x 2 manifest families x 4 cases).  Counting the
+    # rejections separately keeps a corpus that silently stopped shipping the
+    # newer-field cases from passing as a full sweep.
+    assert case_count == 144
+    assert rejected == 132
 
 
 def test_released_source_identity_vectors() -> None:
