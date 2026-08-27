@@ -1,0 +1,13 @@
+2026-08-19
+/usr/bin/git
+/Users/iv/.codex/packages/standalone/releases/0.147.0-aarch64-apple-darwin/codex-path/rg
+git version 2.50.1 (Apple Git-155)
+ripgrep 15.2.0 (rev e89fff89ac)
+git rev-parse --is-inside-work-tree: true
+
+2026-08-19 publish readiness
+gh version 2.97.0 (2026-07-31)
+gh auth status: authenticated as ivanopcode
+branch: main
+scope: commit 239c807 only
+remote: origin https://github.com/ivanopcode/cocoaskills.git

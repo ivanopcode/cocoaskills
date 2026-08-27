@@ -1,0 +1,15 @@
+{
+  "build_repository_substitutions": {
+    "golden-skill": {
+      "golden-tools": {
+        "git": "https://example.com/golden-tools.git",
+        "ref": {
+          "kind": "branch",
+          "value": "release/v2"
+        }
+      }
+    }
+  },
+  "schema_version": 2,
+  "substitutions": {}
+}

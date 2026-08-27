@@ -1,0 +1,17 @@
+{
+  "capabilities": {},
+  "commands": {
+    "reserved-v8": {
+      "interpreter": "python3-v1",
+      "type": "script",
+      "unix_path": "scripts/reserved"
+    }
+  },
+  "dependencies": {
+    "commands": {},
+    "mcp_servers": {},
+    "skills": {}
+  },
+  "runtime_roots": [],
+  "schema_version": 5
+}

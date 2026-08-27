@@ -1,0 +1,67 @@
+id:BUG-260731-2rhy74
+status:done
+title:BUG-260731-2rhy74: marker-v2-writer-conformance-fixture
+
+id:BUG-260805-cfdxsk
+status:done
+title:BUG-260805-cfdxsk: stabilize-macos-worker-domain-e2e
+
+id:BUG-260807-l2ymv3
+status:to-review
+title:BUG-260807-l2ymv3: repair-red-main-after-integration-merge
+
+id:TASK-260720-11yhth
+status:done
+title:Harden runtime reuse and activate built commands
+
+id:TASK-260720-12r55p
+status:done
+title:Consume shared schema v6 vectors
+
+id:TASK-260720-2g21eg
+status:done
+title:Implement fixed go-v1 compile driver
+
+id:TASK-260720-2jfnz6
+status:done
+title:Implement protected POSIX build cache
+
+id:TASK-260720-2x6mjn
+status:done
+title:Implement pure compiled-build planning
+
+id:TASK-260720-3c0ss2
+status:done
+title:Implement build-source identity and context isolation
+
+id:TASK-260720-3pemm6
+status:done
+title:Add cross-platform Go build end-to-end tests against rc.6
+
+id:TASK-260720-3t8nr3
+status:done
+title:Integrate atomic project and hybrid builds
+
+id:TASK-260720-8nxlgx
+status:done
+title:Implement protected Windows build cache
+
+id:TASK-260720-poa3ze
+status:done
+title:Research compile-only build drivers
+
+id:TASK-260803-21lw4t
+status:done
+title:TASK-260803-21lw4t: implement-windows-protocol-shards
+
+id:TASK-260824-2h0vjy
+status:done
+title:TASK-260824-2h0vjy: generalize-candidate-lane-input
+
+id:TASK-260824-2i5yqw
+status:done
+title:TASK-260824-2i5yqw: schema8-implementation
+
+id:TASK-260824-31y75t
+status:done
+title:TASK-260824-31y75t: schema8-consumption-and-qualification

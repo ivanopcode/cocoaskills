@@ -1,0 +1,2715 @@
+
+===== L3 [developer] =====
+<permissions instructions>
+Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is enabled.
+Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
+</permissions instructions>
+<collaboration_mode># Collaboration Mode: Default
+
+You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
+
+Your active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.
+
+## request_user_input availability
+
+The `request_user_input` tool is unavailable in Default mode. If you call it while in Default mode, it will return an error.
+
+In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
+</collaboration_mode>
+<skills_instructions>
+## Skills
+A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.
+### Available skills
+- agent-facing-api: Design pattern for building agent-optimized CLI query layers. Two-layer approach — mini-query DSL for structured reads (field projection, batching) + scoped grep for full-text search. Minimizes token overhead, eliminates MCP session cost. (file: /Users/iv/.agents/skills/agent-facing-api/SKILL.md)
+- akira-wallet-hunt: Self-contained skill for finding fresh and high-quality Akira wallets (high winrate + avg profit), running moonshot screens, explaining score breakdowns, and bootstrapping auth from login/password (including ~/.zprofile AKIRA_LOGIN/AKIRA_PASSWORD convention). (file: /Users/iv/Developer/IV/Akira/skills/akira-wallet-hunt/SKILL.md)
+- alexis-agents-infra: Shared agent infrastructure repo for Claude Code and Codex CLI. Use when updating global agent instructions, skills, symlink setup, tool configs, rules, or the generic agents attachments manifest contract and helper tooling. (file: /Users/iv/.agents/SKILL.md)
+- android-testing-tools: Android UI testing toolkit with screenshot validation. Use when: (1) Setting up UI test infrastructure with Page Object pattern (2) Creating test tags/accessibility IDs with structured naming (3) Writing UI tests with step-by-step screenshots (4) Validating UI via screenshot comparison (5) Writing snapshot tests with Paparazzi or Shot (6) Comparing snapshot diffs with snapshotsdiff CLI (7) Integrating with Allure for test reporting (8) Organizing shared test identifiers between app and test targets File types: Kotlin UI tests, Espresso, UIAutomator, Compose UI Test, Allure reports (file: /Users/iv/.agents/skills/android-testing-tools/agents/skills/android-testing-tools/SKILL.md)
+- architecture-diagrams: Create and organize architecture diagrams as code using C4 model (Structurizr DSL) and PlantUML (file: /Users/iv/.agents/skills/architecture-diagrams/SKILL.md)
+- brave-search: Web search and content extraction via Brave Search API. Use for searching documentation, facts, or any web content. Lightweight, no browser required. (file: /Users/iv/.codex/skills/pi-skills/brave-search/SKILL.md)
+- browser-tools: Interactive browser automation via Chrome DevTools Protocol. Use when you need to interact with web pages, test frontends, or when user interaction with a visible browser is required. (file: /Users/iv/.codex/skills/pi-skills/browser-tools/SKILL.md)
+- core-data-expert: Expert Core Data guidance (iOS/macOS): stack setup, fetch requests & NSFetchedResultsController, saving/merge conflicts, threading & Swift Concurrency, batch operations & persistent history, migrations, performance, and NSPersistentCloudKitContainer/CloudKit sync. (file: /Users/iv/.agents/skills/core-data/core-data-expert/SKILL.md)
+- currency-exchange: Currency exchange calculator CLI workflow for AMD/RUB conversions using real cash rates and the local `exchange` command. (file: /Users/iv/.agents/skills/currency-exchange/SKILL.md)
+- debug-codex-requests: Capture and inspect outgoing Codex API requests by routing a fresh Codex CLI run through a local OpenAI-compatible proxy, then summarize the logged request metadata. Use when Codex needs to debug request size, injected instructions, exposed tools, model or provider overrides, profile differences, or skill/context leakage; prefer the isolated subagent workflow for the proxy and the diagnostic Codex run. (file: /Users/iv/.codex/skills/debug-codex-requests/SKILL.md)
+- gccli: Google Calendar CLI for listing calendars, viewing/creating/updating events, and checking availability. (file: /Users/iv/.codex/skills/pi-skills/gccli/SKILL.md)
+- gdcli: Google Drive CLI for listing, searching, uploading, downloading, and sharing files and folders. (file: /Users/iv/.codex/skills/pi-skills/gdcli/SKILL.md)
+- git-filter-repo: Rewrite git commit identity fields (author/committer name/email) safely through git-filter-repo while keeping other commit fields untouched. (file: /Users/iv/Developer/ALIVe/agentic-infra/skill-git-filter-repo/SKILL.md)
+- glab-keychain-auth: Store a GitLab PAT in macOS Keychain using glab's built-in keyring support and reuse it for self-hosted GitLab CLI work. Use when setting up glab on macOS, authenticating against GitLab Self-Managed, verifying keychain-backed auth, or ensuring agents never keep raw GitLab tokens in shell history, env files, or repo config. (file: /Users/iv/agents/skills/glab-keychain-auth/SKILL.md)
+- gmcli: Gmail CLI for searching emails, reading threads, sending messages, managing drafts, and handling labels/attachments. (file: /Users/iv/.codex/skills/pi-skills/gmcli/SKILL.md)
+- go-testing-tools: Go testing toolkit with tuitestkit library and a closed-loop development cycle for Go applications. Covers test helpers, reducer tests, snapshot/golden testing, mock executor patterns, and view assertions. (file: /Users/iv/.agents/skills/go-testing-tools/SKILL.md)
+- ios-app-manager: iOS app project management CLI for Tuist-based projects with Relux architecture (file: /Users/iv/.agents/skills/ios-app-manager/SKILL.md)
+- ios-testing-tools: iOS UI testing toolkit with screenshot validation. Use when: (1) Setting up UI test infrastructure with Page Object pattern (2) Creating accessibility identifiers with structured naming (3) Writing UI tests with step-by-step screenshots (4) Validating UI via screenshot comparison (5) Writing snapshot tests with swift-snapshot-testing (6) Comparing snapshot diffs with snapshotsdiff CLI (7) Integrating with Allure for test reporting (8) Organizing shared test identifiers between app and test targets File types: Swift UI tests, XCUITest, xcresult, Allure reports, snapshot tests (file: /Users/iv/.agents/skills/ios-testing-tools/SKILL.md)
+- logbook: Record important findings, insights, decisions, and anomalies to a persistent Flight Logbook. Use proactively when discovering root causes, making architectural decisions, encountering surprising behavior, identifying regressions, completing significant milestones, or when the user says to log something. Invoke with 'review' to summarize the current logbook. (file: /Users/iv/agents/skills/logbook/SKILL.md)
+- ota-release-deploy: Use the Relux Works OTA publish/deploy workflow for iOS beta releases. Trigger when Codex needs to install or use the publish-ota-release tool, prepare an Xcode export for OTA, upload a release into the infra-managed OTA state root, run the remote infra OTA deploy, troubleshoot cartool/icon extraction, or verify OTA release URLs on beta.relux.works. (file: /Users/iv/.agents/skills/ota-release-deploy/SKILL.md)
+- product-appraisal: Universal methodology for evaluating complex products, bundles, and subscription offerings across any industry. Covers: product evaluation, bundle assessment, pricing analysis, market positioning, competitive analysis, product appraisal, go/no-go decision, viability assessment, unit economics, bundle value ratio, dead weight analysis, willingness to pay, tier pricing. RU triggers: оценка продукта, анализ бандла, ценообразование, позиционирование, конкурентный анализ, оценка жизнеспособности, юнит-экономика, анализ пакета, оценка ценности, решение go/no-go. (file: /Users/iv/.agents/skills/product-appraisal/product-appraisal/SKILL.md)
+- product-forensics: 4-layer MapReduce methodology for understanding complex products through source code analysis. Produces structured research artifacts from repo scanning to product-level synthesis. Designed for multi-repo platforms where no documentation exists. (file: /Users/iv/.agents/skills/product-forensics/SKILL.md)
+- project-management: Create and manage file-based task boards from project specs. Epic → Story → Task hierarchy with progress tracking. Includes planning capabilities. (file: /Users/iv/.agents/skills/project-management/SKILL.md)
+- swiftui-expert-skill: Write, review, or improve SwiftUI code following best practices for state management, view composition, performance, modern APIs, Swift concurrency, and iOS 26+ Liquid Glass adoption. Use when building new SwiftUI features, refactoring existing views, reviewing code quality, or adopting modern SwiftUI patterns. (file: /Users/iv/.agents/skills/swiftui/swiftui-expert-skill/SKILL.md)
+- telegram-telethon: Access Telegram user chats through Python + Telethon with macOS Keychain-backed auth. Use when you need a local Telegram CLI to bootstrap one-time login, list chat folders and dialogs, find dialog IDs, or export 1:1/group chat history to NDJSON/JSON since a date or over the full accessible history. (file: /Users/iv/agents/skills/telegram-telethon/SKILL.md)
+- transcribe: Speech-to-text transcription using Groq Whisper API. Supports m4a, mp3, wav, ogg, flac, webm. (file: /Users/iv/.codex/skills/pi-skills/transcribe/SKILL.md)
+- vscode: VS Code integration for viewing diffs and comparing files. Use when showing file differences to the user. (file: /Users/iv/.codex/skills/pi-skills/vscode/SKILL.md)
+- xcode-ota-release: Archive iOS apps from the Xcode CLI, export a signed IPA for testing, and publish the export through `publish-ota-release` to `beta.relux.works`. Use when Codex needs to: (1) archive a workspace or project with `xcodebuild`, (2) export `release-testing` or `debugging` with automatic signing, (3) hand the export directory to the Relux OTA release flow, or (4) rerun an OTA build with explicit client/app/version/build metadata. (file: /Users/iv/.agents/skills/xcode-ota-release/SKILL.md)
+- youtrack-cli: Используй, когда нужно работать с одним или несколькими self-hosted или cloud YouTrack инстансами через локальный CLI вместо MCP. Поддерживаются именованные labels инстансов, авторизация через macOS Keychain, optional scoped board ids для больших инстансов, просмотр досок и спринтов, поиск задач, комментарии, обновление полей, явное управление board/sprint membership и agent-facing JSON reads через bundled `ytx` wrapper. (file: /Users/iv/.local/share/agents/skills/youtrack-cli/SKILL.md)
+- youtube-transcript: Fetch transcripts from YouTube videos for summarization and analysis. (file: /Users/iv/.codex/skills/pi-skills/youtube-transcript/SKILL.md)
+- imagegen: Generate or edit raster images when the task benefits from AI-created bitmap visuals such as photos, illustrations, textures, sprites, mockups, or transparent-background cutouts. Use when Codex should create a brand-new image, transform an existing image, or derive visual variants from references, and the output should be a bitmap asset rather than repo-native code or vector. Do not use when the task is better handled by editing existing SVG/vector/code-native assets, extending an established icon or logo system, or building the visual directly in HTML/CSS/canvas. (file: /Users/iv/.codex/skills/.system/imagegen/SKILL.md)
+- openai-docs: Use when the user asks how to build with OpenAI products or APIs and needs up-to-date official documentation with citations, help choosing the latest model for a use case, or explicit GPT-5.4 upgrade and prompt-upgrade guidance; prioritize OpenAI docs MCP tools, use bundled references only as helper context, and restrict any fallback browsing to official OpenAI domains. (file: /Users/iv/.codex/skills/.system/openai-docs/SKILL.md)
+- plugin-creator: Create and scaffold plugin directories for Codex with a required `.codex-plugin/plugin.json`, optional plugin folders/files, and baseline placeholders you can edit before publishing or testing. Use when Codex needs to create a new local plugin, add optional plugin structure, or generate or update repo-root `.agents/plugins/marketplace.json` entries for plugin ordering and availability metadata. (file: /Users/iv/.codex/skills/.system/plugin-creator/SKILL.md)
+- skill-creator: Guide for creating effective skills. This skill should be used when users want to create a new skill (or update an existing skill) that extends Codex's capabilities with specialized knowledge, workflows, or tool integrations. (file: /Users/iv/.codex/skills/.system/skill-creator/SKILL.md)
+- skill-installer: Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo path. Use when a user asks to list installable skills, install a curated skill, or install a skill from another repo (including private repos). (file: /Users/iv/.codex/skills/.system/skill-installer/SKILL.md)
+### How to use skills
+- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.
+- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.
+- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.
+- How to use a skill (progressive disclosure):
+  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.
+  2) When `SKILL.md` references relative paths (e.g., `scripts/foo.py`), resolve them relative to the skill directory listed above first, and only consider other paths if needed.
+  3) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.
+  4) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.
+  5) If `assets/` or templates exist, reuse them instead of recreating from scratch.
+- Coordination and sequencing:
+  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.
+  - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.
+- Context hygiene:
+  - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.
+  - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.
+  - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
+- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.
+</skills_instructions>
+
+===== L4 [user] =====
+# AGENTS.md instructions for /Users/iv
+
+<INSTRUCTIONS>
+# Global Instructions
+
+This document loads all instruction modules automatically.
+
+## Modules
+
+@~/.agents/.instructions/INSTRUCTIONS_PLATFORM.md
+@~/.agents/.instructions/INSTRUCTIONS_STRUCTURE.md
+@~/.agents/.instructions/INSTRUCTIONS_ATTACHMENTS.md
+@~/.agents/.instructions/INSTRUCTIONS_TOOLS.md
+@~/.agents/.instructions/INSTRUCTIONS_SKILLS.md
+@~/.agents/.instructions/INSTRUCTIONS_SKILL_TRIGGERS.md
+@~/.agents/.instructions/INSTRUCTIONS_DIAGRAMS.md
+@~/.agents/.instructions/INSTRUCTIONS_TESTING.md
+@~/.agents/.instructions/INSTRUCTIONS_WORKFLOW.md
+@~/.agents/.instructions/INSTRUCTIONS_DOCS.md
+@~/.agents/.instructions/INSTRUCTIONS_STYLE.md
+</INSTRUCTIONS>
+<environment_context>
+  <cwd>/Users/iv</cwd>
+  <shell>zsh</shell>
+  <current_date>2026-04-01</current_date>
+  <timezone>Asia/Tbilisi</timezone>
+</environment_context>
+
+===== L6 [user] =====
+выведи списко последний сессий кодекса с кратким описание о чем были последние сообщения
+
+===== L11 [assistant] =====
+Сначала проверю, где в этом окружении лежит история сессий Codex, и быстро просмотрю подключенные модули инструкций, чтобы не пропустить локальные правила вывода.
+
+===== L21 [assistant] =====
+Нашёл локальное хранилище сессий в `~/.codex/sessions`. Сейчас быстро посмотрю формат `rollout-*.jsonl`, чтобы аккуратно вытащить именно последние сообщения, а не гадать по имени файла.
+
+===== L39 [assistant] =====
+Формат понятен: `rollout`-файлы у Codex это скорее отдельные прогоны/ходы, а не вся сессия целиком. Сейчас сверю это с `history.jsonl` и локальной sqlite, чтобы собрать именно последние сессии, сгруппированные по `session_id`.
+
+===== L63 [assistant] =====
+В истории вижу и обычные треды, и служебные subagent/one-shot треды, которые плодились во время дебага. Сейчас отфильтрую это, чтобы список не был засран внутренними `PONG`-прогонами, если только ты специально не хотел видеть и их тоже.
+
+===== L76 [assistant] =====
+Уже видно, что нормальный список получится по top-level `cli`-тредам, а не по всем `rollout`/subagent запускам. Вытащу последние такие треды с временем, cwd и 2-3 последними user-сообщениями, после чего сверну это в короткие описания.
+
+===== L83 [assistant] =====
+Собрал top-level `cli`-сессии из локальной истории Codex. Внутренние `subagent`/`exec` прогоны я не включал. Время локальное.
+
+- `2026-04-01 03:59` `019d4656…`: текущая сессия. Последнее сообщение: просьба вывести список последних сессий Codex с кратким описанием.
+- `2026-04-01 03:58` `019d3f69…`: большая сессия про `YouTrack` CLI/MCP и правки agent-инструкций. Последние сообщения были про синтаксис `@...` в `Global Instructions`, как агенту понимать что он уже в `dedicated worktree`, и уточнение что `New Task Entry` допустим только на `develop`.
+- `2026-04-01 03:50` `019d4646…`: запуск `$product-forensics` для анализа проекта `partners-app-dev` в `/Users/iv/Developer/Wildberries/partners-app-dev`.
+- `2026-04-01 03:48` `019d4619…`: сессия про создание skill для дебага запросов Codex через прокси и subagents. Последние сообщения: брать model profiles из `~/.codex/config.toml`, повторно проверить skill на `oss 20b`, и можно ли логировать полный контекст переписки, а не только метрики запроса.
+- `2026-04-01 02:47` `019d4614…`: короткая тестовая сессия, последнее сообщение `hello`.
+- `2026-04-01 02:43` `019d4611…`: короткая разговорная сессия, последние сообщения `hello` и `how are you`.
+- `2026-04-01 02:42` `019d460f…`: короткая тестовая сессия, последнее сообщение `hello`.
+- `2026-04-01 02:41` `019d460f…`: короткая разговорная сессия, последние сообщения `hello` и `how are you doing`.
+- `2026-04-01 02:40` `019d460d…`: короткая русскоязычная разговорная сессия, последние сообщения `привет привет`, `как поживаешь`, `у меня тоже нормально`.
+- `2026-04-01 02:27` `019d4601…`: короткая разговорная сессия, последние сообщения `hello` и `how are you`.
+
+Если хочешь, могу следующим сообщением вывести это же:
+1. с полными `session_id`
+2. только “содержательные” сессии без `hello`
+3. включая внутренние `subagent`-запуски и `PONG`-тесты.
+
+===== L88 [user] =====
+нужны полные айди да
+
+===== L93 [assistant] =====
+Вот полные `session_id` последних top-level `cli` сессий:
+
+- `019d4656-83e4-79e2-8483-eb484c359f74` — текущая, про список последних сессий Codex
+- `019d3f69-4561-7702-bdbd-a6a262f85d63` — YouTrack CLI/MCP + правила `worktree`/инструкций
+- `019d4646-64fb-72b1-9953-1a05e5fb7216` — `$product-forensics` для `partners-app-dev`
+- `019d4619-2a57-7fb1-9f78-31f66293ccb8` — skill для дебага запросов Codex через proxy/subagents
+- `019d4614-9b3d-7323-b1d7-a4261d025678` — `hello`
+- `019d4611-3bd0-7f91-892e-8641031e64a9` — `hello` / `how are you`
+- `019d460f-e007-79c0-953c-163b7b791817` — `hello`
+- `019d460f-11c5-7ba3-a5c7-f795372effa2` — `hello` / `how are you doing`
+- `019d460d-7c95-77d0-9b26-749cf994d845` — `привет привет` / `как поживаешь`
+- `019d4601-e435-7141-b05f-e3753eac090e` — `hello` / `how are you`
+
+Если надо, могу сразу вывести следующий блок:
+- только содержательные сессии без `hello`
+- последние `N` сессий
+- включая внутренние `subagent`-сессии тоже
+
+===== L98 [user] =====
+нужно больше сессий, ищу ту которая была с glab
+
+===== L103 [assistant] =====
+Сейчас поищу по локальной истории и базе тредов все упоминания `glab`, чтобы вытащить нужную сессию с полным `session_id`, а не листать вслепую по общему списку.
+
+===== L116 [assistant] =====
+Нашёл как минимум одну явную `glab`-сессию и ещё одну, где `glab` всплывал уже внутри рабочего треда про `worktree`/MR. Доберу полный список релевантных `session_id`, чтобы не пропустить нужную.
+
+===== L123 [assistant] =====
+Вот релевантные сессии, где был `glab` или работа с GitLab через CLI.
+
+- `019d3f2c-ef9d-7a12-97bf-59f193f2c2c2`
+  `2026-03-30 18:36` -> `2026-03-31 22:31`
+  `cwd: /Users/iv`
+  Самая вероятная, если ты ищешь именно сессию про `glab`.
+  Там было:
+  `есть ли аналог gh-cli для gitlab?`
+  `через что ставим на мак glab`
+  настройка self-hosted GitLab
+  хранение PAT в macOS Keychain
+  bootstrap `glab-keychain-auth`
+  фикс ошибки в `bootstrap-glab-keychain.sh`
+  вопрос про доступ к нескольким GitLab репозиториям
+
+- `019d4543-0d6c-7c50-9c21-b2fe17105c33`
+  `2026-03-31 22:58` -> `2026-04-01 01:53`
+  `cwd: /Users/iv/Developer/Wildberries/partners-app-dev`
+  Это сессия, где явно было:
+  `используй ... glab cli что бы сделать mr`
+  То есть рабочий тред про проект, который потом дошёл до коммита и MR через `glab`.
+
+- `019d3f69-4561-7702-bdbd-a6a262f85d63`
+  `2026-03-30 19:42` -> `2026-04-01 04:20`
+  `cwd: /Users/iv`
+  Основная тема была про `YouTrack`, но ближе к концу там тоже был `glab`:
+  `запуш и через glab сделай мр`
+  потом разбор ошибки `glab auth status`
+  и вопрос, почему получился `Draft: Draft: ...`
+
+Если хочешь, я могу сразу для любой из этих сессий вывести:
+- последние 10 сообщений
+- только user-сообщения
+- краткую хронологию по шагам, о чём там шёл разговор
+
+===== L128 [user] =====
+а в каком контексте работали с Scripts/create_worktree.py скриптом для создания ворктри
+
+===== L133 [assistant] =====
+Сейчас найду сам `Scripts/create_worktree.py` и связанные с ним сессии/сообщения, чтобы ответить по факту: в каком именно репо и под какую задачу этот скрипт трогали.
+
+===== L142 [assistant] =====
+Историю уже нашёл: основной контекст был вокруг `partners-app-dev` и задачи про агентские `worktree`. Доберу точный путь файла и, если он один, привяжу ответ к конкретной ветке/задаче без догадок.
+
+===== L154 [assistant] =====
+Чтобы ответ был полезный, быстро посмотрю сам файл и историю по нему: там, скорее всего, прямо зашиты цели скрипта и видно, какие именно хвосты тогда закрывали.
+
+===== L167 [assistant] =====
+Ещё дерну короткий README рядом со скриптом: там обычно в одной-двух абзацах сформулирован исходный pain point, ради которого helper вообще появился.
+
+===== L174 [assistant] =====
+С `Scripts/create_worktree.py` работали в контексте `partners-app-dev`, задачи `PMA-22178` про нормальный `worktree`-workflow для агентской разработки.
+
+Ключевой контекст был такой:
+- в сессии `019d3f69-4561-7702-bdbd-a6a262f85d63` сначала оформили и дожали сам процесс вокруг task/worktree/agent docs, плюс там же всплыла задача `PMA-22178`
+- основная реализация самого helper-а была в сессии `019d4543-0d6c-7c50-9c21-b2fe17105c33` в репо ` /Users/iv/Developer/Wildberries/partners-app-dev `
+- позже в этой же сессии уже пошли коммит и MR через `glab`
+
+Что именно решали этим скриптом:
+- обычный `git worktree add` не приносил файлы, нужные для старта проекта
+- конкретно для этого репо нужен был перенос локальных/несгенерённых артефактов вроде `Secrets.plist`, а также опциональных кэшей
+- хотели, чтобы агент мог создавать новый checkout одной командой и не спотыкаться об пустой worktree
+
+Это прямо зафиксировано в [README.md](/Users/iv/Developer/Wildberries/partners-app-dev-pma-22178/Scripts/worktree/README.md): там сказано, что свежему worktree не хватает локальных и сгенерированных артефактов, и helper решает именно это.
+
+По обсуждениям в истории над скриптом дожимали такие вещи:
+- дефолтный путь `/.temp/worktrees/<repo>-<identifier>`, а не безликий `.../worktree`
+- shorthand-вызов `make worktree 20362`
+- `WORKTREE_SYNC_CACHE=true` по умолчанию
+- cleanup на `Ctrl-C` и `SIGTERM`
+- machine-readable вывод для агентов: `--print-path` и `--json`
+- self-tests на нормализацию id и вычисление default path
+- более понятный preflight по `rsync`, manifest и занятым путям
+
+Текущий файл нашёлся здесь:
+[create_worktree.py](/Users/iv/Developer/Wildberries/partners-app-dev-pma-22178/Scripts/create_worktree.py)
+
+И по git-истории у него стартовый коммит такой:
+- `9c7d968d50` — `[PMA-22178] Добавлен скрипт создания worktree`
+
+Если хочешь, могу следующим сообщением вытащить именно хронологию по этой теме:
+- какие user-сообщения привели к созданию скрипта
+- какие потом были правки и замечания по нему
+- в какой момент там подключился `glab` и MR
+
+===== L179 [user] =====
+я имею ввиду идентификатор сессии
+
+===== L184 [assistant] =====
+Если нужен именно `session_id`, где трогали `Scripts/create_worktree.py`, то основной такой:
+
+`019d4543-0d6c-7c50-9c21-b2fe17105c33`
+
+Это та сессия, где обсуждали и дожимали:
+- дефолтный `worktree` path
+- `WORKTREE_SYNC_CACHE=true` по умолчанию
+- shorthand `make worktree 20362`
+- cleanup на `Ctrl-C` / `SIGTERM`
+- `--print-path`
+- `--json`
+- self-tests
+- preflight-валидацию
+
+Если нужен ещё смежный тред, где шёл более широкий контекст вокруг task/worktree/agent flow, то это:
+
+`019d3f69-4561-7702-bdbd-a6a262f85d63`
+
+Но именно по самому `Scripts/create_worktree.py` главный `session_id` — `019d4543-0d6c-7c50-9c21-b2fe17105c33`.
+
+===== L190 [user] =====
+давай сделаем скилл который выводит последние сесси кодекс (по умолчанию 20 штук, но может контралироваться пользователем) должно быть session id, описания о чем дискуссия в общем, а также отдельно описания послледних сообщений. все сообщения должны быть без скоращений, как и session id (главное). используй $skill-creator а также как референс стиля skill.md возьми agents/skills/glab-mr-workflow и youtrack-cli тк они хорошо заточены под слабые модели которые местами плохо понимают, а это наша цель в тмо числе.
+
+===== L192 [user] =====
+<skill>
+<name>skill-creator</name>
+<path>/Users/iv/.codex/skills/.system/skill-creator/SKILL.md</path>
+---
+name: skill-creator
+description: Guide for creating effective skills. This skill should be used when users want to create a new skill (or update an existing skill) that extends Codex's capabilities with specialized knowledge, workflows, or tool integrations.
+metadata:
+  short-description: Create or update a skill
+---
+
+# Skill Creator
+
+This skill provides guidance for creating effective skills.
+
+## About Skills
+
+Skills are modular, self-contained folders that extend Codex's capabilities by providing
+specialized knowledge, workflows, and tools. Think of them as "onboarding guides" for specific
+domains or tasks—they transform Codex from a general-purpose agent into a specialized agent
+equipped with procedural knowledge that no model can fully possess.
+
+### What Skills Provide
+
+1. Specialized workflows - Multi-step procedures for specific domains
+2. Tool integrations - Instructions for working with specific file formats or APIs
+3. Domain expertise - Company-specific knowledge, schemas, business logic
+4. Bundled resources - Scripts, references, and assets for complex and repetitive tasks
+
+## Core Principles
+
+### Concise is Key
+
+The context window is a public good. Skills share the context window with everything else Codex needs: system prompt, conversation history, other Skills' metadata, and the actual user request.
+
+**Default assumption: Codex is already very smart.** Only add context Codex doesn't already have. Challenge each piece of information: "Does Codex really need this explanation?" and "Does this paragraph justify its token cost?"
+
+Prefer concise examples over verbose explanations.
+
+### Set Appropriate Degrees of Freedom
+
+Match the level of specificity to the task's fragility and variability:
+
+**High freedom (text-based instructions)**: Use when multiple approaches are valid, decisions depend on context, or heuristics guide the approach.
+
+**Medium freedom (pseudocode or scripts with parameters)**: Use when a preferred pattern exists, some variation is acceptable, or configuration affects behavior.
+
+**Low freedom (specific scripts, few parameters)**: Use when operations are fragile and error-prone, consistency is critical, or a specific sequence must be followed.
+
+Think of Codex as exploring a path: a narrow bridge with cliffs needs specific guardrails (low freedom), while an open field allows many routes (high freedom).
+
+### Protect Validation Integrity
+
+You may use subagents during iteration to validate whether a skill works on realistic tasks or whether a suspected problem is real. This is most useful when you want an independent pass on the skill's behavior, outputs, or failure modes after a revision.  Only do this when it is possible to start new subagents.
+
+When using subagents for validation, treat that as an evaluation surface. The goal is to learn whether the skill generalizes, not whether another agent can reconstruct the answer from leaked context.
+
+Prefer raw artifacts such as example prompts, outputs, diffs, logs, or traces. Give the minimum task-local context needed to perform the validation. Avoid passing the intended answer, suspected bug, intended fix, or your prior conclusions unless the validation explicitly requires them.
+
+### Anatomy of a Skill
+
+Every skill consists of a required SKILL.md file and optional bundled resources:
+
+```
+skill-name/
+├── SKILL.md (required)
+│   ├── YAML frontmatter metadata (required)
+│   │   ├── name: (required)
+│   │   └── description: (required)
+│   └── Markdown instructions (required)
+├── agents/ (recommended)
+│   └── openai.yaml - UI metadata for skill lists and chips
+└── Bundled Resources (optional)
+    ├── scripts/          - Executable code (Python/Bash/etc.)
+    ├── references/       - Documentation intended to be loaded into context as needed
+    └── assets/           - Files used in output (templates, icons, fonts, etc.)
+```
+
+#### SKILL.md (required)
+
+Every SKILL.md consists of:
+
+- **Frontmatter** (YAML): Contains `name` and `description` fields. These are the only fields that Codex reads to determine when the skill gets used, thus it is very important to be clear and comprehensive in describing what the skill is, and when it should be used.
+- **Body** (Markdown): Instructions and guidance for using the skill. Only loaded AFTER the skill triggers (if at all).
+
+#### Agents metadata (recommended)
+
+- UI-facing metadata for skill lists and chips
+- Read references/openai_yaml.md before generating values and follow its descriptions and constraints
+- Create: human-facing `display_name`, `short_description`, and `default_prompt` by reading the skill
+- Generate deterministically by passing the values as `--interface key=value` to `scripts/generate_openai_yaml.py` or `scripts/init_skill.py`
+- On updates: validate `agents/openai.yaml` still matches SKILL.md; regenerate if stale
+- Only include other optional interface fields (icons, brand color) if explicitly provided
+- See references/openai_yaml.md for field definitions and examples
+
+#### Bundled Resources (optional)
+
+##### Scripts (`scripts/`)
+
+Executable code (Python/Bash/etc.) for tasks that require deterministic reliability or are repeatedly rewritten.
+
+- **When to include**: When the same code is being rewritten repeatedly or deterministic reliability is needed
+- **Example**: `scripts/rotate_pdf.py` for PDF rotation tasks
+- **Benefits**: Token efficient, deterministic, may be executed without loading into context
+- **Note**: Scripts may still need to be read by Codex for patching or environment-specific adjustments
+
+##### References (`references/`)
+
+Documentation and reference material intended to be loaded as needed into context to inform Codex's process and thinking.
+
+- **When to include**: For documentation that Codex should reference while working
+- **Examples**: `references/finance.md` for financial schemas, `references/mnda.md` for company NDA template, `references/policies.md` for company policies, `references/api_docs.md` for API specifications
+- **Use cases**: Database schemas, API documentation, domain knowledge, company policies, detailed workflow guides
+- **Benefits**: Keeps SKILL.md lean, loaded only when Codex determines it's needed
+- **Best practice**: If files are large (>10k words), include grep search patterns in SKILL.md
+- **Avoid duplication**: Information should live in either SKILL.md or references files, not both. Prefer references files for detailed information unless it's truly core to the skill—this keeps SKILL.md lean while making information discoverable without hogging the context window. Keep only essential procedural instructions and workflow guidance in SKILL.md; move detailed reference material, schemas, and examples to references files.
+
+##### Assets (`assets/`)
+
+Files not intended to be loaded into context, but rather used within the output Codex produces.
+
+- **When to include**: When the skill needs files that will be used in the final output
+- **Examples**: `assets/logo.png` for brand assets, `assets/slides.pptx` for PowerPoint templates, `assets/frontend-template/` for HTML/React boilerplate, `assets/font.ttf` for typography
+- **Use cases**: Templates, images, icons, boilerplate code, fonts, sample documents that get copied or modified
+- **Benefits**: Separates output resources from documentation, enables Codex to use files without loading them into context
+
+#### What to Not Include in a Skill
+
+A skill should only contain essential files that directly support its functionality. Do NOT create extraneous documentation or auxiliary files, including:
+
+- README.md
+- INSTALLATION_GUIDE.md
+- QUICK_REFERENCE.md
+- CHANGELOG.md
+- etc.
+
+The skill should only contain the information needed for an AI agent to do the job at hand. It should not contain auxiliary context about the process that went into creating it, setup and testing procedures, user-facing documentation, etc. Creating additional documentation files just adds clutter and confusion.
+
+### Progressive Disclosure Design Principle
+
+Skills use a three-level loading system to manage context efficiently:
+
+1. **Metadata (name + description)** - Always in context (~100 words)
+2. **SKILL.md body** - When skill triggers (<5k words)
+3. **Bundled resources** - As needed by Codex (Unlimited because scripts can be executed without reading into context window)
+
+#### Progressive Disclosure Patterns
+
+Keep SKILL.md body to the essentials and under 500 lines to minimize context bloat. Split content into separate files when approaching this limit. When splitting out content into other files, it is very important to reference them from SKILL.md and describe clearly when to read them, to ensure the reader of the skill knows they exist and when to use them.
+
+**Key principle:** When a skill supports multiple variations, frameworks, or options, keep only the core workflow and selection guidance in SKILL.md. Move variant-specific details (patterns, examples, configuration) into separate reference files.
+
+**Pattern 1: High-level guide with references**
+
+```markdown
+# PDF Processing
+
+## Quick start
+
+Extract text with pdfplumber:
+[code example]
+
+## Advanced features
+
+- **Form filling**: See [FORMS.md](FORMS.md) for complete guide
+- **API reference**: See [REFERENCE.md](REFERENCE.md) for all methods
+- **Examples**: See [EXAMPLES.md](EXAMPLES.md) for common patterns
+```
+
+Codex loads FORMS.md, REFERENCE.md, or EXAMPLES.md only when needed.
+
+**Pattern 2: Domain-specific organization**
+
+For Skills with multiple domains, organize content by domain to avoid loading irrelevant context:
+
+```
+bigquery-skill/
+├── SKILL.md (overview and navigation)
+└── reference/
+    ├── finance.md (revenue, billing metrics)
+    ├── sales.md (opportunities, pipeline)
+    ├── product.md (API usage, features)
+    └── marketing.md (campaigns, attribution)
+```
+
+When a user asks about sales metrics, Codex only reads sales.md.
+
+Similarly, for skills supporting multiple frameworks or variants, organize by variant:
+
+```
+cloud-deploy/
+├── SKILL.md (workflow + provider selection)
+└── references/
+    ├── aws.md (AWS deployment patterns)
+    ├── gcp.md (GCP deployment patterns)
+    └── azure.md (Azure deployment patterns)
+```
+
+When the user chooses AWS, Codex only reads aws.md.
+
+**Pattern 3: Conditional details**
+
+Show basic content, link to advanced content:
+
+```markdown
+# DOCX Processing
+
+## Creating documents
+
+Use docx-js for new documents. See [DOCX-JS.md](DOCX-JS.md).
+
+## Editing documents
+
+For simple edits, modify the XML directly.
+
+**For tracked changes**: See [REDLINING.md](REDLINING.md)
+**For OOXML details**: See [OOXML.md](OOXML.md)
+```
+
+Codex reads REDLINING.md or OOXML.md only when the user needs those features.
+
+**Important guidelines:**
+
+- **Avoid deeply nested references** - Keep references one level deep from SKILL.md. All reference files should link directly from SKILL.md.
+- **Structure longer reference files** - For files longer than 100 lines, include a table of contents at the top so Codex can see the full scope when previewing.
+
+## Skill Creation Process
+
+Skill creation involves these steps:
+
+1. Understand the skill with concrete examples
+2. Plan reusable skill contents (scripts, references, assets)
+3. Initialize the skill (run init_skill.py)
+4. Edit the skill (implement resources and write SKILL.md)
+5. Validate the skill (run quick_validate.py)
+6. Iterate based on real usage and forward-test complex skills.
+
+Follow these steps in order, skipping only if there is a clear reason why they are not applicable.
+
+### Skill Naming
+
+- Use lowercase letters, digits, and hyphens only; normalize user-provided titles to hyphen-case (e.g., "Plan Mode" -> `plan-mode`).
+- When generating names, generate a name under 64 characters (letters, digits, hyphens).
+- Prefer short, verb-led phrases that describe the action.
+- Namespace by tool when it improves clarity or triggering (e.g., `gh-address-comments`, `linear-address-issue`).
+- Name the skill folder exactly after the skill name.
+
+### Step 1: Understanding the Skill with Concrete Examples
+
+Skip this step only when the skill's usage patterns are already clearly understood. It remains valuable even when working with an existing skill.
+
+To create an effective skill, clearly understand concrete examples of how the skill will be used. This understanding can come from either direct user examples or generated examples that are validated with user feedback.
+
+For example, when building an image-editor skill, relevant questions include:
+
+- "What functionality should the image-editor skill support? Editing, rotating, anything else?"
+- "Can you give some examples of how this skill would be used?"
+- "I can imagine users asking for things like 'Remove the red-eye from this image' or 'Rotate this image'. Are there other ways you imagine this skill being used?"
+- "What would a user say that should trigger this skill?"
+- "Where should I create this skill? If you do not have a preference, I will place it in `$CODEX_HOME/skills` (or `~/.codex/skills` when `CODEX_HOME` is unset) so Codex can discover it automatically."
+
+To avoid overwhelming users, avoid asking too many questions in a single message. Start with the most important questions and follow up as needed for better effectiveness.
+
+Conclude this step when there is a clear sense of the functionality the skill should support.
+
+### Step 2: Planning the Reusable Skill Contents
+
+To turn concrete examples into an effective skill, analyze each example by:
+
+1. Considering how to execute on the example from scratch
+2. Identifying what scripts, references, and assets would be helpful when executing these workflows repeatedly
+
+Example: When building a `pdf-editor` skill to handle queries like "Help me rotate this PDF," the analysis shows:
+
+1. Rotating a PDF requires re-writing the same code each time
+2. A `scripts/rotate_pdf.py` script would be helpful to store in the skill
+
+Example: When designing a `frontend-webapp-builder` skill for queries like "Build me a todo app" or "Build me a dashboard to track my steps," the analysis shows:
+
+1. Writing a frontend webapp requires the same boilerplate HTML/React each time
+2. An `assets/hello-world/` template containing the boilerplate HTML/React project files would be helpful to store in the skill
+
+Example: When building a `big-query` skill to handle queries like "How many users have logged in today?" the analysis shows:
+
+1. Querying BigQuery requires re-discovering the table schemas and relationships each time
+2. A `references/schema.md` file documenting the table schemas would be helpful to store in the skill
+
+To establish the skill's contents, analyze each concrete example to create a list of the reusable resources to include: scripts, references, and assets.
+
+### Step 3: Initializing the Skill
+
+At this point, it is time to actually create the skill.
+
+Skip this step only if the skill being developed already exists. In this case, continue to the next step.
+
+Before running `init_skill.py`, ask where the user wants the skill created. If they do not specify a location, default to `$CODEX_HOME/skills`; when `CODEX_HOME` is unset, fall back to `~/.codex/skills` so the skill is auto-discovered.
+
+When creating a new skill from scratch, always run the `init_skill.py` script. The script conveniently generates a new template skill directory that automatically includes everything a skill requires, making the skill creation process much more efficient and reliable.
+
+Usage:
+
+```bash
+scripts/init_skill.py <skill-name> --path <output-directory> [--resources scripts,references,assets] [--examples]
+```
+
+Examples:
+
+```bash
+scripts/init_skill.py my-skill --path "${CODEX_HOME:-$HOME/.codex}/skills"
+scripts/init_skill.py my-skill --path "${CODEX_HOME:-$HOME/.codex}/skills" --resources scripts,references
+scripts/init_skill.py my-skill --path ~/work/skills --resources scripts --examples
+```
+
+The script:
+
+- Creates the skill directory at the specified path
+- Generates a SKILL.md template with proper frontmatter and TODO placeholders
+- Creates `agents/openai.yaml` using agent-generated `display_name`, `short_description`, and `default_prompt` passed via `--interface key=value`
+- Optionally creates resource directories based on `--resources`
+- Optionally adds example files when `--examples` is set
+
+After initialization, customize the SKILL.md and add resources as needed. If you used `--examples`, replace or delete placeholder files.
+
+Generate `display_name`, `short_description`, and `default_prompt` by reading the skill, then pass them as `--interface key=value` to `init_skill.py` or regenerate with:
+
+```bash
+scripts/generate_openai_yaml.py <path/to/skill-folder> --interface key=value
+```
+
+Only include other optional interface fields when the user explicitly provides them. For full field descriptions and examples, see references/openai_yaml.md.
+
+### Step 4: Edit the Skill
+
+When editing the (newly-generated or existing) skill, remember that the skill is being created for another instance of Codex to use. Include information that would be beneficial and non-obvious to Codex. Consider what procedural knowledge, domain-specific details, or reusable assets would help another Codex instance execute these tasks more effectively.
+
+After substantial revisions, or if the skill is particularly tricky, you should use subagents to forward-test the skill on realistic tasks or artifacts. When doing so, pass the artifact under validation rather than your diagnosis of what is wrong, and keep the prompt generic enough that success depends on transferable reasoning rather than hidden ground truth.
+
+#### Start with Reusable Skill Contents
+
+To begin implementation, start with the reusable resources identified above: `scripts/`, `references/`, and `assets/` files. Note that this step may require user input. For example, when implementing a `brand-guidelines` skill, the user may need to provide brand assets or templates to store in `assets/`, or documentation to store in `references/`.
+
+Added scripts must be tested by actually running them to ensure there are no bugs and that the output matches what is expected. If there are many similar scripts, only a representative sample needs to be tested to ensure confidence that they all work while balancing time to completion.
+
+If you used `--examples`, delete any placeholder files that are not needed for the skill. Only create resource directories that are actually required.
+
+#### Update SKILL.md
+
+**Writing Guidelines:** Always use imperative/infinitive form.
+
+##### Frontmatter
+
+Write the YAML frontmatter with `name` and `description`:
+
+- `name`: The skill name
+- `description`: This is the primary triggering mechanism for your skill, and helps Codex understand when to use the skill.
+  - Include both what the Skill does and specific triggers/contexts for when to use it.
+  - Include all "when to use" information here - Not in the body. The body is only loaded after triggering, so "When to Use This Skill" sections in the body are not helpful to Codex.
+  - Example description for a `docx` skill: "Comprehensive document creation, editing, and analysis with support for tracked changes, comments, formatting preservation, and text extraction. Use when Codex needs to work with professional documents (.docx files) for: (1) Creating new documents, (2) Modifying or editing content, (3) Working with tracked changes, (4) Adding comments, or any other document tasks"
+
+Do not include any other fields in YAML frontmatter.
+
+##### Body
+
+Write instructions for using the skill and its bundled resources.
+
+### Step 5: Validate the Skill
+
+Once development of the skill is complete, validate the skill folder to catch basic issues early:
+
+```bash
+scripts/quick_validate.py <path/to/skill-folder>
+```
+
+The validation script checks YAML frontmatter format, required fields, and naming rules. If validation fails, fix the reported issues and run the command again.
+
+### Step 6: Iterate
+
+After testing the skill, you may detect the skill is complex enough that it requires forward-testing; or users may request improvements.
+
+User testing often this happens right after using the skill, with fresh context of how the skill performed.
+
+**Forward-testing and iteration workflow:**
+
+1. Use the skill on real tasks
+2. Notice struggles or inefficiencies
+3. Identify how SKILL.md or bundled resources should be updated
+4. Implement changes and test again
+5. Forward-test if it is reasonable and appropriate
+
+## Forward-testing
+
+To forward-test, launch subagents as a way to stress test the skill with minimal context.
+Subagents should *not* know that they are being asked to test the skill.  They should be treated as
+an agent asked to perform a task by the user.  Prompts to subagents should look like:
+  `Use $skill-x at /path/to/skill-x to solve problem y`
+Not:
+  `Review the skill at /path/to/skill-x; pretend a user asks you to...`
+
+Decision rule for forward-testing:
+  - Err on the side of forward-testing
+  - Ask for approval if you think there's a risk that forward-testing would:
+    * take a long time,
+    * require additional approvals from the user, or
+    * modify live production systems
+
+  In these cases, show the user your proposed prompt and request (1) a yes/no decision, and
+  (2) any suggested modifictions.
+
+Considerations when forward-testing:
+   - use fresh threads for independent passes
+   - pass the skill, and a request in a similar way the user would.
+   - pass raw artifacts, not your conclusions
+   - avoid showing expected answers or intended fixes
+   - rebuild context from source artifacts after each iteration
+   - review the subagent's output and reasoning and emitted artifacts
+   - avoid leaving artifacts the agent can find on disk between iterations;
+     clean up subagents' artifacts to avoid additional contamination.
+
+If forward-testing only succeeds when subagents see leaked context, tighten the skill or the
+forward-testing setup before trusting the result.
+
+</skill>
+
+===== L196 [assistant] =====
+Использую `$skill-creator`; сначала посмотрю, где лежит исходный репозиторий для shared skills, и открою референсы `glab-mr-workflow` и `youtrack-cli`, чтобы собрать новый skill в том же стиле, а не наобум.
+
+===== L208 [assistant] =====
+Скилл-creator подтверждён. Сейчас доберу именно source path для референсных skills и проверю `~/agents` как кандидат на authoring-репозиторий, чтобы новый skill положить туда, а не в runtime-слой.
+
+===== L220 [assistant] =====
+План такой: возьму `/Users/iv/agents/skills` как source-of-truth, открою `glab-mr-workflow` и `youtrack-cli`, затем заскелечу новый skill через `skill-creator` и добавлю минимальный helper, который агрегирует треды из `~/.codex/state_5.sqlite` и `~/.codex/history.jsonl`.
+
+===== L236 [assistant] =====
+Референсы посмотрел: стиль там как раз жёсткий, агент-ориентированный и без лишней болтовни. Дальше зафиксирую рабочий план в `.temp/tasks.md`, потом создам новый skill в `/Users/iv/agents/skills` и привяжу его в `.codex/skills`.
+
+===== L249 [assistant] =====
+Сейчас внесу task entry в `.temp/tasks.md`, затем через `init_skill.py` создам новый skill skeleton в `/Users/iv/agents/skills`. После этого допишу helper и сам `SKILL.md` в жёстком формате для слабых моделей.
+
+===== L261 [assistant] =====
+Скелет создал. Сейчас перепишу шаблон полностью: уберу TODO-шум, добавлю детерминированный helper и жёсткий output contract, чтобы skill не разваливался на слабых моделях.
+
+===== L275 [assistant] =====
+Перехожу к правкам файлов: добавлю helper, перепишу `SKILL.md`, уберу мусорный `.DS_Store`, а потом свяжу skill через symlink и прогоню smoke checks на реальной истории Codex.
+
+===== L281 [assistant] =====
+Упёрся в мусорный бинарный `.DS_Store`: `apply_patch` не может его удалить, потому что это не UTF-8. Сначала тихо уберу его обычной командой, потом повторю текстовые правки через patch.
+
+===== L292 [assistant] =====
+Содержимое уже на месте. Сейчас добью интеграцию: сделаю executable-биты, создам symlink-и в `.codex/skills` и `.claude/skills`, потом прогоню helper на живой истории и валидатор skill-creator.
+
+===== L302 [assistant] =====
+Дальше только верификация: прогоню helper в трёх режимах — recent, query и exact session id — чтобы убедиться, что он реально закрывает твой кейс с `glab` и полными `session_id`.
+
+===== L315 [assistant] =====
+Валидация упёрлась не в skill, а в отсутствие `PyYAML` у системного `python3`. Не буду засорять глобальный env: поставлю `PyYAML` во временный каталог под `.temp/skill-validate`, прогоню `quick_validate.py` через `PYTHONPATH`, и параллельно добью smoke checks по `glab`-query и exact `session_id`.
+
+===== L333 [assistant] =====
+Осталось закрыть хвосты: зафиксирую прогресс и проверки в `.temp/tasks.md`, потом сведу итог без лишнего changelog-а.
+
+===== L344 [assistant] =====
+Скилл создан в [SKILL.md](/Users/iv/agents/skills/codex-sessions/SKILL.md), helper лежит в [codex_sessions.py](/Users/iv/agents/skills/codex-sessions/scripts/codex_sessions.py), wrapper в [codex-sessions](/Users/iv/agents/skills/codex-sessions/scripts/codex-sessions). Source-of-truth сделал в `/Users/iv/agents/skills/codex-sessions`, плюс привязал его в `/Users/iv/.codex/skills/codex-sessions` и `/Users/iv/.claude/skills/codex-sessions`.
+
+Что умеет:
+- по умолчанию отдаёт 20 последних top-level `cli` сессий
+- держит полные `session_id` без сокращений
+- держит полные последние user-сообщения без `...`
+- отдельно даёт базу для общего описания дискуссии и отдельно последние сообщения
+- поддерживает `--limit`, `--last-messages`, `--query`, `--session-id`, `--include-internal`
+
+Проверил на живой истории:
+- recent list: `--limit 2 --last-messages 2`
+- поиск по теме: `--query glab --limit 3`
+- exact lookup: `--session-id 019d4543-0d6c-7c50-9c21-b2fe17105c33 --last-messages 2`
+- `quick_validate.py` тоже прошёл; для него не ставил ничего глобально, `PyYAML` положил временно в `/Users/iv/.temp/skill-validate/pydeps`
+
+Если хочешь, следующим сообщением могу сразу:
+- допилить ranking поиска, чтобы текущая сессия не всплывала выше “исторически более релевантной”
+- добавить режим только для “содержательных” сессий без `hello`/`привет`
+- сделать отдельный флаг для количества сессий и количества последних сообщений прямо из natural-language парсинга в helper
+
+===== L349 [user] =====
+ok. добавь mit леценизию и мое авторство, создай через gh-cli репозиторий в ivanopcode, и запуши туда (предварительно создай репозиторий для скилла с нормальным гитигнор, а также убедись что коммит
+  полписан моей ivanopcode подписью. названия skill-codex-list-sessions, добавь также readme
+
+===== L354 [assistant] =====
+Сейчас приведу skill к финальному виду для отдельного репозитория: переименую под `skill-codex-list-sessions`, добавлю `README.md`, `LICENSE`, `.gitignore`, затем проверю `gh` auth и git-signing конфиг, создам репозиторий в `ivanopcode` и запушу подписанный коммит.
+
+===== L367 [assistant] =====
+`gh` уже залогинен как `ivanopcode`. Сейчас быстро сниму рабочий git-signing профиль с одного из твоих репозиториев с верифицированными коммитами, чтобы новый repo сразу коммитился правильной SSH-подписью, потом начну переименование и упаковку skill в отдельный репозиторий.
+
+===== L380 [assistant] =====
+Профиль подписи на GitHub есть. Сейчас найду, какой локальный SSH key path у тебя уже используется для `git commit -S`, и потом внесу его в новый repo локальным config, чтобы не гадать с `user.signingkey`.
+
+===== L393 [assistant] =====
+Нашёл локальный `~/.ssh/ivanopcode` keypair и `allowed_signers`. Проверю ещё локальную верификацию SSH-signature через этот ключ, чтобы новый коммит не просто был с `-S`, а реально читался как good signature и совпадал с `ivanopcode`.
+
+===== L406 [assistant] =====
+Переименую сам skill под `skill-codex-list-sessions`, обновлю metadata и symlink-и, затем добавлю `README.md`, `LICENSE`, `.gitignore` и инициализирую отдельный git repo с локальным SSH-signing конфигом на `~/.ssh/ivanopcode.pub`. После этого сделаю подписанный коммит и `gh repo create ... --push`.
+
+===== L424 [assistant] =====
+Сейчас правлю содержимое под новое имя и упаковываю repo-метаданные. Затем инициализирую git прямо в `skill-codex-list-sessions`, сделаю signed commit и только после локальной проверки создам GitHub-репозиторий и запушу.
+
+===== L431 [assistant] =====
+Сначала локально прогоню проверки уже в новом имени skill-а, затем инициализирую repo, настрою локальный SSH-signing и сделаю signed commit. После этого уже безопасно создам remote и проверю verification через GitHub API.
+
+===== L444 [assistant] =====
+Проверки зелёные. Уберу мусорные `.DS_Store`/`__pycache__`, потом инициализирую git, поставлю локальный signing config на `ivanopcode` key и сделаю signed commit.
+
+===== L457 [assistant] =====
+`git init` прошёл, но пакетный `git config` повалился на одном из шагов. Быстро проверю repo state и проставлю конфиг по одному, чтобы не оставить полубитое состояние перед коммитом.
+
+===== L481 [assistant] =====
+Поймал обычный `config.lock` хвост после прошлой попытки. Уберу lock, завершу локальный git config и сразу покажу итоговый signing-профиль перед коммитом.
+
+===== L491 [assistant] =====
+Локальный signing config готов. Уберу последний `.DS_Store` из корня skill-а, затем зафиксирую все файлы одним signed commit и сразу покажу `git log --show-signature`, чтобы было видно, что подпись реально читается как good signature.
+
+===== L504 [assistant] =====
+Коммит уже создан. Сейчас отдельно перепроверю подпись локально, потом через `gh repo create` подниму `ivanopcode/skill-codex-list-sessions`, запушу `main` и добьюсь подтверждения `verified=true` через GitHub API, а не только локально.
+
+===== L515 [assistant] =====
+`gh repo create` ушёл в работу. Подожду завершение и сразу после этого проверю remote URL и verification статуса коммита на стороне GitHub.
+
+===== L524 [assistant] =====
+Remote уже создан и `main` запушен. Остался последний контрольный шаг: вытащу commit verification с GitHub API, чтобы подтвердить, что коммит распознан именно как verified после push, а не только локально.
+
+===== L537 [assistant] =====
+Финальный небольшой хвост: я временно включал global `gpg.ssh.allowedSignersFile` только ради локальной проверки подписи. Сейчас уберу это из global config и оставлю проверку локально только внутри нового repo, чтобы не оставлять лишний глобальный след.
+
+===== L552 [assistant] =====
+Последний housekeeping: отмечу task как завершённый в `.temp/tasks.md`, чтобы не оставлять хвостов на следующую сессию.
+
+===== L559 [assistant] =====
+Скилл переименован в `skill-codex-list-sessions` и упакован как отдельный репозиторий в [skill-codex-list-sessions](/Users/iv/agents/skills/skill-codex-list-sessions). Обновил [SKILL.md](/Users/iv/agents/skills/skill-codex-list-sessions/SKILL.md), [agents/openai.yaml](/Users/iv/agents/skills/skill-codex-list-sessions/agents/openai.yaml), добавил [README.md](/Users/iv/agents/skills/skill-codex-list-sessions/README.md), [LICENSE](/Users/iv/agents/skills/skill-codex-list-sessions/LICENSE) с MIT и авторством Ivan Oparin, и [`.gitignore`](/Users/iv/agents/skills/skill-codex-list-sessions/.gitignore). Локальные symlink-и обновлены на `~/.codex/skills/skill-codex-list-sessions` и `~/.claude/skills/skill-codex-list-sessions`.
+
+GitHub-репозиторий создан и запушен: `https://github.com/ivanopcode/skill-codex-list-sessions`. Корневой коммит `7bf1025a33bb3ce91915755e5f4ae4e1596b5b3c` подписан SSH-ключом `ivanopcode`; локально `git log --show-signature` показывает `Good "git" signature`, и GitHub API вернул `verified=true`, `reason=valid`.
+
+Проверил helper и skill:
+- `python3 -m py_compile [codex_sessions.py](/Users/iv/agents/skills/skill-codex-list-sessions/scripts/codex_sessions.py)`
+- smoke query по `glab`
+- exact lookup по `session_id`
+- `quick_validate.py` для skill-структуры
+
+Если хочешь, следующим сообщением могу ещё сделать второй коммит с polish-правками: например убрать текущую сессию из `--query glab` результатов по умолчанию или добавить фильтр “только содержательные сессии”.
+
+===== L564 [user] =====
+добавь его в https://github.com/ivanopcode/ivanopcode там где skills для агентов
+
+===== L569 [assistant] =====
+Сначала найду локальный checkout `ivanopcode`, посмотрю где там секция про agent skills, и внесу точечное обновление без лишних изменений.
+
+===== L582 [assistant] =====
+В локальном `ivanopcode` checkout ветка сильно разошлась с remote. Чтобы не ломать твой текущий репозиторий, сделаю отдельный чистый worktree от актуального remote `main`, обновлю там `README.md`, подпишу коммит и запушу уже из этого изолированного checkout.
+
+===== L592 [assistant] =====
+Жду завершения `fetch`, потом подниму worktree от свежего `origin/main` или `iv3/main` и внесу туда ровно одну правку в секцию `Agentic Skills`.
+
+===== L598 [assistant] =====
+Один из старых remote-алиасов (`iv2`) битый, но нужный `iv3/main` уже обновился. Дальше работаю от свежего remote `iv3/main`, чтобы не зависеть от поломанного alias.
+
+===== L611 [assistant] =====
+Сейчас внесу одну строку в `README.md` профиля, поставлю signed commit в изолированном worktree и запушу прямо в `main`, потому что этот checkout уже основан на актуальном `iv3/main` и изменение там тривиальное.
+
+===== L617 [assistant] =====
+Правка внесена. Теперь проверю diff, задам локальный SSH-signing в этом worktree, сделаю signed commit и запушу `HEAD:main` на `iv3`. После пуша отдельно проверю verification через GitHub API.
+
+===== L629 [assistant] =====
+Коммит готов. Сейчас локально проверю подпись, затем пушну этот один коммит в `iv3/main` и подтвержу `verified=true` уже на GitHub.
+
+===== L638 [assistant] =====
+Пуш ушёл. Дожидаюсь завершения и сразу проверю новый коммит в `ivanopcode/ivanopcode` через GitHub API, чтобы подтвердить, что профильный README уже обновлён на remote.
+
+===== L650 [assistant] =====
+Remote уже обновлён и GitHub подтвердил `verified=true` для нового коммита. Уберу временный worktree, чтобы не оставлять мусор в `.temp`, при этом основной divergent checkout не трону.
+
+===== L660 [assistant] =====
+Основной checkout профиля сейчас просто отстаёт на один только что запушенный коммит. Быстро подтяну его `--ff-only`, чтобы локальный `README.md` тоже совпадал с remote и не было рассинхрона.
+
+===== L671 [assistant] =====
+Добавил `skill-codex-list-sessions` в секцию Agentic Skills в [README.md](/Users/iv/Developer/IV/ivanopcode/README.md) профиля `ivanopcode`.
+
+Изменение уже запушено в `main` репозитория `ivanopcode/ivanopcode`. Коммит: `124167a72496d631d597d72163f60d6ebb3a6a43`, GitHub verification: `verified=true`. Локальный checkout `/Users/iv/Developer/IV/ivanopcode` тоже подтянут `--ff-only`, так что он синхронизирован с remote.
+
+===== L676 [user] =====
+› $skill-codex-list-sessions
+
+
+• Using skill-codex-list-sessions and starting with the bundled helper’s default recent-session read. I’m pulling the latest top-level Codex CLI sessions so I can summarize each session and show the latest
+  user prompts verbatim.
+
+• Ran /Users/iv/agents/skills/skill-codex-list-sessions/scripts/codex-sessions
+  └ {
+      "limit": 20,
+    … +523 lines
+      ]
+    }
+
+─ Worked for 1m 06s ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Найдено 20 top-level cli сессий. Internal / subagent / exec не включал. Ниже список в порядке убывания updated_at.
+
+  1. 019d46ce-7f3d-71e0-9d3c-8090963f61d6
+     Общее обсуждение: текущая сессия, в которой был вызван skill-codex-list-sessions для чтения локальной истории Codex.
+     Последние сообщения пользователя:
+
+  [$skill-codex-list-sessions](/Users/iv/agents/skills/skill-codex-list-sessions/SKILL.md)
+
+  2. 019d4619-2a57-7fb1-9f78-31f66293ccb8
+     Общее обсуждение: разработка скилла для диагностики запросов Codex через локальный прокси, субагентов и логирование; затем уточнение поведения для профиля oss и требования показывать системный промпт
+     агентской среды.
+     Последние сообщения пользователя:
+
+  а на реальном budget из профиля oss -- это должно быть оснвное поведение скилла
+
+  пока не прогоняй, но сделай правки котоыре это учитывают
+
+  еще я хочу что бы скилл мог показывать системный промпт который задает агентская среда
+
+  3. 019d3f2c-ef9d-7a12-97bf-59f193f2c2c2
+     Общее обсуждение: сессия про CLI-работу с self-hosted GitLab, затем про оформление отдельного скилла/репозитория, настройку remote-ов, лицензии, подписанных коммитов и публикацию в ivanopcode.
+     Последние сообщения пользователя:
+
+  скилл уже есть в relux-works?
+
+  origin переименуй в iv а upstream в rw
+
+  ok. добавь mit леценизию и мое авторство, создай через gh-cli репозиторий в ivanopcode, и запуши туда (предварительно создай репозиторий для скилла с нормальным гитигнор, а также убедись что коммит
+  полписан моей ivanopcode подписью
+
+  4. 019d4656-83e4-79e2-8483-eb484c359f74
+     Общее обсуждение: запрос на вывод последних сессий Codex перешел в разработку и публикацию skill-codex-list-sessions, включая README, лицензию и подключение скилла в репозиторий профиля.
+     Последние сообщения пользователя:
+
+  давай сделаем скилл который выводит последние сесси кодекс (по умолчанию 20 штук, но может контралироваться пользователем) должно быть session id, описания о чем дискуссия в общем, а также отдельно
+  описания послледних сообщений. все сообщения должны быть без скоращений, как и session id (главное). используй [$skill-creator](/Users/iv/.codex/skills/.system/skill-creator/SKILL.md) а также как референс
+  стиля skill.md возьми agents/skills/glab-mr-workflow и youtrack-cli тк они хорошо заточены под слабые модели которые местами плохо понимают, а это наша цель в тмо числе.
+
+  ok. добавь mit леценизию и мое авторство, создай через gh-cli репозиторий в ivanopcode, и запуши туда (предварительно создай репозиторий для скилла с нормальным гитигнор, а также убедись что коммит
+    полписан моей ivanopcode подписью. названия skill-codex-list-sessions, добавь также readme
+
+  добавь его в https://github.com/ivanopcode/ivanopcode там где skills для агентов
+
+  5. 019d3f69-4561-7702-bdbd-a6a262f85d63
+     Общее обсуждение: исследование open source CLI/MCP для self-hosted YouTrack, затем работа над agent skill-ами, проверка стиля skill.md, контекст для MR-чеклиста и финальный коммит/пуш.
+     Последние сообщения пользователя:
+
+  проверь как написан skill.md в новом скилле тут - подходит под наш стиль для weak model? /Users/iv/agents/skills/glab-mr-workflow/
+
+  получил сейчас фейл джобы на одном из своих мр. ❌ Все чекбоксы в описании MR должны быть отмечены. было вот так: ### Изменения 🔧
+  - Добавлен скрипт создания git worktree с переносом локальных файлов, необходимых для bootstrap проекта
+  - Добавлены manifests для обязательных локальных inputs и опциональных cache paths
+  - Добавлена документация по использованию worktree helper
+
+  ### Чеклист 📋
+  - [ ] Описание MR обновлено для большей понятности того, что было сделано
+  - [ ] Добавлены **Feature Toggles** на изменения, либо:
+      - В описании явно указано, что тогглы не требуются
+  - [ ] Вся логика в моем коде покрыта **Unit-тестами**, либо:
+      - В описании явно указано, что unit-тесты не требуются для внутренних dev scripts --- давай добавим контекст как правильно оформлять при создании мр
+
+  коммитим и пушим
+
+  6. 019d4543-0d6c-7c50-9c21-b2fe17105c33
+     Общее обсуждение: проверка флага COMPILATION_CACHE_ENABLE_CACHING в Tuist-проекте, после чего сессия сместилась в доработку create_worktree.py: cleanup, machine-readable output, self-tests и более
+     строгую preflight-валидацию.
+     Последние сообщения пользователя:
+
+  что максимум можешь из этого сразу решить?
+
+  давай вот это все тогда доделаем   - Сделать корректный cleanup на Ctrl-C и SIGTERM в Scripts/create_worktree.py:242. Сейчас это главный реальный
+      хвост.
+    - Добавить machine-readable интерфейс для агентского сценария: --print-path и, возможно, --json. Это даст
+      стабильный контракт без парсинга логов.
+    - Добавить небольшой набор self-tests на нормализацию идентификатора и вычисление default path. Для такого
+      helper-а этого уже достаточно, чтобы не ловить регрессии по именованию.
+    - Чуть усилить preflight-валидацию: понятнее ругаться на отсутствующий rsync, занятый target path, невалидный
+      manifest.
+
+  давай закоммитим и запушим
+
+  7. 019d4646-64fb-72b1-9953-1a05e5fb7216
+     Общее обсуждение: запуск product-forensics для анализа проекта в partners-app-dev.
+     Последние сообщения пользователя:
+
+  [$product-forensics](/Users/iv/.agents/skills/product-forensics/SKILL.md) давай проанализируем данный проект
+
+  8. 019d4614-9b3d-7323-b1d7-a4261d025678
+     Общее обсуждение: короткая англоязычная приветственная сессия без дальнейшей предметной задачи.
+     Последние сообщения пользователя:
+
+  hello
+
+  9. [118;1:3u019d4611-3bd0-7f91-892e-8641031e64a9
+     Общее обсуждение: короткая англоязычная приветственная сессия с обменом hello и вопросом о самочувствии.
+     Последние сообщения пользователя:
+
+  hello
+
+  how are you
+
+  10. 019d460f-e007-79c0-953c-163b7b791817
+     Общее обсуждение: короткая англоязычная приветственная сессия.
+     Последние сообщения пользователя:
+
+  hello
+
+  11. 019d460f-11c5-7ba3-a5c7-f795372effa2
+     Общее обсуждение: короткая англоязычная приветственная сессия с продолжением how are you doing.
+     Последние сообщения пользователя:
+
+  hello
+
+  how are you doing
+
+  12. 019d460d-7c95-77d0-9b26-749cf994d845
+     Общее обсуждение: короткая русскоязычная приветственная сессия с бытовым обменом репликами.
+     Последние сообщения пользователя:
+
+  привет привет
+
+  как поживаешь
+
+  у меня тоже нормально
+
+  13. 019d4601-e435-7141-b05f-e3753eac090e
+     Общее обсуждение: короткая англоязычная приветственная сессия с вопросом how are you.
+     Последние сообщения пользователя:
+
+  hello
+
+  how are you
+
+  14. 019d45ff-3927-7c72-8698-14a5012e3ca3
+     Общее обсуждение: короткая англоязычная приветственная сессия.
+     Последние сообщения пользователя:
+
+  hello
+
+  15. 019d45fd-a791-7563-a636-a87c61725a7f
+     Общее обсуждение: короткая русскоязычная приветственная сессия.
+     Последние сообщения пользователя:
+
+  привет
+
+  16. 019d45f2-6de7-7590-8785-005b2f0f3552
+     Общее обсуждение: короткая англоязычная приветственная сессия.
+     Последние сообщения пользователя:
+
+  hello
+
+  17. 019d45f0-6dd3-7fb1-8379-c1a4960af9ee
+     Общее обсуждение: короткая англоязычная приветственная сессия.
+     Последние сообщения пользователя:
+
+  hello
+
+  18. 019d45ea-73ca-7e42-a8c9-dc9e5f0f9ff8
+     Общее обсуждение: короткая англоязычная приветственная сессия.
+     Последние сообщения пользователя:
+
+  hello
+
+  19. 019d45e8-3038-7fe3-b871-a8937bae3285
+     Общее обсуждение: короткая англоязычная приветственная сессия.
+     Последние сообщения пользователя:
+
+  hello
+
+  20. 019d45e1-e8bc-7e23-99a2-6fe1d2978976
+     Общее обсуждение: создание AGENTS.md как contributor guide / repository guidelines для репозитория, с требованиями к структуре документа, секциям и стилю изложения.
+     Последние сообщения пользователя:
+
+  Generate a file named AGENTS.md that serves as a contributor guide for this repository.
+  Your goal is to produce a clear, concise, and well-structured document with descriptive headings and actionable explanations for each section.
+  Follow the outline below, but adapt as needed — add sections if relevant, and omit those that do not apply to this project.
+
+  Document Requirements
+
+  - Title the document "Repository Guidelines".
+  - Use Markdown headings (#, ##, etc.) for structure.
+  - Keep the document concise. 200-400 words is optimal.
+  - Keep explanations short, direct, and specific to this repository.
+  - Provide examples where helpful (commands, directory paths, naming patterns).
+  - Maintain a professional, instructional tone.
+
+  Recommended Sections
+
+  Project Structure & Module Organization
+
+  - Outline the project structure, including where the source code, tests, and assets are located.
+
+  Build, Test, and Development Commands
+
+  - List key commands for building, testing, and running locally (e.g., npm test, make build).
+  - Briefly explain what each command does.
+
+  Coding Style & Naming Conventions
+
+  - Specify indentation rules, language-specific style preferences, and naming patterns.
+  - Include any formatting or linting tools used.
+
+  Testing Guidelines
+
+  - Identify testing frameworks and coverage requirements.
+  - State test naming conventions and how to run tests.
+
+  Commit & Pull Request Guidelines
+
+  - Summarize commit message conventions found in the project’s Git history.
+  - Outline pull request requirements (descriptions, linked issues, screenshots, etc.).
+
+  (Optional) Add other sections if relevant, such as Security & Configuration Tips, Architecture Overview, or Agent-Specific Instructions.
+
+  Если хочешь, дальше могу сделать одно из трех:
+
+  1. найти конкретную сессию по ключевому слову;
+  2. показать только нетривиальные сессии без hello/привет;
+  3. раскрыть одну конкретную сессию по session_id.
+
+─ Local tools: 1 call (146ms) • WebSocket: 2 events send (4ms) • 2920 events received (89.6s) ──────── вывод не подходит. нужно что то вроде таблицы + одно приложение саммари о чем вся беседе и о чем последние 2 сообщения.
+
+===== L678 [user] =====
+<skill>
+<name>product-forensics</name>
+<path>/Users/iv/.agents/skills/product-forensics/SKILL.md</path>
+---
+name: product-forensics
+description: >
+  4-layer MapReduce methodology for understanding complex products through source code analysis.
+  Produces structured research artifacts from repo scanning to product-level synthesis.
+  Designed for multi-repo platforms where no documentation exists.
+triggers:
+  - product forensics
+  - source code analysis
+  - product understanding
+  - codebase analysis
+  - reverse engineer product
+  - understand the product
+  - what does this product do
+  - map the codebase
+  - product analysis
+  - product synthesis
+  - deep dive research
+  - recon repos
+---
+
+# Product Forensics
+
+## When To Use
+
+- You have a multi-repo codebase with no/poor documentation
+- You need to understand what a product does from source code alone
+- You're onboarding onto an unfamiliar product
+- You need to produce structured product documentation from code
+- You want to identify risks, gaps, and architectural decisions
+
+## The 4-Layer Model
+
+A MapReduce pipeline that progressively builds product understanding from raw code.
+
+```
+L1 RECON         L2 DEEP-DIVE        L3 DOMAIN SYNTHESIS     L4 PRODUCT SYNTHESIS
+(per repo)       (per feature)        (per domain)            (per topic)
+
+ repo-1 ─┐       ┌─ feature-a ─┐      ┌─ domain-X ─┐         ┌─ product overview
+ repo-2 ─┤  MAP  ├─ feature-b ─┤ MAP  ├─ domain-Y ─┤ REDUCE  ├─ personas & journeys
+ repo-3 ─┤ ───►  ├─ feature-c ─┤ ───► ├─ domain-Z ─┤  ───►   ├─ use case catalog
+ ...     ─┘      └─ ...        ─┘     └─ ...       ─┘         ├─ architecture decisions
+                                                               └─ risks & gaps
+
+ SCAN code        TRACE flows          READ L2 files           READ L1+L3 files
+ 15 files         74 files             8 files                 5 files
+ ~30min           ~2-3hrs              ~1hr                    ~1hr
+```
+
+### L1: Recon (Surface Scan)
+
+- **Input:** One repository directory
+- **Output:** Structured recon report per repo
+- **Parallelism:** All repos in parallel (batch size 8)
+- **Agent type:** Code reader — scans actual files, no guessing
+- **Key output:** Tech stack, API surface, data flows, inter-service deps, Phase 2 suggestions
+- **File pattern:** `.research/L1_recon/{date}_recon_{repo-name}.md`
+
+### L2: Deep-Dive (Feature-Level Analysis)
+
+- **Input:** Specific research question + starting code points (from L1 suggestions)
+- **Output:** Detailed research doc per feature/topic
+- **Parallelism:** All tasks in parallel (batch size 8)
+- **Agent type:** Code tracer — follows flows through all layers with file:line precision
+- **Key output:** End-to-end flows, state machines, cross-service contracts, risks
+- **File pattern:** `.research/L2_deep-dive/{TASK_ID}_{topic}.md`
+
+### L3: Domain Synthesis (Cross-Repo Consolidation)
+
+- **Input:** Multiple L2 research files grouped by domain
+- **Output:** Domain-level synthesis (product-oriented, not code-oriented)
+- **Parallelism:** All domains in parallel (batch size 8)
+- **Agent type:** Synthesizer — reads research files only, no source code
+- **Key output:** User perspective, end-to-end flows, domain model, integration points, risks
+- **File pattern:** `.research/L3_domain-synthesis/synthesis_{TASK_ID}_{domain}.md`
+
+### L4: Product Synthesis (Product-Level Understanding)
+
+- **Input:** All L3 domain syntheses + L1 recon reports
+- **Output:** Product-level documents (overview, personas, use cases, architecture, risks)
+- **Parallelism:** All topics in parallel (batch size 5)
+- **Agent type:** Product analyst — reads synthesis files only, no source code
+- **Key output:** Executive summary, user journeys, architecture decisions, risk assessment
+- **File pattern:** `.research/L4_product-synthesis/synthesis_{TASK_ID}_{topic}.md`
+
+## Research Organization
+
+File and folder structure for research artifacts — see [`references/research-organization.md`](references/research-organization.md).
+
+## Layer Specifications
+
+Detailed specs for each layer (inputs, outputs, scope, rules) — see [`references/layer-specifications.md`](references/layer-specifications.md).
+
+## Agent Templates
+
+Prompt templates for spawning agents at each layer — see [`references/agent-templates.md`](references/agent-templates.md).
+
+## Execution Workflow
+
+### Prerequisites
+
+- `task-board` CLI installed and configured
+- All target repos cloned locally
+- Board initialized with `.task-board/`
+
+### Step-by-Step
+
+1. **Create epic** for the analysis on the board
+2. **Create one story per repo** (for L1+L2)
+3. **Run L1 recon** — spawn agents in batches of 8, one per story
+   - Each L1 agent scans its repo and creates L2 tasks under the same story
+4. **Review L1 output** — check recon reports, adjust L2 task descriptions if needed
+5. **Run L2 deep-dives** — spawn agents in batches of 8, one per task
+   - Each L2 agent traces a specific feature/topic in depth
+6. **Review L2 output** — check research files for completeness
+7. **Create synthesis epic** with two stories: domain synthesis + product synthesis
+8. **Group L2 files by domain** — create L3 tasks, each listing which L2 files to read
+9. **Run L3 domain synthesis** — spawn agents in batches of 8
+10. **Review L3 output** — check domain syntheses
+11. **Create L4 tasks** — each lists which L3+L1 files to read and what topic to cover
+12. **Run L4 product synthesis** — spawn agents in batch
+13. **Review L4 output** — final product documentation
+
+### Proven Metrics (xflow/connect, 15 repos)
+
+| Layer | Tasks | Output Files | Total Lines | Wall Time |
+|-------|-------|-------------|-------------|-----------|
+| L1 Recon | 15 | 15 | ~5K | ~30min |
+| L2 Deep-Dive | 88 | 74 | ~28K | ~2-3hrs |
+| L3 Domain Synthesis | 8 | 8 | ~2.7K | ~1hr |
+| L4 Product Synthesis | 5 | 5 | ~2.7K | ~1hr |
+| **Total** | **116** | **102** | **~38K** | **~5hrs** |
+
+### Key Operational Notes
+
+- **Batch size 8** works reliably without rate limits
+- **Spawn with `--no-update-check`** to avoid CLI hangs
+- **L1 agents create L2 tasks** — this is the "map" step that generates the work
+- **L3/L4 agents do NOT read source code** — only research files
+- **Review between layers is essential** — catch gaps before they propagate
+- **All research persists to files** — context windows collapse, files survive
+
+## Anti-Patterns
+
+- Trying to understand a product by reading code directly (doesn't scale)
+- Skipping L1 and jumping to deep-dives (no map of the territory)
+- Running L3/L4 without reviewing L2 first (garbage in, garbage out)
+- Having synthesis agents read source code (they should only read research files)
+- Not persisting research to files (lost when context resets)
+- Batches larger than 8 (risk rate limits)
+
+</skill>
+
+===== L679 [user] =====
+<skill>
+<name>skill-codex-list-sessions</name>
+<path>/Users/iv/agents/skills/skill-codex-list-sessions/SKILL.md</path>
+---
+name: skill-codex-list-sessions
+description: Use when Codex needs to list recent local Codex sessions, find a session by topic or keyword, recover full session ids, or summarize what a session was generally about plus what the latest user messages said. Reads local Codex history from ~/.codex/state_5.sqlite and ~/.codex/history.jsonl through the bundled helper. Default to 20 top-level cli sessions unless the user asks for a different limit or explicitly wants internal exec or subagent sessions too.
+---
+
+# Codex Sessions
+
+## Default Mode
+
+- Execute the bundled helper yourself and return the result.
+- Do not answer with shell recipes when the helper already exists locally.
+- Show commands only when the user explicitly asks for setup or implementation details.
+- Answer in the user's language unless the user explicitly asks for another language.
+- Keep every `session_id` full. Never shorten it.
+- Keep every quoted last-message text full. Never replace text with `...`, `…`, or paraphrased fragments.
+- Treat "last messages" as the latest user prompts from local Codex history unless the user explicitly asks for a different interpretation.
+- Resolve command paths from this skill file path.
+- If the skill file path is `/abs/path/to/SKILL.md`, then:
+  - `<sessions-command>` is `/abs/path/to/scripts/codex-sessions`
+- Use that absolute path for every command in this skill.
+- Do not replace the helper with ad hoc `sqlite3`, `rg`, or `python` commands unless the helper is missing or clearly insufficient.
+- Before sending the final answer, do one completeness check against the user's request. If the answer is not good enough yet, keep using tools instead of finalizing.
+
+## Repository Notes
+
+- This repository is the source of truth for the skill.
+- The local runtime skill may be exposed through symlinks such as:
+  - `~/.codex/skills/skill-codex-list-sessions`
+  - `~/.claude/skills/skill-codex-list-sessions`
+- Keep the repository contents deterministic and weak-model-friendly.
+- Prefer extending the bundled helper over adding long procedural prose when new read behavior is needed.
+
+## Resolve Context First
+
+Always start with the bundled helper.
+
+Default recent-session read:
+
+```bash
+<sessions-command>
+```
+
+That means:
+
+- top-level `cli` sessions only
+- `20` sessions
+- `3` trailing user messages per session
+
+Override the limit only when the user asked for a different number:
+
+```bash
+<sessions-command> --limit <n>
+```
+
+If the user asks for more or fewer recent messages inside each session:
+
+```bash
+<sessions-command> --limit <n> --last-messages <m>
+```
+
+## Search By Topic Or Session Id
+
+When the user is trying to find a specific session by topic, tool name, repo, or keyword, use `--query`:
+
+```bash
+<sessions-command> --query '<text>' --limit <n>
+```
+
+Examples:
+
+- `glab`
+- `youtrack`
+- `worktree`
+- `partners-app-dev`
+
+When the user already knows the exact session id, use:
+
+```bash
+<sessions-command> --session-id <full-session-id>
+```
+
+Rules:
+
+- Prefer `--session-id` over `--query` when the user already has the full id.
+- Keep `--limit` explicit for broad searches so the result set stays intentional.
+- If `--query` returns no top-level `cli` matches, rerun once with `--include-internal` before concluding that nothing was found.
+
+## Internal Sessions
+
+By default, recent-session lists should show only top-level `cli` sessions.
+
+Use internal sessions only when one of these is true:
+
+- the user explicitly asks for subagent, exec, or internal runs
+- the user is searching a topic and the top-level pass returned no matches
+- the user is debugging why a specific one-shot run existed
+
+Command:
+
+```bash
+<sessions-command> --include-internal --limit <n>
+<sessions-command> --include-internal --query '<text>' --limit <n>
+```
+
+Internal sessions include:
+
+- `exec`
+- `subagent`
+- other non-`cli` thread sources
+
+Say explicitly when a reported match came from an internal session rather than a normal top-level conversation.
+
+## Summary Rules
+
+The helper returns:
+
+- full `session_id`
+- `title`
+- `topic_basis`
+- `first_user_message`
+- full trailing user messages
+- timestamps
+- cwd
+- session kind
+
+Use that data to produce two separate outputs for each session:
+
+1. **Overall discussion**
+   - one or two sentences about what the session was generally about
+   - prefer the session `title` when it is descriptive
+   - when the title is generic like `hello` or `привет`, infer the topic from `first_user_message` and the trailing messages instead
+2. **Last user messages**
+   - show the latest user messages as full text
+   - do not shorten them
+   - do not rewrite them into brief fragments unless the user explicitly asked for summaries instead of the original text
+
+## Output Contract
+
+For a recent-session list:
+
+- include the total number of returned sessions
+- list sessions in descending `updated_at` order
+- for each session include:
+  - full `session_id`
+  - overall discussion description
+  - a separate section for the latest user messages
+- keep raw message text complete and unshortened
+- keep `session_id` complete and unshortened
+
+For a search result:
+
+- say what query was used
+- say whether the match is top-level or internal
+- if several sessions match, list all returned sessions up to the requested limit
+
+For an exact session lookup:
+
+- include the full `session_id`
+- include the overall discussion description
+- include the latest user messages
+- mention if the session was not found exactly
+
+## Ask Only If Blocked
+
+Ask the user only when one of these is true:
+
+- local Codex files are missing
+- the user asked for a specific number but it is ambiguous or invalid
+- the user asked for a different notion of "last messages" than the helper exposes from local history
+
+Otherwise, run the helper and return the result.
+
+## Pre-final Check
+
+Before sending the final answer:
+
+1. Confirm that every shown `session_id` is full.
+2. Confirm that every shown last-message text is full.
+3. Confirm that overall discussion and last messages are separated clearly.
+4. Confirm that the session count matches the requested or default limit.
+5. Confirm that you did not silently include internal sessions unless the rules above allow it.
+
+If any answer is "no", keep working instead of finalizing.
+
+</skill>
+
+===== L680 [user] =====
+<skill>
+<name>skill-creator</name>
+<path>/Users/iv/.codex/skills/.system/skill-creator/SKILL.md</path>
+---
+name: skill-creator
+description: Guide for creating effective skills. This skill should be used when users want to create a new skill (or update an existing skill) that extends Codex's capabilities with specialized knowledge, workflows, or tool integrations.
+metadata:
+  short-description: Create or update a skill
+---
+
+# Skill Creator
+
+This skill provides guidance for creating effective skills.
+
+## About Skills
+
+Skills are modular, self-contained folders that extend Codex's capabilities by providing
+specialized knowledge, workflows, and tools. Think of them as "onboarding guides" for specific
+domains or tasks—they transform Codex from a general-purpose agent into a specialized agent
+equipped with procedural knowledge that no model can fully possess.
+
+### What Skills Provide
+
+1. Specialized workflows - Multi-step procedures for specific domains
+2. Tool integrations - Instructions for working with specific file formats or APIs
+3. Domain expertise - Company-specific knowledge, schemas, business logic
+4. Bundled resources - Scripts, references, and assets for complex and repetitive tasks
+
+## Core Principles
+
+### Concise is Key
+
+The context window is a public good. Skills share the context window with everything else Codex needs: system prompt, conversation history, other Skills' metadata, and the actual user request.
+
+**Default assumption: Codex is already very smart.** Only add context Codex doesn't already have. Challenge each piece of information: "Does Codex really need this explanation?" and "Does this paragraph justify its token cost?"
+
+Prefer concise examples over verbose explanations.
+
+### Set Appropriate Degrees of Freedom
+
+Match the level of specificity to the task's fragility and variability:
+
+**High freedom (text-based instructions)**: Use when multiple approaches are valid, decisions depend on context, or heuristics guide the approach.
+
+**Medium freedom (pseudocode or scripts with parameters)**: Use when a preferred pattern exists, some variation is acceptable, or configuration affects behavior.
+
+**Low freedom (specific scripts, few parameters)**: Use when operations are fragile and error-prone, consistency is critical, or a specific sequence must be followed.
+
+Think of Codex as exploring a path: a narrow bridge with cliffs needs specific guardrails (low freedom), while an open field allows many routes (high freedom).
+
+### Protect Validation Integrity
+
+You may use subagents during iteration to validate whether a skill works on realistic tasks or whether a suspected problem is real. This is most useful when you want an independent pass on the skill's behavior, outputs, or failure modes after a revision.  Only do this when it is possible to start new subagents.
+
+When using subagents for validation, treat that as an evaluation surface. The goal is to learn whether the skill generalizes, not whether another agent can reconstruct the answer from leaked context.
+
+Prefer raw artifacts such as example prompts, outputs, diffs, logs, or traces. Give the minimum task-local context needed to perform the validation. Avoid passing the intended answer, suspected bug, intended fix, or your prior conclusions unless the validation explicitly requires them.
+
+### Anatomy of a Skill
+
+Every skill consists of a required SKILL.md file and optional bundled resources:
+
+```
+skill-name/
+├── SKILL.md (required)
+│   ├── YAML frontmatter metadata (required)
+│   │   ├── name: (required)
+│   │   └── description: (required)
+│   └── Markdown instructions (required)
+├── agents/ (recommended)
+│   └── openai.yaml - UI metadata for skill lists and chips
+└── Bundled Resources (optional)
+    ├── scripts/          - Executable code (Python/Bash/etc.)
+    ├── references/       - Documentation intended to be loaded into context as needed
+    └── assets/           - Files used in output (templates, icons, fonts, etc.)
+```
+
+#### SKILL.md (required)
+
+Every SKILL.md consists of:
+
+- **Frontmatter** (YAML): Contains `name` and `description` fields. These are the only fields that Codex reads to determine when the skill gets used, thus it is very important to be clear and comprehensive in describing what the skill is, and when it should be used.
+- **Body** (Markdown): Instructions and guidance for using the skill. Only loaded AFTER the skill triggers (if at all).
+
+#### Agents metadata (recommended)
+
+- UI-facing metadata for skill lists and chips
+- Read references/openai_yaml.md before generating values and follow its descriptions and constraints
+- Create: human-facing `display_name`, `short_description`, and `default_prompt` by reading the skill
+- Generate deterministically by passing the values as `--interface key=value` to `scripts/generate_openai_yaml.py` or `scripts/init_skill.py`
+- On updates: validate `agents/openai.yaml` still matches SKILL.md; regenerate if stale
+- Only include other optional interface fields (icons, brand color) if explicitly provided
+- See references/openai_yaml.md for field definitions and examples
+
+#### Bundled Resources (optional)
+
+##### Scripts (`scripts/`)
+
+Executable code (Python/Bash/etc.) for tasks that require deterministic reliability or are repeatedly rewritten.
+
+- **When to include**: When the same code is being rewritten repeatedly or deterministic reliability is needed
+- **Example**: `scripts/rotate_pdf.py` for PDF rotation tasks
+- **Benefits**: Token efficient, deterministic, may be executed without loading into context
+- **Note**: Scripts may still need to be read by Codex for patching or environment-specific adjustments
+
+##### References (`references/`)
+
+Documentation and reference material intended to be loaded as needed into context to inform Codex's process and thinking.
+
+- **When to include**: For documentation that Codex should reference while working
+- **Examples**: `references/finance.md` for financial schemas, `references/mnda.md` for company NDA template, `references/policies.md` for company policies, `references/api_docs.md` for API specifications
+- **Use cases**: Database schemas, API documentation, domain knowledge, company policies, detailed workflow guides
+- **Benefits**: Keeps SKILL.md lean, loaded only when Codex determines it's needed
+- **Best practice**: If files are large (>10k words), include grep search patterns in SKILL.md
+- **Avoid duplication**: Information should live in either SKILL.md or references files, not both. Prefer references files for detailed information unless it's truly core to the skill—this keeps SKILL.md lean while making information discoverable without hogging the context window. Keep only essential procedural instructions and workflow guidance in SKILL.md; move detailed reference material, schemas, and examples to references files.
+
+##### Assets (`assets/`)
+
+Files not intended to be loaded into context, but rather used within the output Codex produces.
+
+- **When to include**: When the skill needs files that will be used in the final output
+- **Examples**: `assets/logo.png` for brand assets, `assets/slides.pptx` for PowerPoint templates, `assets/frontend-template/` for HTML/React boilerplate, `assets/font.ttf` for typography
+- **Use cases**: Templates, images, icons, boilerplate code, fonts, sample documents that get copied or modified
+- **Benefits**: Separates output resources from documentation, enables Codex to use files without loading them into context
+
+#### What to Not Include in a Skill
+
+A skill should only contain essential files that directly support its functionality. Do NOT create extraneous documentation or auxiliary files, including:
+
+- README.md
+- INSTALLATION_GUIDE.md
+- QUICK_REFERENCE.md
+- CHANGELOG.md
+- etc.
+
+The skill should only contain the information needed for an AI agent to do the job at hand. It should not contain auxiliary context about the process that went into creating it, setup and testing procedures, user-facing documentation, etc. Creating additional documentation files just adds clutter and confusion.
+
+### Progressive Disclosure Design Principle
+
+Skills use a three-level loading system to manage context efficiently:
+
+1. **Metadata (name + description)** - Always in context (~100 words)
+2. **SKILL.md body** - When skill triggers (<5k words)
+3. **Bundled resources** - As needed by Codex (Unlimited because scripts can be executed without reading into context window)
+
+#### Progressive Disclosure Patterns
+
+Keep SKILL.md body to the essentials and under 500 lines to minimize context bloat. Split content into separate files when approaching this limit. When splitting out content into other files, it is very important to reference them from SKILL.md and describe clearly when to read them, to ensure the reader of the skill knows they exist and when to use them.
+
+**Key principle:** When a skill supports multiple variations, frameworks, or options, keep only the core workflow and selection guidance in SKILL.md. Move variant-specific details (patterns, examples, configuration) into separate reference files.
+
+**Pattern 1: High-level guide with references**
+
+```markdown
+# PDF Processing
+
+## Quick start
+
+Extract text with pdfplumber:
+[code example]
+
+## Advanced features
+
+- **Form filling**: See [FORMS.md](FORMS.md) for complete guide
+- **API reference**: See [REFERENCE.md](REFERENCE.md) for all methods
+- **Examples**: See [EXAMPLES.md](EXAMPLES.md) for common patterns
+```
+
+Codex loads FORMS.md, REFERENCE.md, or EXAMPLES.md only when needed.
+
+**Pattern 2: Domain-specific organization**
+
+For Skills with multiple domains, organize content by domain to avoid loading irrelevant context:
+
+```
+bigquery-skill/
+├── SKILL.md (overview and navigation)
+└── reference/
+    ├── finance.md (revenue, billing metrics)
+    ├── sales.md (opportunities, pipeline)
+    ├── product.md (API usage, features)
+    └── marketing.md (campaigns, attribution)
+```
+
+When a user asks about sales metrics, Codex only reads sales.md.
+
+Similarly, for skills supporting multiple frameworks or variants, organize by variant:
+
+```
+cloud-deploy/
+├── SKILL.md (workflow + provider selection)
+└── references/
+    ├── aws.md (AWS deployment patterns)
+    ├── gcp.md (GCP deployment patterns)
+    └── azure.md (Azure deployment patterns)
+```
+
+When the user chooses AWS, Codex only reads aws.md.
+
+**Pattern 3: Conditional details**
+
+Show basic content, link to advanced content:
+
+```markdown
+# DOCX Processing
+
+## Creating documents
+
+Use docx-js for new documents. See [DOCX-JS.md](DOCX-JS.md).
+
+## Editing documents
+
+For simple edits, modify the XML directly.
+
+**For tracked changes**: See [REDLINING.md](REDLINING.md)
+**For OOXML details**: See [OOXML.md](OOXML.md)
+```
+
+Codex reads REDLINING.md or OOXML.md only when the user needs those features.
+
+**Important guidelines:**
+
+- **Avoid deeply nested references** - Keep references one level deep from SKILL.md. All reference files should link directly from SKILL.md.
+- **Structure longer reference files** - For files longer than 100 lines, include a table of contents at the top so Codex can see the full scope when previewing.
+
+## Skill Creation Process
+
+Skill creation involves these steps:
+
+1. Understand the skill with concrete examples
+2. Plan reusable skill contents (scripts, references, assets)
+3. Initialize the skill (run init_skill.py)
+4. Edit the skill (implement resources and write SKILL.md)
+5. Validate the skill (run quick_validate.py)
+6. Iterate based on real usage and forward-test complex skills.
+
+Follow these steps in order, skipping only if there is a clear reason why they are not applicable.
+
+### Skill Naming
+
+- Use lowercase letters, digits, and hyphens only; normalize user-provided titles to hyphen-case (e.g., "Plan Mode" -> `plan-mode`).
+- When generating names, generate a name under 64 characters (letters, digits, hyphens).
+- Prefer short, verb-led phrases that describe the action.
+- Namespace by tool when it improves clarity or triggering (e.g., `gh-address-comments`, `linear-address-issue`).
+- Name the skill folder exactly after the skill name.
+
+### Step 1: Understanding the Skill with Concrete Examples
+
+Skip this step only when the skill's usage patterns are already clearly understood. It remains valuable even when working with an existing skill.
+
+To create an effective skill, clearly understand concrete examples of how the skill will be used. This understanding can come from either direct user examples or generated examples that are validated with user feedback.
+
+For example, when building an image-editor skill, relevant questions include:
+
+- "What functionality should the image-editor skill support? Editing, rotating, anything else?"
+- "Can you give some examples of how this skill would be used?"
+- "I can imagine users asking for things like 'Remove the red-eye from this image' or 'Rotate this image'. Are there other ways you imagine this skill being used?"
+- "What would a user say that should trigger this skill?"
+- "Where should I create this skill? If you do not have a preference, I will place it in `$CODEX_HOME/skills` (or `~/.codex/skills` when `CODEX_HOME` is unset) so Codex can discover it automatically."
+
+To avoid overwhelming users, avoid asking too many questions in a single message. Start with the most important questions and follow up as needed for better effectiveness.
+
+Conclude this step when there is a clear sense of the functionality the skill should support.
+
+### Step 2: Planning the Reusable Skill Contents
+
+To turn concrete examples into an effective skill, analyze each example by:
+
+1. Considering how to execute on the example from scratch
+2. Identifying what scripts, references, and assets would be helpful when executing these workflows repeatedly
+
+Example: When building a `pdf-editor` skill to handle queries like "Help me rotate this PDF," the analysis shows:
+
+1. Rotating a PDF requires re-writing the same code each time
+2. A `scripts/rotate_pdf.py` script would be helpful to store in the skill
+
+Example: When designing a `frontend-webapp-builder` skill for queries like "Build me a todo app" or "Build me a dashboard to track my steps," the analysis shows:
+
+1. Writing a frontend webapp requires the same boilerplate HTML/React each time
+2. An `assets/hello-world/` template containing the boilerplate HTML/React project files would be helpful to store in the skill
+
+Example: When building a `big-query` skill to handle queries like "How many users have logged in today?" the analysis shows:
+
+1. Querying BigQuery requires re-discovering the table schemas and relationships each time
+2. A `references/schema.md` file documenting the table schemas would be helpful to store in the skill
+
+To establish the skill's contents, analyze each concrete example to create a list of the reusable resources to include: scripts, references, and assets.
+
+### Step 3: Initializing the Skill
+
+At this point, it is time to actually create the skill.
+
+Skip this step only if the skill being developed already exists. In this case, continue to the next step.
+
+Before running `init_skill.py`, ask where the user wants the skill created. If they do not specify a location, default to `$CODEX_HOME/skills`; when `CODEX_HOME` is unset, fall back to `~/.codex/skills` so the skill is auto-discovered.
+
+When creating a new skill from scratch, always run the `init_skill.py` script. The script conveniently generates a new template skill directory that automatically includes everything a skill requires, making the skill creation process much more efficient and reliable.
+
+Usage:
+
+```bash
+scripts/init_skill.py <skill-name> --path <output-directory> [--resources scripts,references,assets] [--examples]
+```
+
+Examples:
+
+```bash
+scripts/init_skill.py my-skill --path "${CODEX_HOME:-$HOME/.codex}/skills"
+scripts/init_skill.py my-skill --path "${CODEX_HOME:-$HOME/.codex}/skills" --resources scripts,references
+scripts/init_skill.py my-skill --path ~/work/skills --resources scripts --examples
+```
+
+The script:
+
+- Creates the skill directory at the specified path
+- Generates a SKILL.md template with proper frontmatter and TODO placeholders
+- Creates `agents/openai.yaml` using agent-generated `display_name`, `short_description`, and `default_prompt` passed via `--interface key=value`
+- Optionally creates resource directories based on `--resources`
+- Optionally adds example files when `--examples` is set
+
+After initialization, customize the SKILL.md and add resources as needed. If you used `--examples`, replace or delete placeholder files.
+
+Generate `display_name`, `short_description`, and `default_prompt` by reading the skill, then pass them as `--interface key=value` to `init_skill.py` or regenerate with:
+
+```bash
+scripts/generate_openai_yaml.py <path/to/skill-folder> --interface key=value
+```
+
+Only include other optional interface fields when the user explicitly provides them. For full field descriptions and examples, see references/openai_yaml.md.
+
+### Step 4: Edit the Skill
+
+When editing the (newly-generated or existing) skill, remember that the skill is being created for another instance of Codex to use. Include information that would be beneficial and non-obvious to Codex. Consider what procedural knowledge, domain-specific details, or reusable assets would help another Codex instance execute these tasks more effectively.
+
+After substantial revisions, or if the skill is particularly tricky, you should use subagents to forward-test the skill on realistic tasks or artifacts. When doing so, pass the artifact under validation rather than your diagnosis of what is wrong, and keep the prompt generic enough that success depends on transferable reasoning rather than hidden ground truth.
+
+#### Start with Reusable Skill Contents
+
+To begin implementation, start with the reusable resources identified above: `scripts/`, `references/`, and `assets/` files. Note that this step may require user input. For example, when implementing a `brand-guidelines` skill, the user may need to provide brand assets or templates to store in `assets/`, or documentation to store in `references/`.
+
+Added scripts must be tested by actually running them to ensure there are no bugs and that the output matches what is expected. If there are many similar scripts, only a representative sample needs to be tested to ensure confidence that they all work while balancing time to completion.
+
+If you used `--examples`, delete any placeholder files that are not needed for the skill. Only create resource directories that are actually required.
+
+#### Update SKILL.md
+
+**Writing Guidelines:** Always use imperative/infinitive form.
+
+##### Frontmatter
+
+Write the YAML frontmatter with `name` and `description`:
+
+- `name`: The skill name
+- `description`: This is the primary triggering mechanism for your skill, and helps Codex understand when to use the skill.
+  - Include both what the Skill does and specific triggers/contexts for when to use it.
+  - Include all "when to use" information here - Not in the body. The body is only loaded after triggering, so "When to Use This Skill" sections in the body are not helpful to Codex.
+  - Example description for a `docx` skill: "Comprehensive document creation, editing, and analysis with support for tracked changes, comments, formatting preservation, and text extraction. Use when Codex needs to work with professional documents (.docx files) for: (1) Creating new documents, (2) Modifying or editing content, (3) Working with tracked changes, (4) Adding comments, or any other document tasks"
+
+Do not include any other fields in YAML frontmatter.
+
+##### Body
+
+Write instructions for using the skill and its bundled resources.
+
+### Step 5: Validate the Skill
+
+Once development of the skill is complete, validate the skill folder to catch basic issues early:
+
+```bash
+scripts/quick_validate.py <path/to/skill-folder>
+```
+
+The validation script checks YAML frontmatter format, required fields, and naming rules. If validation fails, fix the reported issues and run the command again.
+
+### Step 6: Iterate
+
+After testing the skill, you may detect the skill is complex enough that it requires forward-testing; or users may request improvements.
+
+User testing often this happens right after using the skill, with fresh context of how the skill performed.
+
+**Forward-testing and iteration workflow:**
+
+1. Use the skill on real tasks
+2. Notice struggles or inefficiencies
+3. Identify how SKILL.md or bundled resources should be updated
+4. Implement changes and test again
+5. Forward-test if it is reasonable and appropriate
+
+## Forward-testing
+
+To forward-test, launch subagents as a way to stress test the skill with minimal context.
+Subagents should *not* know that they are being asked to test the skill.  They should be treated as
+an agent asked to perform a task by the user.  Prompts to subagents should look like:
+  `Use $skill-x at /path/to/skill-x to solve problem y`
+Not:
+  `Review the skill at /path/to/skill-x; pretend a user asks you to...`
+
+Decision rule for forward-testing:
+  - Err on the side of forward-testing
+  - Ask for approval if you think there's a risk that forward-testing would:
+    * take a long time,
+    * require additional approvals from the user, or
+    * modify live production systems
+
+  In these cases, show the user your proposed prompt and request (1) a yes/no decision, and
+  (2) any suggested modifictions.
+
+Considerations when forward-testing:
+   - use fresh threads for independent passes
+   - pass the skill, and a request in a similar way the user would.
+   - pass raw artifacts, not your conclusions
+   - avoid showing expected answers or intended fixes
+   - rebuild context from source artifacts after each iteration
+   - review the subagent's output and reasoning and emitted artifacts
+   - avoid leaving artifacts the agent can find on disk between iterations;
+     clean up subagents' artifacts to avoid additional contamination.
+
+If forward-testing only succeeds when subagents see leaked context, tighten the skill or the
+forward-testing setup before trusting the result.
+
+</skill>
+
+===== L684 [assistant] =====
+Использую `skill-codex-list-sessions` и `skill-creator`: сначала зафиксирую, где именно слабая модель расплывается, затем ужесточу сам skill под компактный табличный вывод и, если нужно, добавлю в helper более удобную структуру для summary последних двух сообщений.
+
+===== L697 [assistant] =====
+Сейчас внесу follow-up в task log и потом перепишу сам skill под компактный режим: по умолчанию `2` последних сообщения и жёсткий табличный output contract вместо длинного нумерованного списка с сырыми репликами.
+
+===== L707 [assistant] =====
+Правки будут в трёх местах: `SKILL.md`, helper default `--last-messages`, и короткий `README.md`, чтобы skill и repo были в одном стиле. Смысл один: compact-first для list/search, raw full texts только по явному запросу или для exact lookup.
+
+===== L718 [assistant] =====
+Правки готовы. Сейчас быстро прогоню helper и валидатор ещё раз, чтобы убедиться, что новый дефолт действительно `2` сообщения и skill structurally валиден после изменения output contract.
+
+===== L731 [assistant] =====
+Функционально всё уже готово. Добью только task log, чтобы следующее возобновление сессии сразу показывало, что мы уже перешли с raw-dump режима на compact table contract для слабых моделей.
+
+===== L738 [assistant] =====
+Поджал skill под тот фидбек. Изменил [SKILL.md](/Users/iv/agents/skills/skill-codex-list-sessions/SKILL.md), [codex_sessions.py](/Users/iv/agents/skills/skill-codex-list-sessions/scripts/codex_sessions.py) и [README.md](/Users/iv/agents/skills/skill-codex-list-sessions/README.md).
+
+Что поменял:
+- default recent window теперь `2` последних user-сообщения, а не `3`
+- для list/search режимов skill теперь требует один компактный Markdown table с колонками `Session ID | О чем вся беседа | О чем последние 2 сообщения`
+- raw full тексты последних сообщений больше не должны вываливаться в list/search; они оставлены только для exact lookup или явного запроса на verbatim/exact text
+- в `SKILL.md` добавил прямой compact-first contract и пример правильной формы ответа для weak models
+
+Проверил:
+- `python3 -m py_compile` для helper
+- `codex-sessions --limit 2` показывает новый default `last_messages: 2`
+- `quick_validate.py` проходит
+
+Это пока локальные изменения в [skill-codex-list-sessions](/Users/iv/agents/skills/skill-codex-list-sessions). Если хочешь, следующим сообщением я сразу закоммичу и запушу их в `ivanopcode/skill-codex-list-sessions`.
+
+===== L743 [user] =====
+давай
+
+===== L748 [assistant] =====
+Сейчас зафиксирую текущие изменения в `skill-codex-list-sessions`: проверю diff, сделаю signed commit в этом repo и запушу в `origin/main`, затем отдельно подтвержу подпись и чистое состояние ветки.
+
+===== L761 [assistant] =====
+Проверки зелёные, signing config на месте. Дальше только commit/push и контрольная проверка `verified=true` на GitHub.
+
+===== L779 [assistant] =====
+Пуш в процессе. Как только завершится, проверю `origin/main` и GitHub verification для нового коммита `2184176...`.
+
+===== L793 [assistant] =====
+Зафиксирую в task log, что compact-output доработка уже не просто локально готова, а запушена как verified signed commit в `skill-codex-list-sessions`.
+
+===== L799 [assistant] =====
+Запушил.
+
+Новый коммит в `ivanopcode/skill-codex-list-sessions`:
+- `2184176428ecfdcfb4aeb5aa8d89a82b2687556b`
+- message: `refactor: tighten compact session listing output`
+
+Проверка подписи:
+- локально: `Good "git" signature`
+- GitHub: `verified=true`, `reason=valid`
+
+Ссылка на коммит:
+- `https://github.com/ivanopcode/skill-codex-list-sessions/commit/2184176428ecfdcfb4aeb5aa8d89a82b2687556b`
+
+Локальная ветка чистая:
+- `main...origin/main`
+
+===== L804 [user] =====
+$skill-codex-list-sessions
+
+===== L806 [user] =====
+<skill>
+<name>skill-codex-list-sessions</name>
+<path>/Users/iv/agents/skills/skill-codex-list-sessions/SKILL.md</path>
+---
+name: skill-codex-list-sessions
+description: Use when Codex needs to list recent local Codex sessions, find a session by topic or keyword, recover full session ids, or summarize what a session was generally about plus what the latest user messages said. Reads local Codex history from ~/.codex/state_5.sqlite and ~/.codex/history.jsonl through the bundled helper. Default to 20 top-level cli sessions unless the user asks for a different limit or explicitly wants internal exec or subagent sessions too.
+---
+
+# Codex Sessions
+
+## Default Mode
+
+- Execute the bundled helper yourself and return the result.
+- Do not answer with shell recipes when the helper already exists locally.
+- Show commands only when the user explicitly asks for setup or implementation details.
+- Answer in the user's language unless the user explicitly asks for another language.
+- Keep every `session_id` full. Never shorten it.
+- For recent-session lists and topic searches, prefer compact summaries over verbatim raw message dumps.
+- Show full raw last-message text only when the user explicitly asks for exact text, verbatim text, or a deep dive into one exact session.
+- Treat "last messages" as the latest user prompts from local Codex history unless the user explicitly asks for a different interpretation.
+- Resolve command paths from this skill file path.
+- If the skill file path is `/abs/path/to/SKILL.md`, then:
+  - `<sessions-command>` is `/abs/path/to/scripts/codex-sessions`
+- Use that absolute path for every command in this skill.
+- Do not replace the helper with ad hoc `sqlite3`, `rg`, or `python` commands unless the helper is missing or clearly insufficient.
+- Before sending the final answer, do one completeness check against the user's request. If the answer is not good enough yet, keep using tools instead of finalizing.
+
+## Repository Notes
+
+- This repository is the source of truth for the skill.
+- The local runtime skill may be exposed through symlinks such as:
+  - `~/.codex/skills/skill-codex-list-sessions`
+  - `~/.claude/skills/skill-codex-list-sessions`
+- Keep the repository contents deterministic and weak-model-friendly.
+- Prefer extending the bundled helper over adding long procedural prose when new read behavior is needed.
+
+## Resolve Context First
+
+Always start with the bundled helper.
+
+Default recent-session read:
+
+```bash
+<sessions-command> --last-messages 2
+```
+
+That means:
+
+- top-level `cli` sessions only
+- `20` sessions
+- `2` trailing user messages per session
+
+Override the limit only when the user asked for a different number:
+
+```bash
+<sessions-command> --limit <n> --last-messages 2
+```
+
+If the user asks for more or fewer recent messages inside each session:
+
+```bash
+<sessions-command> --limit <n> --last-messages <m>
+```
+
+## Search By Topic Or Session Id
+
+When the user is trying to find a specific session by topic, tool name, repo, or keyword, use `--query`:
+
+```bash
+<sessions-command> --query '<text>' --limit <n>
+```
+
+Examples:
+
+- `glab`
+- `youtrack`
+- `worktree`
+- `partners-app-dev`
+
+When the user already knows the exact session id, use:
+
+```bash
+<sessions-command> --session-id <full-session-id>
+```
+
+Rules:
+
+- Prefer `--session-id` over `--query` when the user already has the full id.
+- Keep `--limit` explicit for broad searches so the result set stays intentional.
+- If `--query` returns no top-level `cli` matches, rerun once with `--include-internal` before concluding that nothing was found.
+
+## Internal Sessions
+
+By default, recent-session lists should show only top-level `cli` sessions.
+
+Use internal sessions only when one of these is true:
+
+- the user explicitly asks for subagent, exec, or internal runs
+- the user is searching a topic and the top-level pass returned no matches
+- the user is debugging why a specific one-shot run existed
+
+Command:
+
+```bash
+<sessions-command> --include-internal --limit <n>
+<sessions-command> --include-internal --query '<text>' --limit <n>
+```
+
+Internal sessions include:
+
+- `exec`
+- `subagent`
+- other non-`cli` thread sources
+
+Say explicitly when a reported match came from an internal session rather than a normal top-level conversation.
+
+## Summary Rules
+
+The helper returns:
+
+- full `session_id`
+- `title`
+- `topic_basis`
+- `first_user_message`
+- full trailing user messages
+- timestamps
+- cwd
+- session kind
+
+Use that data to produce two separate outputs for each session:
+
+1. **Overall discussion**
+   - one or two sentences about what the session was generally about
+   - prefer the session `title` when it is descriptive
+   - when the title is generic like `hello` or `привет`, infer the topic from `first_user_message` and the trailing messages instead
+2. **Last two messages summary**
+   - summarize what the latest two user messages were about in one sentence
+   - do not paste the raw texts in list mode
+   - mention exact raw texts only for exact lookup or when the user explicitly asked for verbatim output
+
+## Compact Output First
+
+For recent-session lists and topic searches, the default answer must be a compact Markdown table.
+
+Use exactly these columns in the main table:
+
+- `Session ID`
+- `О чем вся беседа`
+- `О чем последние 2 сообщения`
+
+Rules:
+
+- One row per session.
+- Each summary cell should usually be one sentence.
+- Do not dump raw quoted user messages into the table.
+- Do not render the main answer as a long numbered essay unless the user explicitly asks for that format.
+- After the table, add at most one short line that says how many sessions were returned and whether internal sessions were included.
+
+Target shape:
+
+```markdown
+| Session ID | О чем вся беседа | О чем последние 2 сообщения |
+| --- | --- | --- |
+| 019d... | Сессия про ... | Последние два сообщения были про ... |
+```
+
+This compact table is the default for:
+
+- recent-session lists
+- keyword searches
+
+For exact session lookup, use a short summary block first. Only after that, include the full raw latest messages when the user explicitly asked for exact text or deep inspection.
+
+## Output Contract
+
+For a recent-session list:
+
+- include the total number of returned sessions
+- list sessions in descending `updated_at` order
+- use one compact Markdown table as the main output
+- for each session include:
+  - full `session_id`
+  - overall discussion description
+  - one-sentence summary of what the latest two user messages were about
+- keep `session_id` complete and unshortened
+
+For a search result:
+
+- say what query was used
+- say whether the match is top-level or internal
+- if several sessions match, list all returned sessions up to the requested limit
+- use the same compact Markdown table as the default presentation
+
+For an exact session lookup:
+
+- include the full `session_id`
+- include the overall discussion description
+- include a short summary of the latest two user messages
+- include the raw latest user messages only when the user explicitly asked for exact text or the exact lookup clearly implies deep inspection
+- mention if the session was not found exactly
+
+## Ask Only If Blocked
+
+Ask the user only when one of these is true:
+
+- local Codex files are missing
+- the user asked for a specific number but it is ambiguous or invalid
+- the user asked for a different notion of "last messages" than the helper exposes from local history
+
+Otherwise, run the helper and return the result.
+
+## Pre-final Check
+
+Before sending the final answer:
+
+1. Confirm that every shown `session_id` is full.
+2. Confirm that list and search results are shown as one compact Markdown table rather than a long numbered list.
+3. Confirm that overall discussion and "last two messages" are separated clearly.
+4. Confirm that the session count matches the requested or default limit.
+5. Confirm that you did not silently include internal sessions unless the rules above allow it.
+6. Confirm that you did not paste raw full messages in list or search mode unless the user explicitly asked for exact text.
+
+If any answer is "no", keep working instead of finalizing.
+
+</skill>
+
+===== L810 [assistant] =====
+Использую `skill-codex-list-sessions` в его дефолтном режиме: сейчас вытащу 20 последних top-level `cli` сессий и сверну их в компактную таблицу с полными `session_id`, общим смыслом беседы и кратким смыслом последних двух сообщений.
+
+===== L821 [assistant] =====
+| Session ID | О чем вся беседа | О чем последние 2 сообщения |
+|---|---|---|
+| 019d4656-83e4-79e2-8483-eb484c359f74 | Запрос на список последних Codex-сессий, затем создание, публикация и интеграция `skill-codex-list-sessions`. | Подтверждение финального пуша и затем повторный вызов скилла для проверки результата. |
+| 019d46d3-3eef-78f1-8b51-0c131aa876d4 | Правки глобальных agent-инструкций и формулировок для Apple-platform роли. | Замена неудачной формулировки на более естественную и затем коммит с пушем. |
+| 019d46ce-7f3d-71e0-9d3c-8090963f61d6 | Короткая сессия с прямым вызовом `skill-codex-list-sessions`. | Один запрос: запустить скилл и показать недавние сессии. |
+| 019d4619-2a57-7fb1-9f78-31f66293ccb8 | Разработка скилла для диагностики запросов Codex через прокси, субагентов и логирование. | Добавить показ системного промпта агентской среды и затем проверить поведение на практике. |
+| 019d3f2c-ef9d-7a12-97bf-59f193f2c2c2 | Работа с self-hosted GitLab через `glab`, затем оформление отдельного скилла и публикация в GitHub. | Переименовать remotes в `iv` и `rw`, затем создать MIT-репозиторий в `ivanopcode` с подписанным коммитом. |
+| 019d3f69-4561-7702-bdbd-a6a262f85d63 | Исследование YouTrack CLI/MCP, затем доводка agent skill-ов и контекста для merge request. | Разобрать падение job с MR checklist и затем закоммитить изменения с пушем. |
+| 019d4543-0d6c-7c50-9c21-b2fe17105c33 | Проверка `COMPILATION_CACHE_ENABLE_CACHING` в Tuist-проекте, затем доработка `Scripts/create_worktree.py`. | Доделать cleanup, machine-readable output, self-tests и preflight-валидацию, затем закоммитить и запушить. |
+| 019d4646-64fb-72b1-9953-1a05e5fb7216 | Запуск `product-forensics` для анализа проекта `partners-app-dev`. | Один запрос: проанализировать проект через `product-forensics`. |
+| 019d4614-9b3d-7323-b1d7-a4261d025678 | Короткая англоязычная приветственная сессия. | Одно приветствие. |
+| 019d4611-3bd0-7f91-892e-8641031e64a9 | Короткая англоязычная беседа-приветствие. | Приветствие и вопрос о самочувствии. |
+| 019d460f-e007-79c0-953c-163b7b791817 | Короткая англоязычная приветственная сессия. | Одно приветствие. |
+| 019d460f-11c5-7ba3-a5c7-f795372effa2 | Короткая англоязычная беседа-приветствие. | Приветствие и вопрос, как идут дела. |
+| 019d460d-7c95-77d0-9b26-749cf994d845 | Короткая русскоязычная бытовая беседа. | Вопрос о самочувствии и ответ, что все нормально. |
+| 019d4601-e435-7141-b05f-e3753eac090e | Короткая англоязычная беседа-приветствие. | Приветствие и вопрос о самочувствии. |
+| 019d45ff-3927-7c72-8698-14a5012e3ca3 | Короткая англоязычная приветственная сессия. | Одно приветствие. |
+| 019d45fd-a791-7563-a636-a87c61725a7f | Короткая русскоязычная приветственная сессия. | Одно приветствие. |
+| 019d45f2-6de7-7590-8785-005b2f0f3552 | Короткая англоязычная приветственная сессия. | Одно приветствие. |
+| 019d45f0-6dd3-7fb1-8379-c1a4960af9ee | Короткая англоязычная приветственная сессия. | Одно приветствие. |
+| 019d45ea-73ca-7e42-a8c9-dc9e5f0f9ff8 | Короткая англоязычная приветственная сессия. | Одно приветствие. |
+| 019d45e8-3038-7fe3-b871-a8937bae3285 | Короткая англоязычная приветственная сессия. | Одно приветствие. |
+
+Показаны 20 top-level `cli` сессий; `internal` / `subagent` / `exec` не включены.
+
+===== L826 [user] =====
+<image name=[Image #1]>
+</image>
+[Image #1] уже лучше, но хочется что бы форматирование было подходящие. строка сессия, потом строка о чем беседа и строка о чем последние 2, и таким образом делаем большую строку которая формирует все о сессии и мы ее комануем с другими такими же
+
+===== L831 [assistant] =====
+Использую `skill-codex-list-sessions` и `skill-creator`: сначала посмотрю текущий контракт скилла и внесу правку в формат ответа, чтобы он выдавал отдельный компактный блок на каждую сессию вместо таблицы.
+
+===== L847 [assistant] =====
+Меняю сам контракт ответа с таблицы на повторяющиеся 3-строчные блоки на сессию, потому что в терминале длинные markdown-строки ломаются и становятся хуже читаемыми, чем компактные вертикальные записи.
+
+===== L854 [assistant] =====
+Правка внесена. Сейчас быстро провалидирую `SKILL.md` и перечитаю ключевой блок, чтобы убедиться, что weak-model контракт теперь однозначно требует вертикальные блоки, а не таблицу.
+
+===== L867 [assistant] =====
+Изменил контракт вывода в [SKILL.md](/Users/iv/agents/skills/skill-codex-list-sessions/SKILL.md) и обновил описание в [README.md](/Users/iv/agents/skills/skill-codex-list-sessions/README.md). Теперь default-формат для list/search не таблица, а вертикальные блоки по 3 строки на сессию с одной пустой строкой между блоками:
+
+```text
+Session ID: 019d...
+О чем вся беседа: ...
+О чем последние 2 сообщения: ...
+
+Session ID: 019d...
+О чем вся беседа: ...
+О чем последние 2 сообщения: ...
+```
+
+Провалидировал скилл через `quick_validate.py`, все ок. Локально есть незапушенные изменения в [SKILL.md](/Users/iv/agents/skills/skill-codex-list-sessions/SKILL.md) и [README.md](/Users/iv/agents/skills/skill-codex-list-sessions/README.md). Если нужно, следующим сообщением закоммичу и запушу.
+
+===== L872 [user] =====
+$skill-codex-list-sessions
+
+===== L874 [user] =====
+<skill>
+<name>skill-codex-list-sessions</name>
+<path>/Users/iv/agents/skills/skill-codex-list-sessions/SKILL.md</path>
+---
+name: skill-codex-list-sessions
+description: Use when Codex needs to list recent local Codex sessions, find a session by topic or keyword, recover full session ids, or summarize what a session was generally about plus what the latest user messages said. Reads local Codex history from ~/.codex/state_5.sqlite and ~/.codex/history.jsonl through the bundled helper. Default to 20 top-level cli sessions unless the user asks for a different limit or explicitly wants internal exec or subagent sessions too.
+---
+
+# Codex Sessions
+
+## Default Mode
+
+- Execute the bundled helper yourself and return the result.
+- Do not answer with shell recipes when the helper already exists locally.
+- Show commands only when the user explicitly asks for setup or implementation details.
+- Answer in the user's language unless the user explicitly asks for another language.
+- Keep every `session_id` full. Never shorten it.
+- For recent-session lists and topic searches, prefer compact summaries over verbatim raw message dumps.
+- Show full raw last-message text only when the user explicitly asks for exact text, verbatim text, or a deep dive into one exact session.
+- Treat "last messages" as the latest user prompts from local Codex history unless the user explicitly asks for a different interpretation.
+- Resolve command paths from this skill file path.
+- If the skill file path is `/abs/path/to/SKILL.md`, then:
+  - `<sessions-command>` is `/abs/path/to/scripts/codex-sessions`
+- Use that absolute path for every command in this skill.
+- Do not replace the helper with ad hoc `sqlite3`, `rg`, or `python` commands unless the helper is missing or clearly insufficient.
+- Before sending the final answer, do one completeness check against the user's request. If the answer is not good enough yet, keep using tools instead of finalizing.
+
+## Repository Notes
+
+- This repository is the source of truth for the skill.
+- The local runtime skill may be exposed through symlinks such as:
+  - `~/.codex/skills/skill-codex-list-sessions`
+  - `~/.claude/skills/skill-codex-list-sessions`
+- Keep the repository contents deterministic and weak-model-friendly.
+- Prefer extending the bundled helper over adding long procedural prose when new read behavior is needed.
+
+## Resolve Context First
+
+Always start with the bundled helper.
+
+Default recent-session read:
+
+```bash
+<sessions-command> --last-messages 2
+```
+
+That means:
+
+- top-level `cli` sessions only
+- `20` sessions
+- `2` trailing user messages per session
+
+Override the limit only when the user asked for a different number:
+
+```bash
+<sessions-command> --limit <n> --last-messages 2
+```
+
+If the user asks for more or fewer recent messages inside each session:
+
+```bash
+<sessions-command> --limit <n> --last-messages <m>
+```
+
+## Search By Topic Or Session Id
+
+When the user is trying to find a specific session by topic, tool name, repo, or keyword, use `--query`:
+
+```bash
+<sessions-command> --query '<text>' --limit <n>
+```
+
+Examples:
+
+- `glab`
+- `youtrack`
+- `worktree`
+- `partners-app-dev`
+
+When the user already knows the exact session id, use:
+
+```bash
+<sessions-command> --session-id <full-session-id>
+```
+
+Rules:
+
+- Prefer `--session-id` over `--query` when the user already has the full id.
+- Keep `--limit` explicit for broad searches so the result set stays intentional.
+- If `--query` returns no top-level `cli` matches, rerun once with `--include-internal` before concluding that nothing was found.
+
+## Internal Sessions
+
+By default, recent-session lists should show only top-level `cli` sessions.
+
+Use internal sessions only when one of these is true:
+
+- the user explicitly asks for subagent, exec, or internal runs
+- the user is searching a topic and the top-level pass returned no matches
+- the user is debugging why a specific one-shot run existed
+
+Command:
+
+```bash
+<sessions-command> --include-internal --limit <n>
+<sessions-command> --include-internal --query '<text>' --limit <n>
+```
+
+Internal sessions include:
+
+- `exec`
+- `subagent`
+- other non-`cli` thread sources
+
+Say explicitly when a reported match came from an internal session rather than a normal top-level conversation.
+
+## Summary Rules
+
+The helper returns:
+
+- full `session_id`
+- `title`
+- `topic_basis`
+- `first_user_message`
+- full trailing user messages
+- timestamps
+- cwd
+- session kind
+
+Use that data to produce two separate outputs for each session:
+
+1. **Overall discussion**
+   - one or two sentences about what the session was generally about
+   - prefer the session `title` when it is descriptive
+   - when the title is generic like `hello` or `привет`, infer the topic from `first_user_message` and the trailing messages instead
+2. **Last two messages summary**
+   - summarize what the latest two user messages were about in one sentence
+   - do not paste the raw texts in list mode
+   - mention exact raw texts only for exact lookup or when the user explicitly asked for verbatim output
+
+## Compact Output First
+
+For recent-session lists and topic searches, the default answer must be a compact per-session block layout, not a Markdown table.
+
+Use exactly this 3-line structure for every session block:
+
+- `Session ID: <full-session-id>`
+- `О чем вся беседа: <one-sentence summary>`
+- `О чем последние 2 сообщения: <one-sentence summary>`
+
+Rules:
+
+- One session block per session.
+- Keep exactly one blank line between neighboring session blocks.
+- Each summary line should usually be one sentence.
+- Do not dump raw quoted user messages into list mode.
+- Do not render the main answer as a Markdown table unless the user explicitly asks for a table.
+- Do not render the main answer as a long numbered essay unless the user explicitly asks for that format.
+- After the blocks, add at most one short line that says how many sessions were returned and whether internal sessions were included.
+
+Target shape:
+
+```markdown
+Session ID: 019d...
+О чем вся беседа: Сессия про ...
+О чем последние 2 сообщения: Последние два сообщения были про ...
+
+Session ID: 019d...
+О чем вся беседа: Сессия про ...
+О чем последние 2 сообщения: Последние два сообщения были про ...
+```
+
+This compact block layout is the default for:
+
+- recent-session lists
+- keyword searches
+
+For exact session lookup, use a short summary block first. Only after that, include the full raw latest messages when the user explicitly asked for exact text or deep inspection.
+
+## Output Contract
+
+For a recent-session list:
+
+- include the total number of returned sessions
+- list sessions in descending `updated_at` order
+- use repeating 3-line session blocks as the main output
+- for each session include:
+  - full `session_id`
+  - overall discussion description
+  - one-sentence summary of what the latest two user messages were about
+- keep `session_id` complete and unshortened
+
+For a search result:
+
+- say what query was used
+- say whether the match is top-level or internal
+- if several sessions match, list all returned sessions up to the requested limit
+- use the same compact per-session block layout as the default presentation
+
+For an exact session lookup:
+
+- include the full `session_id`
+- include the overall discussion description
+- include a short summary of the latest two user messages
+- include the raw latest user messages only when the user explicitly asked for exact text or the exact lookup clearly implies deep inspection
+- mention if the session was not found exactly
+
+## Ask Only If Blocked
+
+Ask the user only when one of these is true:
+
+- local Codex files are missing
+- the user asked for a specific number but it is ambiguous or invalid
+- the user asked for a different notion of "last messages" than the helper exposes from local history
+
+Otherwise, run the helper and return the result.
+
+## Pre-final Check
+
+Before sending the final answer:
+
+1. Confirm that every shown `session_id` is full.
+2. Confirm that list and search results are shown as compact 3-line session blocks rather than a table or a long numbered list.
+3. Confirm that overall discussion and "last two messages" are separated clearly.
+4. Confirm that the session count matches the requested or default limit.
+5. Confirm that you did not silently include internal sessions unless the rules above allow it.
+6. Confirm that you did not paste raw full messages in list or search mode unless the user explicitly asked for exact text.
+
+If any answer is "no", keep working instead of finalizing.
+
+</skill>
+
+===== L878 [assistant] =====
+Использую `skill-codex-list-sessions` и запускаю bundled helper с default recent-session read, чтобы вернуть 20 последних top-level `cli` сессий в новом вертикальном формате.
+
+===== L885 [assistant] =====
+Session ID: 019d4656-83e4-79e2-8483-eb484c359f74  
+О чем вся беседа: Запрос на просмотр последних Codex-сессий перешел в создание, публикацию и доработку `skill-codex-list-sessions`, включая формат выдачи.  
+О чем последние 2 сообщения: Пользователь попросил сделать вывод вертикальными блоками вместо таблицы, а затем снова вызвал скилл для проверки.
+
+Session ID: 019d4619-2a57-7fb1-9f78-31f66293ccb8  
+О чем вся беседа: Разработка скилла для диагностики запросов Codex через прокси, субагентов и логирование, с последующей упаковкой в отдельный публичный репозиторий.  
+О чем последние 2 сообщения: Сначала был запрос зафиксировать текущее состояние коммитом, затем добавить MIT-лицензию, авторство, GitHub-репозиторий, подписанный коммит и публикацию в профильных README.
+
+Session ID: 019d46d3-3eef-78f1-8b51-0c131aa876d4  
+О чем вся беседа: Правки `agents.md` с добавлением роли про глубокую экспертизу в Apple-платформах и уточнением формулировок инструкций.  
+О чем последние 2 сообщения: Пользователь попросил заменить неудачную связку слов на более естественную формулировку, после чего попросил коммит и пуш.
+
+Session ID: 019d46ce-7f3d-71e0-9d3c-8090963f61d6  
+О чем вся беседа: Короткая сессия с прямым вызовом `skill-codex-list-sessions`.  
+О чем последние 2 сообщения: Единственное сообщение было про запуск скилла для вывода недавних сессий.
+
+Session ID: 019d3f2c-ef9d-7a12-97bf-59f193f2c2c2  
+О чем вся беседа: Обсуждение CLI-работы с self-hosted GitLab через `glab`, а затем оформление и публикация отдельного скилла в GitHub.  
+О чем последние 2 сообщения: Пользователь попросил переименовать remotes в `iv` и `rw`, а затем создать MIT-репозиторий в `ivanopcode` с подписанным коммитом.
+
+Session ID: 019d3f69-4561-7702-bdbd-a6a262f85d63  
+О чем вся беседа: Исследование open source CLI и MCP-решений для self-hosted YouTrack, затем правки skill-ов и контекста для merge request workflow.  
+О чем последние 2 сообщения: Пользователь принес пример упавшей MR-checklist job и попросил добавить правильный контекст для оформления MR, после чего попросил коммит и пуш.
+
+Session ID: 019d4543-0d6c-7c50-9c21-b2fe17105c33  
+О чем вся беседа: Проверка флага `COMPILATION_CACHE_ENABLE_CACHING` в Tuist-проекте, затем доработка `Scripts/create_worktree.py`.  
+О чем последние 2 сообщения: Пользователь попросил доделать cleanup, machine-readable output, self-tests и preflight-валидацию, а затем закоммитить и запушить результат.
+
+Session ID: 019d4646-64fb-72b1-9953-1a05e5fb7216  
+О чем вся беседа: Запуск `product-forensics` для анализа проекта `partners-app-dev`.  
+О чем последние 2 сообщения: Единственное сообщение было про анализ проекта через `product-forensics`.
+
+Session ID: 019d4614-9b3d-7323-b1d7-a4261d025678  
+О чем вся беседа: Короткая англоязычная приветственная сессия без предметной задачи.  
+О чем последние 2 сообщения: Единственное сообщение было обычным приветствием.
+
+Session ID: 019d4611-3bd0-7f91-892e-8641031e64a9  
+О чем вся беседа: Короткая англоязычная беседа-приветствие.  
+О чем последние 2 сообщения: Последние сообщения были про приветствие и вопрос о самочувствии.
+
+Session ID: 019d460f-e007-79c0-953c-163b7b791817  
+О чем вся беседа: Короткая англоязычная приветственная сессия.  
+О чем последние 2 сообщения: Единственное сообщение было обычным приветствием.
+
+Session ID: 019d460f-11c5-7ba3-a5c7-f795372effa2  
+О чем вся беседа: Короткая англоязычная беседа-приветствие.  
+О чем последние 2 сообщения: Последние сообщения были про приветствие и вопрос, как идут дела.
+
+Session ID: 019d460d-7c95-77d0-9b26-749cf994d845  
+О чем вся беседа: Короткая русскоязычная бытовая беседа.  
+О чем последние 2 сообщения: Последние сообщения были про самочувствие и ответ, что все нормально.
+
+Session ID: 019d4601-e435-7141-b05f-e3753eac090e  
+О чем вся беседа: Короткая англоязычная беседа-приветствие.  
+О чем последние 2 сообщения: Последние сообщения были про приветствие и вопрос о самочувствии.
+
+Session ID: 019d45ff-3927-7c72-8698-14a5012e3ca3  
+О чем вся беседа: Короткая англоязычная приветственная сессия.  
+О чем последние 2 сообщения: Единственное сообщение было обычным приветствием.
+
+Session ID: 019d45fd-a791-7563-a636-a87c61725a7f  
+О чем вся беседа: Короткая русскоязычная приветственная сессия.  
+О чем последние 2 сообщения: Единственное сообщение было обычным приветствием.
+
+Session ID: 019d45f2-6de7-7590-8785-005b2f0f3552  
+О чем вся беседа: Короткая англоязычная приветственная сессия.  
+О чем последние 2 сообщения: Единственное сообщение было обычным приветствием.
+
+Session ID: 019d45f0-6dd3-7fb1-8379-c1a4960af9ee  
+О чем вся беседа: Короткая англоязычная приветственная сессия.  
+О чем последние 2 сообщения: Единственное сообщение было обычным приветствием.
+
+Session ID: 019d45ea-73ca-7e42-a8c9-dc9e5f0f9ff8  
+О чем вся беседа: Короткая англоязычная приветственная сессия.  
+О чем последние 2 сообщения: Единственное сообщение было обычным приветствием.
+
+Session ID: 019d45e8-3038-7fe3-b871-a8937bae3285  
+О чем вся беседа: Короткая англоязычная приветственная сессия.  
+О чем последние 2 сообщения: Единственное сообщение было обычным приветствием.
+
+Показаны 20 top-level `cli` сессий; `internal` / `subagent` / `exec` не включены.
+
+===== L887 [user] =====
+отлично коммитим и пушим во все ремоут
+
+===== L892 [assistant] =====
+Коммичу и пушу изменения в репозитории `skill-codex-list-sessions`. Сначала проверю статус, ветку и список remotes, чтобы отправить ровно этот diff во все настроенные удалённые репозитории.
+
+===== L905 [assistant] =====
+В этом репозитории сейчас один remote: `origin`. Коммичу только [SKILL.md](/Users/iv/agents/skills/skill-codex-list-sessions/SKILL.md) и [README.md](/Users/iv/agents/skills/skill-codex-list-sessions/README.md), затем пушу `main` в `origin` и проверю подпись коммита.
+
+===== L915 [assistant] =====
+Коммит собран. Дальше пушу `main` в единственный настроенный remote и проверяю, что подпись прошла локально и на GitHub.
+
+===== L929 [assistant] =====
+Пуш прошёл. Сейчас доберу финальную проверку: чистый ли worktree и подтвердил ли GitHub `verified` для нового коммита.
+
+===== L939 [assistant] =====
+Запушил во все настроенные remotes этого репозитория. Здесь был только один remote: `origin`.
+
+Коммит:
+- `9f0226622e60b32e2078d667e16619498d237f4c`
+- `refactor: switch session list output to vertical blocks`
+
+Что вошло:
+- [SKILL.md](/Users/iv/agents/skills/skill-codex-list-sessions/SKILL.md)
+- [README.md](/Users/iv/agents/skills/skill-codex-list-sessions/README.md)
+
+Проверка:
+- локально подпись валидна: `Good "git" signature`
+- GitHub: `verified=true`, `reason=valid`
+- repo чистый: `main...origin/main`
+
+===== L944 [user] =====
+добавь также origin rw для relux works и запуш туда
+
+===== L949 [assistant] =====
+Проверю, какой URL использовать для `rw`, существует ли публичный репозиторий в Relux Works, и затем добавлю remote с пушем без лишних догадок.
+
+===== L962 [user] =====
+origin переименую в iv
+
+===== L968 [assistant] =====
+`origin` не трогаю. Создам публичный репозиторий в `relux-works`, добавлю только remote `rw` и запушу туда текущий `main`.
+
+===== L981 [assistant] =====
+Репозиторий в `relux-works` пока не существует, remote `rw` тоже. Создаю его через `gh`, привязываю как `rw` и сразу пушу текущую ветку.
+
+===== L992 [assistant] =====
+`rw` добавлен и пуш выполнен. Быстро проверю remotes и что коммит виден в новом публичном репозитории `relux-works`.
+
+===== L1005 [assistant] =====
+`origin` не трогал. Добавил `rw` и запушил туда.
+
+Что сделано:
+- создан публичный репозиторий `https://github.com/relux-works/skill-codex-list-sessions`
+- добавлен remote `rw`
+- текущий `main` запушен в `rw`
+
+Текущее состояние:
+- `origin` -> `git@github.com:ivanopcode/skill-codex-list-sessions.git`
+- `rw` -> `git@github.com:relux-works/skill-codex-list-sessions.git`
+
+Проверка:
+- коммит `9f0226622e60b32e2078d667e16619498d237f4c` есть в `relux-works`
+- GitHub verification: `verified=true`
+- ссылка на коммит: `https://github.com/relux-works/skill-codex-list-sessions/commit/9f0226622e60b32e2078d667e16619498d237f4c`
+
+Нюанс:
+- после `gh repo create --push` локальная ветка `main` теперь трекает `rw/main` вместо `origin/main` (`## main...rw/main`)
+
+Если хочешь, следующим сообщением могу сразу:
+- переключить tracking обратно на `origin/main`
+- или дождаться, пока ты переименуешь `origin` в `iv`, и потом настроить tracking на `iv/main`
+
+===== L1010 [user] =====
+убери Weak-model-friendly из описания
+
+===== L1015 [assistant] =====
+Использую `skill-creator` как для правки существующего скилла. Сначала найду все вхождения `Weak-model-friendly`, чтобы убрать формулировку последовательно, а не точечно.
+
+===== L1028 [user] =====
+и Author
+Ivan Oparin
+GitHub: @ivanopcode
+
+===== L1034 [assistant] =====
+Нашёл это в трёх местах: [README.md](/Users/iv/agents/skills/skill-codex-list-sessions/README.md), внутренней формулировке в [SKILL.md](/Users/iv/agents/skills/skill-codex-list-sessions/SKILL.md) и GitHub description репозитория. Заодно уберу блок `Author / GitHub` из `README` и приведу удалённые описания к нейтральной формулировке.
+
+===== L1047 [assistant] =====
+Правлю локальные файлы и журнал задачи, затем синхронизирую GitHub description для обоих репозиториев на нейтральный текст без `Weak-model-friendly` и без авторского блока в `README`.
+
+===== L1064 [assistant] =====
+Изменения внесены. Сейчас быстро проверю, что `Weak-model-friendly` действительно исчез из skill-репозитория и что оба GitHub-репозитория уже показывают новый description.
+
+===== L1076 [assistant] =====
+Убрал это из публичного описания и из `README`.
+
+Изменения:
+- в [README.md](/Users/iv/agents/skills/skill-codex-list-sessions/README.md) удалил `Weak-model-friendly ...`
+- из [README.md](/Users/iv/agents/skills/skill-codex-list-sessions/README.md) убрал блок `Author / Ivan Oparin / GitHub: @ivanopcode`
+- в [SKILL.md](/Users/iv/agents/skills/skill-codex-list-sessions/SKILL.md) заменил `weak-model-friendly` на нейтральное `easy to follow`
+- обновил GitHub description у обоих репозиториев:
+  - `ivanopcode/skill-codex-list-sessions`
+  - `relux-works/skill-codex-list-sessions`
+
+Текущее description:
+- `Codex skill for listing recent local Codex sessions.`
+
+Проверка:
+- локально в репозитории `Weak-model-friendly` больше не встречается
+- изменения пока не закоммичены, затронуты [README.md](/Users/iv/agents/skills/skill-codex-list-sessions/README.md) и [SKILL.md](/Users/iv/agents/skills/skill-codex-list-sessions/SKILL.md)
+
+Если хочешь, следующим сообщением закоммичу и запушу в `origin` и `rw`.
+
+===== L1081 [user] =====
+закоммить и запуг
+
+===== L1086 [assistant] =====
+Коммичу локальные правки и пушу в оба настроенных remote для `skill-codex-list-sessions`. Сначала быстро проверю статус и remotes, затем соберу подписанный коммит и отправлю `main` в `origin` и `rw`.
+
+===== L1097 [user] =====
+origin переименую в iv
+
+===== L1102 [assistant] =====
+`origin` не переименовываю. Коммит делаю сейчас, затем пушу в текущие `origin` и `rw` как они настроены сейчас.
+
+===== L1111 [assistant] =====
+Коммит собран. Пушу новый `main` в оба remote и затем быстро проверю подпись и состояние ветки.
+
+===== L1128 [assistant] =====
+Оба пуша прошли. Добираю финальную проверку: чистый ли worktree и видит ли GitHub новый подписанный коммит в обоих репозиториях.
+
+===== L1140 [assistant] =====
+Закоммитил и запушил.
+
+Коммит:
+- `c76e20c0f5e158f87b729510e65d6d722a38a19e`
+- `docs: remove author and branding wording`
+
+Запушено в:
+- `origin` -> `ivanopcode/skill-codex-list-sessions`
+- `rw` -> `relux-works/skill-codex-list-sessions`
+
+Проверка:
+- локально подпись валидна: `Good "git" signature`
+- GitHub `ivanopcode`: `verified=true`
+- GitHub `relux-works`: `verified=true`
+
+Состояние репозитория:
+- worktree чистый
+- локальная ветка все еще трекает `rw/main` (`main...rw/main`)
+
+===== L1145 [user] =====
+origin переименуй в iv
+
+===== L1150 [assistant] =====
+Переименовываю remote `origin` в `iv` в репозитории `skill-codex-list-sessions` и сразу проверяю итоговую конфигурацию remotes.
+
+===== L1159 [assistant] =====
+Переименовал.
+
+Теперь remotes такие:
+- `iv` -> `git@github.com:ivanopcode/skill-codex-list-sessions.git`
+- `rw` -> `git@github.com:relux-works/skill-codex-list-sessions.git`

@@ -1,0 +1,55 @@
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/BUG-260731-2rhy74/pin-old|detached|6fc2fd97dbdf|status_rc=0|changes=1
+  ?? uv.lock
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/BUG-260805-cfdxsk/worktree|ci/fastpath-macos-worker-domain|d4d8dd9c9d89|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/BUG-260807-l2ymv3/worktree|fix/BUG-260807-l2ymv3-windows-clock-and-shims|a5dc01aa399a|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/build-https/worktree|feat/build-https-broker|5381317a67ec|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/csk-runtime-command-fix/cocoaskills-wb|fix/shell-neutral-onboarding|10a758509374|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/ratify-build-ssh/worktree|chore/ratify-build-ssh-not-lockable|4ffba9a440aa|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/spec-rc6-pin-check|detached|6fc2fd97dbdf|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-11yhth/baseline|detached|11160f642d65|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-11yhth/worktree|task/TASK-260720-11yhth-command-runtime-activation|0be99ba1ff2e|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-12r55p/worktree|task/TASK-260720-12r55p-ivmbp-20260802|0471df5ca1f7|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-2g21eg/worktree|task/TASK-260720-2g21eg-go-v1-compile-driver|82d1cfc769d5|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-2jfnz6/worktree|task/TASK-260720-2jfnz6-protected-posix-build-cache|540af8ef0c99|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-2x6mjn/review-baseline|detached|82d1cfc769d5|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-2x6mjn/worktree|task/TASK-260720-2x6mjn-pure-build-planner|b3a5031ed551|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-3c0ss2/worktree|task/TASK-260720-3c0ss2-build-source-identity|97a0ed870782|status_rc=0|changes=1
+  ?? task-board.config.json
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-3pemm6/worktree|task/TASK-260720-3pemm6-go-e2e|8c71c00ecf86|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-3t8nr3/worktree|task/TASK-260720-3t8nr3-transactional-project-hybrid|7a66c73ebb30|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-8nxlgx/worktree|task/TASK-260720-8nxlgx-protected-windows-build-cache|11160f642d65|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-poa3ze/origin-main-worktree|detached|6fc2fd97dbdf|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260803-21lw4t/fix-hosted-cleanliness|fix/TASK-260803-21lw4t-hosted-cleanliness|5add1a4c32a6|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260803-21lw4t/fix-windows-tests|fix/TASK-260803-21lw4t-windows-tests|d64cc760774c|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260803-21lw4t/integration|ci/main-canary-TASK-260803-21lw4t|3f3a5d5f4b08|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260803-21lw4t/worktree|ci/fastpath-windows-protocol-shards|07ab96a2ceb9|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2h0vjy/crlf|task/TASK-260824-2h0vjy-audit-line-endings|743a9a1d1519|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2h0vjy/cycle4|detached|5381317a67ec|status_rc=0|changes=1
+   M src/csk/builds/go_v1.py
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2h0vjy/fix|task/TASK-260824-2h0vjy-macos-domain-join|46a942ae9531|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2h0vjy/rework|task/TASK-260824-2h0vjy-restore-audit-surface|f5d67b25368b|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2h0vjy/worktree|task/TASK-260824-2h0vjy-candidate-lane-input|991d6d31fc99|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2i5yqw/pr40|feat/schema-8-module-roots|1c6b68e09ee2|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2i5yqw/worktree|task/TASK-260824-2i5yqw-schema8|4ffba9a440aa|status_rc=0|changes=30
+  M  .github/ci/go-e2e-native-smoke-nodeids.txt
+  M  ARCHITECTURE.md
+  M  CHANGELOG.md
+  M  docs/skill-authoring.md
+  MM src/csk/builds/go_v1.py
+  M  src/csk/builds/planner.py
+  M  src/csk/gc.py
+  M  src/csk/hashing.py
+  M  src/csk/install_marker.py
+  M  src/csk/installer.py
+  A  src/csk/script_policy.py
+  M  src/csk/shims.py
+  M  src/csk/skillcheck.py
+  MM src/csk/skillspec.py
+  M  src/csk/status.py
+  A  tests/fixtures/skill_go_modroots/SKILL.md
+  A  tests/fixtures/skill_go_modroots/agent-skill.json
+  A  tests/fixtures/skill_go_modroots/pkg/board/board.go
+  A  tests/fixtures/skill_go_modroots/pkg/board/go.mod
+  A  tests/fixtures/skill_go_modroots/tools/cli/cmd/modroot-tool/main.go
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-31y75t/rework|task/TASK-260824-31y75t-declared-gap-owner|b480fcb32c08|status_rc=0|changes=0
+WORKTREE|/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-31y75t/worktree|task/TASK-260824-31y75t-schema8-consumption|ae1b6f2af2a8|status_rc=0|changes=0

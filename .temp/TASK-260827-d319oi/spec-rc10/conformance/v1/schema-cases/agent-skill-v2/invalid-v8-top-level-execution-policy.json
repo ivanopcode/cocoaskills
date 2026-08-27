@@ -1,0 +1,9 @@
+{
+  "commands": {},
+  "dependencies": {
+    "commands": {}
+  },
+  "execution_policy": "script-worker-v1",
+  "runtime_roots": [],
+  "schema_version": 2
+}

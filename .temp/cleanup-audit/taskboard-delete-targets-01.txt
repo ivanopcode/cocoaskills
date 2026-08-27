@@ -1,0 +1,17 @@
+../cocoaskills-taskboard/.temp/BUG-260805-cfdxsk
+../cocoaskills-taskboard/.temp/TASK-260803-21lw4t
+../cocoaskills-taskboard/.temp/TASK-260803-21lw4t-review
+../cocoaskills-taskboard/.temp/TASK-260803-2ol7ok
+../cocoaskills-taskboard/.temp/TASK-260803-2ol7ok-review
+../cocoaskills-taskboard/.temp/TASK-260803-2ol7ok-review-preflight.log
+../cocoaskills-taskboard/.temp/TASK-260803-2ol7ok-review-start.log
+../cocoaskills-taskboard/.temp/TASK-260819-1an2j1
+../cocoaskills-taskboard/.temp/TASK-260819-2bow35
+../cocoaskills-taskboard/.temp/TASK-260819-2j7v0x
+../cocoaskills-taskboard/.temp/TASK-260819-2lh7ts
+../cocoaskills-taskboard/.temp/TASK-260819-2otvoy
+../cocoaskills-taskboard/.temp/TASK-260819-8a0q6y
+../cocoaskills-taskboard/.temp/TASK-260821-14ic33
+../cocoaskills-taskboard/.temp/TASK-260821-3s96o5
+../cocoaskills-taskboard/.temp/TASK-260824-1dop3s
+../cocoaskills-taskboard/.temp/TASK-260824-31y75t

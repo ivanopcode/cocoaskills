@@ -1,0 +1,254 @@
+[
+  {
+    "expected": {
+      "adapter_mode": "auto",
+      "cache_ttl_seconds": 3600,
+      "default_agents": [
+        "codex_cli"
+      ],
+      "max_request_bytes": 1048576,
+      "offline_grace_seconds": 604800,
+      "registry_urls": [],
+      "snapshot_clock_skew_seconds": 300,
+      "snapshot_max_age_seconds": 604800
+    },
+    "input": {
+      "projects": {},
+      "schema_version": 1,
+      "skills_root": "./skills"
+    },
+    "name": "minimal-defaults",
+    "valid": true
+  },
+  {
+    "expected": {
+      "adapter_mode": "auto",
+      "cache_ttl_seconds": 0,
+      "checkout_alias": "app",
+      "default_agents": [
+        "codex_cli"
+      ],
+      "max_request_bytes": 2048,
+      "offline_grace_seconds": 0,
+      "project_alias": "app",
+      "registry_urls": [
+        "https://registry.example/api"
+      ],
+      "snapshot_clock_skew_seconds": 0,
+      "snapshot_max_age_seconds": 86400
+    },
+    "input": {
+      "audit": {
+        "cache_ttl_seconds": 0,
+        "max_request_bytes": 2048,
+        "offline_grace_seconds": 0,
+        "snapshot_clock_skew_seconds": 0,
+        "snapshot_max_age_seconds": 86400
+      },
+      "audit_registries": [
+        {
+          "name": "primary",
+          "public_keys": [
+            "ed25519:A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="
+          ],
+          "url": "HTTPS://REGISTRY.EXAMPLE:443/api/"
+        }
+      ],
+      "preferred_locale": null,
+      "projects": {
+        "app": {
+          "agents": [
+            "codex_cli"
+          ],
+          "checkout_alias": null,
+          "path": "./app",
+          "project_alias": null
+        }
+      },
+      "schema_version": 1,
+      "skills_root": "./skills"
+    },
+    "name": "canonical-registry-and-zero-cache",
+    "valid": true
+  },
+  {
+    "input": {
+      "projects": {},
+      "schema_version": 1,
+      "skills_root": "./skills",
+      "typo": true
+    },
+    "name": "unknown-top-level",
+    "valid": false
+  },
+  {
+    "input": {
+      "projects": {
+        "-app": {
+          "path": "./app"
+        }
+      },
+      "schema_version": 1,
+      "skills_root": "./skills"
+    },
+    "name": "invalid-project-key",
+    "valid": false
+  },
+  {
+    "input": {
+      "projects": {
+        "app": {
+          "path": "./app",
+          "project_alias": "App Label"
+        }
+      },
+      "schema_version": 1,
+      "skills_root": "./skills"
+    },
+    "name": "invalid-project-alias",
+    "valid": false
+  },
+  {
+    "input": {
+      "projects": {
+        "app": {
+          "path": "./app",
+          "typo": true
+        }
+      },
+      "schema_version": 1,
+      "skills_root": "./skills"
+    },
+    "name": "unknown-project-field",
+    "valid": false
+  },
+  {
+    "input": {
+      "default_agents": [
+        "codex_cli",
+        "codex_cli"
+      ],
+      "projects": {},
+      "schema_version": 1,
+      "skills_root": "./skills"
+    },
+    "name": "duplicate-agents",
+    "valid": false
+  },
+  {
+    "input": {
+      "audit_registries": [
+        {
+          "name": "r",
+          "required": true,
+          "url": "https://r.example"
+        }
+      ],
+      "projects": {},
+      "schema_version": 1,
+      "skills_root": "./skills"
+    },
+    "name": "unknown-registry-field",
+    "valid": false
+  },
+  {
+    "input": {
+      "audit_registries": [
+        {
+          "name": "r",
+          "public_keys": [
+            "ed25519:bad"
+          ],
+          "url": "https://r.example"
+        }
+      ],
+      "projects": {},
+      "schema_version": 1,
+      "skills_root": "./skills"
+    },
+    "name": "malformed-pinned-key",
+    "valid": false
+  },
+  {
+    "input": {
+      "audit_registries": [
+        {
+          "name": "r",
+          "url": "http://r.example"
+        }
+      ],
+      "projects": {},
+      "schema_version": 1,
+      "skills_root": "./skills"
+    },
+    "name": "insecure-registry",
+    "valid": false
+  },
+  {
+    "input": {
+      "audit_registries": [
+        {
+          "name": "one",
+          "url": "https://R.EXAMPLE:443/"
+        },
+        {
+          "name": "two",
+          "url": "https://r.example"
+        }
+      ],
+      "projects": {},
+      "schema_version": 1,
+      "skills_root": "./skills"
+    },
+    "name": "duplicate-canonical-registry",
+    "valid": false
+  },
+  {
+    "input": {
+      "preferred_locale": "",
+      "projects": {},
+      "schema_version": 1,
+      "skills_root": "./skills"
+    },
+    "name": "empty-preferred-locale",
+    "valid": false
+  },
+  {
+    "input": {
+      "audit": {
+        "cache_ttl_seconds": -1
+      },
+      "projects": {},
+      "schema_version": 1,
+      "skills_root": "./skills"
+    },
+    "name": "negative-cache-ttl",
+    "valid": false
+  },
+  {
+    "input": {
+      "audit": {
+        "max_request_bytes": 10485761
+      },
+      "projects": {},
+      "schema_version": 1,
+      "skills_root": "./skills"
+    },
+    "name": "oversize-backend-request",
+    "valid": false
+  },
+  {
+    "input": {
+      "audit": {
+        "source_policy": {
+          "classification": "public"
+        }
+      },
+      "projects": {},
+      "schema_version": 1,
+      "skills_root": "./skills"
+    },
+    "name": "unknown-source-policy-field",
+    "valid": false
+  }
+]

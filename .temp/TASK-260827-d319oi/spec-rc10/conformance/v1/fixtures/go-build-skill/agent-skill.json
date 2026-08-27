@@ -1,0 +1,25 @@
+{
+  "schema_version": 6,
+  "runtime_roots": ["scripts"],
+  "build_roots": ["assets/build-tool"],
+  "commands": {
+    "golden-tool": {
+      "type": "build",
+      "driver": "go-v1",
+      "source_dir": "assets/build-tool/cmd/golden-tool"
+    },
+    "skill-helper": {
+      "type": "script",
+      "unix_path": "scripts/skill-helper",
+      "win_path": "scripts/skill-helper.cmd"
+    }
+  },
+  "capabilities": {
+    "network": "none",
+    "filesystem": "repo",
+    "exec": "none",
+    "secrets": "none",
+    "env_read": []
+  },
+  "dependencies": {}
+}

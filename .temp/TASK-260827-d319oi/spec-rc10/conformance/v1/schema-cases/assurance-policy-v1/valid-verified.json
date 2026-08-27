@@ -1,0 +1,15 @@
+{
+  "execution_policy": "verified-provider-execution-v1",
+  "mode": "verified",
+  "policy_id": "verified-provider-policy-v1",
+  "provider_contract": "host-execution-provider-v1",
+  "required_capabilities": [
+    "total-network-denial-v1",
+    "read-only-source-and-toolchain-v1",
+    "exact-executable-allowlisting-v1",
+    "private-build-root-only-writes-v1",
+    "hard-aggregate-descendant-resource-bounds-v1",
+    "fail-closed-capability-preflight-v1"
+  ],
+  "schema_version": 1
+}

@@ -1,0 +1,15 @@
+{
+  "build_repository_substitutions": {
+    "golden-skill": {
+      "golden-tools": {
+        "argv": [
+          "go",
+          "build"
+        ],
+        "path": "../golden-tools"
+      }
+    }
+  },
+  "schema_version": 2,
+  "substitutions": {}
+}

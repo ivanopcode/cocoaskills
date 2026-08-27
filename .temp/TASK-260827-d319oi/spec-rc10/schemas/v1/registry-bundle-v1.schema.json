@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/registry-bundle-v1.schema.json",
+  "title": "Curator authenticated registry bundle schema 1",
+  "type": "object",
+  "required": ["schema_version", "records", "snapshot", "public_key"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "records": {"type": "array", "items": {"$ref": "audit-record-v1.schema.json"}, "maxItems": 1000000},
+    "snapshot": {"$ref": "registry-snapshot-v1.schema.json"},
+    "public_key": {"type": "string", "pattern": "^(?:ed25519:)?[A-Za-z0-9+/]{43}=$"}
+  },
+  "additionalProperties": false
+}

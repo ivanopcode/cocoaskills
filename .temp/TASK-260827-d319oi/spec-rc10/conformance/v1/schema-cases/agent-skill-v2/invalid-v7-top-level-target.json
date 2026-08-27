@@ -1,0 +1,9 @@
+{
+  "commands": {},
+  "dependencies": {
+    "commands": {}
+  },
+  "runtime_roots": [],
+  "schema_version": 2,
+  "target": "tool"
+}

@@ -1,0 +1,38 @@
+........................................................................ [  6%]
+........................................................................ [ 13%]
+........................................................................ [ 20%]
+........................................................................ [ 27%]
+........................................................................ [ 34%]
+........................................................................ [ 41%]
+........................................................................ [ 48%]
+........................................................................ [ 55%]
+........................................................................ [ 62%]
+........................................................................ [ 68%]
+........................................................................ [ 75%]
+........................................................................ [ 82%]
+...................................................................s.... [ 89%]
+........................................................................ [ 96%]
+.....................................                                    [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95
+  /Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-5a12be45-399d-4a12-8085-5e58eab3dd8b/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg
+  <class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-5a12be45-399d-4a12-8085-5e58eab3dd8b/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg'
+    warnings.warn(
+
+.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95
+  /Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-5a12be45-399d-4a12-8085-5e58eab3dd8b/test_rc6_toolchain_case_toolch0/toolchain-mode-1
+  <class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-5a12be45-399d-4a12-8085-5e58eab3dd8b/test_rc6_toolchain_case_toolch0/toolchain-mode-1'
+    warnings.warn(
+
+.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95
+  /Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-5a12be45-399d-4a12-8085-5e58eab3dd8b/test_rc6_toolchain_case_toolch0
+  <class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-5a12be45-399d-4a12-8085-5e58eab3dd8b/test_rc6_toolchain_case_toolch0'
+    warnings.warn(
+
+.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95
+  /Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-5a12be45-399d-4a12-8085-5e58eab3dd8b
+  <class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-5a12be45-399d-4a12-8085-5e58eab3dd8b'
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1044 passed, 1 skipped, 4 warnings in 1245.95s (0:20:45)

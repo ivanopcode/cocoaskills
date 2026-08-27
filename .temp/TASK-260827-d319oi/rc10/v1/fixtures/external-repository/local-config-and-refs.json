@@ -1,0 +1,131 @@
+{
+  "cases": [
+    {
+      "expected": "admitted",
+      "files_base64": {
+        "HEAD": "cmVmOiByZWZzL2hlYWRzL21haW4K",
+        "config": "W2NvcmVdCglyZXBvc2l0b3J5Zm9ybWF0dmVyc2lvbiA9IDAKCWJhcmUgPSBmYWxzZQo=",
+        "refs/heads/main": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nwo="
+      },
+      "name": "valid-sha1-files-ref",
+      "source_process_started": false
+    },
+    {
+      "expected": "admitted",
+      "files_base64": {
+        "HEAD": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ0K",
+        "config": "W2NvcmVdCglyZXBvc2l0b3J5Zm9ybWF0dmVyc2lvbiA9IDEKCWJhcmUgPSBmYWxzZQpbZXh0ZW5zaW9uc10KCW9iamVjdEZvcm1hdCA9IHNoYTI1NgoJcmVmU3RvcmFnZSA9IGZpbGVzCg=="
+      },
+      "name": "valid-sha256-detached-head",
+      "source_process_started": false
+    },
+    {
+      "expected_error": "build_repository_local_gitfile_unsupported",
+      "files_base64": {
+        "dot-git-file": "Z2l0ZGlyOiAuLi9vdXRzaWRlLmdpdAo="
+      },
+      "name": "reject-gitfile"
+    },
+    {
+      "expected_error": "build_repository_local_bare_unsupported",
+      "files_base64": {
+        "HEAD": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nwo=",
+        "config": "W2NvcmVdCnJlcG9zaXRvcnlmb3JtYXR2ZXJzaW9uID0gMApiYXJlID0gdHJ1ZQo="
+      },
+      "name": "reject-bare-layout"
+    },
+    {
+      "expected_error": "build_repository_local_linked_worktree_unsupported",
+      "files_base64": {
+        "HEAD": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nwo=",
+        "commondir": "Li4vLi4K",
+        "config": "W2NvcmVdCglyZXBvc2l0b3J5Zm9ybWF0dmVyc2lvbiA9IDAKCWJhcmUgPSBmYWxzZQo="
+      },
+      "name": "reject-linked-worktree"
+    },
+    {
+      "expected_error": "build_repository_local_format_unsupported",
+      "files_base64": {
+        "HEAD": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nwo=",
+        "config": "W2NvcmVdCglyZXBvc2l0b3J5Zm9ybWF0dmVyc2lvbiA9IDAKCWJhcmUgPSBmYWxzZQpbaW5jbHVkZV0KcGF0aCA9IC4uL291dHNpZGUK"
+      },
+      "name": "reject-config-include"
+    },
+    {
+      "expected_error": "build_repository_local_format_unsupported",
+      "files_base64": {
+        "HEAD": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nwo=",
+        "config": "W2NvcmVdCglyZXBvc2l0b3J5Zm9ybWF0dmVyc2lvbiA9IDAKCWJhcmUgPSBmYWxzZQo=",
+        "objects/info/alternates": "L291dHNpZGUvb2JqZWN0cwo="
+      },
+      "name": "reject-alternate-object-store"
+    },
+    {
+      "expected_error": "build_repository_local_format_unsupported",
+      "files_base64": {
+        "HEAD": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nwo=",
+        "config": "W2NvcmVdCglyZXBvc2l0b3J5Zm9ybWF0dmVyc2lvbiA9IDAKCWJhcmUgPSBmYWxzZQo=",
+        "refs/replace/0123456789abcdef0123456789abcdef01234567": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYgo="
+      },
+      "name": "reject-replace-ref"
+    },
+    {
+      "expected_error": "build_repository_local_format_unsupported",
+      "files_base64": {
+        "HEAD": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nwo=",
+        "config": "W2NvcmVdCglyZXBvc2l0b3J5Zm9ybWF0dmVyc2lvbiA9IDAKCWJhcmUgPSBmYWxzZQo=",
+        "info/grafts": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nwo="
+      },
+      "name": "reject-grafts"
+    },
+    {
+      "expected_error": "build_repository_local_format_unsupported",
+      "files_base64": {
+        "HEAD": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nwo=",
+        "config": "W2NvcmVdCglyZXBvc2l0b3J5Zm9ybWF0dmVyc2lvbiA9IDAKCWJhcmUgPSBmYWxzZQo=",
+        "objects/pack/pack-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.promisor": ""
+      },
+      "name": "reject-promisor-sidecar"
+    },
+    {
+      "expected_error": "build_repository_local_format_unsupported",
+      "files_base64": {
+        "HEAD": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nwo=",
+        "config": "W2NvcmVdCglyZXBvc2l0b3J5Zm9ybWF0dmVyc2lvbiA9IDAKCWJhcmUgPSBmYWxzZQpbcmVtb3RlICJvcmlnaW4iXQpwcm9taXNvciA9IHRydWUKcGFydGlhbENsb25lRmlsdGVyID0gYmxvYjpub25lCg=="
+      },
+      "name": "reject-partial-clone-config"
+    },
+    {
+      "expected": "admitted-inert",
+      "files_base64": {
+        "HEAD": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nwo=",
+        "config": "W2NvcmVdCglyZXBvc2l0b3J5Zm9ybWF0dmVyc2lvbiA9IDAKCWJhcmUgPSBmYWxzZQpbZmlsdGVyICJsZnMiXQpjbGVhbiA9IGdpdC1sZnMgY2xlYW4gLS0gJWYKc211ZGdlID0gZ2l0LWxmcyBzbXVkZ2UgLS0gJWYK"
+      },
+      "name": "source-filter-config-is-inert",
+      "source_process_started": false
+    },
+    {
+      "expected": "admitted-inert",
+      "files_base64": {
+        "HEAD": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nwo=",
+        "config": "W2NvcmVdCglyZXBvc2l0b3J5Zm9ybWF0dmVyc2lvbiA9IDAKCWJhcmUgPSBmYWxzZQpbY3JlZGVudGlhbF0KaGVscGVyID0gIXBhY2thZ2UtY29tbWFuZAo="
+      },
+      "name": "source-credential-helper-is-inert",
+      "source_process_started": false
+    },
+    {
+      "expected_error": "build_repository_local_format_unsupported",
+      "files_base64": {
+        "HEAD": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nwo=",
+        "config": "W2NvcmVdCnJlcG9zaXRvcnlmb3JtYXR2ZXJzaW9uID0gMQpiYXJlID0gZmFsc2UKW2V4dGVuc2lvbnNdCnJlZlN0b3JhZ2UgPSByZWZ0YWJsZQo="
+      },
+      "name": "reject-reftable"
+    },
+    {
+      "entry_type": "symbolic-link-or-special",
+      "expected_error": "build_repository_local_layout_unsafe",
+      "name": "reject-link-or-special-administration-file",
+      "path_opened": false
+    }
+  ]
+}

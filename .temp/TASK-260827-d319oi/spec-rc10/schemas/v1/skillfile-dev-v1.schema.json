@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/skillfile-dev-v1.schema.json",
+  "title": "Skillfile.dev.json schema 1",
+  "type": "object",
+  "required": ["substitutions"],
+  "properties": {
+    "substitutions": {
+      "type": "object",
+      "propertyNames": {"$ref": "common.schema.json#/$defs/identifier"},
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["path"],
+            "properties": {"path": {"$ref": "common.schema.json#/$defs/nonEmptyString"}},
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["git", "ref"],
+            "properties": {
+              "git": {"$ref": "common.schema.json#/$defs/nonEmptyString"},
+              "ref": {"$ref": "common.schema.json#/$defs/devRef"}
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    }
+  },
+  "additionalProperties": false
+}

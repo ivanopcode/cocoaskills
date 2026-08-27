@@ -1,0 +1,121 @@
+{
+  "bootstrap_cases": [
+    {
+      "config": "missing",
+      "force": false,
+      "if_missing": true,
+      "name": "missing-config-if-missing",
+      "outcome": "created"
+    },
+    {
+      "config": "existing-invalid",
+      "force": false,
+      "if_missing": true,
+      "name": "existing-config-if-missing",
+      "outcome": "unchanged-success"
+    },
+    {
+      "config": "either",
+      "force": true,
+      "if_missing": true,
+      "name": "if-missing-with-force",
+      "outcome": "usage-error"
+    }
+  ],
+  "dry_run_cases": [
+    {
+      "forbidden_persistent_effects": [
+        "source-fetch",
+        "source-clone",
+        "snapshot-cache",
+        "response-cache",
+        "audit-state",
+        "registry-state",
+        "configuration",
+        "runtime",
+        "project-artifacts"
+      ],
+      "name": "project-upgrade",
+      "scope": "project"
+    },
+    {
+      "forbidden_persistent_effects": [
+        "source-fetch",
+        "source-clone",
+        "snapshot-cache",
+        "response-cache",
+        "audit-state",
+        "registry-state",
+        "configuration",
+        "runtime",
+        "global-artifacts"
+      ],
+      "name": "global-upgrade",
+      "scope": "global"
+    }
+  ],
+  "launcher_cases": [
+    {
+      "forward_arguments": true,
+      "name": "skill-command-without-shell-activation",
+      "platforms": [
+        "unix",
+        "windows"
+      ],
+      "preserve_exit_status": true,
+      "preserve_inherited_path": true,
+      "required_path_roles": [
+        "command_directory",
+        "implementation_runtime",
+        "system_dependencies"
+      ]
+    },
+    {
+      "forward_arguments": true,
+      "name": "declared-system-command-without-profile",
+      "platforms": [
+        "unix",
+        "windows"
+      ],
+      "preserve_exit_status": true,
+      "preserve_inherited_path": true,
+      "required_path_roles": [
+        "command_directory",
+        "implementation_runtime",
+        "system_dependencies"
+      ]
+    }
+  ],
+  "upgrade_cases": [
+    {
+      "exclude": [
+        "unrelated"
+      ],
+      "fetch": [
+        "direct",
+        "transitive"
+      ],
+      "name": "selected-project-closure",
+      "scope": "project",
+      "selection": "one"
+    },
+    {
+      "deduplicate": true,
+      "name": "all-projects-deduplicate",
+      "scope": "project",
+      "selection": "all"
+    },
+    {
+      "exclude": [
+        "unrelated"
+      ],
+      "fetch": [
+        "direct",
+        "transitive"
+      ],
+      "name": "global-closure",
+      "scope": "global",
+      "selection": "global"
+    }
+  ]
+}

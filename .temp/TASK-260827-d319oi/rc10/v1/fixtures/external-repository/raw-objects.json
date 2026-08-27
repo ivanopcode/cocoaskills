@@ -1,0 +1,104 @@
+{
+  "cases": [
+    {
+      "content_base64": "dHJlZSBhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhCnBhcmVudCBiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiCmF1dGhvciBBIFUgVGhvciA8YUBleGFtcGxlLnRlc3Q+IDEgKzAwMDAKY29tbWl0dGVyIEMgTyBNaXR0ZXIgPGNAZXhhbXBsZS50ZXN0PiAyICswMDAwCmdwZ3NpZyAtLS0tLUJFR0lOIFBHUCBTSUdOQVRVUkUtLS0tLQogcGF5bG9hZAogLS0tLS1FTkQgUEdQIFNJR05BVFVSRS0tLS0tCngtY3VyYXRvci1maXh0dXJlIG9wYXF1ZQoKbWVzc2FnZQ0KYm9keQo=",
+      "expected": "valid",
+      "name": "valid-commit-with-signed-and-extra-headers",
+      "object_format": "sha1",
+      "object_id": "aa8bab74b710023ff9eaed657933e6302ad2f7b6",
+      "object_type": "commit"
+    },
+    {
+      "content_base64": "dHJlZSBhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhCnRyZWUgYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYgphdXRob3IgQSA8YUBiPiAxICswMDAwCmNvbW1pdHRlciBDIDxjQGQ+IDIgKzAwMDAKCm1lc3NhZ2UK",
+      "expected_error": "build_repository_git_object_semantics_invalid",
+      "name": "reject-duplicate-tree-header",
+      "object_format": "sha1",
+      "object_id": "daf264e5125d4b7a957e49f69d75d87e0c405f79",
+      "object_type": "commit"
+    },
+    {
+      "content_base64": "cGFyZW50IGJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIKdHJlZSBhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhCmF1dGhvciBBIDxhQGI+IDEgKzAwMDAKY29tbWl0dGVyIEMgPGNAZD4gMiArMDAwMAoKbWVzc2FnZQo=",
+      "expected_error": "build_repository_git_object_semantics_invalid",
+      "name": "reject-misordered-tree-after-parent",
+      "object_format": "sha1",
+      "object_id": "2c5f9389dd52d685e5a745364659db192bbb518e",
+      "object_type": "commit"
+    },
+    {
+      "content_base64": "dHJlZSBhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhCmF1dGhvciBBIDxhQGI+IDEgKzAwMDAKY29tbWl0dGVyIEMgPGNAZD4gMiArMDAwMAptZXNzYWdlCg==",
+      "expected_error": "build_repository_git_object_semantics_invalid",
+      "name": "reject-missing-header-message-separator",
+      "object_format": "sha1",
+      "object_id": "9aba039e4d56547fb5c3006059151e1af5030369",
+      "object_type": "commit"
+    },
+    {
+      "content_base64": "b2JqZWN0IGFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEKdHlwZSBjb21taXQKdGFnIHYxLjQuMAp0YWdnZXIgVCBBZ2dlciA8dEBleGFtcGxlLnRlc3Q+IDMgKzAwMDAKCnJlbGVhc2UKLS0tLS1CRUdJTiBQR1AgU0lHTkFUVVJFLS0tLS0Kb3BhcXVlCi0tLS0tRU5EIFBHUCBTSUdOQVRVUkUtLS0tLQo=",
+      "expected": "valid",
+      "name": "valid-signed-annotated-tag",
+      "object_format": "sha1",
+      "object_id": "4164df33ac95e74b15ad788f931c8b9c1373a5d1",
+      "object_type": "tag"
+    },
+    {
+      "content_base64": "b2JqZWN0IGFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEKb2JqZWN0IGJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIKdHlwZSBjb21taXQKdHlwZSB0YWcKdGFnIHYxLjQuMAoKbWVzc2FnZQo=",
+      "expected_error": "build_repository_git_object_semantics_invalid",
+      "name": "reject-duplicate-object-and-type-headers",
+      "object_format": "sha1",
+      "object_id": "7a92a3609ef508be97e15090c5585250d2d7b8b1",
+      "object_type": "tag"
+    },
+    {
+      "content_base64": "b2JqZWN0IGFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEKdHlwZSB0YWcKdGFnIHYxLjQuMAoKbWVzc2FnZQo=",
+      "expected_error": "build_repository_git_object_semantics_invalid",
+      "name": "reject-tag-declared-target-type-mismatch",
+      "object_format": "sha1",
+      "object_id": "df5061ac7f305f59396114ba9cae6cb5992098c5",
+      "object_type": "tag"
+    },
+    {
+      "content_base64": "dHJlZSBhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhCmF1dGhvciBBIDxhQGI+IDEgKzAwMDAKY29tbWl0dGVyIEMgPGNAZD4gMiArMDAwMAoKc2hhMjU2Cg==",
+      "expected": "valid",
+      "name": "valid-sha256-commit",
+      "object_format": "sha256",
+      "object_id": "0fa804ad1140b9f38e50f0f7f67ed1c7466fe158b707bda612e224e57fe36e64",
+      "object_type": "commit"
+    },
+    {
+      "content_base64": "MTAwNjQ0IFJFQURNRS5tZAARERERERERERERERERERERERERETEwMDc1NSB0b29sACIiIiIiIiIiIiIiIiIiIiIiIiIi",
+      "expected": "valid",
+      "name": "valid-regular-and-executable-files",
+      "object_format": "sha1",
+      "object_id": "4e0cceee2354481f6eebd83c8fa8b63d57160708",
+      "object_type": "tree"
+    },
+    {
+      "content_base64": "MTIwMDAwIGxpbmsAERERERERERERERERERERERERERE=",
+      "expected_error": "build_repository_git_object_semantics_invalid",
+      "name": "reject-symbolic-link",
+      "object_format": "sha1",
+      "object_id": "f6b4f3a9e5e7c16ce47d0c3e3301ed65ad4095aa",
+      "object_type": "tree"
+    },
+    {
+      "content_base64": "MTYwMDAwIHN1Ym1vZHVsZQAREREREREREREREREREREREREREQ==",
+      "expected_error": "build_repository_git_object_semantics_invalid",
+      "name": "reject-submodule-gitlink",
+      "object_format": "sha1",
+      "object_id": "de74527bbe1ee44b08f8e60c9c28197422222384",
+      "object_type": "tree"
+    },
+    {
+      "content_base64": "MTAwNjAwIHNwZWNpYWwAERERERERERERERERERERERERERE=",
+      "expected_error": "build_repository_git_object_semantics_invalid",
+      "name": "reject-special-file-mode",
+      "object_format": "sha1",
+      "object_id": "9ff55919d2798fa35cfacd31401f65d5bf020aee",
+      "object_type": "tree"
+    }
+  ],
+  "source_paths": [
+    "network-private-store",
+    "local-inert-copy"
+  ]
+}

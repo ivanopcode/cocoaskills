@@ -1,0 +1,111 @@
+## candidate stories
+STORY-260712-469238,done,STORY-260712-469238: content-hash
+STORY-260712-8976ff,done,STORY-260712-8976ff: identity-and-allowlist
+STORY-260712-b0266a,done,STORY-260712-b0266a: git-operations
+STORY-260712-e36395,done,STORY-260712-e36395: snapshot-cache
+STORY-260712-706209,done,STORY-260712-706209: ci-matrix-and-gates
+## candidate tasks all statuses
+TASK-260720-2dnqw2,done,Implement canonical build metadata models
+TASK-260720-2g21eg,done,Implement fixed go-v1 compile driver
+TASK-260720-2jfnz6,done,Implement protected POSIX build cache
+TASK-260720-2x6mjn,done,Implement pure compiled-build planning
+TASK-260720-3c0ss2,done,Implement build-source identity and context isolation
+TASK-260720-3j8pp5,done,Implement trusted Go toolchain identity
+TASK-260720-3t8nr3,done,Integrate atomic project and hybrid builds
+TASK-260720-8nxlgx,done,Implement protected Windows build cache
+TASK-260720-akf5kh,done,Document schema v6 compiled commands
+TASK-260720-g7kgox,done,Integrate atomic global builds
+--
+TASK-260730-1fsbqd,done,TASK-260730-1fsbqd: land-accepted-curator-spec-candidate
+TASK-260720-11pfex,done,Activate build commands and exclude build roots
+TASK-260720-1ljev5,done,Collect compiled artifacts safely
+TASK-260720-1nlmvv,done,Expose build diagnostics and repair behavior
+TASK-260720-1pvfj5,done,Enforce cross-platform compiled-build CI gates
+--
+TASK-260720-3itlly,done,Stage build plans before installation mutation
+TASK-260720-3mrm4z,done,Canonicalize build inputs and receipts
+TASK-260720-3pwg2w,done,Protect and publish immutable build cache entries
+TASK-260720-4bd0it,done,Implement install marker v2 and build currentness
+TASK-260720-6i3cya,done,Establish a trusted Go toolchain session
+--
+TASK-260728-1skseh,backlog,TASK-260728-1skseh: run-linux-native-external-repository-qualification
+TASK-260729-2sxx7k,blocked,TASK-260729-2sxx7k: validate-accepted-curator-go-snapshot-on-linux
+TASK-260728-1ax4j0,done,TASK-260728-1ax4j0: curator-external-snapshot-audit-and-cache
+TASK-260728-1uepyd,done,TASK-260728-1uepyd: curator-clean-git-and-raw-object-admission
+TASK-260728-20ao7p,blocked,TASK-260728-20ao7p: curator-rc5-e2e-docs-macos-windows
+TASK-260728-pwbr32,done,TASK-260728-pwbr32: curator-schema-v7-repository-models-and-substitutions
+TASK-260728-rjxrgs,done,TASK-260728-rjxrgs: curator-mixed-receipt-marker-and-lifecycle
+TASK-260805-19mnqj,done,TASK-260805-19mnqj: curator-windows-protected-external-cache-backend
+TASK-260728-1egim2,backlog,TASK-260728-1egim2: document-swift-driver-pair-authoring-and-operations
+TASK-260728-1xviwb,backlog,TASK-260728-1xviwb: verify-swift-repository-cross-manager-interop
+--
+TASK-260729-1vpytz,done,TASK-260729-1vpytz: research-official-go-bootstrap-guidance
+TASK-260728-12pnm1,done,TASK-260728-12pnm1: design-rust-repository-v1-security-contract
+TASK-260728-168smo,done,TASK-260728-168smo: select-kotlin-artifact-model-and-driver-pair
+TASK-260728-1g0z69,done,TASK-260728-1g0z69: define-toolchain-requirement-and-guidance-contract
+TASK-260728-1yhuqi,done,TASK-260728-1yhuqi: design-swift-driver-pair-security-contract
+--
+TASK-260728-2bu2q6,backlog,TASK-260728-2bu2q6: qualify-additional-driver-spec-candidate
+TASK-260728-2jaw7h,done,TASK-260728-2jaw7h: add-toolchain-requirements-to-curator-spec
+TASK-260728-2spy93,done,TASK-260728-2spy93: define-additional-driver-version-and-artifact-boundary
+TASK-260729-iuepxx,done,TASK-260729-iuepxx: audit-language-story-dependency-cycle
+TASK-260729-rhjxtx,done,TASK-260729-rhjxtx: probe-rust-swift-kotlin-toolchain-boundaries
+TASK-260728-1ph8rs,done,TASK-260728-1ph8rs: csk-schema-v7-repository-models-and-substitutions
+TASK-260728-2mfeje,done,TASK-260728-2mfeje: csk-clean-git-and-raw-object-admission
+TASK-260728-2uxmut,done,TASK-260728-2uxmut: csk-external-snapshot-audit-and-cache
+TASK-260728-3jaa57,done,TASK-260728-3jaa57: csk-mixed-receipt-marker-and-lifecycle
+TASK-260728-3kuxg7,done,TASK-260728-3kuxg7: csk-rc5-e2e-docs-macos-windows
+--
+TASK-260806-1akndx,done,TASK-260806-1akndx: preflight-release-train-remote-inventory
+TASK-260806-1jhgji,done,TASK-260806-1jhgji: review-land-curator-schema7-pr
+TASK-260806-1kbszq,done,TASK-260806-1kbszq: preserve-residual-curator-dirty-worktrees
+TASK-260806-1q0206,backlog,TASK-260806-1q0206: verify-cocoaskills-rc-install-channels
+TASK-260806-21quur,done,TASK-260806-21quur: prepare-cocoaskills-homebrew-rc-channel
+--
+TASK-260807-3merwb,backlog,TASK-260807-3merwb: run-qualifying-cocoaskills-ci
+TASK-260807-zna3vh,done,TASK-260807-zna3vh: port-go-v1-spec0005-vendored-exceptions
+TASK-260819-15jj0t,done,TASK-260819-15jj0t: relocate-cocoaskills-taskboard
+TASK-260821-2ilnu2,to-review,TASK-260821-2ilnu2: bump-tap-formula-to-v0-13-0
+TASK-260821-3s9eld,to-review,TASK-260821-3s9eld: automate-tap-bump-in-release-workflow
+--
+TASK-260805-1up812,blocked,TASK-260805-1up812: validate-sentry-pilot-on-windows-after-host-recovery
+TASK-260805-21x2xn,blocked,TASK-260805-21x2xn: create-internally-signed-tree-identical-rc3-commit
+TASK-260806-bpr1w4,backlog,TASK-260806-bpr1w4: cleanup-ephemeral-wb-e2e-key
+TASK-260819-1y7hh4,done,TASK-260819-1y7hh4: en-readme
+TASK-260819-8a0q6y,done,TASK-260819-8a0q6y: ru-root-readme
+--
+TASK-260824-2i5yqw,done,TASK-260824-2i5yqw: schema8-implementation
+TASK-260824-31y75t,done,TASK-260824-31y75t: schema8-consumption-and-qualification
+TASK-260824-12mm3n,backlog,TASK-260824-12mm3n: research-gocache-seed-seam
+TASK-260824-2msukb,backlog,TASK-260824-2msukb: research-phase-scoped-observation
+TASK-260824-32vdi7,backlog,TASK-260824-32vdi7: implement-scoped-observation
+TASK-260824-343ou7,backlog,TASK-260824-343ou7: rebalance-shards-post-tier3
+TASK-260824-37mdxb,backlog,TASK-260824-37mdxb: implement-gocache-seed-seam
+TASK-260824-1p6t1t,backlog,TASK-260824-1p6t1t: reshard-sabotage-p02-p05
+TASK-260824-2f17nl,backlog,TASK-260824-2f17nl: split-pr-fast-go-e2e-smoke-windows
+TASK-260824-2hy9an,backlog,TASK-260824-2hy9an: shard-merge-go-e2e-windows
+TASK-260824-2xvyjy,backlog,TASK-260824-2xvyjy: enable-pip-cache-all-jobs
+TASK-260824-3cbw4o,backlog,TASK-260824-3cbw4o: shard-posix-full-protocol-lanes
+TASK-260824-139rcb,backlog,TASK-260824-139rcb: research-main-gate-scheduling
+## epic plan
+{"error":{"message":"unresolvable planning blockers: STORY-260803-3gnicd is blocked by STORY-260805-1fpplh (out-of-scope); STORY-260803-3gnicd is blocked by STORY-260805-2o5a3r (out-of-scope); STORY-260803-3gnicd is blocked by STORY-260805-tcd4yj (out-of-scope); STORY-260819-pihwph is blocked by STORY-260803-3gnicd (resolved-element-has-active-blocker)"}}
+## goal help
+CAS-replace the complete active primary objective
+
+Usage:
+  task-board goal update [flags]
+
+Flags:
+  -h, --help               help for update
+      --if-revision int    Observed active revision required for compare-and-swap
+      --objective string   Complete replacement parent objective
+      --reason string      Reason for realigning the primary goal
+
+Global Flags:
+      --board-dir string         Path to the board directory (overrides TASK_BOARD_DIR and config local.board_dir) (default ".task-board")
+      --context-profile string   Agent context profile override: full or lite
+      --insecure                 Skip TLS certificate verification (for self-signed certs)
+      --json                     Output in JSON format
+      --no-update-check          Disable automatic update check
+      --remote string            Remote board server URL (overrides TASK_BOARD_REMOTE)
+      --remote-board string      Remote board ID (overrides TASK_BOARD_ID)

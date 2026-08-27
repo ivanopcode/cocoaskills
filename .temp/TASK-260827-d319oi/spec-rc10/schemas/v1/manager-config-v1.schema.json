@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/manager-config-v1.schema.json",
+  "title": "Curator manager logical configuration schema 1",
+  "type": "object",
+  "required": ["schema_version", "skills_root", "projects"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "skills_root": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "default_agents": {"$ref": "common.schema.json#/$defs/identifierSet", "default": ["codex_cli"]},
+    "preferred_locale": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/$defs/locale"},
+        {"type": "null"}
+      ],
+      "default": null
+    },
+    "adapter_mode": {"enum": ["auto", "symlink", "copy"], "default": "auto"},
+    "worktree_alias_pattern": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "projects": {
+      "type": "object",
+      "propertyNames": {"$ref": "common.schema.json#/$defs/identifier"},
+      "additionalProperties": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+          "agents": {"$ref": "common.schema.json#/$defs/identifierSet"},
+          "project_alias": {
+            "oneOf": [
+              {"$ref": "common.schema.json#/$defs/identifier"},
+              {"type": "null"}
+            ]
+          },
+          "checkout_alias": {
+            "oneOf": [
+              {"$ref": "common.schema.json#/$defs/identifier"},
+              {"type": "null"}
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "allowed_sources": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 4096}, "uniqueItems": true},
+    "audit": {"$ref": "#/$defs/audit"},
+    "audit_registries": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/registry"}
+    },
+    "disable_builtin_registries": {"type": "boolean", "default": false}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "registry": {
+      "type": "object",
+      "required": ["name", "url"],
+      "properties": {
+        "name": {"$ref": "common.schema.json#/$defs/identifier"},
+        "url": {"type": "string", "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^\\s]+$", "maxLength": 4096},
+        "public_keys": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^(?:ed25519:)?[A-Za-z0-9+/]{43}=$"},
+          "uniqueItems": true,
+          "default": []
+        },
+        "enabled": {"type": "boolean", "default": true}
+      },
+      "additionalProperties": false
+    },
+    "audit": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean", "default": false},
+        "mode": {"enum": ["advisory", "strict"], "default": "advisory"},
+        "fail_on": {"enum": ["off", "low", "medium", "high", "critical"], "default": "high"},
+        "backend": {"type": "string", "minLength": 1, "maxLength": 128, "default": "null"},
+        "model": {
+          "oneOf": [
+            {"type": "string", "minLength": 1, "maxLength": 1024},
+            {"type": "null"}
+          ],
+          "default": null
+        },
+        "allow_cloud": {"type": "boolean", "default": false},
+        "max_request_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760, "default": 1048576},
+        "backends": {"type": "object"},
+        "grants": {"type": "array", "items": {"type": "object"}},
+        "revocations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "oneOf": [
+              {"pattern": "^(?:sha256:)?[A-Fa-f0-9]{64}$"},
+              {"pattern": "^source:.*\\S.*$"}
+            ]
+          },
+          "uniqueItems": true
+        },
+        "source_policy": {
+          "oneOf": [
+            {"$ref": "#/$defs/sourcePolicy"},
+            {"type": "null"}
+          ]
+        },
+        "registry_policy": {"enum": ["advisory", "strict"], "default": "advisory"},
+        "snapshot_max_age_seconds": {"type": "integer", "minimum": 1, "maximum": 2147483647, "default": 604800},
+        "snapshot_clock_skew_seconds": {"type": "integer", "minimum": 0, "maximum": 2147483647, "default": 300},
+        "cache_ttl_seconds": {"type": "integer", "minimum": 0, "maximum": 2147483647, "default": 3600},
+        "offline_grace_seconds": {"type": "integer", "minimum": 0, "maximum": 2147483647, "default": 604800}
+      },
+      "additionalProperties": false
+    },
+    "sourcePolicy": {
+      "type": "object",
+      "properties": {
+        "default_class": {"enum": ["internal", "public"], "default": "internal"},
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["pattern", "class"],
+            "properties": {
+              "pattern": {"type": "string", "minLength": 1, "maxLength": 4096},
+              "class": {"enum": ["internal", "public"]}
+            },
+            "additionalProperties": false
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

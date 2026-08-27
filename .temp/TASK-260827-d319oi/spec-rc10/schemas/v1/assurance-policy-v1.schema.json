@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/assurance-policy-v1.schema.json",
+  "title": "Curator assurance policy schema 1",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["schema_version", "policy_id", "mode", "execution_policy", "provider_contract", "required_capabilities"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "policy_id": {"const": "portable-cli-policy-v1"},
+        "mode": {"const": "portable"},
+        "execution_policy": {"const": "manager-worker-v1"},
+        "provider_contract": {"type": "null"},
+        "required_capabilities": {"const": []}
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["schema_version", "policy_id", "mode", "execution_policy", "provider_contract", "required_capabilities"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "policy_id": {"const": "verified-provider-policy-v1"},
+        "mode": {"const": "verified"},
+        "execution_policy": {"const": "verified-provider-execution-v1"},
+        "provider_contract": {"const": "host-execution-provider-v1"},
+        "required_capabilities": {
+          "const": [
+            "total-network-denial-v1",
+            "read-only-source-and-toolchain-v1",
+            "exact-executable-allowlisting-v1",
+            "private-build-root-only-writes-v1",
+            "hard-aggregate-descendant-resource-bounds-v1",
+            "fail-closed-capability-preflight-v1"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

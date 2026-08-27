@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/csk-skill-v1.schema.json",
+  "title": "csk-skill.json schema 1",
+  "type": "object",
+  "required": ["schema_version"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "commands": {"type": "object", "propertyNames": {"$ref": "common.schema.json#/$defs/identifier"}, "additionalProperties": {"$ref": "common.schema.json#/$defs/command"}}
+  },
+  "allOf": [
+    {"not": {"anyOf": [{"required": ["runtime_roots"]}, {"required": ["dependencies"]}, {"required": ["capabilities"]}]}}
+  ],
+  "additionalProperties": true
+}

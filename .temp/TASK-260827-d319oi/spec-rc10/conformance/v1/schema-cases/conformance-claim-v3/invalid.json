@@ -1,0 +1,17 @@
+{
+  "classes": [
+    "core",
+    "manager"
+  ],
+  "created_at": "2026-07-13T00:00:00Z",
+  "implementation": "example-manager",
+  "implementation_version": "1.0",
+  "operating_systems": [
+    "macos",
+    "windows"
+  ],
+  "protocol_version": "1.0.0-rc.5",
+  "result": "pass",
+  "schema_version": 3,
+  "suite_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}

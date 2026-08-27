@@ -1,0 +1,12 @@
+{
+  "build_repository_substitutions": {
+    "golden-skill": {
+      "golden-tools": {
+        "command": "other",
+        "path": "../golden-tools"
+      }
+    }
+  },
+  "schema_version": 2,
+  "substitutions": {}
+}

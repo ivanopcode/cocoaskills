@@ -1,0 +1,393 @@
+{
+  "cases": [
+    {
+      "build_permitted": true,
+      "declaration": {
+        "build_root": "tools/cli",
+        "build_roots": [
+          "tools/cli"
+        ],
+        "modules": [
+          "pkg/board",
+          "pkg/remoteconfig"
+        ],
+        "runtime_roots": [
+          "scripts"
+        ]
+      },
+      "expected_error": null,
+      "fails_before": null,
+      "go_build_started": true,
+      "go_list_started": true,
+      "go_list_succeeds": true,
+      "name": "valid-declared-module-roots",
+      "persistent_state_changed": false,
+      "platform_path_mapping": "linux",
+      "snapshot": {
+        "directories": [
+          "pkg/board",
+          "pkg/remoteconfig",
+          "scripts",
+          "tools/cli",
+          "tools/cli/vendor"
+        ],
+        "go_mod_files": [
+          "pkg/board/go.mod",
+          "pkg/remoteconfig/go.mod",
+          "tools/cli/go.mod"
+        ],
+        "link_paths": []
+      },
+      "vendor_module_annotations": [
+        "# example.com/board => ../../pkg/board",
+        "# example.com/board v0.0.0 => ../../pkg/board",
+        "# example.com/remoteconfig => ../../pkg/remoteconfig",
+        "# example.com/remoteconfig v0.0.0 => ../../pkg/remoteconfig"
+      ]
+    },
+    {
+      "build_permitted": false,
+      "declaration": {
+        "build_root": "tools/cli",
+        "build_roots": [
+          "tools/cli"
+        ],
+        "modules": [],
+        "runtime_roots": [
+          "scripts"
+        ]
+      },
+      "expected_error": "build_module_root_directive_undeclared",
+      "fails_before": "go-build",
+      "go_build_started": false,
+      "go_list_started": true,
+      "go_list_succeeds": true,
+      "name": "replacement-target-escapes-snapshot",
+      "persistent_state_changed": false,
+      "platform_path_mapping": "linux",
+      "snapshot": {
+        "directories": [
+          "scripts",
+          "tools/cli",
+          "tools/cli/vendor"
+        ],
+        "go_mod_files": [
+          "tools/cli/go.mod"
+        ],
+        "link_paths": []
+      },
+      "vendor_module_annotations": [
+        "# example.com/escape => ../../../outside"
+      ]
+    },
+    {
+      "build_permitted": false,
+      "declaration": {
+        "build_root": "tools/cli",
+        "build_roots": [
+          "tools/cli"
+        ],
+        "modules": [],
+        "runtime_roots": [
+          "scripts"
+        ]
+      },
+      "expected_error": "build_module_root_directive_form_unsupported",
+      "fails_before": "go-build",
+      "go_build_started": false,
+      "go_list_started": true,
+      "go_list_succeeds": true,
+      "name": "module-to-module-redirect",
+      "persistent_state_changed": false,
+      "platform_path_mapping": "linux",
+      "snapshot": {
+        "directories": [
+          "scripts",
+          "tools/cli",
+          "tools/cli/vendor"
+        ],
+        "go_mod_files": [
+          "tools/cli/go.mod"
+        ],
+        "link_paths": []
+      },
+      "vendor_module_annotations": [
+        "# example.com/board => example.com/fork v1.2.3"
+      ]
+    },
+    {
+      "build_permitted": false,
+      "declaration": {
+        "build_root": "tools/cli",
+        "build_roots": [
+          "tools/cli"
+        ],
+        "modules": [],
+        "runtime_roots": [
+          "scripts"
+        ]
+      },
+      "expected_error": "build_module_root_directive_undeclared",
+      "fails_before": "go-build",
+      "go_build_started": false,
+      "go_list_started": true,
+      "go_list_succeeds": true,
+      "name": "undeclared-directory-replacement",
+      "persistent_state_changed": false,
+      "platform_path_mapping": "linux",
+      "snapshot": {
+        "directories": [
+          "pkg/extra",
+          "scripts",
+          "tools/cli",
+          "tools/cli/vendor"
+        ],
+        "go_mod_files": [
+          "pkg/extra/go.mod",
+          "tools/cli/go.mod"
+        ],
+        "link_paths": []
+      },
+      "vendor_module_annotations": [
+        "# example.com/extra => ../../pkg/extra"
+      ]
+    },
+    {
+      "build_permitted": false,
+      "declaration": {
+        "build_root": "tools/cli",
+        "build_roots": [
+          "tools/cli"
+        ],
+        "modules": [
+          "pkg/board"
+        ],
+        "runtime_roots": [
+          "scripts"
+        ]
+      },
+      "expected_error": "build_module_root_declaration_unused",
+      "fails_before": "go-build",
+      "go_build_started": false,
+      "go_list_started": true,
+      "go_list_succeeds": true,
+      "name": "declared-module-without-replacement",
+      "persistent_state_changed": false,
+      "platform_path_mapping": "linux",
+      "snapshot": {
+        "directories": [
+          "pkg/board",
+          "scripts",
+          "tools/cli",
+          "tools/cli/vendor"
+        ],
+        "go_mod_files": [
+          "pkg/board/go.mod",
+          "tools/cli/go.mod"
+        ],
+        "link_paths": []
+      },
+      "vendor_module_annotations": []
+    },
+    {
+      "build_permitted": false,
+      "declaration": {
+        "build_root": "tools/cli",
+        "build_roots": [
+          "tools/cli"
+        ],
+        "modules": [
+          "pkg/board",
+          "pkg/board/codec"
+        ],
+        "runtime_roots": [
+          "scripts"
+        ]
+      },
+      "expected_error": "build_module_root_containment_invalid",
+      "fails_before": "go-list",
+      "go_build_started": false,
+      "go_list_started": false,
+      "go_list_succeeds": null,
+      "name": "nested-declared-module-roots",
+      "persistent_state_changed": false,
+      "platform_path_mapping": "linux",
+      "snapshot": {
+        "directories": [
+          "pkg/board",
+          "pkg/board/codec",
+          "scripts",
+          "tools/cli",
+          "tools/cli/vendor"
+        ],
+        "go_mod_files": [
+          "pkg/board/go.mod",
+          "pkg/board/codec/go.mod",
+          "tools/cli/go.mod"
+        ],
+        "link_paths": []
+      },
+      "vendor_module_annotations": []
+    },
+    {
+      "build_permitted": false,
+      "declaration": {
+        "build_root": "tools/cli",
+        "build_roots": [
+          "tools/cli"
+        ],
+        "modules": [
+          "tools/cli/pkg/lib"
+        ],
+        "runtime_roots": [
+          "scripts"
+        ]
+      },
+      "expected_error": "build_module_root_containment_invalid",
+      "fails_before": "go-list",
+      "go_build_started": false,
+      "go_list_started": false,
+      "go_list_succeeds": null,
+      "name": "module-root-contained-by-build-root",
+      "persistent_state_changed": false,
+      "platform_path_mapping": "linux",
+      "snapshot": {
+        "directories": [
+          "scripts",
+          "tools/cli",
+          "tools/cli/pkg/lib",
+          "tools/cli/vendor"
+        ],
+        "go_mod_files": [
+          "tools/cli/go.mod",
+          "tools/cli/pkg/lib/go.mod"
+        ],
+        "link_paths": []
+      },
+      "vendor_module_annotations": []
+    },
+    {
+      "build_permitted": false,
+      "declaration": {
+        "build_root": "tools/cli",
+        "build_roots": [
+          "tools/cli"
+        ],
+        "modules": [
+          "pkg/board"
+        ],
+        "runtime_roots": [
+          "pkg"
+        ]
+      },
+      "expected_error": "build_module_root_containment_invalid",
+      "fails_before": "go-list",
+      "go_build_started": false,
+      "go_list_started": false,
+      "go_list_succeeds": null,
+      "name": "module-root-contained-by-runtime-root",
+      "persistent_state_changed": false,
+      "platform_path_mapping": "linux",
+      "snapshot": {
+        "directories": [
+          "pkg",
+          "pkg/board",
+          "tools/cli",
+          "tools/cli/vendor"
+        ],
+        "go_mod_files": [
+          "pkg/board/go.mod",
+          "tools/cli/go.mod"
+        ],
+        "link_paths": []
+      },
+      "vendor_module_annotations": []
+    },
+    {
+      "build_permitted": false,
+      "declaration": {
+        "build_root": "tools/cli",
+        "build_roots": [
+          "tools/cli"
+        ],
+        "modules": [
+          "pkg/board"
+        ],
+        "runtime_roots": [
+          "scripts"
+        ]
+      },
+      "expected_error": "build_module_root_directive_form_unsupported",
+      "fails_before": "go-build",
+      "go_build_started": false,
+      "go_list_started": true,
+      "go_list_succeeds": true,
+      "name": "versioned-left-directory-replacement",
+      "persistent_state_changed": false,
+      "platform_path_mapping": "linux",
+      "snapshot": {
+        "directories": [
+          "pkg/board",
+          "scripts",
+          "tools/cli",
+          "tools/cli/vendor"
+        ],
+        "go_mod_files": [
+          "pkg/board/go.mod",
+          "tools/cli/go.mod"
+        ],
+        "link_paths": []
+      },
+      "vendor_module_annotations": [
+        "# example.com/board v1.2.3 => ../../pkg/board"
+      ]
+    },
+    {
+      "build_permitted": false,
+      "declaration": {
+        "build_root": "tools/cli",
+        "build_roots": [
+          "tools/cli"
+        ],
+        "modules": [
+          "pkg/Board",
+          "pkg/board"
+        ],
+        "runtime_roots": [
+          "scripts"
+        ]
+      },
+      "expected_error": "build_module_root_containment_invalid",
+      "fails_before": "go-list",
+      "go_build_started": false,
+      "go_list_started": false,
+      "go_list_succeeds": null,
+      "name": "windows-case-colliding-declared-module-roots",
+      "persistent_state_changed": false,
+      "platform_path_mapping": "windows",
+      "snapshot": {
+        "directories": [
+          "pkg/Board",
+          "pkg/board",
+          "scripts",
+          "tools/cli",
+          "tools/cli/vendor"
+        ],
+        "go_mod_files": [
+          "pkg/Board/go.mod",
+          "pkg/board/go.mod",
+          "tools/cli/go.mod"
+        ],
+        "link_paths": []
+      },
+      "vendor_module_annotations": []
+    }
+  ],
+  "evaluation_order": [
+    "declaration-and-containment-before-go-list",
+    "go-list-vendor-consistency",
+    "directive-form-and-bijection-before-go-build"
+  ],
+  "protocol_version": "1.0.0-rc.9",
+  "schema_version": 1
+}

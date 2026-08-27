@@ -1,0 +1,42 @@
+{
+  "candidate_claims_emitted": [],
+  "claim_schema_version": 3,
+  "platforms": [
+    {
+      "name": "linux",
+      "status": "excluded",
+      "until_task": "TASK-260728-1skseh"
+    },
+    {
+      "name": "macos",
+      "status": "pending-downstream-native-evidence"
+    },
+    {
+      "name": "windows",
+      "status": "pending-downstream-native-evidence"
+    }
+  ],
+  "protocol_version": "1.0.0-rc.9",
+  "rules": [
+    {
+      "name": "schema-valid-is-not-qualified",
+      "required": "native-driver-platform-evidence"
+    },
+    {
+      "name": "driver-platform-subset",
+      "required": "each driver platform is also top-level evidenced"
+    },
+    {
+      "allowed_drivers": [
+        "go-repository-v1",
+        "go-v1"
+      ],
+      "name": "no-generic-driver"
+    },
+    {
+      "name": "no-unevidenced-platform",
+      "required": "every emitted tuple has immutable passing evidence"
+    }
+  ],
+  "schema_version": 1
+}

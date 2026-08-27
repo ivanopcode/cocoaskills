@@ -1,0 +1,18 @@
+{
+  "capability_receipt_sha256": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "checkpoint_type": "verified-execution-checkpoint-v1",
+  "created_at": "2026-07-13T00:00:00Z",
+  "operation_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "permit_sha256": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+  "phase": "execution-succeeded",
+  "previous_checkpoint_sha256": null,
+  "provider": {
+    "operating_system": "macos",
+    "provider_binary_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "provider_contract": "host-execution-provider-v1",
+    "provider_id": "example.host-provider",
+    "provider_version": "1.0.0",
+    "schema_version": 1
+  },
+  "schema_version": 1
+}

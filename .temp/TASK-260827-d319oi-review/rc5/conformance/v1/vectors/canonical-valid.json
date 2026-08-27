@@ -1,0 +1,36 @@
+[
+  {
+    "canonical_utf8": "{\"a\":[true,null,0,-12],\"z\":\"заметка\"}",
+    "input": {
+      "a": [
+        true,
+        null,
+        0,
+        -12
+      ],
+      "z": "заметка"
+    },
+    "name": "sorted-object"
+  },
+  {
+    "canonical_utf8": "{\"s\":\"\\b\\f\\n\\r\\t<>/&\\\\\\\"\"}",
+    "input": {
+      "s": "\b\f\n\r\t<>/&\\\""
+    },
+    "name": "string-escapes"
+  },
+  {
+    "canonical_utf8": "{\"endorsement\":{\"sig\":{\"key_id\":\"nested\"}}}",
+    "input": {
+      "endorsement": {
+        "sig": {
+          "key_id": "nested"
+        }
+      },
+      "sig": {
+        "key_id": "outer"
+      }
+    },
+    "name": "nested-signature-kept"
+  }
+]

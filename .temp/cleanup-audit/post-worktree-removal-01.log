@@ -1,0 +1,14 @@
+## remaining registered source temp worktrees
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/BUG-260731-2rhy74/pin-old
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/BUG-260807-l2ymv3/worktree
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/build-https/worktree
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/csk-runtime-command-fix/cocoaskills-wb
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/ratify-build-ssh/worktree
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-3c0ss2/worktree
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2h0vjy/cycle4
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2i5yqw/worktree
+## failed residuals
+174540	.temp/BUG-260805-cfdxsk/worktree
+452220	.temp/TASK-260803-21lw4t/worktree
+## size after worktree removals
+3065124	.temp

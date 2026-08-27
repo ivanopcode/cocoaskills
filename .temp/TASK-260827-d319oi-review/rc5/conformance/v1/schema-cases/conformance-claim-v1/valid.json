@@ -1,0 +1,15 @@
+{
+  "classes": [
+    "core"
+  ],
+  "created_at": "2026-07-13T00:00:00Z",
+  "implementation": "example",
+  "implementation_version": "1.0",
+  "operating_systems": [
+    "linux"
+  ],
+  "protocol_version": "1.0.0-rc.3",
+  "result": "pass",
+  "schema_version": 1,
+  "suite_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}

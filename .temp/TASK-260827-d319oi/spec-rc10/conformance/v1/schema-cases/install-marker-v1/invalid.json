@@ -1,0 +1,35 @@
+{
+  "activation": {
+    "commands": [
+      "golden-tool"
+    ],
+    "context": true
+  },
+  "agents": [
+    "codex_cli"
+  ],
+  "commands": [
+    "golden-tool"
+  ],
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "content_sha256": "sha256:e2bd2941476b164099dc773d7448c638ff99849f8dce76e7b105f215fcdf31be",
+  "dependencies": [],
+  "files": [
+    ".skill_triggers/en.md",
+    "SKILL.md",
+    "references/notes.md"
+  ],
+  "installed_at": "2000-01-01T00:00:00Z",
+  "name": "golden-skill",
+  "ref": "0123456789abcdef0123456789abcdef01234567",
+  "ref_kind": "revision",
+  "requirers": [
+    "<project>"
+  ],
+  "runtime_roots": [
+    "scripts"
+  ],
+  "schema_version": 1,
+  "skill_schema_version": 5,
+  "source": "golden-skill"
+}

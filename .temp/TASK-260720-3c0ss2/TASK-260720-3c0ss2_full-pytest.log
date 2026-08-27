@@ -1,0 +1,16 @@
+TASK-260720-3c0ss2 full pytest evidence — 2026-07-30
+
+Working directory:
+  /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-3c0ss2/worktree
+
+Command:
+  PATH=/Users/iv/Developer/Wildberries/cocoaskills/.venv/bin:$PATH python -m pytest -q
+
+Result:
+  595 passed, 19 skipped in 78.05s
+
+Exit code:
+  0
+
+The skips are the suite's existing platform/conformance skips; there were no
+test failures.

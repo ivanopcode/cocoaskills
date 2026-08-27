@@ -1,0 +1,39 @@
+{
+  "assurance": {
+    "default_mode": "portable",
+    "portable_execution_policy": "manager-worker-v1",
+    "portable_policy": "portable-cli-policy-v1",
+    "silent_downgrade_permitted": false,
+    "skill_vendored_provider_allowed": false,
+    "verified_execution_policy": "verified-provider-execution-v1",
+    "verified_implementations": [],
+    "verified_platform_claims": [],
+    "verified_policy": "verified-provider-policy-v1",
+    "verified_provider_contract": "host-execution-provider-v1"
+  },
+  "candidate_protocol_pin": {
+    "manifest_sha256": "sha256:803918bf8672f76cf990985e51db213b826674cd5bb54fbf47731b8404b44403",
+    "suite_root": "conformance/v1"
+  },
+  "claim_v5": {
+    "claim_protocol_version": "1.0.0-rc.9",
+    "claims_emitted": [],
+    "schema": "schemas/v1/conformance-claim-v5.schema.json"
+  },
+  "created_at": "2026-08-23T00:00:00Z",
+  "downstream_consumption": {
+    "committed_release_pin_advanced": false,
+    "environment": "CURATOR_CONFORMANCE_ROOT",
+    "required_manifest_sha256": "sha256:803918bf8672f76cf990985e51db213b826674cd5bb54fbf47731b8404b44403"
+  },
+  "historical_release": {
+    "immutable": true,
+    "metadata_path": "release/1.0.0-rc.8.json",
+    "metadata_sha256": "sha256:293f101d10665061aa049efa72141f9e3c5d608bbde300e882f6e3e095e31ede",
+    "protocol_version": "1.0.0-rc.8",
+    "source_commit": "f8c405aa3ad0a39d260c2ed93684e55c5a346359"
+  },
+  "legacy_release": "1.0.0-rc.8",
+  "protocol_version": "1.0.0-rc.9",
+  "source_baseline_commit": "f8c405aa3ad0a39d260c2ed93684e55c5a346359"
+}

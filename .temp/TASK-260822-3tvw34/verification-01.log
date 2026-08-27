@@ -1,0 +1,68 @@
+### 1. Tag dates vs CHANGELOG headings
+v0.12.5 taggerdate=2026-07-14
+v0.13.0 taggerdate=2026-08-08
+v0.14.0 taggerdate=2026-08-21
+v0.14.1 taggerdate=2026-08-22
+10:## [0.14.1] - 2026-08-22
+16:## [0.14.0] - 2026-08-21
+31:## [0.13.0] - 2026-08-08
+
+### 2. Commit ranges (nothing after v0.14.1)
+v0.13.0..v0.14.0:
+fd116d7 Merge fix/go-v1-install-blockers: unblock go-repository-v1 installs and add scoped build-SSH credentials
+d8d3529 test: regressions for install blockers and build-ssh scopes
+b2d3d14 feat: operator-scoped build-SSH credential selection
+e66c0c8 fix: unblock go-repository-v1 for package-manager installs
+d3e0116 ci: bump the Homebrew tap from the release workflow
+0099b25 docs: restructure documentation around bilingual READMEs and internals rationale
+b1e05cd ci: add fast pull request feedback lane
+239c807 chore: relocate task board configuration
+v0.14.0..v0.14.1:
+818049c Merge feat/build-ssh-candidates: one-Enter onboarding for build-SSH credentials
+2bb2772 feat: offer detected credential candidates in the build-SSH precheck
+1a4ac00 test: assert the tap bump gate semantically instead of by exact formatting
+0d7806f ci: trust the tap before installing in the Homebrew smoke lane
+fa59664 docs: adopt Russian-first documentation with market positioning and CLI reference
+e9d6785 ci: run the tap bump after a skipped TestPyPI lane
+v0.14.1..HEAD:
+(empty -> empty Unreleased is correct)
+
+### 3. Tag containment of rehomed ex-Unreleased claims
+build-ssh-identity           first=76e07f07 tags=v0.13.0
+CSK_GO_FINGERPRINT_TIMEOUT   first=15401942 tags=v0.13.0
+manager-worker-v1            first=495ad021 tags=v0.13.0
+
+### 4. 0.14.0 claims located in v0.13.0..v0.14.0
+lib64                  d8d3529 test: regressions for install blockers and build-ssh scopes e66c0c8 fix: unblock go-repository-v1 for package-manager installs 
+dataclasses.replace    b2d3d14 feat: operator-scoped build-SSH credential selection 
+GOROOT)/bin            e66c0c8 fix: unblock go-repository-v1 for package-manager installs 
+
+### 5. Prose-style scan of new content (em/en dash, guillemets)
+README 144-153 dashes: 0
+CHANGELOG 8-30 dashes: 0
+
+### 6. README landed content
+### Приватные репозитории сборки: за один Enter
+
+Скиллы со скомпилированными командами собираются из отдельно запиненных git-репозиториев. Если репозиторий приватный, при первой установке `csk` считывает обнаруженные варианты (ssh-agent, ваши `*.pub`): вы выбираете вариант на терминале (дефолт "агент + пин ключа"), указываете скоуп, и выбор сохраняется в конфиг. В CI то же самое задаётся заранее:
+
+```bash
+csk config build-ssh add gitlab.example.com/portals/infra \
+    --agent auto --identity ~/.ssh/work.pub
+```
+
+Пакет скилла выбрать креды не может: выбор делает только оператор и только явно.
+
+
+### 7. Troubleshooting link
+291:- [`docs/troubleshooting.md`](docs/troubleshooting.md): диагностика ошибок установки, миграция со старых версий и решение частых проблем.
+-rw-r--r--@ 1 iv  staff  4571 Aug 22 20:52 docs/troubleshooting.md
+
+### 8. CLI example vs live csk 0.14.1
+csk 0.14.1
+usage: csk config build-ssh add [-h] [--agent [SOCKET]] [--identity PATH]
+                                [--known-hosts PATH]
+                                scope
+
+positional arguments:
+  scope               canonical-identity prefix, e.g. gitlab.example.com/group

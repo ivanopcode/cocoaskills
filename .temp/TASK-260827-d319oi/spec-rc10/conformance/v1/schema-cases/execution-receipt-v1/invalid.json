@@ -1,0 +1,22 @@
+{
+  "artifact_sha256": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+  "build_input_sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  "capability_receipt_sha256": "sha256:389310c2a3b2c87862d7dbdfd307955a6aa614613b3d028f530605dfd9cd1816",
+  "completed_at": "2026-07-13T00:01:00Z",
+  "execution_policy": "verified-provider-execution-v1",
+  "operation_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "permit_sha256": "sha256:5ceba538b19482b29730dea8609306a6d1b431b9d53d98ed66a83db4dd364f1b",
+  "policy_id": "portable-cli-policy-v1",
+  "provider": {
+    "operating_system": "macos",
+    "provider_binary_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "provider_contract": "host-execution-provider-v1",
+    "provider_id": "example.host-provider",
+    "provider_version": "1.0.0",
+    "schema_version": 1
+  },
+  "receipt_type": "verified-execution-receipt-v1",
+  "result": "succeeded",
+  "schema_version": 1,
+  "started_at": "2026-07-13T00:00:00Z"
+}

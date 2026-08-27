@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/error-response-v1.schema.json",
+  "title": "Registry error response",
+  "type": "object",
+  "required": ["error"],
+  "properties": {
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 128},
+        "message": {"$ref": "common.schema.json#/$defs/nonEmptyString"},
+        "details": {"type": "object", "additionalProperties": {"$ref": "common.schema.json#/$defs/canonicalValue"}}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

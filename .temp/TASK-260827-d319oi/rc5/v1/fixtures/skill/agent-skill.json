@@ -1,0 +1,26 @@
+{
+  "schema_version": 5,
+  "runtime_roots": [
+    "scripts"
+  ],
+  "capabilities": {
+    "network": ["api.example.com"],
+    "filesystem": "repo",
+    "exec": "none",
+    "secrets": "none",
+    "env_read": ["HOME"],
+    "prompt_scope": "Golden interoperability fixture."
+  },
+  "commands": {
+    "golden-tool": {
+      "type": "script",
+      "unix_path": "scripts/golden-tool",
+      "win_path": "scripts/golden-tool"
+    }
+  },
+  "dependencies": {
+    "commands": {},
+    "skills": {},
+    "mcp_servers": {}
+  }
+}

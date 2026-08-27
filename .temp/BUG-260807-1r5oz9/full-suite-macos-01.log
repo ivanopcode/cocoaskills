@@ -1,0 +1,15 @@
+  <class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-abc466f7-03e5-4a6b-a3a8-acf520ecb5ce/test_rc6_toolchain_case_toolch0/toolchain-mode-1'
+    warnings.warn(
+
+.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95
+  /Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-abc466f7-03e5-4a6b-a3a8-acf520ecb5ce/test_rc6_toolchain_case_toolch0
+  <class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-abc466f7-03e5-4a6b-a3a8-acf520ecb5ce/test_rc6_toolchain_case_toolch0'
+    warnings.warn(
+
+.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95
+  /Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-abc466f7-03e5-4a6b-a3a8-acf520ecb5ce
+  <class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-abc466f7-03e5-4a6b-a3a8-acf520ecb5ce'
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1340 passed, 243 skipped, 4 warnings in 196.36s (0:03:16)

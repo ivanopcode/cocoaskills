@@ -1,0 +1,484 @@
+Win diag / Python 3.12	UNKNOWN STEP	﻿2026-07-31T09:29:40.7916106Z Current runner version: '2.336.0'
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7954914Z ##[group]Runner Image Provisioner
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7956384Z Hosted Compute Agent
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7957264Z Version: 20260707.563
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7958142Z Commit: 02667638d2b423fbc733a8e32a88b44996a3ba6e
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7959112Z Build Date: 2026-07-07T19:33:50Z
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7960433Z Worker ID: {de2db7c9-4b26-421b-9b4f-7f38cf8ec497}
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7961512Z Azure Region: eastus2
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7962286Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7964506Z ##[group]Operating System
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7965447Z Microsoft Windows Server 2025
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7966287Z 10.0.26100
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7966981Z Datacenter
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7967695Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7968422Z ##[group]Runner Image
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7969318Z Image: windows-2025-vs2026
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7970194Z Version: 20260728.188.1
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7973181Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20260728.188/images/windows/Windows2025-VS2026-Readme.md
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7976013Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20260728.188
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7977583Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7979275Z ##[group]GITHUB_TOKEN Permissions
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7982537Z Contents: read
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7983468Z Metadata: read
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7984236Z Packages: read
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7985016Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7987924Z Secret source: Actions
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.7989405Z Prepare workflow directory
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.8444938Z Prepare all required actions
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:40.8493546Z Getting action download info
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.0104250Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.1305567Z Download action repository 'actions/setup-python@v5' (SHA:a26af69be951a213d495a4c3e4e4022e16d87065)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.5535163Z Complete job name: Win diag / Python 3.12
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8096987Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8107476Z ##[group]Run actions/checkout@v4
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8108120Z with:
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8108490Z   fetch-depth: 0
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8108905Z   repository: ivanopcode/cocoaskills
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8113068Z   token: ***
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8113463Z   ssh-strict: true
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8113848Z   ssh-user: git
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8114238Z   persist-credentials: true
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8114678Z   clean: true
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8115071Z   sparse-checkout-cone-mode: true
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8115553Z   fetch-tags: false
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8115948Z   show-progress: true
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8116339Z   lfs: false
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8116771Z   submodules: false
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8117169Z   set-safe-directory: true
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8117617Z   allow-unsafe-pr-checkout: false
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:41.8118236Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:42.1092580Z Syncing repository: ivanopcode/cocoaskills
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:42.1094509Z ##[group]Getting Git version info
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:42.1095186Z Working directory is 'D:\a\cocoaskills\cocoaskills'
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:42.3900513Z [command]"C:\Program Files\Git\bin\git.exe" version
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.0510063Z git version 2.55.0.windows.3
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.0559982Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.0580379Z Temporarily overriding HOME='D:\a\_temp\31047693-fb80-4840-8243-de6dcb911182' before making global git config changes
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.0582169Z Adding repository directory to the temporary git global config as a safe directory
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.0592626Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\cocoaskills\cocoaskills
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.1164247Z Deleting the contents of 'D:\a\cocoaskills\cocoaskills'
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.1170156Z ##[group]Initializing the repository
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.1179523Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\cocoaskills\cocoaskills
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.1974290Z Initialized empty Git repository in D:/a/cocoaskills/cocoaskills/.git/
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.2025736Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/ivanopcode/cocoaskills
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.2551619Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.2552277Z ##[group]Disabling automatic garbage collection
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.2561782Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.2870905Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.2871423Z ##[group]Setting up auth
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.2884265Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:43.3185086Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:44.5182778Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:44.5475903Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:45.0734659Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:45.1024909Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:45.6291916Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:45.6592217Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:45.6592943Z ##[group]Fetching the repository
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:45.6605913Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/*
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6323981Z From https://github.com/ivanopcode/cocoaskills
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6324987Z  * [new branch]      debug/BUG-260731-1rldqv-win-diag -> origin/debug/BUG-260731-1rldqv-win-diag
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6325950Z  * [new branch]      debug/BUG-260731-1rldqv-win-probe -> origin/debug/BUG-260731-1rldqv-win-probe
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6326861Z  * [new branch]      feat/csk-v0.10-hybrid-scope -> origin/feat/csk-v0.10-hybrid-scope
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6327494Z  * [new branch]      main       -> origin/main
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6328565Z  * [new branch]      task/TASK-260720-3t8nr3-transactional-project-hybrid -> origin/task/TASK-260720-3t8nr3-transactional-project-hybrid
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6329594Z  * [new tag]         v0.1.0     -> v0.1.0
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6330049Z  * [new tag]         v0.1.0-rc1 -> v0.1.0-rc1
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6330491Z  * [new tag]         v0.1.1     -> v0.1.1
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6330997Z  * [new tag]         v0.1.2     -> v0.1.2
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6331356Z  * [new tag]         v0.10.0    -> v0.10.0
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6331753Z  * [new tag]         v0.11.0    -> v0.11.0
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6332134Z  * [new tag]         v0.12.0    -> v0.12.0
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6332522Z  * [new tag]         v0.12.3    -> v0.12.3
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6332985Z  * [new tag]         v0.12.4    -> v0.12.4
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6335071Z  * [new tag]         v0.12.5    -> v0.12.5
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6335469Z  * [new tag]         v0.2.0     -> v0.2.0
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6336135Z  * [new tag]         v0.2.0-rc1 -> v0.2.0-rc1
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6336539Z  * [new tag]         v0.2.1     -> v0.2.1
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6337264Z  * [new tag]         v0.3.0     -> v0.3.0
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6338991Z  * [new tag]         v0.4.0     -> v0.4.0
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6339392Z  * [new tag]         v0.5.0     -> v0.5.0
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6339789Z  * [new tag]         v0.6.0     -> v0.6.0
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6340143Z  * [new tag]         v0.8.0     -> v0.8.0
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6340520Z  * [new tag]         v0.9.0     -> v0.9.0
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6382291Z [command]"C:\Program Files\Git\bin\git.exe" branch --list --remote origin/debug/BUG-260731-1rldqv-win-diag
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6722607Z   origin/debug/BUG-260731-1rldqv-win-diag
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.6766943Z [command]"C:\Program Files\Git\bin\git.exe" rev-parse refs/remotes/origin/debug/BUG-260731-1rldqv-win-diag
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.7020380Z 61227383b9f1b6d4b8b19c4e9f79a1de3b79d9c8
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.7052953Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.7053314Z ##[group]Determining the checkout info
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.7054839Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.7063783Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.7448990Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.7737832Z ##[group]Checking out the ref
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.7751064Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force -B debug/BUG-260731-1rldqv-win-diag refs/remotes/origin/debug/BUG-260731-1rldqv-win-diag
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.8855167Z Switched to a new branch 'debug/BUG-260731-1rldqv-win-diag'
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.8938250Z branch 'debug/BUG-260731-1rldqv-win-diag' set up to track 'origin/debug/BUG-260731-1rldqv-win-diag'.
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.8989102Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.9379315Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:46.9633702Z 61227383b9f1b6d4b8b19c4e9f79a1de3b79d9c8
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0096482Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0098575Z ##[group]Run actions/checkout@v4
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0098815Z with:
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0099026Z   repository: relux-works/curator-spec
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0099321Z   ref: 0c81c1f8d5321d822be2a2817b05aea03e656e15
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0099595Z   path: protocol-spec
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0102154Z   token: ***
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0102351Z   ssh-strict: true
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0102547Z   ssh-user: git
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0102747Z   persist-credentials: true
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0102963Z   clean: true
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0103157Z   sparse-checkout-cone-mode: true
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0103390Z   fetch-depth: 1
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0103609Z   fetch-tags: false
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0103797Z   show-progress: true
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0103984Z   lfs: false
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0104151Z   submodules: false
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0104342Z   set-safe-directory: true
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0104581Z   allow-unsafe-pr-checkout: false
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.0105165Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.1264578Z Syncing repository: relux-works/curator-spec
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.1271515Z ##[group]Getting Git version info
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.1272265Z Working directory is 'D:\a\cocoaskills\cocoaskills\protocol-spec'
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.1888365Z [command]"C:\Program Files\Git\bin\git.exe" version
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.2148646Z git version 2.55.0.windows.3
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.2194108Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.2210740Z Temporarily overriding HOME='D:\a\_temp\636eeefa-d0e5-4a41-8c35-1a1f922c6f0e' before making global git config changes
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.2211740Z Adding repository directory to the temporary git global config as a safe directory
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.2221624Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\cocoaskills\cocoaskills\protocol-spec
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.2508454Z ##[group]Initializing the repository
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.2518161Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\cocoaskills\cocoaskills\protocol-spec
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.2840523Z Initialized empty Git repository in D:/a/cocoaskills/cocoaskills/protocol-spec/.git/
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.2882259Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/relux-works/curator-spec
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.3175211Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.3176089Z ##[group]Disabling automatic garbage collection
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.3184160Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.3490729Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.3491319Z ##[group]Setting up auth
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.3492152Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.3792804Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.9263617Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:47.9569702Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:48.4713723Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:48.5005585Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.0105683Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.0402296Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.0402699Z ##[group]Fetching the repository
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.0414594Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin 0c81c1f8d5321d822be2a2817b05aea03e656e15
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.3479099Z From https://github.com/relux-works/curator-spec
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.3479684Z  * branch            0c81c1f8d5321d822be2a2817b05aea03e656e15 -> FETCH_HEAD
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.3520146Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.3520660Z ##[group]Determining the checkout info
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.3523177Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.3536196Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.3853562Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.4140807Z ##[group]Checking out the ref
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.4150071Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force 0c81c1f8d5321d822be2a2817b05aea03e656e15
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5756752Z Note: switching to '0c81c1f8d5321d822be2a2817b05aea03e656e15'.
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5757074Z 
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5757318Z You are in 'detached HEAD' state. You can look around, make experimental
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5757792Z changes and commit them, and you can discard any commits you make in this
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5758241Z state without impacting any branches by switching back to a branch.
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5758503Z 
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5758684Z If you want to create a new branch to retain commits you create, you may
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5759115Z do so (now or later) by using -c with the switch command. Example:
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5759363Z 
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5759494Z   git switch -c <new-branch-name>
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5759663Z 
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5759781Z Or undo this operation with:
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5759934Z 
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5760008Z   git switch -
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5760129Z 
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5760323Z Turn off this advice by setting config variable advice.detachedHead to false
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5760924Z 
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5761332Z HEAD is now at 0c81c1f Publish the marker-v2 writer golden
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.5823816Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.6149372Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.6410807Z 0c81c1f8d5321d822be2a2817b05aea03e656e15
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.6809668Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.6810991Z ##[group]Run actions/setup-python@v5
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.6811237Z with:
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.6811419Z   python-version: 3.12
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.6811631Z   allow-prereleases: true
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.6811841Z   check-latest: false
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.6814355Z   token: ***
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.6814577Z   update-environment: true
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.6814800Z   freethreaded: false
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.6814988Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.8416690Z ##[group]Installed versions
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.8620698Z (node:5604) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.8621936Z (Use `node --trace-deprecation ...` to show where the warning was created)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.8622557Z Successfully set up CPython (3.12.10)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.8623172Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.8924112Z ##[group]Run git config --global user.email "ci@example.com"
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.8924663Z [36;1mgit config --global user.email "ci@example.com"[0m
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.8925004Z [36;1mgit config --global user.name "CI"[0m
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.8925328Z [36;1mgit config --global init.defaultBranch main[0m
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.8925642Z [36;1mgit config --global core.autocrlf false[0m
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.8925937Z [36;1mgit config --global core.symlinks false[0m
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.9408779Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.9409153Z env:
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.9409425Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.9409916Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.9410361Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.9410812Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.9411191Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:49.9411488Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:50.6073745Z ##[group]Run python -m pip install --upgrade pip
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:50.6074742Z [36;1mpython -m pip install --upgrade pip[0m
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:50.6075267Z [36;1mpython -m pip install -e ".[dev]"[0m
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:50.6165186Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:50.6165760Z env:
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:50.6166179Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:50.6167029Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:50.6167978Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:50.6168643Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:50.6169293Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:50.6169811Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:56.4971747Z Requirement already satisfied: pip in C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages (26.1.2)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:56.9722048Z Collecting pip
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:57.2161985Z   Downloading pip-26.2-py3-none-any.whl.metadata (4.6 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:57.2490194Z Downloading pip-26.2-py3-none-any.whl (1.8 MB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:57.4347579Z    ---------------------------------------- 1.8/1.8 MB 14.3 MB/s  0:00:00
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:57.7648080Z Installing collected packages: pip
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:57.7649327Z   Attempting uninstall: pip
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:57.7676048Z     Found existing installation: pip 26.1.2
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:57.9483173Z     Uninstalling pip-26.1.2:
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:29:57.9683892Z       Successfully uninstalled pip-26.1.2
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:00.3201849Z Successfully installed pip-26.2
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:01.5830557Z Obtaining file:///D:/a/cocoaskills/cocoaskills
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:01.5865069Z   Installing build dependencies: started
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:04.5848043Z   Installing build dependencies: finished with status 'done'
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:04.5866714Z   Checking if build backend supports build_editable: started
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:05.7109355Z   Checking if build backend supports build_editable: finished with status 'done'
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:05.7135187Z   Getting requirements to build editable: started
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:06.7316757Z   Getting requirements to build editable: finished with status 'done'
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:06.7350572Z   Preparing editable metadata (pyproject.toml): started
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:07.3972481Z   Preparing editable metadata (pyproject.toml): finished with status 'done'
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:07.7329432Z Collecting pytest>=9 (from cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:07.9506433Z   Downloading pytest-9.1.1-py3-none-any.whl.metadata (7.6 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.0011222Z Collecting build>=1.2 (from cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.0093339Z   Downloading build-1.5.0-py3-none-any.whl.metadata (5.7 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.0660242Z Collecting twine>=5 (from cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.0740299Z   Downloading twine-7.0.0-py3-none-any.whl.metadata (3.5 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.2380644Z Collecting mypy>=1.14 (from cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.2481458Z   Downloading mypy-2.3.0-cp312-cp312-win_amd64.whl.metadata (2.4 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.4507508Z Collecting cryptography>=44 (from cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.4599865Z   Downloading cryptography-49.0.0-cp311-abi3-win_amd64.whl.metadata (4.3 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.4806951Z Requirement already satisfied: packaging>=24.0 in C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages (from build>=1.2->cocoaskills==0.12.6.dev26+g61227383b.d20260731) (26.2)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.5024058Z Collecting pyproject_hooks (from build>=1.2->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.5119463Z   Downloading pyproject_hooks-1.2.0-py3-none-any.whl.metadata (1.3 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.5318089Z Requirement already satisfied: colorama in C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages (from build>=1.2->cocoaskills==0.12.6.dev26+g61227383b.d20260731) (0.4.6)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.6422612Z Collecting cffi>=2.0.0 (from cryptography>=44->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.6523400Z   Downloading cffi-2.1.0-cp312-cp312-win_amd64.whl.metadata (2.6 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.6928002Z Collecting pycparser (from cffi>=2.0.0->cryptography>=44->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.7009130Z   Downloading pycparser-3.0-py3-none-any.whl.metadata (8.2 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.7485169Z Collecting typing_extensions>=4.6.0 (from mypy>=1.14->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.7577441Z   Downloading typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.8044497Z Collecting mypy_extensions>=1.0.0 (from mypy>=1.14->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.8130038Z   Downloading mypy_extensions-1.1.0-py3-none-any.whl.metadata (1.1 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.8545308Z Collecting pathspec>=1.0.0 (from mypy>=1.14->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:08.8635971Z   Downloading pathspec-1.1.1-py3-none-any.whl.metadata (14 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.0049267Z Collecting librt>=0.13.0 (from mypy>=1.14->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.0135250Z   Downloading librt-0.13.0-cp312-cp312-win_amd64.whl.metadata (1.3 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.0857764Z Collecting ast-serialize<1.0.0,>=0.6.0 (from mypy>=1.14->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.0940618Z   Downloading ast_serialize-0.6.0-cp39-abi3-win_amd64.whl.metadata (1.3 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.1396959Z Collecting iniconfig>=1.0.1 (from pytest>=9->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.1479379Z   Downloading iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.1947490Z Collecting pluggy<2,>=1.5 (from pytest>=9->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.2035568Z   Downloading pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.2489202Z Collecting pygments>=2.7.2 (from pytest>=9->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.2587107Z   Downloading pygments-2.20.0-py3-none-any.whl.metadata (2.5 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.3050290Z Collecting readme-renderer>=35.0 (from twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.3135887Z   Downloading readme_renderer-45.0-py3-none-any.whl.metadata (3.0 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.3674652Z Collecting requests>=2.20 (from twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.3759336Z   Downloading requests-2.34.2-py3-none-any.whl.metadata (4.8 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.4183529Z Collecting requests-toolbelt!=0.9.0,>=0.8.0 (from twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.4267934Z   Downloading requests_toolbelt-1.0.0-py2.py3-none-any.whl.metadata (14 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.4759071Z Collecting urllib3>=1.26.0 (from twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.4847250Z   Downloading urllib3-2.7.0-py3-none-any.whl.metadata (6.9 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.5408713Z Collecting keyring>=21.2.0 (from twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.5494446Z   Downloading keyring-25.7.0-py3-none-any.whl.metadata (21 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.5967517Z Collecting rfc3986>=1.4.0 (from twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.6049153Z   Downloading rfc3986-2.0.0-py2.py3-none-any.whl.metadata (6.6 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.6629605Z Collecting rich>=14.3.3 (from twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.6715653Z   Downloading rich-15.0.0-py3-none-any.whl.metadata (18 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.7140929Z Collecting id (from twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.7227121Z   Downloading id-1.6.1-py3-none-any.whl.metadata (5.1 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.7805005Z Collecting pywin32-ctypes>=0.2.0 (from keyring>=21.2.0->twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.7888637Z   Downloading pywin32_ctypes-0.2.3-py3-none-any.whl.metadata (3.9 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.8360431Z Collecting jaraco.classes (from keyring>=21.2.0->twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.8443368Z   Downloading jaraco.classes-3.4.0-py3-none-any.whl.metadata (2.6 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.8901031Z Collecting jaraco.functools (from keyring>=21.2.0->twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.8988318Z   Downloading jaraco_functools-4.6.0-py3-none-any.whl.metadata (2.9 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.9413206Z Collecting jaraco.context (from keyring>=21.2.0->twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:09.9505215Z   Downloading jaraco_context-6.1.2-py3-none-any.whl.metadata (4.2 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.0188407Z Collecting nh3>=0.2.14 (from readme-renderer>=35.0->twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.0284315Z   Downloading nh3-0.3.6-cp38-abi3-win_amd64.whl.metadata (2.0 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.0786611Z Collecting docutils>=0.21.2 (from readme-renderer>=35.0->twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.0872599Z   Downloading docutils-0.23-py3-none-any.whl.metadata (15 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.2436232Z Collecting charset_normalizer<4,>=2 (from requests>=2.20->twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.2521361Z   Downloading charset_normalizer-3.4.9-cp312-cp312-win_amd64.whl.metadata (42 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.3009460Z Collecting idna<4,>=2.5 (from requests>=2.20->twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.3094073Z   Downloading idna-3.18-py3-none-any.whl.metadata (6.1 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.3609903Z Collecting certifi>=2023.5.7 (from requests>=2.20->twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.3852315Z   Downloading certifi-2026.7.22-py3-none-any.whl.metadata (2.5 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.4401091Z Collecting markdown-it-py>=2.2.0 (from rich>=14.3.3->twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.4489660Z   Downloading markdown_it_py-4.2.0-py3-none-any.whl.metadata (7.4 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.4937293Z Collecting mdurl~=0.1 (from markdown-it-py>=2.2.0->rich>=14.3.3->twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.5019360Z   Downloading mdurl-0.1.2-py3-none-any.whl.metadata (1.6 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.5536486Z Collecting more-itertools (from jaraco.classes->keyring>=21.2.0->twine>=5->cocoaskills==0.12.6.dev26+g61227383b.d20260731)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.5647003Z   Downloading more_itertools-11.1.0-py3-none-any.whl.metadata (41 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.5975598Z Downloading build-1.5.0-py3-none-any.whl (26 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.6191234Z Downloading cryptography-49.0.0-cp311-abi3-win_amd64.whl (3.8 MB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.6803572Z    ---------------------------------------- 3.8/3.8 MB 75.5 MB/s  0:00:00
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.6898828Z Downloading cffi-2.1.0-cp312-cp312-win_amd64.whl (185 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.7177827Z Downloading mypy-2.3.0-cp312-cp312-win_amd64.whl (11.2 MB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.7941605Z    ---------------------------------------- 11.2/11.2 MB 140.5 MB/s  0:00:00
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.8035290Z Downloading ast_serialize-0.6.0-cp39-abi3-win_amd64.whl (1.1 MB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.8286035Z    ---------------------------------------- 1.1/1.1 MB 26.2 MB/s  0:00:00
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.8368752Z Downloading librt-0.13.0-cp312-cp312-win_amd64.whl (126 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.8626413Z Downloading mypy_extensions-1.1.0-py3-none-any.whl (5.0 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.8865970Z Downloading pathspec-1.1.1-py3-none-any.whl (57 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.9064375Z Downloading pytest-9.1.1-py3-none-any.whl (386 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.9359669Z Downloading pluggy-1.6.0-py3-none-any.whl (20 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.9581024Z Downloading iniconfig-2.3.0-py3-none-any.whl (7.5 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:10.9847425Z Downloading pygments-2.20.0-py3-none-any.whl (1.2 MB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.0125420Z    ---------------------------------------- 1.2/1.2 MB 31.3 MB/s  0:00:00
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.0206337Z Downloading twine-7.0.0-py3-none-any.whl (43 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.0852025Z Downloading keyring-25.7.0-py3-none-any.whl (39 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.1095055Z Downloading pywin32_ctypes-0.2.3-py3-none-any.whl (30 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.1325647Z Downloading readme_renderer-45.0-py3-none-any.whl (14 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.1564502Z Downloading docutils-0.23-py3-none-any.whl (634 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.1800768Z    ---------------------------------------- 634.7/634.7 kB 24.8 MB/s  0:00:00
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.1918890Z Downloading nh3-0.3.6-cp38-abi3-win_amd64.whl (624 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.2140661Z    ---------------------------------------- 624.5/624.5 kB 11.7 MB/s  0:00:00
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.2222804Z Downloading requests-2.34.2-py3-none-any.whl (73 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.2481277Z Downloading charset_normalizer-3.4.9-cp312-cp312-win_amd64.whl (162 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.2728468Z Downloading idna-3.18-py3-none-any.whl (65 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.2952970Z Downloading urllib3-2.7.0-py3-none-any.whl (131 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.3311931Z Downloading certifi-2026.7.22-py3-none-any.whl (136 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.3533822Z Downloading requests_toolbelt-1.0.0-py2.py3-none-any.whl (54 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.3824038Z Downloading rfc3986-2.0.0-py2.py3-none-any.whl (31 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.4054235Z Downloading rich-15.0.0-py3-none-any.whl (310 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.4308476Z Downloading markdown_it_py-4.2.0-py3-none-any.whl (91 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.4535325Z Downloading mdurl-0.1.2-py3-none-any.whl (10.0 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.4781736Z Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.4992473Z Downloading id-1.6.1-py3-none-any.whl (14 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.5233888Z Downloading jaraco.classes-3.4.0-py3-none-any.whl (6.8 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.5473702Z Downloading jaraco_context-6.1.2-py3-none-any.whl (7.9 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.5719224Z Downloading jaraco_functools-4.6.0-py3-none-any.whl (11 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.5950156Z Downloading more_itertools-11.1.0-py3-none-any.whl (72 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.6168728Z Downloading pycparser-3.0-py3-none-any.whl (48 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.6379223Z Downloading pyproject_hooks-1.2.0-py3-none-any.whl (10 kB)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.8237025Z Building wheels for collected packages: cocoaskills
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:11.8271161Z   Building editable for cocoaskills (pyproject.toml): started
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:12.7105992Z   Building editable for cocoaskills (pyproject.toml): finished with status 'done'
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:12.7146517Z   Created wheel for cocoaskills: filename=cocoaskills-0.12.6.dev26+g61227383b.d20260731-0.editable-py3-none-any.whl size=15277 sha256=ab8af9009e977d4ce6a2d5bc461635429ac4611bbdc4e674f7dbc73dd94ce351
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:12.7148114Z   Stored in directory: C:\Users\runneradmin\AppData\Local\Temp\pip-ephem-wheel-cache-4p_yt706\wheels\50\e6\49\b128ea3868d48dacbf048933cb43ed33408d89d7d202df8836
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:12.7194165Z Successfully built cocoaskills
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:12.8069241Z Installing collected packages: urllib3, typing_extensions, rfc3986, pywin32-ctypes, pyproject_hooks, pygments, pycparser, pluggy, pathspec, nh3, mypy_extensions, more-itertools, mdurl, librt, jaraco.context, iniconfig, idna, docutils, cocoaskills, charset_normalizer, certifi, ast-serialize, requests, readme-renderer, pytest, mypy, markdown-it-py, jaraco.functools, jaraco.classes, id, cffi, build, rich, requests-toolbelt, keyring, cryptography, twine
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.1123862Z 
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.1164847Z Successfully installed ast-serialize-0.6.0 build-1.5.0 certifi-2026.7.22 cffi-2.1.0 charset_normalizer-3.4.9 cocoaskills-0.12.6.dev26+g61227383b.d20260731 cryptography-49.0.0 docutils-0.23 id-1.6.1 idna-3.18 iniconfig-2.3.0 jaraco.classes-3.4.0 jaraco.context-6.1.2 jaraco.functools-4.6.0 keyring-25.7.0 librt-0.13.0 markdown-it-py-4.2.0 mdurl-0.1.2 more-itertools-11.1.0 mypy-2.3.0 mypy_extensions-1.1.0 nh3-0.3.6 pathspec-1.1.1 pluggy-1.6.0 pycparser-3.0 pygments-2.20.0 pyproject_hooks-1.2.0 pytest-9.1.1 pywin32-ctypes-0.2.3 readme-renderer-45.0 requests-2.34.2 requests-toolbelt-1.0.0 rfc3986-2.0.0 rich-15.0.0 twine-7.0.0 typing_extensions-4.16.0 urllib3-2.7.0
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.5252267Z ##[group]Run python win_probe.py
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.5252632Z [36;1mpython win_probe.py[0m
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.5326617Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.5326962Z env:
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.5327228Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.5327680Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.5328156Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.5329123Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.5329533Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.5329843Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8389983Z python=3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8390721Z os.name=nt platform=win32
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8424393Z 
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8425020Z ===== A: os.stat vs os.fstat mode for extensions =====
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8430822Z tool.cmd   lstat=0o0777 fstat=0o0666 same_ino=True
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8436540Z tool.exe   lstat=0o0777 fstat=0o0666 same_ino=True
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8442558Z tool.bat   lstat=0o0777 fstat=0o0666 same_ino=True
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8447797Z tool.txt   lstat=0o0666 fstat=0o0666 same_ino=True
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8453347Z tool       lstat=0o0666 fstat=0o0666 same_ino=True
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8454112Z 
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8454324Z ===== B: symlink creation, type flags, traversal =====
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8482073Z dirlink: created, st_file_attributes=0x410 DIRECTORY_bit=True
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8483713Z     stat() -> os.stat_result(st_mode=16895, st_ino=1688849860566547, st_dev=9230925183971590040, st_nlink=1, st_uid=0, st_gid=0, st_size=0, st_atime=1785490226, st_mtime=1785490226, st_ctime=1785490226)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8485763Z     exists() -> True
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8486110Z     is_dir() -> True
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8490650Z filelink: created, st_file_attributes=0x410 DIRECTORY_bit=True
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8492783Z     stat() -> os.stat_result(st_mode=16895, st_ino=1688849860566547, st_dev=9230925183971590040, st_nlink=1, st_uid=0, st_gid=0, st_size=0, st_atime=1785490226, st_mtime=1785490226, st_ctime=1785490226)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8494655Z     exists() -> True
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8494979Z     is_dir() -> True
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8495173Z 
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8495370Z ===== B2: dangling relative link reports is_dir() =====
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8500295Z dangling dir link: is_dir()=False st_file_attributes=0x410
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8500900Z 
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8501058Z ===== B3: unlink of a directory link =====
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8506990Z unlink(dir link) -> ok
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8507503Z 
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:26.8507682Z ===== C: publication-source owner SIDs =====
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.0390586Z _current_user_sid() = S-1-5-21-1067599573-4126134432-3943563581-500
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.0408525Z plain dir: owner=S-1-5-32-544 matches_current=False dacl_present=True dacl_protected=True
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.0409373Z     ace type=0 flags=0x3 mask=0x1f01ff sid=S-1-5-18
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.0409810Z     ace type=0 flags=0x3 mask=0x1f01ff sid=S-1-5-32-544
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.0410129Z     ace type=0 flags=0x3 mask=0x1f01ff sid=S-1-3-4
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.0413036Z plain file: owner=S-1-5-32-544 matches_current=False dacl_present=True dacl_protected=False
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.0413729Z     ace type=0 flags=0x10 mask=0x1f01ff sid=S-1-5-18
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.0414155Z     ace type=0 flags=0x10 mask=0x1f01ff sid=S-1-5-32-544
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.0414476Z     ace type=0 flags=0x10 mask=0x1f01ff sid=S-1-3-4
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.2181310Z ##[group]Run python -m pytest -q tests/test_install.py tests/test_status.py tests/test_gc.py tests/test_build_cache_windows.py tests/test_build_cache_posix.py tests/test_transactions.py tests/test_locking.py tests/test_adapters.py tests/test_config.py
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.2183276Z [36;1mpython -m pytest -q tests/test_install.py tests/test_status.py tests/test_gc.py tests/test_build_cache_windows.py tests/test_build_cache_posix.py tests/test_transactions.py tests/test_locking.py tests/test_adapters.py tests/test_config.py[0m
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.2275597Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.2275946Z env:
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.2276212Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.2276666Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.2277114Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.2277587Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.2277970Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.2278417Z   CURATOR_CONFORMANCE_ROOT: D:\a\cocoaskills\cocoaskills/protocol-spec/conformance/v1
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T09:30:27.2279063Z ##[endgroup]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:36:27.2427304Z s..ss.............................................sss................... [ 23%]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:36:30.9854454Z ....................sssssssssssssssssssssssssssssssssssssssssss......... [ 46%]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:24.2420755Z ..........................................................s............. [ 70%]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:38.6823421Z ................................ssss.........................s.......... [ 93%]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:38.8182568Z ....................                                                     [100%]
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:38.8183118Z 253 passed, 55 skipped in 4030.63s (1:07:10)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:38.9944851Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:38.9946498Z Post job cleanup.
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:39.1446888Z (node:4024) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:39.1447678Z (Use `node --trace-deprecation ...` to show where the warning was created)
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:39.1755847Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:39.1757407Z Post job cleanup.
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:39.3834305Z [command]"C:\Program Files\Git\bin\git.exe" version
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:39.4137555Z git version 2.55.0.windows.3
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:39.4193116Z Copying 'C:\Users\runneradmin\.gitconfig' to 'D:\a\_temp\7d1b4992-9266-4be0-af82-9a848258e3ab\.gitconfig'
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:39.4213339Z Temporarily overriding HOME='D:\a\_temp\7d1b4992-9266-4be0-af82-9a848258e3ab' before making global git config changes
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:39.4214465Z Adding repository directory to the temporary git global config as a safe directory
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:39.4224342Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\cocoaskills\cocoaskills\protocol-spec
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:39.4518486Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:39.4803668Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:40.0304364Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:40.0568828Z http.https://github.com/.extraheader
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:40.0610736Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:40.0904216Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:40.6110603Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:40.6400713Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:41.1883184Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:41.1886225Z Post job cleanup.
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:41.3609174Z [command]"C:\Program Files\Git\bin\git.exe" version
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:41.3882192Z git version 2.55.0.windows.3
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:41.3938463Z Copying 'C:\Users\runneradmin\.gitconfig' to 'D:\a\_temp\77e0825d-dbf5-4525-a7e7-3da5c63385d1\.gitconfig'
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:41.3957347Z Temporarily overriding HOME='D:\a\_temp\77e0825d-dbf5-4525-a7e7-3da5c63385d1' before making global git config changes
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:41.3958530Z Adding repository directory to the temporary git global config as a safe directory
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:41.3968587Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\cocoaskills\cocoaskills
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:41.4262352Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:41.4549923Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:41.9786194Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:42.0042740Z http.https://github.com/.extraheader
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:42.0083028Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:42.0373614Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:42.5458852Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:42.5748734Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:43.1077746Z Cleaning up orphan processes
+Win diag / Python 3.12	UNKNOWN STEP	2026-07-31T10:37:43.1549913Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-python@v5. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

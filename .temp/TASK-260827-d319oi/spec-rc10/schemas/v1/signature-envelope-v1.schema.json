@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/signature-envelope-v1.schema.json",
+  "title": "Curator Ed25519 signature envelope",
+  "$ref": "common.schema.json#/$defs/signature"
+}

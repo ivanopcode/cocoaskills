@@ -1,0 +1,703 @@
+{
+  "audit_label_cases": [
+    {
+      "execution_policy": null,
+      "labels": [
+        "script-command-declared-only"
+      ],
+      "manifest_schema": 7,
+      "name": "schema7-script"
+    },
+    {
+      "execution_policy": null,
+      "labels": [
+        "script-command-declared-only"
+      ],
+      "manifest_schema": 8,
+      "name": "schema8-declared-only-script"
+    },
+    {
+      "execution_policy": "script-worker-v1",
+      "labels": [],
+      "manifest_schema": 8,
+      "name": "schema8-enforced-script"
+    },
+    {
+      "execution_policy": "script-worker-v1",
+      "labels": [
+        "script-command-unfiltered-declared-network"
+      ],
+      "manifest_schema": 8,
+      "name": "schema8-enforced-unfiltered-network"
+    }
+  ],
+  "capability_derivation_cases": [
+    {
+      "declared": {},
+      "derived": {
+        "env_read": [],
+        "exec": [
+          "resolved-interpreter"
+        ],
+        "filesystem": [
+          "private-cache-root",
+          "private-config-root",
+          "private-temp-root",
+          "manager-selected-working-directory"
+        ],
+        "network": "offline-environment",
+        "prompt_scope": null,
+        "secrets": []
+      },
+      "name": "all-fields-absent-deny-by-default"
+    },
+    {
+      "accepted": true,
+      "declared": {
+        "network": [
+          "api.example.com"
+        ]
+      },
+      "derived": {
+        "network_filter": null
+      },
+      "name": "declared-network-hosts-are-reporting-only",
+      "warning": "script-command-unfiltered-declared-network"
+    },
+    {
+      "declared": {
+        "exec": [
+          "git"
+        ]
+      },
+      "derived": {
+        "inherited_path": false,
+        "path": [
+          "resolved-interpreter",
+          "manager-resolved:git"
+        ]
+      },
+      "name": "declared-exec-is-manager-resolved"
+    },
+    {
+      "declared": {
+        "secrets": [
+          "release-token"
+        ]
+      },
+      "derived": {
+        "secret_values": []
+      },
+      "name": "declared-secrets-remain-identifiers"
+    }
+  ],
+  "capability_evidence_cases": [
+    {
+      "expected_error": null,
+      "invocation_succeeds": true,
+      "mutation": null,
+      "name": "valid-linux-host-conditional-unavailable",
+      "record_valid": true
+    },
+    {
+      "expected_error": "script_execution_capability_evidence_invalid",
+      "invocation_succeeds": false,
+      "mutation": "available-status-unavailable",
+      "name": "available-control-reported-unavailable",
+      "record_valid": false
+    },
+    {
+      "expected_error": "script_execution_capability_evidence_invalid",
+      "invocation_succeeds": false,
+      "mutation": "unavailable-status-applied",
+      "name": "unavailable-control-reported-applied",
+      "record_valid": false
+    },
+    {
+      "expected_error": "script_execution_capability_evidence_invalid",
+      "invocation_succeeds": false,
+      "mutation": "remove-control",
+      "name": "missing-control-entry",
+      "record_valid": false
+    },
+    {
+      "expected_error": "script_execution_capability_evidence_invalid",
+      "invocation_succeeds": false,
+      "mutation": "duplicate-control",
+      "name": "duplicate-control-entry",
+      "record_valid": false
+    },
+    {
+      "expected_error": "script_execution_capability_evidence_invalid",
+      "invocation_succeeds": false,
+      "mutation": "add-unknown-control",
+      "name": "extra-control-entry",
+      "record_valid": false
+    },
+    {
+      "expected_error": "script_execution_capability_evidence_invalid",
+      "invocation_succeeds": false,
+      "mutation": "record-version-v2",
+      "name": "unknown-record-version",
+      "record_valid": false
+    },
+    {
+      "expected_error": "script_execution_capability_evidence_invalid",
+      "invocation_succeeds": false,
+      "mutation": "probe-unavailable-status-applied",
+      "name": "host-conditional-status-contradicts-probe",
+      "record_valid": false
+    },
+    {
+      "expected_error": "script_execution_capability_evidence_invalid",
+      "invocation_succeeds": false,
+      "mutation": "probed-at-install",
+      "name": "cached-probe-result",
+      "record_valid": false
+    },
+    {
+      "expected_error": "script_execution_capability_evidence_invalid",
+      "invocation_succeeds": false,
+      "mutation": "record-count-two",
+      "name": "second-record-for-invocation",
+      "record_valid": false
+    },
+    {
+      "expected_error": "script_execution_capability_evidence_invalid",
+      "invocation_succeeds": false,
+      "mutation": "capability-evidence-v1",
+      "name": "foreign-build-record-version",
+      "record_valid": false
+    },
+    {
+      "expected_error": "script_execution_hardened_claim_forbidden",
+      "invocation_succeeds": false,
+      "mutation": "manager-worker-v1",
+      "name": "foreign-build-execution-policy",
+      "record_valid": false
+    },
+    {
+      "expected_error": "script_execution_hardened_claim_forbidden",
+      "invocation_succeeds": false,
+      "mutation": "script-total-network-denial",
+      "name": "deferred-script-guarantee-entry",
+      "record_valid": false
+    },
+    {
+      "expected_error": "script_execution_hardened_claim_forbidden",
+      "invocation_succeeds": false,
+      "mutation": "total-network-denial",
+      "name": "deferred-build-guarantee-entry",
+      "record_valid": false
+    }
+  ],
+  "capability_evidence_record": {
+    "control_entry_fields": [
+      "availability",
+      "name",
+      "probed_at",
+      "status"
+    ],
+    "entry_cardinality": "exactly-one-per-inventory-control",
+    "examples": {
+      "linux": {
+        "controls": [
+          {
+            "availability": "available",
+            "name": "descendant-domain-termination",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          },
+          {
+            "availability": "host-conditional",
+            "name": "active-process-count-limit",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          },
+          {
+            "availability": "host-conditional",
+            "name": "aggregate-memory-limit",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          },
+          {
+            "availability": "available",
+            "name": "per-file-size-limit",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          },
+          {
+            "availability": "available",
+            "name": "inherited-handle-restriction",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          },
+          {
+            "availability": "host-conditional",
+            "name": "descendant-exec-denial",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          },
+          {
+            "availability": "host-conditional",
+            "name": "filesystem-write-confinement",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          },
+          {
+            "availability": "host-conditional",
+            "name": "network-isolation-domain",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          }
+        ],
+        "execution_policy": "script-worker-v1",
+        "platform": "linux",
+        "record_version": "script-capability-evidence-v1"
+      },
+      "macos": {
+        "controls": [
+          {
+            "availability": "available",
+            "name": "descendant-domain-termination",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          },
+          {
+            "availability": "unavailable",
+            "name": "active-process-count-limit",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          },
+          {
+            "availability": "unavailable",
+            "name": "aggregate-memory-limit",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          },
+          {
+            "availability": "available",
+            "name": "per-file-size-limit",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          },
+          {
+            "availability": "available",
+            "name": "inherited-handle-restriction",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          },
+          {
+            "availability": "unavailable",
+            "name": "descendant-exec-denial",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          },
+          {
+            "availability": "unavailable",
+            "name": "filesystem-write-confinement",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          },
+          {
+            "availability": "unavailable",
+            "name": "network-isolation-domain",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          }
+        ],
+        "execution_policy": "script-worker-v1",
+        "platform": "macos",
+        "record_version": "script-capability-evidence-v1"
+      },
+      "windows": {
+        "controls": [
+          {
+            "availability": "available",
+            "name": "descendant-domain-termination",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          },
+          {
+            "availability": "available",
+            "name": "active-process-count-limit",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          },
+          {
+            "availability": "available",
+            "name": "aggregate-memory-limit",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          },
+          {
+            "availability": "unavailable",
+            "name": "per-file-size-limit",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          },
+          {
+            "availability": "available",
+            "name": "inherited-handle-restriction",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          },
+          {
+            "availability": "unavailable",
+            "name": "descendant-exec-denial",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          },
+          {
+            "availability": "unavailable",
+            "name": "filesystem-write-confinement",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          },
+          {
+            "availability": "unavailable",
+            "name": "network-isolation-domain",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          }
+        ],
+        "execution_policy": "script-worker-v1",
+        "platform": "windows",
+        "record_version": "script-capability-evidence-v1"
+      }
+    },
+    "excluded_from": [
+      "cache-key",
+      "command-stderr",
+      "command-stdout",
+      "conformance-claim",
+      "install-marker",
+      "receipt"
+    ],
+    "inventory_version": "script-worker-v1-native-control-inventory-v1",
+    "probe_timings": [
+      "pre-worker-launch"
+    ],
+    "record_cardinality": "exactly-one-per-invocation",
+    "record_fields": [
+      "controls",
+      "execution_policy",
+      "platform",
+      "record_version"
+    ],
+    "record_version": "script-capability-evidence-v1",
+    "result_only": true
+  },
+  "execution_policy": "script-worker-v1",
+  "interpreters": [
+    "node-v1",
+    "python3-v1"
+  ],
+  "mandatory_controls": [
+    "fixed-process-graph",
+    "worker-identity-verification",
+    "interpreter-resolution-and-identity-verification",
+    "manager-built-environment",
+    "manager-built-path",
+    "offline-network-configuration",
+    "operation-private-runtime-area",
+    "explicit-standard-stream-binding",
+    "inventory-controls-applied",
+    "closed-script-capability-evidence-record",
+    "worker-domain-teardown"
+  ],
+  "native_control_inventory": {
+    "authority": "conformance/v1/vectors/script-host-execution-policy.json#native_control_inventory",
+    "availability_states": [
+      "available",
+      "host-conditional",
+      "unavailable"
+    ],
+    "controls": [
+      {
+        "name": "descendant-domain-termination",
+        "platforms": {
+          "linux": {
+            "availability": "available",
+            "mechanism": "process-group-and-session-teardown",
+            "unavailable_reason": null
+          },
+          "macos": {
+            "availability": "available",
+            "mechanism": "process-group-and-session-teardown",
+            "unavailable_reason": null
+          },
+          "windows": {
+            "availability": "available",
+            "mechanism": "job-object-kill-on-close",
+            "unavailable_reason": null
+          }
+        }
+      },
+      {
+        "name": "active-process-count-limit",
+        "platforms": {
+          "linux": {
+            "availability": "host-conditional",
+            "mechanism": "delegated-cgroup-v2-pids.max",
+            "unavailable_reason": null
+          },
+          "macos": {
+            "availability": "unavailable",
+            "mechanism": null,
+            "unavailable_reason": "no-private-aggregate-domain"
+          },
+          "windows": {
+            "availability": "available",
+            "mechanism": "job-object-active-process-limit",
+            "unavailable_reason": null
+          }
+        }
+      },
+      {
+        "name": "aggregate-memory-limit",
+        "platforms": {
+          "linux": {
+            "availability": "host-conditional",
+            "mechanism": "delegated-cgroup-v2-memory.max",
+            "unavailable_reason": null
+          },
+          "macos": {
+            "availability": "unavailable",
+            "mechanism": null,
+            "unavailable_reason": "no-private-aggregate-domain"
+          },
+          "windows": {
+            "availability": "available",
+            "mechanism": "job-object-process-and-job-memory-limit",
+            "unavailable_reason": null
+          }
+        }
+      },
+      {
+        "name": "per-file-size-limit",
+        "platforms": {
+          "linux": {
+            "availability": "available",
+            "mechanism": "rlimit-fsize",
+            "unavailable_reason": null
+          },
+          "macos": {
+            "availability": "available",
+            "mechanism": "rlimit-fsize",
+            "unavailable_reason": null
+          },
+          "windows": {
+            "availability": "unavailable",
+            "mechanism": null,
+            "unavailable_reason": "no-private-aggregate-domain"
+          }
+        }
+      },
+      {
+        "name": "inherited-handle-restriction",
+        "platforms": {
+          "linux": {
+            "availability": "available",
+            "mechanism": "close-on-exec-and-explicit-descriptor-release",
+            "unavailable_reason": null
+          },
+          "macos": {
+            "availability": "available",
+            "mechanism": "close-on-exec-and-explicit-descriptor-release",
+            "unavailable_reason": null
+          },
+          "windows": {
+            "availability": "available",
+            "mechanism": "explicit-handle-inheritance-list",
+            "unavailable_reason": null
+          }
+        }
+      },
+      {
+        "name": "descendant-exec-denial",
+        "platforms": {
+          "linux": {
+            "availability": "host-conditional",
+            "mechanism": "landlock-execute-right",
+            "unavailable_reason": null
+          },
+          "macos": {
+            "availability": "unavailable",
+            "mechanism": null,
+            "unavailable_reason": "no-unprivileged-per-process-exec-policy"
+          },
+          "windows": {
+            "availability": "unavailable",
+            "mechanism": null,
+            "unavailable_reason": "child-process-policy-requires-appcontainer"
+          }
+        }
+      },
+      {
+        "name": "filesystem-write-confinement",
+        "platforms": {
+          "linux": {
+            "availability": "host-conditional",
+            "mechanism": "landlock-write-rights",
+            "unavailable_reason": null
+          },
+          "macos": {
+            "availability": "unavailable",
+            "mechanism": null,
+            "unavailable_reason": "no-unprivileged-filesystem-domain"
+          },
+          "windows": {
+            "availability": "unavailable",
+            "mechanism": null,
+            "unavailable_reason": "no-unprivileged-filesystem-domain"
+          }
+        }
+      },
+      {
+        "name": "network-isolation-domain",
+        "platforms": {
+          "linux": {
+            "availability": "host-conditional",
+            "mechanism": "network-namespace-without-interfaces",
+            "unavailable_reason": null
+          },
+          "macos": {
+            "availability": "unavailable",
+            "mechanism": null,
+            "unavailable_reason": "no-unprivileged-network-domain"
+          },
+          "windows": {
+            "availability": "unavailable",
+            "mechanism": null,
+            "unavailable_reason": "no-unprivileged-network-domain"
+          }
+        }
+      }
+    ],
+    "exhaustive": true,
+    "platforms": [
+      "linux",
+      "macos",
+      "windows"
+    ],
+    "probe_scope": "per-invocation",
+    "probe_timing": "pre-worker-launch",
+    "unavailable_reasons": [
+      "child-process-policy-requires-appcontainer",
+      "no-private-aggregate-domain",
+      "no-unprivileged-filesystem-domain",
+      "no-unprivileged-network-domain",
+      "no-unprivileged-per-process-exec-policy"
+    ],
+    "version": "script-worker-v1-native-control-inventory-v1"
+  },
+  "opt_in_cases": [
+    {
+      "accepted": true,
+      "execution_policy": "script-worker-v1",
+      "interpreter": "python3-v1",
+      "manifest_schema": 8,
+      "mode": "enforced",
+      "name": "schema8-explicit-opt-in"
+    },
+    {
+      "accepted": true,
+      "execution_policy": null,
+      "interpreter": null,
+      "manifest_schema": 8,
+      "mode": "declared-only",
+      "name": "schema8-absent-policy"
+    },
+    {
+      "accepted": true,
+      "execution_policy": null,
+      "interpreter": null,
+      "manifest_schema": 7,
+      "mode": "declared-only",
+      "name": "legacy-schema7-script"
+    },
+    {
+      "accepted": false,
+      "execution_policy": null,
+      "interpreter": "python3-v1",
+      "manifest_schema": 8,
+      "mode": null,
+      "name": "interpreter-without-policy"
+    },
+    {
+      "accepted": false,
+      "execution_policy": "script-worker-v1",
+      "interpreter": null,
+      "manifest_schema": 8,
+      "mode": null,
+      "name": "policy-without-interpreter"
+    },
+    {
+      "accepted": false,
+      "execution_policy": "script-worker-v2",
+      "interpreter": "python3-v1",
+      "manifest_schema": 8,
+      "mode": null,
+      "name": "unknown-policy"
+    }
+  ],
+  "preflight_cases": [
+    {
+      "expected_error": "script_execution_control_unavailable",
+      "invocation_succeeds": false,
+      "mandatory_control_available": false,
+      "name": "mandatory-control-unavailable-at-install",
+      "operation": "install",
+      "worker_started": false
+    },
+    {
+      "expected_error": "script_execution_control_unavailable",
+      "invocation_succeeds": false,
+      "mandatory_control_available": false,
+      "name": "mandatory-control-unavailable-at-invocation",
+      "operation": "invoke",
+      "worker_started": false
+    },
+    {
+      "control": "active-process-count-limit",
+      "evidence_status": "applied",
+      "expected_error": null,
+      "inventory_availability": "host-conditional",
+      "invocation_succeeds": true,
+      "mechanism": "delegated-cgroup-v2-pids.max",
+      "name": "linux-pids-max-probe-available-evidence-applied-invocation-succeeds",
+      "operation": "invoke",
+      "platform": "linux",
+      "probe_result": "available",
+      "worker_started": true
+    },
+    {
+      "control": "active-process-count-limit",
+      "evidence_status": "unavailable",
+      "expected_error": null,
+      "inventory_availability": "host-conditional",
+      "invocation_succeeds": true,
+      "mechanism": "delegated-cgroup-v2-pids.max",
+      "name": "linux-pids-max-probe-unavailable-evidence-unavailable-invocation-succeeds",
+      "operation": "invoke",
+      "platform": "linux",
+      "probe_result": "unavailable",
+      "worker_started": true
+    },
+    {
+      "control": "active-process-count-limit",
+      "evidence_status": "unavailable",
+      "expected_error": null,
+      "inventory_availability": "unavailable",
+      "invocation_succeeds": true,
+      "name": "fixed-unavailable-control-does-not-reject",
+      "operation": "invoke",
+      "platform": "macos",
+      "probe_result": "unavailable",
+      "worker_started": true
+    }
+  ],
+  "protocol_version": "1.0.0-rc.9",
+  "schema_version": 1
+}

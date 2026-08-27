@@ -1,0 +1,11 @@
+{
+  "capabilities": {},
+  "commands": {},
+  "dependencies": {
+    "commands": {},
+    "mcp_servers": {},
+    "skills": {}
+  },
+  "runtime_roots": [],
+  "schema_version": 5
+}

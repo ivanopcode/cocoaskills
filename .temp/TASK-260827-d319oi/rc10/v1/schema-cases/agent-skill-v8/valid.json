@@ -1,0 +1,55 @@
+{
+  "build_repositories": {
+    "golden-tools": {
+      "git": "https://github.com/example/golden-tools.git",
+      "locked_commit": {
+        "hex": "0123456789abcdef0123456789abcdef01234567",
+        "object_format": "sha1"
+      },
+      "tag": "v1.4.0"
+    }
+  },
+  "build_roots": [
+    "build"
+  ],
+  "capabilities": {},
+  "commands": {
+    "build-tool": {
+      "driver": "go-v1",
+      "modules": [
+        "pkg/board",
+        "pkg/remoteconfig"
+      ],
+      "source_dir": "build/cmd/tool",
+      "type": "build"
+    },
+    "enforced-tool": {
+      "execution_policy": "script-worker-v1",
+      "interpreter": "python3-v1",
+      "type": "script",
+      "unix_path": "scripts/enforced",
+      "win_path": "scripts/enforced.cmd"
+    },
+    "golden-tool": {
+      "driver": "go-repository-v1",
+      "repository": "golden-tools",
+      "target": "golden-tool",
+      "type": "build"
+    },
+    "script-tool": {
+      "type": "script",
+      "unix_path": "scripts/tool"
+    },
+    "system-tool": {
+      "command": "tool",
+      "type": "system"
+    }
+  },
+  "dependencies": {
+    "commands": {},
+    "mcp_servers": {},
+    "skills": {}
+  },
+  "runtime_roots": [],
+  "schema_version": 8
+}

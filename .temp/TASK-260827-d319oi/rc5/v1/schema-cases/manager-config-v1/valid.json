@@ -1,0 +1,21 @@
+{
+  "audit": {
+    "cache_ttl_seconds": 0,
+    "offline_grace_seconds": 0
+  },
+  "audit_registries": [
+    {
+      "name": "primary",
+      "url": "HTTPS://registry.example"
+    }
+  ],
+  "preferred_locale": null,
+  "projects": {
+    "app": {
+      "path": "/tmp/app",
+      "project_alias": null
+    }
+  },
+  "schema_version": 1,
+  "skills_root": "/tmp/skills"
+}

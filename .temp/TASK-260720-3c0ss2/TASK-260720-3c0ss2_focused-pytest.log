@@ -1,0 +1,16 @@
+TASK-260720-3c0ss2 focused pytest evidence — 2026-07-30
+
+Working directory:
+  /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-3c0ss2/worktree
+
+Command:
+  PATH=/Users/iv/Developer/Wildberries/cocoaskills/.venv/bin:$PATH CURATOR_CONFORMANCE_ROOT=/Users/iv/Developer/ReluxWorks/curator/.temp/TASK-260729-3nx97g/worktree/conformance/v1 python -m pytest tests/test_protocol_conformance.py tests/test_build_source.py tests/test_hashing.py tests/test_whitelist.py tests/test_skillcheck.py -q
+
+Result:
+  150 passed
+
+Exit code:
+  0
+
+The run covers the accepted rc.5 conformance fixtures together with the new
+build-source framing, source-boundary, whitelist, and static skill-check cases.

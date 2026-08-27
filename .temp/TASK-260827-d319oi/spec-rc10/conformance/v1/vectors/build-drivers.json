@@ -1,0 +1,2336 @@
+{
+  "argv": [
+    {
+      "argv": [
+        "/absolute/trusted/goroot/bin/go",
+        "telemetry",
+        "off"
+      ],
+      "cwd": "<operation-private>/empty",
+      "name": "telemetry-off",
+      "source_aware": false
+    },
+    {
+      "argv": [
+        "/absolute/trusted/goroot/bin/go",
+        "version"
+      ],
+      "cwd": "<operation-private>/empty",
+      "name": "version",
+      "source_aware": false
+    },
+    {
+      "argv": [
+        "/absolute/trusted/goroot/bin/go",
+        "env",
+        "-json",
+        "GOROOT",
+        "GOHOSTOS",
+        "GOHOSTARCH",
+        "GOOS",
+        "GOARCH",
+        "GO386",
+        "GOAMD64",
+        "GOARM",
+        "GOARM64",
+        "GOMIPS",
+        "GOMIPS64",
+        "GOPPC64",
+        "GORISCV64",
+        "GOWASM",
+        "GOTELEMETRY",
+        "GOTELEMETRYDIR"
+      ],
+      "cwd": "<operation-private>/empty",
+      "name": "env",
+      "source_aware": false
+    },
+    {
+      "argv": [
+        "/absolute/trusted/goroot/bin/go",
+        "list",
+        "-mod=vendor",
+        "-deps",
+        "-json",
+        "-buildvcs=false",
+        "-compiler=gc",
+        "-pgo=off",
+        "."
+      ],
+      "cwd": "<validated-source-dir>",
+      "name": "list",
+      "source_aware": true
+    },
+    {
+      "argv": [
+        "/absolute/trusted/goroot/bin/go",
+        "build",
+        "-mod=vendor",
+        "-trimpath",
+        "-buildvcs=false",
+        "-buildmode=exe",
+        "-compiler=gc",
+        "-pgo=off",
+        "-ldflags=-linkmode=internal -libgcc=none",
+        "-o",
+        "<operation-staging>/bin/golden-tool",
+        "."
+      ],
+      "cwd": "<validated-source-dir>",
+      "name": "build",
+      "source_aware": true
+    }
+  ],
+  "build_source_cases": [
+    {
+      "content_sha256": "sha256:27cdcac0734aa3e069e95a10341e89b118a07c60002516e7b401e95477f01332",
+      "name": "fixture-exact-build-source",
+      "preimage_base64": "Y3VyYXRvci1idWlsZC1zb3VyY2UtdjEARgAAAAAAAAARLmNzay1pbnN0YWxsLmpzb24AAAAAAAAALHsicGFja2FnZV9tYXJrZXIiOiJjb21waWxlci12aXNpYmxlLWlucHV0In0KRgAAAAAAAAAIU0tJTEwubWQAAAAAAAAAXyMgR28gYnVpbGQgZ29sZGVuIHNraWxsCgpUaGlzIGNvbnRleHQgcmVtYWlucyB2aXNpYmxlIHdoaWxlIHRoZSBuZXN0ZWQgYnVpbGQgcm9vdCBpcyBleGNsdWRlZC4KRgAAAAAAAAAQYWdlbnQtc2tpbGwuanNvbgAAAAAAAAIlewogICJzY2hlbWFfdmVyc2lvbiI6IDYsCiAgInJ1bnRpbWVfcm9vdHMiOiBbInNjcmlwdHMiXSwKICAiYnVpbGRfcm9vdHMiOiBbImFzc2V0cy9idWlsZC10b29sIl0sCiAgImNvbW1hbmRzIjogewogICAgImdvbGRlbi10b29sIjogewogICAgICAidHlwZSI6ICJidWlsZCIsCiAgICAgICJkcml2ZXIiOiAiZ28tdjEiLAogICAgICAic291cmNlX2RpciI6ICJhc3NldHMvYnVpbGQtdG9vbC9jbWQvZ29sZGVuLXRvb2wiCiAgICB9LAogICAgInNraWxsLWhlbHBlciI6IHsKICAgICAgInR5cGUiOiAic2NyaXB0IiwKICAgICAgInVuaXhfcGF0aCI6ICJzY3JpcHRzL3NraWxsLWhlbHBlciIsCiAgICAgICJ3aW5fcGF0aCI6ICJzY3JpcHRzL3NraWxsLWhlbHBlci5jbWQiCiAgICB9CiAgfSwKICAiY2FwYWJpbGl0aWVzIjogewogICAgIm5ldHdvcmsiOiAibm9uZSIsCiAgICAiZmlsZXN5c3RlbSI6ICJyZXBvIiwKICAgICJleGVjIjogIm5vbmUiLAogICAgInNlY3JldHMiOiAibm9uZSIsCiAgICAiZW52X3JlYWQiOiBbXQogIH0sCiAgImRlcGVuZGVuY2llcyI6IHt9Cn0KRgAAAAAAAAApYXNzZXRzL2J1aWxkLXRvb2wvY21kL2dvbGRlbi10b29sL21haW4uZ28AAAAAAAAAg3BhY2thZ2UgbWFpbgoKaW1wb3J0ICgKCSJmbXQiCgoJImV4YW1wbGUuY29tL2N1cmF0b3IvZ29sZGVuLWJ1aWxkL2ludGVybmFsL3JlbmRlciIKKQoKZnVuYyBtYWluKCkgewoJZm10LlByaW50KHJlbmRlci5NZXNzYWdlKCkpCn0KRgAAAAAAAAAYYXNzZXRzL2J1aWxkLXRvb2wvZ28ubW9kAAAAAAAAAF5tb2R1bGUgZXhhbXBsZS5jb20vY3VyYXRvci9nb2xkZW4tYnVpbGQKCmdvIDEuMjMKCnJlcXVpcmUgZXhhbXBsZS5jb20vY3VyYXRvci92ZW5kb3JlZCB2MS4wLjAKRgAAAAAAAAArYXNzZXRzL2J1aWxkLXRvb2wvaW50ZXJuYWwvcmVuZGVyL2VtcHR5LnR4dAAAAAAAAAAARgAAAAAAAAArYXNzZXRzL2J1aWxkLXRvb2wvaW50ZXJuYWwvcmVuZGVyL3JlbmRlci5nbwAAAAAAAAEPcGFja2FnZSByZW5kZXIKCmltcG9ydCAoCglfICJlbWJlZCIKCSJzdHJpbmdzIgoKCSJleGFtcGxlLmNvbS9jdXJhdG9yL3ZlbmRvcmVkL2RlY29yYXRlIgopCgovL2dvOmVtYmVkIHRlbXBsYXRlLnR4dAp2YXIgdGVtcGxhdGUgc3RyaW5nCgovL2dvOmVtYmVkIGVtcHR5LnR4dAp2YXIgZW1wdHkgW11ieXRlCgpmdW5jIE1lc3NhZ2UoKSBzdHJpbmcgewoJXyA9IGVtcHR5CglyZXR1cm4gZGVjb3JhdGUuV3JhcChzdHJpbmdzLlRyaW1TcGFjZSh0ZW1wbGF0ZSkpICsgIlxuIgp9CkYAAAAAAAAALmFzc2V0cy9idWlsZC10b29sL2ludGVybmFsL3JlbmRlci90ZW1wbGF0ZS50eHQAAAAAAAAADWdvbGRlbiBidWlsZApGAAAAAAAAAEphc3NldHMvYnVpbGQtdG9vbC92ZW5kb3IvZXhhbXBsZS5jb20vY3VyYXRvci92ZW5kb3JlZC9kZWNvcmF0ZS9kZWNvcmF0ZS5nbwAAAAAAAABPcGFja2FnZSBkZWNvcmF0ZQoKZnVuYyBXcmFwKHZhbHVlIHN0cmluZykgc3RyaW5nIHsKCXJldHVybiAiWyIgKyB2YWx1ZSArICJdIgp9CkYAAAAAAAAAJGFzc2V0cy9idWlsZC10b29sL3ZlbmRvci9tb2R1bGVzLnR4dAAAAAAAAABhIyBleGFtcGxlLmNvbS9jdXJhdG9yL3ZlbmRvcmVkIHYxLjAuMAojIyBleHBsaWNpdDsgZ28gMS4yMwpleGFtcGxlLmNvbS9jdXJhdG9yL3ZlbmRvcmVkL2RlY29yYXRlCkYAAAAAAAAAEGFzc2V0cy9wcm9tcHQubWQAAAAAAAAAL1RoaXMgdW5yZWxhdGVkIGFzc2V0IHJlbWFpbnMgaW4gYWdlbnQgY29udGV4dC4KRgAAAAAAAAAUc2NyaXB0cy9za2lsbC1oZWxwZXIAAAAAAAAAHyMhL2Jpbi9zaApwcmludGYgJyVzXG4nIGhlbHBlcgpGAAAAAAAAABhzY3JpcHRzL3NraWxsLWhlbHBlci5jbWQAAAAAAAAAFkBlY2hvIG9mZgplY2hvIGhlbHBlcgo=",
+      "records": [
+        {
+          "content_base64": "eyJwYWNrYWdlX21hcmtlciI6ImNvbXBpbGVyLXZpc2libGUtaW5wdXQifQo=",
+          "path": ".csk-install.json"
+        },
+        {
+          "content_base64": "IyBHbyBidWlsZCBnb2xkZW4gc2tpbGwKClRoaXMgY29udGV4dCByZW1haW5zIHZpc2libGUgd2hpbGUgdGhlIG5lc3RlZCBidWlsZCByb290IGlzIGV4Y2x1ZGVkLgo=",
+          "path": "SKILL.md"
+        },
+        {
+          "content_base64": "ewogICJzY2hlbWFfdmVyc2lvbiI6IDYsCiAgInJ1bnRpbWVfcm9vdHMiOiBbInNjcmlwdHMiXSwKICAiYnVpbGRfcm9vdHMiOiBbImFzc2V0cy9idWlsZC10b29sIl0sCiAgImNvbW1hbmRzIjogewogICAgImdvbGRlbi10b29sIjogewogICAgICAidHlwZSI6ICJidWlsZCIsCiAgICAgICJkcml2ZXIiOiAiZ28tdjEiLAogICAgICAic291cmNlX2RpciI6ICJhc3NldHMvYnVpbGQtdG9vbC9jbWQvZ29sZGVuLXRvb2wiCiAgICB9LAogICAgInNraWxsLWhlbHBlciI6IHsKICAgICAgInR5cGUiOiAic2NyaXB0IiwKICAgICAgInVuaXhfcGF0aCI6ICJzY3JpcHRzL3NraWxsLWhlbHBlciIsCiAgICAgICJ3aW5fcGF0aCI6ICJzY3JpcHRzL3NraWxsLWhlbHBlci5jbWQiCiAgICB9CiAgfSwKICAiY2FwYWJpbGl0aWVzIjogewogICAgIm5ldHdvcmsiOiAibm9uZSIsCiAgICAiZmlsZXN5c3RlbSI6ICJyZXBvIiwKICAgICJleGVjIjogIm5vbmUiLAogICAgInNlY3JldHMiOiAibm9uZSIsCiAgICAiZW52X3JlYWQiOiBbXQogIH0sCiAgImRlcGVuZGVuY2llcyI6IHt9Cn0K",
+          "path": "agent-skill.json"
+        },
+        {
+          "content_base64": "cGFja2FnZSBtYWluCgppbXBvcnQgKAoJImZtdCIKCgkiZXhhbXBsZS5jb20vY3VyYXRvci9nb2xkZW4tYnVpbGQvaW50ZXJuYWwvcmVuZGVyIgopCgpmdW5jIG1haW4oKSB7CglmbXQuUHJpbnQocmVuZGVyLk1lc3NhZ2UoKSkKfQo=",
+          "path": "assets/build-tool/cmd/golden-tool/main.go"
+        },
+        {
+          "content_base64": "bW9kdWxlIGV4YW1wbGUuY29tL2N1cmF0b3IvZ29sZGVuLWJ1aWxkCgpnbyAxLjIzCgpyZXF1aXJlIGV4YW1wbGUuY29tL2N1cmF0b3IvdmVuZG9yZWQgdjEuMC4wCg==",
+          "path": "assets/build-tool/go.mod"
+        },
+        {
+          "content_base64": "",
+          "path": "assets/build-tool/internal/render/empty.txt"
+        },
+        {
+          "content_base64": "cGFja2FnZSByZW5kZXIKCmltcG9ydCAoCglfICJlbWJlZCIKCSJzdHJpbmdzIgoKCSJleGFtcGxlLmNvbS9jdXJhdG9yL3ZlbmRvcmVkL2RlY29yYXRlIgopCgovL2dvOmVtYmVkIHRlbXBsYXRlLnR4dAp2YXIgdGVtcGxhdGUgc3RyaW5nCgovL2dvOmVtYmVkIGVtcHR5LnR4dAp2YXIgZW1wdHkgW11ieXRlCgpmdW5jIE1lc3NhZ2UoKSBzdHJpbmcgewoJXyA9IGVtcHR5CglyZXR1cm4gZGVjb3JhdGUuV3JhcChzdHJpbmdzLlRyaW1TcGFjZSh0ZW1wbGF0ZSkpICsgIlxuIgp9Cg==",
+          "path": "assets/build-tool/internal/render/render.go"
+        },
+        {
+          "content_base64": "Z29sZGVuIGJ1aWxkCg==",
+          "path": "assets/build-tool/internal/render/template.txt"
+        },
+        {
+          "content_base64": "cGFja2FnZSBkZWNvcmF0ZQoKZnVuYyBXcmFwKHZhbHVlIHN0cmluZykgc3RyaW5nIHsKCXJldHVybiAiWyIgKyB2YWx1ZSArICJdIgp9Cg==",
+          "path": "assets/build-tool/vendor/example.com/curator/vendored/decorate/decorate.go"
+        },
+        {
+          "content_base64": "IyBleGFtcGxlLmNvbS9jdXJhdG9yL3ZlbmRvcmVkIHYxLjAuMAojIyBleHBsaWNpdDsgZ28gMS4yMwpleGFtcGxlLmNvbS9jdXJhdG9yL3ZlbmRvcmVkL2RlY29yYXRlCg==",
+          "path": "assets/build-tool/vendor/modules.txt"
+        },
+        {
+          "content_base64": "VGhpcyB1bnJlbGF0ZWQgYXNzZXQgcmVtYWlucyBpbiBhZ2VudCBjb250ZXh0Lgo=",
+          "path": "assets/prompt.md"
+        },
+        {
+          "content_base64": "IyEvYmluL3NoCnByaW50ZiAnJXNcbicgaGVscGVyCg==",
+          "path": "scripts/skill-helper"
+        },
+        {
+          "content_base64": "QGVjaG8gb2ZmCmVjaG8gaGVscGVyCg==",
+          "path": "scripts/skill-helper.cmd"
+        }
+      ],
+      "result": "accepted"
+    },
+    {
+      "content_sha256": "sha256:68008c9a1131c1295d78f4f7d184c3df5f7382a88d8d40333be7cf02b2ee4de9",
+      "domain_prefix_base64": "Y3VyYXRvci1idWlsZC1zb3VyY2UtdjEA",
+      "input_order": [
+        {
+          "content_base64": "AP8B",
+          "path": "z-binary.bin"
+        },
+        {
+          "content_base64": "",
+          "path": "empty"
+        },
+        {
+          "content_base64": "eyJ2YXJpYW50IjoiZml4dHVyZSJ9Cg==",
+          "path": ".csk-install.json"
+        },
+        {
+          "content_base64": "dXRmOAo=",
+          "path": "é.txt"
+        }
+      ],
+      "name": "domain-prefix-ordering-framing-empty-binary-and-root-marker",
+      "preimage_base64": "Y3VyYXRvci1idWlsZC1zb3VyY2UtdjEARgAAAAAAAAARLmNzay1pbnN0YWxsLmpzb24AAAAAAAAAFnsidmFyaWFudCI6ImZpeHR1cmUifQpGAAAAAAAAAAVlbXB0eQAAAAAAAAAARgAAAAAAAAAMei1iaW5hcnkuYmluAAAAAAAAAAMA/wFGAAAAAAAAAAbDqS50eHQAAAAAAAAABXV0ZjgK",
+      "result": "accepted",
+      "sorted_paths": [
+        ".csk-install.json",
+        "empty",
+        "z-binary.bin",
+        "é.txt"
+      ]
+    },
+    {
+      "content_sha256": "sha256:68008c9a1131c1295d78f4f7d184c3df5f7382a88d8d40333be7cf02b2ee4de9",
+      "name": "mode-and-timestamp-are-non-inputs",
+      "result": "accepted",
+      "variants": [
+        {
+          "mode": "0644",
+          "mtime": "2000-01-01T00:00:00Z"
+        },
+        {
+          "mode": "0755",
+          "mtime": "2030-01-01T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "boundary": "build-source",
+      "expected": {
+        "artifact_executed": false,
+        "error": "invalid_unicode",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "path_bytes_base64": "/w=="
+      },
+      "name": "invalid-unicode-build-source-path"
+    },
+    {
+      "boundary": "build-source",
+      "expected": {
+        "artifact_executed": false,
+        "error": "duplicate_path",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "paths": [
+          "same",
+          "same"
+        ]
+      },
+      "name": "duplicate-build-source-path"
+    },
+    {
+      "boundary": "build-source",
+      "expected": {
+        "artifact_executed": false,
+        "error": "link_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "path": "link",
+        "type": "symlink"
+      },
+      "name": "build-source-symbolic-link"
+    },
+    {
+      "boundary": "build-source",
+      "expected": {
+        "artifact_executed": false,
+        "error": "special_file_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "path": "pipe",
+        "type": "fifo"
+      },
+      "name": "build-source-special-file"
+    },
+    {
+      "boundary": "build-source",
+      "expected": {
+        "artifact_executed": false,
+        "error": "snapshot_mutated",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "phase": "before-last-build-child-exit"
+      },
+      "name": "build-source-mutation-during-use"
+    },
+    {
+      "framed_content_sha256": [
+        "sha256:96e3ed15c69a125ac033997b1f53baababece8a0be0831590f9282431ab6bc85",
+        "sha256:15068f03268e971a11b928800ca920c6841dee76747bb3411ae93ff4ab77a334"
+      ],
+      "framed_hashes_equal": false,
+      "legacy_stream_base64": "YQB4AGIAeQ==",
+      "legacy_streams_equal": true,
+      "name": "legacy-nul-stream-structural-collision",
+      "one_file": [
+        {
+          "content_base64": "eABiAHk=",
+          "path": "a"
+        }
+      ],
+      "result": "regression-proved",
+      "two_files": [
+        {
+          "content_base64": "eA==",
+          "path": "a"
+        },
+        {
+          "content_base64": "eQ==",
+          "path": "b"
+        }
+      ]
+    },
+    {
+      "build_source_hashes_equal": false,
+      "legacy_installed_tree_hashes_equal": true,
+      "name": "root-marker-bytes-are-build-input",
+      "result": "regression-proved",
+      "variants": [
+        {
+          "content_sha256": "sha256:2bcb6040dc11fce8e7a90a54ff22e16cd8d97e7fb7a623c45925c82b835f5d61",
+          "name": "A"
+        },
+        {
+          "content_sha256": "sha256:aa0e5a5e862cb306231299861858e734070d8777013e4000fb649dd0f5133285",
+          "name": "B"
+        }
+      ]
+    }
+  ],
+  "cache_identity": {
+    "aliases": false,
+    "legacy_rc4_without_execution_policy": {
+      "cache_key": "sha256:3fcd714a40e8918eb67dbd35d435875dcce6c9047da811a1fa26626e5e57be48",
+      "execution_policy": null,
+      "input": {
+        "build_root": "build",
+        "build_source": {
+          "algorithm": "curator-build-source-v1",
+          "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "command": "golden-tool",
+        "driver": "go-v1",
+        "policy": {
+          "cgo": false,
+          "compiler_directives": "reject-nonstandard-cgo-import-dynamic-v1",
+          "host_objects": false,
+          "libgcc": "none",
+          "link_mode": "internal",
+          "module_mode": "vendor",
+          "network": "none",
+          "package_assembly": false,
+          "target_mode": "native",
+          "telemetry": "off-private",
+          "workspace": false
+        },
+        "schema_version": 1,
+        "source_dir": "build/cmd/golden-tool",
+        "target": {
+          "goarch": "arm64",
+          "goos": "darwin",
+          "tuning": {
+            "GOARM64": "v8.0"
+          }
+        },
+        "toolchain": {
+          "algorithm": "curator-go-toolchain-v1",
+          "content_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "go_relpath": "bin/go",
+          "go_version": "go version go1.26.1 darwin/arm64"
+        }
+      },
+      "schema_valid": false
+    },
+    "portable": {
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "execution_policy": "manager-worker-v1",
+      "input": {
+        "build_root": "build",
+        "build_source": {
+          "algorithm": "curator-build-source-v1",
+          "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "command": "golden-tool",
+        "driver": "go-v1",
+        "policy": {
+          "cgo": false,
+          "compiler_directives": "reject-nonstandard-cgo-import-dynamic-v1",
+          "execution_policy": "manager-worker-v1",
+          "host_objects": false,
+          "libgcc": "none",
+          "link_mode": "internal",
+          "module_mode": "vendor",
+          "network": "none",
+          "package_assembly": false,
+          "target_mode": "native",
+          "telemetry": "off-private",
+          "workspace": false
+        },
+        "schema_version": 1,
+        "source_dir": "build/cmd/golden-tool",
+        "target": {
+          "goarch": "arm64",
+          "goos": "darwin",
+          "tuning": {
+            "GOARM64": "v8.0"
+          }
+        },
+        "toolchain": {
+          "algorithm": "curator-go-toolchain-v1",
+          "content_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "go_relpath": "bin/go",
+          "go_version": "go version go1.26.1 darwin/arm64"
+        }
+      },
+      "schema_valid": true
+    },
+    "reserved_hardened": {
+      "cache_key": "sha256:13736230d33ce59de7f7323dcd4cffd510655ad8dabd5ee9e8b6cb182ec70037",
+      "execution_policy": "hardened-worker-v1",
+      "hardened_profile_owner": "STORY-260728-327soo",
+      "input": {
+        "build_root": "build",
+        "build_source": {
+          "algorithm": "curator-build-source-v1",
+          "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "command": "golden-tool",
+        "driver": "go-v1",
+        "policy": {
+          "cgo": false,
+          "compiler_directives": "reject-nonstandard-cgo-import-dynamic-v1",
+          "execution_policy": "hardened-worker-v1",
+          "host_objects": false,
+          "libgcc": "none",
+          "link_mode": "internal",
+          "module_mode": "vendor",
+          "network": "none",
+          "package_assembly": false,
+          "target_mode": "native",
+          "telemetry": "off-private",
+          "workspace": false
+        },
+        "schema_version": 1,
+        "source_dir": "build/cmd/golden-tool",
+        "target": {
+          "goarch": "arm64",
+          "goos": "darwin",
+          "tuning": {
+            "GOARM64": "v8.0"
+          }
+        },
+        "toolchain": {
+          "algorithm": "curator-go-toolchain-v1",
+          "content_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "go_relpath": "bin/go",
+          "go_version": "go version go1.26.1 darwin/arm64"
+        }
+      },
+      "schema_valid": false
+    }
+  },
+  "driver": "go-v1",
+  "fixed_environment": {
+    "CGO_ENABLED": "0",
+    "GO111MODULE": "on",
+    "GOARCH": "arm64",
+    "GOARM64": "v8.0",
+    "GOCACHE": "<operation-private>/gocache",
+    "GOENV": "off",
+    "GOEXPERIMENT": "",
+    "GOFLAGS": "",
+    "GOMODCACHE": "<operation-private>/gomodcache",
+    "GONOPROXY": "none",
+    "GONOSUMDB": "none",
+    "GOOS": "darwin",
+    "GOPATH": "<operation-private>/gopath",
+    "GOPRIVATE": "",
+    "GOPROXY": "off",
+    "GOROOT": "<resolved-trusted-goroot>",
+    "GOSUMDB": "off",
+    "GOTMPDIR": "<operation-private>/gotmp",
+    "GOTOOLCHAIN": "local",
+    "GOVCS": "*:off",
+    "GOWORK": "off",
+    "GO_EXTLINK_ENABLED": "0",
+    "HOME": "<operation-private>/home",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "<operation-private>/empty-path",
+    "TMPDIR": "<operation-private>/tmp",
+    "XDG_CONFIG_HOME": "<operation-private>/config"
+  },
+  "fixed_environment_cases": [
+    {
+      "environment": {
+        "CGO_ENABLED": "0",
+        "GO111MODULE": "on",
+        "GOARCH": "arm64",
+        "GOARM64": "v8.0",
+        "GOCACHE": "<operation-private>/gocache",
+        "GOENV": "off",
+        "GOEXPERIMENT": "",
+        "GOFLAGS": "",
+        "GOMODCACHE": "<operation-private>/gomodcache",
+        "GONOPROXY": "none",
+        "GONOSUMDB": "none",
+        "GOOS": "darwin",
+        "GOPATH": "<operation-private>/gopath",
+        "GOPRIVATE": "",
+        "GOPROXY": "off",
+        "GOROOT": "<resolved-trusted-goroot>",
+        "GOSUMDB": "off",
+        "GOTMPDIR": "<operation-private>/gotmp",
+        "GOTOOLCHAIN": "local",
+        "GOVCS": "*:off",
+        "GOWORK": "off",
+        "GO_EXTLINK_ENABLED": "0",
+        "HOME": "<operation-private>/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "<operation-private>/empty-path",
+        "TMPDIR": "<operation-private>/tmp",
+        "XDG_CONFIG_HOME": "<operation-private>/config"
+      },
+      "goarch": "arm64",
+      "goos": "darwin",
+      "name": "darwin-arm64",
+      "optional_variables": []
+    },
+    {
+      "environment": {
+        "CGO_ENABLED": "0",
+        "GO111MODULE": "on",
+        "GOAMD64": "v1",
+        "GOARCH": "amd64",
+        "GOCACHE": "<operation-private>/gocache",
+        "GOENV": "off",
+        "GOEXPERIMENT": "",
+        "GOFLAGS": "",
+        "GOMODCACHE": "<operation-private>/gomodcache",
+        "GONOPROXY": "none",
+        "GONOSUMDB": "none",
+        "GOOS": "linux",
+        "GOPATH": "<operation-private>/gopath",
+        "GOPRIVATE": "",
+        "GOPROXY": "off",
+        "GOROOT": "<resolved-trusted-goroot>",
+        "GOSUMDB": "off",
+        "GOTMPDIR": "<operation-private>/gotmp",
+        "GOTOOLCHAIN": "local",
+        "GOVCS": "*:off",
+        "GOWORK": "off",
+        "GO_EXTLINK_ENABLED": "0",
+        "HOME": "<operation-private>/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "<operation-private>/empty-path",
+        "TMPDIR": "<operation-private>/tmp",
+        "XDG_CONFIG_HOME": "<operation-private>/config"
+      },
+      "goarch": "amd64",
+      "goos": "linux",
+      "name": "linux-amd64",
+      "optional_variables": []
+    },
+    {
+      "environment": {
+        "APPDATA": "<operation-private>/appdata",
+        "CGO_ENABLED": "0",
+        "GO111MODULE": "on",
+        "GOAMD64": "v1",
+        "GOARCH": "amd64",
+        "GOCACHE": "<operation-private>/gocache",
+        "GOENV": "off",
+        "GOEXPERIMENT": "",
+        "GOFLAGS": "",
+        "GOMODCACHE": "<operation-private>/gomodcache",
+        "GONOPROXY": "none",
+        "GONOSUMDB": "none",
+        "GOOS": "windows",
+        "GOPATH": "<operation-private>/gopath",
+        "GOPRIVATE": "",
+        "GOPROXY": "off",
+        "GOROOT": "<resolved-trusted-goroot>",
+        "GOSUMDB": "off",
+        "GOTMPDIR": "<operation-private>/gotmp",
+        "GOTOOLCHAIN": "local",
+        "GOVCS": "*:off",
+        "GOWORK": "off",
+        "GO_EXTLINK_ENABLED": "0",
+        "HOME": "<operation-private>/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "LOCALAPPDATA": "<operation-private>/localappdata",
+        "PATH": "<operation-private>/empty-path",
+        "TEMP": "<operation-private>/tmp",
+        "TMP": "<operation-private>/tmp",
+        "TMPDIR": "<operation-private>/tmp",
+        "USERPROFILE": "<operation-private>/userprofile",
+        "XDG_CONFIG_HOME": "<operation-private>/config"
+      },
+      "goarch": "amd64",
+      "goos": "windows",
+      "name": "windows-amd64",
+      "optional_variables": [
+        "SYSTEMROOT",
+        "WINDIR"
+      ]
+    }
+  ],
+  "fixture": {
+    "build_source": {
+      "algorithm": "curator-build-source-v1",
+      "content_sha256": "sha256:27cdcac0734aa3e069e95a10341e89b118a07c60002516e7b401e95477f01332",
+      "preimage_base64": "Y3VyYXRvci1idWlsZC1zb3VyY2UtdjEARgAAAAAAAAARLmNzay1pbnN0YWxsLmpzb24AAAAAAAAALHsicGFja2FnZV9tYXJrZXIiOiJjb21waWxlci12aXNpYmxlLWlucHV0In0KRgAAAAAAAAAIU0tJTEwubWQAAAAAAAAAXyMgR28gYnVpbGQgZ29sZGVuIHNraWxsCgpUaGlzIGNvbnRleHQgcmVtYWlucyB2aXNpYmxlIHdoaWxlIHRoZSBuZXN0ZWQgYnVpbGQgcm9vdCBpcyBleGNsdWRlZC4KRgAAAAAAAAAQYWdlbnQtc2tpbGwuanNvbgAAAAAAAAIlewogICJzY2hlbWFfdmVyc2lvbiI6IDYsCiAgInJ1bnRpbWVfcm9vdHMiOiBbInNjcmlwdHMiXSwKICAiYnVpbGRfcm9vdHMiOiBbImFzc2V0cy9idWlsZC10b29sIl0sCiAgImNvbW1hbmRzIjogewogICAgImdvbGRlbi10b29sIjogewogICAgICAidHlwZSI6ICJidWlsZCIsCiAgICAgICJkcml2ZXIiOiAiZ28tdjEiLAogICAgICAic291cmNlX2RpciI6ICJhc3NldHMvYnVpbGQtdG9vbC9jbWQvZ29sZGVuLXRvb2wiCiAgICB9LAogICAgInNraWxsLWhlbHBlciI6IHsKICAgICAgInR5cGUiOiAic2NyaXB0IiwKICAgICAgInVuaXhfcGF0aCI6ICJzY3JpcHRzL3NraWxsLWhlbHBlciIsCiAgICAgICJ3aW5fcGF0aCI6ICJzY3JpcHRzL3NraWxsLWhlbHBlci5jbWQiCiAgICB9CiAgfSwKICAiY2FwYWJpbGl0aWVzIjogewogICAgIm5ldHdvcmsiOiAibm9uZSIsCiAgICAiZmlsZXN5c3RlbSI6ICJyZXBvIiwKICAgICJleGVjIjogIm5vbmUiLAogICAgInNlY3JldHMiOiAibm9uZSIsCiAgICAiZW52X3JlYWQiOiBbXQogIH0sCiAgImRlcGVuZGVuY2llcyI6IHt9Cn0KRgAAAAAAAAApYXNzZXRzL2J1aWxkLXRvb2wvY21kL2dvbGRlbi10b29sL21haW4uZ28AAAAAAAAAg3BhY2thZ2UgbWFpbgoKaW1wb3J0ICgKCSJmbXQiCgoJImV4YW1wbGUuY29tL2N1cmF0b3IvZ29sZGVuLWJ1aWxkL2ludGVybmFsL3JlbmRlciIKKQoKZnVuYyBtYWluKCkgewoJZm10LlByaW50KHJlbmRlci5NZXNzYWdlKCkpCn0KRgAAAAAAAAAYYXNzZXRzL2J1aWxkLXRvb2wvZ28ubW9kAAAAAAAAAF5tb2R1bGUgZXhhbXBsZS5jb20vY3VyYXRvci9nb2xkZW4tYnVpbGQKCmdvIDEuMjMKCnJlcXVpcmUgZXhhbXBsZS5jb20vY3VyYXRvci92ZW5kb3JlZCB2MS4wLjAKRgAAAAAAAAArYXNzZXRzL2J1aWxkLXRvb2wvaW50ZXJuYWwvcmVuZGVyL2VtcHR5LnR4dAAAAAAAAAAARgAAAAAAAAArYXNzZXRzL2J1aWxkLXRvb2wvaW50ZXJuYWwvcmVuZGVyL3JlbmRlci5nbwAAAAAAAAEPcGFja2FnZSByZW5kZXIKCmltcG9ydCAoCglfICJlbWJlZCIKCSJzdHJpbmdzIgoKCSJleGFtcGxlLmNvbS9jdXJhdG9yL3ZlbmRvcmVkL2RlY29yYXRlIgopCgovL2dvOmVtYmVkIHRlbXBsYXRlLnR4dAp2YXIgdGVtcGxhdGUgc3RyaW5nCgovL2dvOmVtYmVkIGVtcHR5LnR4dAp2YXIgZW1wdHkgW11ieXRlCgpmdW5jIE1lc3NhZ2UoKSBzdHJpbmcgewoJXyA9IGVtcHR5CglyZXR1cm4gZGVjb3JhdGUuV3JhcChzdHJpbmdzLlRyaW1TcGFjZSh0ZW1wbGF0ZSkpICsgIlxuIgp9CkYAAAAAAAAALmFzc2V0cy9idWlsZC10b29sL2ludGVybmFsL3JlbmRlci90ZW1wbGF0ZS50eHQAAAAAAAAADWdvbGRlbiBidWlsZApGAAAAAAAAAEphc3NldHMvYnVpbGQtdG9vbC92ZW5kb3IvZXhhbXBsZS5jb20vY3VyYXRvci92ZW5kb3JlZC9kZWNvcmF0ZS9kZWNvcmF0ZS5nbwAAAAAAAABPcGFja2FnZSBkZWNvcmF0ZQoKZnVuYyBXcmFwKHZhbHVlIHN0cmluZykgc3RyaW5nIHsKCXJldHVybiAiWyIgKyB2YWx1ZSArICJdIgp9CkYAAAAAAAAAJGFzc2V0cy9idWlsZC10b29sL3ZlbmRvci9tb2R1bGVzLnR4dAAAAAAAAABhIyBleGFtcGxlLmNvbS9jdXJhdG9yL3ZlbmRvcmVkIHYxLjAuMAojIyBleHBsaWNpdDsgZ28gMS4yMwpleGFtcGxlLmNvbS9jdXJhdG9yL3ZlbmRvcmVkL2RlY29yYXRlCkYAAAAAAAAAEGFzc2V0cy9wcm9tcHQubWQAAAAAAAAAL1RoaXMgdW5yZWxhdGVkIGFzc2V0IHJlbWFpbnMgaW4gYWdlbnQgY29udGV4dC4KRgAAAAAAAAAUc2NyaXB0cy9za2lsbC1oZWxwZXIAAAAAAAAAHyMhL2Jpbi9zaApwcmludGYgJyVzXG4nIGhlbHBlcgpGAAAAAAAAABhzY3JpcHRzL3NraWxsLWhlbHBlci5jbWQAAAAAAAAAFkBlY2hvIG9mZgplY2hvIGhlbHBlcgo="
+    },
+    "context_sha256": "sha256:82c0a18e34ea078bdb311b676fe7b2111ebc0c293523be6b99c0a864ebaa1b85",
+    "excluded_context_files": [
+      "assets/build-tool/cmd/golden-tool/main.go",
+      "assets/build-tool/go.mod",
+      "assets/build-tool/internal/render/empty.txt",
+      "assets/build-tool/internal/render/render.go",
+      "assets/build-tool/internal/render/template.txt",
+      "assets/build-tool/vendor/example.com/curator/vendored/decorate/decorate.go",
+      "assets/build-tool/vendor/modules.txt",
+      "scripts/skill-helper",
+      "scripts/skill-helper.cmd"
+    ],
+    "expected_artifacts": {
+      "build_source_preimage": "expected/build-driver/build-source.preimage.bin",
+      "build_source_sha256": "expected/build-driver/build-source-sha256.txt",
+      "context_files": "expected/build-driver/context_files.json",
+      "context_sha256": "expected/build-driver/context_sha256.txt"
+    },
+    "expected_context_files": [
+      "SKILL.md",
+      "assets/prompt.md"
+    ],
+    "root": "fixtures/go-build-skill",
+    "snapshot_files": [
+      ".csk-install.json",
+      "SKILL.md",
+      "agent-skill.json",
+      "assets/build-tool/cmd/golden-tool/main.go",
+      "assets/build-tool/go.mod",
+      "assets/build-tool/internal/render/empty.txt",
+      "assets/build-tool/internal/render/render.go",
+      "assets/build-tool/internal/render/template.txt",
+      "assets/build-tool/vendor/example.com/curator/vendored/decorate/decorate.go",
+      "assets/build-tool/vendor/modules.txt",
+      "assets/prompt.md",
+      "scripts/skill-helper",
+      "scripts/skill-helper.cmd"
+    ]
+  },
+  "portable_identity": {
+    "artifact": {
+      "path": "bin/golden-tool",
+      "sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "size": 1234567
+    },
+    "build_input": {
+      "build_root": "build",
+      "build_source": {
+        "algorithm": "curator-build-source-v1",
+        "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "command": "golden-tool",
+      "driver": "go-v1",
+      "policy": {
+        "cgo": false,
+        "compiler_directives": "reject-nonstandard-cgo-import-dynamic-v1",
+        "execution_policy": "manager-worker-v1",
+        "host_objects": false,
+        "libgcc": "none",
+        "link_mode": "internal",
+        "module_mode": "vendor",
+        "network": "none",
+        "package_assembly": false,
+        "target_mode": "native",
+        "telemetry": "off-private",
+        "workspace": false
+      },
+      "schema_version": 1,
+      "source_dir": "build/cmd/golden-tool",
+      "target": {
+        "goarch": "arm64",
+        "goos": "darwin",
+        "tuning": {
+          "GOARM64": "v8.0"
+        }
+      },
+      "toolchain": {
+        "algorithm": "curator-go-toolchain-v1",
+        "content_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "go_relpath": "bin/go",
+        "go_version": "go version go1.26.1 darwin/arm64"
+      }
+    },
+    "build_input_ccj_base64": "eyJidWlsZF9yb290IjoiYnVpbGQiLCJidWlsZF9zb3VyY2UiOnsiYWxnb3JpdGhtIjoiY3VyYXRvci1idWlsZC1zb3VyY2UtdjEiLCJjb250ZW50X3NoYTI1NiI6InNoYTI1NjpiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIn0sImNvbW1hbmQiOiJnb2xkZW4tdG9vbCIsImRyaXZlciI6ImdvLXYxIiwicG9saWN5Ijp7ImNnbyI6ZmFsc2UsImNvbXBpbGVyX2RpcmVjdGl2ZXMiOiJyZWplY3Qtbm9uc3RhbmRhcmQtY2dvLWltcG9ydC1keW5hbWljLXYxIiwiZXhlY3V0aW9uX3BvbGljeSI6Im1hbmFnZXItd29ya2VyLXYxIiwiaG9zdF9vYmplY3RzIjpmYWxzZSwibGliZ2NjIjoibm9uZSIsImxpbmtfbW9kZSI6ImludGVybmFsIiwibW9kdWxlX21vZGUiOiJ2ZW5kb3IiLCJuZXR3b3JrIjoibm9uZSIsInBhY2thZ2VfYXNzZW1ibHkiOmZhbHNlLCJ0YXJnZXRfbW9kZSI6Im5hdGl2ZSIsInRlbGVtZXRyeSI6Im9mZi1wcml2YXRlIiwid29ya3NwYWNlIjpmYWxzZX0sInNjaGVtYV92ZXJzaW9uIjoxLCJzb3VyY2VfZGlyIjoiYnVpbGQvY21kL2dvbGRlbi10b29sIiwidGFyZ2V0Ijp7ImdvYXJjaCI6ImFybTY0IiwiZ29vcyI6ImRhcndpbiIsInR1bmluZyI6eyJHT0FSTTY0IjoidjguMCJ9fSwidG9vbGNoYWluIjp7ImFsZ29yaXRobSI6ImN1cmF0b3ItZ28tdG9vbGNoYWluLXYxIiwiY29udGVudF9zaGEyNTYiOiJzaGEyNTY6Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjYyIsImdvX3JlbHBhdGgiOiJiaW4vZ28iLCJnb192ZXJzaW9uIjoiZ28gdmVyc2lvbiBnbzEuMjYuMSBkYXJ3aW4vYXJtNjQifX0=",
+    "build_input_ccj_utf8": "{\"build_root\":\"build\",\"build_source\":{\"algorithm\":\"curator-build-source-v1\",\"content_sha256\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"command\":\"golden-tool\",\"driver\":\"go-v1\",\"policy\":{\"cgo\":false,\"compiler_directives\":\"reject-nonstandard-cgo-import-dynamic-v1\",\"execution_policy\":\"manager-worker-v1\",\"host_objects\":false,\"libgcc\":\"none\",\"link_mode\":\"internal\",\"module_mode\":\"vendor\",\"network\":\"none\",\"package_assembly\":false,\"target_mode\":\"native\",\"telemetry\":\"off-private\",\"workspace\":false},\"schema_version\":1,\"source_dir\":\"build/cmd/golden-tool\",\"target\":{\"goarch\":\"arm64\",\"goos\":\"darwin\",\"tuning\":{\"GOARM64\":\"v8.0\"}},\"toolchain\":{\"algorithm\":\"curator-go-toolchain-v1\",\"content_sha256\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"go_relpath\":\"bin/go\",\"go_version\":\"go version go1.26.1 darwin/arm64\"}}",
+    "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+    "execution_policy": "manager-worker-v1",
+    "expected_artifacts": {
+      "build_input": "expected/build-driver/build-input.ccj.json",
+      "cache_key": "expected/build-driver/cache-key.txt",
+      "marker": "expected/build-driver/marker.json",
+      "receipt": "expected/build-driver/receipt.ccj.json",
+      "receipt_sha256": "expected/build-driver/receipt-sha256.txt"
+    },
+    "marker": {
+      "activation": {
+        "commands": [
+          "golden-tool"
+        ],
+        "context": true
+      },
+      "agents": [
+        "codex_cli"
+      ],
+      "build_roots": [
+        "build"
+      ],
+      "build_source": {
+        "algorithm": "curator-build-source-v1",
+        "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "builds": {
+        "golden-tool": {
+          "artifact_path": "bin/golden-tool",
+          "artifact_sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+          "driver": "go-v1",
+          "receipt_sha256": "sha256:919fbbad8e6ce95532219fd952c2309d0d7026f85209650508fd6834af4020cd"
+        }
+      },
+      "commands": [
+        "golden-tool"
+      ],
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "content_sha256": "sha256:e2bd2941476b164099dc773d7448c638ff99849f8dce76e7b105f215fcdf31be",
+      "dependencies": [],
+      "files": [
+        ".skill_triggers/en.md",
+        "SKILL.md",
+        "references/notes.md"
+      ],
+      "installed_at": "2000-01-01T00:00:00Z",
+      "locale": null,
+      "name": "golden-skill",
+      "ref": "0123456789abcdef0123456789abcdef01234567",
+      "ref_kind": "revision",
+      "requirers": [
+        "<project>"
+      ],
+      "runtime_roots": [],
+      "schema_version": 2,
+      "skill_schema_version": 6,
+      "source": "golden-skill"
+    },
+    "receipt_sha256": "sha256:919fbbad8e6ce95532219fd952c2309d0d7026f85209650508fd6834af4020cd",
+    "stored_receipt": {
+      "artifact": {
+        "path": "bin/golden-tool",
+        "sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "size": 1234567
+      },
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "input": {
+        "build_root": "build",
+        "build_source": {
+          "algorithm": "curator-build-source-v1",
+          "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "command": "golden-tool",
+        "driver": "go-v1",
+        "policy": {
+          "cgo": false,
+          "compiler_directives": "reject-nonstandard-cgo-import-dynamic-v1",
+          "execution_policy": "manager-worker-v1",
+          "host_objects": false,
+          "libgcc": "none",
+          "link_mode": "internal",
+          "module_mode": "vendor",
+          "network": "none",
+          "package_assembly": false,
+          "target_mode": "native",
+          "telemetry": "off-private",
+          "workspace": false
+        },
+        "schema_version": 1,
+        "source_dir": "build/cmd/golden-tool",
+        "target": {
+          "goarch": "arm64",
+          "goos": "darwin",
+          "tuning": {
+            "GOARM64": "v8.0"
+          }
+        },
+        "toolchain": {
+          "algorithm": "curator-go-toolchain-v1",
+          "content_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "go_relpath": "bin/go",
+          "go_version": "go version go1.26.1 darwin/arm64"
+        }
+      },
+      "schema_version": 1
+    },
+    "stored_receipt_base64": "eyJhcnRpZmFjdCI6eyJwYXRoIjoiYmluL2dvbGRlbi10b29sIiwic2hhMjU2Ijoic2hhMjU2OmRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGQiLCJzaXplIjoxMjM0NTY3fSwiY2FjaGVfa2V5Ijoic2hhMjU2OjUyOTM3MDEyMmFlMTFlMmU5NjFkNTI2NWIxYTAyMGUwNDZiY2Q0MzE2NWIyZWI5NmIwNWU3M2E1MTE4N2FjOWIiLCJpbnB1dCI6eyJidWlsZF9yb290IjoiYnVpbGQiLCJidWlsZF9zb3VyY2UiOnsiYWxnb3JpdGhtIjoiY3VyYXRvci1idWlsZC1zb3VyY2UtdjEiLCJjb250ZW50X3NoYTI1NiI6InNoYTI1NjpiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIn0sImNvbW1hbmQiOiJnb2xkZW4tdG9vbCIsImRyaXZlciI6ImdvLXYxIiwicG9saWN5Ijp7ImNnbyI6ZmFsc2UsImNvbXBpbGVyX2RpcmVjdGl2ZXMiOiJyZWplY3Qtbm9uc3RhbmRhcmQtY2dvLWltcG9ydC1keW5hbWljLXYxIiwiZXhlY3V0aW9uX3BvbGljeSI6Im1hbmFnZXItd29ya2VyLXYxIiwiaG9zdF9vYmplY3RzIjpmYWxzZSwibGliZ2NjIjoibm9uZSIsImxpbmtfbW9kZSI6ImludGVybmFsIiwibW9kdWxlX21vZGUiOiJ2ZW5kb3IiLCJuZXR3b3JrIjoibm9uZSIsInBhY2thZ2VfYXNzZW1ibHkiOmZhbHNlLCJ0YXJnZXRfbW9kZSI6Im5hdGl2ZSIsInRlbGVtZXRyeSI6Im9mZi1wcml2YXRlIiwid29ya3NwYWNlIjpmYWxzZX0sInNjaGVtYV92ZXJzaW9uIjoxLCJzb3VyY2VfZGlyIjoiYnVpbGQvY21kL2dvbGRlbi10b29sIiwidGFyZ2V0Ijp7ImdvYXJjaCI6ImFybTY0IiwiZ29vcyI6ImRhcndpbiIsInR1bmluZyI6eyJHT0FSTTY0IjoidjguMCJ9fSwidG9vbGNoYWluIjp7ImFsZ29yaXRobSI6ImN1cmF0b3ItZ28tdG9vbGNoYWluLXYxIiwiY29udGVudF9zaGEyNTYiOiJzaGEyNTY6Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjYyIsImdvX3JlbHBhdGgiOiJiaW4vZ28iLCJnb192ZXJzaW9uIjoiZ28gdmVyc2lvbiBnbzEuMjYuMSBkYXJ3aW4vYXJtNjQifX0sInNjaGVtYV92ZXJzaW9uIjoxfQ==",
+    "stored_receipt_ccj_utf8": "{\"artifact\":{\"path\":\"bin/golden-tool\",\"sha256\":\"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"size\":1234567},\"cache_key\":\"sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b\",\"input\":{\"build_root\":\"build\",\"build_source\":{\"algorithm\":\"curator-build-source-v1\",\"content_sha256\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"command\":\"golden-tool\",\"driver\":\"go-v1\",\"policy\":{\"cgo\":false,\"compiler_directives\":\"reject-nonstandard-cgo-import-dynamic-v1\",\"execution_policy\":\"manager-worker-v1\",\"host_objects\":false,\"libgcc\":\"none\",\"link_mode\":\"internal\",\"module_mode\":\"vendor\",\"network\":\"none\",\"package_assembly\":false,\"target_mode\":\"native\",\"telemetry\":\"off-private\",\"workspace\":false},\"schema_version\":1,\"source_dir\":\"build/cmd/golden-tool\",\"target\":{\"goarch\":\"arm64\",\"goos\":\"darwin\",\"tuning\":{\"GOARM64\":\"v8.0\"}},\"toolchain\":{\"algorithm\":\"curator-go-toolchain-v1\",\"content_sha256\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"go_relpath\":\"bin/go\",\"go_version\":\"go version go1.26.1 darwin/arm64\"}},\"schema_version\":1}"
+  },
+  "positive_cases": [
+    {
+      "manifest": {
+        "build_roots": [
+          "assets/build-tool"
+        ],
+        "commands": {
+          "golden-tool": {
+            "driver": "go-v1",
+            "source_dir": "assets/build-tool/cmd/golden-tool",
+            "type": "build"
+          },
+          "skill-helper": {
+            "type": "script",
+            "unix_path": "scripts/skill-helper",
+            "win_path": "scripts/skill-helper.cmd"
+          }
+        },
+        "runtime_roots": [
+          "scripts"
+        ],
+        "schema_version": 6
+      },
+      "name": "schema-6-mixed-script-and-build-commands",
+      "result": "accepted"
+    },
+    {
+      "cache_hit_source_aware_go_commands": [],
+      "dry_run_source_aware_go_commands": [],
+      "expected_context_files": [
+        "SKILL.md",
+        "assets/prompt.md"
+      ],
+      "expected_excluded_files": [
+        "assets/build-tool/cmd/golden-tool/main.go",
+        "assets/build-tool/go.mod",
+        "assets/build-tool/internal/render/empty.txt",
+        "assets/build-tool/internal/render/render.go",
+        "assets/build-tool/internal/render/template.txt",
+        "assets/build-tool/vendor/example.com/curator/vendored/decorate/decorate.go",
+        "assets/build-tool/vendor/modules.txt",
+        "scripts/skill-helper",
+        "scripts/skill-helper.cmd"
+      ],
+      "name": "build-root-excluded-from-agent-context",
+      "result": "accepted"
+    },
+    {
+      "name": "valid-standard-library-only-main",
+      "package": {
+        "dependencies": [
+          "standard-library"
+        ],
+        "main_packages": 1,
+        "name": "main",
+        "vendor_required": false
+      },
+      "result": "accepted"
+    },
+    {
+      "name": "valid-vendor-only-main-with-transitive-embed",
+      "package": {
+        "embedded_inputs": [
+          "assets/build-tool/internal/render/template.txt",
+          "assets/build-tool/internal/render/empty.txt"
+        ],
+        "main_packages": 1,
+        "module_root": "assets/build-tool",
+        "name": "main",
+        "transitive_package": "internal/render",
+        "vendor_mode": "vendor",
+        "vendored_package": "example.com/curator/vendored/decorate"
+      },
+      "result": "accepted"
+    },
+    {
+      "argv": [
+        {
+          "argv": [
+            "/absolute/trusted/goroot/bin/go",
+            "telemetry",
+            "off"
+          ],
+          "cwd": "<operation-private>/empty",
+          "name": "telemetry-off",
+          "source_aware": false
+        },
+        {
+          "argv": [
+            "/absolute/trusted/goroot/bin/go",
+            "version"
+          ],
+          "cwd": "<operation-private>/empty",
+          "name": "version",
+          "source_aware": false
+        },
+        {
+          "argv": [
+            "/absolute/trusted/goroot/bin/go",
+            "env",
+            "-json",
+            "GOROOT",
+            "GOHOSTOS",
+            "GOHOSTARCH",
+            "GOOS",
+            "GOARCH",
+            "GO386",
+            "GOAMD64",
+            "GOARM",
+            "GOARM64",
+            "GOMIPS",
+            "GOMIPS64",
+            "GOPPC64",
+            "GORISCV64",
+            "GOWASM",
+            "GOTELEMETRY",
+            "GOTELEMETRYDIR"
+          ],
+          "cwd": "<operation-private>/empty",
+          "name": "env",
+          "source_aware": false
+        },
+        {
+          "argv": [
+            "/absolute/trusted/goroot/bin/go",
+            "list",
+            "-mod=vendor",
+            "-deps",
+            "-json",
+            "-buildvcs=false",
+            "-compiler=gc",
+            "-pgo=off",
+            "."
+          ],
+          "cwd": "<validated-source-dir>",
+          "name": "list",
+          "source_aware": true
+        },
+        {
+          "argv": [
+            "/absolute/trusted/goroot/bin/go",
+            "build",
+            "-mod=vendor",
+            "-trimpath",
+            "-buildvcs=false",
+            "-buildmode=exe",
+            "-compiler=gc",
+            "-pgo=off",
+            "-ldflags=-linkmode=internal -libgcc=none",
+            "-o",
+            "<operation-staging>/bin/golden-tool",
+            "."
+          ],
+          "cwd": "<validated-source-dir>",
+          "name": "build",
+          "source_aware": true
+        }
+      ],
+      "artifact_executed": false,
+      "name": "fixed-environment-and-five-direct-argv-forms",
+      "result": "accepted",
+      "shell_used": false
+    },
+    {
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "execution_policy": "manager-worker-v1",
+      "name": "portable-execution-policy-is-required-input",
+      "package_selectable": false,
+      "policy_field": "policy.execution_policy",
+      "result": "accepted"
+    },
+    {
+      "artifact_executed": false,
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "name": "protected-cache-hit",
+      "protected_boundary_verified": true,
+      "receipt_sha256": "sha256:919fbbad8e6ce95532219fd952c2309d0d7026f85209650508fd6834af4020cd",
+      "result": "cache-hit",
+      "source_aware_go_commands": []
+    },
+    {
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "name": "compiler-free-dry-run-miss",
+      "package_independent_go_commands": [
+        "telemetry-off",
+        "version",
+        "env"
+      ],
+      "persistent_effects": [],
+      "result": "would-preflight-and-build",
+      "source_aware_go_commands": []
+    }
+  ],
+  "rejection_cases": [
+    {
+      "boundary": "manifest",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_requires_schema_6",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "type=build under schema_version=5"
+      },
+      "name": "schema-5-build-command"
+    },
+    {
+      "boundary": "manifest",
+      "expected": {
+        "artifact_executed": false,
+        "error": "unsupported_build_driver",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "driver is not go-v1"
+      },
+      "name": "unknown-driver"
+    },
+    {
+      "boundary": "manifest",
+      "expected": {
+        "artifact_executed": false,
+        "error": "manifest_invalid",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "build command declares args"
+      },
+      "name": "forbidden-args"
+    },
+    {
+      "boundary": "manifest",
+      "expected": {
+        "artifact_executed": false,
+        "error": "manifest_invalid",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "build command declares env"
+      },
+      "name": "forbidden-env"
+    },
+    {
+      "boundary": "manifest",
+      "expected": {
+        "artifact_executed": false,
+        "error": "manifest_invalid",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "build command declares output"
+      },
+      "name": "forbidden-output"
+    },
+    {
+      "boundary": "manifest",
+      "expected": {
+        "artifact_executed": false,
+        "error": "manifest_invalid",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "build command declares toolchain"
+      },
+      "name": "forbidden-toolchain"
+    },
+    {
+      "boundary": "manifest",
+      "expected": {
+        "artifact_executed": false,
+        "error": "manifest_invalid",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "build command declares hooks"
+      },
+      "name": "forbidden-hooks"
+    },
+    {
+      "boundary": "manifest",
+      "expected": {
+        "artifact_executed": false,
+        "error": "manifest_invalid",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "one command combines build and script fields"
+      },
+      "name": "mixed-script-build-shape"
+    },
+    {
+      "boundary": "filesystem",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_roots_required",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "build command has no build_roots"
+      },
+      "name": "missing-build-roots"
+    },
+    {
+      "boundary": "filesystem",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_root_missing",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "declared build root does not exist"
+      },
+      "name": "missing-build-root-directory"
+    },
+    {
+      "boundary": "filesystem",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_root_unused",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "declared build root contains no command"
+      },
+      "name": "unused-build-root"
+    },
+    {
+      "boundary": "filesystem",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_roots_overlap",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "one build root contains another"
+      },
+      "name": "overlapping-build-roots"
+    },
+    {
+      "boundary": "filesystem",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_runtime_roots_overlap",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "build root overlaps runtime root"
+      },
+      "name": "runtime-overlapping-build-root"
+    },
+    {
+      "boundary": "filesystem",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_root_invalid",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "build_root is dot"
+      },
+      "name": "root-build-root"
+    },
+    {
+      "boundary": "filesystem",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_root_link",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "build root is a symbolic link"
+      },
+      "name": "build-root-symlink"
+    },
+    {
+      "boundary": "filesystem",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_root_special_file",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "build root is a special file"
+      },
+      "name": "build-root-special-file"
+    },
+    {
+      "boundary": "filesystem",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_source_outside_build_root",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "source_dir is dot"
+      },
+      "name": "root-source-dir"
+    },
+    {
+      "boundary": "filesystem",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_source_path_escape",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "source_dir contains parent traversal"
+      },
+      "name": "escaped-source-dir"
+    },
+    {
+      "boundary": "filesystem",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_source_outside_build_root",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "source_dir is outside every build root"
+      },
+      "name": "source-outside-root"
+    },
+    {
+      "boundary": "filesystem",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_source_link",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "source_dir crosses a symbolic link"
+      },
+      "name": "source-link"
+    },
+    {
+      "boundary": "filesystem",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_source_special_file",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "source_dir is a special file"
+      },
+      "name": "source-special-file"
+    },
+    {
+      "boundary": "filesystem",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_source_not_directory",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "source_dir is a regular file"
+      },
+      "name": "source-not-directory"
+    },
+    {
+      "boundary": "module",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_module_missing",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "build root lacks direct go.mod"
+      },
+      "name": "missing-root-go-mod"
+    },
+    {
+      "boundary": "module",
+      "expected": {
+        "artifact_executed": false,
+        "error": "nested_build_module",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "nearest go.mod intervenes below build root"
+      },
+      "name": "nested-module"
+    },
+    {
+      "boundary": "dependency-graph",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_package_not_main",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "selected package is a library"
+      },
+      "name": "non-main-package"
+    },
+    {
+      "boundary": "dependency-graph",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_package_ambiguous",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "selection yields multiple main packages"
+      },
+      "name": "multiple-packages"
+    },
+    {
+      "boundary": "dependency-graph",
+      "expected": {
+        "artifact_executed": false,
+        "error": "vendor_dependency_missing",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "required module is absent from vendor"
+      },
+      "name": "missing-vendored-dependency"
+    },
+    {
+      "boundary": "dependency-graph",
+      "expected": {
+        "artifact_executed": false,
+        "error": "vendor_metadata_inconsistent",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "vendor/modules.txt disagrees with go.mod"
+      },
+      "name": "inconsistent-vendor-modules"
+    },
+    {
+      "boundary": "dependency-graph",
+      "expected": {
+        "artifact_executed": false,
+        "error": "workspace_dependency_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "dependency resolves only through go.work"
+      },
+      "name": "workspace-only-dependency"
+    },
+    {
+      "boundary": "toolchain",
+      "expected": {
+        "artifact_executed": false,
+        "error": "toolchain_switch_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "go.mod requests another toolchain"
+      },
+      "name": "toolchain-switch-request"
+    },
+    {
+      "boundary": "toolchain",
+      "expected": {
+        "artifact_executed": false,
+        "error": "unsupported_go_family",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "selected release is older than Go 1.23"
+      },
+      "name": "unsupported-go-pre-1-23"
+    },
+    {
+      "boundary": "toolchain",
+      "expected": {
+        "artifact_executed": false,
+        "error": "unsupported_go_family",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "selected release family is not allowlisted"
+      },
+      "name": "unsupported-go-future-family"
+    },
+    {
+      "boundary": "dependency-graph",
+      "expected": {
+        "artifact_executed": false,
+        "error": "cgo_required",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "package has no buildable files with CGO_ENABLED=0"
+      },
+      "name": "cgo-only-package"
+    },
+    {
+      "boundary": "dependency-graph",
+      "expected": {
+        "artifact_executed": false,
+        "error": "go_native_input_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "non-standard package has CFiles"
+      },
+      "name": "native-c-input"
+    },
+    {
+      "boundary": "dependency-graph",
+      "expected": {
+        "artifact_executed": false,
+        "error": "go_native_input_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "non-standard package has CXXFiles"
+      },
+      "name": "native-cxx-input"
+    },
+    {
+      "boundary": "dependency-graph",
+      "expected": {
+        "artifact_executed": false,
+        "error": "go_native_input_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "non-standard package has SwigFiles"
+      },
+      "name": "native-swig-input"
+    },
+    {
+      "boundary": "dependency-graph",
+      "expected": {
+        "artifact_executed": false,
+        "error": "go_syso_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "root package has SysoFiles"
+      },
+      "name": "root-syso"
+    },
+    {
+      "boundary": "dependency-graph",
+      "expected": {
+        "artifact_executed": false,
+        "error": "go_syso_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "transitive package has SysoFiles"
+      },
+      "name": "transitive-syso"
+    },
+    {
+      "boundary": "dependency-graph",
+      "expected": {
+        "artifact_executed": false,
+        "error": "go_assembly_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "root SFiles includes an absolute path"
+      },
+      "name": "root-assembly-absolute-include"
+    },
+    {
+      "boundary": "dependency-graph",
+      "expected": {
+        "artifact_executed": false,
+        "error": "go_assembly_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "transitive SFiles escapes the build root"
+      },
+      "name": "transitive-assembly-escaping-include"
+    },
+    {
+      "boundary": "dependency-graph",
+      "expected": {
+        "artifact_executed": false,
+        "error": "go_embed_input_escape",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "EmbedFiles resolves outside the build root"
+      },
+      "name": "escaped-embed-input"
+    },
+    {
+      "boundary": "compiler-directive",
+      "expected": {
+        "artifact_executed": false,
+        "error": "go_forbidden_compiler_directive",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "active GoFiles contains //go:cgo_import_dynamic"
+      },
+      "name": "cgo-import-dynamic"
+    },
+    {
+      "boundary": "compiler-directive",
+      "expected": {
+        "artifact_executed": false,
+        "error": "go_generator_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "package requires go generate output"
+      },
+      "name": "attempted-go-generate"
+    },
+    {
+      "boundary": "compiler-directive",
+      "expected": {
+        "artifact_executed": false,
+        "error": "go_pgo_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "package attempts default.pgo input"
+      },
+      "name": "default-pgo"
+    },
+    {
+      "boundary": "process",
+      "expected": {
+        "artifact_executed": false,
+        "error": "process_environment_poisoned",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "host PATH contains compiler tools"
+      },
+      "name": "poisoned-path"
+    },
+    {
+      "boundary": "process",
+      "expected": {
+        "artifact_executed": false,
+        "error": "process_environment_poisoned",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "host GOFLAGS requests toolexec"
+      },
+      "name": "inherited-goflags-toolexec"
+    },
+    {
+      "boundary": "process",
+      "expected": {
+        "artifact_executed": false,
+        "error": "process_environment_poisoned",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "host GOENV selects a file"
+      },
+      "name": "inherited-goenv"
+    },
+    {
+      "boundary": "process",
+      "expected": {
+        "artifact_executed": false,
+        "error": "process_environment_poisoned",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "host GOWORK selects a workspace"
+      },
+      "name": "inherited-gowork"
+    },
+    {
+      "boundary": "process",
+      "expected": {
+        "artifact_executed": false,
+        "error": "ambient_vcs_input_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "repository VCS metadata would affect output"
+      },
+      "name": "vcs-metadata"
+    },
+    {
+      "boundary": "process",
+      "expected": {
+        "artifact_executed": false,
+        "error": "untrusted_go_executable",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "repository supplies a fake go executable"
+      },
+      "name": "repository-local-fake-go"
+    },
+    {
+      "boundary": "process",
+      "expected": {
+        "artifact_executed": false,
+        "error": "telemetry_initialization_failed",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "go telemetry off exits unsuccessfully"
+      },
+      "name": "telemetry-command-failure"
+    },
+    {
+      "boundary": "process",
+      "expected": {
+        "artifact_executed": false,
+        "error": "telemetry_directory_untrusted",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "GOTELEMETRYDIR escapes operation root"
+      },
+      "name": "telemetry-private-dir-escape"
+    },
+    {
+      "boundary": "process",
+      "expected": {
+        "artifact_executed": false,
+        "error": "external_link_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "target requires external linking"
+      },
+      "name": "external-link-required"
+    },
+    {
+      "boundary": "process",
+      "expected": {
+        "artifact_executed": false,
+        "error": "libgcc_fallback_forbidden",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "linker attempts host compiler lookup"
+      },
+      "name": "libgcc-fallback-attempt"
+    },
+    {
+      "boundary": "process",
+      "expected": {
+        "artifact_executed": false,
+        "error": "unexpected_child_process",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "child executable is outside GOROOT/pkg/tool/host"
+      },
+      "name": "child-outside-goroot-tools"
+    },
+    {
+      "boundary": "toolchain",
+      "expected": {
+        "artifact_executed": false,
+        "error": "toolchain_executable_mismatch",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "selected executable is not GOROOT/bin/go"
+      },
+      "name": "wrong-go-executable-path"
+    },
+    {
+      "boundary": "toolchain",
+      "expected": {
+        "artifact_executed": false,
+        "error": "toolchain_digest_mismatch",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "tree digest changes before child exit"
+      },
+      "name": "toolchain-digest-mismatch"
+    },
+    {
+      "boundary": "cache",
+      "expected": {
+        "artifact_executed": false,
+        "error": "cache_key_mismatch",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "receipt input derives another key"
+      },
+      "name": "cache-key-mismatch"
+    },
+    {
+      "boundary": "cache",
+      "expected": {
+        "artifact_executed": false,
+        "error": "cache_input_mismatch",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "receipt target differs"
+      },
+      "name": "cache-wrong-target"
+    },
+    {
+      "boundary": "cache",
+      "expected": {
+        "artifact_executed": false,
+        "error": "cache_input_mismatch",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "receipt toolchain differs"
+      },
+      "name": "cache-wrong-toolchain"
+    },
+    {
+      "boundary": "cache",
+      "expected": {
+        "artifact_executed": false,
+        "error": "cache_input_mismatch",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "receipt policy differs"
+      },
+      "name": "cache-wrong-policy"
+    },
+    {
+      "boundary": "cache",
+      "expected": {
+        "artifact_executed": false,
+        "error": "cache_input_mismatch",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "receipt build source differs"
+      },
+      "name": "cache-wrong-build-source"
+    },
+    {
+      "boundary": "cache",
+      "expected": {
+        "artifact_executed": false,
+        "error": "receipt_hash_mismatch",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "stored receipt hash differs"
+      },
+      "name": "receipt-hash-mismatch"
+    },
+    {
+      "boundary": "cache",
+      "expected": {
+        "artifact_executed": false,
+        "error": "artifact_hash_mismatch",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "artifact bytes differ"
+      },
+      "name": "artifact-hash-mismatch"
+    },
+    {
+      "boundary": "cache",
+      "expected": {
+        "artifact_executed": false,
+        "error": "artifact_size_mismatch",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "artifact length differs"
+      },
+      "name": "artifact-size-mismatch"
+    },
+    {
+      "boundary": "cache",
+      "expected": {
+        "artifact_executed": false,
+        "error": "artifact_path_mismatch",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "artifact path is not manager-derived"
+      },
+      "name": "artifact-path-mismatch"
+    },
+    {
+      "boundary": "cache",
+      "expected": {
+        "artifact_executed": false,
+        "error": "receipt_not_canonical",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "stored receipt is pretty-printed"
+      },
+      "name": "noncanonical-receipt-whitespace"
+    },
+    {
+      "boundary": "cache",
+      "expected": {
+        "artifact_executed": false,
+        "error": "receipt_not_canonical",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "stored receipt has terminal LF"
+      },
+      "name": "noncanonical-receipt-trailing-lf"
+    },
+    {
+      "boundary": "cache",
+      "expected": {
+        "artifact_executed": false,
+        "error": "cache_entry_incomplete",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "receipt or artifact is absent"
+      },
+      "name": "partial-cache-entry"
+    },
+    {
+      "boundary": "cache",
+      "expected": {
+        "artifact_executed": false,
+        "error": "artifact_link",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "artifact is a symbolic link"
+      },
+      "name": "artifact-link"
+    },
+    {
+      "boundary": "cache",
+      "expected": {
+        "artifact_executed": false,
+        "error": "artifact_special_file",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "artifact is not regular"
+      },
+      "name": "artifact-special-file"
+    },
+    {
+      "boundary": "cache",
+      "expected": {
+        "artifact_executed": false,
+        "error": "cache_publication_conflict",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "winner differs for the same key"
+      },
+      "name": "concurrent-publisher-different-bytes"
+    },
+    {
+      "boundary": "cache",
+      "cache_boundary": {
+        "all_components_link_safe": true,
+        "manager_created": false,
+        "other_principals_can_write": true,
+        "owner_matches_manager_principal": false
+      },
+      "candidate": {
+        "artifact_bytes_base64": "YXR0YWNrZXItY2hvc2VuLWFydGlmYWN0",
+        "artifact_is_regular_executable": true,
+        "internal_checks": {
+          "artifact_hash_matches": true,
+          "artifact_size_matches": true,
+          "cache_key_matches": true,
+          "input_matches": true,
+          "receipt_hash_matches": true
+        },
+        "receipt": {
+          "artifact": {
+            "path": "bin/golden-tool",
+            "sha256": "sha256:a4f06a1304c926ed7f2326c8fd90cabc5c5bd2981e690a4351c852d91c079d88",
+            "size": 24
+          },
+          "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+          "input": {
+            "build_root": "build",
+            "build_source": {
+              "algorithm": "curator-build-source-v1",
+              "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "command": "golden-tool",
+            "driver": "go-v1",
+            "policy": {
+              "cgo": false,
+              "compiler_directives": "reject-nonstandard-cgo-import-dynamic-v1",
+              "execution_policy": "manager-worker-v1",
+              "host_objects": false,
+              "libgcc": "none",
+              "link_mode": "internal",
+              "module_mode": "vendor",
+              "network": "none",
+              "package_assembly": false,
+              "target_mode": "native",
+              "telemetry": "off-private",
+              "workspace": false
+            },
+            "schema_version": 1,
+            "source_dir": "build/cmd/golden-tool",
+            "target": {
+              "goarch": "arm64",
+              "goos": "darwin",
+              "tuning": {
+                "GOARM64": "v8.0"
+              }
+            },
+            "toolchain": {
+              "algorithm": "curator-go-toolchain-v1",
+              "content_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "go_relpath": "bin/go",
+              "go_version": "go version go1.26.1 darwin/arm64"
+            }
+          },
+          "schema_version": 1
+        },
+        "receipt_sha256": "sha256:e15a8b198ddc4b9892747af3fc070713e72b72ad121512f7bdd5919d3581bd6d"
+      },
+      "expected": {
+        "artifact_executed": false,
+        "dry_run": "would-rebuild-untrusted-cache",
+        "error": "untrusted_provenance",
+        "marker_current": false,
+        "real_operation": "rebuild-from-validated-snapshot-into-protected-state",
+        "result": "reject",
+        "reuse": false
+      },
+      "name": "self-consistent-forged-receipt-outside-protected-state"
+    },
+    {
+      "boundary": "context",
+      "expected": {
+        "artifact_executed": false,
+        "build_source_hashes_equal": false,
+        "cache_keys_created": false,
+        "error": "build_source_outside_build_root",
+        "go_commands": [],
+        "legacy_content_hashes_equal": true,
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "candidate_command": {
+          "driver": "go-v1",
+          "source_dir": ".",
+          "type": "build"
+        },
+        "directive": "//go:embed .csk-install.json",
+        "legacy_content_sha256": "sha256:829a040a1455fdf96e2731aa5c089e7e42dbcec2a51b1db3222a610f0ffb5b35",
+        "variants": [
+          {
+            "build_source": {
+              "algorithm": "curator-build-source-v1",
+              "content_sha256": "sha256:0017492cfbcd822237a7e72239d45b59f0923b54f2ac2e0a59ecd9202cc48ad0"
+            },
+            "marker_content_base64": "eyJ2YXJpYW50IjoiQSJ9Cg=="
+          },
+          {
+            "build_source": {
+              "algorithm": "curator-build-source-v1",
+              "content_sha256": "sha256:60fe9b764163b7d6bc38bc0cac63675398eb7167ad692fd189e221c3fc096266"
+            },
+            "marker_content_base64": "eyJ2YXJpYW50IjoiQiJ9Cg=="
+          }
+        ]
+      },
+      "name": "marker-embed-build-source-regression"
+    },
+    {
+      "boundary": "context",
+      "expected": {
+        "artifact_executed": false,
+        "error": "build_root_visible_in_context",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "condition": "context selector exposes build-root input"
+      },
+      "name": "build-root-content-in-context"
+    },
+    {
+      "boundary": "execution-policy",
+      "expected": {
+        "aliases_portable_cache_key": false,
+        "artifact_executed": false,
+        "cache_lookup_performed": false,
+        "error": "build_input_invalid",
+        "result": "reject",
+        "reuse": false,
+        "schema_valid": false
+      },
+      "input": {
+        "build_input": {
+          "build_root": "build",
+          "build_source": {
+            "algorithm": "curator-build-source-v1",
+            "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          "command": "golden-tool",
+          "driver": "go-v1",
+          "policy": {
+            "cgo": false,
+            "compiler_directives": "reject-nonstandard-cgo-import-dynamic-v1",
+            "host_objects": false,
+            "libgcc": "none",
+            "link_mode": "internal",
+            "module_mode": "vendor",
+            "network": "none",
+            "package_assembly": false,
+            "target_mode": "native",
+            "telemetry": "off-private",
+            "workspace": false
+          },
+          "schema_version": 1,
+          "source_dir": "build/cmd/golden-tool",
+          "target": {
+            "goarch": "arm64",
+            "goos": "darwin",
+            "tuning": {
+              "GOARM64": "v8.0"
+            }
+          },
+          "toolchain": {
+            "algorithm": "curator-go-toolchain-v1",
+            "content_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "go_relpath": "bin/go",
+            "go_version": "go version go1.26.1 darwin/arm64"
+          }
+        },
+        "condition": "policy omits the required execution_policy",
+        "derived_cache_key": "sha256:3fcd714a40e8918eb67dbd35d435875dcce6c9047da811a1fa26626e5e57be48",
+        "execution_policy": null
+      },
+      "name": "legacy-rc4-input-without-execution-policy"
+    },
+    {
+      "boundary": "execution-policy",
+      "expected": {
+        "aliases_portable_cache_key": false,
+        "artifact_executed": false,
+        "cache_lookup_performed": false,
+        "error": "build_execution_policy_unsupported",
+        "result": "reject",
+        "reuse": false,
+        "schema_valid": false
+      },
+      "input": {
+        "build_input": {
+          "build_root": "build",
+          "build_source": {
+            "algorithm": "curator-build-source-v1",
+            "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          "command": "golden-tool",
+          "driver": "go-v1",
+          "policy": {
+            "cgo": false,
+            "compiler_directives": "reject-nonstandard-cgo-import-dynamic-v1",
+            "execution_policy": "hardened-worker-v1",
+            "host_objects": false,
+            "libgcc": "none",
+            "link_mode": "internal",
+            "module_mode": "vendor",
+            "network": "none",
+            "package_assembly": false,
+            "target_mode": "native",
+            "telemetry": "off-private",
+            "workspace": false
+          },
+          "schema_version": 1,
+          "source_dir": "build/cmd/golden-tool",
+          "target": {
+            "goarch": "arm64",
+            "goos": "darwin",
+            "tuning": {
+              "GOARM64": "v8.0"
+            }
+          },
+          "toolchain": {
+            "algorithm": "curator-go-toolchain-v1",
+            "content_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "go_relpath": "bin/go",
+            "go_version": "go version go1.26.1 darwin/arm64"
+          }
+        },
+        "condition": "policy names the reserved hardened profile",
+        "derived_cache_key": "sha256:13736230d33ce59de7f7323dcd4cffd510655ad8dabd5ee9e8b6cb182ec70037",
+        "execution_policy": "hardened-worker-v1"
+      },
+      "name": "reserved-hardened-execution-policy"
+    }
+  ],
+  "schema_version": 1,
+  "toolchain_cases": [
+    {
+      "content_sha256": "sha256:baf7c5f3b9c3f1fae3da4c356381bf74442aa7f8f0b6fb2304c9c10833d6032e",
+      "entries": [
+        {
+          "path": "pkg/tool-link",
+          "target": "../bin/go",
+          "type": "symlink"
+        },
+        {
+          "content_base64": "R08=",
+          "path": "bin/go",
+          "type": "file"
+        },
+        {
+          "path": "pkg",
+          "type": "directory"
+        },
+        {
+          "path": "bin",
+          "type": "directory"
+        }
+      ],
+      "go_version_stdout_base64": "Z28gdmVyc2lvbiBnbzEuMjUuNSBkYXJ3aW4vYXJtNjQK",
+      "name": "unsorted-directories-files-and-internal-link",
+      "normalized_go_version": "go version go1.25.5 darwin/arm64",
+      "preimage_base64": "Y3VyYXRvci1nby10b29sY2hhaW4tdjEARAAAAAAAAAADYmluAAAAAAAAAABGAAAAAAAAAAZiaW4vZ28AAAAAAAAAAkdPRAAAAAAAAAADcGtnAAAAAAAAAABMAAAAAAAAAA1wa2cvdG9vbC1saW5rAAAAAAAAAAkuLi9iaW4vZ29WAAAAAAAAAAAAAAAAAAAAIGdvIHZlcnNpb24gZ28xLjI1LjUgZGFyd2luL2FybTY0",
+      "result": "accepted"
+    },
+    {
+      "content_sha256": "sha256:baf7c5f3b9c3f1fae3da4c356381bf74442aa7f8f0b6fb2304c9c10833d6032e",
+      "go_version_stdout_base64": "Z28gdmVyc2lvbiBnbzEuMjUuNSBkYXJ3aW4vYXJtNjQNCg==",
+      "name": "crlf-version-normalizes-to-lf-identity",
+      "normalized_go_version": "go version go1.25.5 darwin/arm64",
+      "result": "accepted"
+    },
+    {
+      "content_sha256": "sha256:baf7c5f3b9c3f1fae3da4c356381bf74442aa7f8f0b6fb2304c9c10833d6032e",
+      "name": "toolchain-mode-and-timestamp-are-non-inputs",
+      "result": "accepted",
+      "variants": [
+        {
+          "mode": "0755",
+          "mtime": "2000-01-01T00:00:00Z"
+        },
+        {
+          "mode": "0555",
+          "mtime": "2030-01-01T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "boundary": "toolchain",
+      "expected": {
+        "artifact_executed": false,
+        "error": "malformed_go_version",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "stdout_base64": "Z28gdmVyc2lvbiBnbzEuMjUuNSBkYXJ3aW4vYXJtNjQ="
+      },
+      "name": "toolchain-version-missing-terminal-lf"
+    },
+    {
+      "boundary": "toolchain",
+      "expected": {
+        "artifact_executed": false,
+        "error": "malformed_go_version",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "stdout_base64": "Z28gdmVyc2lvbiBnbzEuMjUuNSBkYXJ3aW4vYXJtNjQKCg=="
+      },
+      "name": "toolchain-version-multiple-terminal-newlines"
+    },
+    {
+      "boundary": "toolchain",
+      "expected": {
+        "artifact_executed": false,
+        "error": "invalid_unicode",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "path_bytes_base64": "/w=="
+      },
+      "name": "invalid-unicode-toolchain-path"
+    },
+    {
+      "boundary": "toolchain",
+      "expected": {
+        "artifact_executed": false,
+        "error": "duplicate_path",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "paths": [
+          "bin/go",
+          "bin/go"
+        ]
+      },
+      "name": "duplicate-toolchain-path"
+    },
+    {
+      "boundary": "toolchain",
+      "expected": {
+        "artifact_executed": false,
+        "error": "toolchain_link_escape",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "path": "pkg/escape",
+        "target": "../../outside"
+      },
+      "name": "escaping-toolchain-link"
+    },
+    {
+      "boundary": "toolchain",
+      "expected": {
+        "artifact_executed": false,
+        "error": "toolchain_link_absolute",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "path": "pkg/absolute",
+        "target": "/outside"
+      },
+      "name": "absolute-toolchain-link"
+    },
+    {
+      "boundary": "toolchain",
+      "expected": {
+        "artifact_executed": false,
+        "error": "toolchain_link_dangling",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "path": "pkg/missing",
+        "target": "missing"
+      },
+      "name": "dangling-toolchain-link"
+    },
+    {
+      "boundary": "toolchain",
+      "expected": {
+        "artifact_executed": false,
+        "error": "toolchain_executable_mismatch",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "required": "<goroot>/bin/go",
+        "selected": "/tmp/go"
+      },
+      "name": "selected-go-outside-goroot"
+    },
+    {
+      "boundary": "toolchain",
+      "expected": {
+        "artifact_executed": false,
+        "error": "toolchain_mutated",
+        "result": "reject",
+        "reuse": false
+      },
+      "input": {
+        "phase": "before-last-child-exit"
+      },
+      "name": "toolchain-tree-mutation-during-use"
+    }
+  ]
+}

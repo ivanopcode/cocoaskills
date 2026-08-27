@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/registry-snapshot-v1.schema.json",
+  "title": "Curator registry snapshot schema 1",
+  "type": "object",
+  "required": ["schema_version", "merkle_root", "log_size", "head", "version", "created_at", "sig"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "merkle_root": {"$ref": "common.schema.json#/$defs/hex256"},
+    "log_size": {"$ref": "common.schema.json#/$defs/nonNegativeSafeInteger"},
+    "head": {"$ref": "common.schema.json#/$defs/hex256"},
+    "version": {"$ref": "common.schema.json#/$defs/nonNegativeSafeInteger"},
+    "created_at": {"$ref": "common.schema.json#/$defs/timestamp"},
+    "sig": {"$ref": "common.schema.json#/$defs/signature"}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "targets": {
+    "admin-tool": {
+      "build_root": "tools/admin",
+      "driver": "go-repository-v1",
+      "source_dir": "tools/admin/cmd/admin"
+    },
+    "golden-tool": {
+      "build_root": ".",
+      "driver": "go-repository-v1",
+      "output": "bin/tool",
+      "source_dir": "cmd/golden-tool"
+    }
+  }
+}

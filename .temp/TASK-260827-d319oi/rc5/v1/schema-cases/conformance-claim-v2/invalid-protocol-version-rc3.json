@@ -1,0 +1,16 @@
+{
+  "classes": [
+    "core",
+    "manager"
+  ],
+  "created_at": "2026-07-20T00:00:00Z",
+  "implementation": "example-manager",
+  "implementation_version": "1.0",
+  "operating_systems": [
+    "linux"
+  ],
+  "protocol_version": "1.0.0-rc.3",
+  "result": "pass",
+  "schema_version": 2,
+  "suite_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}

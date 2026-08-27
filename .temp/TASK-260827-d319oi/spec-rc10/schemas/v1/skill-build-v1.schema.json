@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/skill-build-v1.schema.json",
+  "title": "skill-build.json schema 1",
+  "type": "object",
+  "required": ["schema_version", "targets"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "targets": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "common.schema.json#/$defs/identifier"},
+      "additionalProperties": {"$ref": "common.schema.json#/$defs/skillBuildTargetV1"}
+    }
+  },
+  "additionalProperties": false
+}

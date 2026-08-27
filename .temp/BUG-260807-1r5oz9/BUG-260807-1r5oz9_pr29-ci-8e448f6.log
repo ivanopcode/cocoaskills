@@ -1,0 +1,24 @@
+PR 29 CI rollup — BUG-260807-1r5oz9
+captured 2026-08-07T15:14:55Z
+
+## head 636ea5d (LOGBOOK-only on top of 8e448f6)
+head=636ea5d5c14d8225ccb73fe326f3d582bd5d8f54  merge=CLEAN  mergeable=MERGEABLE
+
+SUCCESS	Build artifacts
+SUCCESS	Tests / Python 3.11 on macos-latest
+SUCCESS	Tests / Python 3.11 on ubuntu-latest
+SUCCESS	Tests / Python 3.11 on windows-latest
+SUCCESS	Tests / Python 3.12 on macos-latest
+SUCCESS	Tests / Python 3.12 on ubuntu-latest
+SUCCESS	Tests / Python 3.12 on windows-latest
+SUCCESS	Tests / Python 3.13 on macos-latest
+SUCCESS	Tests / Python 3.13 on ubuntu-latest
+SUCCESS	Tests / Python 3.13 on windows-latest
+SUCCESS	Tests / Python 3.14 on macos-latest
+SUCCESS	Tests / Python 3.14 on ubuntu-latest
+SUCCESS	Tests / Python 3.14 on windows-latest
+SUCCESS	Type check / mypy strict
+
+TOTAL=14  SUCCESS=14
+
+## earlier: head 8e448f6 (the R1/R3 docstring commit) was also 14/14 SUCCESS, CLEAN, MERGEABLE

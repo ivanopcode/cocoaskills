@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/install-marker-v1.schema.json",
+  "title": ".csk-install.json schema 1",
+  "type": "object",
+  "required": ["schema_version", "name", "source", "ref_kind", "ref", "commit", "content_sha256", "locale", "agents", "commands", "dependencies", "skill_schema_version", "runtime_roots", "installed_at", "files"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "name": {"$ref": "common.schema.json#/$defs/identifier"},
+    "source": {"$ref": "common.schema.json#/$defs/portablePath"},
+    "ref_kind": {"enum": ["tag", "branch", "revision"]},
+    "ref": {"$ref": "common.schema.json#/$defs/nonEmptyString"},
+    "commit": {"$ref": "common.schema.json#/$defs/commit"},
+    "content_sha256": {"$ref": "common.schema.json#/$defs/sha256"},
+    "locale": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/$defs/locale"},
+        {"type": "null"}
+      ]
+    },
+    "agents": {"$ref": "common.schema.json#/$defs/identifierSet"},
+    "commands": {"$ref": "common.schema.json#/$defs/identifierSet"},
+    "dependencies": {"$ref": "common.schema.json#/$defs/identifierSet"},
+    "skill_schema_version": {"type": "integer", "minimum": 0, "maximum": 5},
+    "runtime_roots": {"$ref": "common.schema.json#/$defs/pathSet"},
+    "installed_at": {"$ref": "common.schema.json#/$defs/timestamp"},
+    "files": {"$ref": "common.schema.json#/$defs/pathSet"},
+    "git": {"$ref": "common.schema.json#/$defs/nonEmptyString"},
+    "requirements": {"$ref": "common.schema.json#/$defs/identifierSet"},
+    "mcp_servers": {"type": "object", "propertyNames": {"$ref": "common.schema.json#/$defs/identifier"}, "additionalProperties": {"$ref": "common.schema.json#/$defs/identifierSet"}},
+    "attestation": {
+      "type": "object",
+      "required": ["registry", "status"],
+      "properties": {
+        "registry": {"$ref": "common.schema.json#/$defs/nonEmptyString"},
+        "status": {"enum": ["audited", "deprecated"]},
+        "key_id": {"type": "string", "pattern": "^[0-9a-f]{16}$"}
+      },
+      "additionalProperties": false
+    },
+    "activation": {
+      "type": "object",
+      "required": ["context", "commands"],
+      "properties": {"context": {"type": "boolean"}, "commands": {"$ref": "common.schema.json#/$defs/identifierSet"}},
+      "additionalProperties": false
+    },
+    "requirers": {"$ref": "common.schema.json#/$defs/stringSet"},
+    "substituted": {"$ref": "common.schema.json#/$defs/nonEmptyString"}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,19 @@
+{
+  "build_input_sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  "capability_receipt_sha256": "sha256:389310c2a3b2c87862d7dbdfd307955a6aa614613b3d028f530605dfd9cd1816",
+  "execution_policy": "manager-worker-v1",
+  "expires_at": "2026-07-13T00:05:00Z",
+  "nonce": "operation-nonce-1",
+  "operation_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "permit_type": "verified-execution-permit-v1",
+  "policy_id": "verified-provider-policy-v1",
+  "provider": {
+    "operating_system": "macos",
+    "provider_binary_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "provider_contract": "host-execution-provider-v1",
+    "provider_id": "example.host-provider",
+    "provider_version": "1.0.0",
+    "schema_version": 1
+  },
+  "schema_version": 1
+}

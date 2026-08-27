@@ -1,0 +1,665 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/common.schema.json",
+  "title": "Curator Protocol common definitions",
+  "$defs": {
+    "identifier": {
+      "allOf": [
+        {"type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?$", "maxLength": 128},
+        {"not": {"pattern": "^(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|$)"}}
+      ]
+    },
+    "portablePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^/\\\\:\\u0000-\\u001f\\u007f-\\u009f](?:[^\\\\:\\u0000-\\u001f\\u007f-\\u009f]*[^/ .\\\\:\\u0000-\\u001f\\u007f-\\u009f])?$",
+      "not": {"pattern": "(?:^|/)(?:\\.{1,2}|[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|/|$)|//"}
+    },
+    "nonEmptyString": {"type": "string", "minLength": 1, "maxLength": 8192},
+    "projectAlias": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"},
+    "locale": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?$"},
+    "safeInteger": {"type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991},
+    "nonNegativeSafeInteger": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "hex256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}(?:[0-9a-f]{24})?$"},
+    "timestamp": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "stringSet": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "identifierSet": {"type": "array", "items": {"$ref": "#/$defs/identifier"}, "uniqueItems": true},
+    "pathSet": {"type": "array", "items": {"$ref": "#/$defs/portablePath"}, "uniqueItems": true},
+    "ref": {
+      "type": "object",
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": {"enum": ["tag", "revision"]},
+        "value": {"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[^\\s\\^~><*]+$"}
+      },
+      "additionalProperties": false
+    },
+    "devRef": {
+      "type": "object",
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": {"enum": ["tag", "revision", "branch"]},
+        "value": {"type": "string", "minLength": 1, "maxLength": 1024}
+      },
+      "additionalProperties": false
+    },
+    "scriptCommand": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {"const": "script"},
+        "unix_path": {"$ref": "#/$defs/portablePath"},
+        "win_path": {"$ref": "#/$defs/portablePath"}
+      },
+      "anyOf": [{"required": ["unix_path"]}, {"required": ["win_path"]}],
+      "additionalProperties": false
+    },
+    "systemCommand": {
+      "type": "object",
+      "required": ["type", "command"],
+      "properties": {
+        "type": {"const": "system"},
+        "command": {"$ref": "#/$defs/identifier"},
+        "hint": {"$ref": "#/$defs/nonEmptyString"}
+      },
+      "additionalProperties": false
+    },
+    "command": {"oneOf": [{"$ref": "#/$defs/scriptCommand"}, {"$ref": "#/$defs/systemCommand"}]},
+    "buildCommandV6": {
+      "type": "object",
+      "required": ["type", "driver", "source_dir"],
+      "properties": {
+        "type": {"const": "build"},
+        "driver": {"const": "go-v1"},
+        "source_dir": {"$ref": "#/$defs/portablePath"}
+      },
+      "additionalProperties": false
+    },
+    "commandV6": {"oneOf": [{"$ref": "#/$defs/scriptCommand"}, {"$ref": "#/$defs/systemCommand"}, {"$ref": "#/$defs/buildCommandV6"}]},
+    "rootOrPortablePath": {
+      "oneOf": [
+        {"const": "."},
+        {"$ref": "#/$defs/portablePath"}
+      ]
+    },
+    "repositoryGit": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?:https://[A-Za-z0-9][A-Za-z0-9.-]*/(?!(?:\\.{1,2})(?:/|$))[^\\s%?#\\\\/:\\u0000-\\u001f\\u007f-\\u009f]+(?:/(?!(?:\\.{1,2})(?:/|$))[^\\s%?#\\\\/:\\u0000-\\u001f\\u007f-\\u009f]+)*|ssh://(?:[A-Za-z0-9][A-Za-z0-9._-]{0,63}@)?[A-Za-z0-9][A-Za-z0-9.-]*/(?!(?:\\.{1,2})(?:/|$))[A-Za-z0-9._-]+(?:/(?!(?:\\.{1,2})(?:/|$))[A-Za-z0-9._-]+)*|(?:[A-Za-z0-9][A-Za-z0-9._-]{0,63}@)?[A-Za-z0-9][A-Za-z0-9.-]*:(?!(?:\\.{1,2})(?:/|$))[A-Za-z0-9._-]+(?:/(?!(?:\\.{1,2})(?:/|$))[A-Za-z0-9._-]+)*)$"
+    },
+    "gitRefName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^(?!/)(?!.*//)(?!.*\\.\\.)(?!.*@\\{)(?!.*(?:^|/)\\.)(?!.*(?:^|/)[^/]*\\.lock(?:/|$))(?!.*[\\u0000-\\u0020\\u007f~^:?*\\[\\\\])(?!@$).*[^/.]$"
+    },
+    "lockedCommit": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["object_format", "hex"],
+          "properties": {
+            "object_format": {"const": "sha1"},
+            "hex": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["object_format", "hex"],
+          "properties": {
+            "object_format": {"const": "sha256"},
+            "hex": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "buildRepositoryV1": {
+      "type": "object",
+      "required": ["git", "locked_commit"],
+      "properties": {
+        "git": {"$ref": "#/$defs/repositoryGit"},
+        "locked_commit": {"$ref": "#/$defs/lockedCommit"},
+        "tag": {"$ref": "#/$defs/gitRefName"}
+      },
+      "additionalProperties": false
+    },
+    "repositoryBuildCommandV1": {
+      "type": "object",
+      "required": ["type", "driver", "repository", "target"],
+      "properties": {
+        "type": {"const": "build"},
+        "driver": {"const": "go-repository-v1"},
+        "repository": {"$ref": "#/$defs/identifier"},
+        "target": {"$ref": "#/$defs/identifier"}
+      },
+      "additionalProperties": false
+    },
+    "commandV7": {
+      "oneOf": [
+        {"$ref": "#/$defs/scriptCommand"},
+        {"$ref": "#/$defs/systemCommand"},
+        {"$ref": "#/$defs/buildCommandV6"},
+        {"$ref": "#/$defs/repositoryBuildCommandV1"}
+      ]
+    },
+    "scriptExecutionPolicyV1": {"const": "script-worker-v1"},
+    "scriptInterpreterV1": {"enum": ["node-v1", "python3-v1"]},
+    "scriptCommandV8": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {"const": "script"},
+        "unix_path": {"$ref": "#/$defs/portablePath"},
+        "win_path": {"$ref": "#/$defs/portablePath"},
+        "execution_policy": {"$ref": "#/$defs/scriptExecutionPolicyV1"},
+        "interpreter": {"$ref": "#/$defs/scriptInterpreterV1"}
+      },
+      "anyOf": [{"required": ["unix_path"]}, {"required": ["win_path"]}],
+      "dependentRequired": {
+        "execution_policy": ["interpreter"],
+        "interpreter": ["execution_policy"]
+      },
+      "additionalProperties": false
+    },
+    "buildCommandV8": {
+      "type": "object",
+      "required": ["type", "driver", "source_dir"],
+      "properties": {
+        "type": {"const": "build"},
+        "driver": {"const": "go-v1"},
+        "source_dir": {"$ref": "#/$defs/portablePath"},
+        "modules": {"$ref": "#/$defs/pathSet"}
+      },
+      "additionalProperties": false
+    },
+    "commandV8": {
+      "oneOf": [
+        {"$ref": "#/$defs/scriptCommandV8"},
+        {"$ref": "#/$defs/systemCommand"},
+        {"$ref": "#/$defs/buildCommandV8"},
+        {"$ref": "#/$defs/repositoryBuildCommandV1"}
+      ]
+    },
+    "skillBuildTargetV1": {
+      "type": "object",
+      "required": ["driver", "build_root", "source_dir"],
+      "properties": {
+        "driver": {"const": "go-repository-v1"},
+        "build_root": {"$ref": "#/$defs/rootOrPortablePath"},
+        "source_dir": {"$ref": "#/$defs/rootOrPortablePath"}
+      },
+      "additionalProperties": false
+    },
+    "repositoryStructuredRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": {"const": "revision"},
+            "value": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": {"enum": ["tag", "branch"]},
+            "value": {"$ref": "#/$defs/gitRefName"}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "buildRepositorySubstitution": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["path"],
+          "properties": {"path": {"$ref": "#/$defs/nonEmptyString"}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["git", "ref"],
+          "properties": {
+            "git": {"$ref": "#/$defs/repositoryGit"},
+            "ref": {"$ref": "#/$defs/repositoryStructuredRef"}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "networkSourceIdentity": {
+      "type": "object",
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": {"const": "network-git"},
+        "value": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 4096,
+          "pattern": "^(?!.*\\.git$)[a-z0-9][a-z0-9.-]*/(?!(?:\\.{1,2})(?:/|$))[^\\s%?#\\\\/:\\u0000-\\u001f\\u007f-\\u009f]+(?:/(?!(?:\\.{1,2})(?:/|$))[^\\s%?#\\\\/:\\u0000-\\u001f\\u007f-\\u009f]+)*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "localSourceIdentity": {
+      "type": "object",
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": {"const": "operator-local-git"},
+        "value": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "declaredRepositorySourceV1": {
+      "type": "object",
+      "required": ["identity", "transport", "locked_commit"],
+      "properties": {
+        "identity": {"$ref": "#/$defs/networkSourceIdentity"},
+        "transport": {"enum": ["https", "ssh"]},
+        "locked_commit": {"$ref": "#/$defs/lockedCommit"},
+        "tag": {"$ref": "#/$defs/gitRefName"}
+      },
+      "additionalProperties": false
+    },
+    "effectiveRepositorySourceV1": {
+      "type": "object",
+      "required": ["identity", "object_format", "commit", "substituted", "build_source"],
+      "properties": {
+        "identity": {
+          "oneOf": [
+            {"$ref": "#/$defs/networkSourceIdentity"},
+            {"$ref": "#/$defs/localSourceIdentity"}
+          ]
+        },
+        "transport": {"enum": ["https", "ssh"]},
+        "object_format": {"enum": ["sha1", "sha256"]},
+        "commit": {"$ref": "#/$defs/commit"},
+        "substituted": {"type": "boolean"},
+        "substitution": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["type"],
+              "properties": {"type": {"const": "local-path"}},
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["type", "ref"],
+              "properties": {
+                "type": {"const": "network-git"},
+                "ref": {"$ref": "#/$defs/repositoryStructuredRef"}
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "build_source": {"$ref": "#/$defs/buildSourceIdentity"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"object_format": {"const": "sha1"}}, "required": ["object_format"]},
+          "then": {"properties": {"commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}},
+          "else": {"properties": {"commit": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}
+        },
+        {
+          "if": {"properties": {"substituted": {"const": true}}, "required": ["substituted"]},
+          "then": {"required": ["substitution"]},
+          "else": {"not": {"required": ["substitution"]}}
+        },
+        {
+          "if": {"properties": {"identity": {"properties": {"kind": {"const": "network-git"}}, "required": ["kind"]}}},
+          "then": {"required": ["transport"]},
+          "else": {"not": {"required": ["transport"]}}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "repositoryDescriptorSelectionV1": {
+      "type": "object",
+      "required": ["path", "target"],
+      "properties": {
+        "path": {"const": "skill-build.json"},
+        "target": {"$ref": "#/$defs/identifier"}
+      },
+      "additionalProperties": false
+    },
+    "buildSourceIdentity": {
+      "type": "object",
+      "required": ["algorithm", "content_sha256"],
+      "properties": {
+        "algorithm": {"const": "curator-build-source-v1"},
+        "content_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "goNativeTargetV1": {
+      "type": "object",
+      "required": ["goos", "goarch", "tuning"],
+      "properties": {
+        "goos": {"$ref": "#/$defs/identifier"},
+        "goarch": {"$ref": "#/$defs/identifier"},
+        "tuning": {
+          "type": "object",
+          "maxProperties": 1,
+          "propertyNames": {"enum": ["GO386", "GOAMD64", "GOARM", "GOARM64", "GOMIPS", "GOMIPS64", "GOPPC64", "GORISCV64", "GOWASM"]},
+          "additionalProperties": {"$ref": "#/$defs/nonEmptyString"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "goToolchainIdentityV1": {
+      "type": "object",
+      "required": ["algorithm", "go_relpath", "go_version", "content_sha256"],
+      "properties": {
+        "algorithm": {"const": "curator-go-toolchain-v1"},
+        "go_relpath": {"const": "bin/go"},
+        "go_version": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\r\\n\\u0000]+$"},
+        "content_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "goExecutionPolicyV1": {"const": "manager-worker-v1"},
+    "goBuildPolicyV1": {
+      "type": "object",
+      "required": ["module_mode", "network", "workspace", "cgo", "compiler_directives", "target_mode", "link_mode", "libgcc", "package_assembly", "host_objects", "telemetry", "execution_policy"],
+      "properties": {
+        "module_mode": {"const": "vendor"},
+        "network": {"const": "none"},
+        "workspace": {"const": false},
+        "cgo": {"const": false},
+        "compiler_directives": {"const": "reject-nonstandard-cgo-import-dynamic-v1"},
+        "target_mode": {"const": "native"},
+        "link_mode": {"const": "internal"},
+        "libgcc": {"const": "none"},
+        "package_assembly": {"const": false},
+        "host_objects": {"const": false},
+        "telemetry": {"const": "off-private"},
+        "execution_policy": {"$ref": "#/$defs/goExecutionPolicyV1"}
+      },
+      "additionalProperties": false
+    },
+    "goRepositoryBuildPolicyV1": {
+      "type": "object",
+      "required": ["module_mode", "network", "workspace", "cgo", "compiler_directives", "target_mode", "link_mode", "libgcc", "package_assembly", "host_objects", "telemetry", "execution_policy", "source_kind"],
+      "properties": {
+        "module_mode": {"const": "vendor"},
+        "network": {"const": "none"},
+        "workspace": {"const": false},
+        "cgo": {"const": false},
+        "compiler_directives": {"const": "reject-nonstandard-cgo-import-dynamic-v1"},
+        "target_mode": {"const": "native"},
+        "link_mode": {"const": "internal"},
+        "libgcc": {"const": "none"},
+        "package_assembly": {"const": false},
+        "host_objects": {"const": false},
+        "telemetry": {"const": "off-private"},
+        "execution_policy": {"$ref": "#/$defs/goExecutionPolicyV1"},
+        "source_kind": {"const": "locked-external-git-v1"}
+      },
+      "additionalProperties": false
+    },
+    "goBuildInputV1": {
+      "type": "object",
+      "required": ["schema_version", "driver", "build_source", "build_root", "command", "source_dir", "target", "toolchain", "policy"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "driver": {"const": "go-v1"},
+        "build_source": {"$ref": "#/$defs/buildSourceIdentity"},
+        "build_root": {"$ref": "#/$defs/portablePath"},
+        "command": {"$ref": "#/$defs/identifier"},
+        "source_dir": {"$ref": "#/$defs/portablePath"},
+        "target": {"$ref": "#/$defs/goNativeTargetV1"},
+        "toolchain": {"$ref": "#/$defs/goToolchainIdentityV1"},
+        "policy": {"$ref": "#/$defs/goBuildPolicyV1"}
+      },
+      "additionalProperties": false
+    },
+    "goRepositoryBuildInputV1": {
+      "type": "object",
+      "required": ["schema_version", "driver", "source", "command", "build_root", "source_dir", "target", "toolchain", "policy"],
+      "properties": {
+        "schema_version": {"const": 2},
+        "driver": {"const": "go-repository-v1"},
+        "source": {
+          "type": "object",
+          "required": ["repository", "declared", "effective", "descriptor"],
+          "properties": {
+            "repository": {"$ref": "#/$defs/identifier"},
+            "declared": {"$ref": "#/$defs/declaredRepositorySourceV1"},
+            "effective": {"$ref": "#/$defs/effectiveRepositorySourceV1"},
+            "descriptor": {"$ref": "#/$defs/repositoryDescriptorSelectionV1"}
+          },
+          "additionalProperties": false
+        },
+        "command": {"$ref": "#/$defs/identifier"},
+        "build_root": {"$ref": "#/$defs/rootOrPortablePath"},
+        "source_dir": {"$ref": "#/$defs/rootOrPortablePath"},
+        "target": {"$ref": "#/$defs/goNativeTargetV1"},
+        "toolchain": {"$ref": "#/$defs/goToolchainIdentityV1"},
+        "policy": {"$ref": "#/$defs/goRepositoryBuildPolicyV1"}
+      },
+      "additionalProperties": false
+    },
+    "buildArtifactV1": {
+      "type": "object",
+      "required": ["path", "sha256", "size"],
+      "properties": {
+        "path": {"$ref": "#/$defs/portablePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"$ref": "#/$defs/nonNegativeSafeInteger"}
+      },
+      "additionalProperties": false
+    },
+    "buildRecordV1": {
+      "type": "object",
+      "required": ["driver", "cache_key", "receipt_sha256", "artifact_sha256", "artifact_path"],
+      "properties": {
+        "driver": {"const": "go-v1"},
+        "cache_key": {"$ref": "#/$defs/sha256"},
+        "receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "artifact_sha256": {"$ref": "#/$defs/sha256"},
+        "artifact_path": {"$ref": "#/$defs/portablePath"}
+      },
+      "additionalProperties": false
+    },
+    "buildRecordV1WithReceiptVersion": {
+      "type": "object",
+      "required": ["driver", "receipt_schema_version", "execution_policy", "cache_key", "receipt_sha256", "artifact_sha256", "artifact_path"],
+      "properties": {
+        "driver": {"const": "go-v1"},
+        "receipt_schema_version": {"const": 1},
+        "execution_policy": {"$ref": "#/$defs/goExecutionPolicyV1"},
+        "cache_key": {"$ref": "#/$defs/sha256"},
+        "receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "artifact_sha256": {"$ref": "#/$defs/sha256"},
+        "artifact_path": {"$ref": "#/$defs/portablePath"}
+      },
+      "additionalProperties": false
+    },
+    "buildRecordV2": {
+      "type": "object",
+      "required": ["driver", "receipt_schema_version", "execution_policy", "repository", "declared_identity", "declared_locked_commit", "effective_identity", "object_format", "commit", "substituted", "build_source", "descriptor_target", "cache_key", "receipt_sha256", "artifact_sha256", "artifact_path"],
+      "properties": {
+        "driver": {"const": "go-repository-v1"},
+        "receipt_schema_version": {"const": 2},
+        "execution_policy": {"$ref": "#/$defs/goExecutionPolicyV1"},
+        "repository": {"$ref": "#/$defs/identifier"},
+        "declared_identity": {"$ref": "#/$defs/networkSourceIdentity"},
+        "declared_locked_commit": {"$ref": "#/$defs/lockedCommit"},
+        "declared_tag": {"$ref": "#/$defs/gitRefName"},
+        "effective_identity": {
+          "oneOf": [
+            {"$ref": "#/$defs/networkSourceIdentity"},
+            {"$ref": "#/$defs/localSourceIdentity"}
+          ]
+        },
+        "object_format": {"enum": ["sha1", "sha256"]},
+        "commit": {"$ref": "#/$defs/commit"},
+        "substituted": {"type": "boolean"},
+        "substitution": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["type"],
+              "properties": {"type": {"const": "local-path"}},
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["type", "ref"],
+              "properties": {
+                "type": {"const": "network-git"},
+                "ref": {"$ref": "#/$defs/repositoryStructuredRef"}
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "build_source": {"$ref": "#/$defs/buildSourceIdentity"},
+        "descriptor_target": {"$ref": "#/$defs/identifier"},
+        "cache_key": {"$ref": "#/$defs/sha256"},
+        "receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "artifact_sha256": {"$ref": "#/$defs/sha256"},
+        "artifact_path": {"$ref": "#/$defs/portablePath"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"object_format": {"const": "sha1"}}, "required": ["object_format"]},
+          "then": {"properties": {"commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}},
+          "else": {"properties": {"commit": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}
+        },
+        {
+          "if": {"properties": {"substituted": {"const": true}}, "required": ["substituted"]},
+          "then": {"required": ["substitution"]},
+          "else": {"not": {"required": ["substitution"]}}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "legacySkillCommand": {
+      "type": "object",
+      "required": ["type", "skill", "command"],
+      "properties": {
+        "type": {"const": "skill"},
+        "skill": {"$ref": "#/$defs/identifier"},
+        "command": {"$ref": "#/$defs/identifier"},
+        "hint": {"$ref": "#/$defs/nonEmptyString"}
+      },
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "network": {
+          "oneOf": [
+            {"const": "none"},
+            {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": "^[^\\s/\\\\]+$"}, "uniqueItems": true}
+          ],
+          "default": "none"
+        },
+        "filesystem": {
+          "oneOf": [
+            {"enum": ["repo", "home-config"]},
+            {"$ref": "#/$defs/pathSet"}
+          ],
+          "default": "repo"
+        },
+        "exec": {
+          "oneOf": [{"const": "none"}, {"$ref": "#/$defs/identifierSet"}],
+          "default": "none"
+        },
+        "secrets": {
+          "oneOf": [{"const": "none"}, {"$ref": "#/$defs/stringSet"}],
+          "default": "none"
+        },
+        "env_read": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+          "uniqueItems": true,
+          "default": []
+        },
+        "prompt_scope": {"$ref": "#/$defs/nonEmptyString"}
+      },
+      "additionalProperties": false
+    },
+    "skillRequirement": {
+      "type": "object",
+      "required": ["git", "ref"],
+      "properties": {
+        "git": {"$ref": "#/$defs/nonEmptyString"},
+        "ref": {"$ref": "#/$defs/ref"},
+        "mode": {"enum": ["full", "runtime", "context"], "default": "full"},
+        "commands": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/identifier"}, "uniqueItems": true}
+      },
+      "allOf": [
+        {"if": {"required": ["commands"]}, "then": {"properties": {"mode": {"const": "runtime"}}, "required": ["mode"]}}
+      ],
+      "additionalProperties": false
+    },
+    "mcpRequirement": {
+      "type": "object",
+      "required": ["hint"],
+      "properties": {
+        "hint": {"$ref": "#/$defs/nonEmptyString"},
+        "transport": {"enum": ["stdio", "http"]},
+        "required_in": {"enum": ["any", "all"], "default": "any"}
+      },
+      "additionalProperties": false
+    },
+    "dependenciesV2": {
+      "type": "object",
+      "properties": {
+        "commands": {"type": "object", "additionalProperties": {"oneOf": [{"$ref": "#/$defs/systemCommand"}, {"$ref": "#/$defs/legacySkillCommand"}]}}
+      },
+      "additionalProperties": false
+    },
+    "dependenciesV4": {
+      "type": "object",
+      "properties": {
+        "commands": {"type": "object", "additionalProperties": {"oneOf": [{"$ref": "#/$defs/systemCommand"}, {"$ref": "#/$defs/legacySkillCommand"}]}},
+        "skills": {"type": "object", "additionalProperties": {"$ref": "#/$defs/skillRequirement"}}
+      },
+      "additionalProperties": false
+    },
+    "dependenciesV5": {
+      "type": "object",
+      "properties": {
+        "commands": {"type": "object", "additionalProperties": {"oneOf": [{"$ref": "#/$defs/systemCommand"}, {"$ref": "#/$defs/legacySkillCommand"}]}},
+        "skills": {"type": "object", "additionalProperties": {"$ref": "#/$defs/skillRequirement"}},
+        "mcp_servers": {"type": "object", "additionalProperties": {"$ref": "#/$defs/mcpRequirement"}}
+      },
+      "additionalProperties": false
+    },
+    "signature": {
+      "type": "object",
+      "required": ["algorithm", "key_id", "signature"],
+      "properties": {
+        "algorithm": {"const": "ed25519"},
+        "key_id": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+        "signature": {"type": "string", "pattern": "^[A-Za-z0-9+/]{86}==$"}
+      },
+      "additionalProperties": false
+    },
+    "canonicalValue": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "boolean"},
+        {"$ref": "#/$defs/safeInteger"},
+        {"type": "string"},
+        {"type": "array", "items": {"$ref": "#/$defs/canonicalValue"}},
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/canonicalValue"}}
+      ]
+    }
+  }
+}

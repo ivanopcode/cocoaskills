@@ -1,0 +1,11 @@
+{
+  "capabilities": {},
+  "commands": {},
+  "dependencies": {
+    "commands": {},
+    "skills": {}
+  },
+  "execution_policy": "script-worker-v1",
+  "runtime_roots": [],
+  "schema_version": 4
+}

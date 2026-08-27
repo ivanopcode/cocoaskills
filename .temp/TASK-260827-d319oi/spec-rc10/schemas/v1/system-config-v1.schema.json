@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/system-config-v1.schema.json",
+  "title": "Curator enforced system configuration schema 1",
+  "type": "object",
+  "required": ["schema_version"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "locked": {"type": "array", "items": {"enum": ["audit_registries", "disable_builtin_registries", "allowed_sources", "audit"]}, "uniqueItems": true},
+    "skills_root": {"$ref": "manager-config-v1.schema.json#/properties/skills_root"},
+    "default_agents": {"$ref": "manager-config-v1.schema.json#/properties/default_agents"},
+    "preferred_locale": {"$ref": "manager-config-v1.schema.json#/properties/preferred_locale"},
+    "adapter_mode": {"$ref": "manager-config-v1.schema.json#/properties/adapter_mode"},
+    "worktree_alias_pattern": {"$ref": "manager-config-v1.schema.json#/properties/worktree_alias_pattern"},
+    "projects": {"$ref": "manager-config-v1.schema.json#/properties/projects"},
+    "allowed_sources": {"$ref": "manager-config-v1.schema.json#/properties/allowed_sources"},
+    "disable_builtin_registries": {"$ref": "manager-config-v1.schema.json#/properties/disable_builtin_registries"},
+    "audit": {"$ref": "manager-config-v1.schema.json#/properties/audit"},
+    "audit_registries": {"$ref": "manager-config-v1.schema.json#/properties/audit_registries"}
+  },
+  "additionalProperties": false
+}

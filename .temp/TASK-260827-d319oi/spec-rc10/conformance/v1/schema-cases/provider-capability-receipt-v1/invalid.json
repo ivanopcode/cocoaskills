@@ -1,0 +1,38 @@
+{
+  "capabilities": [
+    {
+      "capability_id": "total-network-denial-v1",
+      "status": "established"
+    },
+    {
+      "capability_id": "read-only-source-and-toolchain-v1",
+      "status": "established"
+    },
+    {
+      "capability_id": "exact-executable-allowlisting-v1",
+      "status": "established"
+    },
+    {
+      "capability_id": "private-build-root-only-writes-v1",
+      "status": "established"
+    },
+    {
+      "capability_id": "hard-aggregate-descendant-resource-bounds-v1",
+      "status": "established"
+    }
+  ],
+  "expires_at": "2026-07-13T00:05:00Z",
+  "health": "healthy",
+  "nonce": "operation-nonce-1",
+  "observed_at": "2026-07-13T00:00:00Z",
+  "provider": {
+    "operating_system": "macos",
+    "provider_binary_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "provider_contract": "host-execution-provider-v1",
+    "provider_id": "example.host-provider",
+    "provider_version": "1.0.0",
+    "schema_version": 1
+  },
+  "receipt_type": "provider-capability-receipt-v1",
+  "schema_version": 1
+}

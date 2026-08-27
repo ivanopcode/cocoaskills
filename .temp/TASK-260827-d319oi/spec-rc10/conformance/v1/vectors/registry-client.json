@@ -1,0 +1,138 @@
+{
+  "key_rotation_resets_state": false,
+  "pagination_rejections": [
+    {
+      "error": "pagination_cycle",
+      "name": "repeated-cursor"
+    },
+    {
+      "characters": 4097,
+      "error": "invalid_cursor",
+      "name": "oversize-cursor"
+    },
+    {
+      "error": "record_limit",
+      "name": "record-limit",
+      "records": 10001
+    },
+    {
+      "bytes": 16777217,
+      "error": "body_limit",
+      "name": "oversize-response"
+    }
+  ],
+  "retry_cases": [
+    {
+      "idempotency_key": false,
+      "method": "GET",
+      "name": "get-network",
+      "outcome": "network_error",
+      "retry_permitted": true
+    },
+    {
+      "idempotency_key": false,
+      "method": "GET",
+      "name": "get-rate-limit",
+      "outcome": "429",
+      "retry_permitted": true
+    },
+    {
+      "idempotency_key": false,
+      "method": "GET",
+      "name": "get-unavailable",
+      "outcome": "503",
+      "retry_permitted": true
+    },
+    {
+      "idempotency_key": false,
+      "method": "GET",
+      "name": "get-conflict",
+      "outcome": "409",
+      "retry_permitted": false
+    },
+    {
+      "idempotency_key": true,
+      "method": "POST",
+      "name": "post-idempotent-unavailable",
+      "outcome": "503",
+      "retry_permitted": true
+    },
+    {
+      "idempotency_key": false,
+      "method": "POST",
+      "name": "post-unsafe-unavailable",
+      "outcome": "503",
+      "retry_permitted": false
+    },
+    {
+      "idempotency_key": true,
+      "method": "POST",
+      "name": "post-idempotent-bad-request",
+      "outcome": "400",
+      "retry_permitted": false
+    }
+  ],
+  "retry_policy": {
+    "follow_redirects": false,
+    "get_total_deadline_seconds": 30,
+    "max_attempts": 3,
+    "post_total_deadline_seconds": 45
+  },
+  "rollback_state_cases": [
+    {
+      "accepted": true,
+      "name": "missing-on-first-use",
+      "state": "missing"
+    },
+    {
+      "accepted": false,
+      "name": "deleted-after-prior-use",
+      "state": "deleted"
+    },
+    {
+      "accepted": false,
+      "name": "corrupted-existing-state",
+      "state": "malformed"
+    },
+    {
+      "accepted": false,
+      "name": "unavailable-state-directory",
+      "state": "unavailable"
+    }
+  ],
+  "snapshot_transitions": [
+    {
+      "accepted": true,
+      "candidate_key": "new",
+      "candidate_version": 8,
+      "name": "advance-after-key-rotation",
+      "same_body": false,
+      "stored_version": 7
+    },
+    {
+      "accepted": false,
+      "candidate_key": "new",
+      "candidate_version": 7,
+      "name": "restore-rollback",
+      "same_body": false,
+      "stored_version": 8
+    },
+    {
+      "accepted": true,
+      "candidate_key": "new",
+      "candidate_version": 8,
+      "name": "equal-version-repeat",
+      "same_body": true,
+      "stored_version": 8
+    },
+    {
+      "accepted": false,
+      "candidate_key": "new",
+      "candidate_version": 8,
+      "name": "equal-version-equivocation",
+      "same_body": false,
+      "stored_version": 8
+    }
+  ],
+  "state_key": "canonical_registry_url"
+}

@@ -1,0 +1,17 @@
+{
+  "build_roots": [
+    "tools/cli"
+  ],
+  "capabilities": {},
+  "commands": {
+    "tool": {
+      "driver": "go-v1",
+      "modules": [
+        "pkg/CON"
+      ],
+      "source_dir": "tools/cli/cmd/tool",
+      "type": "build"
+    }
+  },
+  "schema_version": 8
+}

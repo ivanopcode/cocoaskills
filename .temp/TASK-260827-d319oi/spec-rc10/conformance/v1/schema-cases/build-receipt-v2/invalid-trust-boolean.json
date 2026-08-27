@@ -1,0 +1,78 @@
+{
+  "artifact": {
+    "path": "bin/golden-tool",
+    "sha256": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+    "size": 1234567
+  },
+  "cache_key": "sha256:4abc903bde7d8d9f65d32fd276f37dadccc88eb28bbaf693106dcebc4a19107a",
+  "input": {
+    "build_root": ".",
+    "command": "golden-tool",
+    "driver": "go-repository-v1",
+    "policy": {
+      "cgo": false,
+      "compiler_directives": "reject-nonstandard-cgo-import-dynamic-v1",
+      "execution_policy": "manager-worker-v1",
+      "host_objects": false,
+      "libgcc": "none",
+      "link_mode": "internal",
+      "module_mode": "vendor",
+      "network": "none",
+      "package_assembly": false,
+      "source_kind": "locked-external-git-v1",
+      "target_mode": "native",
+      "telemetry": "off-private",
+      "workspace": false
+    },
+    "schema_version": 2,
+    "source": {
+      "declared": {
+        "identity": {
+          "kind": "network-git",
+          "value": "github.com/example/golden-tools"
+        },
+        "locked_commit": {
+          "hex": "0123456789abcdef0123456789abcdef01234567",
+          "object_format": "sha1"
+        },
+        "tag": "v1.4.0",
+        "transport": "https"
+      },
+      "descriptor": {
+        "path": "skill-build.json",
+        "target": "golden-tool"
+      },
+      "effective": {
+        "build_source": {
+          "algorithm": "curator-build-source-v1",
+          "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "commit": "0123456789abcdef0123456789abcdef01234567",
+        "identity": {
+          "kind": "network-git",
+          "value": "github.com/example/golden-tools"
+        },
+        "object_format": "sha1",
+        "substituted": false,
+        "transport": "https"
+      },
+      "repository": "golden-tools"
+    },
+    "source_dir": "cmd/golden-tool",
+    "target": {
+      "goarch": "arm64",
+      "goos": "darwin",
+      "tuning": {
+        "GOARM64": "v8.0"
+      }
+    },
+    "toolchain": {
+      "algorithm": "curator-go-toolchain-v1",
+      "content_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "go_relpath": "bin/go",
+      "go_version": "go version go1.26.1 darwin/arm64"
+    }
+  },
+  "schema_version": 2,
+  "trusted": true
+}

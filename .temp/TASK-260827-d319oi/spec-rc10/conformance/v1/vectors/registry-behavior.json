@@ -1,0 +1,27 @@
+{
+  "artifact_hash": "sha256:f2c21f31f69bb5c9366028ac6e63a701c66803586c8ce12eac1186dcd350e5eb",
+  "cache": {
+    "body_limit_bytes": 16777216,
+    "offline_grace_seconds": 604800,
+    "record_limit": 10000,
+    "ttl_seconds": 3600
+  },
+  "pagination": {
+    "cursor_bound_to_query": true,
+    "cursor_bound_to_snapshot": true,
+    "default_limit": 100,
+    "filter_operator": "and",
+    "maximum_limit": 1000
+  },
+  "snapshot": {
+    "equal_version_equivocation_rejected": true,
+    "future_skew_seconds": 300,
+    "max_age_seconds": 604800,
+    "rollback_rejected": true
+  },
+  "submission": {
+    "idempotency_key": "sha256_of_ccj1",
+    "idempotency_scope": "auditor_and_key",
+    "retention_seconds": 86400
+  }
+}

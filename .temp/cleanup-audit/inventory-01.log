@@ -1,0 +1,1044 @@
+## readiness
+/Users/iv/.codex/packages/standalone/releases/0.150.0-aarch64-apple-darwin/codex-path/rg
+/usr/bin/git
+/usr/bin/du
+/Users/iv/.local/bin/task-board
+## pwd/repo
+/Users/iv/Developer/Wildberries/cocoaskills
+/Users/iv/Developer/Wildberries/cocoaskills
+ M LOGBOOK.md
+ M src/csk/build_repository.py
+ M tests/test_build_metadata.py
+ M tests/test_protocol_conformance.py
+ M tests/test_rc5_external_repository_conformance.py
+ M tests/test_schema_v7_repository.py
+?? TASK-260826-29y82b_results.md
+## siblings
+../.build
+../.csk-materialization-plan-m_ebbkir
+../.task-board
+../.temp
+../.worktrees
+../WBFraudProtection
+../WBNavigationSample
+../agentic infra
+../agentic-infra-docs
+../best-practices
+../ci-tools
+../cocoaskills
+../cocoaskills-taskboard
+../core
+../homebrew-csk
+../imageEditor
+../imageEditor__from_ivwb
+../partners-app-dev
+../partners-app-tuist-plugins
+../partners-app-unsigned
+../partners-develop
+../skill-wb-agentic-infra
+../skills-audit
+../tuist
+../wbdesignsystem
+../wbnavigation
+../wbnavigation-sample-work
+../wbportal
+../wbportal__from_ivwb
+../wbqrqueue
+../wbqrqueue__from_ivwb
+## temp top-level sizes
+840088	.temp/TASK-260803-21lw4t
+787704	.temp/TASK-260824-31y75t
+714844	.temp/TASK-260824-2h0vjy
+662624	.temp/TASK-260720-2g21eg
+658948	.temp/TASK-260824-2i5yqw
+332992	.temp/TASK-260720-2jfnz6
+298276	.temp/TASK-260720-12r55p
+280208	.temp/BUG-260807-l2ymv3
+182648	.temp/TASK-260720-3pemm6
+179608	.temp/BUG-260805-cfdxsk
+162156	.temp/TASK-260720-3t8nr3
+158956	.temp/TASK-260720-8nxlgx
+137516	.temp/build-https
+132308	.temp/TASK-260720-11yhth
+122240	.temp/TASK-260819-2j7v0x
+115132	.temp/TASK-260822-1jns5p
+107708	.temp/spec-rc6-pin-check
+37844	.temp/csk-runtime-command-fix
+24144	.temp/spawn-runs
+23872	.temp/BUG-260807-1it17m
+23600	.temp/logwork
+21748	.temp/TASK-260720-2x6mjn
+11232	.temp/TASK-260720-3c0ss2
+7836	.temp/swift_book
+6936	.temp/curator-spec-verify
+6928	.temp/curator-spec
+6928	.temp/TASK-260826-29y82b
+6036	.temp/ratify-build-ssh
+5312	.temp/TASK-260827-d319oi
+4924	.temp/TASK-260720-poa3ze
+4780	.temp/TASK-260819-1y7hh4
+2952	.temp/BUG-260731-1rldqv
+2736	.temp/BUG-260731-2rhy74
+2540	.temp/curator-shell-neutral
+2040	.temp/resources
+1460	.temp/TASK-260821-2c7ter
+1300	.temp/BUG-260807-26lmvj
+1248	.temp/TASK-260819-2bow35
+1152	.temp/TASK-260728-3jaa57
+936	.temp/f2-messages.txt
+848	.temp/upstream-patch-dist
+836	.temp/BUG-260807-1r5oz9
+716	.temp/skill-sentry
+700	.temp/skill-youtrack-repo
+684	.temp/PMA-24177
+672	.temp/PMA-24178
+620	.temp/aid
+616	.temp/skill-band
+612	.temp/skill-grafana
+552	.temp/skill-bi
+540	.temp/skill-gitlab
+532	.temp/skill-bi-ref
+364	.temp/BUG-260807-1r5oz9-dist
+304	.temp/research
+304	.temp/PMA-24176
+168	.temp/f1-messages.txt
+160	.temp/ci-source-identity
+128	.temp/skill-figma
+128	.temp/skill-deploy-lab
+108	.temp/TASK-260822-3o5iw2
+60	.temp/TASK-260821-1h8thl
+44	.temp/TASK-260822-3tvw34
+40	.temp/old-readme.md
+36	.temp/skill-authoring.orig.md
+36	.temp/rev3-orig.md
+36	.temp/TASK-260819-8a0q6y
+32	.temp/TASK-260821-2nd3y7
+32	.temp/PMA-24703
+28	.temp/TASK-260822-3ah6pu
+24	.temp/TASK-260819-1uhs6k
+20	.temp/tz-docs-0.14.md
+20	.temp/BUG-260821-p628cq
+12	.temp/tz-docs-build-https.md
+12	.temp/review-8a0q6y-3.md
+12	.temp/review-3o5iw2.md
+12	.temp/review-3ah6pu.md
+12	.temp/review-2otvoy-2.md
+12	.temp/review-2nd3y7.md
+12	.temp/review-1y7hh4.md
+12	.temp/review-1y7hh4-2.md
+12	.temp/review-1uhs6k.md
+12	.temp/review-1uhs6k-2.md
+12	.temp/review-1jns5p-4.md
+12	.temp/review-1jns5p-2.md
+12	.temp/review-1h8thl.md
+12	.temp/review-1h8thl-2.md
+12	.temp/research-operational-contract.md
+12	.temp/create_results.py
+12	.temp/TASK-260819-1uhs6k_results.md
+12	.temp/TASK-260819-1an2j1
+12	.temp/PMA-24147
+8	.temp/ytx-output-task.md
+8	.temp/tasks.md
+8	.temp/review-8a0q6y.md
+8	.temp/review-8a0q6y-2.md
+8	.temp/review-3tvw34.md
+8	.temp/review-3s96o5.md
+8	.temp/review-3s96o5-2.md
+8	.temp/review-2rzwqa.md
+8	.temp/review-2otvoy.md
+## temp tree depth2
+.temp/.DS_Store
+.temp/BUG-260731-1rldqv
+.temp/BUG-260731-1rldqv/BUG-260731-1rldqv_evidence.md
+.temp/BUG-260731-1rldqv/BUG-260731-1rldqv_root-cause-and-fix.md
+.temp/BUG-260731-1rldqv/logs
+.temp/BUG-260731-2rhy74
+.temp/BUG-260731-2rhy74/pin-old
+.temp/BUG-260805-cfdxsk
+.temp/BUG-260805-cfdxsk/.DS_Store
+.temp/BUG-260805-cfdxsk/worktree
+.temp/BUG-260807-1it17m
+.temp/BUG-260807-1it17m/BUG-260807-1it17m_results.md
+.temp/BUG-260807-1it17m/macos-report.json
+.temp/BUG-260807-1it17m/run_windows_check.cmd
+.temp/BUG-260807-1it17m/stage-macos
+.temp/BUG-260807-1it17m/stage-macos2
+.temp/BUG-260807-1it17m/stage-macos3
+.temp/BUG-260807-1it17m/stage-macos4
+.temp/BUG-260807-1it17m/stage-macos5
+.temp/BUG-260807-1it17m/venv
+.temp/BUG-260807-1it17m/windows-report.json
+.temp/BUG-260807-1it17m/windows_launcher_check.py
+.temp/BUG-260807-1r5oz9
+.temp/BUG-260807-1r5oz9-dist
+.temp/BUG-260807-1r5oz9-dist/cocoaskills-0.13.0rc5.dev8+g8c6c16327-py3-none-any.whl
+.temp/BUG-260807-1r5oz9/BUG-260807-1r5oz9_pr29-ci-8e448f6.log
+.temp/BUG-260807-1r5oz9/conformance-01.log
+.temp/BUG-260807-1r5oz9/conformance-02.log
+.temp/BUG-260807-1r5oz9/fix-win-py313.log
+.temp/BUG-260807-1r5oz9/full-suite-macos-01.log
+.temp/BUG-260807-1r5oz9/pr29-body.md
+.temp/BUG-260807-1r5oz9/pr29-ci-watch.log
+.temp/BUG-260807-1r5oz9/pr29-ci-watch2.log
+.temp/BUG-260807-1r5oz9/repro-final-win-py314.log
+.temp/BUG-260807-1r5oz9/repro-win-py311.log
+.temp/BUG-260807-26lmvj
+.temp/BUG-260807-26lmvj/.DS_Store
+.temp/BUG-260807-26lmvj/sentry-cli
+.temp/BUG-260807-26lmvj/skill-sentry-worktree
+.temp/BUG-260807-l2ymv3
+.temp/BUG-260807-l2ymv3/.DS_Store
+.temp/BUG-260807-l2ymv3/BUG-260807-l2ymv3_results.md
+.temp/BUG-260807-l2ymv3/prior-attempt.patch
+.temp/BUG-260807-l2ymv3/protocol-spec
+.temp/BUG-260807-l2ymv3/results.md
+.temp/BUG-260807-l2ymv3/spec
+.temp/BUG-260807-l2ymv3/win-run.ps1
+.temp/BUG-260807-l2ymv3/win-setup.ps1
+.temp/BUG-260807-l2ymv3/worktree
+.temp/BUG-260821-p628cq
+.temp/BUG-260821-p628cq/BUG-260821-p628cq_review.md
+.temp/BUG-260821-p628cq/full-pytest-01.log
+.temp/BUG-260821-p628cq/mutation-probe.py
+.temp/PMA-24147
+.temp/PMA-24147/.DS_Store
+.temp/PMA-24147/logs
+.temp/PMA-24148
+.temp/PMA-24149
+.temp/PMA-24176
+.temp/PMA-24176/worktree
+.temp/PMA-24177
+.temp/PMA-24177/skill-sentry
+.temp/PMA-24178
+.temp/PMA-24178/skill-grafana
+.temp/PMA-24703
+.temp/PMA-24703/dependency-architecture.md
+.temp/TASK-260720-11yhth
+.temp/TASK-260720-11yhth/baseline
+.temp/TASK-260720-11yhth/curator-spec
+.temp/TASK-260720-11yhth/worktree
+.temp/TASK-260720-12r55p
+.temp/TASK-260720-12r55p/.DS_Store
+.temp/TASK-260720-12r55p/TASK-260720-12r55p_cycle-6-evidence.md
+.temp/TASK-260720-12r55p/TASK-260720-12r55p_cycle-6-windows-portability.patch
+.temp/TASK-260720-12r55p/audit
+.temp/TASK-260720-12r55p/curator-spec-432eb2e
+.temp/TASK-260720-12r55p/full-suite-01.log
+.temp/TASK-260720-12r55p/full-suite-final.log
+.temp/TASK-260720-12r55p/venv
+.temp/TASK-260720-12r55p/win-failure-reasons.txt
+.temp/TASK-260720-12r55p/worktree
+.temp/TASK-260720-2g21eg
+.temp/TASK-260720-2g21eg/.DS_Store
+.temp/TASK-260720-2g21eg/worktree
+.temp/TASK-260720-2jfnz6
+.temp/TASK-260720-2jfnz6/.DS_Store
+.temp/TASK-260720-2jfnz6/evidence
+.temp/TASK-260720-2jfnz6/lint.index
+.temp/TASK-260720-2jfnz6/pytest-focused
+.temp/TASK-260720-2jfnz6/pytest-focused-final
+.temp/TASK-260720-2jfnz6/pytest-full
+.temp/TASK-260720-2jfnz6/pytest-untrusted
+.temp/TASK-260720-2jfnz6/pytest-untrusted-zero
+.temp/TASK-260720-2jfnz6/uv.lock.tool-readiness
+.temp/TASK-260720-2jfnz6/venv
+.temp/TASK-260720-2jfnz6/worktree
+.temp/TASK-260720-2x6mjn
+.temp/TASK-260720-2x6mjn/TASK-260720-2x6mjn_results.md
+.temp/TASK-260720-2x6mjn/TASK-260720-2x6mjn_review-verdict-cycle2.md
+.temp/TASK-260720-2x6mjn/TASK-260720-2x6mjn_review-verdict.md
+.temp/TASK-260720-2x6mjn/TASK-260720-2x6mjn_review2-probes.tar.gz
+.temp/TASK-260720-2x6mjn/evidence
+.temp/TASK-260720-2x6mjn/nogo-bin
+.temp/TASK-260720-2x6mjn/probe
+.temp/TASK-260720-2x6mjn/probe2
+.temp/TASK-260720-2x6mjn/review-baseline
+.temp/TASK-260720-2x6mjn/review2-mypy-01.log
+.temp/TASK-260720-2x6mjn/review2-probe-worktree-01.log
+.temp/TASK-260720-2x6mjn/review2-pytest-full-01.log
+.temp/TASK-260720-2x6mjn/review3
+.temp/TASK-260720-2x6mjn/review4
+.temp/TASK-260720-2x6mjn/worktree
+.temp/TASK-260720-3c0ss2
+.temp/TASK-260720-3c0ss2/TASK-260720-3c0ss2_build-validation.log
+.temp/TASK-260720-3c0ss2/TASK-260720-3c0ss2_focused-pytest.log
+.temp/TASK-260720-3c0ss2/TASK-260720-3c0ss2_full-pytest.log
+.temp/TASK-260720-3c0ss2/TASK-260720-3c0ss2_mypy.log
+.temp/TASK-260720-3c0ss2/TASK-260720-3c0ss2_results.md
+.temp/TASK-260720-3c0ss2/TASK-260720-3c0ss2_tool-readiness.log
+.temp/TASK-260720-3c0ss2/worktree
+.temp/TASK-260720-3pemm6
+.temp/TASK-260720-3pemm6/.DS_Store
+.temp/TASK-260720-3pemm6/TASK-260720-3pemm6_accepted-e2e-inventory.json
+.temp/TASK-260720-3pemm6/TASK-260720-3pemm6_developer-evidence.md
+.temp/TASK-260720-3pemm6/worktree
+.temp/TASK-260720-3t8nr3
+.temp/TASK-260720-3t8nr3/.DS_Store
+.temp/TASK-260720-3t8nr3/TASK-260720-3t8nr3_review-verdict.md
+.temp/TASK-260720-3t8nr3/worktree
+.temp/TASK-260720-8nxlgx
+.temp/TASK-260720-8nxlgx/.DS_Store
+.temp/TASK-260720-8nxlgx/base-provenance-01.log
+.temp/TASK-260720-8nxlgx/python-tool-readiness-01.log
+.temp/TASK-260720-8nxlgx/reviewer-af18fc
+.temp/TASK-260720-8nxlgx/ssh-readiness-01.log
+.temp/TASK-260720-8nxlgx/venv
+.temp/TASK-260720-8nxlgx/worktree
+.temp/TASK-260720-poa3ze
+.temp/TASK-260720-poa3ze/origin-main-worktree
+.temp/TASK-260728-3jaa57
+.temp/TASK-260728-3jaa57/dist
+.temp/TASK-260728-3kuxg7
+.temp/TASK-260728-3kuxg7/TASK-260728-3kuxg7_results.md
+.temp/TASK-260803-21lw4t
+.temp/TASK-260803-21lw4t/.DS_Store
+.temp/TASK-260803-21lw4t/fix-hosted-cleanliness
+.temp/TASK-260803-21lw4t/fix-windows-tests
+.temp/TASK-260803-21lw4t/integration
+.temp/TASK-260803-21lw4t/review-RUN-260823-59a169-evidence
+.temp/TASK-260803-21lw4t/review-RUN-260823-59a169-fresh
+.temp/TASK-260803-21lw4t/review-RUN-260823-59a169-ssh
+.temp/TASK-260803-21lw4t/review-verdict_RUN-260823-59a169.md
+.temp/TASK-260803-21lw4t/worktree
+.temp/TASK-260819-1an2j1
+.temp/TASK-260819-1an2j1/pytest-full-02.log
+.temp/TASK-260819-1an2j1/review-verdict-2.md
+.temp/TASK-260819-1uhs6k
+.temp/TASK-260819-1uhs6k/review-verdict.md
+.temp/TASK-260819-1uhs6k/verdict-786c62.md
+.temp/TASK-260819-1uhs6k_results.md
+.temp/TASK-260819-1y7hh4
+.temp/TASK-260819-1y7hh4/.DS_Store
+.temp/TASK-260819-1y7hh4/LOGBOOK.md.bak
+.temp/TASK-260819-1y7hh4/build-01.log
+.temp/TASK-260819-1y7hh4/build-rereview-01.log
+.temp/TASK-260819-1y7hh4/dist
+.temp/TASK-260819-1y7hh4/dist2
+.temp/TASK-260819-1y7hh4/logbook-entry.md
+.temp/TASK-260819-1y7hh4/pytest-rereview-01.log
+.temp/TASK-260819-1y7hh4/pytest-review3-01.log
+.temp/TASK-260819-1y7hh4/review-verdict-2.md
+.temp/TASK-260819-1y7hh4/review-verdict-3.md
+.temp/TASK-260819-1y7hh4/rework-2.md
+.temp/TASK-260819-1y7hh4/rr
+.temp/TASK-260819-1y7hh4/verdict.md
+.temp/TASK-260819-2bow35
+.temp/TASK-260819-2bow35/TASK-260819-2bow35_implementation-validation.md
+.temp/TASK-260819-2bow35/dist
+.temp/TASK-260819-2j7v0x
+.temp/TASK-260819-2j7v0x/.DS_Store
+.temp/TASK-260819-2j7v0x/attached-report.md
+.temp/TASK-260819-2j7v0x/ci_metrics.py
+.temp/TASK-260819-2j7v0x/collect_count.py
+.temp/TASK-260819-2j7v0x/curator-rc5
+.temp/TASK-260819-2j7v0x/curator-rc6
+.temp/TASK-260819-2j7v0x/curator-spec-cache
+.temp/TASK-260819-2j7v0x/tool-readiness.md
+.temp/TASK-260819-2j7v0x/validate_report.py
+.temp/TASK-260819-2j7v0x/xdist-ordinary-basetemp
+.temp/TASK-260819-2j7v0x/xdist-ordinary-cache
+.temp/TASK-260819-2j7v0x/xdist-ordinary-cache2
+.temp/TASK-260819-8a0q6y
+.temp/TASK-260819-8a0q6y/pytest-review4-01.log
+.temp/TASK-260819-8a0q6y/review-verdict-4.md
+.temp/TASK-260819-8a0q6y/verdict-3.md
+.temp/TASK-260821-1h8thl
+.temp/TASK-260821-1h8thl/orig.md
+.temp/TASK-260821-1h8thl/review-verdict-round2.md
+.temp/TASK-260821-1h8thl/review.md
+.temp/TASK-260821-1h8thl_results.md
+.temp/TASK-260821-1h8thl_review-verdict-round3.md
+.temp/TASK-260821-2c7ter
+.temp/TASK-260821-2c7ter/build-01.log
+.temp/TASK-260821-2c7ter/build-02.log
+.temp/TASK-260821-2c7ter/build-03.log
+.temp/TASK-260821-2c7ter/dist
+.temp/TASK-260821-2c7ter/pytest-full-01.log
+.temp/TASK-260821-2c7ter/pytest-full-02.log
+.temp/TASK-260821-2c7ter/pytest-full-03.log
+.temp/TASK-260821-2c7ter/review-01.md
+.temp/TASK-260821-2c7ter/review-02.md
+.temp/TASK-260821-2c7ter/review-03.md
+.temp/TASK-260821-2c7ter_results.md
+.temp/TASK-260821-2nd3y7
+.temp/TASK-260821-2nd3y7/review-92e9f5-evidence.log
+.temp/TASK-260821-2nd3y7/verdict-92e9f5.md
+.temp/TASK-260821-2nd3y7/verdict.md
+.temp/TASK-260822-1jns5p
+.temp/TASK-260822-1jns5p/pytest
+.temp/TASK-260822-1jns5p/pytest-01.log
+.temp/TASK-260822-1jns5p/pytest-02.log
+.temp/TASK-260822-1jns5p/review-01.md
+.temp/TASK-260822-1jns5p/review-verdict-3.md
+.temp/TASK-260822-1jns5p/review-verdict-4.md
+.temp/TASK-260822-1jns5p/review-verdict-5.md
+.temp/TASK-260822-3ah6pu
+.temp/TASK-260822-3ah6pu/review.md
+.temp/TASK-260822-3ah6pu/verdict.md
+.temp/TASK-260822-3o5iw2
+.temp/TASK-260822-3o5iw2/.DS_Store
+.temp/TASK-260822-3o5iw2/fixture-skill
+.temp/TASK-260822-3o5iw2/neg
+.temp/TASK-260822-3o5iw2/review-round2.md
+.temp/TASK-260822-3o5iw2/review.md
+.temp/TASK-260822-3o5iw2/template-current.md
+.temp/TASK-260822-3o5iw2/template.md
+.temp/TASK-260822-3o5iw2/verify
+.temp/TASK-260822-3tvw34
+.temp/TASK-260822-3tvw34/pytest-02.log
+.temp/TASK-260822-3tvw34/pytest-03.log
+.temp/TASK-260822-3tvw34/review-01.md
+.temp/TASK-260822-3tvw34/verdict-02.md
+.temp/TASK-260822-3tvw34/verification-01.log
+.temp/TASK-260822-3tvw34/verification-02.log
+.temp/TASK-260822-3tvw34/verification-03.log
+.temp/TASK-260824-1d7zbo
+.temp/TASK-260824-1d7zbo/verdict.md
+.temp/TASK-260824-2h0vjy
+.temp/TASK-260824-2h0vjy/.DS_Store
+.temp/TASK-260824-2h0vjy/artifacts
+.temp/TASK-260824-2h0vjy/candidate-spec
+.temp/TASK-260824-2h0vjy/crlf
+.temp/TASK-260824-2h0vjy/cycle4
+.temp/TASK-260824-2h0vjy/evidence
+.temp/TASK-260824-2h0vjy/fix
+.temp/TASK-260824-2h0vjy/logs
+.temp/TASK-260824-2h0vjy/macos-e2e-97428409507.log
+.temp/TASK-260824-2h0vjy/probe
+.temp/TASK-260824-2h0vjy/protocol-spec
+.temp/TASK-260824-2h0vjy/pytest-candidate-01.log
+.temp/TASK-260824-2h0vjy/released-spec
+.temp/TASK-260824-2h0vjy/rework
+.temp/TASK-260824-2h0vjy/verdict-cycle5.md
+.temp/TASK-260824-2h0vjy/verdict.md
+.temp/TASK-260824-2h0vjy/worktree
+.temp/TASK-260824-2i5yqw
+.temp/TASK-260824-2i5yqw/.DS_Store
+.temp/TASK-260824-2i5yqw/TASK-260824-2i5yqw_implementation-notes.md
+.temp/TASK-260824-2i5yqw/conformance-run-02.log
+.temp/TASK-260824-2i5yqw/core.md
+.temp/TASK-260824-2i5yqw/curator-spec-rc9
+.temp/TASK-260824-2i5yqw/e2e-venv
+.temp/TASK-260824-2i5yqw/goprobe
+.temp/TASK-260824-2i5yqw/module-roots.json
+.temp/TASK-260824-2i5yqw/pr40
+.temp/TASK-260824-2i5yqw/review
+.temp/TASK-260824-2i5yqw/script-policy.json
+.temp/TASK-260824-2i5yqw/spec
+.temp/TASK-260824-2i5yqw/spec-e2e
+.temp/TASK-260824-2i5yqw/spec-pinned
+.temp/TASK-260824-2i5yqw/spec-rc9
+.temp/TASK-260824-2i5yqw/spec-released
+.temp/TASK-260824-2i5yqw/sweep_v8_cases.py
+.temp/TASK-260824-2i5yqw/worktree
+.temp/TASK-260824-2rzwqa
+.temp/TASK-260824-2rzwqa/verdict.md
+.temp/TASK-260824-31y75t
+.temp/TASK-260824-31y75t/.DS_Store
+.temp/TASK-260824-31y75t/candidate-rc9
+.temp/TASK-260824-31y75t/evidence
+.temp/TASK-260824-31y75t/negative-controls.md
+.temp/TASK-260824-31y75t/negctl
+.temp/TASK-260824-31y75t/negctl-owner
+.temp/TASK-260824-31y75t/negctl2
+.temp/TASK-260824-31y75t/released-pin
+.temp/TASK-260824-31y75t/rev2
+.temp/TASK-260824-31y75t/rev2-artifacts
+.temp/TASK-260824-31y75t/rev2-merge
+.temp/TASK-260824-31y75t/rev3
+.temp/TASK-260824-31y75t/rev3-artifacts
+.temp/TASK-260824-31y75t/rev3-negctl
+.temp/TASK-260824-31y75t/review4
+.temp/TASK-260824-31y75t/review4-evidence
+.temp/TASK-260824-31y75t/review4-verification.md
+.temp/TASK-260824-31y75t/rework
+.temp/TASK-260824-31y75t/venv-rev2
+.temp/TASK-260824-31y75t/venv311
+.temp/TASK-260824-31y75t/verdict.md
+.temp/TASK-260824-31y75t/worktree
+.temp/TASK-260826-29y82b
+.temp/TASK-260826-29y82b/.DS_Store
+.temp/TASK-260826-29y82b/review-spec
+.temp/TASK-260826-29y82b/review-verdict.md
+.temp/TASK-260827-d319oi
+.temp/TASK-260827-d319oi/.DS_Store
+.temp/TASK-260827-d319oi/mypy-01.log
+.temp/TASK-260827-d319oi/pytest-full-01.log
+.temp/TASK-260827-d319oi/rc10
+.temp/TASK-260827-d319oi/rc5
+.temp/TASK-260827-d319oi/schema-v7-rc10-01.log
+.temp/TASK-260827-d319oi/schema-v7-rc5-mutant-01.log
+.temp/aid
+.temp/aid/.DS_Store
+.temp/aid/.git
+.temp/aid/.gitignore
+.temp/aid/README.md
+.temp/aid/docs
+.temp/aid/templates
+.temp/build-https
+.temp/build-https/.DS_Store
+.temp/build-https/TASK-260824-1dop3s_rework-notes.md
+.temp/build-https/logs
+.temp/build-https/section-https.md
+.temp/build-https/worktree
+.temp/ci-fastpath-260823-tool-readiness.log
+.temp/ci-fastpath-tool-readiness-260819.log
+.temp/ci-source-identity
+.temp/ci-source-identity/windows-3.13.zip
+.temp/cleanup-audit
+.temp/cleanup-audit/inventory-01.log
+.temp/cleanup-audit/tool-readiness-01.log
+.temp/create_results.py
+.temp/csk-runtime-command-fix
+.temp/csk-runtime-command-fix/agentic-infra-docs
+.temp/csk-runtime-command-fix/cocoaskills-wb
+.temp/csk-runtime-command-fix/skill-band
+.temp/csk-runtime-command-fix/skill-bi
+.temp/csk-runtime-command-fix/skill-gitlab
+.temp/csk-runtime-command-fix/skill-grafana
+.temp/csk-runtime-command-fix/skill-sentry
+.temp/csk-runtime-command-fix/skill-wb-agentic-infra
+.temp/csk-runtime-command-fix/skill-wiki
+.temp/csk-runtime-command-fix/skill-wiki-memory
+.temp/csk-runtime-command-fix/skill-youtrack
+.temp/curator-shell-neutral
+.temp/curator-shell-neutral/curator
+.temp/curator-shell-neutral/curator-spec
+.temp/curator-spec
+.temp/curator-spec-verify
+.temp/curator-spec-verify/.DS_Store
+.temp/curator-spec-verify/.git
+.temp/curator-spec-verify/.gitattributes
+.temp/curator-spec-verify/.github
+.temp/curator-spec-verify/.relux
+.temp/curator-spec-verify/CHANGELOG.md
+.temp/curator-spec-verify/COMPATIBILITY.md
+.temp/curator-spec-verify/GOVERNANCE.md
+.temp/curator-spec-verify/LICENSE
+.temp/curator-spec-verify/Makefile
+.temp/curator-spec-verify/README.md
+.temp/curator-spec-verify/RELEASE.md
+.temp/curator-spec-verify/SECURITY.md
+.temp/curator-spec-verify/cli
+.temp/curator-spec-verify/conformance
+.temp/curator-spec-verify/decisions
+.temp/curator-spec-verify/docs
+.temp/curator-spec-verify/go.mod
+.temp/curator-spec-verify/maintainers.allowed_signers
+.temp/curator-spec-verify/profiles
+.temp/curator-spec-verify/protocol
+.temp/curator-spec-verify/release
+.temp/curator-spec-verify/requirements-dev.txt
+.temp/curator-spec-verify/reviews
+.temp/curator-spec-verify/schemas
+.temp/curator-spec-verify/tools
+.temp/curator-spec/.DS_Store
+.temp/curator-spec/.git
+.temp/curator-spec/.gitattributes
+.temp/curator-spec/.github
+.temp/curator-spec/.relux
+.temp/curator-spec/CHANGELOG.md
+.temp/curator-spec/COMPATIBILITY.md
+.temp/curator-spec/GOVERNANCE.md
+.temp/curator-spec/LICENSE
+.temp/curator-spec/Makefile
+.temp/curator-spec/README.md
+.temp/curator-spec/RELEASE.md
+.temp/curator-spec/SECURITY.md
+.temp/curator-spec/cli
+.temp/curator-spec/conformance
+.temp/curator-spec/decisions
+.temp/curator-spec/docs
+.temp/curator-spec/go.mod
+.temp/curator-spec/maintainers.allowed_signers
+.temp/curator-spec/profiles
+.temp/curator-spec/protocol
+.temp/curator-spec/release
+.temp/curator-spec/requirements-dev.txt
+.temp/curator-spec/reviews
+.temp/curator-spec/schemas
+.temp/curator-spec/tools
+.temp/f1-messages.txt
+.temp/f2-messages.txt
+.temp/logwork
+.temp/logwork/TASK-260728-3kuxg7
+.temp/logwork/TASK-260819-2j7v0x
+.temp/old-readme.md
+.temp/open-pr-docs014-outcome.md
+.temp/open-pr-https-outcome.md
+.temp/open-pr-outcome.md
+.temp/open-pr2-outcome.md
+.temp/ratify-build-ssh
+.temp/ratify-build-ssh/.DS_Store
+.temp/ratify-build-ssh/worktree
+.temp/research
+.temp/research-operational-contract.md
+.temp/research/PLAN.md
+.temp/research/auth
+.temp/research/contract-audit
+.temp/research/csk-audit
+.temp/research/csk-review
+.temp/research/docs
+.temp/research/review-24147.md
+.temp/research/review-24148.md
+.temp/research/review-24149.md
+.temp/resources
+.temp/resources/TASK-260803-1nj6ar
+.temp/resources/TASK-260803-2ol7ok
+.temp/rev3-orig.md
+.temp/review-1an2j1.md
+.temp/review-1d7zbo.md
+.temp/review-1h8thl-2.md
+.temp/review-1h8thl.md
+.temp/review-1jns5p-2.md
+.temp/review-1jns5p-4.md
+.temp/review-1jns5p.md
+.temp/review-1uhs6k-2.md
+.temp/review-1uhs6k.md
+.temp/review-1y7hh4-2.md
+.temp/review-1y7hh4.md
+.temp/review-2c7ter-2.md
+.temp/review-2c7ter.md
+.temp/review-2nd3y7.md
+.temp/review-2otvoy-2.md
+.temp/review-2otvoy.md
+.temp/review-2rzwqa.md
+.temp/review-3ah6pu.md
+.temp/review-3o5iw2.md
+.temp/review-3s96o5-2.md
+.temp/review-3s96o5.md
+.temp/review-3tvw34.md
+.temp/review-8a0q6y-2.md
+.temp/review-8a0q6y-3.md
+.temp/review-8a0q6y.md
+.temp/review-note-3tvw34.md
+.temp/reviewer-note-generic.md
+.temp/rework-note-1h8thl.md
+.temp/rework-note-1jns5p-4.md
+.temp/rework-note-2c7ter.md
+.temp/scope-note-2c7ter.md
+.temp/skill-authoring-v7-section.md
+.temp/skill-authoring.orig.md
+.temp/skill-band
+.temp/skill-band/.git
+.temp/skill-band/.gitignore
+.temp/skill-band/.skill_triggers
+.temp/skill-band/README.md
+.temp/skill-band/SKILL.md
+.temp/skill-band/agents
+.temp/skill-band/csk-skill.json
+.temp/skill-band/dependencies.json
+.temp/skill-band/locales
+.temp/skill-band/references
+.temp/skill-band/scripts
+.temp/skill-band/tests
+.temp/skill-bi
+.temp/skill-bi-ref
+.temp/skill-bi-ref/.DS_Store
+.temp/skill-bi-ref/.git
+.temp/skill-bi-ref/.gitignore
+.temp/skill-bi-ref/.skill_triggers
+.temp/skill-bi-ref/Makefile
+.temp/skill-bi-ref/README.md
+.temp/skill-bi-ref/SKILL.md
+.temp/skill-bi-ref/agents
+.temp/skill-bi-ref/csk-skill.json
+.temp/skill-bi-ref/dependencies.json
+.temp/skill-bi-ref/locales
+.temp/skill-bi-ref/references
+.temp/skill-bi-ref/scripts
+.temp/skill-bi-ref/tests
+.temp/skill-bi/.DS_Store
+.temp/skill-bi/.git
+.temp/skill-bi/.gitignore
+.temp/skill-bi/.skill_triggers
+.temp/skill-bi/Makefile
+.temp/skill-bi/README.md
+.temp/skill-bi/SKILL.md
+.temp/skill-bi/agents
+.temp/skill-bi/locales
+.temp/skill-bi/references
+.temp/skill-bi/scripts
+.temp/skill-bi/tests
+.temp/skill-deploy-lab
+.temp/skill-deploy-lab/.git
+.temp/skill-deploy-lab/README.md
+.temp/skill-figma
+.temp/skill-figma/.git
+.temp/skill-figma/README.md
+.temp/skill-gitlab
+.temp/skill-gitlab/.git
+.temp/skill-gitlab/.gitignore
+.temp/skill-gitlab/.skill_triggers
+.temp/skill-gitlab/LICENSE
+.temp/skill-gitlab/Makefile
+.temp/skill-gitlab/README.md
+.temp/skill-gitlab/SKILL.md
+.temp/skill-gitlab/agents
+.temp/skill-gitlab/csk-skill.json
+.temp/skill-gitlab/dependencies.json
+.temp/skill-gitlab/locales
+.temp/skill-gitlab/references
+.temp/skill-gitlab/scripts
+.temp/skill-gitlab/tests
+.temp/skill-grafana
+.temp/skill-grafana/.DS_Store
+.temp/skill-grafana/.git
+.temp/skill-grafana/.gitignore
+.temp/skill-grafana/.skill_triggers
+.temp/skill-grafana/Makefile
+.temp/skill-grafana/README.md
+.temp/skill-grafana/SKILL.md
+.temp/skill-grafana/agents
+.temp/skill-grafana/csk-skill.json
+.temp/skill-grafana/locales
+.temp/skill-grafana/references
+.temp/skill-grafana/scripts
+.temp/skill-grafana/tests
+.temp/skill-sentry
+.temp/skill-sentry/.DS_Store
+.temp/skill-sentry/.git
+.temp/skill-sentry/.gitignore
+.temp/skill-sentry/.skill_triggers
+.temp/skill-sentry/Makefile
+.temp/skill-sentry/README.md
+.temp/skill-sentry/SKILL.md
+.temp/skill-sentry/agents
+.temp/skill-sentry/csk-skill.json
+.temp/skill-sentry/dependencies.json
+.temp/skill-sentry/locales
+.temp/skill-sentry/references
+.temp/skill-sentry/scripts
+.temp/skill-sentry/tests
+.temp/skill-youtrack-repo
+.temp/skill-youtrack-repo/.git
+.temp/skill-youtrack-repo/.gitignore
+.temp/skill-youtrack-repo/.skill_triggers
+.temp/skill-youtrack-repo/LICENSE
+.temp/skill-youtrack-repo/Makefile
+.temp/skill-youtrack-repo/README.md
+.temp/skill-youtrack-repo/SKILL.md
+.temp/skill-youtrack-repo/agents
+.temp/skill-youtrack-repo/csk-skill.json
+.temp/skill-youtrack-repo/locales
+.temp/skill-youtrack-repo/references
+.temp/skill-youtrack-repo/scripts
+.temp/skill-youtrack-repo/tests
+.temp/spawn-runs
+.temp/spawn-runs/.DS_Store
+.temp/spawn-runs/.scheduler.lock
+.temp/spawn-runs/RUN-260805-b69ed9
+.temp/spawn-runs/RUN-260805-efe3a6
+.temp/spawn-runs/RUN-260818-f32f0c
+.temp/spec-rc6-pin-check
+.temp/spec-rc6-pin-check/.git
+.temp/spec-rc6-pin-check/.github
+.temp/spec-rc6-pin-check/.gitignore
+.temp/spec-rc6-pin-check/.pytest_cache
+.temp/spec-rc6-pin-check/.venv
+.temp/spec-rc6-pin-check/ARCHITECTURE.md
+.temp/spec-rc6-pin-check/ARCHITECTURE.ru.md
+.temp/spec-rc6-pin-check/CHANGELOG.md
+.temp/spec-rc6-pin-check/CONTRIBUTING.md
+.temp/spec-rc6-pin-check/CONTRIBUTING.ru.md
+.temp/spec-rc6-pin-check/LICENSE
+.temp/spec-rc6-pin-check/README.md
+.temp/spec-rc6-pin-check/README.ru.md
+.temp/spec-rc6-pin-check/SECURITY.md
+.temp/spec-rc6-pin-check/SECURITY.ru.md
+.temp/spec-rc6-pin-check/docs
+.temp/spec-rc6-pin-check/pyproject.toml
+.temp/spec-rc6-pin-check/src
+.temp/spec-rc6-pin-check/tests
+.temp/spec22-blocked-packet.md
+.temp/swift_book
+.temp/swift_book/META-INF
+.temp/swift_book/OEBPS
+.temp/swift_book/mimetype
+.temp/tasks.md
+.temp/tool-readiness-git-inspection.log
+.temp/tooling-note-8a0q6y.md
+.temp/tooling-note-generic.md
+.temp/tz-docs-0.14.md
+.temp/tz-docs-build-https.md
+.temp/upstream-patch-dist
+.temp/upstream-patch-dist/cocoaskills-0.12.4.dev2+g49fc1ad7c.d20260713-py3-none-any.whl
+.temp/upstream-patch-dist/cocoaskills-0.12.4.dev2+g49fc1ad7c.d20260713.tar.gz
+.temp/upstream-patch-dist/cocoaskills-0.12.4.dev3+gba515444a-py3-none-any.whl
+.temp/upstream-patch-dist/cocoaskills-0.12.4.dev3+gba515444a.tar.gz
+.temp/ytx-output-task.md
+## worktrees
+worktree /Users/iv/Developer/Wildberries/cocoaskills
+HEAD 9164604509c35a6fff82fa4f7258a6f1638930f2
+branch refs/heads/main
+
+worktree /Users/iv/Developer/ReluxWorks/.temp/TASK-260805-3chgem-cocoaskills-rc
+HEAD ec7f74764d787eb9c9bfd0f9b2f6bb923aa0a029
+detached
+
+worktree /Users/iv/Developer/ReluxWorks/cocoaskills-production
+HEAD d2db86ce0c999da97829e4900c50f7350b777015
+branch refs/heads/agent/registry-client-production
+
+worktree /Users/iv/Developer/ReluxWorks/cocoaskills-production/.temp/BUG-260807-3092wj/worktree
+HEAD abcddea9c4fc7e968f76ebe94e382f3443eb614c
+branch refs/heads/bug/BUG-260807-3092wj-operator-ssh
+
+worktree /Users/iv/Developer/ReluxWorks/cocoaskills-production/.temp/TASK-260720-z2z795/worktree
+HEAD 540ac24280c8b4b7a1e861bfae3b2fd7a247a064
+branch refs/heads/task/TASK-260720-z2z795-transaction-engine
+
+worktree /Users/iv/Developer/ReluxWorks/cocoaskills-production/.temp/TASK-260720-z9j4c9/worktree
+HEAD dd76b570f88339fd1d659c02950e68b17f6ba834
+branch refs/heads/task/TASK-260720-z9j4c9-schema-v6
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/BUG-260805-fky0kz-cocoaskills
+HEAD 58f08e7e57ecca553e63dc99c7587119de8f5227
+branch refs/heads/bug/BUG-260805-fky0kz-prerelease-smoke
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/BUG-260805-fky0kz-github-signed-verify
+HEAD 7bceb09fd46ab23e40d627f822ffdf2f4c480a42
+branch refs/heads/bug/BUG-260805-fky0kz-github-signed
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/BUG-260806-11bbgy/cocoaskills
+HEAD f415b17a0d40f46a2ddd73e3a7469ea62934ed91
+detached
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/BUG-260806-11bbgy/rework
+HEAD a1d9bb40b1a17eca4819583193c8919b2e0db3df
+branch refs/heads/bug/BUG-260806-11bbgy-py314
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/BUG-260806-1bwq2z/cocoaskills
+HEAD b9ec2535bf0af39e0eca08a6d9a8687540a80dff
+branch refs/heads/bug/BUG-260806-1bwq2z
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/BUG-260807-29evfj/worktree
+HEAD 7f04ae1141c9f1f39f9320e8bb0ca5ad231abf5f
+detached
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/BUG-260807-31psuu/cocoaskills
+HEAD 7680d8f6952c4a1611d8f4b29f0b2980fdebd7c0
+branch refs/heads/bug/BUG-260807-31psuu-selective-fetch
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/BUG-260807-3me1d5/worktree
+HEAD 2ac06f734cda5fd3f26e9190c2af766925eccf9c
+branch refs/heads/fix/BUG-260807-3me1d5-fingerprint-timeout
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/INTEGRATION-260807
+HEAD 3f1a804f1a0e55aaac5496fa882a8722578f298d
+detached
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/TASK-260720-3s27te/cocoaskills
+HEAD 8c71c00ecf86048e4b0ef0e50c03352cf36191d3
+detached
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/TASK-260803-2ol7ok/cocoaskills
+HEAD a361899d803bd8d1af2ef501c8ac04c7f0883e29
+detached
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/TASK-260803-2ol7ok/cocoaskills-wrong-head
+HEAD d1c0655260378cb007147a5e22aed93625de4e8b
+detached
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/TASK-260804-1c6wcs/cocoaskills
+HEAD 4fa8a887dd215859b7c0540bff240a1d4bff8569
+detached
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/TASK-260804-4l63er/cocoaskills-worktree
+HEAD 8c71c00ecf86048e4b0ef0e50c03352cf36191d3
+detached
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/TASK-260805-2ukk8d/rc3-worktree
+HEAD 17547365d0a525b1d7b0c2d29f9f7ec792a87c0a
+detached
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/TASK-260805-3chgem/cocoaskills-release
+HEAD b04a89617ad43ce987e3e1867a53b98a58b6cd33
+branch refs/heads/release/TASK-260805-3chgem-rc4-gate
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/TASK-260805-3ut33m/cocoaskills-integration
+HEAD 58f08e7e57ecca553e63dc99c7587119de8f5227
+branch refs/heads/integration/TASK-260805-3ut33m-schema7
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/TASK-260805-3ut33m/cocoaskills-published
+HEAD ec7f74764d787eb9c9bfd0f9b2f6bb923aa0a029
+detached
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/TASK-260806-1dyqcj/cocoaskills-clean
+HEAD b9ec2535bf0af39e0eca08a6d9a8687540a80dff
+detached
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/TASK-260806-1qh6qg/cocoaskills-rc4
+HEAD b04a89617ad43ce987e3e1867a53b98a58b6cd33
+detached
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/TASK-260806-38dwps/cocoaskills-main
+HEAD b9ec2535bf0af39e0eca08a6d9a8687540a80dff
+detached
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/TASK-260807-zna3vh/baseline
+HEAD b9ec2535bf0af39e0eca08a6d9a8687540a80dff
+detached
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/TASK-260807-zna3vh/cocoaskills
+HEAD 70e9ca226c968f98b175a49e23a8e7766b290d5d
+branch refs/heads/task/TASK-260807-zna3vh-vendored-exceptions
+
+worktree /Users/iv/Developer/ReluxWorks/curator-parity/.temp/TASK-260807-zuzjjg/worktree
+HEAD b0b69705911d991014f2e7d6e4efb1b0d2de4b9f
+branch refs/heads/fix/BUG-260806-1bwq2z-cat-file-partial-reads
+
+worktree /Users/iv/Developer/ReluxWorks/curator/.temp/TASK-260720-2dnqw2/worktree
+HEAD 495ad021847529ce5a544dba415ca2fe19949539
+branch refs/heads/task/TASK-260720-2dnqw2-canonical-build-metadata
+
+worktree /Users/iv/Developer/ReluxWorks/curator/.temp/TASK-260720-3j8pp5/worktree
+HEAD 1d28910f5bb276ff58e2a102e06968bd7640abe3
+branch refs/heads/task/TASK-260720-3j8pp5-toolchain-identity
+
+worktree /Users/iv/Developer/ReluxWorks/curator/.temp/TASK-260824-1n98b3/cocoaskills
+HEAD 6d7f47353c6d1177f5c81960772b105e67898740
+branch refs/heads/task/TASK-260824-1n98b3-released-suite-rc9
+
+worktree /Users/iv/Developer/ReluxWorks/curator/.temp/TASK-260824-1n98b3/cocoaskills-base
+HEAD b0d74990d2386e621b7042829efc29f466ea810e
+detached
+
+worktree /Users/iv/Developer/Wildberries/.worktrees/cocoaskills-agent-skill
+HEAD 9064b23429e3805a4c865e76dc7d782dfe9356a1
+branch refs/heads/agent/agent-skill-manifest
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/BUG-260731-2rhy74/pin-old
+HEAD 6fc2fd97dbdf40f5b0e46f846eaa0d78a1b33d12
+detached
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/BUG-260805-cfdxsk/worktree
+HEAD d4d8dd9c9d89222572406ede409b6d209392d941
+branch refs/heads/ci/fastpath-macos-worker-domain
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/BUG-260807-l2ymv3/worktree
+HEAD a5dc01aa399a24b3bd26c4b1dfacc6a1215a9606
+branch refs/heads/fix/BUG-260807-l2ymv3-windows-clock-and-shims
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/build-https/worktree
+HEAD 5381317a67ec375f60117df3fa693b3bf1ae02c6
+branch refs/heads/feat/build-https-broker
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/csk-runtime-command-fix/cocoaskills-wb
+HEAD 10a758509374e75827e53b7bb43532a08f998e5f
+branch refs/heads/fix/shell-neutral-onboarding
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/ratify-build-ssh/worktree
+HEAD 4ffba9a440aa0ec44c87b125bb858cd66f85e661
+branch refs/heads/chore/ratify-build-ssh-not-lockable
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/spec-rc6-pin-check
+HEAD 6fc2fd97dbdf40f5b0e46f846eaa0d78a1b33d12
+detached
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-11yhth/baseline
+HEAD 11160f642d65a8daf3fbcca5401dca5ec80440f9
+detached
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-11yhth/worktree
+HEAD 0be99ba1ff2ead4627111d9fe0af435cb4e3e7c9
+branch refs/heads/task/TASK-260720-11yhth-command-runtime-activation
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-12r55p/worktree
+HEAD 0471df5ca1f737b4212a70040583126aa4ae1ae2
+branch refs/heads/task/TASK-260720-12r55p-ivmbp-20260802
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-2g21eg/worktree
+HEAD 82d1cfc769d5c056e16f0c120ec3b11e2ccc8dae
+branch refs/heads/task/TASK-260720-2g21eg-go-v1-compile-driver
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-2jfnz6/worktree
+HEAD 540af8ef0c99e3c9f91673e61e26dabc52ffd924
+branch refs/heads/task/TASK-260720-2jfnz6-protected-posix-build-cache
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-2x6mjn/review-baseline
+HEAD 82d1cfc769d5c056e16f0c120ec3b11e2ccc8dae
+detached
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-2x6mjn/worktree
+HEAD b3a5031ed551b27a298eef486a068b5175beaacc
+branch refs/heads/task/TASK-260720-2x6mjn-pure-build-planner
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-3c0ss2/worktree
+HEAD 97a0ed870782b48eebc5a9c25a9cfa8fea5ff245
+branch refs/heads/task/TASK-260720-3c0ss2-build-source-identity
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-3pemm6/worktree
+HEAD 8c71c00ecf86048e4b0ef0e50c03352cf36191d3
+branch refs/heads/task/TASK-260720-3pemm6-go-e2e
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-3t8nr3/worktree
+HEAD 7a66c73ebb30822df40c87856f2301f1f409b735
+branch refs/heads/task/TASK-260720-3t8nr3-transactional-project-hybrid
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-8nxlgx/worktree
+HEAD 11160f642d65a8daf3fbcca5401dca5ec80440f9
+branch refs/heads/task/TASK-260720-8nxlgx-protected-windows-build-cache
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-poa3ze/origin-main-worktree
+HEAD 6fc2fd97dbdf40f5b0e46f846eaa0d78a1b33d12
+detached
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260803-21lw4t/fix-hosted-cleanliness
+HEAD 5add1a4c32a6f108b5f350936ec1ff2eea022793
+branch refs/heads/fix/TASK-260803-21lw4t-hosted-cleanliness
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260803-21lw4t/fix-windows-tests
+HEAD d64cc760774c877da4a1585ad891c9f1537e0d24
+branch refs/heads/fix/TASK-260803-21lw4t-windows-tests
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260803-21lw4t/integration
+HEAD 3f3a5d5f4b087465ce78f42c185a0279d9499819
+branch refs/heads/ci/main-canary-TASK-260803-21lw4t
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260803-21lw4t/worktree
+HEAD 07ab96a2ceb9078e0f88da41bad5b74a8229c2cb
+branch refs/heads/ci/fastpath-windows-protocol-shards
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2h0vjy/crlf
+HEAD 743a9a1d15191189a1487ff13f32c9e3d770022e
+branch refs/heads/task/TASK-260824-2h0vjy-audit-line-endings
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2h0vjy/cycle4
+HEAD 5381317a67ec375f60117df3fa693b3bf1ae02c6
+detached
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2h0vjy/fix
+HEAD 46a942ae95310667d6f39bb3ac8351ea07ee55b7
+branch refs/heads/task/TASK-260824-2h0vjy-macos-domain-join
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2h0vjy/rework
+HEAD f5d67b25368b81fcb4fa21665930af465ec6a684
+branch refs/heads/task/TASK-260824-2h0vjy-restore-audit-surface
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2h0vjy/worktree
+HEAD 991d6d31fc9973eb9b6ed16fe73f94700ca5ce1e
+branch refs/heads/task/TASK-260824-2h0vjy-candidate-lane-input
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2i5yqw/pr40
+HEAD 1c6b68e09ee2ca583573154d7df58b0c8b527d88
+branch refs/heads/feat/schema-8-module-roots
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2i5yqw/worktree
+HEAD 4ffba9a440aa0ec44c87b125bb858cd66f85e661
+branch refs/heads/task/TASK-260824-2i5yqw-schema8
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-31y75t/rework
+HEAD b480fcb32c086b451aa3a6130d5ed6e169f18b96
+branch refs/heads/task/TASK-260824-31y75t-declared-gap-owner
+
+worktree /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-31y75t/worktree
+HEAD ae1b6f2af2a85ec60bc44ba9fba81c85d9744835
+branch refs/heads/task/TASK-260824-31y75t-schema8-consumption
+
+## task-board goal
+Primary Goal: PRIMARY-GOAL-260807-14tce2 revision 15
+State: active
+Objective: Two parallel workstreams. (1) Deliver the docs-build-https story per .research/260824_tz-docs-build-https.md: README HTTPS quickstart next to the SSH block, skill-authoring v7 transport paragraph with the mandatory .git suffix rule, troubleshooting entries for build_repository_credential_policy_invalid (three branches) and the 301 no-.git case with the Windows credential-store note, and the compiled-commands macOS/Windows-only line in the reference install matrix; every example verified against csk from the working tree; delivered as a merged GitHub PR after full per-job CI verification, WB GitLab fast-forwarded to the same commit, no AI attribution. (2) Execute the approved CocoaSkills CI fast path from freshly fetched origin/main in separate task-scoped git worktrees: preserve Python 3.11-3.14 and all platforms, stabilize the macOS arm64 Go worker-domain termination/join regression without weakening fail-closed semantics, revalidate and implement deterministic exhaustive Windows protocol shards with bounded timeouts and exact node completeness, independently review each change, integrate only accepted commits, and qualify the resulting hosted CI without touching unrelated dirty work. Keep spec#22 deferred; docs-0.14 is delivered (PR 37, 2bfe3d6).
+Board Scope: local ../cocoaskills-taskboard/.task-board
+Updated: 2026-08-24T13:25:43.559209Z

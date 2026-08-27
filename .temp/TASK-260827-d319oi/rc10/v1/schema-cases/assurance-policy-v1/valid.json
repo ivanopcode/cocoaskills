@@ -1,0 +1,8 @@
+{
+  "execution_policy": "manager-worker-v1",
+  "mode": "portable",
+  "policy_id": "portable-cli-policy-v1",
+  "provider_contract": null,
+  "required_capabilities": [],
+  "schema_version": 1
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/execution-receipt-v1.schema.json",
+  "title": "Curator verified provider execution receipt schema 1",
+  "type": "object",
+  "required": ["schema_version", "receipt_type", "policy_id", "execution_policy", "operation_id", "provider", "capability_receipt_sha256", "permit_sha256", "build_input_sha256", "artifact_sha256", "result", "started_at", "completed_at"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "receipt_type": {"const": "verified-execution-receipt-v1"},
+    "policy_id": {"const": "verified-provider-policy-v1"},
+    "execution_policy": {"const": "verified-provider-execution-v1"},
+    "operation_id": {"$ref": "common.schema.json#/$defs/sha256"},
+    "provider": {"$ref": "verified-provider-v1.schema.json"},
+    "capability_receipt_sha256": {"$ref": "common.schema.json#/$defs/sha256"},
+    "permit_sha256": {"$ref": "common.schema.json#/$defs/sha256"},
+    "build_input_sha256": {"$ref": "common.schema.json#/$defs/sha256"},
+    "artifact_sha256": {"$ref": "common.schema.json#/$defs/sha256"},
+    "result": {"const": "succeeded"},
+    "started_at": {"$ref": "common.schema.json#/$defs/timestamp"},
+    "completed_at": {"$ref": "common.schema.json#/$defs/timestamp"}
+  },
+  "additionalProperties": false
+}

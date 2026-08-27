@@ -1,0 +1,29 @@
+{
+  "capabilities": {
+    "env_read": [],
+    "exec": "none",
+    "filesystem": "repo",
+    "network": "none",
+    "secrets": "none"
+  },
+  "commands": {
+    "build-tool": {
+      "driver": "go-v1",
+      "execution_policy": "script-worker-v1",
+      "interpreter": "python3-v1",
+      "source_dir": "build/cmd/tool",
+      "type": "build"
+    },
+    "enforced-tool": {
+      "execution_policy": "script-worker-v1",
+      "interpreter": "python3-v1",
+      "type": "script",
+      "unix_path": "scripts/enforced",
+      "win_path": "scripts/enforced.cmd"
+    }
+  },
+  "runtime_roots": [
+    "scripts"
+  ],
+  "schema_version": 8
+}

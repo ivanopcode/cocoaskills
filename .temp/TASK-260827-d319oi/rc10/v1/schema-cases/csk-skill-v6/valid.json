@@ -1,0 +1,28 @@
+{
+  "build_roots": [
+    "build"
+  ],
+  "capabilities": {},
+  "commands": {
+    "build-tool": {
+      "driver": "go-v1",
+      "source_dir": "build/cmd/tool",
+      "type": "build"
+    },
+    "script-tool": {
+      "type": "script",
+      "unix_path": "scripts/tool"
+    },
+    "system-tool": {
+      "command": "tool",
+      "type": "system"
+    }
+  },
+  "dependencies": {
+    "commands": {},
+    "mcp_servers": {},
+    "skills": {}
+  },
+  "runtime_roots": [],
+  "schema_version": 6
+}

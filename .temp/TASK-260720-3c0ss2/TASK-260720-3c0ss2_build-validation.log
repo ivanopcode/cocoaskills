@@ -1,0 +1,42 @@
+TASK-260720-3c0ss2 build and hygiene validation — 2026-07-30
+
+Working directory:
+  /Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-3c0ss2/worktree
+
+1. Distribution build
+   command:
+     PATH=/Users/iv/Developer/Wildberries/cocoaskills/.venv/bin:$PATH python -m build
+   result:
+     Successfully built cocoaskills-0.12.6.dev1+gdd76b570f.d20260729.tar.gz
+     and cocoaskills-0.12.6.dev1+gdd76b570f.d20260729-py3-none-any.whl
+   exit code: 0
+
+2. Distribution metadata
+   command:
+     PATH=/Users/iv/Developer/Wildberries/cocoaskills/.venv/bin:$PATH python -m twine check dist/*
+   result:
+     wheel PASSED; sdist PASSED
+   exit code: 0
+
+3. Distribution inventory
+   command:
+     PATH=/Users/iv/Developer/Wildberries/cocoaskills/.venv/bin:$PATH python <inline inventory assertion>
+   result:
+     csk/builds/source.py is present in both the wheel and sdist
+   exit code: 0
+
+4. Bytecode compilation
+   command:
+     PATH=/Users/iv/Developer/Wildberries/cocoaskills/.venv/bin:$PATH python -m compileall -q src/csk tests
+   result:
+     no diagnostics
+   exit code: 0
+
+5. Diff hygiene
+   command:
+     git diff --check
+   result:
+     no diagnostics
+   exit code: 0
+
+No Go command was run, as required by task scope.

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/reviews/review-report-v2.schema.json",
+  "title": "Curator Protocol independent review report v2",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "protocol_version",
+    "review_type",
+    "reviewed_commit",
+    "reviewer",
+    "scope",
+    "completed_at",
+    "source_url",
+    "conclusion",
+    "findings"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "protocol_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "review_type": {"enum": ["security", "interoperability"]},
+    "reviewed_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "reviewer": {
+      "type": "object",
+      "required": [
+        "name",
+        "affiliation",
+        "contact",
+        "independent",
+        "project_maintainer",
+        "authored_reviewed_changes",
+        "conflicts"
+      ],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 200},
+        "affiliation": {"type": "string", "minLength": 1, "maxLength": 200},
+        "contact": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S"},
+        "independent": {"const": true},
+        "project_maintainer": {"const": false},
+        "authored_reviewed_changes": {"const": false},
+        "conflicts": {"type": "string", "minLength": 1, "maxLength": 2000}
+      },
+      "additionalProperties": false
+    },
+    "scope": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "completed_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "source_url": {"type": "string", "format": "uri", "pattern": "^https://"},
+    "conclusion": {"enum": ["pass", "conditional", "fail"]},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "severity", "status", "title", "evidence"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[A-Z][A-Z0-9-]{1,63}$"},
+          "severity": {"enum": ["critical", "high", "medium", "low", "info"]},
+          "status": {"enum": ["open", "resolved", "accepted"]},
+          "title": {"type": "string", "minLength": 1, "maxLength": 500},
+          "evidence": {"type": "string", "minLength": 1, "maxLength": 10000}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

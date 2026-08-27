@@ -1,0 +1,401 @@
+{
+  "artifact_key": [
+    "name",
+    "source_identity",
+    "commit",
+    "content_sha256"
+  ],
+  "cache_cases": [
+    {
+      "cache_control": "public",
+      "name": "public-read",
+      "request": "GET /v1/snapshot"
+    },
+    {
+      "cache_control": "no-store",
+      "name": "authenticated-write",
+      "request": "POST /v1/records"
+    },
+    {
+      "cache_control": "no-store",
+      "name": "error-response",
+      "request": "GET /v1/records invalid"
+    }
+  ],
+  "idempotency_cases": [
+    {
+      "appends": 1,
+      "auditors": [
+        "auditor-a",
+        "auditor-a"
+      ],
+      "body_ids": [
+        "alpha-audited",
+        "alpha-audited"
+      ],
+      "key": "request-1",
+      "name": "same-auditor-replay",
+      "statuses": [
+        201,
+        200
+      ]
+    },
+    {
+      "appends": 1,
+      "auditors": [
+        "auditor-a",
+        "auditor-a"
+      ],
+      "body_ids": [
+        "alpha-audited",
+        "alpha-equivocated"
+      ],
+      "key": "request-2",
+      "name": "same-auditor-conflict",
+      "statuses": [
+        201,
+        409
+      ]
+    },
+    {
+      "appends": 2,
+      "auditors": [
+        "auditor-a",
+        "auditor-b"
+      ],
+      "body_ids": [
+        "alpha-audited",
+        "alpha-equivocated"
+      ],
+      "key": "shared-key",
+      "name": "different-auditors-do-not-conflict",
+      "statuses": [
+        201,
+        201
+      ]
+    }
+  ],
+  "limits": {
+    "body_bytes": 16777216,
+    "cursor_characters": 4096,
+    "idempotency_key_characters": 256,
+    "idempotency_retention_seconds": 86400,
+    "page_items": 1000
+  },
+  "pagination": {
+    "append_after_first_page": {
+      "id": "alpha-recovered",
+      "record": {
+        "audit": {
+          "case": "alpha-recovered"
+        },
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content_sha256": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "name": "alpha",
+        "schema_version": 1,
+        "source_identity": "git.example.com/skills/alpha",
+        "status": "audited"
+      }
+    },
+    "boundary_log_size": 4,
+    "cursor_rejections": [
+      "changed_query",
+      "changed_limit",
+      "wrong_endpoint",
+      "expired",
+      "unavailable_snapshot"
+    ],
+    "expected_new_query_ids": [
+      "alpha-recovered",
+      "beta-mirror"
+    ],
+    "expected_original_cursor_ids": [
+      "beta-mirror"
+    ],
+    "expected_pages": [
+      [
+        "alpha-revoked"
+      ],
+      [
+        "beta-mirror"
+      ]
+    ],
+    "invalid_cursor_status": 404,
+    "query": {
+      "content_sha256": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+      "limit": 1
+    }
+  },
+  "query_cases": [
+    {
+      "expected_ids": [
+        "alpha-revoked",
+        "alpha-equivocated"
+      ],
+      "name": "identity-pair-keeps-content-equivocation",
+      "query": {
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_identity": "git.example.com/skills/alpha"
+      }
+    },
+    {
+      "expected_ids": [
+        "alpha-revoked",
+        "beta-mirror"
+      ],
+      "name": "content-hash-matches-mirrors",
+      "query": {
+        "content_sha256": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"
+      }
+    },
+    {
+      "expected_ids": [
+        "alpha-equivocated"
+      ],
+      "name": "all-filters-are-conjunctive",
+      "query": {
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content_sha256": "sha256:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+        "source_identity": "git.example.com/skills/alpha"
+      }
+    },
+    {
+      "expected_ids": [],
+      "name": "conjunctive-mismatch-is-empty",
+      "query": {
+        "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "content_sha256": "sha256:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+        "source_identity": "mirror.example.com/skills/beta"
+      }
+    },
+    {
+      "error": "invalid_query",
+      "name": "source-without-commit",
+      "query": {
+        "source_identity": "git.example.com/skills/alpha"
+      }
+    },
+    {
+      "error": "invalid_query",
+      "name": "commit-without-source",
+      "query": {
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  ],
+  "records": [
+    {
+      "id": "alpha-audited",
+      "record": {
+        "audit": {
+          "case": "alpha-audited"
+        },
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content_sha256": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "name": "alpha",
+        "schema_version": 1,
+        "source_identity": "git.example.com/skills/alpha",
+        "status": "audited"
+      }
+    },
+    {
+      "id": "alpha-revoked",
+      "record": {
+        "audit": {
+          "case": "alpha-revoked"
+        },
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content_sha256": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "name": "alpha",
+        "schema_version": 1,
+        "source_identity": "git.example.com/skills/alpha",
+        "status": "revoked"
+      }
+    },
+    {
+      "id": "alpha-equivocated",
+      "record": {
+        "audit": {
+          "case": "alpha-equivocated"
+        },
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content_sha256": "sha256:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+        "name": "alpha",
+        "schema_version": 1,
+        "source_identity": "git.example.com/skills/alpha",
+        "status": "pending"
+      }
+    },
+    {
+      "id": "beta-mirror",
+      "record": {
+        "audit": {
+          "case": "beta-mirror"
+        },
+        "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "content_sha256": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "name": "beta",
+        "schema_version": 1,
+        "source_identity": "mirror.example.com/skills/beta",
+        "status": "audited"
+      }
+    }
+  ],
+  "recovery_cases": [
+    {
+      "mutation": "none",
+      "name": "valid-restart",
+      "ready": true
+    },
+    {
+      "mutation": "prev_hash",
+      "name": "broken-previous-hash",
+      "ready": false
+    },
+    {
+      "mutation": "entry_hash",
+      "name": "broken-entry-hash",
+      "ready": false
+    },
+    {
+      "mutation": "sequence_gap",
+      "name": "missing-sequence",
+      "ready": false
+    },
+    {
+      "mutation": "idempotency_seq",
+      "name": "idempotency-orphan",
+      "ready": false
+    },
+    {
+      "mutation": "import_seq",
+      "name": "import-ledger-orphan",
+      "ready": false
+    },
+    {
+      "mutation": "metadata",
+      "name": "missing-service-metadata",
+      "ready": false
+    },
+    {
+      "mutation": "schema_table",
+      "name": "missing-schema-table",
+      "ready": false
+    }
+  ],
+  "restore_cases": [
+    {
+      "checkpoint_version": 8,
+      "matching_head": true,
+      "name": "checkpoint-equal",
+      "ready": true,
+      "restored_version": 8
+    },
+    {
+      "checkpoint_version": 8,
+      "matching_head": false,
+      "name": "checkpoint-rollback",
+      "ready": false,
+      "restored_version": 7
+    },
+    {
+      "checkpoint_version": 8,
+      "matching_head": false,
+      "name": "checkpoint-equivocation",
+      "ready": false,
+      "restored_version": 8
+    }
+  ],
+  "snapshot": {
+    "created_at_immutable_per_boundary": true,
+    "key_rotation_preserves_body": true,
+    "version_equals_log_size": true
+  },
+  "sort_key": [
+    "name",
+    "source_identity",
+    "commit",
+    "content_sha256"
+  ],
+  "transaction_cases": [
+    {
+      "contiguous": true,
+      "expected_first_seq": 1,
+      "expected_last_seq": 32,
+      "name": "concurrent-writers",
+      "writers": 32
+    },
+    {
+      "injection_point": "after_log_insert",
+      "name": "failure-before-commit",
+      "state_unchanged": true
+    },
+    {
+      "injection_point": "before_import_ledger",
+      "name": "bundle-import-failure",
+      "state_unchanged": true
+    }
+  ],
+  "transport_cases": [
+    {
+      "name": "maximum-page-size",
+      "query_limit": 1000,
+      "status": 200
+    },
+    {
+      "error": "invalid_query",
+      "name": "oversize-page",
+      "query_limit": 1001,
+      "status": 400
+    },
+    {
+      "cursor_characters": 4097,
+      "error": "invalid_cursor",
+      "name": "oversize-cursor",
+      "status": 404
+    },
+    {
+      "body_bytes": 16777217,
+      "error": "request_too_large",
+      "name": "oversize-request-body",
+      "status": 413
+    },
+    {
+      "content_encoding": "gzip",
+      "error": "unsupported_media_type",
+      "name": "compressed-request-body",
+      "status": 415
+    },
+    {
+      "idempotency_key_characters": 256,
+      "name": "maximum-idempotency-key",
+      "status": 201
+    },
+    {
+      "error": "invalid_idempotency_key",
+      "idempotency_key_characters": 257,
+      "name": "oversize-idempotency-key",
+      "status": 400
+    },
+    {
+      "error": "invalid_idempotency_key",
+      "idempotency_key": "contains space",
+      "name": "non-visible-idempotency-key",
+      "status": 400
+    },
+    {
+      "configured_requests": 1,
+      "error": "rate_limited",
+      "name": "network-rate-limit",
+      "retry_after": true,
+      "status": 429
+    },
+    {
+      "configured_submissions": 1,
+      "error": "rate_limited",
+      "name": "auditor-rate-limit",
+      "retry_after": true,
+      "status": 429
+    }
+  ]
+}

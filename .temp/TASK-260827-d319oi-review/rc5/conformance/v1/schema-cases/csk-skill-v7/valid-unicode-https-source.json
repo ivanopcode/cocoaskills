@@ -1,0 +1,30 @@
+{
+  "build_repositories": {
+    "golden-tools": {
+      "git": "https://example.com/组织/工具.git",
+      "locked_commit": {
+        "hex": "0123456789abcdef0123456789abcdef01234567",
+        "object_format": "sha1"
+      },
+      "tag": "v1.4.0"
+    }
+  },
+  "build_roots": [
+    "build"
+  ],
+  "capabilities": {},
+  "commands": {
+    "golden-tool": {
+      "driver": "go-repository-v1",
+      "repository": "golden-tools",
+      "target": "golden-tool",
+      "type": "build"
+    },
+    "local-helper": {
+      "driver": "go-v1",
+      "source_dir": "build/cmd/helper",
+      "type": "build"
+    }
+  },
+  "schema_version": 7
+}

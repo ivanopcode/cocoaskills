@@ -1,0 +1,23 @@
+{
+  "assurance": {
+    "execution_policy": "verified-provider-execution-v1",
+    "mode": "verified",
+    "policy_id": "verified-provider-policy-v1",
+    "provider_contract": "host-execution-provider-v1",
+    "provider_id": "example.host-provider"
+  },
+  "claim_type": "assurance-conformance-claim-v1",
+  "classes": [
+    "manager"
+  ],
+  "created_at": "2026-07-13T00:00:00Z",
+  "implementation": "example",
+  "implementation_version": "1.0",
+  "operating_systems": [
+    "macos"
+  ],
+  "protocol_version": "1.0.0-rc.8",
+  "result": "pass",
+  "schema_version": 4,
+  "suite_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}

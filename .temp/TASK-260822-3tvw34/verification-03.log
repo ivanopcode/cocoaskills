@@ -1,0 +1,129 @@
+=== TASK-260822-3tvw34 review 2 (RUN-260822-37f5d2) verification ===
+Sat Aug 22 22:44:52 +04 2026
+
+--- pwd / repo state ---
+/Users/iv/Developer/Wildberries/cocoaskills
+ M .gitignore
+ M CHANGELOG.md
+ M CONTRIBUTING.ru.md
+ M LOGBOOK.md
+ M README.md
+ M docs/cli.md
+ M docs/external-build-repositories.md
+ M docs/reference.md
+ M docs/skill-authoring.md
+?? .research/260822_tz-docs-0.14.md
+?? docs/troubleshooting.md
+
+--- W1/W2 target line (README.md:144-154) ---
+### Приватные репозитории сборки: за один Enter
+
+Скомпилированные команды скилла могут собираться из отдельно запиненного git-репозитория. Если репозиторий приватный, при первой установке `csk` показывает обнаруженные варианты (ssh-agent, ваши `*.pub`): вы выбираете вариант на терминале (дефолт "агент + пин ключа"), указываете скоуп, и выбор сохраняется в конфиг. В CI то же самое задаётся заранее:
+
+```bash
+csk config build-ssh add gitlab.example.com/portals/infra \
+    --agent auto --identity ~/.ssh/work.pub
+```
+
+Пакет скилла выбрать креды не может: выбор делает только оператор и только явно.
+
+
+--- W1: qualification against schema docs ---
+146:Скомпилированные команды скилла могут собираться из отдельно запиненного git-репозитория. Если репозиторий приватный, при первой установке `csk` показывает обнаруженные варианты (ssh-agent, ваши `*.pub`): вы выбираете вариант на терминале (дефолт "агент + пин ключа"), указываете скоуп, и выбор сохраняется в конфиг. В CI то же самое задаётся заранее:
+## 5. Корни сборки и скомпилированные команды
+* Схема v6: добавляет компилируемые команды и исключение файлов сборки через `build_roots`.
+
+--- W2: precheck prints candidates (installer.py) ---
+961:    print("Detected candidates:")
+    options.append(("enter a path manually", None, "__manual__"))
+    print("Detected candidates:")
+    for index, (label, _, _) in enumerate(options, start=1):
+        marker = "   <- default" if index == 1 and len(options) > 1 else ""
+        print(f"  [{index}] {label}{marker}")
+    choice_raw = input(f"Select [1-{len(options)}, empty=1, n=abort]: ").strip().lower()
+    if choice_raw in {"n", "no"}:
+
+--- prose-style: em/en dash + guillemets in new blocks (must be 0) ---
+0
+0
+
+--- CLI example vs cli.py epilog ---
+            "Examples:\n"
+            "  csk config build-ssh add gitlab.example.com/portals/infra \\\n"
+            "      --agent auto --identity ~/.ssh/work.pub\n"
+            "  csk config build-ssh list\n"
+
+--- README nesting + troubleshooting link ---
+awk: syntax error at source line 1
+ context is
+	 >>> \ <<< $1<146
+awk: bailing out at source line 1
+291:- [`docs/troubleshooting.md`](docs/troubleshooting.md): диагностика ошибок установки, миграция со старых версий и решение частых проблем.
+-rw-r--r--@ 1 iv  staff  4571 Aug 22 20:52 docs/troubleshooting.md
+
+--- README nesting (nearest ## before line 146) ---
+59:## Быстрый старт
+
+--- CHANGELOG headings and dates vs annotated tags ---
+8:## [Unreleased]
+10:## [0.14.1] - 2026-08-22
+16:## [0.14.0] - 2026-08-21
+31:## [0.13.0] - 2026-08-08
+145:## [0.12.5] - 2026-07-14
+v0.13.0 2026-08-08
+v0.14.0 2026-08-21
+v0.14.1 2026-08-22
+
+--- tag containment for rehomed / claimed commits ---
+76e07f0 -> error: malformed object name $c
+7680d8f -> error: malformed object name $c
+dd76b57 -> error: malformed object name $c
+2734bef -> error: malformed object name $c
+495ad02 -> error: malformed object name $c
+e66c0c8 -> error: malformed object name $c
+b2d3d14 -> error: malformed object name $c
+d8d3529 -> error: malformed object name $c
+2bb2772 -> error: malformed object name $c
+
+--- commit ranges ---
+v0.13.0..v0.14.0:
+fd116d7 Merge fix/go-v1-install-blockers: unblock go-repository-v1 installs and add scoped build-SSH credentials
+d8d3529 test: regressions for install blockers and build-ssh scopes
+b2d3d14 feat: operator-scoped build-SSH credential selection
+e66c0c8 fix: unblock go-repository-v1 for package-manager installs
+d3e0116 ci: bump the Homebrew tap from the release workflow
+0099b25 docs: restructure documentation around bilingual READMEs and internals rationale
+b1e05cd ci: add fast pull request feedback lane
+239c807 chore: relocate task board configuration
+v0.14.0..v0.14.1:
+818049c Merge feat/build-ssh-candidates: one-Enter onboarding for build-SSH credentials
+2bb2772 feat: offer detected credential candidates in the build-SSH precheck
+1a4ac00 test: assert the tap bump gate semantically instead of by exact formatting
+0d7806f ci: trust the tap before installing in the Homebrew smoke lane
+fa59664 docs: adopt Russian-first documentation with market positioning and CLI reference
+e9d6785 ci: run the tap bump after a skipped TestPyPI lane
+v0.14.1..HEAD (must be empty):
+
+--- comparison links + duplicates ---
+[Unreleased]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.14.1...main
+[0.14.1]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.14.0...v0.14.1
+[0.14.0]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.13.0...v0.14.0
+[0.13.0]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.5...v0.13.0
+[0.12.5]: https://gitlab.wildberries.ru/portals/agentic-infra/cocoaskills/-/compare/v0.12.4...v0.12.5
+duplicate link defs (must be empty):
+
+--- Unreleased body (must be empty) ---
+## [Unreleased]
+
+## [0.14.1] - 2026-08-22
+
+--- tag containment (rerun, fixed quoting) ---
+76e07f0 -> v0.13.0
+7680d8f -> v0.13.0
+dd76b57 -> v0.13.0-rc.1
+2734bef -> v0.13.0-rc.1
+495ad02 -> v0.13.0-rc.1
+e66c0c8 -> v0.14.0
+b2d3d14 -> v0.14.0
+d8d3529 -> v0.14.0
+2bb2772 -> v0.14.1

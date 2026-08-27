@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/conformance-claim-v4.schema.json",
+  "title": "Curator Protocol conformance claim schema 4",
+  "type": "object",
+  "required": ["schema_version", "protocol_version", "claim_type", "implementation", "implementation_version", "classes", "suite_sha256", "assurance", "operating_systems", "created_at", "result"],
+  "properties": {
+    "schema_version": {"const": 4},
+    "protocol_version": {"const": "1.0.0-rc.8"},
+    "claim_type": {"const": "assurance-conformance-claim-v1"},
+    "implementation": {"$ref": "common.schema.json#/$defs/nonEmptyString"},
+    "implementation_version": {"$ref": "common.schema.json#/$defs/nonEmptyString"},
+    "classes": {"type": "array", "minItems": 1, "items": {"enum": ["core", "manager", "registry-client", "registry-service"]}, "uniqueItems": true},
+    "suite_sha256": {"$ref": "common.schema.json#/$defs/sha256"},
+    "assurance": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["mode", "policy_id", "execution_policy"],
+          "properties": {"mode": {"const": "portable"}, "policy_id": {"const": "portable-cli-policy-v1"}, "execution_policy": {"const": "manager-worker-v1"}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["mode", "policy_id", "execution_policy", "provider_contract", "provider_id", "provider_binary_sha256", "capability_receipt_sha256", "execution_receipt_sha256"],
+          "properties": {
+            "mode": {"const": "verified"},
+            "policy_id": {"const": "verified-provider-policy-v1"},
+            "execution_policy": {"const": "verified-provider-execution-v1"},
+            "provider_contract": {"const": "host-execution-provider-v1"},
+            "provider_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+            "provider_binary_sha256": {"$ref": "common.schema.json#/$defs/sha256"},
+            "capability_receipt_sha256": {"$ref": "common.schema.json#/$defs/sha256"},
+            "execution_receipt_sha256": {"$ref": "common.schema.json#/$defs/sha256"}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "operating_systems": {"type": "array", "minItems": 1, "items": {"enum": ["linux", "macos", "windows"]}, "uniqueItems": true},
+    "created_at": {"$ref": "common.schema.json#/$defs/timestamp"},
+    "result": {"const": "pass"}
+  },
+  "additionalProperties": false
+}

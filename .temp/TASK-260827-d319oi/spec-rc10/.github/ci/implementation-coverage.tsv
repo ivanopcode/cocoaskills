@@ -1,0 +1,59 @@
+# Implementation coverage ledger for the schema-8 families.
+#
+# The pinned implementation jobs used to answer only "does the pinned build
+# still exit 0 against whatever this repository publishes?". Schema 8 showed
+# what that answer is worth: both pinned managers returned exit 0 against a
+# root carrying the whole schema-8 surface while reading none of it, because a
+# family's PRESENCE in the conformance root was never evidence that anything
+# opened it.
+#
+# This table is the specification's own statement of the other half. It names,
+# per pinned implementation, the cases that must be OBSERVED PASSING against
+# this repository's in-tree suite, and the root artefacts each of them reads:
+#
+#   * `tools/implementation_coverage.py families` fails when this repository
+#     stops publishing an artefact a row declares, so a family cannot be
+#     deleted from the suite while the ledger still claims it is consumed;
+#   * `tools/implementation_coverage.py go` fails when a `go` row is not
+#     observed passing in that runner's real `go test -json` stream. A rename,
+#     a deletion, a package dropped from the invocation, a `-run` filter
+#     matching nothing or a skip all fail here BY NAME instead of quietly
+#     shrinking the run;
+#   * `tools/implementation_coverage.py pytest` does the same for a `manager`
+#     row against that runner's real `--junitxml` stream, and a row covers
+#     every parameterization its test function produces.
+#
+# The ledger is deliberately owned HERE rather than deferred to each
+# implementation's own consumption ledger: an implementation that renames or
+# drops a schema-8 consumer must fail this repository's landing gate, not
+# merely its own.
+#
+# Columns are TAB separated:
+#   implementation  identity  artefacts  behaviour
+#
+# `implementation` is `go` or `manager`. A `go` identity is
+# `<package>.<TestName>`, relative to the Go module path. A `manager` identity
+# is a pytest nodeid relative to that implementation's checkout. `artefacts`
+# is a comma separated list of root-relative published paths or family
+# directories; a directory is published when the manifest publishes at least
+# one file below it.
+#
+# implementation	identity	artefacts	behaviour
+go	internal/skillspec.TestReleasedSchemaCases	schema-cases/index.json,schema-cases/agent-skill-v8,schema-cases/csk-skill-v8	both halves of the schema-8 manifest bump are loaded, and every published case in them is consumed
+go	internal/marker.TestReadAuthoritativeMarkerV4SchemaCases	schema-cases/index.json,schema-cases/install-marker-v4	every published install-marker-v4 case is read back through the marker reader
+go	internal/moduleroots.TestModuleRootVectors	vectors/module-roots.json	every published module-roots case drives declaration, containment and the declared/effective replace bijection to its own failure boundary
+go	internal/scriptpolicy.TestScriptHostExecutionPolicySectionsAreAllClassified	vectors/script-host-execution-policy.json	every top-level section of the published script-worker family is classified, so a section this specification adds cannot be ignored
+go	internal/scriptpolicy.TestScriptExecutionPolicyIdentityMatchesTheSuite	vectors/script-host-execution-policy.json	the closed policy identity and interpreter set the implementation hard-codes are read back from the suite's own bytes
+go	internal/scriptpolicy.TestScriptExecutionOptInCases	vectors/script-host-execution-policy.json	every published opt-in case decides manifest acceptance and the enforced/declared-only classification
+go	internal/scriptpolicy.TestARefusalPrecedesEveryWorkerSurface	vectors/script-host-execution-policy.json	every enforced shape the suite declares is refused before any worker surface
+manager	tests/test_schema8_candidate_conformance.py::test_every_declared_schema8_artefact_is_published	schema-cases/index.json	the presence ledger is decided against this suite's manifest inside the run that consumes it
+manager	tests/test_schema8_candidate_conformance.py::test_both_manifest_families_are_consumed_in_full	schema-cases/agent-skill-v8,schema-cases/csk-skill-v8	every published agent-skill-v8 and csk-skill-v8 case is collected, and neither family is empty
+manager	tests/test_schema8_candidate_conformance.py::test_schema8_manifest_case	schema-cases/agent-skill-v8,schema-cases/csk-skill-v8	every published schema-8 manifest case decides acceptance through the real skill-spec loader
+manager	tests/test_schema8_candidate_conformance.py::test_the_marker_v4_family_is_consumed_in_full	schema-cases/install-marker-v4	every published install-marker-v4 case is collected, and the family is not empty
+manager	tests/test_schema8_candidate_conformance.py::test_marker_v4_case	schema-cases/install-marker-v4	every published install-marker-v4 case is read back through the marker reader and round-trips
+manager	tests/test_schema8_candidate_conformance.py::test_module_root_sections_are_all_classified	vectors/module-roots.json	every top-level section of the published module-roots family is classified
+manager	tests/test_schema8_candidate_conformance.py::test_module_root_case	vectors/module-roots.json	every published module-roots case drives the go-v1 driver to its own declared failure boundary
+manager	tests/test_schema8_candidate_conformance.py::test_script_policy_sections_are_all_classified	vectors/script-host-execution-policy.json	every top-level section of the published script-worker family is classified
+manager	tests/test_schema8_candidate_conformance.py::test_script_policy_identity_matches_the_suite	vectors/script-host-execution-policy.json	the closed policy identity and interpreter set the implementation hard-codes are the suite's own
+manager	tests/test_schema8_candidate_conformance.py::test_script_policy_opt_in_case	vectors/script-host-execution-policy.json	every published opt-in case decides manifest acceptance and the enforced/declared-only classification
+manager	tests/test_schema8_candidate_conformance.py::test_a_refusal_precedes_every_worker_surface	vectors/script-host-execution-policy.json	every enforced shape the suite declares is refused before any install mutation

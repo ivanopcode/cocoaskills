@@ -1,0 +1,27 @@
+[
+  {
+    "error": "duplicate_key",
+    "input_text": "{\"a\":1,\"a\":2}",
+    "name": "duplicate-key"
+  },
+  {
+    "error": "non_integer_number",
+    "input_text": "{\"n\":1.5}",
+    "name": "fraction"
+  },
+  {
+    "error": "non_shortest_integer",
+    "input_text": "{\"n\":-0}",
+    "name": "negative-zero"
+  },
+  {
+    "error": "unsafe_integer",
+    "input_text": "{\"n\":9007199254740992}",
+    "name": "unsafe-integer"
+  },
+  {
+    "error": "invalid_unicode",
+    "input_text": "{\"s\":\"\\ud800\"}",
+    "name": "lone-surrogate"
+  }
+]

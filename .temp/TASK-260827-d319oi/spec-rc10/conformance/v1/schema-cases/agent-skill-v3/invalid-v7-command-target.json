@@ -1,0 +1,15 @@
+{
+  "capabilities": {},
+  "commands": {
+    "reserved-v7": {
+      "command": "legacy-tool",
+      "target": "tool",
+      "type": "system"
+    }
+  },
+  "dependencies": {
+    "commands": {}
+  },
+  "runtime_roots": [],
+  "schema_version": 3
+}

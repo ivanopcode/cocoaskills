@@ -1,0 +1,63 @@
+[
+  {
+    "edges": [
+      [
+        "app",
+        "beta"
+      ],
+      [
+        "app",
+        "alpha"
+      ],
+      [
+        "alpha",
+        "base"
+      ],
+      [
+        "beta",
+        "base"
+      ]
+    ],
+    "expected_provider_order": [
+      "base",
+      "alpha",
+      "beta",
+      "app"
+    ],
+    "name": "deterministic-diamond",
+    "nodes": [
+      "app",
+      "alpha",
+      "beta",
+      "base"
+    ]
+  },
+  {
+    "edges": [
+      [
+        "a",
+        "b"
+      ],
+      [
+        "b",
+        "a"
+      ]
+    ],
+    "error": "dependency_cycle",
+    "name": "cycle"
+  },
+  {
+    "error": "commit_conflict",
+    "name": "commit-conflict",
+    "requirements": [
+      {
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "base"
+      },
+      {
+        "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "base"
+      }
+    ]
+  }
+]

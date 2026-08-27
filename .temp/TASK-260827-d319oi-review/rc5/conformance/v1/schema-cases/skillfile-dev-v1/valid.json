@@ -1,0 +1,7 @@
+{
+  "substitutions": {
+    "golden-skill": {
+      "path": "../golden-skill"
+    }
+  }
+}

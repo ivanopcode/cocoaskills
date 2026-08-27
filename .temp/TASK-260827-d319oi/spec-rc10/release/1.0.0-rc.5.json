@@ -1,0 +1,29 @@
+{
+  "candidate_protocol_pin": {
+    "manifest_sha256": "sha256:b6f56aacc0e37dcc6692f73f641bff761e89b645adfe20a47a06d81c6fda204c",
+    "suite_root": "conformance/v1"
+  },
+  "claim_v3": {
+    "claims_emitted": [],
+    "linux_excluded_until_task": "TASK-260728-1skseh",
+    "macos_status": "pending-downstream-native-evidence",
+    "windows_status": "pending-downstream-native-evidence"
+  },
+  "created_at": "2026-07-28T00:00:00Z",
+  "downstream_consumption": {
+    "committed_release_pin_advanced": false,
+    "environment": "CURATOR_CONFORMANCE_ROOT",
+    "required_manifest_sha256": "sha256:b6f56aacc0e37dcc6692f73f641bff761e89b645adfe20a47a06d81c6fda204c"
+  },
+  "execution_policy": {
+    "capability_evidence_record_version": "capability-evidence-v1",
+    "hardened_profile_claimed": false,
+    "hardened_profile_owner": "STORY-260728-327soo",
+    "legacy_rc4_go_v1_cache_key": "sha256:3fcd714a40e8918eb67dbd35d435875dcce6c9047da811a1fa26626e5e57be48",
+    "native_control_inventory_version": "rc5-native-control-inventory-v1",
+    "portable": "manager-worker-v1"
+  },
+  "legacy_release": "1.0.0-rc.4",
+  "protocol_version": "1.0.0-rc.5",
+  "source_baseline_commit": "57c1f56846d221ecc55786bd3c2467ec32f11730"
+}

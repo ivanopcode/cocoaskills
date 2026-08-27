@@ -1,0 +1,67 @@
+[
+  {
+    "expected_commands": [],
+    "expected_source": "agent-skill.json",
+    "files": {
+      "agent-skill.json": "{\"schema_version\":1,\"commands\":{}}\n"
+    },
+    "name": "canonical-only"
+  },
+  {
+    "expected_commands": [],
+    "expected_source": "csk-skill.json",
+    "files": {
+      "csk-skill.json": "{\"schema_version\":1,\"commands\":{}}\n"
+    },
+    "name": "legacy-only"
+  },
+  {
+    "expected_commands": [],
+    "expected_source": "agent-skill.json",
+    "files": {
+      "agent-skill.json": "{\"schema_version\":1,\"commands\":{}}\n",
+      "csk-skill.json": "{\n  \"commands\": {},\n  \"schema_version\": 1\n}\n"
+    },
+    "name": "equal-dual-manifests"
+  },
+  {
+    "error": "conflicting_skill_manifests",
+    "files": {
+      "agent-skill.json": "{\"schema_version\":1,\"commands\":{}}\n",
+      "csk-skill.json": "{\"schema_version\":1,\"commands\":{\"legacy\":{\"type\":\"system\",\"command\":\"legacy\"}}}\n"
+    },
+    "name": "conflicting-dual-manifests"
+  },
+  {
+    "error": "manifest_invalid",
+    "files": {
+      "agent-skill.json": "{\n",
+      "csk-skill.json": "{\"schema_version\":1,\"commands\":{}}\n"
+    },
+    "name": "invalid-canonical-does-not-fallback"
+  },
+  {
+    "error": "manifest_invalid",
+    "files": {
+      "agent-skill.json": "{\"schema_version\":1,\"commands\":{}}\n",
+      "csk-skill.json": "{\n"
+    },
+    "name": "invalid-legacy-does-not-hide-behind-canonical"
+  },
+  {
+    "expected_commands": [
+      "legacy"
+    ],
+    "expected_source": "agents/runtime.json",
+    "files": {
+      "agents/runtime.json": "{\"commands\":{\"legacy\":\"scripts/legacy\"}}\n"
+    },
+    "name": "runtime-fallback-without-modern-manifest"
+  },
+  {
+    "expected_commands": [],
+    "expected_source": null,
+    "files": {},
+    "name": "pure-context-without-manifest"
+  }
+]

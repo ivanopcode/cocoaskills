@@ -1,0 +1,17 @@
+{
+  "capabilities": {},
+  "commands": {
+    "reserved-v7": {
+      "command": "legacy-tool",
+      "target": "tool",
+      "type": "system"
+    }
+  },
+  "dependencies": {
+    "commands": {},
+    "mcp_servers": {},
+    "skills": {}
+  },
+  "runtime_roots": [],
+  "schema_version": 5
+}

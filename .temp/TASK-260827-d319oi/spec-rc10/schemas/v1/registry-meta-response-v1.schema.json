@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/registry-meta-response-v1.schema.json",
+  "title": "Registry metadata response",
+  "type": "object",
+  "required": ["name", "version", "public_keys", "record_schema_versions", "policy"],
+  "properties": {
+    "name": {"$ref": "common.schema.json#/$defs/nonEmptyString"},
+    "version": {"$ref": "common.schema.json#/$defs/nonEmptyString"},
+    "public_keys": {"type": "array", "items": {"type": "string", "pattern": "^(?:ed25519:)?[A-Za-z0-9+/]{43}=$"}, "uniqueItems": true},
+    "record_schema_versions": {"type": "array", "items": {"type": "integer", "minimum": 1}, "uniqueItems": true},
+    "policy": {"$ref": "common.schema.json#/$defs/nonEmptyString"},
+    "limits": {
+      "type": "object",
+      "properties": {"max_page_size": {"type": "integer", "minimum": 1}, "max_body_bytes": {"type": "integer", "minimum": 1}},
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,15 @@
+{
+  "build_roots": [
+    "build"
+  ],
+  "capabilities": {},
+  "commands": {
+    "build-tool": {
+      "driver": "go-v1",
+      "flags": [],
+      "source_dir": "build/cmd/tool",
+      "type": "build"
+    }
+  },
+  "schema_version": 6
+}

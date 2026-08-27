@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "protocol_version": "1.0.0",
+  "review_type": "security",
+  "reviewed_commit": "0123456789abcdef0123456789abcdef01234567",
+  "reviewer": {
+    "name": "Example Reviewer",
+    "affiliation": "Independent Security Lab",
+    "contact": "reviewer@example.com",
+    "independent": true,
+    "conflicts": "No conflicts identified."
+  },
+  "scope": ["protocol/registry.md", "profiles/registry-service.md"],
+  "completed_at": "2026-07-13T00:00:00Z",
+  "source_url": "https://example.com/reviews/curator-1.0-security",
+  "conclusion": "pass",
+  "findings": []
+}

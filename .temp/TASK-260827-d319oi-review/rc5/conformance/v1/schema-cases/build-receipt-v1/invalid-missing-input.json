@@ -1,0 +1,9 @@
+{
+  "artifact": {
+    "path": "bin/golden-tool",
+    "sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "size": 1234567
+  },
+  "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+  "schema_version": 1
+}

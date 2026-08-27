@@ -1,0 +1,13 @@
+{
+  "created_at": "2026-07-13T00:00:00Z",
+  "head": "98094f893ea294d02e994f7e5621b2b23b9ff416a7d3501cf28c674c85be7e75",
+  "log_size": 2,
+  "merkle_root": "f8750d79fbac61d4f8ff1accc5ead79cfa0167232f4f62908f3b51234eb68441",
+  "schema_version": 1,
+  "sig": {
+    "algorithm": "ed25519",
+    "key_id": "56475aa75463474c",
+    "signature": "CA/uK4YQsDe7IyZkPSqPuYJyUuR7mcQvb7jkFLOLUdzvc6A7iAmmKsUcbi4xrRBBIMya2tSqM53HbnDuG0L+Cg=="
+  },
+  "version": 2
+}

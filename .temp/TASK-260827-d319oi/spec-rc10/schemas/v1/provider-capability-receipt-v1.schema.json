@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/provider-capability-receipt-v1.schema.json",
+  "title": "Curator provider capability receipt schema 1",
+  "type": "object",
+  "required": ["schema_version", "receipt_type", "provider", "health", "capabilities", "nonce", "observed_at", "expires_at"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "receipt_type": {"const": "provider-capability-receipt-v1"},
+    "provider": {"$ref": "verified-provider-v1.schema.json"},
+    "health": {"const": "healthy"},
+    "capabilities": {
+      "type": "array",
+      "prefixItems": [
+        {"$ref": "#/$defs/network"},
+        {"$ref": "#/$defs/readonly"},
+        {"$ref": "#/$defs/allowlist"},
+        {"$ref": "#/$defs/writes"},
+        {"$ref": "#/$defs/resources"},
+        {"$ref": "#/$defs/preflight"}
+      ],
+      "items": false,
+      "minItems": 6,
+      "maxItems": 6
+    },
+    "nonce": {"$ref": "common.schema.json#/$defs/nonEmptyString"},
+    "observed_at": {"$ref": "common.schema.json#/$defs/timestamp"},
+    "expires_at": {"$ref": "common.schema.json#/$defs/timestamp"}
+  },
+  "$defs": {
+    "established": {
+      "type": "object",
+      "required": ["capability_id", "status"],
+      "properties": {"capability_id": {"type": "string"}, "status": {"const": "established"}},
+      "additionalProperties": false
+    },
+    "network": {"allOf": [{"$ref": "#/$defs/established"}, {"properties": {"capability_id": {"const": "total-network-denial-v1"}}}]},
+    "readonly": {"allOf": [{"$ref": "#/$defs/established"}, {"properties": {"capability_id": {"const": "read-only-source-and-toolchain-v1"}}}]},
+    "allowlist": {"allOf": [{"$ref": "#/$defs/established"}, {"properties": {"capability_id": {"const": "exact-executable-allowlisting-v1"}}}]},
+    "writes": {"allOf": [{"$ref": "#/$defs/established"}, {"properties": {"capability_id": {"const": "private-build-root-only-writes-v1"}}}]},
+    "resources": {"allOf": [{"$ref": "#/$defs/established"}, {"properties": {"capability_id": {"const": "hard-aggregate-descendant-resource-bounds-v1"}}}]},
+    "preflight": {"allOf": [{"$ref": "#/$defs/established"}, {"properties": {"capability_id": {"const": "fail-closed-capability-preflight-v1"}}}]}
+  },
+  "additionalProperties": false
+}

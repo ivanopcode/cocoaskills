@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/build-receipt-v2.schema.json",
+  "title": "Curator build receipt schema 2",
+  "type": "object",
+  "required": ["schema_version", "cache_key", "input", "artifact"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "cache_key": {"$ref": "common.schema.json#/$defs/sha256"},
+    "input": {"$ref": "common.schema.json#/$defs/goRepositoryBuildInputV1"},
+    "artifact": {"$ref": "common.schema.json#/$defs/buildArtifactV1"}
+  },
+  "additionalProperties": false
+}

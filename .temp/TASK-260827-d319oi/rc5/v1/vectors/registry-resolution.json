@@ -1,0 +1,31 @@
+[
+  {
+    "expected": "audited",
+    "name": "audited-only",
+    "records": [
+      "record_audited.json"
+    ]
+  },
+  {
+    "expected": "revoked",
+    "name": "deny-wins",
+    "records": [
+      "record_audited.json",
+      "record_revoked.json"
+    ]
+  },
+  {
+    "expected": "unknown",
+    "name": "forged-ignored",
+    "records": [
+      "record_forged.json"
+    ]
+  },
+  {
+    "expected": "unknown",
+    "name": "wrong-key-id-ignored",
+    "records": [
+      "record_wrong_key_id.json"
+    ]
+  }
+]

@@ -1,0 +1,54 @@
+[
+  {
+    "input": "skill-youtrack",
+    "valid": true
+  },
+  {
+    "input": "9lives",
+    "valid": true
+  },
+  {
+    "input": "a.b_c-d",
+    "valid": true
+  },
+  {
+    "input": "",
+    "valid": false
+  },
+  {
+    "input": "-leading",
+    "valid": false
+  },
+  {
+    "input": ".hidden",
+    "valid": false
+  },
+  {
+    "input": "has space",
+    "valid": false
+  },
+  {
+    "input": "unicode-é",
+    "valid": false
+  },
+  {
+    "input": "trailing.",
+    "valid": false
+  },
+  {
+    "input": "CON",
+    "valid": false
+  },
+  {
+    "input": "nul.txt",
+    "valid": false
+  },
+  {
+    "input": "COM1.log",
+    "valid": false
+  },
+  {
+    "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "valid": false
+  }
+]

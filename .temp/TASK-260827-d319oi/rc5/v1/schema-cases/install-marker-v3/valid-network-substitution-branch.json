@@ -1,0 +1,75 @@
+{
+  "activation": {
+    "commands": [
+      "golden-tool"
+    ],
+    "context": true
+  },
+  "agents": [
+    "codex_cli"
+  ],
+  "build_roots": [],
+  "builds": {
+    "golden-tool": {
+      "artifact_path": "bin/golden-tool",
+      "artifact_sha256": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+      "build_source": {
+        "algorithm": "curator-build-source-v1",
+        "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "cache_key": "sha256:4abc903bde7d8d9f65d32fd276f37dadccc88eb28bbaf693106dcebc4a19107a",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "declared_identity": {
+        "kind": "network-git",
+        "value": "github.com/example/golden-tools"
+      },
+      "declared_locked_commit": {
+        "hex": "0123456789abcdef0123456789abcdef01234567",
+        "object_format": "sha1"
+      },
+      "declared_tag": "v1.4.0",
+      "descriptor_target": "golden-tool",
+      "driver": "go-repository-v1",
+      "effective_identity": {
+        "kind": "network-git",
+        "value": "git.example.com/forks/golden-tools"
+      },
+      "execution_policy": "manager-worker-v1",
+      "object_format": "sha1",
+      "receipt_schema_version": 2,
+      "receipt_sha256": "sha256:0f8f910a2b6ba9b35531bb232cb2890e11eb55a64ba01bcdd2d93d5ea421d0e0",
+      "repository": "golden-tools",
+      "substituted": true,
+      "substitution": {
+        "ref": {
+          "kind": "branch",
+          "value": "release/v2"
+        },
+        "type": "network-git"
+      }
+    }
+  },
+  "commands": [
+    "golden-tool"
+  ],
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "content_sha256": "sha256:e2bd2941476b164099dc773d7448c638ff99849f8dce76e7b105f215fcdf31be",
+  "dependencies": [],
+  "files": [
+    ".skill_triggers/en.md",
+    "SKILL.md",
+    "references/notes.md"
+  ],
+  "installed_at": "2000-01-01T00:00:00Z",
+  "locale": null,
+  "name": "golden-skill",
+  "ref": "0123456789abcdef0123456789abcdef01234567",
+  "ref_kind": "revision",
+  "requirers": [
+    "<project>"
+  ],
+  "runtime_roots": [],
+  "schema_version": 3,
+  "skill_schema_version": 7,
+  "source": "golden-skill"
+}

@@ -1,0 +1,14 @@
+{
+  "commands": {
+    "reserved-v8": {
+      "interpreter": "python3-v1",
+      "type": "script",
+      "unix_path": "scripts/reserved"
+    }
+  },
+  "dependencies": {
+    "commands": {}
+  },
+  "runtime_roots": [],
+  "schema_version": 2
+}

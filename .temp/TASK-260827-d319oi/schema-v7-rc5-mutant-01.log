@@ -1,0 +1,108 @@
+...........F/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-18296963-ff7b-41cd-b54b-f8783085bc4b/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-18296963-ff7b-41cd-b54b-f8783085bc4b/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-18296963-ff7b-41cd-b54b-f8783085bc4b/test_rc6_toolchain_case_toolch0/toolchain-mode-1
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-18296963-ff7b-41cd-b54b-f8783085bc4b/test_rc6_toolchain_case_toolch0/toolchain-mode-1'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-18296963-ff7b-41cd-b54b-f8783085bc4b/test_rc6_toolchain_case_toolch0
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-18296963-ff7b-41cd-b54b-f8783085bc4b/test_rc6_toolchain_case_toolch0'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-18296963-ff7b-41cd-b54b-f8783085bc4b
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-18296963-ff7b-41cd-b54b-f8783085bc4b'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-04ea2735-c321-4942-ab3f-c6db3a201706/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-04ea2735-c321-4942-ab3f-c6db3a201706/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-04ea2735-c321-4942-ab3f-c6db3a201706/test_rc6_toolchain_case_toolch0/toolchain-mode-1
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-04ea2735-c321-4942-ab3f-c6db3a201706/test_rc6_toolchain_case_toolch0/toolchain-mode-1'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-04ea2735-c321-4942-ab3f-c6db3a201706/test_rc6_toolchain_case_toolch0
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-04ea2735-c321-4942-ab3f-c6db3a201706/test_rc6_toolchain_case_toolch0'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-04ea2735-c321-4942-ab3f-c6db3a201706
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-04ea2735-c321-4942-ab3f-c6db3a201706'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-caeb053d-a0fc-4d88-a7fb-652a548d6b1b/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-caeb053d-a0fc-4d88-a7fb-652a548d6b1b/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-caeb053d-a0fc-4d88-a7fb-652a548d6b1b/test_rc6_toolchain_case_toolch0/toolchain-mode-1
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-caeb053d-a0fc-4d88-a7fb-652a548d6b1b/test_rc6_toolchain_case_toolch0/toolchain-mode-1'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-caeb053d-a0fc-4d88-a7fb-652a548d6b1b/test_rc6_toolchain_case_toolch0
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-caeb053d-a0fc-4d88-a7fb-652a548d6b1b/test_rc6_toolchain_case_toolch0'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-caeb053d-a0fc-4d88-a7fb-652a548d6b1b
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-caeb053d-a0fc-4d88-a7fb-652a548d6b1b'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-eacf4329-7d77-4d5f-a7d1-a2e7902c0bac/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-eacf4329-7d77-4d5f-a7d1-a2e7902c0bac/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-eacf4329-7d77-4d5f-a7d1-a2e7902c0bac/test_rc6_toolchain_case_toolch0/toolchain-mode-1
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-eacf4329-7d77-4d5f-a7d1-a2e7902c0bac/test_rc6_toolchain_case_toolch0/toolchain-mode-1'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-eacf4329-7d77-4d5f-a7d1-a2e7902c0bac/test_rc6_toolchain_case_toolch0
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-eacf4329-7d77-4d5f-a7d1-a2e7902c0bac/test_rc6_toolchain_case_toolch0'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-eacf4329-7d77-4d5f-a7d1-a2e7902c0bac
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-eacf4329-7d77-4d5f-a7d1-a2e7902c0bac'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-3d6eac85-6260-423a-977f-84485d7a8f01/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-3d6eac85-6260-423a-977f-84485d7a8f01/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-3d6eac85-6260-423a-977f-84485d7a8f01/test_rc6_toolchain_case_toolch0/toolchain-mode-1
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-3d6eac85-6260-423a-977f-84485d7a8f01/test_rc6_toolchain_case_toolch0/toolchain-mode-1'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-3d6eac85-6260-423a-977f-84485d7a8f01/test_rc6_toolchain_case_toolch0
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-3d6eac85-6260-423a-977f-84485d7a8f01/test_rc6_toolchain_case_toolch0'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-3d6eac85-6260-423a-977f-84485d7a8f01
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-3d6eac85-6260-423a-977f-84485d7a8f01'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-6c9924b8-4b86-40c1-8bfc-d4203ed0b9a9/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-6c9924b8-4b86-40c1-8bfc-d4203ed0b9a9/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-6c9924b8-4b86-40c1-8bfc-d4203ed0b9a9/test_rc6_toolchain_case_toolch0/toolchain-mode-1
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-6c9924b8-4b86-40c1-8bfc-d4203ed0b9a9/test_rc6_toolchain_case_toolch0/toolchain-mode-1'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-6c9924b8-4b86-40c1-8bfc-d4203ed0b9a9/test_rc6_toolchain_case_toolch0
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-6c9924b8-4b86-40c1-8bfc-d4203ed0b9a9/test_rc6_toolchain_case_toolch0'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-6c9924b8-4b86-40c1-8bfc-d4203ed0b9a9
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-6c9924b8-4b86-40c1-8bfc-d4203ed0b9a9'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-c76e6326-82f0-44d0-803a-c3794292be8f/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-c76e6326-82f0-44d0-803a-c3794292be8f/test_rc6_toolchain_case_toolch0/toolchain-mode-1/pkg'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-c76e6326-82f0-44d0-803a-c3794292be8f/test_rc6_toolchain_case_toolch0/toolchain-mode-1
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-c76e6326-82f0-44d0-803a-c3794292be8f/test_rc6_toolchain_case_toolch0/toolchain-mode-1'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-c76e6326-82f0-44d0-803a-c3794292be8f/test_rc6_toolchain_case_toolch0
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-c76e6326-82f0-44d0-803a-c3794292be8f/test_rc6_toolchain_case_toolch0'
+  warnings.warn(
+/Users/iv/Developer/Wildberries/cocoaskills/.venv/lib/python3.14/site-packages/_pytest/pathlib.py:95: PytestWarning: (rm_rf) error removing /private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-c76e6326-82f0-44d0-803a-c3794292be8f
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/garbage-c76e6326-82f0-44d0-803a-c3794292be8f'
+  warnings.warn(
+
+=================================== FAILURES ===================================
+_____________________ test_released_accepted_schema_cases ______________________
+
+tmp_path = PosixPath('/private/var/folders/cz/jqbthtks55zbkpcdkfyk4bl80000gp/T/pytest-of-iv/pytest-1193/test_released_accepted_schema_0')
+
+    def test_released_accepted_schema_cases(tmp_path: Path) -> None:
+        root_text = os.environ.get("CURATOR_SCHEMA_V7_ROOT")
+        if root_text is None:
+            pytest.skip("CURATOR_SCHEMA_V7_ROOT is not set")
+        root = Path(root_text)
+        manifest = root / "manifest.json"
+        raw_manifest = manifest.read_bytes()
+>       assert hashlib.sha256(raw_manifest).hexdigest() == ACCEPTED_MANIFEST_SHA256
+E       AssertionError: assert 'b6f56aacc0e3...6d81c6fda204c' == '803918bf8672...31b8404b44403'
+E         
+E         - 803918bf8672f76cf990985e51db213b826674cd5bb54fbf47731b8404b44403
+E         + b6f56aacc0e37dcc6692f73f641bff761e89b645adfe20a47a06d81c6fda204c
+
+tests/test_schema_v7_repository.py:331: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_schema_v7_repository.py::test_released_accepted_schema_cases
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 11 passed, 29 deselected in 0.07s

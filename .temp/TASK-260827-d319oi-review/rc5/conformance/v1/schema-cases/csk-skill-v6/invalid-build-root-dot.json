@@ -1,0 +1,7 @@
+{
+  "build_roots": [
+    "."
+  ],
+  "capabilities": {},
+  "schema_version": 6
+}

@@ -1,0 +1,680 @@
+{
+  "bootstrap_cases": [
+    {
+      "config": "missing",
+      "force": false,
+      "if_missing": true,
+      "name": "missing-config-if-missing",
+      "outcome": "created"
+    },
+    {
+      "config": "existing-invalid",
+      "force": false,
+      "if_missing": true,
+      "name": "existing-config-if-missing",
+      "outcome": "unchanged-success"
+    },
+    {
+      "config": "either",
+      "force": true,
+      "if_missing": true,
+      "name": "if-missing-with-force",
+      "outcome": "usage-error"
+    }
+  ],
+  "build_order_cases": [
+    {
+      "active_build_commands": {
+        "app": [
+          "golden-tool"
+        ],
+        "data-provider": [
+          "zeta-tool",
+          "alpha-tool",
+          "é-tool"
+        ],
+        "ui-provider": [
+          "beta-tool"
+        ]
+      },
+      "closure_edges": [
+        {
+          "consumer": "app",
+          "provider": "ui-provider"
+        },
+        {
+          "consumer": "app",
+          "provider": "data-provider"
+        }
+      ],
+      "expected_build_order": [
+        "data-provider/alpha-tool",
+        "data-provider/zeta-tool",
+        "data-provider/é-tool",
+        "ui-provider/beta-tool",
+        "app/golden-tool"
+      ],
+      "expected_provider_order": [
+        "data-provider",
+        "ui-provider",
+        "app"
+      ],
+      "name": "provider-first-and-lexical-command-order",
+      "ordering": "provider-first-kahn-then-unicode-scalar-command-name"
+    }
+  ],
+  "cache_publication_cases": [
+    {
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "manager_home_lock": true,
+      "merge_existing_entry": false,
+      "name": "publish-complete-immutable-entry-under-home-lock",
+      "publication": "atomic-complete-directory",
+      "receipt_sha256": "sha256:919fbbad8e6ce95532219fd952c2309d0d7026f85209650508fd6834af4020cd",
+      "result": "published"
+    },
+    {
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "name": "concurrent-identical-winner",
+      "result": "reuse-winner",
+      "staged_loser": "discard",
+      "winner_bytes_equal_staged": true,
+      "winner_modified": false,
+      "winner_validation": "exact-protected-entry"
+    },
+    {
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "install_targets_mutated": false,
+      "name": "concurrent-determinism-mismatch",
+      "result": "determinism-or-corruption-error",
+      "winner_bytes_equal_staged": false,
+      "winner_modified": false,
+      "winner_validation": "exact-protected-entry"
+    },
+    {
+      "adopt_or_repair_candidate": false,
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "existing_valid_entries_modified": false,
+      "manager_home_lock": true,
+      "name": "corrupt-live-entry",
+      "quarantine_allowed": true,
+      "result": "replace-from-verified-staging"
+    },
+    {
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "candidate_reused": false,
+      "chmod_then_adopt": false,
+      "embedded_hashes_match": true,
+      "name": "untrusted-cache-boundary",
+      "result": "rebuild-into-new-protected-state",
+      "status_current": false
+    }
+  ],
+  "compiled_build_fixture": {
+    "artifact": {
+      "path": "bin/golden-tool",
+      "sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "size": 1234567
+    },
+    "build_input": {
+      "build_root": "build",
+      "build_source": {
+        "algorithm": "curator-build-source-v1",
+        "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "command": "golden-tool",
+      "driver": "go-v1",
+      "policy": {
+        "cgo": false,
+        "compiler_directives": "reject-nonstandard-cgo-import-dynamic-v1",
+        "execution_policy": "manager-worker-v1",
+        "host_objects": false,
+        "libgcc": "none",
+        "link_mode": "internal",
+        "module_mode": "vendor",
+        "network": "none",
+        "package_assembly": false,
+        "target_mode": "native",
+        "telemetry": "off-private",
+        "workspace": false
+      },
+      "schema_version": 1,
+      "source_dir": "build/cmd/golden-tool",
+      "target": {
+        "goarch": "arm64",
+        "goos": "darwin",
+        "tuning": {
+          "GOARM64": "v8.0"
+        }
+      },
+      "toolchain": {
+        "algorithm": "curator-go-toolchain-v1",
+        "content_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "go_relpath": "bin/go",
+        "go_version": "go version go1.26.1 darwin/arm64"
+      }
+    },
+    "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+    "execution_policy": "manager-worker-v1",
+    "logical_command": "golden-tool",
+    "receipt_sha256": "sha256:919fbbad8e6ce95532219fd952c2309d0d7026f85209650508fd6834af4020cd",
+    "source_vector": "build-drivers.json#/portable_identity",
+    "stored_receipt": {
+      "artifact": {
+        "path": "bin/golden-tool",
+        "sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "size": 1234567
+      },
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "input": {
+        "build_root": "build",
+        "build_source": {
+          "algorithm": "curator-build-source-v1",
+          "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "command": "golden-tool",
+        "driver": "go-v1",
+        "policy": {
+          "cgo": false,
+          "compiler_directives": "reject-nonstandard-cgo-import-dynamic-v1",
+          "execution_policy": "manager-worker-v1",
+          "host_objects": false,
+          "libgcc": "none",
+          "link_mode": "internal",
+          "module_mode": "vendor",
+          "network": "none",
+          "package_assembly": false,
+          "target_mode": "native",
+          "telemetry": "off-private",
+          "workspace": false
+        },
+        "schema_version": 1,
+        "source_dir": "build/cmd/golden-tool",
+        "target": {
+          "goarch": "arm64",
+          "goos": "darwin",
+          "tuning": {
+            "GOARM64": "v8.0"
+          }
+        },
+        "toolchain": {
+          "algorithm": "curator-go-toolchain-v1",
+          "content_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "go_relpath": "bin/go",
+          "go_version": "go version go1.26.1 darwin/arm64"
+        }
+      },
+      "schema_version": 1
+    }
+  },
+  "cross_project_cases": [
+    {
+      "commit_order": [
+        "project-alpha",
+        "project-beta"
+      ],
+      "consumer_ledger_after": [
+        "project-alpha",
+        "project-beta"
+      ],
+      "consumer_ledger_before": [],
+      "name": "two-project-success-preserves-both-consumers",
+      "private_builds_may_overlap": true,
+      "result": "success",
+      "shared_cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "shared_transactions_serialized": true
+    },
+    {
+      "consumer_ledger_after_rollback": [
+        "project-alpha"
+      ],
+      "consumer_ledger_before_failing_transaction": [
+        "project-alpha"
+      ],
+      "failing_project": "project-beta",
+      "name": "successful-project-survives-other-project-rollback",
+      "project_alpha_targets_unchanged": true,
+      "result": "project-beta-rolled-back",
+      "shared_cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "successful_project": "project-alpha"
+    }
+  ],
+  "dry_run_cases": [
+    {
+      "forbidden_persistent_effects": [
+        "source-fetch",
+        "source-clone",
+        "snapshot-cache",
+        "response-cache",
+        "audit-state",
+        "registry-state",
+        "configuration",
+        "runtime",
+        "project-artifacts"
+      ],
+      "name": "project-upgrade",
+      "scope": "project"
+    },
+    {
+      "forbidden_persistent_effects": [
+        "source-fetch",
+        "source-clone",
+        "snapshot-cache",
+        "response-cache",
+        "audit-state",
+        "registry-state",
+        "configuration",
+        "runtime",
+        "global-artifacts"
+      ],
+      "name": "global-upgrade",
+      "scope": "global"
+    },
+    {
+      "allowed_go_commands": [
+        "telemetry-off",
+        "version",
+        "env"
+      ],
+      "artifact_executed": false,
+      "forbidden_go_commands": [
+        "list",
+        "build"
+      ],
+      "forbidden_persistent_effects": [
+        "source-checkout",
+        "snapshot-cache",
+        "response-cache",
+        "toolchain-probe-memo",
+        "module-cache",
+        "go-build-cache",
+        "compiled-artifact-cache",
+        "audit-state",
+        "registry-state",
+        "revocation-state",
+        "configuration",
+        "project-lock",
+        "cache-build-lock",
+        "manager-home-lock",
+        "journal",
+        "backup",
+        "quarantine",
+        "permission-repair",
+        "context-tree",
+        "runtime-tree",
+        "environment-file",
+        "install-marker",
+        "command-shim",
+        "adapter-ledger",
+        "adapter-mirror",
+        "consumer-ledger",
+        "gc-metadata"
+      ],
+      "logical_cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "name": "compiled-cache-miss-is-read-only",
+      "operation_private_state_after": "absent",
+      "reported_build_outcomes": [
+        "cache-hit",
+        "would-preflight-and-build",
+        "would-rebuild-untrusted-cache",
+        "corrupt",
+        "unsupported"
+      ],
+      "scope": "multi-project"
+    }
+  ],
+  "gc_cases": [
+    {
+      "artifact_executed": false,
+      "compiled_cache_mark_roots": [
+        "supported-valid-marker-v2",
+        "in-flight-journal"
+      ],
+      "entry_adopted": false,
+      "logical_cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "mark_roots": [
+        "registered-consumer",
+        "supported-valid-marker-v1",
+        "supported-valid-marker-v2",
+        "in-flight-journal"
+      ],
+      "name": "locked-mark-and-sweep-compiled-cache",
+      "only_lock": "manager-home-mutation-lock",
+      "protected_boundary_revalidated": true,
+      "receipt_content_alone_is_live_reference": false,
+      "result": "swept-unreferenced-old-entries",
+      "sweep_requires": [
+        "unreferenced",
+        "machine-local",
+        "older-than-grace-period"
+      ],
+      "uncertain_state_action": "retain-or-conservatively-quarantine-and-report"
+    },
+    {
+      "manager_home_lock": true,
+      "name": "post-commit-gc-failure-is-maintenance-warning",
+      "result": "installation-success-with-warning",
+      "successful_installation_rolled_back": false
+    }
+  ],
+  "launcher_cases": [
+    {
+      "forward_arguments": true,
+      "name": "skill-command-without-shell-activation",
+      "platforms": [
+        "unix",
+        "windows"
+      ],
+      "preserve_exit_status": true,
+      "preserve_inherited_path": true,
+      "required_path_roles": [
+        "command_directory",
+        "implementation_runtime",
+        "system_dependencies"
+      ]
+    },
+    {
+      "forward_arguments": true,
+      "name": "declared-system-command-without-profile",
+      "platforms": [
+        "unix",
+        "windows"
+      ],
+      "preserve_exit_status": true,
+      "preserve_inherited_path": true,
+      "required_path_roles": [
+        "command_directory",
+        "implementation_runtime",
+        "system_dependencies"
+      ]
+    }
+  ],
+  "planning_cases": [
+    {
+      "failure_at_any_gate": {
+        "cache_lookup": false,
+        "go_commands": [],
+        "persistent_mutations": []
+      },
+      "name": "all-source-and-trust-gates-before-build",
+      "required_before_toolchain_or_cache": [
+        "complete-snapshot-tree-validation",
+        "dual-manifest-parse-and-schema-validation",
+        "runtime-build-root-and-source-dir-validation",
+        "static-build-root-context-and-runtime-exclusion",
+        "curator-build-source-v1",
+        "provider-first-closure",
+        "command-shim-portable-and-platform-collision-planning",
+        "source-allowlist-and-snapshot-checks",
+        "source-audit-policy",
+        "trusted-registry-resolution",
+        "attestation-revocation-and-moved-tag-policy"
+      ],
+      "result": "build-eligible",
+      "then": [
+        "trusted-toolchain-resolution-and-fingerprint",
+        "logical-cache-key-derivation",
+        "protected-cache-read-only-inspection",
+        "go-list",
+        "go-build"
+      ]
+    }
+  ],
+  "private_build_cases": [
+    {
+      "artifacts_executed": false,
+      "builds": [
+        {
+          "artifact_verified": true,
+          "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+          "command": "golden-tool",
+          "receipt_sha256": "sha256:919fbbad8e6ce95532219fd952c2309d0d7026f85209650508fd6834af4020cd",
+          "staging": "operation-private"
+        },
+        {
+          "artifact_verified": true,
+          "command": "second-tool",
+          "staging": "operation-private"
+        }
+      ],
+      "manager_home_lock_during_build": false,
+      "name": "all-misses-stage-and-verify-before-home-lock",
+      "result": "ready-to-publish",
+      "shared_mutations_before_all_verified": []
+    },
+    {
+      "events": [
+        "golden-tool-staged-and-verified",
+        "second-tool-go-list-passed",
+        "second-tool-go-build-failed",
+        "operation-private-staging-removed"
+      ],
+      "forbidden_effects": [
+        "recovery",
+        "cache-publication",
+        "quarantine",
+        "permission-repair",
+        "journal",
+        "target-swap",
+        "consumer-update",
+        "gc"
+      ],
+      "manager_home_lock_acquired": false,
+      "name": "second-build-failure-preserves-persistent-state",
+      "persistent_state_after": "persistent-generation-7",
+      "persistent_state_before": "persistent-generation-7",
+      "result": "build-failed"
+    }
+  ],
+  "recovery_cases": [
+    {
+      "backups_retained_until_recovery_succeeds": true,
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "expected_action": "verify-preimages-and-restore-reverse-commit-order",
+      "journal_owner": "global",
+      "journal_state": "partially-committed",
+      "journal_transaction_id": "transaction-global-17",
+      "name": "interrupted-global-journal-recovered-by-transaction-id",
+      "result": "restored",
+      "scan_scope": "all-incomplete-journals",
+      "successful_project_consumers_after": [
+        "project-alpha"
+      ],
+      "successful_project_consumers_before": [
+        "project-alpha"
+      ],
+      "triggering_project": "project-beta"
+    },
+    {
+      "manager_home_lock": true,
+      "name": "install-recovery-runs-after-private-builds",
+      "private_builds_verified": true,
+      "recovery_before_build": false,
+      "restart_if_plan_assumption_changed": true,
+      "result": "publication-may-proceed"
+    }
+  ],
+  "repair_cases": [
+    {
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "forbidden_shortcuts": [
+        "adopt-candidate",
+        "chmod-then-adopt",
+        "recalculate-marker-only",
+        "trust-self-consistent-receipt"
+      ],
+      "independent_conditions": [
+        "missing",
+        "corrupt",
+        "wrong-target",
+        "wrong-toolchain",
+        "untrusted-boundary"
+      ],
+      "name": "repair-rebuilds-invalid-compiled-entry",
+      "required_pipeline": [
+        "complete-snapshot-validation",
+        "static-context-exclusion",
+        "build-source-identity",
+        "provider-first-closure",
+        "source-audit",
+        "registry-and-attestation-gates",
+        "fixed-toolchain-and-process-graph",
+        "operation-private-build",
+        "protected-publication",
+        "journaled-commit"
+      ],
+      "result": "rebuilt-and-journaled"
+    }
+  ],
+  "schema_version": 1,
+  "status_cases": [
+    {
+      "artifact_executed": false,
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "mutations": [],
+      "name": "compiled-installation-current",
+      "receipt_sha256": "sha256:919fbbad8e6ce95532219fd952c2309d0d7026f85209650508fd6834af4020cd",
+      "result": "current",
+      "validated": [
+        "marker-schema",
+        "effective-plan",
+        "installed-content",
+        "static-build-root-exclusion",
+        "raw-snapshot-build-source",
+        "build-input",
+        "logical-cache-key",
+        "protected-boundary",
+        "canonical-receipt",
+        "artifact-path-hash-and-size"
+      ]
+    },
+    {
+      "adopt": false,
+      "artifact_executed": false,
+      "independent_conditions": [
+        "missing-raw-snapshot",
+        "context-visible-build-root",
+        "runtime-copied-build-root",
+        "untrusted-cache-boundary",
+        "unsupported-driver",
+        "unsupported-toolchain",
+        "corrupt-receipt",
+        "corrupt-artifact",
+        "wrong-native-target",
+        "build-source-mismatch",
+        "cache-key-mismatch",
+        "receipt-hash-mismatch",
+        "artifact-path-mismatch",
+        "artifact-hash-mismatch"
+      ],
+      "mutations": [],
+      "name": "compiled-currentness-failure-matrix",
+      "quarantine": false,
+      "repair": false,
+      "result": "non-current"
+    }
+  ],
+  "transaction_cases": [
+    {
+      "cache_build_lock_released_before_home_lock": true,
+      "expected_project_lock_order": [
+        "project-alpha",
+        "project-z",
+        "project-é"
+      ],
+      "forbidden_while_holding_home_lock": [
+        "project-lock",
+        "cache-build-lock"
+      ],
+      "input_project_identities": [
+        "project-é",
+        "project-z",
+        "project-alpha"
+      ],
+      "maximum_cache_build_locks": 1,
+      "name": "deterministic-lock-order",
+      "result": "locks-acquired",
+      "then_manager_home_lock": true,
+      "then_optional_cache_build_lock": true
+    },
+    {
+      "backups_retained_until_consumer_durable": true,
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "canonical_identifier_order": "unsigned-utf8-bytewise-within-class",
+      "consumer_ledger_committed_last": true,
+      "expected_commit_order": [
+        "context-and-marker/project-alpha",
+        "context-and-marker/project-beta",
+        "runtime-shim-environment/project-alpha",
+        "adapter-and-mirror/project-alpha",
+        "stale-removal/project-alpha",
+        "consumer-ledger/machine"
+      ],
+      "name": "deterministic-target-order-and-consumer-last",
+      "result": "committed",
+      "target_class_order": [
+        "context-and-marker",
+        "runtime-shim-environment",
+        "adapter-and-mirror",
+        "stale-removal",
+        "consumer-ledger"
+      ]
+    },
+    {
+      "commit_order": [
+        "context-and-marker/project-alpha",
+        "context-and-marker/project-beta",
+        "runtime-shim-environment/project-alpha",
+        "adapter-and-mirror/project-alpha",
+        "stale-removal/project-alpha",
+        "consumer-ledger/machine"
+      ],
+      "existing_valid_cache_entries_modified": false,
+      "expected_restore_order": [
+        "consumer-ledger/machine",
+        "stale-removal/project-alpha",
+        "adapter-and-mirror/project-alpha",
+        "runtime-shim-environment/project-alpha",
+        "context-and-marker/project-beta",
+        "context-and-marker/project-alpha"
+      ],
+      "manager_home_lock_held_through_rollback": true,
+      "name": "reverse-rollback-under-home-lock",
+      "require_current_digest_equals_desired_before_restore": true,
+      "result": "rolled-back",
+      "unknown_state_overwritten": false
+    }
+  ],
+  "upgrade_cases": [
+    {
+      "exclude": [
+        "unrelated"
+      ],
+      "fetch": [
+        "direct",
+        "transitive"
+      ],
+      "name": "selected-project-closure",
+      "scope": "project",
+      "selection": "one"
+    },
+    {
+      "deduplicate": true,
+      "name": "all-projects-deduplicate",
+      "scope": "project",
+      "selection": "all"
+    },
+    {
+      "exclude": [
+        "unrelated"
+      ],
+      "fetch": [
+        "direct",
+        "transitive"
+      ],
+      "name": "global-closure",
+      "scope": "global",
+      "selection": "global"
+    }
+  ]
+}

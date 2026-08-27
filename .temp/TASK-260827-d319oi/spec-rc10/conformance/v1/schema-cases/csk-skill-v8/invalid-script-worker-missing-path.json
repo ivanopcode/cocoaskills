@@ -1,0 +1,20 @@
+{
+  "capabilities": {
+    "env_read": [],
+    "exec": "none",
+    "filesystem": "repo",
+    "network": "none",
+    "secrets": "none"
+  },
+  "commands": {
+    "enforced-tool": {
+      "execution_policy": "script-worker-v1",
+      "interpreter": "python3-v1",
+      "type": "script"
+    }
+  },
+  "runtime_roots": [
+    "scripts"
+  ],
+  "schema_version": 8
+}

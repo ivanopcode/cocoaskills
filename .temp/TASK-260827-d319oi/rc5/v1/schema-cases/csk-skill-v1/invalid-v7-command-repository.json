@@ -1,0 +1,10 @@
+{
+  "commands": {
+    "reserved-v7": {
+      "command": "legacy-tool",
+      "repository": "repo",
+      "type": "system"
+    }
+  },
+  "schema_version": 1
+}

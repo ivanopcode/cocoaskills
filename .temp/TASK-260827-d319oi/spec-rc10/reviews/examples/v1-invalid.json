@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "protocol_version": "1.0.0-rc.2",
+  "review_type": "self-review",
+  "reviewed_commit": "main",
+  "reviewer": {
+    "name": "",
+    "affiliation": "Project",
+    "contact": "reviewer@example.com",
+    "independent": false,
+    "conflicts": ""
+  },
+  "scope": [],
+  "completed_at": "today",
+  "source_url": "internal",
+  "conclusion": "pass",
+  "findings": []
+}

@@ -1,0 +1,508 @@
+{
+  "cache_identities": [
+    {
+      "expected_key": "sha256:e7c9dc8be989c2437d00d9185426239d11872b822bee33fcbcc19291c10bf331",
+      "input": {
+        "build_input_sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "cache_identity": "portable-cache-identity-v1",
+        "execution_policy": "manager-worker-v1",
+        "policy_id": "portable-cli-policy-v1"
+      },
+      "mode": "portable"
+    },
+    {
+      "expected_key": "sha256:882f67884b883942959f4e5edcc63b8e6ef45240b4db7c2b86adf963f3d07404",
+      "input": {
+        "build_input_sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "cache_identity": "verified-cache-identity-v1",
+        "capability_receipt_sha256": "sha256:389310c2a3b2c87862d7dbdfd307955a6aa614613b3d028f530605dfd9cd1816",
+        "execution_policy": "verified-provider-execution-v1",
+        "policy_id": "verified-provider-policy-v1",
+        "provider_binary_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "provider_contract": "host-execution-provider-v1",
+        "provider_id": "example.host-provider"
+      },
+      "mode": "verified"
+    }
+  ],
+  "contract_version": "assurance-modes-v1",
+  "fail_closed_cases": [
+    {
+      "error": "verified_provider_missing",
+      "execution_started": false,
+      "fallback_mode": null,
+      "name": "verified-provider-missing"
+    },
+    {
+      "error": "verified_provider_unavailable",
+      "execution_started": false,
+      "fallback_mode": null,
+      "name": "verified-provider-unhealthy"
+    },
+    {
+      "error": "verified_provider_unavailable",
+      "execution_started": false,
+      "fallback_mode": null,
+      "name": "verified-provider-incompatible"
+    },
+    {
+      "error": "verified_capabilities_unsatisfied",
+      "execution_started": false,
+      "fallback_mode": null,
+      "name": "verified-capability-missing"
+    },
+    {
+      "error": "assurance_evidence_mismatch",
+      "execution_started": false,
+      "fallback_mode": null,
+      "name": "portable-evidence-for-verified"
+    },
+    {
+      "execution_started": false,
+      "expected": "cache_miss",
+      "fallback_mode": null,
+      "name": "provider-change-cache-miss"
+    },
+    {
+      "error": "verified_checkpoint_invalid",
+      "execution_started": false,
+      "fallback_mode": null,
+      "name": "checkpoint-used-as-cache"
+    },
+    {
+      "error": "compiled_artifact_forbidden",
+      "execution_started": false,
+      "fallback_mode": null,
+      "name": "skill-vendored-provider"
+    }
+  ],
+  "platforms": [
+    "linux",
+    "macos",
+    "windows"
+  ],
+  "policies": [
+    {
+      "default": true,
+      "execution_policy": "manager-worker-v1",
+      "mode": "portable",
+      "policy_id": "portable-cli-policy-v1",
+      "provider_contract": null
+    },
+    {
+      "default": false,
+      "execution_policy": "verified-provider-execution-v1",
+      "mode": "verified",
+      "policy_id": "verified-provider-policy-v1",
+      "provider_contract": "host-execution-provider-v1"
+    }
+  ],
+  "record_identities": [
+    "provider-capability-receipt-v1",
+    "verified-execution-permit-v1",
+    "verified-execution-receipt-v1",
+    "verified-execution-checkpoint-v1",
+    "assurance-conformance-claim-v1"
+  ],
+  "relational_rejection_cases": [
+    {
+      "expected": {
+        "error": "verified_provider_identity_invalid",
+        "execution_started": false,
+        "failure_stage": "pre-execution",
+        "fallback_mode": null
+      },
+      "mutation": {
+        "path": [
+          "execution_receipt",
+          "provider",
+          "provider_id"
+        ],
+        "value": "other.host-provider"
+      },
+      "name": "provider-id-mismatch"
+    },
+    {
+      "expected": {
+        "error": "verified_provider_unavailable",
+        "execution_started": false,
+        "failure_stage": "pre-execution",
+        "fallback_mode": null
+      },
+      "mutation": {
+        "path": [
+          "permit",
+          "provider",
+          "provider_contract"
+        ],
+        "value": "host-execution-provider-v2"
+      },
+      "name": "provider-contract-mismatch"
+    },
+    {
+      "expected": {
+        "error": "verified_provider_identity_invalid",
+        "execution_started": false,
+        "failure_stage": "pre-execution",
+        "fallback_mode": null
+      },
+      "mutation": {
+        "path": [
+          "execution_receipt",
+          "provider",
+          "provider_binary_sha256"
+        ],
+        "value": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "name": "provider-binary-mismatch"
+    },
+    {
+      "expected": {
+        "error": "verified_capabilities_unsatisfied",
+        "execution_started": false,
+        "failure_stage": "pre-execution",
+        "fallback_mode": null
+      },
+      "mutation": {
+        "path": [
+          "capability_receipt",
+          "capabilities",
+          5,
+          "status"
+        ],
+        "value": "unavailable"
+      },
+      "name": "capability-set-mismatch"
+    },
+    {
+      "expected": {
+        "error": "verified_capabilities_unsatisfied",
+        "execution_started": false,
+        "failure_stage": "pre-execution",
+        "fallback_mode": null
+      },
+      "mutation": {
+        "path": [
+          "permit",
+          "capability_receipt_sha256"
+        ],
+        "value": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "name": "capability-receipt-mismatch"
+    },
+    {
+      "expected": {
+        "error": "verified_permit_invalid",
+        "execution_started": false,
+        "failure_stage": "pre-execution",
+        "fallback_mode": null
+      },
+      "mutation": {
+        "path": [
+          "permit",
+          "nonce"
+        ],
+        "value": "operation-nonce-2"
+      },
+      "name": "nonce-mismatch"
+    },
+    {
+      "expected": {
+        "error": "verified_execution_receipt_invalid",
+        "execution_started": false,
+        "failure_stage": "pre-execution",
+        "fallback_mode": null
+      },
+      "mutation": {
+        "path": [
+          "execution_receipt",
+          "operation_id"
+        ],
+        "value": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "name": "operation-mismatch"
+    },
+    {
+      "expected": {
+        "error": "verified_execution_receipt_invalid",
+        "execution_started": false,
+        "failure_stage": "pre-execution",
+        "fallback_mode": null
+      },
+      "mutation": {
+        "path": [
+          "execution_receipt",
+          "permit_sha256"
+        ],
+        "value": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "name": "permit-mismatch"
+    },
+    {
+      "expected": {
+        "error": "verified_execution_receipt_invalid",
+        "execution_started": false,
+        "failure_stage": "pre-execution",
+        "fallback_mode": null
+      },
+      "mutation": {
+        "path": [
+          "execution_receipt",
+          "build_input_sha256"
+        ],
+        "value": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "name": "build-input-mismatch"
+    },
+    {
+      "expected": {
+        "error": "verified_execution_receipt_invalid",
+        "execution_started": false,
+        "failure_stage": "pre-execution",
+        "fallback_mode": null
+      },
+      "mutation": {
+        "path": [
+          "execution_receipt",
+          "artifact_sha256"
+        ],
+        "value": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "name": "artifact-mismatch"
+    },
+    {
+      "expected": {
+        "error": "verified_capabilities_unsatisfied",
+        "execution_started": false,
+        "failure_stage": "pre-execution",
+        "fallback_mode": null
+      },
+      "mutation": {
+        "path": [
+          "validation_time"
+        ],
+        "value": "2026-07-13T00:05:00Z"
+      },
+      "name": "capability-receipt-stale"
+    },
+    {
+      "expected": {
+        "error": "verified_permit_invalid",
+        "execution_started": false,
+        "failure_stage": "pre-execution",
+        "fallback_mode": null
+      },
+      "mutation": {
+        "path": [
+          "permit",
+          "expires_at"
+        ],
+        "value": "2026-07-13T00:01:00Z"
+      },
+      "name": "permit-expired"
+    },
+    {
+      "expected": {
+        "error": "verified_checkpoint_invalid",
+        "execution_started": false,
+        "failure_stage": "pre-execution",
+        "fallback_mode": null
+      },
+      "mutation": {
+        "path": [
+          "checkpoints",
+          2,
+          "previous_checkpoint_sha256"
+        ],
+        "value": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "name": "checkpoint-chain-mismatch"
+    },
+    {
+      "expected": {
+        "error": "assurance_evidence_mismatch",
+        "execution_started": false,
+        "failure_stage": "pre-execution",
+        "fallback_mode": null
+      },
+      "mutation": {
+        "path": [
+          "fallback_mode"
+        ],
+        "value": "portable"
+      },
+      "name": "portable-fallback-attempt"
+    }
+  ],
+  "release_claims": [],
+  "valid_flow": {
+    "artifact_sha256": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+    "build_input_sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "cache": {
+      "expected_key": "sha256:882f67884b883942959f4e5edcc63b8e6ef45240b4db7c2b86adf963f3d07404",
+      "input": {
+        "build_input_sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "cache_identity": "verified-cache-identity-v1",
+        "capability_receipt_sha256": "sha256:389310c2a3b2c87862d7dbdfd307955a6aa614613b3d028f530605dfd9cd1816",
+        "execution_policy": "verified-provider-execution-v1",
+        "policy_id": "verified-provider-policy-v1",
+        "provider_binary_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "provider_contract": "host-execution-provider-v1",
+        "provider_id": "example.host-provider"
+      }
+    },
+    "capability_receipt": {
+      "capabilities": [
+        {
+          "capability_id": "total-network-denial-v1",
+          "status": "established"
+        },
+        {
+          "capability_id": "read-only-source-and-toolchain-v1",
+          "status": "established"
+        },
+        {
+          "capability_id": "exact-executable-allowlisting-v1",
+          "status": "established"
+        },
+        {
+          "capability_id": "private-build-root-only-writes-v1",
+          "status": "established"
+        },
+        {
+          "capability_id": "hard-aggregate-descendant-resource-bounds-v1",
+          "status": "established"
+        },
+        {
+          "capability_id": "fail-closed-capability-preflight-v1",
+          "status": "established"
+        }
+      ],
+      "expires_at": "2026-07-13T00:05:00Z",
+      "health": "healthy",
+      "nonce": "operation-nonce-1",
+      "observed_at": "2026-07-13T00:00:00Z",
+      "provider": {
+        "operating_system": "macos",
+        "provider_binary_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "provider_contract": "host-execution-provider-v1",
+        "provider_id": "example.host-provider",
+        "provider_version": "1.0.0",
+        "schema_version": 1
+      },
+      "receipt_type": "provider-capability-receipt-v1",
+      "schema_version": 1
+    },
+    "checkpoints": [
+      {
+        "capability_receipt_sha256": "sha256:389310c2a3b2c87862d7dbdfd307955a6aa614613b3d028f530605dfd9cd1816",
+        "checkpoint_type": "verified-execution-checkpoint-v1",
+        "created_at": "2026-07-13T00:01:00Z",
+        "operation_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "permit_sha256": "sha256:8f282633cc4656af3823b1489b9992ec790a60ef6cf9b91608533e1df8062a21",
+        "phase": "permit-issued",
+        "previous_checkpoint_sha256": null,
+        "provider": {
+          "operating_system": "macos",
+          "provider_binary_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "provider_contract": "host-execution-provider-v1",
+          "provider_id": "example.host-provider",
+          "provider_version": "1.0.0",
+          "schema_version": 1
+        },
+        "schema_version": 1
+      },
+      {
+        "capability_receipt_sha256": "sha256:389310c2a3b2c87862d7dbdfd307955a6aa614613b3d028f530605dfd9cd1816",
+        "checkpoint_type": "verified-execution-checkpoint-v1",
+        "created_at": "2026-07-13T00:02:00Z",
+        "operation_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "permit_sha256": "sha256:8f282633cc4656af3823b1489b9992ec790a60ef6cf9b91608533e1df8062a21",
+        "phase": "execution-started",
+        "previous_checkpoint_sha256": "sha256:e1ac1a57a92744735b100eb16673967717bb0ade0e1950792524cdaf40fec660",
+        "provider": {
+          "operating_system": "macos",
+          "provider_binary_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "provider_contract": "host-execution-provider-v1",
+          "provider_id": "example.host-provider",
+          "provider_version": "1.0.0",
+          "schema_version": 1
+        },
+        "schema_version": 1
+      },
+      {
+        "capability_receipt_sha256": "sha256:389310c2a3b2c87862d7dbdfd307955a6aa614613b3d028f530605dfd9cd1816",
+        "checkpoint_type": "verified-execution-checkpoint-v1",
+        "created_at": "2026-07-13T00:03:00Z",
+        "operation_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "permit_sha256": "sha256:8f282633cc4656af3823b1489b9992ec790a60ef6cf9b91608533e1df8062a21",
+        "phase": "execution-succeeded",
+        "previous_checkpoint_sha256": "sha256:d52824fce9a5720eb6ad0fa5f6237cf4b926e5fb6ba46ca86a754208aa9a5d76",
+        "provider": {
+          "operating_system": "macos",
+          "provider_binary_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "provider_contract": "host-execution-provider-v1",
+          "provider_id": "example.host-provider",
+          "provider_version": "1.0.0",
+          "schema_version": 1
+        },
+        "schema_version": 1
+      }
+    ],
+    "execution_policy": "verified-provider-execution-v1",
+    "execution_receipt": {
+      "artifact_sha256": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+      "build_input_sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "capability_receipt_sha256": "sha256:389310c2a3b2c87862d7dbdfd307955a6aa614613b3d028f530605dfd9cd1816",
+      "completed_at": "2026-07-13T00:03:00Z",
+      "execution_policy": "verified-provider-execution-v1",
+      "operation_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "permit_sha256": "sha256:8f282633cc4656af3823b1489b9992ec790a60ef6cf9b91608533e1df8062a21",
+      "policy_id": "verified-provider-policy-v1",
+      "provider": {
+        "operating_system": "macos",
+        "provider_binary_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "provider_contract": "host-execution-provider-v1",
+        "provider_id": "example.host-provider",
+        "provider_version": "1.0.0",
+        "schema_version": 1
+      },
+      "receipt_type": "verified-execution-receipt-v1",
+      "result": "succeeded",
+      "schema_version": 1,
+      "started_at": "2026-07-13T00:02:00Z"
+    },
+    "fallback_mode": null,
+    "operation_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "permit": {
+      "build_input_sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "capability_receipt_sha256": "sha256:389310c2a3b2c87862d7dbdfd307955a6aa614613b3d028f530605dfd9cd1816",
+      "execution_policy": "verified-provider-execution-v1",
+      "expires_at": "2026-07-13T00:04:00Z",
+      "nonce": "operation-nonce-1",
+      "operation_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "permit_type": "verified-execution-permit-v1",
+      "policy_id": "verified-provider-policy-v1",
+      "provider": {
+        "operating_system": "macos",
+        "provider_binary_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "provider_contract": "host-execution-provider-v1",
+        "provider_id": "example.host-provider",
+        "provider_version": "1.0.0",
+        "schema_version": 1
+      },
+      "schema_version": 1
+    },
+    "policy_id": "verified-provider-policy-v1",
+    "provider": {
+      "operating_system": "macos",
+      "provider_binary_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "provider_contract": "host-execution-provider-v1",
+      "provider_id": "example.host-provider",
+      "provider_version": "1.0.0",
+      "schema_version": 1
+    },
+    "selected_mode": "verified",
+    "validation_time": "2026-07-13T00:01:30Z"
+  }
+}

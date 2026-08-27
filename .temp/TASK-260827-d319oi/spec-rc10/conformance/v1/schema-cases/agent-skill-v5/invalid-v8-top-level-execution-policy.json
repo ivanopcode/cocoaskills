@@ -1,0 +1,12 @@
+{
+  "capabilities": {},
+  "commands": {},
+  "dependencies": {
+    "commands": {},
+    "mcp_servers": {},
+    "skills": {}
+  },
+  "execution_policy": "script-worker-v1",
+  "runtime_roots": [],
+  "schema_version": 5
+}

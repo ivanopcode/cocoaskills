@@ -1,0 +1,190 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 808a54c..44a8676 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -64,6 +64,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
+ 
+ ### Исправлено
+ 
++- Deadline toolchain fingerprint для `go-v1` теперь читает часы с достаточным
++  разрешением на всех поддерживаемых платформах. `time.monotonic()` на Windows
++  до CPython 3.13 — это `GetTickCount64()` с тиком 15.625 мс, поэтому deadline
++  короче одного тика был ненаблюдаем: показание не двигалось, и уже
++  исчерпанный deadline молча пропускал работу, которую должен был отклонить.
++  Модуль перешёл на `time.perf_counter()`, монотонный везде и с разрешением
++  100 нс на Windows во всех поддерживаемых CPython, так что deadline означает
++  одно и то же на каждой ноге матрицы. Направление проверки не изменилось:
++  превышение deadline по-прежнему отклоняет toolchain, никогда не допускает.
+ - Deadline toolchain fingerprint для `go-v1` больше не зажат жёстко на 120
+   секунд: default поднят до 600 секунд, caller задаёт его через
+   `ToolchainConfig(fingerprint_timeout=...)` или аргумент `timeout` у
+diff --git a/src/csk/builds/toolchain.py b/src/csk/builds/toolchain.py
+index 3842731..2b70c6d 100644
+--- a/src/csk/builds/toolchain.py
++++ b/src/csk/builds/toolchain.py
+@@ -305,7 +305,7 @@ class SubprocessProbeRunner:
+         stderr_thread.start()
+ 
+         timed_out = False
+-        deadline = time.monotonic() + timeout
++        deadline = _elapsed() + timeout
+         while process.poll() is None:
+             if stop_requested.wait(timeout=0.01):
+                 try:
+@@ -313,7 +313,7 @@ class SubprocessProbeRunner:
+                 except OSError:
+                     pass
+                 break
+-            if time.monotonic() >= deadline:
++            if _elapsed() >= deadline:
+                 timed_out = True
+                 try:
+                     process.kill()
+@@ -1937,17 +1937,32 @@ def _bounded_timeout(value: float, maximum: float) -> float:
+     return value
+ 
+ 
++def _elapsed() -> float:
++    """Read this module's one monotonic clock for every deadline.
++
++    ``time.monotonic()`` is not the same clock everywhere: on Windows before
++    CPython 3.13 it is ``GetTickCount64()``, whose 15.625 ms tick makes any
++    deadline shorter than one tick unobservable — the reading does not move,
++    so an already-exhausted deadline silently admits work it was meant to
++    refuse.  ``time.perf_counter()`` is monotonic on every supported platform
++    and resolves to 100 ns on Windows for every supported CPython, so a
++    deadline means the same thing on every leg of the matrix.
++    """
++
++    return time.perf_counter()
++
++
+ def _deadline(timeout: float) -> float:
+     if timeout <= 0:
+         raise ToolchainError(
+             "toolchain_timeout",
+             "toolchain fingerprint timeout must be positive",
+         )
+-    return time.monotonic() + timeout
++    return _elapsed() + timeout
+ 
+ 
+ def _check_deadline(deadline: float) -> None:
+-    if time.monotonic() > deadline:
++    if _elapsed() > deadline:
+         error = ToolchainError(
+             "toolchain_timeout",
+             "toolchain fingerprint deadline exceeded",
+diff --git a/tests/test_builds_toolchain.py b/tests/test_builds_toolchain.py
+index 5f9c3d0..6962084 100644
+--- a/tests/test_builds_toolchain.py
++++ b/tests/test_builds_toolchain.py
+@@ -1091,3 +1091,32 @@ def test_caller_deadline_overrides_an_unusably_small_operator_value(
+         timeout=toolchain.MAX_FINGERPRINT_TIMEOUT,
+     )
+     assert identity.algorithm == toolchain.TOOLCHAIN_ALGORITHM
++
++
++def test_an_exhausted_deadline_is_refused_on_a_coarse_grained_clock(
++    tmp_path: Path,
++    monkeypatch: pytest.MonkeyPatch,
++):
++    """A deadline shorter than the platform clock tick must still refuse.
++
++    Windows CPython before 3.13 backs ``time.monotonic()`` with
++    ``GetTickCount64()``, which advances once every 15.625 ms.  Reading such a
++    clock twice inside one tick returns the same value, so a deadline built
++    from it looks unreached no matter how much work has run.  This stubs that
++    clock in for every platform: the fingerprint pass must still refuse the
++    toolchain, because a deadline is a refusal boundary and a coarse clock
++    must never turn it into an admission.
++    """
++
++    # A GOROOT this small hashes well inside one 15.625 ms tick, so every
++    # reading taken during the pass is the same reading.
++    monkeypatch.setattr(toolchain.time, "monotonic", lambda: 1234.5625)
++    goroot = _make_goroot(tmp_path / "trusted-go")
++    stdout = b"go version go1.25.5 %s/%s\n" % (
++        toolchain._native_host().goos.encode("ascii"),
++        toolchain._native_host().goarch.encode("ascii"),
++    )
++
++    with pytest.raises(toolchain.ToolchainError) as raised:
++        toolchain.fingerprint_toolchain(goroot, stdout, timeout=0.000001)
++    _assert_code("toolchain_timeout", raised)
+diff --git a/tests/test_global_install_selection.py b/tests/test_global_install_selection.py
+index a884115..8716af7 100644
+--- a/tests/test_global_install_selection.py
++++ b/tests/test_global_install_selection.py
+@@ -3,6 +3,7 @@
+ from __future__ import annotations
+ 
+ import json
++import sys
+ from pathlib import Path
+ 
+ import pytest
+@@ -62,16 +63,29 @@ def _make_command_skill(skills_root: Path, name: str, command: str) -> None:
+                         command: {
+                             "type": "script",
+                             "unix_path": f"scripts/{command}",
++                            "win_path": f"scripts/{command}.cmd",
+                         }
+                     },
+                 }
+             ),
+             f"scripts/{command}": f"#!/bin/sh\necho {name}\n",
++            f"scripts/{command}.cmd": f"@echo off\r\necho {name}\r\n",
+         },
+         tag="v1",
+     )
+ 
+ 
++def _global_shim(csk_home: Path, command: str) -> Path:
++    """The published global shim, under the name the host platform gets.
++
++    Windows shims carry the ``.cmd`` suffix that makes them executable from
++    ``cmd.exe`` and PowerShell; POSIX shims keep the bare command name.
++    """
++
++    suffix = ".cmd" if sys.platform == "win32" else ""
++    return csk_home / "global" / "bin" / f"{command}{suffix}"
++
++
+ def _record_git_traffic(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[str]]:
+     traffic: dict[str, list[str]] = {"fetch": [], "clone": []}
+     real_fetch = git_ops.fetch_repo
+@@ -239,8 +253,8 @@ def test_global_install_only_preserves_previously_installed_skills(
+ 
+     assert (installed / "skill-kept").is_dir()
+     assert (installed / "skill-target").is_dir()
+-    assert (csk_home / "global" / "bin" / "kept-tool").exists()
+-    assert (csk_home / "global" / "bin" / "target-tool").exists()
++    assert _global_shim(csk_home, "kept-tool").exists()
++    assert _global_shim(csk_home, "target-tool").exists()
+     assert (
+         csk_home / "runtime" / "skill-kept" / kept_commit
+     ).is_dir()
+@@ -272,11 +286,13 @@ def test_global_install_only_rejects_a_command_taken_by_a_retained_skill(
+                         "shared-tool": {
+                             "type": "script",
+                             "unix_path": "scripts/shared-tool",
++                            "win_path": "scripts/shared-tool.cmd",
+                         }
+                     },
+                 }
+             ),
+             "scripts/shared-tool": "#!/bin/sh\necho skill-target\n",
++            "scripts/shared-tool.cmd": "@echo off\r\necho skill-target\r\n",
+         },
+     )
+     commit_all(target_repo, "export shared-tool")
+@@ -296,7 +312,7 @@ def test_global_install_only_rejects_a_command_taken_by_a_retained_skill(
+         "Command collision for 'shared-tool'" in error
+         for error in result.errors
+     )
+-    assert (csk_home / "global" / "bin" / "shared-tool").exists()
++    assert _global_shim(csk_home, "shared-tool").exists()
+ 
+ 
+ def test_global_install_only_warns_about_retained_dependents(

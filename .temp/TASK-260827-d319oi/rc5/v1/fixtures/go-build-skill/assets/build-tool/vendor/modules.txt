@@ -1,0 +1,3 @@
+# example.com/curator/vendored v1.0.0
+## explicit; go 1.23
+example.com/curator/vendored/decorate

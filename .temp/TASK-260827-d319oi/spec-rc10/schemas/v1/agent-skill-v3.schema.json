@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/agent-skill-v3.schema.json",
+  "title": "agent-skill.json schema 3",
+  "type": "object",
+  "required": ["schema_version", "capabilities"],
+  "properties": {
+    "schema_version": {"const": 3},
+    "runtime_roots": {"$ref": "common.schema.json#/$defs/pathSet"},
+    "commands": {"type": "object", "propertyNames": {"$ref": "common.schema.json#/$defs/identifier"}, "additionalProperties": {"$ref": "common.schema.json#/$defs/command"}},
+    "capabilities": {"$ref": "common.schema.json#/$defs/capabilities"},
+    "dependencies": {"$ref": "common.schema.json#/$defs/dependenciesV2"}
+  },
+  "additionalProperties": false
+}

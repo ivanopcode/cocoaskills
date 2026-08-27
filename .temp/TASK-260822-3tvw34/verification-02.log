@@ -1,0 +1,93 @@
+# TASK-260822-3tvw34 review 2 (RUN-260822-a70c5e) verification log
+
+$ pwd
+/Users/iv/Developer/Wildberries/cocoaskills
+
+## W1 + W2 fixes present (grep)
+$ grep -n "скомпилир\|компилир" README.md
+146:Скомпилированные команды скилла могут собираться из отдельно запиненного git-репозитория. Если репозиторий приватный, при первой установке `csk` показывает обнаруженные варианты (ssh-agent, ваши `*.pub`): вы выбираете вариант на терминале (дефолт "агент + пин ключа"), указываете скоуп, и выбор сохраняется в конфиг. В CI то же самое задаётся заранее:
+
+W1: "могут собираться из отдельно запиненного git-репозитория" (was: "собираются из
+отдельно запиненных git-репозиториев"). Matches docs/skill-authoring.md:367
+"Скиллы схемы 7 могут также выбирать зафиксированный внешний источник Git".
+Base schema-6 form (build_roots inside the package, source_dir within a root) is
+documented at docs/skill-authoring.md:369-380 and stays uncontradicted.
+
+W2: "показывает обнаруженные варианты" (was "считывает"). Matches
+src/csk/installer.py:961 print("Detected candidates:").
+
+## Precheck default label
+$ sed -n '941,950p' src/csk/installer.py
+    if candidates.agent_socket is not None and candidates.public_keys:
+        first = candidates.public_keys[0]
+        ...
+        options.append((f"ssh-agent{loaded} + pin {first}", "auto", first))
+First option is "ssh-agent + pin <key>", printed with "<- default" marker
+(installer.py:963). README's дефолт "агент + пин ключа" is accurate.
+
+## Prose style: no dashes or guillemets in any line added by this task
+$ git diff -U0 -- CHANGELOG.md | grep '^+' | grep -v '^+++' | grep $'[—–«»]'
+(no output, exit 1)
+$ git diff -U0 -- README.md | grep '^+' | grep -v '^+++' | grep $'[—–«»]'
+(no output, exit 1)
+$ sed -n '144,154p' README.md | grep -c $'[—–«»]'
+0
+
+## Tag dates match CHANGELOG headings
+$ git for-each-ref --format='%(refname:short) %(taggerdate:short)' refs/tags/v0.13.0 refs/tags/v0.14.0 refs/tags/v0.14.1
+v0.13.0 2026-08-08
+v0.14.0 2026-08-21
+v0.14.1 2026-08-22
+
+## Commit ranges
+$ git log --oneline v0.13.0..v0.14.0
+fd116d7 Merge fix/go-v1-install-blockers
+d8d3529 test: regressions for install blockers and build-ssh scopes
+b2d3d14 feat: operator-scoped build-SSH credential selection
+e66c0c8 fix: unblock go-repository-v1 for package-manager installs
+d3e0116 ci: bump the Homebrew tap from the release workflow
+0099b25 docs: restructure documentation
+b1e05cd ci: add fast pull request feedback lane
+239c807 chore: relocate task board configuration
+
+$ git log --oneline v0.14.0..v0.14.1
+818049c Merge feat/build-ssh-candidates
+2bb2772 feat: offer detected credential candidates in the build-SSH precheck
+1a4ac00 test: assert the tap bump gate semantically
+0d7806f ci: trust the tap before installing in the Homebrew smoke lane
+fa59664 docs: adopt Russian-first documentation
+e9d6785 ci: run the tap bump after a skipped TestPyPI lane
+
+$ git log --oneline v0.14.1..HEAD
+(empty -> Unreleased correctly holds nothing)
+
+## 0.14.0 claims traced to commit bodies
+e66c0c8: canonicalize argv0 before manager launcher identity checks; lib64 -> lib
+alias; name closure node and ref on invalid manifest; toolchain_executable_mismatch
+remedy note for goenv/asdf/mise. Four of six "Исправлено" bullets.
+b2d3d14: build_ssh map with longest segment-prefix scopes, precheck before fetch,
+fail-closed remedy, --dry-run source table, config build-ssh add/list/remove,
+bootstrap question; plus vendor non-executable advisory downgrade and
+config.add_project via dataclasses.replace. Remaining two "Исправлено" bullets and
+the whole "Добавлено" bullet.
+2bb2772 (in v0.14.0..v0.14.1): 0.14.1 candidate discovery entry.
+
+## Rehomed ex-Unreleased entries: earliest containing tag is v0.13.0
+$ git log --all -S'--only' --pickaxe-regex --oneline -- src/csk/ | tail -1 -> 7680d8f
+$ git tag --contains 7680d8f | head -1 -> v0.13.0
+$ git log --all -S'build_roots' --oneline -- src/csk/ | tail -1 -> dd76b57
+$ git tag --contains dd76b57 | head -3 -> v0.13.0, v0.13.0-rc.1, v0.13.0-rc.2
+
+## README link targets resolve
+All ](*.md) targets in README.md exist on disk; no MISSING lines.
+$ ls -la docs/troubleshooting.md
+-rw-r--r--  1 iv  staff  4571 Aug 22 20:52 docs/troubleshooting.md
+
+## Tests
+$ git status --short -- src/ tests/
+(empty)
+src/ and tests/ are untouched since review 1's full run (1465 passed, 244 skipped
+in 346s, .temp/TASK-260822-3tvw34/verification-01.log). The review-2 delta is two
+prose edits inside README.md:146. No test in tests/ reads the repository README or
+CHANGELOG: every README.md/CHANGELOG reference in tests is a tmp_path fixture
+(checked tests/test_whitelist.py:11,30,52 and tests/test_skillcheck.py:110,327,342).

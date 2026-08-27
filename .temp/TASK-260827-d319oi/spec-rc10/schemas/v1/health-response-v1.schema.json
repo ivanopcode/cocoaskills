@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/health-response-v1.schema.json",
+  "title": "Registry health response",
+  "type": "object",
+  "required": ["status"],
+  "properties": {"status": {"const": "ok"}},
+  "additionalProperties": false
+}

@@ -1,0 +1,109 @@
+### synopsis diff (all sections vs live csk --help)
+sections: 29, mismatches: 0
+
+### B1 grammar / B2 term (expect no hits)
+0 hits
+
+### B3 --version
+16:usage: csk [-h] [--version]
+23:* `--version`: выводит версию csk и завершает работу.
+28:csk --version
+
+### B4 shared flag descriptions (install / upgrade / global install / global upgrade)
+235:* `--dry-run`: рассчитывает план действий без изменения файлов на диске.
+236:* `--verbose`: выводит подробный ход выполнения.
+238:* `--strict-tags`: завершает работу ошибкой, если тег локально указывает на другой коммит.
+239:* `--audit [{advisory,strict}]`: запускает проверку аудита перед установкой (по умолчанию: `advisory`).
+240:* `--build-ssh-identity PATH`: путь к приватному ключу SSH для закрытых репозиториев сборок (переменная: `CSK_BUILD_SSH_IDENTITY`).
+241:* `--build-ssh-agent [SOCKET]`: сокет SSH-агента для доступа к репозиториям сборок (переменная: `CSK_BUILD_SSH_AGENT`).
+242:* `--build-ssh-known-hosts PATH`: путь к файлу known_hosts для проверки ключей хоста (по умолчанию: `~/.ssh/known_hosts`; переменная: `CSK_BUILD_SSH_KNOWN_HOSTS`).
+293:* `--dry-run`: рассчитывает план действий без изменения файлов на диске.
+294:* `--verbose`: выводит подробный ход выполнения.
+296:* `--strict-tags`: завершает работу ошибкой, если тег локально указывает на другой коммит.
+297:* `--audit [{advisory,strict}]`: запускает проверку аудита перед установкой (по умолчанию: `advisory`).
+298:* `--build-ssh-identity PATH`: путь к приватному ключу SSH для закрытых репозиториев сборок (переменная: `CSK_BUILD_SSH_IDENTITY`).
+299:* `--build-ssh-agent [SOCKET]`: сокет SSH-агента для доступа к репозиториям сборок (переменная: `CSK_BUILD_SSH_AGENT`).
+300:* `--build-ssh-known-hosts PATH`: путь к файлу known_hosts для проверки ключей хоста (по умолчанию: `~/.ssh/known_hosts`; переменная: `CSK_BUILD_SSH_KNOWN_HOSTS`).
+477:* `--dry-run`: рассчитывает план действий без изменения файлов на диске.
+478:* `--verbose`: выводит подробный ход выполнения.
+479:* `--strict-tags`: завершает работу ошибкой, если тег локально указывает на другой коммит.
+480:* `--audit [{advisory,strict}]`: запускает проверку аудита перед установкой (по умолчанию: `advisory`).
+482:* `--build-ssh-identity PATH`: путь к приватному ключу SSH для закрытых репозиториев сборок (переменная: `CSK_BUILD_SSH_IDENTITY`).
+483:* `--build-ssh-agent [SOCKET]`: сокет SSH-агента для доступа к репозиториям сборок (переменная: `CSK_BUILD_SSH_AGENT`).
+484:* `--build-ssh-known-hosts PATH`: путь к файлу known_hosts для проверки ключей хоста (по умолчанию: `~/.ssh/known_hosts`; переменная: `CSK_BUILD_SSH_KNOWN_HOSTS`).
+534:* `--dry-run`: рассчитывает план действий без изменения файлов на диске.
+535:* `--verbose`: выводит подробный ход выполнения.
+536:* `--strict-tags`: завершает работу ошибкой, если тег локально указывает на другой коммит.
+537:* `--audit [{advisory,strict}]`: запускает проверку аудита перед установкой (по умолчанию: `advisory`).
+539:* `--build-ssh-identity PATH`: путь к приватному ключу SSH для закрытых репозиториев сборок (переменная: `CSK_BUILD_SSH_IDENTITY`).
+540:* `--build-ssh-agent [SOCKET]`: сокет SSH-агента для доступа к репозиториям сборок (переменная: `CSK_BUILD_SSH_AGENT`).
+541:* `--build-ssh-known-hosts PATH`: путь к файлу known_hosts для проверки ключей хоста (по умолчанию: `~/.ssh/known_hosts`; переменная: `CSK_BUILD_SSH_KNOWN_HOSTS`).
+
+### N1 ё-consistency
+235:* `--dry-run`: рассчитывает план действий без изменения файлов на диске.
+293:* `--dry-run`: рассчитывает план действий без изменения файлов на диске.
+477:* `--dry-run`: рассчитывает план действий без изменения файлов на диске.
+534:* `--dry-run`: рассчитывает план действий без изменения файлов на диске.
+674:* `--publish RECORD`: отправляет подписанный JSON-файл отчета в реестр аудита.
+675:* `--registry REGISTRY`: URL реестра аудита для публикации отчета.
+684:Команда сканирует декларации и выводит отчет безопасности в формате JSON.
+
+### N2 gc snapshots
+Удаляет неиспользуемые runtime-директории, snapshot-записи, просроченный кэш сборок (старше 24 часов) и устаревшие записи реестра клиентов.
+
+### typography (expect no hits)
+0 hits in docs/cli.md
+0 hits in README.md Команды
+
+### coverage
+live: 31 ['add', 'audit', 'bootstrap', 'config show', 'gc', 'global add', 'global init', 'global install', 'global list', 'global remove', 'global status', 'global update', 'global upgrade', 'hybrid add', 'hybrid list', 'hybrid remove', 'hybrid status', 'init', 'install', 'list', 'project add', 'project resolve', 'remove', 'shell-init auto', 'shell-init bash', 'shell-init powershell', 'shell-init zsh', 'skill check', 'status', 'update', 'upgrade']
+README missing: ['shell-init auto', 'shell-init bash', 'shell-init powershell', 'shell-init zsh'] | extra: ['shell-init']
+cli.md missing: ['shell-init auto', 'shell-init bash', 'shell-init powershell', 'shell-init zsh'] | extra: ['shell-init']
+details: 5 5 5 5
+summaries: ['Проект', 'Скиллы и зависимости', 'Global и Hybrid', 'Сборки и аудит', 'Сервисные']
+link: True
+
+### flag bidirectional
+csk update | MISSING in doc: ['--all', '--prune', '--tags'] | NOT in help: []
+flag problems: 1
+
+### flag description consistency
+### --all
+   [csk status] показывает статус для всех зарегистрированных проектов.
+   [csk install] выполняет установку для всех зарегистрированных проектов.
+   [csk upgrade] подтягивает обновления и обновляет все зарегистрированные проекты.
+   [csk audit] выполняет аудит всех зарегистрированных проектов и глобальных скиллов.
+### --check
+   [csk status] завершает выполнение с кодом 1, если хотя бы один скилл требует обновления.
+   [csk global status] завершает выполнение с ненулевым кодом при наличии неактуальных скиллов.
+### --json
+   [csk status] выводит данные в формате JSON вместо таблицы.
+   [csk skill check] выводит список найденных ошибок в формате JSON.
+   [csk global status] выводит данные в формате JSON.
+   [csk audit] выводит результат в формате JSON.
+### --only
+   [csk global install] ограничивает операцию указанным глобальным скиллом (повторяемый флаг).
+   [csk global update] ограничивает операцию указанным скиллом (повторяемый флаг).
+   [csk global upgrade] обновляет только один указанный скилл (повторяемый флаг).
+### --revision
+   [csk add] хеш коммита git-репозитория.
+   [csk global add] хеш коммита.
+   [csk hybrid add] хеш коммита.
+### --source
+   [csk add] имя локальной директории источника в каталоге `skills_root`.
+   [csk global add] имя локальной директории в `skills_root`.
+### name
+   [csk add] имя добавляемого скилла.
+   [csk remove] имя удаляемого скилла.
+   [csk global add] имя скилла.
+   [csk global remove] имя удаляемого глобального скилла.
+   [csk hybrid add] имя скилла.
+   [csk hybrid remove] имя удаляемого скилла.
+### path
+   [csk init] путь к директории проекта. По умолчанию используется текущий каталог.
+   [csk project add] путь к директории проекта.
+   [csk skill check] путь к директории скилла.
+
+### tests
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+76 passed, 24 warnings in 11.97s

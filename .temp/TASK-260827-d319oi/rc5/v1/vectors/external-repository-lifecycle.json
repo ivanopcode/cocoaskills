@@ -1,0 +1,379 @@
+{
+  "cache_cases": [
+    {
+      "audit_succeeded": true,
+      "cache_lookup_after_audit": true,
+      "code": null,
+      "compiler_started": false,
+      "name": "verified-cache-hit",
+      "ordered_phases": [
+        "exact-source-acquisition",
+        "raw-object-identity-and-graph-proof",
+        "all-blob-lfs-scan",
+        "immutable-snapshot-materialization",
+        "whole-snapshot-validation",
+        "build-source-digest",
+        "descriptor-and-target-validation",
+        "independent-external-audit",
+        "artifact-cache-lookup"
+      ],
+      "source_proved": true,
+      "state": "cache-hit"
+    },
+    {
+      "audit_succeeded": true,
+      "cache_lookup_after_audit": true,
+      "code": null,
+      "compiler_started": true,
+      "name": "cache-miss",
+      "ordered_phases": [
+        "exact-source-acquisition",
+        "raw-object-identity-and-graph-proof",
+        "all-blob-lfs-scan",
+        "immutable-snapshot-materialization",
+        "whole-snapshot-validation",
+        "build-source-digest",
+        "descriptor-and-target-validation",
+        "independent-external-audit",
+        "artifact-cache-lookup",
+        "compiler",
+        "receipt-publication",
+        "marker-consumer-last-commit"
+      ],
+      "source_proved": true,
+      "state": "would-preflight-and-build"
+    },
+    {
+      "audit_succeeded": true,
+      "cache_lookup_after_audit": true,
+      "code": "build_repository_receipt_invalid",
+      "compiler_started": true,
+      "name": "corrupt-receipt",
+      "ordered_phases": [
+        "exact-source-acquisition",
+        "raw-object-identity-and-graph-proof",
+        "all-blob-lfs-scan",
+        "immutable-snapshot-materialization",
+        "whole-snapshot-validation",
+        "build-source-digest",
+        "descriptor-and-target-validation",
+        "independent-external-audit",
+        "artifact-cache-lookup",
+        "compiler",
+        "receipt-publication",
+        "marker-consumer-last-commit"
+      ],
+      "source_proved": true,
+      "state": "would-rebuild-untrusted-cache"
+    },
+    {
+      "audit_succeeded": true,
+      "cache_lookup_after_audit": true,
+      "code": "build_repository_artifact_invalid",
+      "compiler_started": true,
+      "name": "corrupt-artifact",
+      "ordered_phases": [
+        "exact-source-acquisition",
+        "raw-object-identity-and-graph-proof",
+        "all-blob-lfs-scan",
+        "immutable-snapshot-materialization",
+        "whole-snapshot-validation",
+        "build-source-digest",
+        "descriptor-and-target-validation",
+        "independent-external-audit",
+        "artifact-cache-lookup",
+        "compiler",
+        "receipt-publication",
+        "marker-consumer-last-commit"
+      ],
+      "source_proved": true,
+      "state": "would-rebuild-untrusted-cache"
+    },
+    {
+      "audit_succeeded": true,
+      "cache_lookup_after_audit": true,
+      "code": "build_repository_protected_boundary_untrusted",
+      "compiler_started": true,
+      "name": "untrusted-protected-boundary",
+      "ordered_phases": [
+        "exact-source-acquisition",
+        "raw-object-identity-and-graph-proof",
+        "all-blob-lfs-scan",
+        "immutable-snapshot-materialization",
+        "whole-snapshot-validation",
+        "build-source-digest",
+        "descriptor-and-target-validation",
+        "independent-external-audit",
+        "artifact-cache-lookup",
+        "compiler",
+        "receipt-publication",
+        "marker-consumer-last-commit"
+      ],
+      "source_proved": true,
+      "state": "would-rebuild-untrusted-cache"
+    },
+    {
+      "audit_claimed": false,
+      "cache_claimed": false,
+      "code": "build_repository_unverified_offline",
+      "mutation": false,
+      "name": "offline-syntax-only",
+      "operation": "syntax",
+      "severity": "warning",
+      "source_claimed": false,
+      "state": "unverified-offline"
+    },
+    {
+      "cache_lookup": false,
+      "code": "build_repository_source_unavailable",
+      "compiler_started": false,
+      "mutation": false,
+      "name": "offline-install",
+      "operation": "install",
+      "severity": "error",
+      "state": "blocked"
+    }
+  ],
+  "mixed_build_cases": [
+    {
+      "drivers": [
+        "go-v1"
+      ],
+      "manifest_schema": 6,
+      "marker_version": 2,
+      "name": "schema6-local-only",
+      "receipt_versions": [
+        1
+      ]
+    },
+    {
+      "drivers": [
+        "go-v1"
+      ],
+      "manifest_schema": 7,
+      "marker_version": 3,
+      "name": "schema7-local-only",
+      "receipt_versions": [
+        1
+      ]
+    },
+    {
+      "drivers": [
+        "go-repository-v1"
+      ],
+      "manifest_schema": 7,
+      "marker_version": 3,
+      "name": "schema7-external-only",
+      "receipt_versions": [
+        2
+      ]
+    },
+    {
+      "drivers": [
+        "go-repository-v1",
+        "go-v1"
+      ],
+      "expected_marker": "expected/external-repository/install-marker-v3-mixed.json",
+      "manifest_schema": 7,
+      "marker_version": 3,
+      "name": "schema7-mixed",
+      "receipt_versions": [
+        2,
+        1
+      ]
+    },
+    {
+      "declared_and_effective_sources": true,
+      "drivers": [
+        "go-repository-v1"
+      ],
+      "manifest_schema": 7,
+      "marker_version": 3,
+      "name": "schema7-substituted-external",
+      "receipt_versions": [
+        2
+      ]
+    }
+  ],
+  "path_shim_cases": [
+    {
+      "artifact_executed_during_install": false,
+      "forward_arguments": true,
+      "name": "external-command-shim",
+      "path_entry_derived_by_manager": true,
+      "preserve_exit_status": true,
+      "preserve_inherited_path": true
+    },
+    {
+      "expected_error": "build_repository_package_output_forbidden",
+      "name": "package-path-entry-rejected",
+      "shim_published": false
+    },
+    {
+      "expected_error": "build_repository_transaction_failed",
+      "name": "shim-collision-rolls-back",
+      "prior_shim_restored": true
+    }
+  ],
+  "signing_cases": [
+    {
+      "artifact_executed_during_install": false,
+      "manager_post_signing": false,
+      "name": "unsigned-local-build",
+      "result": "supported"
+    },
+    {
+      "expected_error": "build_repository_package_signing_forbidden",
+      "name": "package-signing-request",
+      "signer_started": false
+    },
+    {
+      "expected_error": "build_repository_signer_policy_unsupported",
+      "name": "platform-requires-local-signing",
+      "signer_started": false
+    },
+    {
+      "manager_post_signing": false,
+      "name": "release-pipeline-signing",
+      "owner": "operator-release-pipeline"
+    }
+  ],
+  "source_covering_cases": [
+    {
+      "artifact_cache_lookup": true,
+      "audit_claimed": true,
+      "compiler_started": false,
+      "mutation": false,
+      "name": "external-source-dry-run",
+      "operation": "dry-run",
+      "ordered_phases": [
+        "exact-source-acquisition",
+        "raw-object-identity-and-graph-proof",
+        "all-blob-lfs-scan",
+        "immutable-snapshot-materialization",
+        "whole-snapshot-validation",
+        "build-source-digest",
+        "descriptor-and-target-validation",
+        "independent-external-audit",
+        "artifact-cache-lookup"
+      ],
+      "result": "source-covered",
+      "source_claimed": true
+    },
+    {
+      "artifact_cache_lookup": false,
+      "audit_claimed": true,
+      "compiler_started": false,
+      "mutation": false,
+      "name": "external-audit-only",
+      "operation": "audit",
+      "ordered_phases": [
+        "exact-source-acquisition",
+        "raw-object-identity-and-graph-proof",
+        "all-blob-lfs-scan",
+        "immutable-snapshot-materialization",
+        "whole-snapshot-validation",
+        "build-source-digest",
+        "descriptor-and-target-validation",
+        "independent-external-audit"
+      ],
+      "result": "pass",
+      "source_claimed": true
+    }
+  ],
+  "status_repair_gc_cases": [
+    {
+      "code": null,
+      "name": "status-current",
+      "remote_contacted": false,
+      "severity": null,
+      "state": "current"
+    },
+    {
+      "code": "build_repository_non_current",
+      "name": "status-missing-snapshot",
+      "remote_contacted": false,
+      "state": "non-current"
+    },
+    {
+      "code": "build_repository_currentness_unknown",
+      "name": "status-unreadable-protected-state",
+      "remote_contacted": false,
+      "state": "unknown"
+    },
+    {
+      "artifact_cache_lookup": true,
+      "compiler_started": true,
+      "name": "repair-reacquires-exact-source",
+      "ordered_phases": [
+        "exact-source-acquisition",
+        "raw-object-identity-and-graph-proof",
+        "all-blob-lfs-scan",
+        "immutable-snapshot-materialization",
+        "whole-snapshot-validation",
+        "build-source-digest",
+        "descriptor-and-target-validation",
+        "independent-external-audit",
+        "artifact-cache-lookup",
+        "compiler",
+        "receipt-publication",
+        "marker-consumer-last-commit"
+      ],
+      "repeats": [
+        "acquisition",
+        "object-proof",
+        "audit",
+        "transaction-publication"
+      ]
+    },
+    {
+      "name": "gc-retains-roots",
+      "roots": [
+        "artifact-receipts",
+        "in-flight-journals",
+        "install-markers",
+        "protected-snapshots",
+        "uncertain-entries"
+      ]
+    }
+  ],
+  "transaction_cases": [
+    {
+      "failure_at": "build",
+      "journal_retained_if_uncertain": true,
+      "live_state_unchanged": true,
+      "name": "failure-before-publication"
+    },
+    {
+      "consumer_marker_committed": false,
+      "failure_at": "publication",
+      "name": "failure-after-private-stage",
+      "rollback": "restore-prior-complete-state"
+    },
+    {
+      "failure_at": "marker-commit",
+      "name": "marker-consumer-last",
+      "partial_currentness_forbidden": true,
+      "rollback": "restore-prior-complete-state"
+    },
+    {
+      "gc_retains_journal_roots": true,
+      "name": "recovery-uncertain-journal",
+      "recovery": "fail-closed-or-rollback"
+    }
+  ],
+  "whole_snapshot_order": [
+    "exact-source-acquisition",
+    "raw-object-identity-and-graph-proof",
+    "all-blob-lfs-scan",
+    "immutable-snapshot-materialization",
+    "whole-snapshot-validation",
+    "build-source-digest",
+    "descriptor-and-target-validation",
+    "independent-external-audit",
+    "artifact-cache-lookup",
+    "compiler",
+    "receipt-publication",
+    "marker-consumer-last-commit"
+  ]
+}

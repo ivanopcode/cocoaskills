@@ -1,0 +1,1882 @@
+[
+  {
+    "instance": "adapter-ledger-v1/valid.json",
+    "schema": "adapter-ledger-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "adapter-ledger-v1/invalid.json",
+    "schema": "adapter-ledger-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v1/valid.json",
+    "schema": "agent-skill-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "agent-skill-v1/invalid.json",
+    "schema": "agent-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v1/invalid-v7-build-repositories.json",
+    "schema": "agent-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v1/invalid-v7-top-level-repository.json",
+    "schema": "agent-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v1/invalid-v7-top-level-target.json",
+    "schema": "agent-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v1/invalid-v7-top-level-driver.json",
+    "schema": "agent-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v1/invalid-v7-command-repository.json",
+    "schema": "agent-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v1/invalid-v7-command-target.json",
+    "schema": "agent-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v1/invalid-v7-command-driver.json",
+    "schema": "agent-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v2/valid.json",
+    "schema": "agent-skill-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "agent-skill-v2/invalid.json",
+    "schema": "agent-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v2/invalid-v7-build-repositories.json",
+    "schema": "agent-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v2/invalid-v7-top-level-repository.json",
+    "schema": "agent-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v2/invalid-v7-top-level-target.json",
+    "schema": "agent-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v2/invalid-v7-top-level-driver.json",
+    "schema": "agent-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v2/invalid-v7-command-repository.json",
+    "schema": "agent-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v2/invalid-v7-command-target.json",
+    "schema": "agent-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v2/invalid-v7-command-driver.json",
+    "schema": "agent-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v3/valid.json",
+    "schema": "agent-skill-v3.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "agent-skill-v3/invalid.json",
+    "schema": "agent-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v3/invalid-v7-build-repositories.json",
+    "schema": "agent-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v3/invalid-v7-top-level-repository.json",
+    "schema": "agent-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v3/invalid-v7-top-level-target.json",
+    "schema": "agent-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v3/invalid-v7-top-level-driver.json",
+    "schema": "agent-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v3/invalid-v7-command-repository.json",
+    "schema": "agent-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v3/invalid-v7-command-target.json",
+    "schema": "agent-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v3/invalid-v7-command-driver.json",
+    "schema": "agent-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v4/valid.json",
+    "schema": "agent-skill-v4.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "agent-skill-v4/invalid.json",
+    "schema": "agent-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v4/invalid-v7-build-repositories.json",
+    "schema": "agent-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v4/invalid-v7-top-level-repository.json",
+    "schema": "agent-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v4/invalid-v7-top-level-target.json",
+    "schema": "agent-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v4/invalid-v7-top-level-driver.json",
+    "schema": "agent-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v4/invalid-v7-command-repository.json",
+    "schema": "agent-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v4/invalid-v7-command-target.json",
+    "schema": "agent-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v4/invalid-v7-command-driver.json",
+    "schema": "agent-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v5/valid.json",
+    "schema": "agent-skill-v5.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "agent-skill-v5/invalid.json",
+    "schema": "agent-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v5/invalid-v7-build-repositories.json",
+    "schema": "agent-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v5/invalid-v7-top-level-repository.json",
+    "schema": "agent-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v5/invalid-v7-top-level-target.json",
+    "schema": "agent-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v5/invalid-v7-top-level-driver.json",
+    "schema": "agent-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v5/invalid-v7-command-repository.json",
+    "schema": "agent-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v5/invalid-v7-command-target.json",
+    "schema": "agent-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v5/invalid-v7-command-driver.json",
+    "schema": "agent-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/valid.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "agent-skill-v6/invalid.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-build-missing-driver.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-build-missing-source-dir.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-build-root-dot.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-build-source-dir-dot.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-build-unsupported-driver.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-build-mixed-script.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-build-mixed-system.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-build-args.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-build-env.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-build-flags.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-build-hooks.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-build-output.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-build-scripts.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-build-tags.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-build-toolchain.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-v7-build-repositories.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-v7-top-level-repository.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-v7-top-level-target.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-v7-top-level-driver.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-v7-command-repository.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-v7-command-target.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v6/invalid-v7-command-driver.json",
+    "schema": "agent-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/valid.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "agent-skill-v7/invalid.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/valid-sha256-lock.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "agent-skill-v7/valid-untagged-lock.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "agent-skill-v7/valid-ssh-source.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "agent-skill-v7/valid-scp-source.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "agent-skill-v7/valid-unicode-https-source.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "agent-skill-v7/valid-tag-255-bytes.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "agent-skill-v7/invalid-unselected-repository.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-missing-repository.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-sha1-width.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-sha256-width.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-https-userinfo.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-explicit-port.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-https-dot-component.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-ssh-dot-component.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-scp-dot-component.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-ssh-metacharacter.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-ssh-non-ascii.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-raw-revision-tag.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-tag-256-bytes.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-tag-300-bytes.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-generic-driver.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-command-argv.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-command-env.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-command-output.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-command-name.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-command-credentials.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-command-signing.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-command-hooks.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-command-plugins.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-command-generator.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "agent-skill-v7/invalid-command-fallback.json",
+    "schema": "agent-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "audit-record-v1/valid.json",
+    "schema": "audit-record-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "audit-record-v1/invalid.json",
+    "schema": "audit-record-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/valid.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "build-receipt-v1/invalid.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-missing-input.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-missing-artifact.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-driver-mismatch.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-build-source-algorithm.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-toolchain-algorithm.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-policy-mismatch.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-hardened-execution-policy.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-missing-execution-policy.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-artifact-hash.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-unknown-input-field.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-self-asserted-trusted.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-self-asserted-provenance.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-self-asserted-manager-created.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-physical-cache-path.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-physical-receipt-path.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v1/invalid-physical-lock-path.json",
+    "schema": "build-receipt-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/valid.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "build-receipt-v2/invalid.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/valid-local-substitution.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "build-receipt-v2/valid-network-substitution.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "build-receipt-v2/valid-network-sha256-revision.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "build-receipt-v2/valid-sha256.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "build-receipt-v2/valid-untagged.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "build-receipt-v2/valid-canonical-uppercase-git-suffix.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "build-receipt-v2/invalid-unsubstituted-substitution.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-substituted-without-state.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-local-substitution-network-identity.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-network-substitution-local-identity.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-effective-commit-width.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-unsubstituted-declared-effective-mismatch.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-source-outside-build-root.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-sha1-effective-revision-width.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-sha256-effective-revision-width.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-canonical-lowercase-git-suffix.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-canonical-uppercase-host.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-canonical-dot-component.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-driver.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-hardened-execution-policy.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-missing-execution-policy.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-output.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-argv.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "build-receipt-v2/invalid-trust-boolean.json",
+    "schema": "build-receipt-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v1/valid.json",
+    "schema": "conformance-claim-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "conformance-claim-v1/invalid.json",
+    "schema": "conformance-claim-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v2/valid.json",
+    "schema": "conformance-claim-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "conformance-claim-v2/invalid.json",
+    "schema": "conformance-claim-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v2/invalid-protocol-version-rc3.json",
+    "schema": "conformance-claim-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v2/invalid-schema-version-1.json",
+    "schema": "conformance-claim-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v2/invalid-duplicate-classes.json",
+    "schema": "conformance-claim-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v2/invalid-result-fail.json",
+    "schema": "conformance-claim-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v2/invalid-unknown-field.json",
+    "schema": "conformance-claim-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v3/valid.json",
+    "schema": "conformance-claim-v3.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "conformance-claim-v3/invalid.json",
+    "schema": "conformance-claim-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v3/valid-macos-only.json",
+    "schema": "conformance-claim-v3.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "conformance-claim-v3/invalid-linux-unqualified.json",
+    "schema": "conformance-claim-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v3/invalid-rc4.json",
+    "schema": "conformance-claim-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v3/invalid-duplicate-platform.json",
+    "schema": "conformance-claim-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v3/invalid-duplicate-driver-assertion.json",
+    "schema": "conformance-claim-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v3/invalid-driver-platform-outside-claim.json",
+    "schema": "conformance-claim-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v3/invalid-generic-driver.json",
+    "schema": "conformance-claim-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v3/invalid-language-mismatch.json",
+    "schema": "conformance-claim-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v3/invalid-hardened-execution-policy.json",
+    "schema": "conformance-claim-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v3/invalid-missing-execution-policy.json",
+    "schema": "conformance-claim-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "conformance-claim-v3/invalid-unknown-field.json",
+    "schema": "conformance-claim-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v1/valid.json",
+    "schema": "csk-skill-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "csk-skill-v1/invalid.json",
+    "schema": "csk-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v1/invalid-v7-build-repositories.json",
+    "schema": "csk-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v1/invalid-v7-top-level-repository.json",
+    "schema": "csk-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v1/invalid-v7-top-level-target.json",
+    "schema": "csk-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v1/invalid-v7-top-level-driver.json",
+    "schema": "csk-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v1/invalid-v7-command-repository.json",
+    "schema": "csk-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v1/invalid-v7-command-target.json",
+    "schema": "csk-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v1/invalid-v7-command-driver.json",
+    "schema": "csk-skill-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v2/valid.json",
+    "schema": "csk-skill-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "csk-skill-v2/invalid.json",
+    "schema": "csk-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v2/invalid-v7-build-repositories.json",
+    "schema": "csk-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v2/invalid-v7-top-level-repository.json",
+    "schema": "csk-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v2/invalid-v7-top-level-target.json",
+    "schema": "csk-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v2/invalid-v7-top-level-driver.json",
+    "schema": "csk-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v2/invalid-v7-command-repository.json",
+    "schema": "csk-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v2/invalid-v7-command-target.json",
+    "schema": "csk-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v2/invalid-v7-command-driver.json",
+    "schema": "csk-skill-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v3/valid.json",
+    "schema": "csk-skill-v3.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "csk-skill-v3/invalid.json",
+    "schema": "csk-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v3/invalid-v7-build-repositories.json",
+    "schema": "csk-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v3/invalid-v7-top-level-repository.json",
+    "schema": "csk-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v3/invalid-v7-top-level-target.json",
+    "schema": "csk-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v3/invalid-v7-top-level-driver.json",
+    "schema": "csk-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v3/invalid-v7-command-repository.json",
+    "schema": "csk-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v3/invalid-v7-command-target.json",
+    "schema": "csk-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v3/invalid-v7-command-driver.json",
+    "schema": "csk-skill-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v4/valid.json",
+    "schema": "csk-skill-v4.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "csk-skill-v4/invalid.json",
+    "schema": "csk-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v4/invalid-v7-build-repositories.json",
+    "schema": "csk-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v4/invalid-v7-top-level-repository.json",
+    "schema": "csk-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v4/invalid-v7-top-level-target.json",
+    "schema": "csk-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v4/invalid-v7-top-level-driver.json",
+    "schema": "csk-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v4/invalid-v7-command-repository.json",
+    "schema": "csk-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v4/invalid-v7-command-target.json",
+    "schema": "csk-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v4/invalid-v7-command-driver.json",
+    "schema": "csk-skill-v4.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v5/valid.json",
+    "schema": "csk-skill-v5.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "csk-skill-v5/invalid.json",
+    "schema": "csk-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v5/invalid-v7-build-repositories.json",
+    "schema": "csk-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v5/invalid-v7-top-level-repository.json",
+    "schema": "csk-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v5/invalid-v7-top-level-target.json",
+    "schema": "csk-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v5/invalid-v7-top-level-driver.json",
+    "schema": "csk-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v5/invalid-v7-command-repository.json",
+    "schema": "csk-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v5/invalid-v7-command-target.json",
+    "schema": "csk-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v5/invalid-v7-command-driver.json",
+    "schema": "csk-skill-v5.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/valid.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "csk-skill-v6/invalid.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-build-missing-driver.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-build-missing-source-dir.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-build-root-dot.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-build-source-dir-dot.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-build-unsupported-driver.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-build-mixed-script.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-build-mixed-system.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-build-args.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-build-env.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-build-flags.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-build-hooks.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-build-output.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-build-scripts.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-build-tags.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-build-toolchain.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-v7-build-repositories.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-v7-top-level-repository.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-v7-top-level-target.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-v7-top-level-driver.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-v7-command-repository.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-v7-command-target.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v6/invalid-v7-command-driver.json",
+    "schema": "csk-skill-v6.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/valid.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "csk-skill-v7/invalid.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/valid-sha256-lock.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "csk-skill-v7/valid-untagged-lock.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "csk-skill-v7/valid-ssh-source.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "csk-skill-v7/valid-scp-source.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "csk-skill-v7/valid-unicode-https-source.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "csk-skill-v7/valid-tag-255-bytes.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "csk-skill-v7/invalid-unselected-repository.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-missing-repository.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-sha1-width.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-sha256-width.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-https-userinfo.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-explicit-port.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-https-dot-component.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-ssh-dot-component.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-scp-dot-component.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-ssh-metacharacter.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-ssh-non-ascii.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-raw-revision-tag.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-tag-256-bytes.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-tag-300-bytes.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-generic-driver.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-command-argv.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-command-env.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-command-output.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-command-name.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-command-credentials.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-command-signing.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-command-hooks.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-command-plugins.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-command-generator.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "csk-skill-v7/invalid-command-fallback.json",
+    "schema": "csk-skill-v7.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "error-response-v1/valid.json",
+    "schema": "error-response-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "error-response-v1/invalid.json",
+    "schema": "error-response-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "health-response-v1/valid.json",
+    "schema": "health-response-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "health-response-v1/invalid.json",
+    "schema": "health-response-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "hybrid-skillfile-v1/valid.json",
+    "schema": "hybrid-skillfile-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "hybrid-skillfile-v1/invalid.json",
+    "schema": "hybrid-skillfile-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v1/valid.json",
+    "schema": "install-marker-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "install-marker-v1/invalid.json",
+    "schema": "install-marker-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v2/valid.json",
+    "schema": "install-marker-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "install-marker-v2/invalid.json",
+    "schema": "install-marker-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v2/valid-empty-builds.json",
+    "schema": "install-marker-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "install-marker-v2/valid-multiple-builds.json",
+    "schema": "install-marker-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "install-marker-v2/invalid-missing-build-roots.json",
+    "schema": "install-marker-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v2/invalid-missing-build-source.json",
+    "schema": "install-marker-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v2/invalid-build-source-with-empty-builds.json",
+    "schema": "install-marker-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v2/invalid-unknown-top-level.json",
+    "schema": "install-marker-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v2/invalid-unknown-build-field.json",
+    "schema": "install-marker-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v2/invalid-driver-mismatch.json",
+    "schema": "install-marker-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v2/invalid-build-source-algorithm.json",
+    "schema": "install-marker-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v2/invalid-skill-schema-version.json",
+    "schema": "install-marker-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v2/invalid-receipt-hash.json",
+    "schema": "install-marker-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v2/invalid-artifact-path.json",
+    "schema": "install-marker-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/valid.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "install-marker-v3/invalid.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/valid-empty-builds.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "install-marker-v3/valid-external-only-substituted.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "install-marker-v3/valid-external-only-unsubstituted.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "install-marker-v3/valid-local-only.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "install-marker-v3/valid-network-substitution-tag.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "install-marker-v3/valid-network-substitution-branch.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "install-marker-v3/valid-network-sha1-revision.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "install-marker-v3/valid-network-sha256-revision.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "install-marker-v3/valid-sha256-external.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "install-marker-v3/valid-untagged-external.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "install-marker-v3/invalid-missing-local-build-source.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/invalid-external-only-build-source.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/invalid-local-receipt-version.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/invalid-external-receipt-version.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/invalid-external-object-width.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/invalid-external-declared-effective-mismatch.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/invalid-marker-local-identity-kind-mismatch.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/invalid-marker-network-identity-kind-mismatch.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/invalid-marker-sha1-effective-revision-width.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/invalid-marker-sha256-effective-revision-width.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/invalid-local-hardened-execution-policy.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/invalid-external-hardened-execution-policy.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/invalid-local-missing-execution-policy.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/invalid-external-missing-execution-policy.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "install-marker-v3/invalid-package-signing.json",
+    "schema": "install-marker-v3.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "log-response-v1/valid.json",
+    "schema": "log-response-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "log-response-v1/invalid.json",
+    "schema": "log-response-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "manager-config-v1/valid.json",
+    "schema": "manager-config-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "manager-config-v1/invalid.json",
+    "schema": "manager-config-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "records-response-v1/valid.json",
+    "schema": "records-response-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "records-response-v1/invalid.json",
+    "schema": "records-response-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "registry-bundle-v1/valid.json",
+    "schema": "registry-bundle-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "registry-bundle-v1/invalid.json",
+    "schema": "registry-bundle-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "registry-log-entry-v1/valid.json",
+    "schema": "registry-log-entry-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "registry-log-entry-v1/invalid.json",
+    "schema": "registry-log-entry-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "registry-meta-response-v1/valid.json",
+    "schema": "registry-meta-response-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "registry-meta-response-v1/invalid.json",
+    "schema": "registry-meta-response-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "registry-snapshot-v1/valid.json",
+    "schema": "registry-snapshot-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "registry-snapshot-v1/invalid.json",
+    "schema": "registry-snapshot-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "signature-envelope-v1/valid.json",
+    "schema": "signature-envelope-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "signature-envelope-v1/invalid.json",
+    "schema": "signature-envelope-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skill-build-v1/valid.json",
+    "schema": "skill-build-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "skill-build-v1/invalid.json",
+    "schema": "skill-build-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skill-build-v1/valid-root-target.json",
+    "schema": "skill-build-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "skill-build-v1/valid-contained-target.json",
+    "schema": "skill-build-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "skill-build-v1/invalid-source-outside-build-root.json",
+    "schema": "skill-build-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skill-build-v1/invalid-parent-build-root.json",
+    "schema": "skill-build-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skill-build-v1/invalid-output.json",
+    "schema": "skill-build-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skill-build-v1/invalid-command-name.json",
+    "schema": "skill-build-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skill-build-v1/invalid-argv.json",
+    "schema": "skill-build-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skill-build-v1/invalid-environment.json",
+    "schema": "skill-build-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skill-build-v1/invalid-signing.json",
+    "schema": "skill-build-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skill-build-v1/invalid-hook.json",
+    "schema": "skill-build-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skill-build-v1/invalid-plugin.json",
+    "schema": "skill-build-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skillfile-dev-v1/valid.json",
+    "schema": "skillfile-dev-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "skillfile-dev-v1/invalid.json",
+    "schema": "skillfile-dev-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skillfile-dev-v2/valid.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "skillfile-dev-v2/invalid.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skillfile-dev-v2/valid-ordinary-only.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "skillfile-dev-v2/valid-empty-build-repository-substitutions.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "skillfile-dev-v2/valid-populated-build-repository-substitutions.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "skillfile-dev-v2/valid-network-tag.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "skillfile-dev-v2/valid-network-branch.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "skillfile-dev-v2/valid-network-sha256-revision.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "skillfile-dev-v2/invalid-path-and-git.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skillfile-dev-v2/invalid-raw-ref.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skillfile-dev-v2/invalid-network-branch-256-bytes.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skillfile-dev-v2/invalid-output.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skillfile-dev-v2/invalid-credentials.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skillfile-dev-v2/invalid-target-ownership.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skillfile-dev-v2/invalid-driver-ownership.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skillfile-dev-v2/invalid-command-ownership.json",
+    "schema": "skillfile-dev-v2.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "skillfile-v1/valid.json",
+    "schema": "skillfile-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "skillfile-v1/invalid.json",
+    "schema": "skillfile-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "submission-response-v1/valid.json",
+    "schema": "submission-response-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "submission-response-v1/invalid.json",
+    "schema": "submission-response-v1.schema.json",
+    "valid": false
+  },
+  {
+    "instance": "system-config-v1/valid.json",
+    "schema": "system-config-v1.schema.json",
+    "valid": true
+  },
+  {
+    "instance": "system-config-v1/invalid.json",
+    "schema": "system-config-v1.schema.json",
+    "valid": false
+  }
+]

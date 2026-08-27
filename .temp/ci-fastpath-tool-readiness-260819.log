@@ -1,0 +1,16 @@
+Tool readiness check (2026-08-19)
+
+- git: /usr/bin/git
+- git version: 2.50.1 (Apple Git-155)
+- task-board: /Users/iv/.local/bin/task-board
+- task-board help: succeeded and exposed the expected board management commands.
+
+Main canary readiness check (2026-08-19)
+
+- gh: /opt/homebrew/bin/gh
+- gh version: 2.97.0
+- gh authentication: active as ivanopcode; repository/workflow scopes available
+- repository: ivanopcode/cocoaskills
+- default branch: main
+- git transport: HTTPS remote with authenticated GitHub CLI available
+- git diff check: passed

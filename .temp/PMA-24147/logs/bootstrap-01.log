@@ -1,0 +1,20 @@
+Creating virtual environment in /Users/iv/Developer/Wildberries/cocoaskills/.temp/PMA-24147/worktree/.venv
+Collecting keyring<26,>=25 (from -r /Users/iv/Developer/Wildberries/cocoaskills/.temp/PMA-24147/worktree/scripts/requirements.txt (line 1))
+  Using cached keyring-25.7.0-py3-none-any.whl.metadata (21 kB)
+Collecting jaraco.classes (from keyring<26,>=25->-r /Users/iv/Developer/Wildberries/cocoaskills/.temp/PMA-24147/worktree/scripts/requirements.txt (line 1))
+  Using cached jaraco.classes-3.4.0-py3-none-any.whl.metadata (2.6 kB)
+Collecting jaraco.functools (from keyring<26,>=25->-r /Users/iv/Developer/Wildberries/cocoaskills/.temp/PMA-24147/worktree/scripts/requirements.txt (line 1))
+  Using cached jaraco_functools-4.5.0-py3-none-any.whl.metadata (2.9 kB)
+Collecting jaraco.context (from keyring<26,>=25->-r /Users/iv/Developer/Wildberries/cocoaskills/.temp/PMA-24147/worktree/scripts/requirements.txt (line 1))
+  Using cached jaraco_context-6.1.2-py3-none-any.whl.metadata (4.2 kB)
+Collecting more-itertools (from jaraco.classes->keyring<26,>=25->-r /Users/iv/Developer/Wildberries/cocoaskills/.temp/PMA-24147/worktree/scripts/requirements.txt (line 1))
+  Using cached more_itertools-11.1.0-py3-none-any.whl.metadata (41 kB)
+Using cached keyring-25.7.0-py3-none-any.whl (39 kB)
+Using cached jaraco.classes-3.4.0-py3-none-any.whl (6.8 kB)
+Using cached jaraco_context-6.1.2-py3-none-any.whl (7.9 kB)
+Using cached jaraco_functools-4.5.0-py3-none-any.whl (10 kB)
+Using cached more_itertools-11.1.0-py3-none-any.whl (72 kB)
+Installing collected packages: more-itertools, jaraco.context, jaraco.functools, jaraco.classes, keyring
+
+Successfully installed jaraco.classes-3.4.0 jaraco.context-6.1.2 jaraco.functools-4.5.0 keyring-25.7.0 more-itertools-11.1.0
+skill-bi ready

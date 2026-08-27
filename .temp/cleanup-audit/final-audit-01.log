@@ -1,0 +1,79 @@
+## final sizes KiB
+172352	.temp
+78596	../cocoaskills-taskboard/.temp
+942596	../cocoaskills-taskboard/.task-board
+## source retained registered temp worktrees
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/BUG-260731-2rhy74/pin-old|6fc2fd97dbdf40f5b0e46f846eaa0d78a1b33d12|detached
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/BUG-260807-l2ymv3/worktree|a5dc01aa399a24b3bd26c4b1dfacc6a1215a9606|refs/heads/fix/BUG-260807-l2ymv3-windows-clock-and-shims
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/build-https/worktree|5381317a67ec375f60117df3fa693b3bf1ae02c6|refs/heads/feat/build-https-broker
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/csk-runtime-command-fix/cocoaskills-wb|10a758509374e75827e53b7bb43532a08f998e5f|refs/heads/fix/shell-neutral-onboarding
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/ratify-build-ssh/worktree|4ffba9a440aa0ec44c87b125bb858cd66f85e661|refs/heads/chore/ratify-build-ssh-not-lockable
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-3c0ss2/worktree|97a0ed870782b48eebc5a9c25a9cfa8fea5ff245|refs/heads/task/TASK-260720-3c0ss2-build-source-identity
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2h0vjy/cycle4|5381317a67ec375f60117df3fa693b3bf1ae02c6|detached
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2i5yqw/worktree|4ffba9a440aa0ec44c87b125bb858cd66f85e661|refs/heads/task/TASK-260824-2i5yqw-schema8
+## source retained worktree changes and sizes
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/BUG-260731-2rhy74/pin-old|changes=1|kib=2736
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/BUG-260807-l2ymv3/worktree|changes=0|kib=11752
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/build-https/worktree|changes=0|kib=23560
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/csk-runtime-command-fix/cocoaskills-wb|changes=0|kib=29172
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/ratify-build-ssh/worktree|changes=0|kib=6028
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260720-3c0ss2/worktree|changes=1|kib=11204
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2h0vjy/cycle4|changes=1|kib=8604
+/Users/iv/Developer/Wildberries/cocoaskills/.temp/TASK-260824-2i5yqw/worktree|changes=30|kib=14140
+## target registered worktrees
+worktree /Users/iv/Developer/Wildberries/cocoaskills-taskboard
+HEAD 2fbbd266b5aa495aebec2b168663d00e35b48bb8
+branch refs/heads/main
+
+## target retained temp
+41980	../cocoaskills-taskboard/.temp/spawn-runs
+32304	../cocoaskills-taskboard/.temp/logwork
+4212	../cocoaskills-taskboard/.temp/prompts
+56	../cocoaskills-taskboard/.temp/resources
+12	../cocoaskills-taskboard/.temp/changerequests
+8	../cocoaskills-taskboard/.temp/worktrees
+8	../cocoaskills-taskboard/.temp/EPIC-260824-3dive0
+## prune dry-run source
+## prune dry-run target
+## source git status
+ M LOGBOOK.md
+ M src/csk/build_repository.py
+ M tests/test_build_metadata.py
+ M tests/test_protocol_conformance.py
+ M tests/test_rc5_external_repository_conformance.py
+ M tests/test_schema_v7_repository.py
+?? TASK-260826-29y82b_results.md
+## target git status
+ M .task-board/.goals/primary/head.json
+ M .task-board/.goals/v2/owners/parent/primary/head.json
+ M .task-board/EPIC-260720-21aq1i_declarative-compiled-builds/STORY-260728-3qbezb_csk-external-build-repositories/progress.md
+ M .task-board/EPIC-260720-21aq1i_declarative-compiled-builds/progress.md
+ M .task-board/EPIC-260805-2rylks_cocoaskills-stable-release-and-wb-csk-rollout/STORY-260807-1ubndo_cocoaskills-pre-ci-fixes-and-pypi-release/progress.md
+ M .task-board/EPIC-260805-2rylks_cocoaskills-stable-release-and-wb-csk-rollout/progress.md
+ M .task-board/EPIC-260819-2cesef_docs-refresh/progress.md
+ M .task-board/EPIC-260822-38gkry_module-roots-adoption/STORY-260822-27ze8z_module-roots-implementation/progress.md
+ M .task-board/EPIC-260822-38gkry_module-roots-adoption/progress.md
+ M LOGBOOK.md
+?? .task-board/.board-write-ledger.json
+?? .task-board/.goals/primary/PRIMARY-GOAL-260807-14tce2/revision-000015.json
+?? .task-board/.goals/primary/PRIMARY-GOAL-260807-14tce2/revision-000016.json
+?? .task-board/.goals/v2/revisions/PRIMARY-GOAL-260807-14TCE2/revision-000015.json
+?? .task-board/.goals/v2/revisions/PRIMARY-GOAL-260807-14TCE2/revision-000016.json
+?? .task-board/.resources/EPIC-260822-38gkry/
+?? .task-board/.resources/TASK-260824-1d7zbo/
+?? .task-board/.resources/TASK-260824-1dop3s/
+?? .task-board/.resources/TASK-260824-2h0vjy/
+?? .task-board/.resources/TASK-260824-2i5yqw/
+?? .task-board/.resources/TASK-260824-2rzwqa/
+?? .task-board/.resources/TASK-260824-31y75t/
+?? .task-board/.resources/TASK-260824-3gv521/
+?? .task-board/.resources/TASK-260824-3rzggb/
+?? .task-board/.resources/TASK-260826-29y82b/
+?? .task-board/.resources/TASK-260827-16oiuj/
+?? .task-board/.resources/TASK-260827-d319oi/
+?? .task-board/EPIC-260720-21aq1i_declarative-compiled-builds/STORY-260728-3qbezb_csk-external-build-repositories/TASK-260824-1dop3s_private-https-build-repository-credentials/
+?? .task-board/EPIC-260805-2rylks_cocoaskills-stable-release-and-wb-csk-rollout/STORY-260807-1ubndo_cocoaskills-pre-ci-fixes-and-pypi-release/TASK-260827-16oiuj_consolidate-temp-artifacts-and-clean-worktrees/
+?? .task-board/EPIC-260819-2cesef_docs-refresh/STORY-260824-3rzqxr_docs-build-https/
+?? .task-board/EPIC-260822-38gkry_module-roots-adoption/STORY-260822-27ze8z_module-roots-implementation/TASK-260824-2h0vjy_generalize-candidate-lane-input/
+?? .task-board/EPIC-260822-38gkry_module-roots-adoption/STORY-260822-27ze8z_module-roots-implementation/TASK-260824-2i5yqw_schema8-implementation/
+?? .task-board/EPIC-260822-38gkry_module-roots-adoption/STORY-260822-27ze8z_module-roots-implementation/TASK-260824-31y75t_schema8-consumption-and-qualification/

@@ -1,0 +1,10 @@
+{
+  "capabilities": {},
+  "commands": {},
+  "dependencies": {
+    "commands": {}
+  },
+  "repository": "repo",
+  "runtime_roots": [],
+  "schema_version": 3
+}

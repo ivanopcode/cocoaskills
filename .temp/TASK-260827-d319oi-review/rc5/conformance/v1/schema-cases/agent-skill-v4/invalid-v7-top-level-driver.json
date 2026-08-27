@@ -1,0 +1,11 @@
+{
+  "capabilities": {},
+  "commands": {},
+  "dependencies": {
+    "commands": {},
+    "skills": {}
+  },
+  "driver": "go-repository-v1",
+  "runtime_roots": [],
+  "schema_version": 4
+}

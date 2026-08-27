@@ -1,0 +1,42 @@
+[
+  {
+    "input": "en",
+    "valid": true
+  },
+  {
+    "input": "pt-BR",
+    "valid": true
+  },
+  {
+    "input": "zh-Hans-CN",
+    "valid": true
+  },
+  {
+    "input": "",
+    "valid": false
+  },
+  {
+    "input": "-en",
+    "valid": false
+  },
+  {
+    "input": "en-",
+    "valid": false
+  },
+  {
+    "input": "pt_BR",
+    "valid": false
+  },
+  {
+    "input": "../en",
+    "valid": false
+  },
+  {
+    "input": "русский",
+    "valid": false
+  },
+  {
+    "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "valid": false
+  }
+]

@@ -1,0 +1,11 @@
+{
+  "build_repositories": {},
+  "capabilities": {},
+  "commands": {},
+  "dependencies": {
+    "commands": {},
+    "skills": {}
+  },
+  "runtime_roots": [],
+  "schema_version": 4
+}

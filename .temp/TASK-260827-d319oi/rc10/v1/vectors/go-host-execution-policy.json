@@ -1,0 +1,1071 @@
+{
+  "cache_identity": {
+    "aliases": false,
+    "legacy_rc4_without_execution_policy": {
+      "cache_key": "sha256:3fcd714a40e8918eb67dbd35d435875dcce6c9047da811a1fa26626e5e57be48",
+      "execution_policy": null,
+      "input": {
+        "build_root": "build",
+        "build_source": {
+          "algorithm": "curator-build-source-v1",
+          "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "command": "golden-tool",
+        "driver": "go-v1",
+        "policy": {
+          "cgo": false,
+          "compiler_directives": "reject-nonstandard-cgo-import-dynamic-v1",
+          "host_objects": false,
+          "libgcc": "none",
+          "link_mode": "internal",
+          "module_mode": "vendor",
+          "network": "none",
+          "package_assembly": false,
+          "target_mode": "native",
+          "telemetry": "off-private",
+          "workspace": false
+        },
+        "schema_version": 1,
+        "source_dir": "build/cmd/golden-tool",
+        "target": {
+          "goarch": "arm64",
+          "goos": "darwin",
+          "tuning": {
+            "GOARM64": "v8.0"
+          }
+        },
+        "toolchain": {
+          "algorithm": "curator-go-toolchain-v1",
+          "content_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "go_relpath": "bin/go",
+          "go_version": "go version go1.26.1 darwin/arm64"
+        }
+      },
+      "schema_valid": false
+    },
+    "portable": {
+      "cache_key": "sha256:529370122ae11e2e961d5265b1a020e046bcd43165b2eb96b05e73a51187ac9b",
+      "execution_policy": "manager-worker-v1",
+      "input": {
+        "build_root": "build",
+        "build_source": {
+          "algorithm": "curator-build-source-v1",
+          "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "command": "golden-tool",
+        "driver": "go-v1",
+        "policy": {
+          "cgo": false,
+          "compiler_directives": "reject-nonstandard-cgo-import-dynamic-v1",
+          "execution_policy": "manager-worker-v1",
+          "host_objects": false,
+          "libgcc": "none",
+          "link_mode": "internal",
+          "module_mode": "vendor",
+          "network": "none",
+          "package_assembly": false,
+          "target_mode": "native",
+          "telemetry": "off-private",
+          "workspace": false
+        },
+        "schema_version": 1,
+        "source_dir": "build/cmd/golden-tool",
+        "target": {
+          "goarch": "arm64",
+          "goos": "darwin",
+          "tuning": {
+            "GOARM64": "v8.0"
+          }
+        },
+        "toolchain": {
+          "algorithm": "curator-go-toolchain-v1",
+          "content_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "go_relpath": "bin/go",
+          "go_version": "go version go1.26.1 darwin/arm64"
+        }
+      },
+      "schema_valid": true
+    },
+    "reserved_hardened": {
+      "cache_key": "sha256:13736230d33ce59de7f7323dcd4cffd510655ad8dabd5ee9e8b6cb182ec70037",
+      "execution_policy": "hardened-worker-v1",
+      "input": {
+        "build_root": "build",
+        "build_source": {
+          "algorithm": "curator-build-source-v1",
+          "content_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "command": "golden-tool",
+        "driver": "go-v1",
+        "policy": {
+          "cgo": false,
+          "compiler_directives": "reject-nonstandard-cgo-import-dynamic-v1",
+          "execution_policy": "hardened-worker-v1",
+          "host_objects": false,
+          "libgcc": "none",
+          "link_mode": "internal",
+          "module_mode": "vendor",
+          "network": "none",
+          "package_assembly": false,
+          "target_mode": "native",
+          "telemetry": "off-private",
+          "workspace": false
+        },
+        "schema_version": 1,
+        "source_dir": "build/cmd/golden-tool",
+        "target": {
+          "goarch": "arm64",
+          "goos": "darwin",
+          "tuning": {
+            "GOARM64": "v8.0"
+          }
+        },
+        "toolchain": {
+          "algorithm": "curator-go-toolchain-v1",
+          "content_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "go_relpath": "bin/go",
+          "go_version": "go version go1.26.1 darwin/arm64"
+        }
+      },
+      "schema_valid": false
+    }
+  },
+  "capability_evidence_cases": [
+    {
+      "availability": "available",
+      "build_permitted": true,
+      "changes_cache_key": false,
+      "control": "descendant-domain-termination",
+      "entry_count": 1,
+      "expected_error": null,
+      "hardened_guarantee_claimed": false,
+      "in_inventory": true,
+      "name": "available-native-control-is-applied",
+      "record_execution_policy": "manager-worker-v1",
+      "record_valid": true,
+      "record_version": "capability-evidence-v1",
+      "status": "applied"
+    },
+    {
+      "availability": "unavailable",
+      "build_permitted": true,
+      "changes_cache_key": false,
+      "control": "aggregate-memory-limit",
+      "entry_count": 1,
+      "expected_error": null,
+      "hardened_guarantee_claimed": false,
+      "in_inventory": true,
+      "name": "unavailable-native-control-does-not-reject",
+      "record_execution_policy": "manager-worker-v1",
+      "record_valid": true,
+      "record_version": "capability-evidence-v1",
+      "status": "unavailable"
+    },
+    {
+      "availability": "available",
+      "build_permitted": true,
+      "changes_cache_key": false,
+      "control": "per-file-size-limit",
+      "entry_count": 1,
+      "expected_error": null,
+      "hardened_guarantee_claimed": false,
+      "in_inventory": true,
+      "name": "capability-evidence-is-not-cache-input",
+      "record_execution_policy": "manager-worker-v1",
+      "record_valid": true,
+      "record_version": "capability-evidence-v1",
+      "status": "applied"
+    },
+    {
+      "availability": "unavailable",
+      "build_permitted": false,
+      "changes_cache_key": false,
+      "control": "aggregate-memory-limit",
+      "entry_count": 1,
+      "expected_error": "build_execution_capability_evidence_invalid",
+      "hardened_guarantee_claimed": false,
+      "in_inventory": true,
+      "name": "unavailable-control-cannot-be-reported-as-applied",
+      "record_execution_policy": "manager-worker-v1",
+      "record_valid": false,
+      "record_version": "capability-evidence-v1",
+      "status": "applied"
+    },
+    {
+      "availability": "available",
+      "build_permitted": false,
+      "changes_cache_key": false,
+      "control": "descendant-domain-termination",
+      "entry_count": 1,
+      "expected_error": "build_execution_capability_evidence_invalid",
+      "hardened_guarantee_claimed": false,
+      "in_inventory": true,
+      "name": "available-control-cannot-be-reported-as-unavailable",
+      "record_execution_policy": "manager-worker-v1",
+      "record_valid": false,
+      "record_version": "capability-evidence-v1",
+      "status": "unavailable"
+    },
+    {
+      "availability": "available",
+      "build_permitted": false,
+      "changes_cache_key": false,
+      "control": "host-firewall-profile",
+      "entry_count": 1,
+      "expected_error": "build_execution_capability_evidence_invalid",
+      "hardened_guarantee_claimed": false,
+      "in_inventory": false,
+      "name": "unknown-native-control-is-rejected",
+      "record_execution_policy": "manager-worker-v1",
+      "record_valid": false,
+      "record_version": "capability-evidence-v1",
+      "status": "applied"
+    },
+    {
+      "availability": null,
+      "build_permitted": false,
+      "changes_cache_key": false,
+      "control": "inherited-handle-restriction",
+      "entry_count": 0,
+      "expected_error": "build_execution_capability_evidence_invalid",
+      "hardened_guarantee_claimed": false,
+      "in_inventory": true,
+      "name": "missing-native-control-entry-is-rejected",
+      "record_execution_policy": "manager-worker-v1",
+      "record_valid": false,
+      "record_version": "capability-evidence-v1",
+      "status": null
+    },
+    {
+      "availability": "available",
+      "build_permitted": false,
+      "changes_cache_key": false,
+      "control": "per-file-size-limit",
+      "entry_count": 2,
+      "expected_error": "build_execution_capability_evidence_invalid",
+      "hardened_guarantee_claimed": false,
+      "in_inventory": true,
+      "name": "duplicate-native-control-entry-is-rejected",
+      "record_execution_policy": "manager-worker-v1",
+      "record_valid": false,
+      "record_version": "capability-evidence-v1",
+      "status": "applied"
+    },
+    {
+      "availability": "available",
+      "build_permitted": false,
+      "changes_cache_key": false,
+      "control": "descendant-domain-termination",
+      "entry_count": 1,
+      "expected_error": "build_execution_capability_evidence_invalid",
+      "hardened_guarantee_claimed": false,
+      "in_inventory": true,
+      "name": "unknown-evidence-record-version-is-rejected",
+      "record_execution_policy": "manager-worker-v1",
+      "record_valid": false,
+      "record_version": "capability-evidence-v2",
+      "status": "applied"
+    },
+    {
+      "availability": "available",
+      "build_permitted": false,
+      "changes_cache_key": false,
+      "control": "total-network-denial",
+      "entry_count": 1,
+      "expected_error": "build_execution_hardened_claim_forbidden",
+      "hardened_guarantee_claimed": true,
+      "in_inventory": false,
+      "name": "hardened-guarantee-claimed-under-portable-policy",
+      "record_execution_policy": "manager-worker-v1",
+      "record_valid": false,
+      "record_version": "capability-evidence-v1",
+      "status": "applied"
+    },
+    {
+      "availability": "available",
+      "build_permitted": false,
+      "changes_cache_key": false,
+      "control": "descendant-domain-termination",
+      "entry_count": 1,
+      "expected_error": "build_execution_hardened_claim_forbidden",
+      "hardened_guarantee_claimed": true,
+      "in_inventory": true,
+      "name": "hardened-execution-policy-in-evidence-record",
+      "record_execution_policy": "hardened-worker-v1",
+      "record_valid": false,
+      "record_version": "capability-evidence-v1",
+      "status": "applied"
+    }
+  ],
+  "capability_evidence_record": {
+    "availability_states": [
+      "available",
+      "unavailable"
+    ],
+    "consistency_rules": [
+      {
+        "expected_error": "build_execution_capability_evidence_invalid",
+        "rule": "available-control-must-report-status-applied"
+      },
+      {
+        "expected_error": "build_execution_capability_evidence_invalid",
+        "rule": "unavailable-control-must-report-status-unavailable"
+      },
+      {
+        "expected_error": "build_execution_capability_evidence_invalid",
+        "rule": "exactly-one-entry-per-inventory-control"
+      },
+      {
+        "expected_error": "build_execution_capability_evidence_invalid",
+        "rule": "no-entry-outside-the-inventory"
+      },
+      {
+        "expected_error": "build_execution_capability_evidence_invalid",
+        "rule": "unknown-record-version-is-rejected"
+      },
+      {
+        "expected_error": "build_execution_capability_evidence_invalid",
+        "rule": "availability-probed-per-operation-before-worker-launch"
+      },
+      {
+        "expected_error": "build_execution_hardened_claim_forbidden",
+        "rule": "no-deferred-hardened-guarantee-entry"
+      },
+      {
+        "expected_error": "build_execution_hardened_claim_forbidden",
+        "rule": "record-execution-policy-must-be-the-portable-identity"
+      }
+    ],
+    "control_entry_fields": [
+      "availability",
+      "name",
+      "probed_at",
+      "status"
+    ],
+    "entry_cardinality": "exactly-one-per-inventory-control",
+    "examples": {
+      "macos": {
+        "controls": [
+          {
+            "availability": "available",
+            "name": "descendant-domain-termination",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          },
+          {
+            "availability": "unavailable",
+            "name": "active-process-count-limit",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          },
+          {
+            "availability": "unavailable",
+            "name": "aggregate-memory-limit",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          },
+          {
+            "availability": "available",
+            "name": "per-file-size-limit",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          },
+          {
+            "availability": "available",
+            "name": "inherited-handle-restriction",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          }
+        ],
+        "execution_policy": "manager-worker-v1",
+        "platform": "macos",
+        "record_version": "capability-evidence-v1"
+      },
+      "windows": {
+        "controls": [
+          {
+            "availability": "available",
+            "name": "descendant-domain-termination",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          },
+          {
+            "availability": "available",
+            "name": "active-process-count-limit",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          },
+          {
+            "availability": "available",
+            "name": "aggregate-memory-limit",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          },
+          {
+            "availability": "unavailable",
+            "name": "per-file-size-limit",
+            "probed_at": "pre-worker-launch",
+            "status": "unavailable"
+          },
+          {
+            "availability": "available",
+            "name": "inherited-handle-restriction",
+            "probed_at": "pre-worker-launch",
+            "status": "applied"
+          }
+        ],
+        "execution_policy": "manager-worker-v1",
+        "platform": "windows",
+        "record_version": "capability-evidence-v1"
+      }
+    },
+    "excluded_from": [
+      "cache-key",
+      "conformance-claim",
+      "install-marker",
+      "receipt"
+    ],
+    "exposed_in": [
+      "dry-run-plan-result",
+      "install-result",
+      "status-result"
+    ],
+    "inventory_version": "rc5-native-control-inventory-v1",
+    "probe_timings": [
+      "pre-worker-launch"
+    ],
+    "record_fields": [
+      "controls",
+      "execution_policy",
+      "platform",
+      "record_version"
+    ],
+    "record_version": "capability-evidence-v1",
+    "result_only": true,
+    "status_states": [
+      "applied",
+      "unavailable"
+    ]
+  },
+  "deferred_capability_rejection_guards": [
+    {
+      "build_permitted_when_absent": true,
+      "in_capability_evidence_record": false,
+      "in_mandatory_controls": false,
+      "in_native_control_inventory": false,
+      "name": "total-network-denial",
+      "portable_rejection_code": null
+    },
+    {
+      "build_permitted_when_absent": true,
+      "in_capability_evidence_record": false,
+      "in_mandatory_controls": false,
+      "in_native_control_inventory": false,
+      "name": "read-only-source-and-toolchain",
+      "portable_rejection_code": null
+    },
+    {
+      "build_permitted_when_absent": true,
+      "in_capability_evidence_record": false,
+      "in_mandatory_controls": false,
+      "in_native_control_inventory": false,
+      "name": "private-build-root-only-writes",
+      "portable_rejection_code": null
+    },
+    {
+      "build_permitted_when_absent": true,
+      "in_capability_evidence_record": false,
+      "in_mandatory_controls": false,
+      "in_native_control_inventory": false,
+      "name": "hard-aggregate-descendant-resource-bounds",
+      "portable_rejection_code": null
+    },
+    {
+      "build_permitted_when_absent": true,
+      "in_capability_evidence_record": false,
+      "in_mandatory_controls": false,
+      "in_native_control_inventory": false,
+      "name": "exact-executable-allowlisting",
+      "portable_rejection_code": null
+    },
+    {
+      "build_permitted_when_absent": true,
+      "in_capability_evidence_record": false,
+      "in_mandatory_controls": false,
+      "in_native_control_inventory": false,
+      "name": "fail-closed-capability-preflight",
+      "portable_rejection_code": null
+    }
+  ],
+  "deferred_hardened_guarantees": [
+    {
+      "deferred_to": "STORY-260728-327soo",
+      "name": "total-network-denial",
+      "portable_profile_claims": false,
+      "rejects_portable_build": false,
+      "requirement": "kernel-enforced denial of every socket family for the whole build domain"
+    },
+    {
+      "deferred_to": "STORY-260728-327soo",
+      "name": "read-only-source-and-toolchain",
+      "portable_profile_claims": false,
+      "rejects_portable_build": false,
+      "requirement": "kernel-enforced read-only presentation of the snapshot and GOROOT"
+    },
+    {
+      "deferred_to": "STORY-260728-327soo",
+      "name": "private-build-root-only-writes",
+      "portable_profile_claims": false,
+      "rejects_portable_build": false,
+      "requirement": "kernel-enforced confinement of every write to private build roots"
+    },
+    {
+      "deferred_to": "STORY-260728-327soo",
+      "name": "hard-aggregate-descendant-resource-bounds",
+      "portable_profile_claims": false,
+      "rejects_portable_build": false,
+      "requirement": "hard aggregate process, memory, disk, time, and output bounds over all descendants"
+    },
+    {
+      "deferred_to": "STORY-260728-327soo",
+      "name": "exact-executable-allowlisting",
+      "portable_profile_claims": false,
+      "rejects_portable_build": false,
+      "requirement": "kernel-enforced allowlist of the exact permitted executable paths"
+    },
+    {
+      "deferred_to": "STORY-260728-327soo",
+      "name": "fail-closed-capability-preflight",
+      "portable_profile_claims": false,
+      "rejects_portable_build": false,
+      "requirement": "terminal rejection before the worker when any hardened capability is absent"
+    }
+  ],
+  "drivers": [
+    "go-repository-v1",
+    "go-v1"
+  ],
+  "execution_policy": "manager-worker-v1",
+  "failure_boundary": {
+    "missing_deferred_hardened_capability": {
+      "expected_error": null,
+      "fails_before": null,
+      "published": true,
+      "rejects_build": false
+    },
+    "missing_mandatory_portable_control": {
+      "expected_error": "build_execution_control_unavailable",
+      "fails_before": "worker-launch",
+      "published": false,
+      "rejects_build": true
+    },
+    "unavailable_inventory_native_control": {
+      "expected_error": null,
+      "fails_before": null,
+      "published": true,
+      "rejects_build": false
+    }
+  },
+  "hardened_profile_owner": "STORY-260728-327soo",
+  "identity_and_protocol_cases": [
+    {
+      "compiler_started": false,
+      "expected_error": "build_execution_worker_identity_invalid",
+      "name": "pre-launch-identity-mismatch",
+      "published": false,
+      "worker_started": false
+    },
+    {
+      "compiler_started": false,
+      "expected_error": "build_execution_worker_identity_invalid",
+      "name": "worker-executable-symlink-substitution",
+      "published": false,
+      "worker_started": false
+    },
+    {
+      "compiler_started": false,
+      "expected_error": "build_execution_worker_identity_invalid",
+      "name": "worker-executable-replaced-between-checks",
+      "published": false,
+      "worker_started": true
+    },
+    {
+      "compiler_started": false,
+      "expected_error": "build_execution_worker_identity_invalid",
+      "name": "worker-identity-proof-mismatch",
+      "published": false,
+      "worker_started": true
+    },
+    {
+      "compiler_started": true,
+      "expected_error": "build_execution_worker_identity_invalid",
+      "name": "post-build-toolchain-identity-mismatch",
+      "published": false,
+      "worker_started": true
+    },
+    {
+      "compiler_started": true,
+      "expected_error": "build_execution_worker_identity_invalid",
+      "name": "post-build-source-snapshot-mutated",
+      "published": false,
+      "worker_started": true
+    },
+    {
+      "compiler_started": false,
+      "expected_error": "build_execution_worker_identity_invalid",
+      "name": "unexpected-program-started-below-the-worker",
+      "published": false,
+      "worker_started": true
+    },
+    {
+      "compiler_started": false,
+      "expected_error": "build_execution_worker_protocol_invalid",
+      "name": "build-permit-before-complete-list-validation",
+      "published": false,
+      "worker_started": true
+    },
+    {
+      "compiler_started": false,
+      "expected_error": "build_execution_worker_protocol_invalid",
+      "name": "replayed-session-nonce",
+      "published": false,
+      "worker_started": true
+    },
+    {
+      "compiler_started": false,
+      "expected_error": "build_execution_worker_protocol_invalid",
+      "name": "out-of-order-protocol-message",
+      "published": false,
+      "worker_started": true
+    },
+    {
+      "compiler_started": false,
+      "expected_error": "build_execution_worker_protocol_invalid",
+      "name": "oversize-protocol-message",
+      "published": false,
+      "worker_started": true
+    },
+    {
+      "compiler_started": false,
+      "expected_error": "build_execution_worker_protocol_invalid",
+      "name": "unknown-protocol-message-kind",
+      "published": false,
+      "worker_started": true
+    },
+    {
+      "compiler_started": true,
+      "expected_error": "build_execution_worker_protocol_invalid",
+      "name": "second-build-request-in-one-session",
+      "published": false,
+      "worker_started": true
+    },
+    {
+      "compiler_started": false,
+      "expected_error": "build_execution_control_unavailable",
+      "name": "mandatory-control-cannot-be-applied",
+      "published": false,
+      "worker_started": false
+    }
+  ],
+  "mandatory_controls": [
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "fixed-offline-vendored-go",
+      "portable": true,
+      "requirement": "manager-owned argument vectors, vendor-only module mode, GOPROXY/GOVCS/GOWORK/CGO disabled",
+      "scope": "compiler-input"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "fixed-argument-vectors",
+      "portable": true,
+      "requirement": "exactly the five package-independent Go argument-vector forms",
+      "scope": "process-graph"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "fixed-empty-environment",
+      "portable": true,
+      "requirement": "empty bootstrap environment plus manager-owned variables only",
+      "scope": "process-graph"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "fixed-manager-selected-process-graph",
+      "portable": true,
+      "requirement": "within this execution boundary the manager and worker start only the fixed four-node graph and no other program",
+      "scope": "process-graph"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "identity-verified-manager-owned-worker",
+      "portable": true,
+      "requirement": "one hidden-mode re-execution of the installed manager executable",
+      "scope": "process-graph"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "pre-launch-worker-identity-verification",
+      "portable": true,
+      "requirement": "canonical regular-file identity and content digest before launch",
+      "scope": "process-graph"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "post-exec-identity-reverification",
+      "portable": true,
+      "requirement": "worker and fingerprinted toolchain identity re-proved before publication",
+      "scope": "process-graph"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "frozen-source-snapshot-integrity",
+      "portable": true,
+      "requirement": "the manager freezes the validated snapshot, writes to neither it nor GOROOT, and re-verifies both identities before publication",
+      "scope": "filesystem"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "manager-private-staging-roots",
+      "portable": true,
+      "requirement": "operation-private user, configuration, cache, temporary, and output roots",
+      "scope": "filesystem"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "manager-derived-output-path",
+      "portable": true,
+      "requirement": "artifact path derived from the command name alone",
+      "scope": "filesystem"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "bounded-wall-clock-deadline",
+      "portable": true,
+      "requirement": "parent-enforced deadline over the whole worker domain",
+      "scope": "resources"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "bounded-combined-output",
+      "portable": true,
+      "requirement": "bounded, redacted stdout and stderr through manager-owned pipes",
+      "scope": "resources"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "bounded-artifact-size",
+      "portable": true,
+      "requirement": "bounded regular-file artifact streamed into private staging",
+      "scope": "resources"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "closed-standard-input-and-descriptors",
+      "portable": true,
+      "requirement": "standard input closed and unrelated descriptors or handles released",
+      "scope": "process-graph"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "worker-domain-teardown",
+      "portable": true,
+      "requirement": "full worker domain terminated and joined before the operation returns",
+      "scope": "process-graph"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "no-artifact-execution",
+      "portable": true,
+      "requirement": "the built output is never started by the manager or the worker",
+      "scope": "process-graph"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "inventory-native-controls-applied",
+      "portable": true,
+      "requirement": "every control rc5-native-control-inventory-v1 marks available for the host platform is applied, and nothing outside that inventory is applied or reported",
+      "scope": "resources"
+    },
+    {
+      "enforced": "always",
+      "hardened_guarantee": false,
+      "name": "closed-capability-evidence-record",
+      "portable": true,
+      "requirement": "exactly one capability-evidence-v1 record per operation with exactly one entry per inventory control",
+      "scope": "reporting"
+    }
+  ],
+  "native_control_inventory": {
+    "authority": "conformance/v1/vectors/go-host-execution-policy.json#native_control_inventory",
+    "availability_states": [
+      "available",
+      "unavailable"
+    ],
+    "controls": [
+      {
+        "applied_when_available": true,
+        "hardened_guarantee": false,
+        "name": "descendant-domain-termination",
+        "platforms": {
+          "macos": {
+            "availability": "available",
+            "mechanism": "process-group-and-session-teardown",
+            "unavailable_reason": null
+          },
+          "windows": {
+            "availability": "available",
+            "mechanism": "job-object-kill-on-close",
+            "unavailable_reason": null
+          }
+        }
+      },
+      {
+        "applied_when_available": true,
+        "hardened_guarantee": false,
+        "name": "active-process-count-limit",
+        "platforms": {
+          "macos": {
+            "availability": "unavailable",
+            "mechanism": null,
+            "unavailable_reason": "no-private-aggregate-domain"
+          },
+          "windows": {
+            "availability": "available",
+            "mechanism": "job-object-active-process-limit",
+            "unavailable_reason": null
+          }
+        }
+      },
+      {
+        "applied_when_available": true,
+        "hardened_guarantee": false,
+        "name": "aggregate-memory-limit",
+        "platforms": {
+          "macos": {
+            "availability": "unavailable",
+            "mechanism": null,
+            "unavailable_reason": "no-private-aggregate-domain"
+          },
+          "windows": {
+            "availability": "available",
+            "mechanism": "job-object-process-and-job-memory-limit",
+            "unavailable_reason": null
+          }
+        }
+      },
+      {
+        "applied_when_available": true,
+        "hardened_guarantee": false,
+        "name": "per-file-size-limit",
+        "platforms": {
+          "macos": {
+            "availability": "available",
+            "mechanism": "rlimit-fsize",
+            "unavailable_reason": null
+          },
+          "windows": {
+            "availability": "unavailable",
+            "mechanism": null,
+            "unavailable_reason": "no-private-aggregate-domain"
+          }
+        }
+      },
+      {
+        "applied_when_available": true,
+        "hardened_guarantee": false,
+        "name": "inherited-handle-restriction",
+        "platforms": {
+          "macos": {
+            "availability": "available",
+            "mechanism": "close-on-exec-and-explicit-descriptor-release",
+            "unavailable_reason": null
+          },
+          "windows": {
+            "availability": "available",
+            "mechanism": "explicit-handle-inheritance-list",
+            "unavailable_reason": null
+          }
+        }
+      }
+    ],
+    "exhaustive": true,
+    "platforms": [
+      "macos",
+      "windows"
+    ],
+    "probe_scope": "per-operation",
+    "probe_timing": "pre-worker-launch",
+    "unavailable_reasons": [
+      "no-private-aggregate-domain"
+    ],
+    "version": "rc5-native-control-inventory-v1"
+  },
+  "package_influence_cases": [
+    {
+      "compiler_started": false,
+      "descriptor_field": null,
+      "expected_error": "build_execution_package_influence_forbidden",
+      "manifest_field": null,
+      "name": "package-selected-executable",
+      "published": false,
+      "surface": "worker, Go launcher, or GOROOT tool program",
+      "worker_started": false
+    },
+    {
+      "compiler_started": false,
+      "descriptor_field": null,
+      "expected_error": "build_execution_package_influence_forbidden",
+      "manifest_field": null,
+      "name": "package-selected-argv",
+      "published": false,
+      "surface": "Go list or build argument vector",
+      "worker_started": false
+    },
+    {
+      "compiler_started": false,
+      "descriptor_field": null,
+      "expected_error": "build_execution_package_influence_forbidden",
+      "manifest_field": null,
+      "name": "package-selected-environment",
+      "published": false,
+      "surface": "worker or compiler environment value",
+      "worker_started": false
+    },
+    {
+      "compiler_started": false,
+      "descriptor_field": null,
+      "expected_error": "build_execution_package_influence_forbidden",
+      "manifest_field": null,
+      "name": "package-selected-output-path",
+      "published": false,
+      "surface": "staging, artifact, shim, or install destination",
+      "worker_started": false
+    },
+    {
+      "compiler_started": false,
+      "descriptor_field": null,
+      "expected_error": "build_execution_package_influence_forbidden",
+      "manifest_field": null,
+      "name": "package-selected-flags",
+      "published": false,
+      "surface": "compiler, linker, tag, or toolchain flag",
+      "worker_started": false
+    },
+    {
+      "compiler_started": false,
+      "descriptor_field": null,
+      "expected_error": "build_execution_package_influence_forbidden",
+      "manifest_field": null,
+      "name": "package-selected-hooks",
+      "published": false,
+      "surface": "pre-build, post-build, or lifecycle hook",
+      "worker_started": false
+    },
+    {
+      "compiler_started": false,
+      "descriptor_field": null,
+      "expected_error": "build_execution_package_influence_forbidden",
+      "manifest_field": null,
+      "name": "package-selected-plugins",
+      "published": false,
+      "surface": "compiler, linker, or manager plugin",
+      "worker_started": false
+    },
+    {
+      "compiler_started": false,
+      "descriptor_field": null,
+      "expected_error": "build_execution_package_influence_forbidden",
+      "manifest_field": null,
+      "name": "package-selected-generators",
+      "published": false,
+      "surface": "source generator, macro, or code-producing step",
+      "worker_started": false
+    }
+  ],
+  "policy_semantics": {
+    "capability_preflight": {
+      "deferred_hardened_guarantee": "fail-closed-capability-preflight",
+      "does_not_mean": "terminal rejection before the worker when a hardened capability is absent",
+      "means": "the operation rejects before the worker when a mandatory portable control cannot be applied",
+      "policy_field": null,
+      "value": "mandatory-control-preflight-only"
+    },
+    "executable_graph": {
+      "deferred_hardened_guarantee": "exact-executable-allowlisting",
+      "does_not_mean": "kernel-enforced allowlisting of the exact executable paths a descendant may run",
+      "means": "within this execution boundary the manager and worker start only the fixed four-node graph, package data cannot select or add a program, and every started program's identity is verified before and after execution",
+      "policy_field": null,
+      "value": "fixed-manager-selected-graph-with-identity-verification"
+    },
+    "network": {
+      "deferred_hardened_guarantee": "total-network-denial",
+      "does_not_mean": "kernel-enforced network denial for the worker domain or its descendants",
+      "means": "fixed offline Go module, proxy, checksum-database, and version-control configuration, and no manager-initiated or Go-initiated network access for dependency resolution or the build",
+      "policy_field": "network",
+      "value": "none"
+    },
+    "private_write_confinement": {
+      "deferred_hardened_guarantee": "private-build-root-only-writes",
+      "does_not_mean": "kernel-enforced confinement of every descendant write to the private build roots",
+      "means": "every manager-directed write target is an operation-private root and the single artifact is verified in private staging before publication",
+      "policy_field": null,
+      "value": "manager-private-roots-and-verified-artifact"
+    },
+    "resource_bounds": {
+      "deferred_hardened_guarantee": "hard-aggregate-descendant-resource-bounds",
+      "does_not_mean": "hard aggregate process, memory, disk, time, and output bounds over every descendant",
+      "means": "the parent bounds wall-clock time, combined output, and artifact size over the worker domain and applies every inventory control the platform marks available",
+      "policy_field": null,
+      "value": "parent-enforced-deadline-output-and-artifact-bounds"
+    },
+    "source_integrity": {
+      "deferred_hardened_guarantee": "read-only-source-and-toolchain",
+      "does_not_mean": "kernel-enforced read-only presentation of the snapshot or toolchain to descendants",
+      "means": "the manager freezes the validated snapshot, neither the manager nor the worker writes to it or to GOROOT, and a change to either before publication is detected and rejects the operation",
+      "policy_field": null,
+      "value": "frozen-snapshot-with-identity-reverification"
+    }
+  },
+  "process_graph": [
+    "manager-parent",
+    "identity-verified-manager-owned-worker",
+    "fingerprinted-goroot-bin-go",
+    "fingerprinted-goroot-pkg-tool-child"
+  ],
+  "protocol_version": "1.0.0-rc.9",
+  "reserved_hardened_execution_policy": "hardened-worker-v1",
+  "schema_version": 1,
+  "session_states": [
+    "parent-package-independent-toolchain-probe",
+    "parent-native-control-availability-probe",
+    "parent-worker-identity-verification",
+    "worker-launch",
+    "worker-identity-proof-and-nonce-acknowledgement",
+    "worker-control-application-and-evidence",
+    "worker-fixed-go-list",
+    "parent-complete-package-graph-validation",
+    "parent-authenticated-build-permit",
+    "worker-fixed-go-build",
+    "parent-artifact-verification",
+    "parent-post-exec-identity-reverification",
+    "worker-domain-teardown"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/v1/adapter-ledger-v1.schema.json",
+  "title": ".csk-managed.json schema 1",
+  "type": "object",
+  "required": ["schema_version", "entries"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "entries": {"$ref": "common.schema.json#/$defs/identifierSet"}
+  },
+  "additionalProperties": false
+}

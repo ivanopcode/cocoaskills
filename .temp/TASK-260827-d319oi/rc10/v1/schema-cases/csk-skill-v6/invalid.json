@@ -1,0 +1,5 @@
+{
+  "capabilities": {},
+  "install": "echo unsafe",
+  "schema_version": 6
+}
