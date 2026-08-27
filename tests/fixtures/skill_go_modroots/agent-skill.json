@@ -1,0 +1,20 @@
+{
+  "schema_version": 8,
+  "capabilities": {
+    "exec": "none",
+    "network": "none"
+  },
+  "build_roots": [
+    "tools/cli"
+  ],
+  "commands": {
+    "modroot-tool": {
+      "type": "build",
+      "driver": "go-v1",
+      "source_dir": "tools/cli/cmd/modroot-tool",
+      "modules": [
+        "pkg/board"
+      ]
+    }
+  }
+}

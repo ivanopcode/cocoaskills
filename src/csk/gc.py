@@ -361,7 +361,7 @@ def _collect_marker_directory(
     references.snapshots.add((marker.source, marker.commit))
     if isinstance(marker, install_marker.InstallMarkerV2):
         references.builds.update(build.cache_key for build in marker.builds.values())
-    elif isinstance(marker, install_marker.InstallMarkerV3):
+    elif isinstance(marker, install_marker.MIXED_COMMAND_MARKER_SCHEMAS):
         for build in marker.builds.values():
             if build.driver == "go-v1":
                 references.builds.add(build.cache_key)

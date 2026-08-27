@@ -122,9 +122,22 @@ def _build_source_path_bytes(path: str) -> bytes:
     return encoded
 
 
-def _build_source_platform_key(path: str) -> str:
+def platform_path_key(path: str) -> str:
+    """Fold one protocol path to the key two colliding platform paths share.
+
+    Section 2 requires an implementation to detect two protocol paths that map
+    to one platform path. The fold is case and Unicode-composition insensitive
+    because the supported case-insensitive filesystems differ in which of the
+    two they apply, and a comparison that survives both is the only one that
+    holds on every host.
+    """
+
     decomposed = unicodedata.normalize("NFD", path)
     return unicodedata.normalize("NFD", decomposed.casefold())
+
+
+def _build_source_platform_key(path: str) -> str:
+    return platform_path_key(path)
 
 
 def _reject_platform_collisions(root: Path, files: list[Path]) -> None:

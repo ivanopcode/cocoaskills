@@ -24,6 +24,7 @@ from csk.builds import go_v1
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "skill_go_e2e"
+MODULE_ROOT_FIXTURE = Path(__file__).parent / "fixtures" / "skill_go_modroots"
 NATIVE = pytest.mark.skipif(
     sys.platform not in {"darwin", "win32"},
     reason="real go-v1 native controls are accepted only on macOS and Windows",
@@ -64,6 +65,33 @@ def _copy_fixture_repo(skills_root: Path, *, portable_only: bool = False) -> Pat
     init_git_repo(repo)
     commit_all(repo, "go e2e fixture")
     return repo
+
+
+def _setup_module_root_scope(
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+) -> tuple[object, Path]:
+    """Stage the schema-8 declared-module-root skill in the project scope."""
+
+    repo = skills_root / "go-modroots"
+    shutil.copytree(MODULE_ROOT_FIXTURE, repo)
+    init_git_repo(repo)
+    commit_all(repo, "go module roots fixture")
+    project = make_project(tmp_path)
+    cfg = replace(
+        make_config(csk_home, skills_root, project, agents=["codex_cli"]),
+        adapter_mode="copy",
+    )
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [{"name": "go-modroots", "branch": "main"}],
+        },
+    )
+    return cfg, project
 
 
 def _write_global_manifest(csk_home: Path) -> None:
@@ -638,3 +666,91 @@ def test_manager_identity_resolves_through_operator_symlink(
 
     identity = go_v1._resolve_manager_identity(launcher)
     assert identity.launcher.path == manager
+
+
+@pytest.mark.csk_e2e_native
+@NATIVE
+def test_real_go_build_compiles_declared_first_party_module_roots(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+) -> None:
+    """A declared module root reaches the compiler through the vendor tree.
+
+    The build root replaces ``example.test/board`` with the declared directory
+    and the effective replace set in ``vendor/modules.txt`` names that one
+    declaration back, so the bijection holds and the graph is admitted. The
+    artifact proves the replaced module was compiled: its output carries the
+    label only that module provides.
+    """
+
+    cfg, project = _setup_module_root_scope(tmp_path, skills_root, csk_home)
+    calls, _ = _observe_real_builds(monkeypatch)
+
+    result = installer.install(cfg, alias="app")[0]  # type: ignore[arg-type]
+
+    _assert_ok(result)
+    assert calls == ["modroot-tool"]
+    marker = json.loads(
+        (project / ".agents" / "skills" / "go-modroots" / ".csk-install.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert marker["schema_version"] == 4
+    assert marker["skill_schema_version"] == 8
+    build = marker["builds"]["modroot-tool"]
+    assert _artifact(csk_home, build).is_file()
+    executed = _run_shim(
+        _shim(csk_home, project, "project", "modroot-tool"),
+        "argument",
+    )
+    assert executed.returncode == 0
+    assert executed.stdout == "module-root [argument]\n"
+
+    # Reading marker v4 back must find the installation current, so a second
+    # install neither rebuilds nor rewrites the schema-8 record.
+    _assert_ok(installer.install(cfg, alias="app")[0])  # type: ignore[arg-type]
+    assert calls == ["modroot-tool"]
+
+
+@pytest.mark.csk_e2e_native
+@NATIVE
+def test_real_go_build_rejects_an_undeclared_replacement_before_go_build(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+) -> None:
+    """Dropping the declaration leaves a directive naming nothing declared.
+
+    The replacement is still materialized in ``vendor/modules.txt``, so the
+    effective replace set is non-empty while the command declares no module
+    root at all. That is the schema-6 rule the empty list carries, and it must
+    reject before ``go build`` leaves the installation unchanged.
+    """
+
+    cfg, project = _setup_module_root_scope(tmp_path, skills_root, csk_home)
+    repo = skills_root / "go-modroots"
+    manifest = json.loads((repo / "agent-skill.json").read_text(encoding="utf-8"))
+    manifest["commands"]["modroot-tool"].pop("modules")
+    (repo / "agent-skill.json").write_text(
+        json.dumps(manifest, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    commit_all(repo, "drop the module-root declaration")
+
+    def build_must_not_run(self):
+        raise AssertionError("go build ran after a rejected declaration")
+
+    monkeypatch.setattr(go_v1._WorkerClient, "build", build_must_not_run)
+    result = installer.install(cfg, alias="app")[0]  # type: ignore[arg-type]
+
+    assert result.status == "failed"
+    assert any(
+        "build_module_root_directive_undeclared" in error for error in result.errors
+    ), result.errors
+    assert not (
+        project / ".agents" / "skills" / "go-modroots" / ".csk-install.json"
+    ).exists()
+    assert not _shim(csk_home, project, "project", "modroot-tool").exists()

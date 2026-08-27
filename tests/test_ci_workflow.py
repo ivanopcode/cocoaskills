@@ -72,7 +72,7 @@ def test_fast_selections_are_exact_checked_in_node_inventories() -> None:
     ubuntu = _nodeids("go-e2e-ubuntu-smoke-nodeids.txt")
 
     assert len(protocol) == 10
-    assert len(native) == 5
+    assert len(native) == 7
     assert macos_worker_domain == [
         "tests/test_go_build_e2e.py::test_real_go_cache_hit_and_relevant_source_mutation"
     ]

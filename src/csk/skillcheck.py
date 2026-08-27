@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import locale, skillspec, whitelist
+from . import locale, script_policy, skillspec, whitelist
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,7 @@ def validate_skill(skill_dir: Path, *, locale_value: str | None = None) -> list[
         )
 
     if spec is not None:
+        issues.extend(_execution_policy_issues(spec))
         issues.extend(_runtime_root_reference_warnings(skill_dir, spec))
         issues.extend(_command_resolution_warnings(skill_dir, spec))
 
@@ -64,6 +65,27 @@ def validate_skill(skill_dir: Path, *, locale_value: str | None = None) -> list[
             for issue in locale_analysis.issues
         )
     return issues
+
+
+def _execution_policy_issues(spec: skillspec.SkillSpec) -> list[ValidationIssue]:
+    """Report a manifest that selects an execution policy csk does not implement.
+
+    The manifest itself is a valid schema-8 document, so the refusal belongs
+    here, where the manager answers for what it will actually install, and it
+    carries the closed protocol core 4.1.1 diagnostic rather than a
+    ``skill.``-namespaced one.
+    """
+
+    try:
+        script_policy.admit(spec.commands)
+    except script_policy.ScriptPolicyError as exc:
+        # The message repeats the closed diagnostic because the install error
+        # surface reports the message alone, and an operator who is told a
+        # command was refused needs the protocol name of the refusal.
+        return [
+            ValidationIssue(exc.severity, exc.code, exc.path, f"{exc.code}: {exc.detail}")
+        ]
+    return []
 
 
 def has_errors(issues: list[ValidationIssue]) -> bool:

@@ -55,7 +55,7 @@ platforms expect distinct directory paths such as `.claude/skills/` or
 `.cursor/rules/`. Each adapter tracks managed entries within its agent directory
 and mirrors context files by symlink or copy as required by the target platform.
 
-`skillspec.py` accepts manifest schemas 1 through 6. Schema 6 adds
+`skillspec.py` accepts manifest schemas 1 through 8. Schema 6 adds
 `build_roots` and the closed build command
 `{"type":"build","driver":"go-v1","source_dir":"..."}`. Build roots must
 be real, link-free, portable, unique, disjoint from one another and from
@@ -63,6 +63,18 @@ runtime roots, and used by a command. Each source directory belongs to exactly
 one build root whose direct `go.mod` is the nearest module root. Unknown build
 drivers or package-selected build fields fail during parsing; there is no
 driver fallback.
+
+Schema 8 adds two optional fields and no top-level one. A `go-v1` command may
+declare `modules`, the first-party Go module directories of the same package
+that its build root replaces; `go_v1.py` checks that declaration against the
+replacement directives materialized in `<build_root>/vendor/modules.txt` one to
+one and never reads a replacement as an instruction. A script command may
+declare the co-required pair `execution_policy` and `interpreter`. The parser
+accepts that pair because a schema-8 document carrying it is valid;
+`script_policy.py` then refuses to admit the command, because csk does not
+implement the `script-worker-v1` worker and the protocol forbids installing
+such a command declared-only. Schema-8 installations are recorded by install
+marker v4, which carries marker-v3 meaning over a schema-8 manifest.
 
 ## Install pipeline
 
@@ -154,7 +166,8 @@ additionally re-checks installed skills against registries (`attest.py`), and
 | `cli.py` | Argument parsing and command dispatch. |
 | `config.py` | Machine config and the enforced system-config layer: `skills_root`, default agents, adapter mode, audit settings, `allowed_sources`, `audit_registries`. |
 | `manifest.py` | `Skillfile.json` parsing and editing. |
-| `skillspec.py` | `agent-skill.json` parsing: commands, runtime/build roots, capabilities, dependencies, requirements, and the closed schema-6 build shape (schemas 1 through 6). |
+| `skillspec.py` | `agent-skill.json` parsing: commands, runtime/build roots, capabilities, dependencies, requirements, the closed schema-6 build shape, schema-8 declared module roots, and the schema-8 script execution-policy pair (schemas 1 through 8). |
+| `script_policy.py` | Admission for the schema-8 enforced script execution policy: csk parses `script-worker-v1` and refuses to install it with `script_execution_policy_unsupported`. |
 | `closure.py` | Transitive requirement resolution, unification, cycle detection, activation edges, topological order. |
 | `source_identity.py` | Canonical `host/path` identity for git URLs and allowlist matching. |
 | `mcp_configs.py` | Read-only resolution of declared MCP server dependencies against agent configuration surfaces, with static availability probes: PATH resolution for stdio commands, disabled-server filtering, and trust-gating hints for project-only declarations. |
@@ -176,7 +189,7 @@ additionally re-checks installed skills against registries (`attest.py`), and
 | `installer.py` | Project/hybrid planning, private compilation, cache publication, and transactional materialization. |
 | `global_install.py`, `global_bins.py` | User-wide skill installs and global command shims. |
 | `transactions.py` | Journaled multi-target commit, recovery, target-preimage guards, and reverse rollback. |
-| `install_marker.py` | Marker v1/v2 parsing and canonical installed build records. |
+| `install_marker.py` | Marker v1 through v4 parsing and canonical installed build records. |
 | `adapters.py` | Per-agent adapter directories with managed-entry tracking; native-discovery agents (OpenCode, Windsurf) read the canonical directory and skip project mirrors. |
 | `status.py` | Manifest versus installed state reporting. |
 | `attest.py` | Re-check installed markers against trusted audit registries. |

@@ -42,10 +42,11 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Any, BinaryIO, Final, Protocol, cast
 
+from .. import hashing
 from ..identifiers import is_valid_identifier, is_valid_portable_path
 from . import source, toolchain
 
@@ -63,6 +64,28 @@ CODE_HARDENED_CLAIM_FORBIDDEN: Final = (
 CODE_PACKAGE_INFLUENCE_FORBIDDEN: Final = (
     "build_execution_package_influence_forbidden"
 )
+
+# Stable declared-module-root diagnostics from Protocol Core 4.2.3. Declaration
+# and containment reject before the fixed ``go list``; directive form and the
+# bijection reject after it returns and before ``go build``.
+CODE_MODULE_ROOT_CONTAINMENT_INVALID: Final = (
+    "build_module_root_containment_invalid"
+)
+CODE_MODULE_ROOT_DIRECTIVE_FORM_UNSUPPORTED: Final = (
+    "build_module_root_directive_form_unsupported"
+)
+CODE_MODULE_ROOT_DIRECTIVE_UNDECLARED: Final = (
+    "build_module_root_directive_undeclared"
+)
+CODE_MODULE_ROOT_DECLARATION_UNUSED: Final = (
+    "build_module_root_declaration_unused"
+)
+
+# Protocol Core 4.2.3: only a ``vendor/modules.txt`` line whose first two bytes
+# are exactly "# " and which contains the exact bytes " => " is a replacement
+# annotation.
+_MODULES_TXT_ANNOTATION_PREFIX: Final = b"# "
+_MODULES_TXT_REPLACEMENT_SEPARATOR: Final = b" => "
 
 EXECUTION_POLICY: Final = "manager-worker-v1"
 NATIVE_CONTROL_INVENTORY_VERSION: Final = "rc5-native-control-inventory-v1"
@@ -345,6 +368,7 @@ class BuildRequest:
     build_root: str
     source_dir: str
     command: str
+    modules: tuple[str, ...] = ()
     limits: ResourceLimits = field(default_factory=ResourceLimits)
 
 
@@ -628,6 +652,7 @@ def validate_package_graph(
     build_root: Path,
     source_dir: Path,
     goroot: Path,
+    module_dirs: Mapping[str, Path] | None = None,
 ) -> None:
     """Parse the complete ``go list`` stream and constrain every active input."""
 
@@ -637,6 +662,7 @@ def validate_package_graph(
             build_root=build_root,
             source_dir=source_dir,
             goroot=goroot,
+            module_dirs=module_dirs or {},
         )
     except GoV1Error as exc:
         if exc.code != CODE_WORKER_PROTOCOL_INVALID:
@@ -653,6 +679,7 @@ def _validate_package_graph(
     build_root: Path,
     source_dir: Path,
     goroot: Path,
+    module_dirs: Mapping[str, Path],
 ) -> None:
     packages = _decode_json_stream(payload)
     if not packages:
@@ -711,10 +738,22 @@ def _validate_package_graph(
                 "go_test_input_forbidden",
                 "go list selected a test package",
             )
+
+    # Protocol Core 4.2.3 evaluation order: the fixed go list reconciles
+    # vendor consistency first, then directive form and the bijection decide
+    # which replaced modules the graph may carry at all, and only then is each
+    # package's input surface constrained. Every step still precedes go build.
+    replaced_modules = _bijected_module_roots(
+        _effective_replacement_directives(build_root),
+        build_root,
+        module_dirs,
+    )
+    for item in packages:
         _validate_package_inputs(
             item,
             build_root=build_root,
             goroot=goroot,
+            replaced_modules=replaced_modules,
         )
 
     if has_vendored_module:
@@ -730,6 +769,374 @@ def _validate_package_graph(
                 "vendor_metadata_inconsistent",
                 "vendored graph lacks a regular in-root vendor/modules.txt",
             ) from exc
+
+
+# Go selects every non-Go input by file extension, so the declared-directory
+# side of the Protocol Core 4.2.3 scan surface is an extension scan. The vendor
+# copy is checked through the ``go list`` stream instead, because that is the
+# copy the compiler reads.
+_FORBIDDEN_MODULE_INPUT_SUFFIXES: Final[tuple[str, ...]] = (
+    ".syso",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cxx",
+    ".m",
+    ".h",
+    ".hh",
+    ".hpp",
+    ".hxx",
+    ".f",
+    ".for",
+    ".f90",
+    ".s",
+    ".swig",
+    ".swigcxx",
+)
+# Go skips these directory names when it collects a module's packages, so they
+# carry no active input. ``vendor`` is skipped for the reason 4.2.3 states: a
+# declared module directory may carry its own vendor tree, that tree takes no
+# part in resolution under ``-mod=vendor`` at the build root, and a manager
+# must not read it as a dependency source.
+_SKIPPED_MODULE_DIRECTORY_NAMES: Final[frozenset[str]] = frozenset(
+    {"vendor", "testdata"}
+)
+
+
+def _canonical_module_directories(
+    source_root: Path,
+    build_root: Path,
+    values: Sequence[str],
+) -> dict[str, Path]:
+    """Validate every declared module directory against the snapshot itself.
+
+    Protocol Core 4.2.3: each declared directory is a portable relative path
+    other than ``.`` that names a real, link-free directory strictly inside the
+    immutable raw skill snapshot and contains ``go.mod`` directly; the
+    declarations are unique and pairwise disjoint and may not equal, contain,
+    or be contained by the build root. The disjointness comparisons also hold
+    under the section 2 platform path mapping, so two declarations that differ
+    only by case or by another platform folding are rejected even when only one
+    of them exists in this snapshot.
+
+    ``Module.Replace.Dir`` and ``Module.Replace.GoMod`` are never evidence that
+    any of this holds; only the snapshot is.
+
+    The manifest layer additionally rejects a declared directory that overlaps
+    another command's build root or any runtime root, because only it sees the
+    whole declaration set.
+    """
+
+    canonical: dict[str, Path] = {}
+    for value in values:
+        if value == "." or not is_valid_portable_path(value):
+            raise GoV1Error(
+                CODE_MODULE_ROOT_CONTAINMENT_INVALID,
+                f"declared module root {value!r} is not a portable relative "
+                "directory path",
+            )
+        if value in canonical:
+            raise GoV1Error(
+                CODE_MODULE_ROOT_CONTAINMENT_INVALID,
+                f"declared module root {value!r} is declared more than once",
+            )
+        path = source_root.joinpath(*value.split("/"))
+        try:
+            info = path.lstat()
+            resolved = path.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise GoV1Error(
+                CODE_MODULE_ROOT_CONTAINMENT_INVALID,
+                f"declared module root {value!r} is unavailable",
+            ) from exc
+        if (
+            _is_link_or_reparse(info)
+            or not stat.S_ISDIR(info.st_mode)
+            or resolved != path
+        ):
+            raise GoV1Error(
+                CODE_MODULE_ROOT_CONTAINMENT_INVALID,
+                f"declared module root {value!r} is not a canonical link-free "
+                "directory",
+            )
+        if not _strictly_below(path, source_root):
+            raise GoV1Error(
+                CODE_MODULE_ROOT_CONTAINMENT_INVALID,
+                f"declared module root {value!r} is not strictly inside the "
+                "skill snapshot",
+            )
+        go_mod = path / "go.mod"
+        try:
+            go_mod_stat = go_mod.lstat()
+        except OSError as exc:
+            raise GoV1Error(
+                CODE_MODULE_ROOT_CONTAINMENT_INVALID,
+                f"declared module root {value!r} lacks go.mod",
+            ) from exc
+        if _is_link_or_reparse(go_mod_stat) or not stat.S_ISREG(go_mod_stat.st_mode):
+            raise GoV1Error(
+                CODE_MODULE_ROOT_CONTAINMENT_INVALID,
+                f"declared module root {value!r} go.mod is not a regular file",
+            )
+        if _same_or_below(path, build_root) or _same_or_below(build_root, path):
+            raise GoV1Error(
+                CODE_MODULE_ROOT_CONTAINMENT_INVALID,
+                f"declared module root {value!r} overlaps the build root",
+            )
+        canonical[value] = path
+
+    folded = {
+        value: hashing.platform_path_key(value) for value in canonical
+    }
+    build_root_key = (
+        hashing.platform_path_key(
+            build_root.relative_to(source_root).as_posix()
+        )
+        if build_root != source_root
+        else "."
+    )
+    for value, key in folded.items():
+        if build_root_key == "." or _folded_paths_overlap(key, build_root_key):
+            raise GoV1Error(
+                CODE_MODULE_ROOT_CONTAINMENT_INVALID,
+                f"declared module root {value!r} collides with the build root "
+                "under a supported platform path mapping",
+            )
+        for peer, peer_key in folded.items():
+            if peer == value:
+                continue
+            if _folded_paths_overlap(key, peer_key):
+                raise GoV1Error(
+                    CODE_MODULE_ROOT_CONTAINMENT_INVALID,
+                    f"declared module roots {value!r} and {peer!r} collide "
+                    "under a supported platform path mapping",
+                )
+    return canonical
+
+
+def _folded_paths_overlap(left: str, right: str) -> bool:
+    left_parts = PurePosixPath(left).parts
+    right_parts = PurePosixPath(right).parts
+    shared = min(len(left_parts), len(right_parts))
+    return left_parts[:shared] == right_parts[:shared]
+
+
+def _validate_declared_module_inputs(module_dirs: Mapping[str, Path]) -> None:
+    """Extend the section 4.2 scan surface over every declared module directory.
+
+    The vendor copy is authoritative for the build and reaches the same rules
+    through the ``go list`` stream, with the audited-third-party allowance
+    withheld. This is the declared-directory half of the same surface: it is
+    not in the stream at all, because under ``-mod=vendor`` no package resolves
+    through it.
+    """
+
+    for value, directory in module_dirs.items():
+        for parent, names, files in os.walk(directory, topdown=True, followlinks=False):
+            names[:] = [
+                name
+                for name in names
+                if name not in _SKIPPED_MODULE_DIRECTORY_NAMES
+                and not name.startswith((".", "_"))
+            ]
+            for name in files:
+                lowered = name.lower()
+                if lowered.endswith(".go"):
+                    if name.endswith("_test.go"):
+                        continue
+                    _scan_source_directives(
+                        Path(parent) / name,
+                        f"module root {value}",
+                        vendored=False,
+                    )
+                    continue
+                if not lowered.endswith(_FORBIDDEN_MODULE_INPUT_SUFFIXES):
+                    continue
+                if lowered.endswith(".syso"):
+                    code = "go_syso_forbidden"
+                elif lowered.endswith(".s"):
+                    code = "go_assembly_forbidden"
+                else:
+                    code = "go_native_input_forbidden"
+                raise GoV1Error(
+                    code,
+                    f"declared module root {value!r} contains non-Go input "
+                    f"{name!r}",
+                )
+
+
+def _effective_replacement_directives(
+    build_root: Path,
+) -> tuple[tuple[str, str], ...]:
+    """Read the effective replace set out of ``<build_root>/vendor/modules.txt``.
+
+    Protocol Core 4.2.3 makes that file the only surface a manager reads to
+    determine the set. The fixed ``go list -mod=vendor`` invocation already
+    reconciled it against ``go.mod`` and failed before ``go build`` when the
+    two disagreed, so no replacement in ``go.mod`` can be absent from it and
+    none can hide by going unused. ``Module.Replace`` in the ``go list`` stream
+    is deliberately not read here: those paths are derived lexically from
+    ``go.mod`` text, Go does not stat them, and under ``-mod=vendor`` the
+    stream reports them unchanged when the directory they name does not exist.
+
+    Returns the one-token-left directives as ``(module path, replacement)``
+    pairs in file order.
+    """
+
+    modules_txt = build_root / "vendor" / "modules.txt"
+    try:
+        payload = modules_txt.read_bytes()
+    except FileNotFoundError:
+        return ()
+    except OSError as exc:
+        raise GoV1Error(
+            "vendor_metadata_inconsistent",
+            "cannot read vendor/modules.txt to determine the replace set",
+        ) from exc
+
+    directives: list[tuple[str, str]] = []
+    selections: list[tuple[str, str, str]] = []
+    for raw_line in payload.splitlines():
+        if not raw_line.startswith(_MODULES_TXT_ANNOTATION_PREFIX):
+            continue
+        if _MODULES_TXT_REPLACEMENT_SEPARATOR not in raw_line:
+            continue
+        head, _, tail = raw_line.partition(_MODULES_TXT_REPLACEMENT_SEPARATOR)
+        left = _modules_txt_tokens(head[len(_MODULES_TXT_ANNOTATION_PREFIX) :])
+        right = _modules_txt_tokens(tail)
+        if not 1 <= len(left) <= 2 or not 1 <= len(right) <= 2:
+            raise GoV1Error(
+                CODE_MODULE_ROOT_DIRECTIVE_FORM_UNSUPPORTED,
+                "vendor/modules.txt carries a replacement annotation that is "
+                "not one or two tokens on each side",
+            )
+        if len(right) != 1:
+            # A two-token right side is a module-to-module redirect: a
+            # versioned dependency decision, and versioned resolution stays
+            # vendor-only.
+            raise GoV1Error(
+                CODE_MODULE_ROOT_DIRECTIVE_FORM_UNSUPPORTED,
+                f"replacement of {left[0]!r} redirects to another module "
+                "instead of a directory",
+            )
+        if len(left) == 1:
+            directives.append((left[0], right[0]))
+        else:
+            selections.append((left[0], left[1], right[0]))
+
+    materialized = set(directives)
+    for module_path, _version, replacement in selections:
+        # Go writes a one-token-left annotation for every unversioned-left
+        # directive and adds a two-token-left selection annotation when that
+        # directive selects a required module. A two-token-left annotation with
+        # no exactly matching one-token-left annotation is a versioned-left
+        # directive, and that is what enforces the no-version-on-the-left rule
+        # without parsing go.mod.
+        if (module_path, replacement) not in materialized:
+            raise GoV1Error(
+                CODE_MODULE_ROOT_DIRECTIVE_FORM_UNSUPPORTED,
+                f"replacement of {module_path!r} carries a version on the "
+                "directive's left side",
+            )
+    return tuple(directives)
+
+
+def _modules_txt_tokens(chunk: bytes) -> tuple[str, ...]:
+    try:
+        text = chunk.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise GoV1Error(
+            "vendor_metadata_inconsistent",
+            "vendor/modules.txt is not valid UTF-8",
+        ) from exc
+    return tuple(text.split())
+
+
+def _bijected_module_roots(
+    directives: Sequence[tuple[str, str]],
+    build_root: Path,
+    module_dirs: Mapping[str, Path],
+) -> frozenset[str]:
+    """Check the declaration against the effective replace set one to one.
+
+    Protocol Core 4.2.3: every directive must resolve to a distinct
+    declaration and every declaration must be named by exactly one directive.
+    This is the entire use a manager makes of the replace records; they are
+    checked against the declaration, never obeyed. A command with an absent or
+    empty ``modules`` list must therefore have an empty effective replace set.
+
+    Returns the module paths whose modules the declaration admits.
+    """
+
+    by_directory: dict[Path, str] = {}
+    replaced: set[str] = set()
+    for module_path, replacement in directives:
+        resolved = _resolve_replacement_target(build_root, replacement)
+        declared = next(
+            (
+                declared_path
+                for declared_path in module_dirs.values()
+                if resolved is not None and declared_path == resolved
+            ),
+            None,
+        )
+        if declared is None:
+            raise GoV1Error(
+                CODE_MODULE_ROOT_DIRECTIVE_UNDECLARED,
+                f"replacement of {module_path!r} names undeclared directory "
+                f"{replacement!r}",
+            )
+        previous = by_directory.get(declared)
+        if previous is not None:
+            raise GoV1Error(
+                CODE_MODULE_ROOT_DIRECTIVE_UNDECLARED,
+                f"replacements of {previous!r} and {module_path!r} name one "
+                f"declared directory {replacement!r}",
+            )
+        by_directory[declared] = module_path
+        replaced.add(module_path)
+
+    for declared_value, declared_path in module_dirs.items():
+        if declared_path not in by_directory:
+            raise GoV1Error(
+                CODE_MODULE_ROOT_DECLARATION_UNUSED,
+                f"declared module root {declared_value!r} is named by no "
+                "replacement",
+            )
+    return frozenset(replaced)
+
+
+def _resolve_replacement_target(build_root: Path, replacement: str) -> Path | None:
+    """Resolve a directive's right-hand token against the build root.
+
+    Only directory form is admitted, so a token that is not a relative path, or
+    that leaves the snapshot, simply resolves to something no declaration can
+    equal and is reported as undeclared by the caller.
+    """
+
+    if not replacement or "\x00" in replacement:
+        return None
+    candidate = PurePosixPath(replacement.replace("\\", "/"))
+    if candidate.is_absolute():
+        return None
+    parts: list[str] = []
+    for part in candidate.parts:
+        if part == ".":
+            continue
+        if part == "..":
+            if not parts:
+                parts.append("..")
+                continue
+            if parts[-1] == "..":
+                parts.append("..")
+                continue
+            parts.pop()
+            continue
+        parts.append(part)
+    resolved = build_root
+    for part in parts:
+        resolved = resolved.parent if part == ".." else resolved / part
+    return resolved
 
 
 def _decode_json_stream(payload: bytes) -> list[Mapping[str, object]]:
@@ -770,6 +1177,7 @@ def _validate_package_inputs(
     *,
     build_root: Path,
     goroot: Path,
+    replaced_modules: frozenset[str] = frozenset(),
 ) -> None:
     import_path = _optional_string(item.get("ImportPath"))
     trusted_standard = (
@@ -796,7 +1204,7 @@ def _validate_package_inputs(
                 f"standard package {import_path!r} has an unexpected Root",
             )
     else:
-        _validate_module(item, module, build_root)
+        _validate_module(item, module, build_root, replaced_modules)
         item_root = _optional_string(item.get("Root"))
         if item_root:
             try:
@@ -831,7 +1239,12 @@ def _validate_package_inputs(
 
     # The single vendored-exception predicate of decision 0005: a package is
     # audited-by-vendoring only when it lives below the checked-in vendor tree.
-    vendored = _strictly_below(package_dir, build_root / "vendor")
+    # Protocol Core 4.2.3 withholds that allowance from a module carrying a
+    # replacement: its bytes are first-party source of the same package, and
+    # only its physical location happens to be the vendor tree.
+    vendored = _strictly_below(package_dir, build_root / "vendor") and (
+        module is None or _optional_string(module.get("Path")) not in replaced_modules
+    )
 
     if _string_list(item.get("SysoFiles"), "SysoFiles"):
         raise GoV1Error(
@@ -971,13 +1384,23 @@ def _validate_module(
     item: Mapping[str, object],
     module: Mapping[str, object] | None,
     build_root: Path,
+    replaced_modules: frozenset[str] = frozenset(),
 ) -> None:
     import_path = _optional_string(item.get("ImportPath"))
+    module_path = _optional_string(module.get("Path")) if module is not None else ""
     if (
         module is None
-        or not _optional_string(module.get("Path"))
+        or not module_path
         or module.get("Error") is not None
-        or module.get("Replace") is not None
+        or (
+            module.get("Replace") is not None
+            # A replacement is admitted exactly on the bijected set: the
+            # declaration named this module's directory and the effective
+            # replace set named that declaration back. Nothing here reads the
+            # replacement as an instruction, and Replace.Dir and Replace.GoMod
+            # are never evidence that any path exists.
+            and module_path not in replaced_modules
+        )
     ):
         raise GoV1Error(
             "vendor_metadata_inconsistent",
@@ -6721,6 +7144,15 @@ def build(
         request.build_root,
         request.source_dir,
     )
+    # Protocol Core 4.2.3: declaration and containment validation completes
+    # before the fixed go list, so a declaration the snapshot does not support
+    # never reaches a Go probe.
+    module_dirs = _canonical_module_directories(
+        source_root,
+        build_root,
+        request.modules,
+    )
+    _validate_declared_module_inputs(module_dirs)
     _emit_state(_state_observer, SESSION_STATES[0])
 
     platform, probes = probe_native_controls(
@@ -6829,6 +7261,7 @@ def build(
             build_root=build_root,
             source_dir=source_dir,
             goroot=request.toolchain_session.goroot,
+            module_dirs=module_dirs,
         )
         _emit_state(_state_observer, SESSION_STATES[7])
 
@@ -6923,7 +7356,10 @@ def _validate_package_command_surface(request: BuildRequest) -> None:
                 "package build command has a non-string field",
             )
         keys.append(key)
-    extra = sorted(set(keys) - {"type", "driver", "source_dir"})
+    closed_surface = {"type", "driver", "source_dir"}
+    if request.modules:
+        closed_surface.add("modules")
+    extra = sorted(set(keys) - closed_surface)
     if extra:
         surfaces = {
             "executable": "worker, Go launcher, or GOROOT tool program",
@@ -6948,7 +7384,7 @@ def _validate_package_command_surface(request: BuildRequest) -> None:
             CODE_PACKAGE_INFLUENCE_FORBIDDEN,
             f"package field {extra[0]!r} selects the {surface}",
         )
-    if set(keys) != {"type", "driver", "source_dir"}:
+    if set(keys) != closed_surface:
         raise GoV1Error(
             CODE_PACKAGE_INFLUENCE_FORBIDDEN,
             "package build command is not the exact closed surface",
@@ -6957,6 +7393,16 @@ def _validate_package_command_surface(request: BuildRequest) -> None:
         request.command_object.get("type") != "build"
         or request.command_object.get("driver") != "go-v1"
         or request.command_object.get("source_dir") != request.source_dir
+    ):
+        raise GoV1Error(
+            CODE_PACKAGE_INFLUENCE_FORBIDDEN,
+            "package build command differs from the validated go-v1 command",
+        )
+    # ``modules`` is the one optional schema-8 field, and it is a declaration
+    # the manager checks, never an input the package selects. It must therefore
+    # match the validated command exactly, in order and value.
+    if request.modules and list(request.modules) != request.command_object.get(
+        "modules"
     ):
         raise GoV1Error(
             CODE_PACKAGE_INFLUENCE_FORBIDDEN,

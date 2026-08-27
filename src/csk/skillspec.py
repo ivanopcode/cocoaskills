@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from . import protocol_json
+from . import hashing, protocol_json
 from .audit.capabilities import CapabilityManifest, CapabilityParseError, parse_capabilities
 from .build_repository import (
     GO_REPOSITORY_V1_DRIVER,
@@ -20,7 +20,7 @@ from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_portable
 
 
 SCHEMA_VERSION = 1
-SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6, 7}
+SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6, 7, 8}
 CANONICAL_MANIFEST = "agent-skill.json"
 LEGACY_MANIFEST = "csk-skill.json"
 RUNTIME_FALLBACK = "agents/runtime.json"
@@ -33,9 +33,39 @@ REQUIREMENT_MODES = {"full", "runtime", "context"}
 REQUIREMENT_REF_KINDS = {"tag", "revision"}
 _RANGE_MARKERS = ("^", "~", ">", "<", "*", " ")
 _SCHEMA_V1_RESERVED_TOP_LEVEL_FIELDS = frozenset(
-    {"build_roots", "build_repositories", "driver", "repository", "target"}
+    {
+        "build_roots",
+        "build_repositories",
+        "driver",
+        "repository",
+        "target",
+        "modules",
+        "execution_policy",
+        "interpreter",
+    }
 )
-_SCHEMA_V1_RESERVED_COMMAND_FIELDS = frozenset({"driver", "source_dir", "repository", "target"})
+_SCHEMA_V1_RESERVED_COMMAND_FIELDS = frozenset(
+    {
+        "driver",
+        "source_dir",
+        "repository",
+        "target",
+        "modules",
+        "execution_policy",
+        "interpreter",
+    }
+)
+
+# Protocol core 4.1.1: the script execution-policy value space is closed and
+# holds exactly one identity, and the interpreter identifier space is closed at
+# two. A package chooses only whether a command is enforced, never how.
+SCRIPT_EXECUTION_POLICY_V1 = "script-worker-v1"
+SCRIPT_EXECUTION_POLICIES = frozenset({SCRIPT_EXECUTION_POLICY_V1})
+SCRIPT_INTERPRETERS = frozenset({"python3-v1", "node-v1"})
+
+# Protocol core 4.2.3 declaration and containment diagnostic. Declaration and
+# containment validation completes here, before any Go probe runs.
+MODULE_ROOT_CONTAINMENT_INVALID = "build_module_root_containment_invalid"
 
 MCP_TRANSPORTS = {"stdio", "http"}
 MCP_REQUIRED_IN = {"any", "all"}
@@ -58,6 +88,9 @@ class CommandSpec:
     source_dir: str | None = None
     repository: str | None = None
     target: str | None = None
+    modules: tuple[str, ...] = ()
+    execution_policy: str | None = None
+    interpreter: str | None = None
 
 
 @dataclass(frozen=True)
@@ -223,8 +256,17 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
                 raise SkillSpecError(f"commands.{name} has unsupported field(s): {joined}")
         command_type = raw.get("type")
         if command_type == "script":
-            if schema >= 2:
+            if schema >= 8:
+                _reject_unknown_fields(
+                    raw,
+                    {"type", "unix_path", "win_path", "execution_policy", "interpreter"},
+                    f"commands.{name}",
+                )
+            elif schema >= 2:
                 _reject_unknown_fields(raw, {"type", "unix_path", "win_path"}, f"commands.{name}")
+            execution_policy, interpreter = _parse_script_execution_policy(
+                raw, schema=schema, label=f"commands.{name}"
+            )
             unix_path = raw.get("unix_path")
             win_path = raw.get("win_path")
             if schema >= 2 and unix_path is None and win_path is None:
@@ -251,6 +293,8 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
                 unix_path=unix_path,
                 win_path=win_path,
                 source=source_file,
+                execution_policy=execution_policy,
+                interpreter=interpreter,
             )
         elif command_type == "system":
             if schema >= 2:
@@ -273,18 +317,31 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
                 source=source_file,
             )
         elif command_type == "build" and schema >= 6 and raw.get("driver") == GO_V1_DRIVER:
-            _reject_unknown_fields(raw, {"type", "driver", "source_dir"}, f"commands.{name}")
+            allowed_build_fields = {"type", "driver", "source_dir"}
+            if schema >= 8:
+                allowed_build_fields.add("modules")
+            _reject_unknown_fields(raw, allowed_build_fields, f"commands.{name}")
             driver = raw.get("driver")
             source_dir = _validate_relative_path(
                 raw.get("source_dir"),
                 field=f"commands.{name}.source_dir",
                 strict_posix=True,
             )
+            modules = (
+                _parse_module_roots(
+                    raw["modules"],
+                    snapshot=path.parent,
+                    label=f"commands.{name}.modules",
+                )
+                if schema >= 8 and "modules" in raw
+                else ()
+            )
             commands[name] = CommandSpec(
                 name=name,
                 type="build",
                 driver=driver,
                 source_dir=source_dir,
+                modules=modules,
                 source=source_file,
             )
         elif command_type == "build" and schema >= 7 and raw.get("driver") == GO_REPOSITORY_V1_DRIVER:
@@ -316,6 +373,8 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
         _validate_build_layout(path.parent, build_roots, commands)
     if schema >= 7:
         _validate_repository_commands(build_repositories, commands)
+    if schema >= 8:
+        _validate_module_root_layout(build_roots, runtime_roots, commands)
     dependencies, requirements, mcp_servers = _parse_dependencies(
         data.get("dependencies"), schema=schema, source_file=source_file
     )
@@ -724,6 +783,136 @@ def _validate_build_layout(
     for index, root in enumerate(build_roots):
         if root not in used_roots:
             raise SkillSpecError(f"build_roots[{index}] build root {root!r} is not used by any build command")
+
+
+def _parse_script_execution_policy(
+    raw: dict[str, Any], *, schema: int, label: str
+) -> tuple[str | None, str | None]:
+    """Read the closed schema-8 opt-in pair off one script command.
+
+    Protocol core 4.1.1 makes the two fields co-required: a command that
+    declares one without the other is an invalid manifest, and a manager must
+    not resolve the missing field to a default or install the command
+    declared-only. An absent pair means declared-only on every schema.
+    """
+
+    if schema < 8:
+        return None, None
+    execution_policy = raw.get("execution_policy")
+    interpreter = raw.get("interpreter")
+    if execution_policy is None and interpreter is None:
+        return None, None
+    if execution_policy is None or interpreter is None:
+        missing = "interpreter" if interpreter is None else "execution_policy"
+        raise SkillSpecError(
+            f"{label}.{missing} is required: 'execution_policy' and 'interpreter' are co-required"
+        )
+    if execution_policy not in SCRIPT_EXECUTION_POLICIES:
+        admitted = ", ".join(repr(value) for value in sorted(SCRIPT_EXECUTION_POLICIES))
+        raise SkillSpecError(
+            f"{label}.execution_policy must be {admitted}, got {execution_policy!r}"
+        )
+    if interpreter not in SCRIPT_INTERPRETERS:
+        admitted = ", ".join(repr(value) for value in sorted(SCRIPT_INTERPRETERS))
+        raise SkillSpecError(
+            f"{label}.interpreter must be one of {admitted}, got {interpreter!r}"
+        )
+    return execution_policy, interpreter
+
+
+def _parse_module_roots(raw: Any, *, snapshot: Path, label: str) -> tuple[str, ...]:
+    """Validate one command's declared first-party module directories.
+
+    Protocol core 4.2.3 states the package claim and leaves the manager to
+    check it against the snapshot: each entry is a portable relative directory
+    other than ``.``, link-free, real, and carrying ``go.mod`` directly. The
+    directive side of the claim is checked later, against
+    ``vendor/modules.txt``, because no replacement may act as evidence that a
+    directory exists.
+    """
+
+    if not isinstance(raw, list):
+        raise SkillSpecError(f"{label} must be a list of portable relative paths")
+    roots: list[str] = []
+    for index, value in enumerate(raw):
+        field = f"{label}[{index}]"
+        # Every declaration failure of this section carries one diagnostic, so
+        # the shape checks shared with runtime and build roots are relabelled
+        # rather than reimplemented.
+        try:
+            root = _validate_relative_path(value, field=field, strict_posix=True)
+            _validate_link_free_directory(snapshot, root, field=field, noun="module root")
+        except SkillSpecError as exc:
+            raise SkillSpecError(f"{MODULE_ROOT_CONTAINMENT_INVALID}: {exc}") from exc
+        module_file = snapshot.joinpath(*PurePosixPath(root).parts, "go.mod")
+        try:
+            info = module_file.lstat()
+        except FileNotFoundError as exc:
+            raise SkillSpecError(
+                f"{MODULE_ROOT_CONTAINMENT_INVALID}: {field} module root {root!r} "
+                "must contain go.mod directly"
+            ) from exc
+        except OSError as exc:
+            raise SkillSpecError(
+                f"{MODULE_ROOT_CONTAINMENT_INVALID}: {field} cannot inspect "
+                f"{root}/go.mod: {exc}"
+            ) from exc
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            raise SkillSpecError(
+                f"{MODULE_ROOT_CONTAINMENT_INVALID}: {field} module root {root!r} go.mod "
+                "must be a real regular file"
+            )
+        roots.append(root)
+    if len(set(roots)) != len(roots):
+        raise SkillSpecError(
+            f"{MODULE_ROOT_CONTAINMENT_INVALID}: {label} module roots must be unique"
+        )
+    return tuple(roots)
+
+
+def _validate_module_root_layout(
+    build_roots: tuple[str, ...],
+    runtime_roots: tuple[str, ...],
+    commands: dict[str, CommandSpec],
+) -> None:
+    """Reject a declared module root that overlaps another declared directory.
+
+    Protocol core 4.2.3 requires the comparisons to hold under the section 2
+    platform path mapping as well, so two declarations that differ only by case
+    or by another platform folding are rejected even when only one of them
+    exists in this snapshot.
+    """
+
+    for name in sorted(commands):
+        command = commands[name]
+        if command.type != "build" or command.driver != GO_V1_DRIVER:
+            continue
+        label = f"commands.{name}.modules"
+        others: list[tuple[str, str]] = [
+            *((root, "build root") for root in build_roots),
+            *((root, "runtime root") for root in runtime_roots),
+        ]
+        for index, module_root in enumerate(command.modules):
+            for other, noun in others:
+                if _platform_paths_overlap(module_root, other):
+                    raise SkillSpecError(
+                        f"{MODULE_ROOT_CONTAINMENT_INVALID}: {label}[{index}] module root "
+                        f"{module_root!r} overlaps {noun} {other!r}"
+                    )
+            for peer in command.modules[index + 1 :]:
+                if _platform_paths_overlap(module_root, peer):
+                    raise SkillSpecError(
+                        f"{MODULE_ROOT_CONTAINMENT_INVALID}: {label} module roots must be "
+                        f"pairwise disjoint: {module_root!r} overlaps {peer!r}"
+                    )
+
+
+def _platform_paths_overlap(left: str, right: str) -> bool:
+    """Return whether two portable paths collide once a platform folds them."""
+
+    left_key = hashing.platform_path_key(left)
+    right_key = hashing.platform_path_key(right)
+    return _path_contains(left_key, right_key) or _path_contains(right_key, left_key)
 
 
 def _validate_link_free_directory(snapshot: Path, rel_path: str, *, field: str, noun: str) -> None:

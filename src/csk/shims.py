@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from .builds.cache import CacheEntryStatus, CacheInspection
-from . import protocol_json
+from . import protocol_json, script_policy
 from .build_repository import GO_REPOSITORY_V1_DRIVER
 from .builds.metadata import (
     GO_V1_DRIVER,
@@ -98,6 +98,12 @@ def install_runtime_command(
     command: CommandSpec,
     platform_name: str | None = None,
 ) -> Path:
+    # The install preflight already refused an enforced command through
+    # skillcheck, so reaching this point means a caller skipped that gate. The
+    # shim writer must not be the layer that decides, because the only thing it
+    # can do with an enforced command is publish the uncontained launcher
+    # protocol core 4.1.1 forbids by name.
+    script_policy.admit({command.name: command})
     platform = _resolve_platform(platform_name)
     relative = _command_relative_path(command, platform)
     src = (snapshot / relative).resolve()

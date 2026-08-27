@@ -821,7 +821,7 @@ def _existing_external_snapshot_key(
             marker = install_marker.read_install_marker(path.read_bytes())
         except (OSError, install_marker.InstallMarkerError):
             continue
-        if not isinstance(marker, install_marker.InstallMarkerV3):
+        if not isinstance(marker, install_marker.MIXED_COMMAND_MARKER_SCHEMAS):
             continue
         build = marker.builds.get(command)
         if (
@@ -1813,18 +1813,26 @@ def _build_private_misses(
                 frozen: build_source.FrozenSnapshot,
                 command_spec: build_planner.BuildCommand = command,
             ) -> go_v1.BuildResult:
+                command_object: dict[str, object] = {
+                    "type": "build",
+                    "driver": command_spec.driver,
+                    "source_dir": command_spec.source_dir,
+                }
+                # An absent or empty modules list carries the schema-6 meaning
+                # of a single-module build root, so the command surface stays
+                # byte-identical to the schema-6 and schema-7 one until a
+                # package actually declares a module root.
+                if command_spec.modules:
+                    command_object["modules"] = list(command_spec.modules)
                 return go_v1.build(
                     go_v1.BuildRequest(
                         toolchain_session=session,
                         source_snapshot=frozen,
-                        command_object={
-                            "type": "build",
-                            "driver": command_spec.driver,
-                            "source_dir": command_spec.source_dir,
-                        },
+                        command_object=command_object,
                         build_root=command_spec.build_root,
                         source_dir=command_spec.source_dir,
                         command=command_spec.name,
+                        modules=command_spec.modules,
                     )
                 )
 
@@ -3196,7 +3204,7 @@ def _marker_payload(
         requirers=tuple(requirers) if requirers else None,
         substituted=substituted,
     )
-    if plan.spec.schema_version == 7:
+    if plan.spec.schema_version in {7, 8}:
         marker_builds: dict[str, install_marker.InstallMarkerBuildV3] = {}
         for name, build in (builds or {}).items():
             if isinstance(build, install_marker.InstallMarkerBuildV3):
@@ -3211,12 +3219,24 @@ def _marker_payload(
                     artifact_sha256=build.artifact_sha256,
                     artifact_path=build.artifact_path,
                 )
-        marker: install_marker.InstallMarker = install_marker.InstallMarkerV3(
-            **common,
-            build_roots=plan.spec.build_roots,
-            builds=marker_builds,
-            build_source=build_source_identity,
-        )
+        # Schema 7 installation mutations are recorded by marker v3 and
+        # schema-8 ones by marker v4; the two markers share every rule but the
+        # manifest band they bind.
+        marker: install_marker.InstallMarker
+        if plan.spec.schema_version == 8:
+            marker = install_marker.InstallMarkerV4(
+                **common,
+                build_roots=plan.spec.build_roots,
+                builds=marker_builds,
+                build_source=build_source_identity,
+            )
+        else:
+            marker = install_marker.InstallMarkerV3(
+                **common,
+                build_roots=plan.spec.build_roots,
+                builds=marker_builds,
+                build_source=build_source_identity,
+            )
     else:
         local_builds = {
             name: build
