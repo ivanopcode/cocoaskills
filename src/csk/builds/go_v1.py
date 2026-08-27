@@ -5566,7 +5566,8 @@ class _NativeControlDomain:
                     )
             raise GoV1Error(
                 CODE_CONTROL_UNAVAILABLE,
-                "cannot prove complete worker-domain termination and join",
+                "cannot prove complete worker-domain termination and join"
+                f" [DIAG {type(failure).__name__}: {failure}]",
             ) from failure
         self.terminated = True
 
