@@ -2853,3 +2853,22 @@ prevent, proven red rather than argued.
 
 Takeaway for the next pin move: when reporting corpus-pin evidence, cite a run whose skip count shows
 the corpus consumers were reached. A full-suite pass with the roots unset proves nothing about them.
+
+## 2026-08-27 TASK-260827-1r6mer: authoring CLI utilities documentation and compiler admission rules
+
+Created `docs/authoring-cli-commands.md` in Russian following `docs/prose-style.md` to describe how skill authors deliver CLI utilities. Documented:
+1. Placement choices: built-in `build_roots` vs external `build_repositories`.
+2. Compiler admission matrix from `src/csk`: `go-v1` (built-in) and `go-repository-v1` (external), fixed build policy (`FIXED_GO_BUILD_POLICY`), rejections (`cgo_required`, `go_pgo_forbidden`, `go_test_input_forbidden`, `go_assembly_forbidden`, `vendor_dependency_missing`, `vendor_metadata_inconsistent`), macOS/Windows platform restriction, and schema 8 `modules`.
+3. Script commands: shebang resolution, shim creation in `.agents/bin/`, schema 8 `execution_policy: "script-worker-v1"` rejection with `script_execution_policy_unsupported`.
+4. Three minimal working examples (`go-v1`, `go-repository-v1`, `script`) verified with `.venv/bin/csk skill check`.
+5. Planned languages (Kotlin, Swift, Rust) error identification: `error: skill.spec_invalid agent-skill.json: Command '<name>' field 'driver' must be 'go-v1' or 'go-repository-v1'`.
+
+## 2026-08-27 TASK-260827-1r6mer: rework of authoring CLI utilities documentation per review verdict RUN-260827-11a12f
+
+Reworked `docs/authoring-cli-commands.md` and associated task outputs to address review verdict RUN-260827-11a12f:
+1. Synchronized files between main repo `/Users/iv/Developer/Wildberries/cocoaskills` and story worktree `.temp/STORY-260824-3rzqxr/worktree`.
+2. Replaced fabricated Linux refusal string with the two actual code strings: `rc5-native-control-inventory-v1 covers exactly macOS and Windows` (`src/csk/builds/go_v1.py:445`) for `go-v1`, and `go-repository-v1 is supported only on macOS and Windows; Linux qualification is deferred` (`src/csk/installer.py:1475`) for `go-repository-v1`.
+3. Inverted the schema 8 `modules` rule: stated that declared module directories MUST be disjoint from `build_roots` and `runtime_roots` (raising `build_module_root_containment_invalid`), and documented nearest `go.mod` placement rule (`_validate_nearest_go_module`).
+4. Separated `go-v1` as the single compiled driver for internal build roots (`SUPPORTED_BUILD_DRIVERS = {"go-v1"}`) from `go-repository-v1` for external repositories managed by installer layer.
+5. Fixed CGO policy terminology (`cgo: False`, refusal `cgo_required`), named `go_generator_forbidden`, explained `allows_go_generate = vendored`, and cleaned up Russian prose style (removed literal translation "первого партийного кода").
+6. Executed all 8 example skills against `.venv/bin/csk skill check` and recorded literal command outputs, exit codes, stdout, and stderr in outcome resource `TASK-260827-1r6mer_results.md`.
