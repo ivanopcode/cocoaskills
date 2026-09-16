@@ -367,10 +367,67 @@ jobs:
             csk-e2e-smoke-results.xml
           if-no-files-found: error
 
+  fast_draft_sources:
+    name: Fast draft sources / Python 3.14 on ${{ matrix.os }}
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve the draft sources suite pin
+        id: suite
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          pin = json.load(open(".github/ci/draft-sources-suite.json"))
+          print(f"repository={pin['repository']}")
+          print(f"revision={pin['revision']}")
+          PY
+
+      - name: Checkout the draft sources suite
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.suite.outputs.repository }}
+          ref: ${{ steps.suite.outputs.revision }}
+          path: protocol-spec-draft
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          allow-prereleases: true
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+
+      - name: Run draft sources conformance
+        env:
+          CSK_DRAFT_SOURCES_SUITE_ROOT: ${{ github.workspace }}/protocol-spec-draft/conformance/draft-sources-v1
+        run: >-
+          python -m pytest -q tests/test_draft_sources_conformance.py
+          --junitxml=draft-sources-results.xml
+
+      - name: Upload draft sources evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: draft-sources-${{ matrix.os }}-py314
+          path: draft-sources-results.xml
+          if-no-files-found: error
+
   fast:
     name: fast
     if: ${{ always() && github.event_name == 'pull_request' }}
-    needs: [typecheck, build, fast_ordinary, fast_protocol, fast_go_e2e]
+    needs: [typecheck, build, fast_ordinary, fast_protocol, fast_go_e2e, fast_draft_sources]
     runs-on: ubuntu-latest
     steps:
       - name: Require every fast child
@@ -381,7 +438,7 @@ jobs:
           import json
           import os
 
-          expected = {"typecheck", "build", "fast_ordinary", "fast_protocol", "fast_go_e2e"}
+          expected = {"typecheck", "build", "fast_ordinary", "fast_protocol", "fast_go_e2e", "fast_draft_sources"}
           actual = json.loads(os.environ["NEEDS_JSON"])
           if set(actual) != expected:
               raise SystemExit(f"required CI child mismatch: expected={sorted(expected)} actual={sorted(actual)}")
@@ -758,10 +815,67 @@ jobs:
             csk-e2e-results.xml
           if-no-files-found: error
 
+  merge_draft_sources:
+    name: Merge draft sources / Python 3.14 on ${{ matrix.os }}
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve the draft sources suite pin
+        id: suite
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          pin = json.load(open(".github/ci/draft-sources-suite.json"))
+          print(f"repository={pin['repository']}")
+          print(f"revision={pin['revision']}")
+          PY
+
+      - name: Checkout the draft sources suite
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.suite.outputs.repository }}
+          ref: ${{ steps.suite.outputs.revision }}
+          path: protocol-spec-draft
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          allow-prereleases: true
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+
+      - name: Run draft sources conformance
+        env:
+          CSK_DRAFT_SOURCES_SUITE_ROOT: ${{ github.workspace }}/protocol-spec-draft/conformance/draft-sources-v1
+        run: >-
+          python -m pytest -q tests/test_draft_sources_conformance.py
+          --junitxml=draft-sources-results.xml
+
+      - name: Upload draft sources evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: draft-sources-${{ matrix.os }}-py314
+          path: draft-sources-results.xml
+          if-no-files-found: error
+
   merge:
     name: merge
     if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    needs: [typecheck, build, merge_ordinary, merge_protocol, merge_go_e2e]
+    needs: [typecheck, build, merge_ordinary, merge_protocol, merge_go_e2e, merge_draft_sources]
     runs-on: ubuntu-latest
     steps:
       - name: Require every merge child
@@ -772,7 +886,7 @@ jobs:
           import json
           import os
 
-          expected = {"typecheck", "build", "merge_ordinary", "merge_protocol", "merge_go_e2e"}
+          expected = {"typecheck", "build", "merge_ordinary", "merge_protocol", "merge_go_e2e", "merge_draft_sources"}
           actual = json.loads(os.environ["NEEDS_JSON"])
           if set(actual) != expected:
               raise SystemExit(f"required CI child mismatch: expected={sorted(expected)} actual={sorted(actual)}")

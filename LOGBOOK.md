@@ -1,5 +1,29 @@
 # Logbook
 
+## 2026-09-16 - TASK-260916-12bfrq rev2: substring CI checks and an uncalled dispatch line
+
+Review of the draft-sources harness revision 1 returned two gaps of the same
+shape: a check that exists but is never exercised. The semantic entry ended in
+`driver(case)` with zero drivers registered, so every case skipped and no test
+proved the call happens -- the one-case mutant `if case_id != "broad-root"`
+survived. And the CI lane test asserted substrings, so appending
+`-k test_draft_sources_snapshot_vector` to either draft lane kept every token
+while dropping 225 of 228 tests (3 passed, exit 0, junit produced). Revision 2
+registers a driver for the real `broad-root` case through the actual
+parametrized entry and parses each lane's real pytest command into tokens with
+an allowlist. Lesson for later leaves: any workflow assertion that can pass
+while its command carries `-k` is a comment, not a gate.
+
+## 2026-09-16 - TASK-260916-12bfrq: the draft suite outgrew its task text before the harness existed
+
+The pinned draft-sources-v1 corpus at `8ba9c235` carries 115 schema cases, not the 102 the
+task text names -- the same staleness the epic plan already records for the semantic count
+(73 named, 94 carried). The operative requirement is "every index.json schema case", so
+`tests/test_draft_sources_conformance.py` asserts the measured inventory (115 cases over 8
+draft schemas, both polarities each; 94 semantic; 3 snapshot) instead of the stale constant.
+A count assertion that names a smaller number than the corpus carries either fails on day
+one or silently drops real cases; neither is a harness.
+
 ## 2026-08-24 - TASK-260824-31y75t: the candidate lane had never measured a different suite
 
 The candidate protocol suite the Go E2E lanes authenticated, `432eb2ee`, publishes a
