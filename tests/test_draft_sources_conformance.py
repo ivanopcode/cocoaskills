@@ -33,10 +33,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 from collections.abc import Callable, Collection, Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -44,6 +46,7 @@ from referencing import Registry, Resource
 
 from csk import manifest, protocol_json
 from csk.sources import errors as source_errors
+from csk.sources import repository_policy
 
 ROOT_TEXT = os.environ.get("CSK_DRAFT_SOURCES_SUITE_ROOT")
 pytestmark = pytest.mark.skipif(not ROOT_TEXT, reason="CSK_DRAFT_SOURCES_SUITE_ROOT is not set")
@@ -129,13 +132,14 @@ CASE_OWNERS: dict[str, str] = {
     "fallback-policy-unreadable": "TASK-260916-fsw7re",
     "fallback-http-404": "TASK-260916-fsw7re",
     "pinned-auth": "TASK-260916-fsw7re",
-    "v2-port-endpoint": "TASK-260916-fsw7re",
-    "v2-declared-mirror": "TASK-260916-fsw7re",
-    "v2-mirror-first": "TASK-260916-fsw7re",
-    "v2-alias-resolution": "TASK-260916-fsw7re",
-    "v2-undeclared-mirror": "TASK-260916-fsw7re",
-    "v2-alias-unknown": "TASK-260916-fsw7re",
-    "v2-alias-mirror-undeclared": "TASK-260916-fsw7re",
+    # TASK-260916-1iyslr load-machine-owned-repository-endpoint-policy.
+    "v2-port-endpoint": "TASK-260916-1iyslr",
+    "v2-declared-mirror": "TASK-260916-1iyslr",
+    "v2-mirror-first": "TASK-260916-1iyslr",
+    "v2-alias-resolution": "TASK-260916-1iyslr",
+    "v2-undeclared-mirror": "TASK-260916-1iyslr",
+    "v2-alias-unknown": "TASK-260916-1iyslr",
+    "v2-alias-mirror-undeclared": "TASK-260916-1iyslr",
     "v2-user-ssh-alias-ignored": "TASK-260916-fsw7re",
     "v2-user-insteadof-ignored": "TASK-260916-fsw7re",
     # TASK-260916-1iyslr load-machine-owned-repository-endpoint-policy.
@@ -594,3 +598,240 @@ def _drive_unknown_alias(case: dict[str, Any]) -> None:
 
 
 register_semantic_driver("unknown-alias", _drive_unknown_alias)
+
+
+def _policy_case_document(case: dict[str, Any]) -> dict[str, Any]:
+    """Build a policy fixture from one transport semantic-case input."""
+
+    case_id = case["id"]
+    case_input = case["input"]
+    repository = case_input.get("repository", "example.org/kit")
+
+    def endpoint(
+        url: str,
+        authentication: str = "team-https",
+        **extra: Any,
+    ) -> dict[str, Any]:
+        value: dict[str, Any] = {"url": url, "authentication": authentication}
+        value.update(extra)
+        return value
+
+    if case_id == "endpoint-identity-mismatch":
+        return {
+            "schema_version": 1,
+            "repositories": {
+                repository: {
+                    "endpoints": [endpoint(case_input["endpoint"])],
+                    "fallback": "none",
+                }
+            },
+        }
+    if case_id == "v2-reader-accepts-v1-policy":
+        return {
+            "schema_version": 1,
+            "repositories": {
+                repository: {
+                    "endpoints": [endpoint("git@example.org:kit.git", "team-ssh")],
+                    "fallback": "none",
+                }
+            },
+        }
+    if case_id == "v2-v1-reader-rejects-v2-policy":
+        return {
+            "schema_version": 2,
+            "repositories": {
+                repository: {
+                    "endpoints": [endpoint("https://example.org:8443/kit.git")],
+                    "fallback": "none",
+                }
+            },
+        }
+    if case_id == "v2-port-endpoint":
+        return {
+            "schema_version": 2,
+            "repositories": {
+                repository: {
+                    "endpoints": [endpoint(case_input["endpoint"])],
+                    "fallback": "none",
+                }
+            },
+        }
+    if case_id == "v2-declared-mirror":
+        return {
+            "schema_version": 2,
+            "repositories": {
+                repository: {
+                    "endpoints": [
+                        endpoint(
+                            case_input["endpoint"],
+                            "mirror-https",
+                            mirror_of=case_input["mirror_of"],
+                        )
+                    ],
+                    "fallback": "none",
+                }
+            },
+        }
+    if case_id == "v2-mirror-first":
+        urls = case_input["endpoints"]
+        return {
+            "schema_version": 2,
+            "repositories": {
+                repository: {
+                    "endpoints": [
+                        endpoint(urls[0], "mirror-https", mirror_of=case_input["mirror_of"]),
+                        endpoint(urls[1]),
+                    ],
+                    "fallback": case_input["fallback"],
+                }
+            },
+        }
+    if case_id == "v2-alias-resolution":
+        return {
+            "schema_version": 2,
+            "repositories": {
+                repository: {
+                    "endpoints": [
+                        endpoint(
+                            case_input["endpoint"],
+                            "team-https",
+                            alias=case_input["alias"],
+                            mirror_of=case_input["mirror_of"],
+                        )
+                    ],
+                    "fallback": "none",
+                }
+            },
+            "aliases": case_input["aliases"],
+        }
+    if case_id == "v2-undeclared-mirror":
+        endpoint_value = endpoint(case_input["endpoint"])
+        return {
+            "schema_version": 2,
+            "repositories": {
+                repository: {"endpoints": [endpoint_value], "fallback": "none"}
+            },
+        }
+    if case_id == "v2-pin-port-mismatch":
+        return {
+            "schema_version": 2,
+            "repositories": {
+                repository: {
+                    "endpoints": [endpoint(case_input["endpoints"][0])],
+                    "pin": case_input["pin"],
+                    "fallback": "none",
+                }
+            },
+        }
+    if case_id in {
+        "v2-alias-unknown",
+        "v2-alias-mirror-undeclared",
+        "v2-embedded-alias-host",
+        "v2-alias-auth-mismatch",
+        "v2-alias-chain",
+        "v2-double-port",
+        "v2-spurious-mirror-of",
+        "v2-mirror-of-mismatch",
+    }:
+        endpoint_value = endpoint(
+            case_input["endpoint"],
+            case_input.get("endpoint_authentication", "team-https"),
+        )
+        if "alias" in case_input:
+            endpoint_value["alias"] = case_input["alias"]
+        if "mirror_of" in case_input and case_input["mirror_of"] is not None:
+            endpoint_value["mirror_of"] = case_input["mirror_of"]
+        document: dict[str, Any] = {
+            "schema_version": 2,
+            "repositories": {
+                repository: {"endpoints": [endpoint_value], "fallback": "none"}
+            },
+        }
+        if "aliases" in case_input:
+            document["aliases"] = case_input["aliases"]
+        return document
+    raise AssertionError(f"no repository-policy fixture for semantic case {case_id!r}")
+
+
+def _drive_repository_policy_case_impl(case: dict[str, Any]) -> None:
+    """Drive policy semantics through the production parser and resolver."""
+
+    case_id = case["id"]
+    case_input = case["input"]
+    expected = case["expected"]
+    document = _policy_case_document(case)
+    if case_id == "v2-reader-accepts-v1-policy":
+        parsed = repository_policy.parse_policy(document, reader_revision=2)
+        assert parsed.schema_version == 1
+        return
+    if case_id == "v2-v1-reader-rejects-v2-policy":
+        with pytest.raises(repository_policy.RepositoryPolicyError) as excinfo:
+            repository_policy.parse_policy(document, reader_revision=1)
+        assert excinfo.value.code == expected.split(";", 1)[0]
+        return
+
+    if case_id in {
+        "v2-port-endpoint",
+        "v2-declared-mirror",
+        "v2-mirror-first",
+        "v2-alias-resolution",
+    }:
+        parsed = repository_policy.parse_policy(document)
+        plan = repository_policy.select_endpoints(parsed, case_input["repository"])
+        assert all(item.identity == case_input["repository"] for item in plan.endpoints)
+        if case_id == "v2-port-endpoint":
+            assert plan.max_attempts == 1
+            assert plan.endpoints[0].provenance.url_port == 8443
+        elif case_id == "v2-declared-mirror":
+            assert plan.endpoints[0].host == "mirror.example.net"
+        elif case_id == "v2-mirror-first":
+            assert plan.endpoints[0].host == "mirror.example.net"
+            assert plan.next_endpoint(case_input["first_failure"]) == plan.endpoints[1]
+        else:
+            assert plan.endpoints[0].host == "mirror.corp.example"
+            assert plan.endpoints[0].port == 8443
+        return
+
+    with pytest.raises(repository_policy.RepositoryPolicyError) as excinfo:
+        repository_policy.parse_policy(
+            document,
+            reader_revision=1 if case_id == "endpoint-identity-mismatch" else 2,
+        )
+    assert excinfo.value.code == expected.split(";", 1)[0]
+
+
+def _drive_repository_policy_case(case: dict[str, Any]) -> None:
+    """Drive one policy case while proving no socket attempt can occur."""
+
+    network_attempts = 0
+
+    def fail_network_attempt(*args: Any, **kwargs: Any) -> Any:
+        nonlocal network_attempts
+        network_attempts += 1
+        raise AssertionError("repository policy validation attempted network I/O")
+
+    with patch.object(socket, "socket", side_effect=fail_network_attempt):
+        _drive_repository_policy_case_impl(case)
+    assert network_attempts == 0
+
+
+for _case_id in (
+    "endpoint-identity-mismatch",
+    "v2-port-endpoint",
+    "v2-declared-mirror",
+    "v2-mirror-first",
+    "v2-alias-resolution",
+    "v2-reader-accepts-v1-policy",
+    "v2-undeclared-mirror",
+    "v2-pin-port-mismatch",
+    "v2-alias-unknown",
+    "v2-alias-mirror-undeclared",
+    "v2-embedded-alias-host",
+    "v2-alias-auth-mismatch",
+    "v2-alias-chain",
+    "v2-double-port",
+    "v2-spurious-mirror-of",
+    "v2-mirror-of-mismatch",
+    "v2-v1-reader-rejects-v2-policy",
+):
+    register_semantic_driver(_case_id, _drive_repository_policy_case)

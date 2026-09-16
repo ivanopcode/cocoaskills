@@ -73,6 +73,9 @@ MANAGER_KEYS = frozenset(
 # enabled when the global config declares
 # `"experimental": {"skillfile_sources": true}` or when this variable is "1".
 SKILLFILE_SOURCES_ENV_VAR = "CSK_EXPERIMENTAL_SKILLFILE_SOURCES"
+SOURCE_POLICY_ENV_VAR = "CSK_SOURCE_POLICY"
+SOURCE_POLICY_FILENAME = "source-policy.json"
+DEFAULT_SOURCE_POLICY_PATH = DEFAULT_CONFIG_PATH.parent / SOURCE_POLICY_FILENAME
 
 
 class ConfigError(Exception):
@@ -180,6 +183,42 @@ def config_path() -> Path:
     if override:
         return Path(override).expanduser()
     return DEFAULT_CONFIG_PATH
+
+
+def source_policy_path(config: Path | None = None) -> Path:
+    """Return the operator-owned source policy beside the global config.
+
+    ``CSK_SOURCE_POLICY`` is an explicit test/CI and operator override.  When
+    it is absent, a custom ``CSK_CONFIG`` naturally moves the policy beside
+    that config rather than falling back to the real user home.
+    """
+
+    override = os.environ.get(SOURCE_POLICY_ENV_VAR)
+    if override:
+        return Path(override).expanduser()
+    resolved_config = (config or config_path()).expanduser()
+    return resolved_config.parent / SOURCE_POLICY_FILENAME
+
+
+def load_source_policy(
+    path: Path | None = None,
+    *,
+    reader_revision: int = 2,
+) -> Any:
+    """Load the separate operator-owned endpoint policy lazily.
+
+    The import is intentionally local because ``repository_policy`` uses this
+    locator as its default path.  ``Any`` keeps config.py independent from the
+    draft source module's type surface while callers receive its validated
+    ``RepositoryPolicy`` or ``None`` for an absent file.
+    """
+
+    from .sources.repository_policy import load_policy
+
+    # Let repository_policy own the complete locator/read/parse boundary.  In
+    # particular, source_policy_path() may expand an operator override and
+    # that expansion must be typed as repository_policy_invalid by the loader.
+    return load_policy(path, reader_revision=reader_revision)
 
 
 def system_config_path() -> Path | None:
