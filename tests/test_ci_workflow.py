@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import textwrap
@@ -192,8 +193,22 @@ def test_stable_aggregates_always_run_and_fail_closed() -> None:
     workflow = _workflow()
 
     expected = {
-        "fast": {"typecheck", "build", "fast_ordinary", "fast_protocol", "fast_go_e2e"},
-        "merge": {"typecheck", "build", "merge_ordinary", "merge_protocol", "merge_go_e2e"},
+        "fast": {
+            "typecheck",
+            "build",
+            "fast_ordinary",
+            "fast_protocol",
+            "fast_go_e2e",
+            "fast_draft_sources",
+        },
+        "merge": {
+            "typecheck",
+            "build",
+            "merge_ordinary",
+            "merge_protocol",
+            "merge_go_e2e",
+            "merge_draft_sources",
+        },
     }
     for job_id, children in expected.items():
         aggregate = _job(workflow, job_id)
@@ -329,6 +344,162 @@ def test_the_declared_candidate_is_one_immutable_qualified_identity() -> None:
     # evidence from impersonating the qualified suite.
     pin = re.findall(r"^  RELEASED_SUITE_PIN: ([0-9a-f]{40})$", _workflow(), re.MULTILINE)
     assert descriptor["revision"] != pin[0]
+
+
+def test_draft_sources_lanes_run_the_harness_against_the_pinned_suite() -> None:
+    workflow = _workflow()
+
+    fast = _job(workflow, "fast_draft_sources")
+    assert "if: github.event_name == 'pull_request'" in fast
+    assert "refs/heads/main" not in fast
+
+    merge = _job(workflow, "merge_draft_sources")
+    assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in merge
+
+    for job in (fast, merge):
+        assert "os: [ubuntu-latest, macos-latest]" in job
+        assert 'python-version: "3.14"' in job
+        assert "timeout-minutes: 20" in job
+        # The draft suite enters only through its own pin file, never through
+        # the released pin, so the lane cannot impersonate qualified evidence.
+        assert "RELEASED_SUITE_PIN" not in job
+        assert job.index("Resolve the draft sources suite pin") < job.index(
+            "ref: ${{ steps.suite.outputs.revision }}"
+        )
+        assert "repository: ${{ steps.suite.outputs.repository }}" in job
+        assert ".github/ci/draft-sources-suite.json" in job
+        assert "path: protocol-spec-draft" in job
+        assert (
+            "CSK_DRAFT_SOURCES_SUITE_ROOT: ${{ github.workspace }}"
+            "/protocol-spec-draft/conformance/draft-sources-v1" in job
+        )
+        assert "python -m pytest -q tests/test_draft_sources_conformance.py" in job
+        assert "--junitxml=draft-sources-results.xml" in job
+        assert job.count("draft-sources-results.xml") == 2
+        assert "if-no-files-found: error" in job
+
+
+_DRAFT_SOURCES_PYTEST_TARGET = "tests/test_draft_sources_conformance.py"
+_DRAFT_SOURCES_JUNIT = "draft-sources-results.xml"
+
+# Selection/filter flags that must never appear in a draft lane's pytest
+# command: any of them silently narrows the corpus while every searched token
+# stays present. Short flags are matched as single-dash tokens containing k/m
+# (catching -k, -m and bundled forms like -qk); long flags match exactly or
+# with an =value.
+_DRAFT_SOURCES_FORBIDDEN_LONG_FLAGS = (
+    "--deselect",
+    "--deselect-from-file",
+    "--ignore",
+    "--ignore-glob",
+    "--collect-only",
+    "--co",
+    "--last-failed",
+    "--lf",
+    "--failed",
+    "--ff",
+    "--stepwise",
+    "--sw",
+    "--markers",
+)
+
+
+def _draft_sources_pytest_tokens(job_id: str) -> list[str]:
+    """Parse the ACTUAL draft-lane pytest command of one job into tokens.
+
+    The run step uses a YAML ``>-`` folded scalar, so joining the indented
+    continuation lines with single spaces reproduces the shell command; shlex
+    then splits it exactly as the runner would.
+    """
+    job = _job(_workflow(), job_id)
+    marker = "- name: Run draft sources conformance"
+    assert marker in job, f"missing draft conformance run step in {job_id}"
+    body = job[job.index(marker):]
+    run_marker = "run: >-"
+    assert run_marker in body, f"missing folded run block in {job_id}"
+    rest = body[body.index(run_marker) + len(run_marker):].splitlines()
+    command_lines = []
+    for line in rest:
+        if not line.strip():
+            continue
+        if re.match(r"^ {10}\S", line):
+            command_lines.append(line.strip())
+        else:
+            break
+    assert command_lines, f"empty draft conformance run block in {job_id}"
+    return shlex.split(" ".join(command_lines))
+
+
+def test_draft_sources_lanes_run_the_full_harness_without_selection_filters() -> None:
+    """Both draft lanes run the whole harness file with no selection filter.
+
+    Regression for the token-preserving narrowing hole: substring assertions
+    cannot see an appended ``-k``/``-m``/``--deselect``/``--ignore`` filter, so
+    this test parses the ACTUAL ``Run draft sources conformance`` pytest
+    command of BOTH jobs and asserts it targets exactly
+    ``tests/test_draft_sources_conformance.py``, carries no selection/filter
+    flag, node id (``::``) or argfile (``@``), and writes the junit artifact
+    from that same unfiltered run. Appending
+    ``-k test_draft_sources_snapshot_vector`` to either job fails this test
+    while keeping every substring token present.
+    """
+    for job_id in ("fast_draft_sources", "merge_draft_sources"):
+        tokens = _draft_sources_pytest_tokens(job_id)
+        assert tokens[:3] == ["python", "-m", "pytest"], f"{job_id}: {tokens!r}"
+        rest = tokens[3:]
+
+        # No selection/filter flag may narrow the corpus.
+        for token in rest:
+            assert not re.match(r"^-(?!-)[A-Za-z]*[kKmM]", token), (
+                f"{job_id} narrows the draft corpus with {token!r}"
+            )
+            for flag in _DRAFT_SOURCES_FORBIDDEN_LONG_FLAGS:
+                assert not (token == flag or token.startswith(flag + "=")), (
+                    f"{job_id} narrows the draft corpus with {token!r}"
+                )
+            assert "::" not in token, f"{job_id} selects a node id with {token!r}"
+            assert not token.startswith("@"), f"{job_id} selects an argfile with {token!r}"
+
+        # The junit artifact is produced by this same unfiltered run.
+        junit = [token for token in rest if token.startswith("--junitxml=")]
+        assert junit == [f"--junitxml={_DRAFT_SOURCES_JUNIT}"], f"{job_id}: {tokens!r}"
+
+        # Exactly one positional target: the whole harness file.
+        options = {"-q", f"--junitxml={_DRAFT_SOURCES_JUNIT}"}
+        positionals = [token for token in rest if not token.startswith("-")]
+        assert positionals == [_DRAFT_SOURCES_PYTEST_TARGET], f"{job_id}: {tokens!r}"
+        for token in rest:
+            if token.startswith("-"):
+                assert token in options, f"{job_id} carries unexpected option {token!r}"
+
+        job = _job(_workflow(), job_id)
+        assert f"path: {_DRAFT_SOURCES_JUNIT}" in job, f"{job_id} uploads no junit artifact"
+        # A PYTEST_ADDOPTS override would filter the run without touching the
+        # command line at all.
+        assert "PYTEST_ADDOPTS" not in job, f"{job_id} reads PYTEST_ADDOPTS"
+
+
+def test_the_draft_sources_suite_pin_is_one_immutable_identity() -> None:
+    pin = json.loads((CI_CONFIG / "draft-sources-suite.json").read_text(encoding="utf-8"))
+    assert set(pin) == {"repository", "revision", "suite_root", "files"}
+    assert pin["repository"] == "relux-works/curator-spec"
+    assert pin["revision"] == "8ba9c235ec5be00d52378479516c82386fd0c178"
+    assert pin["suite_root"] == "conformance/draft-sources-v1"
+    assert pin["files"] == {
+        "index.json": (
+            "sha256:c1c2e60a595107a79aaefdbd7822d95279cc792cc8cdc969ded36522663e246f"
+        ),
+        "semantic-cases.json": (
+            "sha256:552c1eed16d2d6bb37b0a5726b9420d20e4dc1d5e97e34cfa4ee6182bcb90ce0"
+        ),
+        "snapshot-cases.json": (
+            "sha256:1922256efe21f934b667ec913f34a2af3b16004ecb00c63ee8712eacaf347999"
+        ),
+    }
+    # A draft suite never equals the released pin, which is what keeps draft
+    # evidence from impersonating the qualified suite.
+    released = re.findall(r"^  RELEASED_SUITE_PIN: ([0-9a-f]{40})$", _workflow(), re.MULTILINE)
+    assert pin["revision"] != released[0]
 
 
 def test_the_consumption_ledgers_are_declared_and_reachable() -> None:
