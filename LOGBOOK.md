@@ -2928,3 +2928,11 @@ Reworked `docs/authoring-cli-commands.md` and associated task outputs to address
 4. Separated `go-v1` as the single compiled driver for internal build roots (`SUPPORTED_BUILD_DRIVERS = {"go-v1"}`) from `go-repository-v1` for external repositories managed by installer layer.
 5. Fixed CGO policy terminology (`cgo: False`, refusal `cgo_required`), named `go_generator_forbidden`, explained `allows_go_generate = vendored`, and cleaned up Russian prose style (removed literal translation "первого партийного кода").
 6. Executed all 8 example skills against `.venv/bin/csk skill check` and recorded literal command outputs, exit codes, stdout, and stderr in outcome resource `TASK-260827-1r6mer_results.md`.
+
+## 2026-09-17 TASK-260916-1iyslr: repository source-policy reader revision 2
+
+Reworked the machine-owned repository policy boundary after revision 1 review. The canonical identity boundary now rejects noncanonical terminal `.git` keys without rewriting them; fallback values are type-checked before membership tests; and policy locator expansion is inside the typed `repository_policy_invalid` boundary for both public loaders. The forbidden fallback table now names revocation, canary, assurance, and capability classes.
+
+Fresh narrowing mutants were regenerated from the current candidate, preserving each gate and admitting only a proper subset of its forbidden class. All 21 mutant controls passed and all 21 mutants failed through production parser or loader paths. Policy corpus coverage is 18 of 18 schema cases, semantic harness coverage is 17 of 17 owned drivers with zero socket attempts, and fallback classification coverage is 30 of 30 named rows.
+
+Validation evidence is attached in `TASK-260916-1iyslr_results.md` and `TASK-260916-1iyslr_mutation-evidence.tar.gz`. The exact draft-root landing suite passed with 2429 tests and 171 skips; mypy and the focused policy/conformance suites also passed. No network or credential work was introduced; transport attempts remain assigned to TASK-260916-fsw7re. The candidate remains uncommitted in the Story worktree.

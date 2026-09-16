@@ -123,3 +123,25 @@ harness junit xml as evidence.
 - Known bounds for later leaves: policy-alias cross-checks
   (`v2-embedded-alias-host` family), collection expansion, and config-aware
   opt-in wiring in installer/CLI entry points.
+
+## Leaf progress: TASK-260916-1iyslr repository endpoint policy
+
+- `csk.sources.repository_policy`: frozen policy models, hand-written schema 1
+  and schema 2 parsing, exact canonical repository identity, URI port parsing,
+  mirror and alias admission, exact pin selection, and pure bounded fallback
+  classification. Every endpoint is structurally resolved while parsing, so a
+  transport caller receives no partially validated candidate.
+- `csk.config`: `source_policy_path` locates the operator-owned
+  `source-policy.json` beside the configured global config, with the
+  `CSK_SOURCE_POLICY` override; `load_source_policy` delegates to the typed
+  policy loader.
+- `root_inputs` is parsed as a source-alias to non-empty, portable,
+  duplicate-free and non-overlapping relative-path tuple. It remains machine
+  policy and is not package-provided input.
+- `tests/test_repository_policy.py` and the draft-source harness drive the
+  indexed policy schema cases, all owned revision-2 structural semantic cases,
+  fallback rows, loader faults, and zero-network-attempt assertions.
+- Revision 2 rework keeps the canonical-key invariant at the identity boundary,
+  types every fallback JSON kind before membership checks, and keeps default
+  locator expansion inside the typed policy-loader boundary. Fresh narrowing
+  mutants are replayed from the candidate source; all 21 are killed.
