@@ -379,3 +379,88 @@ def test_validate_skills_root_creates_missing_directory(tmp_path):
     config.validate_skills_root_for_work(cfg)
 
     assert cfg.skills_root.is_dir()
+
+
+def _minimal_config_data(tmp_path, **overrides):
+    data = {
+        "schema_version": 1,
+        "skills_root": str(tmp_path / "skills"),
+        "projects": {},
+    }
+    data.update(overrides)
+    return data
+
+
+def test_config_experimental_absent_defaults_to_disabled(tmp_path):
+    cfg = config.parse_config(_minimal_config_data(tmp_path), tmp_path / "config.json")
+    assert cfg.experimental.skillfile_sources is False
+
+
+def test_config_experimental_flag_parses(tmp_path):
+    cfg = config.parse_config(
+        _minimal_config_data(tmp_path, experimental={"skillfile_sources": True}),
+        tmp_path / "config.json",
+    )
+    assert cfg.experimental.skillfile_sources is True
+
+
+@pytest.mark.parametrize(
+    "experimental",
+    [[], "yes", {"skillfile_sources": "yes"}, {"skillfile_sources": 1}, {"other": True}],
+)
+def test_config_experimental_malformed_fails(tmp_path, experimental):
+    with pytest.raises(config.ConfigError, match="experimental"):
+        config.parse_config(
+            _minimal_config_data(tmp_path, experimental=experimental),
+            tmp_path / "config.json",
+        )
+
+
+def test_config_experimental_flag_round_trips(tmp_path):
+    path = tmp_path / "config.json"
+    cfg = config.parse_config(
+        _minimal_config_data(tmp_path, experimental={"skillfile_sources": True}), path
+    )
+    config.save_config(cfg)
+    assert config.load_config(path).experimental.skillfile_sources is True
+
+
+def test_config_absent_experimental_key_stays_absent_on_save(tmp_path):
+    path = tmp_path / "config.json"
+    cfg = config.parse_config(_minimal_config_data(tmp_path), path)
+    config.save_config(cfg)
+    assert "experimental" not in json.loads(path.read_bytes())
+
+
+@pytest.mark.parametrize(
+    ("env", "flag", "expected"),
+    [
+        (None, None, False),
+        ("0", None, False),
+        ("yes", None, False),
+        ("1", None, True),
+        (None, False, False),
+        (None, True, True),
+        ("1", False, True),
+        ("0", True, True),
+    ],
+)
+def test_skillfile_sources_enabled_matrix(monkeypatch, tmp_path, env, flag, expected):
+    if env is None:
+        monkeypatch.delenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", raising=False)
+    else:
+        monkeypatch.setenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", env)
+    cfg = None
+    if flag is not None:
+        cfg = config.parse_config(
+            _minimal_config_data(tmp_path, experimental={"skillfile_sources": flag}),
+            tmp_path / "config.json",
+        )
+    assert config.skillfile_sources_enabled(cfg) is expected
+
+
+def test_skillfile_sources_env_wins_over_absent_config_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", "1")
+    cfg = config.parse_config(_minimal_config_data(tmp_path), tmp_path / "config.json")
+    assert cfg.experimental.skillfile_sources is False
+    assert config.skillfile_sources_enabled(cfg) is True

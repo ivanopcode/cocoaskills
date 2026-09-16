@@ -65,8 +65,14 @@ MANAGER_KEYS = frozenset(
         "build_https",
         "build_ssh",
         "disable_builtin_registries",
+        "experimental",
     }
 )
+
+# Opt-in for draft skillfile-sources-v1 (Skillfile schema 2). The feature is
+# enabled when the global config declares
+# `"experimental": {"skillfile_sources": true}` or when this variable is "1".
+SKILLFILE_SOURCES_ENV_VAR = "CSK_EXPERIMENTAL_SKILLFILE_SOURCES"
 
 
 class ConfigError(Exception):
@@ -119,6 +125,13 @@ class AuditConfig:
 
 
 @dataclass(frozen=True)
+class ExperimentalConfig:
+    """Unreleased opt-in features. Absent keys default to disabled."""
+
+    skillfile_sources: bool = False
+
+
+@dataclass(frozen=True)
 class GlobalConfig:
     path: Path
     skills_root: Path
@@ -143,6 +156,9 @@ class GlobalConfig:
     # canonical identity prefixes mapped to a token *source* (never a secret).
     # The run-wide CSK_BUILD_HTTPS_TOKEN environment value keeps precedence.
     build_https: tuple[build_https_module.BuildHTTPSRule, ...] = ()
+    # Draft opt-in features. The environment variable keeps precedence: it
+    # enables the feature even when the config key is absent.
+    experimental: ExperimentalConfig = field(default_factory=ExperimentalConfig)
 
     def trusted_registries(self) -> tuple[RegistryConfig, ...]:
         """Effective registries: built-in defaults plus configured entries.
@@ -315,6 +331,8 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
     if not isinstance(disable_builtin, bool):
         raise ConfigError("Global config field 'disable_builtin_registries' must be a boolean")
 
+    experimental = _parse_experimental_config(data.get("experimental"))
+
     if "projects" not in data:
         raise ConfigError("Global config requires field 'projects'")
     projects_raw = data.get("projects")
@@ -369,6 +387,7 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
         disable_builtin_registries=disable_builtin,
         build_ssh=build_ssh_rules,
         build_https=build_https_rules,
+        experimental=experimental,
     )
 
 
@@ -411,7 +430,32 @@ def save_config(config: GlobalConfig) -> None:
         data["build_ssh"] = build_ssh_module.serialize_rules(config.build_ssh)
     if config.build_https:
         data["build_https"] = build_https_module.serialize_rules(config.build_https)
+    if config.experimental.skillfile_sources:
+        data["experimental"] = {"skillfile_sources": True}
     _write_json_atomic(config.path, data)
+
+
+def skillfile_sources_enabled(config: GlobalConfig | None = None) -> bool:
+    """Return whether draft skillfile-sources-v1 (schema 2) is opted in.
+
+    The environment variable enables the feature on its own, winning over an
+    absent config key; otherwise the parsed global config flag decides.
+    """
+    if os.environ.get(SKILLFILE_SOURCES_ENV_VAR) == "1":
+        return True
+    return config is not None and config.experimental.skillfile_sources
+
+
+def _parse_experimental_config(raw: Any) -> ExperimentalConfig:
+    if raw is None:
+        return ExperimentalConfig()
+    if not isinstance(raw, dict):
+        raise ConfigError("Global config field 'experimental' must be an object")
+    _reject_unknown_fields(raw, {"skillfile_sources"}, "experimental")
+    flag = raw.get("skillfile_sources", False)
+    if not isinstance(flag, bool):
+        raise ConfigError("Global config field 'experimental.skillfile_sources' must be a boolean")
+    return ExperimentalConfig(skillfile_sources=flag)
 
 
 def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:

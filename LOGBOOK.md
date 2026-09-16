@@ -1,5 +1,37 @@
 # Logbook
 
+## 2026-09-16 - TASK-260916-2u0v5j rev2: v1 duplicate precedence and null-vs-absent sources
+
+Review rev1 caught two regressions the green suite missed: extracting
+`_parse_legacy_skill` moved the duplicate-name check after source/git/ref
+validation (base reports the duplicate first), and `parse_sources(None)`
+conflated an explicit null `sources` with an absent key (schema type is
+object-only). Fixed by splitting legacy validation into
+`_legacy_skill_name` (unknown fields plus name) and `_finish_legacy_skill`
+(source/git/ref) with the duplicate check between them, and by branching on
+`"sources" in data` in `_parse_v2` while `parse_sources` rejects every
+non-dict including null. The v1 byte-identity corpus is now a 32-entry
+fixture captured from the base module, not a self-comparison.
+
+## 2026-09-16 - TASK-260916-2u0v5j: core 6.1 helper rejects schema-valid 6.3 declarations
+
+`csk.source_identity.canonical_source_identity` enforces portable-path rules
+(reserved device names, trailing dots/spaces) that the core 6.3 endpoint
+grammar and `skillfile-v2.schema.json` deliberately do not apply to
+declaration paths -- e.g. schema-valid `https://example.org/CON`. The v2
+parser (`src/csk/sources/skillfile_v2.py`) therefore validates the closed
+6.3 grammar locally and only mirrors the 6.1 canonicalization rules
+(lowercase host, one terminal `.git` stripped). Later leaves: do not route
+new-source declarations through the 6.1 helper for validation.
+
+## 2026-09-16 - TASK-260916-2u0v5j: unknown-alias fails at parse, owned by expansion
+
+`source_alias_unknown` is raised by `csk.manifest.parse_manifest` before any
+collection expansion, so the `unknown-alias` harness driver is registered at
+parse level even though `CASE_OWNERS` maps the case to TASK-260916-2wjh3m.
+The expansion leaf keeps this driver; a second registration fails closed on
+duplicate.
+
 ## 2026-09-16 - TASK-260916-12bfrq rev2: substring CI checks and an uncalled dispatch line
 
 Review of the draft-sources harness revision 1 returned two gaps of the same

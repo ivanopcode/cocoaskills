@@ -42,7 +42,8 @@ import pytest
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
-from csk import protocol_json
+from csk import manifest, protocol_json
+from csk.sources import errors as source_errors
 
 ROOT_TEXT = os.environ.get("CSK_DRAFT_SOURCES_SUITE_ROOT")
 pytestmark = pytest.mark.skipif(not ROOT_TEXT, reason="CSK_DRAFT_SOURCES_SUITE_ROOT is not set")
@@ -572,3 +573,24 @@ def test_draft_sources_registered_driver_dispatch_through_the_semantic_entry() -
             test_draft_sources_semantic_case(case)
     finally:
         del SEMANTIC_DRIVERS[case["id"]]
+
+
+def _drive_unknown_alias(case: dict[str, Any]) -> None:
+    """Drive ``unknown-alias`` through the production Skillfile parser.
+
+    Registered by TASK-260916-2u0v5j (parse/opt-in): an unknown selector alias
+    fails at parse time with ``source_alias_unknown``, before any expansion.
+    """
+    doc = {
+        "schema_version": 2,
+        "sources": case["input"]["sources"],
+        "skills": [
+            {"name": "probe", "from": case["input"]["from"], "directory": "."},
+        ],
+    }
+    with pytest.raises(source_errors.SourceError) as excinfo:
+        manifest.parse_manifest(doc, Path("Skillfile.json"), allow_schema_2=True)
+    assert excinfo.value.code == case["expected"]
+
+
+register_semantic_driver("unknown-alias", _drive_unknown_alias)

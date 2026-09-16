@@ -276,7 +276,7 @@ def add_decl(
             break
     if not replaced:
         skills.append(decl)
-    manifest.parse_manifest(data, path)
+    manifest.parse_manifest(data, path, scope="global")
     _write_json(path, data)
 
 
@@ -292,7 +292,7 @@ def remove_decl(csk_home: Path, name: str) -> None:
     if len(kept) == len(skills):
         raise GlobalInstallError(f"Global skill not declared: {name}")
     data["skills"] = kept
-    manifest.parse_manifest(data, path)
+    manifest.parse_manifest(data, path, scope="global")
     _write_json(path, data)
 
 
@@ -300,7 +300,7 @@ def load_manifest(csk_home: Path) -> manifest.ProjectManifest:
     path = global_skillfile(csk_home)
     if not path.exists():
         raise GlobalInstallError(f"Global Skillfile not found: {path}\n  Run 'csk global init' first.")
-    loaded = manifest.load_manifest(global_root(csk_home))
+    loaded = manifest.load_manifest(global_root(csk_home), scope="global")
     if loaded is None:
         raise GlobalInstallError(f"Global Skillfile not found: {path}\n  Run 'csk global init' first.")
     return loaded
