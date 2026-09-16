@@ -8,10 +8,21 @@ from typing import Any
 
 from . import protocol_json
 from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_locale, is_valid_portable_path
+from .sources import skillfile_v2
+from .sources.errors import CODE_NAME_CONFLICT, SourceError
 
 
 SCHEMA_VERSION = 1
+SCHEMA_VERSION_2 = 2
 MANIFEST_NAME = "Skillfile.json"
+
+# Schema 2 without the opt-in keeps the existing unsupported-schema text and
+# appends exactly this one hint line naming the config flag and env var.
+SCHEMA_2_OPT_IN_HINT = (
+    "hint: schema_version 2 is draft skillfile-sources-v1 (opt-in); "
+    "set experimental.skillfile_sources in the global config "
+    "or CSK_EXPERIMENTAL_SKILLFILE_SOURCES=1"
+)
 
 
 class ManifestError(Exception):
@@ -39,6 +50,12 @@ class ProjectManifest:
     agents: list[str] = field(default_factory=list)
     locale: str | None = None
     skills: list[SkillDecl] = field(default_factory=list)
+    # Schema 2 (draft skillfile-sources-v1, opt-in) additions. Schema 1
+    # manifests keep schema_version 1 with empty sources/selectors and no hash.
+    schema_version: int = SCHEMA_VERSION
+    sources: dict[str, skillfile_v2.SourceAcquisition] = field(default_factory=dict)
+    selectors: list[skillfile_v2.SkillSelector] = field(default_factory=list)
+    manifest_sha256: str | None = None
 
 
 def manifest_path(project_root: Path) -> Path:
@@ -142,7 +159,12 @@ def _write_payload(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def load_manifest(project_root: Path) -> ProjectManifest | None:
+def load_manifest(
+    project_root: Path,
+    *,
+    allow_schema_2: bool | None = None,
+    scope: skillfile_v2.SkillfileScope = "project",
+) -> ProjectManifest | None:
     path = manifest_path(project_root)
     if not path.exists():
         return None
@@ -150,18 +172,37 @@ def load_manifest(project_root: Path) -> ProjectManifest | None:
         data = protocol_json.loads(path.read_bytes())
     except protocol_json.ProtocolJSONError as exc:
         raise ManifestError(f"Malformed JSON in {path}: {exc}") from exc
-    return parse_manifest(data, path)
+    return parse_manifest(data, path, allow_schema_2=allow_schema_2, scope=scope)
 
 
 def parse_manifest(
-    data: dict[str, Any], path: Path, *, skill_extension_fields: set[str] | None = None
+    data: dict[str, Any],
+    path: Path,
+    *,
+    skill_extension_fields: set[str] | None = None,
+    allow_schema_2: bool | None = None,
+    scope: skillfile_v2.SkillfileScope = "project",
 ) -> ProjectManifest:
+    resolved_scope = skillfile_v2.check_scope(scope)
     if not isinstance(data, dict):
         raise ManifestError(f"{path} must contain a JSON object")
+    schema = data.get("schema_version")
+    if isinstance(schema, int) and not isinstance(schema, bool) and schema == SCHEMA_VERSION_2:
+        if allow_schema_2 is None:
+            from .config import skillfile_sources_enabled
+
+            allow_schema_2 = skillfile_sources_enabled()
+        if not allow_schema_2:
+            raise ManifestError(
+                f"Unsupported Skillfile schema_version {schema}; this Skillfile requires a newer csk"
+                f"\n{SCHEMA_2_OPT_IN_HINT}"
+            )
+        return _parse_v2(
+            data, path, skill_extension_fields=skill_extension_fields, scope=resolved_scope
+        )
     unknown_top = sorted(set(data) - {"schema_version", "project", "agents", "locale", "skills"})
     if unknown_top:
         raise ManifestError(f"Skillfile has unsupported field(s): {', '.join(unknown_top)}")
-    schema = data.get("schema_version")
     if schema is None:
         raise ManifestError(f"{path} is missing required field 'schema_version'")
     if not isinstance(schema, int) or isinstance(schema, bool):
@@ -172,16 +213,8 @@ def parse_manifest(
         )
 
     project_alias = _parse_project_alias(data, path)
-
-    agents = data.get("agents", [])
-    if not _is_str_list(agents):
-        raise ManifestError("Skillfile field 'agents' must be a list of strings")
-    if len(set(agents)) != len(agents) or any(not is_valid_identifier(agent) for agent in agents):
-        raise ManifestError("Skillfile field 'agents' must contain unique portable identifiers")
-
-    locale = data.get("locale")
-    if locale is not None and (not isinstance(locale, str) or not is_valid_locale(locale)):
-        raise ManifestError("Skillfile field 'locale' must be a 1-64 character ASCII locale selector")
+    agents = _parse_agents(data)
+    locale = _parse_locale(data)
 
     raw_skills = data.get("skills")
     if not isinstance(raw_skills, list):
@@ -192,46 +225,15 @@ def parse_manifest(
     for index, raw in enumerate(raw_skills):
         if not isinstance(raw, dict):
             raise ManifestError(f"Skill declaration at index {index} must be an object")
-        allowed_skill_fields = {
-            "name",
-            "source",
-            "git",
-            "tag",
-            "branch",
-            "revision",
-            *(skill_extension_fields or set()),
-        }
-        unknown = sorted(set(raw) - allowed_skill_fields)
-        if unknown:
-            raise ManifestError(f"Skill declaration at index {index} has unsupported field(s): {', '.join(unknown)}")
-        name = raw.get("name")
-        if not isinstance(name, str) or not name:
-            raise ManifestError(f"Skill declaration at index {index} requires non-empty string 'name'")
-        if not is_valid_identifier(name):
-            raise ManifestError(f"Skill name {name!r} {IDENTIFIER_RULE}")
+        # Legacy precedence (byte-identical to schema 1): the duplicate-name
+        # check runs immediately after the name grammar, before source/git/ref
+        # validation. A duplicate entry with an invalid source still reports
+        # the duplicate, not the source error.
+        name = _legacy_skill_name(raw, index, skill_extension_fields=skill_extension_fields)
         if name in seen_names:
             raise ManifestError(f"Duplicate skill name in Skillfile: {name}")
         seen_names.add(name)
-
-        source = raw.get("source", name)
-        if not isinstance(source, str) or not source:
-            raise ManifestError(f"Skill {name!r} field 'source' must be a non-empty string")
-        if not is_valid_portable_path(source):
-            raise ManifestError(f"Skill {name!r} field 'source' must be a portable relative path")
-
-        git_url = raw.get("git")
-        if git_url is not None and (not isinstance(git_url, str) or not git_url):
-            raise ManifestError(f"Skill {name!r} field 'git' must be a non-empty string when present")
-
-        ref_keys = [key for key in ("tag", "branch", "revision") if key in raw]
-        if len(ref_keys) != 1:
-            raise ManifestError(f"Skill {name!r} must specify exactly one of tag, branch, or revision")
-        ref_kind = ref_keys[0]
-        ref_value = raw[ref_kind]
-        if not isinstance(ref_value, str) or not ref_value:
-            raise ManifestError(f"Skill {name!r} field '{ref_kind}' must be a non-empty string")
-
-        skills.append(SkillDecl(name=name, source=source, ref=SkillRef(ref_kind, ref_value), git=git_url))
+        skills.append(_finish_legacy_skill(raw, name))
 
     return ProjectManifest(
         path=path,
@@ -240,6 +242,135 @@ def parse_manifest(
         locale=locale,
         skills=skills,
     )
+
+
+def _parse_v2(
+    data: dict[str, Any],
+    path: Path,
+    *,
+    skill_extension_fields: set[str] | None,
+    scope: skillfile_v2.SkillfileScope,
+) -> ProjectManifest:
+    unknown_top = sorted(
+        set(data) - {"schema_version", "project", "agents", "locale", "skills", "sources"}
+    )
+    if unknown_top:
+        raise ManifestError(f"Skillfile has unsupported field(s): {', '.join(unknown_top)}")
+
+    project_alias = _parse_project_alias(data, path)
+    agents = _parse_agents(data)
+    locale = _parse_locale(data)
+    if "sources" not in data:
+        sources: dict[str, skillfile_v2.SourceAcquisition] = {}
+    else:
+        sources = skillfile_v2.parse_sources(data["sources"], scope=scope)
+
+    raw_skills = data.get("skills")
+    if not isinstance(raw_skills, list):
+        raise ManifestError("Skillfile requires field 'skills' as a list")
+
+    skills: list[SkillDecl] = []
+    selectors: list[skillfile_v2.SkillSelector] = []
+    seen_names: dict[str, str] = {}
+    for index, raw in enumerate(raw_skills):
+        if not isinstance(raw, dict):
+            raise ManifestError(f"Skill declaration at index {index} must be an object")
+        if "from" in raw:
+            selector = skillfile_v2.parse_selector(raw, index, sources=sources)
+            if isinstance(selector, skillfile_v2.IndividualSelector):
+                if selector.name in seen_names:
+                    raise SourceError(
+                        CODE_NAME_CONFLICT,
+                        f"Duplicate skill name in Skillfile: {selector.name}",
+                    )
+                seen_names[selector.name] = "selector"
+            selectors.append(selector)
+            continue
+        name = _legacy_skill_name(raw, index, skill_extension_fields=skill_extension_fields)
+        if name in seen_names:
+            if seen_names[name] == "legacy":
+                raise ManifestError(f"Duplicate skill name in Skillfile: {name}")
+            raise SourceError(
+                CODE_NAME_CONFLICT,
+                f"Duplicate skill name in Skillfile: {name}",
+            )
+        seen_names[name] = "legacy"
+        skills.append(_finish_legacy_skill(raw, name))
+
+    return ProjectManifest(
+        path=path,
+        project_alias=project_alias,
+        agents=list(agents),
+        locale=locale,
+        skills=skills,
+        schema_version=SCHEMA_VERSION_2,
+        sources=sources,
+        selectors=selectors,
+        manifest_sha256=skillfile_v2.manifest_sha256(data),
+    )
+
+
+def _legacy_skill_name(
+    raw: dict[str, Any], index: int, *, skill_extension_fields: set[str] | None
+) -> str:
+    """Validate unknown fields and the skill name; the caller checks duplicates next."""
+    allowed_skill_fields = {
+        "name",
+        "source",
+        "git",
+        "tag",
+        "branch",
+        "revision",
+        *(skill_extension_fields or set()),
+    }
+    unknown = sorted(set(raw) - allowed_skill_fields)
+    if unknown:
+        raise ManifestError(f"Skill declaration at index {index} has unsupported field(s): {', '.join(unknown)}")
+    name = raw.get("name")
+    if not isinstance(name, str) or not name:
+        raise ManifestError(f"Skill declaration at index {index} requires non-empty string 'name'")
+    if not is_valid_identifier(name):
+        raise ManifestError(f"Skill name {name!r} {IDENTIFIER_RULE}")
+    return name
+
+
+def _finish_legacy_skill(raw: dict[str, Any], name: str) -> SkillDecl:
+    """Validate source/git/ref after the duplicate-name check (legacy order)."""
+    source = raw.get("source", name)
+    if not isinstance(source, str) or not source:
+        raise ManifestError(f"Skill {name!r} field 'source' must be a non-empty string")
+    if not is_valid_portable_path(source):
+        raise ManifestError(f"Skill {name!r} field 'source' must be a portable relative path")
+
+    git_url = raw.get("git")
+    if git_url is not None and (not isinstance(git_url, str) or not git_url):
+        raise ManifestError(f"Skill {name!r} field 'git' must be a non-empty string when present")
+
+    ref_keys = [key for key in ("tag", "branch", "revision") if key in raw]
+    if len(ref_keys) != 1:
+        raise ManifestError(f"Skill {name!r} must specify exactly one of tag, branch, or revision")
+    ref_kind = ref_keys[0]
+    ref_value = raw[ref_kind]
+    if not isinstance(ref_value, str) or not ref_value:
+        raise ManifestError(f"Skill {name!r} field '{ref_kind}' must be a non-empty string")
+
+    return SkillDecl(name=name, source=source, ref=SkillRef(ref_kind, ref_value), git=git_url)
+
+
+def _parse_agents(data: dict[str, Any]) -> list[str]:
+    agents = data.get("agents", [])
+    if not _is_str_list(agents):
+        raise ManifestError("Skillfile field 'agents' must be a list of strings")
+    if len(set(agents)) != len(agents) or any(not is_valid_identifier(agent) for agent in agents):
+        raise ManifestError("Skillfile field 'agents' must contain unique portable identifiers")
+    return list(agents)
+
+
+def _parse_locale(data: dict[str, Any]) -> str | None:
+    locale = data.get("locale")
+    if locale is not None and (not isinstance(locale, str) or not is_valid_locale(locale)):
+        raise ManifestError("Skillfile field 'locale' must be a 1-64 character ASCII locale selector")
+    return locale
 
 
 def _parse_project_alias(data: dict[str, Any], path: Path) -> str | None:

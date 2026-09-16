@@ -1,0 +1,586 @@
+{
+  "base_oid": "53638fa1787ef40eace13783614e7975207a289c",
+  "path": "Skillfile.json",
+  "corpus": [
+    {
+      "id": "empty-skills",
+      "payload": {
+        "schema_version": 1,
+        "skills": []
+      },
+      "expected": {
+        "status": "ok",
+        "model": {
+          "project_alias": null,
+          "agents": [],
+          "locale": null,
+          "skills": []
+        }
+      }
+    },
+    {
+      "id": "typical-full",
+      "payload": {
+        "schema_version": 1,
+        "project": {
+          "alias": "demo-ios"
+        },
+        "agents": [
+          "codex_cli"
+        ],
+        "locale": "ru",
+        "skills": [
+          {
+            "name": "skill-a",
+            "source": "repo-a",
+            "git": "git@example.com:skills/repo-a.git",
+            "tag": "v1"
+          }
+        ]
+      },
+      "expected": {
+        "status": "ok",
+        "model": {
+          "project_alias": "demo-ios",
+          "agents": [
+            "codex_cli"
+          ],
+          "locale": "ru",
+          "skills": [
+            {
+              "name": "skill-a",
+              "source": "repo-a",
+              "ref": {
+                "kind": "tag",
+                "value": "v1"
+              },
+              "git": "git@example.com:skills/repo-a.git"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "three-skills",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "a",
+            "tag": "v1"
+          },
+          {
+            "name": "b",
+            "source": "internal/b",
+            "branch": "main"
+          },
+          {
+            "name": "c",
+            "revision": "abc123"
+          }
+        ]
+      },
+      "expected": {
+        "status": "ok",
+        "model": {
+          "project_alias": null,
+          "agents": [],
+          "locale": null,
+          "skills": [
+            {
+              "name": "a",
+              "source": "a",
+              "ref": {
+                "kind": "tag",
+                "value": "v1"
+              },
+              "git": null
+            },
+            {
+              "name": "b",
+              "source": "internal/b",
+              "ref": {
+                "kind": "branch",
+                "value": "main"
+              },
+              "git": null
+            },
+            {
+              "name": "c",
+              "source": "c",
+              "ref": {
+                "kind": "revision",
+                "value": "abc123"
+              },
+              "git": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "operator-alias",
+      "payload": {
+        "schema_version": 1,
+        "project": {
+          "alias": "Demo iOS"
+        },
+        "skills": []
+      },
+      "expected": {
+        "status": "ok",
+        "model": {
+          "project_alias": "Demo iOS",
+          "agents": [],
+          "locale": null,
+          "skills": []
+        }
+      }
+    },
+    {
+      "id": "duplicate-valid",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "same",
+            "tag": "v1"
+          },
+          {
+            "name": "same",
+            "tag": "v2"
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Duplicate skill name in Skillfile: same"
+      }
+    },
+    {
+      "id": "duplicate-invalid-source-escape",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "same",
+            "tag": "v1"
+          },
+          {
+            "name": "same",
+            "source": "../escape",
+            "tag": "v1"
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Duplicate skill name in Skillfile: same"
+      }
+    },
+    {
+      "id": "duplicate-invalid-source-abs",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "same",
+            "tag": "v1"
+          },
+          {
+            "name": "same",
+            "source": "/abs",
+            "tag": "v1"
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Duplicate skill name in Skillfile: same"
+      }
+    },
+    {
+      "id": "duplicate-invalid-source-empty",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "same",
+            "tag": "v1"
+          },
+          {
+            "name": "same",
+            "source": "",
+            "tag": "v1"
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Duplicate skill name in Skillfile: same"
+      }
+    },
+    {
+      "id": "duplicate-invalid-git-empty",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "same",
+            "tag": "v1"
+          },
+          {
+            "name": "same",
+            "git": "",
+            "tag": "v1"
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Duplicate skill name in Skillfile: same"
+      }
+    },
+    {
+      "id": "duplicate-missing-ref",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "same",
+            "tag": "v1"
+          },
+          {
+            "name": "same"
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Duplicate skill name in Skillfile: same"
+      }
+    },
+    {
+      "id": "duplicate-double-ref",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "same",
+            "tag": "v1"
+          },
+          {
+            "name": "same",
+            "tag": "v1",
+            "branch": "main"
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Duplicate skill name in Skillfile: same"
+      }
+    },
+    {
+      "id": "duplicate-empty-ref",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "same",
+            "tag": "v1"
+          },
+          {
+            "name": "same",
+            "tag": ""
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Duplicate skill name in Skillfile: same"
+      }
+    },
+    {
+      "id": "duplicate-unknown-field",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "same",
+            "tag": "v1"
+          },
+          {
+            "name": "same",
+            "tag": "v1",
+            "extra": true
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skill declaration at index 1 has unsupported field(s): extra"
+      }
+    },
+    {
+      "id": "locale-unsafe",
+      "payload": {
+        "schema_version": 1,
+        "skills": [],
+        "locale": "../en"
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skillfile field 'locale' must be a 1-64 character ASCII locale selector"
+      }
+    },
+    {
+      "id": "project-alias-empty",
+      "payload": {
+        "schema_version": 1,
+        "skills": [],
+        "project": {
+          "alias": ""
+        }
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skillfile.json field 'project.alias' must be a non-empty control-free string of at most 128 characters"
+      }
+    },
+    {
+      "id": "unknown-top",
+      "payload": {
+        "schema_version": 1,
+        "skills": [],
+        "extension": true
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skillfile has unsupported field(s): extension"
+      }
+    },
+    {
+      "id": "single-double-ref",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "bad",
+            "tag": "v1",
+            "branch": "main"
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skill 'bad' must specify exactly one of tag, branch, or revision"
+      }
+    },
+    {
+      "id": "single-empty-git",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "bad",
+            "git": "",
+            "tag": "v1"
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skill 'bad' field 'git' must be a non-empty string when present"
+      }
+    },
+    {
+      "id": "single-bad-name",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "../escape",
+            "tag": "v1"
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skill name '../escape' must start with a letter or digit and contain only letters, digits, dots, underscores, or hyphens, be at most 128 characters, and be a portable filename"
+      }
+    },
+    {
+      "id": "single-bad-source",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "ok",
+            "source": "/abs",
+            "tag": "v1"
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skill 'ok' field 'source' must be a portable relative path"
+      }
+    },
+    {
+      "id": "missing-schema",
+      "payload": {
+        "skills": []
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skillfile.json is missing required field 'schema_version'"
+      }
+    },
+    {
+      "id": "schema-string",
+      "payload": {
+        "schema_version": "1",
+        "skills": []
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skillfile.json field 'schema_version' must be an integer, got '1'"
+      }
+    },
+    {
+      "id": "schema-bool",
+      "payload": {
+        "schema_version": true,
+        "skills": []
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skillfile.json field 'schema_version' must be an integer, got True"
+      }
+    },
+    {
+      "id": "schema-99",
+      "payload": {
+        "schema_version": 99,
+        "skills": []
+      },
+      "expected": {
+        "status": "error",
+        "error": "Unsupported Skillfile schema_version 99; this Skillfile requires a newer csk"
+      }
+    },
+    {
+      "id": "missing-skills",
+      "payload": {
+        "schema_version": 1
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skillfile requires field 'skills' as a list"
+      }
+    },
+    {
+      "id": "skills-not-list",
+      "payload": {
+        "schema_version": 1,
+        "skills": {}
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skillfile requires field 'skills' as a list"
+      }
+    },
+    {
+      "id": "skills-string-element",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          "nope"
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skill declaration at index 0 must be an object"
+      }
+    },
+    {
+      "id": "skills-missing-name",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "tag": "v1"
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skill declaration at index 0 requires non-empty string 'name'"
+      }
+    },
+    {
+      "id": "skills-missing-ref",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "x"
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skill 'x' must specify exactly one of tag, branch, or revision"
+      }
+    },
+    {
+      "id": "skills-empty-source",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "x",
+            "source": "",
+            "tag": "v1"
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skill 'x' field 'source' must be a non-empty string"
+      }
+    },
+    {
+      "id": "skills-empty-tag",
+      "payload": {
+        "schema_version": 1,
+        "skills": [
+          {
+            "name": "x",
+            "tag": ""
+          }
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skill 'x' field 'tag' must be a non-empty string"
+      }
+    },
+    {
+      "id": "agents-duplicate",
+      "payload": {
+        "schema_version": 1,
+        "agents": [
+          "a",
+          "a"
+        ],
+        "skills": []
+      },
+      "expected": {
+        "status": "error",
+        "error": "Skillfile field 'agents' must contain unique portable identifiers"
+      }
+    }
+  ]
+}

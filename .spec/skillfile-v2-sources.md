@@ -86,3 +86,40 @@ byte; the fast (`fast_draft_sources`, pull_request) and merge
 (`merge_draft_sources`, push to main) CI lanes check out the pinned revision
 into `protocol-spec-draft/` on ubuntu-latest and macos-latest and upload the
 harness junit xml as evidence.
+
+## Leaf progress: TASK-260916-2u0v5j parse/opt-in (landed in story worktree)
+
+- `csk.sources.errors`: the nine stable `source_*` codes as constants plus
+  `SourceError(code, detail)` (`ValueError`, message `"<code>: <detail>"`).
+- `csk.sources.skillfile_v2`: frozen `PathSource` / `GitSource` (with derived
+  canonical identity and transport) / `RepositorySource` acquisitions and
+  `IndividualSelector` / `CollectionSelector`; hand-written structural
+  validation mirroring `skillfile-v2.schema.json` (closed core 6.3 endpoint
+  grammar, Git ref-name grammar, 40/64-hex revisions, already-canonical
+  `repository` with terminal `.git` refused, literal native `path`,
+  disjoint skills forms, contained directories, literal include/exclude).
+  Scope `project` admits branch refs; `global` and `transitive` refuse them,
+  and `transitive` additionally refuses host paths. `manifest_sha256` is
+  `sha256:` over CCJ-1 of the entire parsed object.
+- `csk.config`: `experimental.skillfile_sources` flag (absent key stays
+  absent on save) and `skillfile_sources_enabled(config=None)`; the env var
+  `CSK_EXPERIMENTAL_SKILLFILE_SOURCES=1` enables the feature on its own.
+- `csk.manifest`: `parse_manifest` / `load_manifest` accept
+  `allow_schema_2` (`None` consults the env var only; config-aware callers
+  pass the resolved value) and `scope`; schema 2 without the opt-in keeps
+  the existing unsupported-schema line plus exactly one hint line.
+  `global_install` parses with `scope="global"`. Schema 1 behavior,
+  precedence and error text are unchanged.
+- `tests/test_skillfile_v2.py` drives all 41 `schema-cases/skillfile-v2`
+  cases through `parse_manifest` (inline mirror plus an authoritative replay
+  when the suite is checked out); `tests/test_manifest.py` carries a 32-doc
+  v1 byte-identity corpus over opt-in on/off against the
+  `tests/fixtures/v1_identity_baseline.json` fixture captured from base
+  `53638fa`; the harness registers the `unknown-alias` driver at parse level.
+- Revision 2: legacy validation split into `_legacy_skill_name` and
+  `_finish_legacy_skill` with the duplicate check between them (v1
+  precedence byte-identical); `_parse_v2` branches on `"sources" in data`
+  and `parse_sources` rejects explicit null like every other non-object.
+- Known bounds for later leaves: policy-alias cross-checks
+  (`v2-embedded-alias-host` family), collection expansion, and config-aware
+  opt-in wiring in installer/CLI entry points.
