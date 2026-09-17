@@ -112,7 +112,9 @@ CASE_OWNERS: dict[str, str] = {
     "capture-mutation": "TASK-260916-sbzutf",
     "frozen-copy-mutation": "TASK-260916-sbzutf",
     "local-git-dirty": "TASK-260916-sbzutf",
-    "missing-snapshot": "TASK-260916-sbzutf",
+    # TASK-260917-34g2lq snapshot-store leaf: moved out of sbzutf by the
+    # recorded leaf split (sbzutf keeps capture and revalidation only).
+    "missing-snapshot": "TASK-260917-34g2lq",
     # TASK-260916-11yseo bind-source-audit-to-existing-assurance-gates.
     "missing-audit-report": "TASK-260916-11yseo",
     "strict-network-attestation-local": "TASK-260916-11yseo",
@@ -526,7 +528,9 @@ def test_draft_sources_driver_registration_rejects_unknown_case() -> None:
 
 
 def test_draft_sources_driver_registration_rejects_duplicate() -> None:
-    case_id = SEMANTIC_CASES[0]["id"]
+    case_id = next(
+        case["id"] for case in SEMANTIC_CASES if case["id"] not in SEMANTIC_DRIVERS
+    )
     register_semantic_driver(case_id, lambda case: None)
     try:
         with pytest.raises(AssertionError, match="duplicate driver"):
@@ -554,14 +558,14 @@ def test_draft_sources_registered_driver_dispatch_through_the_semantic_entry() -
 
     Regression for the dispatch gap: the parametrized semantic test ends in
     ``driver(case)``, but with zero drivers registered every case skips and no
-    other test proves the call happens. This test registers a driver for the
-    real ``broad-root`` case, drives the actual
+    other test proves the call happens. This test registers a driver for a
+    real still-undriven case, drives the actual
     :func:`test_draft_sources_semantic_case` entry (not a private helper),
     asserts the exact case object reaches the driver, and proves a raising
     driver fails the entry. It kills the one-case narrowing mutant
-    ``if case_id != \"broad-root\": driver(case)`` in either phase.
+    ``if case_id != "<that case>": driver(case)`` in either phase.
     """
-    case = next(entry for entry in SEMANTIC_CASES if entry["id"] == "broad-root")
+    case = next(entry for entry in SEMANTIC_CASES if entry["id"] not in SEMANTIC_DRIVERS)
     received: list[dict[str, Any]] = []
 
     def _record(driven: dict[str, Any]) -> None:
@@ -1488,3 +1492,447 @@ for _case_id in (
     "v2-external-build-alias-refused",
 ):
     register_semantic_driver(_case_id, _drive_transport_case)
+# Semantic drivers registered by TASK-260916-100uew (local boundaries).
+#
+# Each driver builds a real temporary-filesystem fixture from the case
+# input, calls a ``csk.sources.boundaries`` production entry point, and
+# asserts the exact expected outcome. Imports stay function-local so this
+# block appends without touching the shared import header.
+
+
+def _boundary_fixture(tmp: Path, case_input: dict[str, Any]) -> tuple[Path, Path]:
+    """Build (project, home) honouring the case's physical/output spellings."""
+
+    project = tmp / "project"
+    home = tmp / "home"
+    home.mkdir(parents=True)
+    physical = str(case_input.get("physical", ""))
+    outputs = [str(output) for output in case_input.get("outputs", [])]
+    seeds = [physical, *outputs]
+    if not physical:
+        planned = str(case_input.get("planned_output", ""))
+        publication = str(case_input.get("publication_output", ""))
+        seeds = [planned, publication]
+    for seed in seeds:
+        if not seed:
+            continue
+        relative = seed.split("/", 1)[1] if "/" in seed else seed
+        if relative:
+            (project / relative).mkdir(parents=True, exist_ok=True)
+    return (project, home)
+
+
+def _drive_broad_root(case: dict[str, Any]) -> None:
+    """Drive ``broad-root`` through the production package check.
+
+    Registered by TASK-260916-100uew (boundaries): a broad alias path
+    with a safe selected subdirectory is allowed.
+    """
+
+    import tempfile
+
+    from csk.sources import boundaries as boundaries_module
+    from csk.sources import repository_policy as policy_module
+
+    case_input = case["input"]
+    with tempfile.TemporaryDirectory(prefix="csk-broad-root-") as raw:
+        project, home = _boundary_fixture(Path(raw), case_input)
+        (project / "agents" / "skills" / "review").mkdir(parents=True, exist_ok=True)
+        record = boundaries_module.freeze_boundaries(project, home)
+        policy = policy_module.RepositoryPolicy(
+            schema_version=1, repositories={}, root_inputs={}
+        )
+        resolved = boundaries_module.check_selected_package(
+            record, project, case_input["directory"], alias="local", policy=policy
+        )
+        assert case["expected"] == "allow"
+        assert resolved.is_dir()
+
+
+def _drive_managed_source(case: dict[str, Any]) -> None:
+    """Drive ``managed-source`` through the production package check.
+
+    Registered by TASK-260916-100uew (boundaries): a selected package
+    inside a managed output fails ``source_output_overlap``.
+    """
+
+    import tempfile
+
+    from csk.sources import boundaries as boundaries_module
+    from csk.sources import repository_policy as policy_module
+
+    case_input = case["input"]
+    with tempfile.TemporaryDirectory(prefix="csk-managed-source-") as raw:
+        project, home = _boundary_fixture(Path(raw), case_input)
+        record = boundaries_module.freeze_boundaries(project, home)
+        policy = policy_module.RepositoryPolicy(
+            schema_version=1, repositories={}, root_inputs={}
+        )
+        with pytest.raises(source_errors.SourceError) as excinfo:
+            boundaries_module.check_selected_package(
+                record, project, case_input["directory"], alias="local", policy=policy
+            )
+        assert excinfo.value.code == case["expected"]
+
+
+def _drive_symlink_managed(case: dict[str, Any]) -> None:
+    """Drive ``symlink-managed`` through the production package check.
+
+    Registered by TASK-260916-100uew (boundaries): the selected
+    directory resolves through a link into a managed output, so it
+    fails ``source_output_overlap``.
+    """
+
+    import tempfile
+
+    from csk.sources import boundaries as boundaries_module
+    from csk.sources import repository_policy as policy_module
+
+    case_input = case["input"]
+    with tempfile.TemporaryDirectory(prefix="csk-symlink-managed-") as raw:
+        project, home = _boundary_fixture(Path(raw), case_input)
+        physical = str(case_input["physical"])
+        managed = project / physical.split("/", 1)[1]
+        managed.mkdir(parents=True, exist_ok=True)
+        directory = str(case_input["directory"])
+        first, _, _ = directory.partition("/")
+        link = project / first
+        if link.exists() or link.is_symlink():
+            raise AssertionError(f"fixture collision at {first!r}")
+        managed_parent = managed.parent
+        link.symlink_to(managed_parent, target_is_directory=True)
+        record = boundaries_module.freeze_boundaries(project, home)
+        policy = policy_module.RepositoryPolicy(
+            schema_version=1, repositories={}, root_inputs={}
+        )
+        with pytest.raises(source_errors.SourceError) as excinfo:
+            boundaries_module.check_selected_package(
+                record, project, directory, alias="local", policy=policy
+            )
+        assert excinfo.value.code == case["expected"]
+
+
+def _drive_case_alias(case: dict[str, Any]) -> None:
+    """Drive ``case-alias`` through the production package check.
+
+    Registered by TASK-260916-100uew (boundaries): on a
+    case-insensitive filesystem the case-variant spelling names the
+    managed output and fails ``source_output_overlap``. On a
+    case-sensitive host the refusal is inapplicable and the driver
+    skips with the declared platform bound.
+    """
+
+    import tempfile
+
+    from csk.sources import boundaries as boundaries_module
+    from csk.sources import repository_policy as policy_module
+
+    case_input = case["input"]
+    with tempfile.TemporaryDirectory(prefix="csk-case-alias-") as raw:
+        tmp = Path(raw)
+        probe = tmp / "CSK-DRIVER-PROBE"
+        probe.write_text("x", encoding="utf-8")
+        conflates = (tmp / "csk-driver-probe").exists()
+        probe.unlink()
+        if not conflates:
+            pytest.skip(
+                "case-alias needs a case-insensitive filesystem (declared platform bound)"
+            )
+        project, home = _boundary_fixture(tmp, case_input)
+        physical = str(case_input["physical"])
+        relative = physical.split("/", 1)[1]
+        (project / relative).mkdir(parents=True, exist_ok=True)
+        first = relative.split("/", 1)[0]
+        record = boundaries_module.freeze_boundaries(project, home)
+        policy = policy_module.RepositoryPolicy(
+            schema_version=1, repositories={}, root_inputs={}
+        )
+        with pytest.raises(source_errors.SourceError) as excinfo:
+            boundaries_module.check_selected_package(
+                record, project, relative, alias="local", policy=policy
+            )
+        assert excinfo.value.code == case["expected"]
+        assert first.lower() in excinfo.value.detail.lower()
+
+
+def _drive_write_boundary_retarget(case: dict[str, Any]) -> None:
+    """Drive ``write-boundary-retarget`` through the publication recheck.
+
+    Registered by TASK-260916-100uew (boundaries): the publication
+    destination left the planned managed output for an authored tree,
+    so the recheck fails ``source_output_overlap``.
+    """
+
+    import tempfile
+
+    from csk.sources import boundaries as boundaries_module
+
+    case_input = case["input"]
+    with tempfile.TemporaryDirectory(prefix="csk-write-retarget-") as raw:
+        project, home = _boundary_fixture(Path(raw), case_input)
+        planned = str(case_input["planned_output"]).split("/", 1)[1]
+        publication = str(case_input["publication_output"]).split("/", 1)[1]
+        (project / planned).mkdir(parents=True, exist_ok=True)
+        (project / publication).mkdir(parents=True, exist_ok=True)
+        record = boundaries_module.freeze_boundaries(project, home)
+        with pytest.raises(source_errors.SourceError) as excinfo:
+            boundaries_module.recheck_publication_destination(
+                record, project, planned, publication + "/SKILL.md"
+            )
+        assert excinfo.value.code == case["expected"]
+
+
+def _drive_root_no_inputs(case: dict[str, Any]) -> None:
+    """Drive ``root-no-inputs`` through the production package check.
+
+    Registered by TASK-260916-100uew (boundaries): a root selection
+    without ``root_inputs`` fails ``source_output_overlap`` because the
+    manager cannot prove separation.
+    """
+
+    import tempfile
+
+    from csk.sources import boundaries as boundaries_module
+    from csk.sources import repository_policy as policy_module
+
+    case_input = case["input"]
+    assert case_input["root_inputs"] is None
+    with tempfile.TemporaryDirectory(prefix="csk-root-no-inputs-") as raw:
+        project = Path(raw) / "project"
+        home = Path(raw) / "home"
+        (project / "agents" / "skills" / "review").mkdir(parents=True)
+        home.mkdir(parents=True)
+        record = boundaries_module.freeze_boundaries(project, home)
+        policy = policy_module.RepositoryPolicy(
+            schema_version=1, repositories={}, root_inputs={}
+        )
+        with pytest.raises(source_errors.SourceError) as excinfo:
+            boundaries_module.check_selected_package(
+                record, project, case_input["directory"], alias="local", policy=policy
+            )
+        assert excinfo.value.code == case["expected"]
+
+
+register_semantic_driver("broad-root", _drive_broad_root)
+register_semantic_driver("managed-source", _drive_managed_source)
+register_semantic_driver("symlink-managed", _drive_symlink_managed)
+register_semantic_driver("case-alias", _drive_case_alias)
+register_semantic_driver("write-boundary-retarget", _drive_write_boundary_retarget)
+register_semantic_driver("root-no-inputs", _drive_root_no_inputs)
+
+
+# Semantic drivers registered by TASK-260916-sbzutf (local snapshots).
+#
+# Each driver builds a real temporary-filesystem fixture from the case
+# input, calls a ``csk.sources.snapshot`` production entry point, and
+# asserts the exact expected outcome. Imports stay function-local so this
+# block appends without touching the shared import header.
+
+
+def _drive_local_git_dirty(case: dict[str, Any]) -> None:
+    """Drive ``local-git-dirty`` through production capture.
+
+    Registered by TASK-260916-sbzutf (snapshots): ``.git`` claims HEAD
+    bytes A while the working tree carries B plus untracked C, so the
+    snapshot covers exactly B and C. No Git process may spawn.
+    """
+
+    if not _selection_fs.supports_descriptor_traversal():
+        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+
+    import subprocess
+    import tempfile
+
+    from csk.sources import local_snapshot
+    from csk.sources import snapshot as snapshot_module
+
+    head = case["input"]["head"]
+    filesystem = case["input"]["filesystem"]
+    untracked = case["input"]["untracked"]
+    with tempfile.TemporaryDirectory(prefix="csk-local-git-dirty-") as raw:
+        root = Path(raw) / "src"
+        home = Path(raw) / "home"
+        home.mkdir(parents=True)
+        (root / ".git" / "objects").mkdir(parents=True)
+        (root / ".git" / "HEAD").write_text(head, encoding="utf-8")
+        (root / "tracked.txt").write_text(filesystem, encoding="utf-8")
+        (root / "untracked.txt").write_text(untracked, encoding="utf-8")
+
+        real_popen = subprocess.Popen
+        real_run = subprocess.run
+
+        def _forbidden(*args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("capture spawned a process during local-git-dirty")
+
+        subprocess.Popen = _forbidden  # type: ignore[assignment]
+        subprocess.run = _forbidden  # type: ignore[assignment]
+        try:
+            package = snapshot_module.capture_package_snapshot(root, ".", home=home)
+        finally:
+            subprocess.Popen = real_popen
+            subprocess.run = real_run
+
+        frozen = package.frozen_files()
+        assert set(frozen) == {"tracked.txt", "untracked.txt"}
+        assert frozen["tracked.txt"].data == filesystem.encode("utf-8")
+        assert frozen["untracked.txt"].data == untracked.encode("utf-8")
+        expected = local_snapshot.build_inventory(
+            [
+                ("tracked.txt", "sha256:" + hashlib.sha256(filesystem.encode("utf-8")).hexdigest(), False),
+                ("untracked.txt", "sha256:" + hashlib.sha256(untracked.encode("utf-8")).hexdigest(), False),
+            ],
+            equivalent=lambda _left, _right: False,
+        )
+        assert package.inventory["snapshot"] == expected["snapshot"]
+        assert case["expected"] == "snapshot-B-and-C"
+
+
+def _drive_capture_mutation(case: dict[str, Any]) -> None:
+    """Drive ``capture-mutation`` through capture plus revalidation.
+
+    Registered by TASK-260916-sbzutf (snapshots): the tree holds A at
+    capture and B at revalidation, so revalidation fails with
+    ``source_snapshot_changed``.
+    """
+
+    if not _selection_fs.supports_descriptor_traversal():
+        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+
+    import tempfile
+
+    from csk.sources import snapshot as snapshot_module
+    from csk.sources._selection_fs import (
+        PreflightPath,
+        PreflightRequest,
+        SelectionSession,
+    )
+    from csk.sources.selection import PRUNED_CHILD_NAMES
+
+    captured_text = case["input"]["captured"]
+    mutated_text = case["input"]["after-capture"]
+    with tempfile.TemporaryDirectory(prefix="csk-capture-mutation-") as raw:
+        root = Path(raw) / "src"
+        home = Path(raw) / "home"
+        home.mkdir(parents=True)
+        (root / "victim.txt").parent.mkdir(parents=True, exist_ok=True)
+        (root / "victim.txt").write_text(captured_text, encoding="utf-8")
+        session = SelectionSession.open(
+            root,
+            home,
+            managed_names=PRUNED_CHILD_NAMES,
+            preflight=PreflightRequest(
+                paths=(
+                    PreflightPath(
+                        (),
+                        code="source_selection_invalid",
+                        context="Snapshot driver session",
+                    ),
+                )
+            ),
+        )
+        with session:
+            captured = session.capture_tree(
+                session.root,
+                label="driver",
+                code=snapshot_module.CODE_CAPTURE,
+                missing_code=snapshot_module.CODE_CAPTURE_ABSENT,
+                changed_code=snapshot_module.CODE_CAPTURE_CHANGED,
+            )
+            (root / "victim.txt").write_text(mutated_text, encoding="utf-8")
+            with pytest.raises(source_errors.SourceError) as excinfo:
+                snapshot_module.revalidate_capture(
+                    session, session.root, captured, label="driver"
+                )
+        assert excinfo.value.code == case["expected"]
+
+
+def _drive_frozen_copy_mutation(case: dict[str, Any]) -> None:
+    """Drive ``frozen-copy-mutation`` through capture plus verification.
+
+    Registered by TASK-260916-sbzutf (snapshots): the frozen copy holds
+    A at audit and B before publication, so verification fails with
+    ``source_snapshot_changed``.
+    """
+
+    if not _selection_fs.supports_descriptor_traversal():
+        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+
+    import tempfile
+
+    from csk.sources import snapshot as snapshot_module
+    from csk.sources.snapshot import FrozenFile
+
+    audited_text = case["input"]["audited"]
+    mutated_text = case["input"]["before-publication"]
+    with tempfile.TemporaryDirectory(prefix="csk-frozen-copy-mutation-") as raw:
+        root = Path(raw) / "src"
+        home = Path(raw) / "home"
+        home.mkdir(parents=True)
+        (root / "victim.txt").parent.mkdir(parents=True, exist_ok=True)
+        (root / "victim.txt").write_text(audited_text, encoding="utf-8")
+        package = snapshot_module.capture_package_snapshot(root, ".", home=home)
+        frozen = package.frozen_files()
+        assert frozen["victim.txt"].data == audited_text.encode("utf-8")
+        frozen["victim.txt"] = FrozenFile(
+            "victim.txt", mutated_text.encode("utf-8"), False
+        )
+        with pytest.raises(source_errors.SourceError) as excinfo:
+            snapshot_module.verify_frozen_copy(
+                frozen,
+                package.inventory["snapshot"],
+                equivalent=package.equivalence.equivalent,
+            )
+        assert excinfo.value.code == case["expected"]
+
+
+register_semantic_driver("local-git-dirty", _drive_local_git_dirty)
+register_semantic_driver("capture-mutation", _drive_capture_mutation)
+register_semantic_driver("frozen-copy-mutation", _drive_frozen_copy_mutation)
+
+
+# Semantic drivers registered by TASK-260917-34g2lq (snapshot store).
+#
+# Each driver builds a real temporary-filesystem fixture from the case
+# input, calls a ``csk.sources`` production entry point, and asserts the
+# exact expected outcome. Imports stay function-local so this block
+# appends without touching the shared import header.
+
+
+def _drive_missing_snapshot(case: dict[str, Any]) -> None:
+    """Drive ``missing-snapshot`` through every consumer reader.
+
+    Registered by TASK-260917-34g2lq (store): the lock names a snapshot,
+    the store holds nothing, and live bytes sit in the authored tree.
+    Every consumer (audit, build, projection, install) fails
+    ``source_snapshot_unavailable`` and nothing recreates the snapshot
+    from the live bytes. No capture runs here, so the driver is
+    host-independent.
+    """
+
+    import tempfile
+
+    from csk.sources import consumers as consumers_module
+
+    assert case["input"]["locked"]
+    assert case["input"]["snapshot_store"] == "absent"
+    live_text = case["input"]["live"]
+    with tempfile.TemporaryDirectory(prefix="csk-missing-snapshot-") as raw:
+        home = Path(raw) / "home"
+        live = Path(raw) / "live" / "pkg"
+        live.mkdir(parents=True)
+        (live / "SKILL.md").write_text(live_text, encoding="utf-8")
+        assert {opener.__name__ for opener in consumers_module.ALL_CONSUMERS} == {
+            "open_for_audit",
+            "open_for_build",
+            "open_for_projection",
+            "open_for_install",
+        }
+        for opener in consumers_module.ALL_CONSUMERS:
+            with pytest.raises(source_errors.SourceError) as excinfo:
+                opener(home, "review", "local:packages/review")
+            assert excinfo.value.code == case["expected"]
+        assert not (home / "source-v1").exists()
+        assert (live / "SKILL.md").read_text(encoding="utf-8") == live_text
+
+
+register_semantic_driver("missing-snapshot", _drive_missing_snapshot)

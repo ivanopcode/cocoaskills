@@ -1299,10 +1299,14 @@ def test_runtime_loaded_modules_are_statically_scanned() -> None:
     assert obs.get("errors", []) == [], (
         f"runtime probe fixture failed: {obs.get('errors', [])}"
     )
+    # `local_snapshot` rides every `csk.sources` import via the `__init__`
+    # re-export (TASK-260917-3qkywj); it is the provably pure inventory seam
+    # admitted by the closure pin above, so it belongs in both pins here.
     assert sorted(obs["modules"]) == [
         "csk.sources",
         "csk.sources._selection_fs",
         "csk.sources.errors",
+        "csk.sources.local_snapshot",
         "csk.sources.selection",
         "csk.sources.skillfile_v2",
     ]
@@ -1315,6 +1319,7 @@ def test_runtime_loaded_modules_are_statically_scanned() -> None:
         "__init__.py",
         "_selection_fs.py",
         "errors.py",
+        "local_snapshot.py",
         "selection.py",
         "skillfile_v2.py",
     ]
@@ -1655,6 +1660,11 @@ def test_closure_dynamic_shape_is_runtime_covered(
 def test_closure_matches_reviewed_selection_tree() -> None:
     """The real-tree closure is exactly the reviewed module set, no refusal."""
 
+    # `local_snapshot.py` is in the closure because `__init__.py` re-exports
+    # the pure inventory/digest seam (TASK-260917-3qkywj) and the walk seeds
+    # `__init__.py`. It is safe to admit: its own criterion (g) proves by a
+    # static AST walk plus an audit-hook property that it reaches no
+    # filesystem, network, clock, locale or environment primitive.
     source_dir = Path(_selection_fs.__file__).parent
     closure, violations = _walk_selection_imports(source_dir)
     assert violations == []
@@ -1663,6 +1673,7 @@ def test_closure_matches_reviewed_selection_tree() -> None:
         "_selection_fs.py",
         "errors.py",
         "skillfile_v2.py",
+        "local_snapshot.py",
         "__init__.py",
     }
 

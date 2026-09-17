@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/draft-sources-v1/local-snapshot-v1.schema.json",
+  "type": "object",
+  "$defs": {
+    "portablePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^/\\\\:\\u0000-\\u001f\\u007f-\\u009f](?:[^\\\\:\\u0000-\\u001f\\u007f-\\u009f]*[^/ .\\\\:\\u0000-\\u001f\\u007f-\\u009f])?$",
+      "not": {
+        "pattern": "(?:^|/)(?:\\.{1,2}|[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|/|$)|//"
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "algorithm": {
+      "const": "curator-local-snapshot-v1"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "$ref": "#/$defs/portablePath"
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "executable": {
+            "type": "boolean"
+          }
+        },
+        "required": ["path", "sha256", "executable"],
+        "additionalProperties": false
+      }
+    },
+    "snapshot": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "required": ["schema_version", "algorithm", "files", "snapshot"],
+  "additionalProperties": false
+}

@@ -706,3 +706,158 @@ never from the operating system's name.
   CR per line for the CRLF bodies git re-prefixes. CR, VT, FF and other
   non-LF boundaries never tear a prefixed physical line into a bare
   evidence record.
+
+## Leaf progress: TASK-260916-100uew local source and output boundaries
+
+- `csk.sources.boundaries`: section-2 physical boundary enforcement.
+  `freeze_boundaries(source_root, csk_home)` answers every outside
+  question and freezes a `BoundaryRecord` (source/home identities, home
+  containment, above-root managed ancestry, per-root bindings with
+  entry identity plus link-target spelling). `check_selected_package`
+  resolves selector directories to physical identity (escape fails
+  `source_selection_invalid`; managed/linked/case-alias packages fail
+  `source_output_overlap`; a root selection without `root_inputs`
+  fails `source_output_overlap`). `prune_discovery_candidates` drops
+  managed `*` candidates silently and deterministically;
+  `check_declared_inputs` refuses a prune-intersected runtime/build
+  input, never installing a smaller set. `validate_root_inputs`
+  enforces the operator allowlist (structural rules before any
+  filesystem touch; then existing, link-free, output-disjoint,
+  readable; physical duplicates fail `source_path_conflict`; SKILL.md
+  plus every required input must be covered). `managed_output_table`
+  is the closed named set (adapter-derived first components plus
+  `.git` plus csk-home containment). `recheck_publication_destination`
+  is the exported per-write hook for TASK-260916-17x3o1 (binding
+  reverify, link-free ancestry, within-planned containment, admitted
+  overwrite refusal; every failure `source_output_overlap`).
+- No containment, ancestry or pruning decision compares path strings:
+  `_is_within` walks the ancestry asking the filesystem at every
+  level, and case-equivalence is a same-parent same-file probe.
+  Resolution is component-wise lstat/readlink with a visited set plus
+  an expansion cap; loops refuse with the caller code. Every
+  filesystem failure becomes a structured `SourceError` naming the
+  subject. The module is portable (no POSIX gate): the publication
+  recheck must run on every platform.
+- `tests/test_source_boundaries.py` (181 tests) drives every entry
+  point with S-FS seam-recording plus audit-hook confinement, an
+  S-ERRORS fault matrix (10 sites x 5 classes with positive
+  controls), and an S-POLICY zero-side-effect counter; the harness
+  registers the six owned drivers (broad-root, managed-source,
+  symlink-managed, case-alias with a named platform bound,
+  write-boundary-retarget, root-no-inputs). All 10 narrowing mutants
+  killed, zero survivors.
+- Bounds: TOCTOU between validation and capture is closed by snapshot
+  revalidation (spec section 3, sibling scope); rollback after a
+  recheck refusal belongs to TASK-260916-17x3o1; inode-less
+  filesystems use the samefile fallback; the harness registration
+  self-tests now address the first still-undriven case so later
+  drivers keep landing without edits.
+
+## Leaf progress: TASK-260916-sbzutf local package snapshot capture
+
+- `csk.sources.snapshot` (new): section-3 capture and revalidation.
+  `capture_package_snapshot(source_root, directory, home)` opens a
+  confined session, descends, and `capture_package` captures working-tree
+  bytes (dirty, staged-shadowed and untracked; never Git HEAD, no Git
+  process spawned), probes the host filesystem-equivalence relations,
+  builds the inventory through `local_snapshot.build_inventory` (called,
+  never reimplemented), and runs revalidation 1 before returning.
+  `revalidate_capture` re-establishes identities, contents, executable
+  bits and the complete admitted path set with a fresh descriptor
+  capture; any mismatch fails `source_snapshot_changed` with no retry.
+  `verify_frozen_copy` rehashes the frozen copy against the audited
+  digest (revalidation 2). Revalidation 3 (publication-write boundary
+  recheck) is named as TASK-260916-100uew's, called by TASK-260916-17x3o1.
+  Storage and `source_snapshot_unavailable` moved to TASK-260917-34g2lq.
+- Capture reads through `SelectionSession.capture_tree`/
+  `read_captured_file` (`_selection_fs.py`): admission is decided on the
+  opened descriptor (`fstat` the fd); links, FIFOs, sockets, devices,
+  hard links, cross-device entries and directories-offered-as-files
+  refuse naming their package-relative path. Listing-to-open skew
+  (changed identity/type/link-count/device, disappearance mid-walk)
+  reports `source_snapshot_changed` via `missing_code`/`changed_code`;
+  stable anomalies keep the caller code. File opens are `O_NONBLOCK`
+  so a file-to-FIFO swap refuses instead of hanging.
+- The equivalence predicate is probed from the capture filesystem
+  itself: variant spellings of captured entries open relative to their
+  still-open parent descriptors and identities are compared
+  (`FilesystemEquivalence` with per-axis known flags; unknown fails
+  toward the exact predicate, visibly). Managed subtrees prune through
+  the frozen Phase-A record only: a top-level `.git` directory prunes,
+  while a `.git` file or nested `.git` captures as ordinary bytes (the
+  boundary table owns the file-vs-directory question).
+- `tests/test_package_snapshot.py` (169 tests): git-dirty/staged/
+  untracked capture incl. real-git and no-spawn tests, special-file
+  class refusals, descriptor-admission races (listing spoofs, swaps),
+  vectors end to end from disk, differential predicate-vs-host tests,
+  17-kind mutation and 8-kind tamper classes, audit-hook confinement
+  plus read-only properties, a 4-site x 9-class fault matrix with
+  positive controls, and tree-hash transaction checks. The harness
+  registers the three owned drivers (local-git-dirty,
+  capture-mutation, frozen-copy-mutation); `missing-snapshot` moved to
+  TASK-260917-34g2lq. All 15 narrowing mutants killed, zero survivors.
+- Bounds: device nodes (needs privilege), NFC/NFD and A/a pairs (need
+  a distinguishing filesystem), DirEntry.stat injection (C-level;
+  listing lies covered by spoofs), non-OSError walk faults structured
+  by the outer boundary for wrapped callers and the walk seam for
+  direct ones. Also rides here: the closure pin admits
+  `csk.sources.local_snapshot` with its justification (recorded
+  orchestrator decision; the instrument, not this leaf, owns it).
+
+## Leaf progress: TASK-260917-34g2lq source-v1 snapshot store and consumers
+
+- `csk.sources.store` (new): the section-3 snapshot store under
+  `<home>/source-v1/` (`snapshots/<skill-hex>/<package-hex>/` with
+  `record.json` plus `trees/<digest-hex>/`, transient
+  `staging/<uuid>/`). Keys are SHA-256 hex of the UTF-8 key bytes, so
+  hostile keys cannot escape or conflate on any host. Records carry
+  `snapshot` digests only and the module never imports
+  `csk.snapshot`, so a digest cannot land in a Git commit field.
+  `stage_snapshot` verifies the frozen copy, writes a staging tree,
+  re-verifies there, then renames into place plus an atomic record
+  replace under `ManagerHomeLock`; pre-commit faults roll back to a
+  byte-identical store. `lookup_snapshot` is lock-free, creates
+  nothing, rehashes every file, rebuilds the inventory through
+  `build_inventory`, and any failure to serve the exact locked bytes
+  fails `source_snapshot_unavailable` -- never recreated, since
+  lookup takes no source path.
+- `csk.sources.consumers` (new): `open_for_audit`, `open_for_build`,
+  `open_for_projection`, `open_for_install`, each a one-line
+  delegation to `store.lookup_snapshot` with a consumer-prefixed
+  detail. Later stories (audit/build materialization, atomic
+  install) call these readers; the readers hand in-memory frozen
+  bytes, never a path, so TOCTOU between verification and use is
+  not expressible. Neither module is re-exported from
+  `csk.sources.__init__`, keeping the selection closure pin exact.
+- `tests/test_source_snapshot_store.py` (118 tests): namespace
+  disjointness over adversarial keys, the no-commit-field JSON scan
+  plus import AST pin, the never-recreate class test over all four
+  consumers (live bytes present, store stays absent, home never
+  created), a 21-shape tamper matrix each driven through all four
+  consumers, S-TXN faults at every stage boundary (fresh and seeded,
+  incl. heal-path restores) with strict before/after tree hashes, a
+  lock-contention timeout proving the reused home lock, post-commit
+  cleanup semantics, heal-with-verified-bytes, crash-residue
+  inertia, a reader/writer thread run, S-ERRORS matrices with
+  positive controls, and runtime host probes (case pairs,
+  on-disk modes, symlinks, real-capture integration gated on
+  descriptor traversal). The harness registers the owned
+  `missing-snapshot` driver across all four consumers. All 6
+  narrowing mutants killed, zero survivors.
+- Bounds: crash consistency rests on verify-on-read plus idempotent
+  re-stage (no fsync); superseded digest trees and foreign crash
+  residue are inert until a later leaf's GC; on-disk permission bits
+  are not part of the frozen identity; reader/writer races resolve
+  to old-or-new complete snapshots, never torn bytes.
+
+## 2026-09-17 xplat note (TASK-260917-34g2lq): hosted-lane bounds
+
+- Revalidation identity is `(st_dev, st_ino)`: on filesystems that
+  reuse inode numbers, byte-identical same-mode replacement is
+  unobservable and unreported. Integrity-neutral (the digest still
+  describes the frozen bytes exactly); the class test probes the
+  premise at runtime instead of assuming a new inode.
+- The source-v1 record replace retries a transient `PermissionError`
+  (Windows sharing denial from a concurrent lock-free reader) within
+  a 0.75 s bound; persistent denials and all other faults refuse as
+  before with total rollback.
