@@ -1,0 +1,18 @@
+{
+  "schema_version": 2,
+  "agents": [
+    "codex"
+  ],
+  "sources": {
+    "local": {
+      "path": "../workspace"
+    }
+  },
+  "skills": [
+    {
+      "name": "alpha",
+      "from": "local",
+      "directory": "skills/alpha"
+    }
+  ]
+}

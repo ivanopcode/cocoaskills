@@ -571,6 +571,30 @@ CCJ-1 read-then-write identity, plus a static AST purity walk. Narrowing
 mutant evidence is recorded in the task outcome. The base shell initially had
 no `python` command (exit 127); `uv sync --extra dev` supplied the repository's
 `.venv`, and all gates were rerun via `PATH=.venv/bin:$PATH python ...`.
+## 2026-09-17 - TASK-260916-3le0i9 resumed run: order/pinning/audit tests, 7 narrowing mutants killed
+
+Finished the interrupted leaf without changing its design: added a five-phase
+validation-order test, an 18-parameter absolute-path CLASS test with
+otherwise-valid digests (so an admitting gate flips to accept), an identical
+duplicate-pair test, a one-character stale test, an independent preimage oracle,
+a seeded identity-is-bytes property, an audit-hook zero-side-effect test, and
+the pinned `valid.json` digest vector. All 7 narrowing mutants (preimage,
+2-reversal, identical pair, final-char stale, two absolute-path spellings, one
+OSError seam) die on named tests with exit 1 and no survivors; full suite
+2502 passed, mypy strict clean.
+
+## 2026-09-17 - TASK-260916-3le0i9 lock identity and schema-reader boundary
+
+Implemented the draft Skillfile lock model as two portable modules. The
+shared package identity vocabulary uses frozen dataclasses for all three
+source-types arms, while machine-private physical bindings stay in a separate
+record and never enter lock bytes. The production lock reader performs
+structural JSON and schema-shape checks before cross-field, digest, and
+membership checks. The pinned lock schema cases carry synthetic copied
+digests, so the conformance harness drives them through the production
+schema-only reader; committed csk fixtures supply the real digest and exact
+round-trip evidence. Configured-Git directory agreement is strict on write
+and tolerant on read to preserve the pinned legacy fixture's spelling.
 
 ## 2026-09-16 - TASK-260916-2u0v5j rev2: v1 duplicate precedence and null-vs-absent sources
 
@@ -3760,3 +3784,8 @@ the writer's `os.replace` with `PermissionError`; the record replace now
 retries sharing denials within a 0.75 s bound (6 attempts, 0.05 s linear
 backoff, `PermissionError` only). Full evidence in
 `TASK-260917-34g2lq_xplat-results.md`.
+## 2026-09-17 TASK-260916-3le0i9: lock-model revision 2 (str-canonicalization class)
+
+Revision 1 review reproduced the sibling-leaf `str`-subclass class here with five attacks: lying `encode` misordered the closure, lying `__eq__`/`__hash__` admitted duplicates and defeated membership, and a `== "."` shortcut tested before any type check admitted a non-`str` directory (integer `5`) into lock wire bytes. The structural fix canonicalizes every `str`-typed field, membership input, and manifest scalar to exact `str` via `str.__str__` at the trust boundary; `str()` is not normalization since it honors overridden `__str__` and can return a hostile subclass instance.
+
+While covering the manifest gate, the new CLASS test proved the reviewer's "immune via the C sorter" observation was comparison-direction luck: `json.dumps(sort_keys=True)` honors lying `__gt__`/`__eq__` through reflected comparison, so hostile manifest keys change the digest. The manifest digest now rebuilds caller dicts with exact-`str` scalars (values bit-identical, non-JSON types still refused downstream) before delegating to the Skillfile v2 helper. Also fixed in this revision: mixed `LockMember`/`str` membership input now compares each record per item, `parse_lock` is tolerant by default with a `strict=True` opt-in, and `SkillfileLock` construction validates element types. All 18 narrowing mutants killed; full suite green (2594 passed, 171 skipped); evidence in `TASK-260916-3le0i9_results.md`.

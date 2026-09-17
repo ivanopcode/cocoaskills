@@ -861,3 +861,36 @@ never from the operating system's name.
   (Windows sharing denial from a concurrent lock-free reader) within
   a 0.75 s bound; persistent denials and all other faults refuse as
   before with total rollback.
+## Leaf progress: TASK-260916-3le0i9 source lock model and validation
+
+- `csk.sources.package_identity` is the shared frozen vocabulary for the
+  `local-snapshot`, `network-git`, and `configured-git` source-types arms.
+  It serializes only portable package identity and never acquisition
+  endpoints or machine paths. Later marker, receipt, and audit leaves import
+  these dataclasses from this module.
+- `csk.sources.lock` creates and reads schema-1 `Skillfile.lock.json` values.
+  It delegates `manifest_sha256` to the existing Skillfile v2 CCJ-1 helper,
+  sorts the closure by UTF-8 name bytes, records root selection indices,
+  computes `lock_sha256` with only that field omitted, and validates in the
+  order structural JSON, schema shape, cross-field semantics, digests, and
+  current membership.
+- Lock creation is strict for Git directory agreement. The whole read surface
+  (`read_lock` and `parse_lock`, with an explicit `strict=True` opt-in for
+  write-path validation) accepts the legacy configured-Git member-directory
+  spelling used by the pinned conformance fixture and preserves it for
+  byte-identical read-to-write interop; network-Git agreement remains
+  enforced on read.
+- Every `str`-typed model field, membership input, and manifest scalar is
+  canonicalized to exact `str` via `str.__str__` (never `str()`) at the trust
+  boundary, so ordering, duplicate, directory, membership, and digest gates
+  decide from values no subclass override can change.
+- `MachinePrivateBinding` is a separate model for absolute physical source
+  location (canonical spelling is the caller's contract) and
+  source-relative root inputs. It is not a lock field and has no filesystem
+  or network side effects.
+- `tests/test_skillfile_lock.py` commits generated digest fixtures in
+  `tests/fixtures/skillfile-v2/{local,network,hand-authored}` and covers the
+  shared identity vocabulary, lock validation, stale membership, ordering,
+  machine binding separation, and exact round trips. The draft harness drives
+  all seven lock schema cases through `read_lock_schema`; the pinned schema
+  cases remain schema-validity fixtures rather than digest vectors.
