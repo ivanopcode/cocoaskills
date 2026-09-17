@@ -48,6 +48,7 @@ dev = [
   "mypy>=1.14",
   "cryptography>=44",
   "jsonschema>=4.23",
+  "pyyaml>=6",
 ]
 
 [project.scripts]
@@ -78,6 +79,7 @@ pythonpath = ["src"]
 markers = [
   "csk_e2e_native: real compiled-command E2E coverage on macOS and Windows",
   "csk_e2e_ubuntu: portable and source-aware fail-closed E2E coverage on Ubuntu",
+  "posix_traversal_independent: tests that run without descriptor-relative traversal",
 ]
 
 [tool.mypy]
