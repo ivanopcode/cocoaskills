@@ -297,6 +297,10 @@ csk shell-init                      # Генерирует или устанав
   an external short-lived temp directory.
 - `mypy` performs strict source type checking. Run `uv run mypy`; it writes no
   persistent artifact unless output is redirected to `.temp/`.
+- `PyYAML` используется только в dev extra как независимый oracle для
+  дифференциальных тестов frontmatter. Запускайте
+  `uv run pytest -q tests/test_frontmatter_differential.py`; постоянные
+  артефакты теста не создаются.
 - `actionlint` validates GitHub Actions workflows. Run
   `actionlint .github/workflows/ci.yml`; validation logs belong under `.temp/`.
 - GitHub Actions runs the cross-platform CI matrices. The merge protocol lane
