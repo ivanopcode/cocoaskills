@@ -835,3 +835,141 @@ for _case_id in (
     "v2-v1-reader-rejects-v2-policy",
 ):
     register_semantic_driver(_case_id, _drive_repository_policy_case)
+def _write_selection_skill(directory: Path, name: str) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: Conformance fixture {name}\n---\n# {name}\n",
+        encoding="utf-8",
+    )
+
+
+def _drive_selector_escape(case: dict[str, Any]) -> None:
+    """Drive ``selector-escape`` through the production directory resolver.
+
+    Registered by TASK-260916-2wjh3m (selection): the selector directory is a
+    portable path whose leading component is a symlink to a directory outside
+    the source root. The escape target exists, yet resolution must fail with
+    ``source_selection_invalid`` before any member read.
+    """
+
+    import tempfile
+
+    from csk.sources import selection as selection_module
+
+    directory = case["input"]["directory"]
+    physical = case["input"]["physical"]
+    with tempfile.TemporaryDirectory(prefix="csk-selector-escape-") as raw:
+        tmp = Path(raw)
+        root = tmp / "src"
+        root.mkdir()
+        outside = tmp / physical
+        _write_selection_skill(outside, "review")
+        first, _, _ = directory.partition("/")
+        # Link the first selector component at the outside top directory.
+        link = root / first
+        target = tmp / physical.split("/")[0]
+        link.symlink_to(target, target_is_directory=True)
+        with pytest.raises(source_errors.SourceError) as excinfo:
+            selection_module.resolve_selector_directory(root, directory)
+        assert excinfo.value.code == case["expected"]
+
+
+def _drive_missing_excluded_literal(case: dict[str, Any]) -> None:
+    """Drive ``missing-excluded-literal`` through collection expansion.
+
+    Registered by TASK-260916-2wjh3m (selection): a missing explicit member
+    fails ``source_member_missing`` even though the same name is excluded.
+    """
+
+    import tempfile
+
+    from csk.sources import selection as selection_module
+    from csk.sources.skillfile_v2 import CollectionSelector
+
+    with tempfile.TemporaryDirectory(prefix="csk-missing-excluded-") as raw:
+        root = Path(raw) / "src"
+        children = case["input"]["children"]
+        if isinstance(children, list):
+            root.mkdir(parents=True)
+            for child in children:
+                (root / child).mkdir(parents=True)
+        else:
+            root.mkdir(parents=True)
+        selector = CollectionSelector(
+            from_alias="local",
+            directory=".",
+            include=tuple(case["input"]["include"]),
+            exclude=tuple(case["input"]["exclude"]),
+        )
+        with pytest.raises(source_errors.SourceError) as excinfo:
+            selection_module.expand_collection(root, selector)
+        assert excinfo.value.code == case["expected"]
+
+
+def _drive_bad_wildcard_member(case: dict[str, Any]) -> None:
+    """Drive ``bad-wildcard-member`` through collection expansion.
+
+    Registered by TASK-260916-2wjh3m (selection): ``"*"`` discovers one valid
+    and one invalid candidate; the whole operation fails with
+    ``source_member_invalid`` instead of skipping the bad member.
+    """
+
+    import tempfile
+
+    from csk.sources import selection as selection_module
+    from csk.sources.skillfile_v2 import CollectionSelector
+
+    with tempfile.TemporaryDirectory(prefix="csk-bad-wildcard-") as raw:
+        root = Path(raw) / "src"
+        root.mkdir(parents=True)
+        for folder, kind in case["input"]["children"].items():
+            member = root / folder
+            if kind == "valid":
+                _write_selection_skill(member, folder)
+            elif kind == "missing-SKILL.md":
+                member.mkdir(parents=True)
+            else:
+                raise AssertionError(f"unknown child kind {kind!r}")
+        selector = CollectionSelector(
+            from_alias="local",
+            directory=".",
+            include=tuple(case["input"]["include"]),
+            exclude=(),
+        )
+        with pytest.raises(source_errors.SourceError) as excinfo:
+            selection_module.expand_collection(root, selector)
+        assert excinfo.value.code == case["expected"]
+
+
+def _drive_duplicate_name(case: dict[str, Any]) -> None:
+    """Drive ``duplicate-name`` through whole-set expansion.
+
+    Registered by TASK-260916-2wjh3m (selection): two folders carry the same
+    installed SKILL.md name, so the expanded set fails with
+    ``source_name_conflict`` before any publication.
+    """
+
+    import tempfile
+
+    from csk.sources import selection as selection_module
+    from csk.sources.skillfile_v2 import CollectionSelector
+
+    with tempfile.TemporaryDirectory(prefix="csk-duplicate-name-") as raw:
+        root = Path(raw) / "src"
+        root.mkdir(parents=True)
+        folders: list[str] = []
+        for member in case["input"]["members"]:
+            folders.append(member["folder"])
+            _write_selection_skill(root / member["folder"], member["name"])
+        selector = CollectionSelector(
+            from_alias="local", directory=".", include=tuple(folders), exclude=()
+        )
+        with pytest.raises(source_errors.SourceError) as excinfo:
+            selection_module.expand_selectors([selector], {"local": root})
+        assert excinfo.value.code == case["expected"]
+
+
+register_semantic_driver("selector-escape", _drive_selector_escape)
+register_semantic_driver("missing-excluded-literal", _drive_missing_excluded_literal)
+register_semantic_driver("bad-wildcard-member", _drive_bad_wildcard_member)
+register_semantic_driver("duplicate-name", _drive_duplicate_name)

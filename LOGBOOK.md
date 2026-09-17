@@ -1,5 +1,397 @@
 # Logbook
 
+## 2026-09-17 - TASK-260916-2wjh3m rev22: consolidate descriptor-boundary seams and narrowing evidence
+
+Closed the seven revision-21 mechanisms in one candidate pass. Session setup
+does not enumerate outside ancestors and now owns/closes every temporary
+descriptor. Managed-root probes stay identity-based and fail closed, including
+symlink aliases; POSIX link targets preserve native backslash filename
+semantics. The R1 property is installed before session setup and asserts the
+production descriptor seam's actual parent identities, while the independent
+outside-descriptor-read attack proves the oracle is non-vacuous. Downstream
+`skillspec` metadata checks use synthetic `lstat`/`stat` data from the
+descriptor-captured snapshot instead of reopening the display path. All ten
+revision-22 narrowing mutants were rerun on this tree and killed; the
+candidate remains uncommitted for Story handoff.
+
+## 2026-09-17 - TASK-260916-2wjh3m rev21: descriptor traversal closes path-string boundary classes
+
+Reworked the selection path around `SelectionSession`: the source root is opened once, selectors descend by descriptor-relative names with no-follow semantics, and ancestry/pruning/containment use opened `(st_dev, st_ino)` identities plus managed-name checks. `physical_path`, lexical containment, and path-string ancestry are gone from the selection path. POSIX uses `O_NOFOLLOW` and `dir_fd`; the Windows fallback uses `scandir`/no-follow checks with the documented weaker race guarantee. Downstream validation receives a descriptor snapshot through `_SnapshotPath`, after one exhaustive pre-read walk rejects links and special files. Added the R1-R8 audit-hook property, identity and structured-error properties, all reviewer attack tests through revision 20, and one narrowing mutant per surface row. The candidate remains uncommitted for the Story handoff.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev20: containment by filesystem identity; a redundant fail-closed layer turns R19a into a measured survivor
+
+Review rev19 reopened F2 on spelling: `physical_path` preserves the caller's case spelling and the csk-home check used lexical `relative_to`, so `CSK_CONFIG` under `SOURCE/` (the same directory as `source/` on a case-insensitive filesystem) made an inside-home package look outside through both entry points. Fixed by replacing every lexical containment test with one `is_within(child, root, *, code, context)` predicate that re-resolves both paths with `physical_path` and walks the physical ancestry comparing `(st_dev, st_ino)` at every ancestor (plus a `samefile` fallback for platforms without meaningful inode identity); nonexistent roots compare by deepest-existing-ancestor identity plus a case-rule tail probe, and all probe failures refuse with the caller-chosen code. Committed the reviewer's case-variant attack plus unicode/wildcard/acceptance regressions and a 90-cell boundary decision table (102 cases). Notable: the new predicate's internal fail-closed re-resolution made the rev19 home-swallow mutant R19a a survivor — the weakened outer layer is compensated by the inner layer raising identically (same code/context/cause), which is reported as a stated bound rather than dropped, and two new narrowings pin the nonexistent-root and absent-child branches instead. Process note: an existing test pinned `managed_output_boundary(absent-path) is None`, so definitive child absence (`ENOENT`/`ENOTDIR`) reports "outside" while every other probe failure refuses — and selector resolution now requires the directory before containment so missing selectors keep their precise error rather than a misleading escape message.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev19: one error-propagating resolver; a global inode visited set false-positives on macOS /var
+
+Review rev18 reopened F2 on the resolver itself: `managed_output_boundary` called `os.path.realpath` with `strict=False`, which swallows filesystem errors internally, so an injected `PermissionError` at the home-alias `lstat` never reached the surrounding fail-closed handler and the inside-home package was accepted. Fixed by replacing every `realpath`/`resolve` on the selection path with one `physical_path` helper that walks component by component with `os.lstat`/`os.readlink`, propagating every `OSError` except `ENOENT` (literal tail for fresh homes) as the caller-chosen `SourceError` with the failing component in the detail. Notable: a global `(dev, ino)` visited set for loop detection false-positived on macOS, where `/var` is a symlink and an absolute link target containing `/var` re-encounters the outer `/var` inode without any cycle; the fix tracks `((dev, ino), remaining)` states, so the same file with the same remaining refuses (true cycle) while the same file with different remaining (DAG re-encounter) stays legitimate, plus a 40-expansion cap. Committed the reviewer's home-alias attack with exact-code/cause assertions plus intermediate-member, two-link-cycle, ELOOP-errno and fresh-home tables (10 cases). The home-swallow narrowing mutant is killed by exactly the 4 home cases. All 52 mutants killed, zero survivors. Process note: pytest `tmp_path` on macOS is already physical (`/private/var/...`), while `tempfile` returns logical (`/var/...`), so an exact-string `lstat` mock triggers under pytest but misses under a hand-rolled temp dir — verify fault-injection mocks through the same fixture the committed test uses.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev18: wrap downstream readers in one boundary; a failed probe is not evidence of absence
+
+Review rev17 reopened F1 on the composed reader (a `PermissionError` inside
+skillcheck's own `Path.read_text` leaked raw through both entry points) and
+F2 on the identity probe (a failed `samefile` was treated as "outside", so
+an injected probe denial turned a refused managed package into an accepted
+one). Fixed with one `_run_member_reader` boundary around every downstream
+invocation (SKILL.md, manifest, `skillcheck`) converting `_FS_ERRORS` to
+structured `source_member_invalid` with the cause chained, and by making
+every boundary probe fail closed (`source_output_overlap` with `boundary
+undetermined`), distinguishing legitimate absence (`FileNotFoundError` /
+`NotADirectoryError`) from failure via `os.stat` instead of `exists()`.
+Committed the reviewer's 4-case attack with exact-code assertions. Two
+narrowing mutants (downstream leak re-admitted; probe failure swallowed)
+are each killed by exactly their 2 committed cases. All 51 mutants killed,
+zero survivors. Process note: terminating a mutant-campaign run mid-flight
+stranded the in-flight mutant (R11a) in the tree, and a marker-grep check
+passed because that mutant carries no marker string — every later run in
+that slice silently ran as mutant+mutant until the R11a iteration crashed
+on its 0x find-string. Recovery was a one-line revert verified by the full
+find-string audit plus a green baseline suite; the whole campaign was then
+re-executed from scratch. Verify a baseline by running it, never by
+grepping for markers.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev17: decide links from lstat, resolve only for diagnostics; the outer guard makes single-edit leak mutants survive
+
+Review rev16 reopened F1 on the exception path: the pre-read walk resolved
+each link before refusing and caught only OSError, so cyclic links leaked
+`RuntimeError` from both entry points instead of `source_member_invalid`.
+Fixed by deciding every symlink from `os.lstat` alone (resolution is now
+diagnostic-only behind the never-raising `_diagnostic_resolve`) and by
+auditing every filesystem call on the selection path into one `_FS_ERRORS`
+tuple (`OSError`, `RuntimeError`, `ValueError`, `UnicodeError`), including
+the previously unguarded `_resolve_root().is_dir()` check. Committed the
+reviewer's 6-case attack plus a cyclic-position table (member root, nested,
+`references/.git`, SKILL.md itself, both entries), a direct
+metadata-gate cyclic test, and an embedded-NUL structured-refusal test.
+Notable: the first R17 mutant (walk branch only) SURVIVED because the
+broadened outer handler converts the leaked `RuntimeError` to a structured
+refusal — the mutant needed a second edit (outer drops `RuntimeError` only)
+to re-admit exactly the leak, and is now killed by 12 cyclic cases through
+both entries. All 47 mutants (46 rerun, 1 new) killed, zero survivors.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev16: guard the composed read path, not the discovery path; pruned for discovery is not pruned for safety
+
+Review rev15 reopened F1 on the composed read path: `_reject_links_in_member`
+skipped `PRUNED_CHILD_NAMES` at any depth, but `skillcheck._prompt_markdown_files`
+(`references.rglob("*.md")`) traverses without that pruning, so
+`references/.git/leak.md -> /outside` was opened twice per entry point. Fixed
+with one exhaustive physical pre-read walk (`os.walk(..., followlinks=False)`
+plus `os.lstat` on every entry, NO name pruning): any symlink refuses, any
+non-regular non-directory refuses, every `realpath` must stay inside the
+resolved source root — before SKILL.md, manifest, or `skillcheck` reads.
+Committed the reviewer's 6-case attack plus a 12-case link-shape table
+(refusal AND zero outside reads on both entries) and a regular
+`references/.git/notes.md` positive control. All 46 mutants (45 rerun with
+identical kill counts, F1 rebuilt for the walk, 1 new: skip-pruned-subtrees)
+killed, zero survivors.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev15: enumerate the alphabet from the spec, not from memory; the B6 bound was a misreading
+
+Review rev14 reopened F3 on the double-quoted escape alphabet:
+`_DOUBLE_QUOTED_ESCAPES` omitted `\/` and backslash + literal TAB, so valid
+descriptions were refused. Worse, the differential suite had blessed the gap
+as bound B6 ("not in the section 5.7 table") — a spec misreading, since YAML
+1.2.2 section 5.7 productions [42]-[62] include both spellings and the oracle
+accepts them. Fixed by implementing the complete alphabet (20 rows, 21
+spellings), refusing surrogates and above-max hex escapes, and deleting B6:
+`\/` is now a strict exact-agreement row and the literal-TAB spelling a T1
+pinned-agreement row (strict docs are tab-free by construction). Committed the
+reviewer's 42-case alphabet attack verbatim plus an implementation-independent
+20-row exact-value table (description exactness at the public tokenizer,
+name exactness through both entry points), name-gate and invalid-escape
+refusal tables, and B15 surrogate-bound rows (corpus 1456, allowlist
+unchanged, entry sample stable at 105). All 45 mutants (43 rerun with
+identical kill counts, 2 new: drop-`\/` and admit-`\q`) killed, zero
+survivors.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev14: normalize only what the grammar consumed; the last line is not like the others
+
+Review rev13 repeated F4 at the one place the rev13 framing still
+normalized unconditionally: `_split_frontmatter_lines` stripped a trailing
+CR from every `split("\n")` segment, including the final unterminated one,
+so `---<CR>` at EOF framed as a clean fence and was accepted. Fixed by
+dropping a trailing CR only where it precedes a consumed LF (all segments
+except the last); the final segment keeps a trailing CR, the fence grammar
+never matches it, and the frontmatter refuses as unclosed. One honest
+layering note: the refusal surfaces as `must close with`, not at the
+framed lone-CR gate, because the gate only sees an already-framed region,
+and the corpus pins that fragment so a future strip-fence regression (the
+R7 mutant) still fails loudly. Committed the attack verbatim plus a 32-param
+endings-x-markers-x-regions matrix, a self-attack table for every
+EOF/empty/opening-only boundary, and 8 differential framing documents
+(corpus 1448, allowlist unchanged). All 43 mutants (42 rerun, 1 new
+final-CR-strip mutant killed through both entries) killed, zero survivors.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev13: separation is a token rule, framing is a region rule; the oracle is lenient about the first
+
+Review rev12 found two framing/tokenizer boundaries: `_check_scalar_trailer`
+admitted `#` with no separating space/tab after a quoted scalar, and
+lone-CR validation ran over the whole document before the closing fence was
+found, so body CR refused a valid package. Fixed by requiring `cursor > pos`
+in the shared trailer checker (one rule for quoted, flow, block-header, and
+plain comment positions) and by splitting raw lines first, locating fences,
+then gating only the framed region. The quoted attack's oracle assertion was
+wrong (PyYAML 6.0.3 accepts `"x"#c`; only `|#c` raises), so the committed
+regression pins the oracle accept and documents the refusal as B14
+separation-strictness (YAML 1.2 section 6.5) rather than agreement. Lesson:
+when the oracle and the grammar disagree, pin both outcomes with the spec
+citation instead of warping either side — leniency in the reference
+implementation is a divergence to record, not a behavior to copy. Corpus 1440
+documents (+33: B14, T1 quoted/header tabs, strict header comments, body-cr
+frame-ok), 42/42 mutants killed (40 rerun + double-zero-separator +
+first-body-line-CR).
+
+## 2026-09-16 - TASK-260916-2wjh3m rev12: LF-only block breaks; the forced exception was wrong, the older test was 1.1
+
+Review rev11 repeated F3 an eleventh time inside the rev11 "narrowest forced
+rule" itself: `_logical_block_lines` turned a trailing NEL/LS/PS into a break
+and strip chomping deleted it, so `name: |-` + `review<U+2028>` installed as
+`review` (identity loss, both entries). The rev11 deviation note proved no
+content model reaches the committed pinned values — because the pinned values
+were YAML 1.1 (PyYAML treats all three as breaks), not 1.2. Fixed by deleting
+the exception with no replacement (block rendering knows exactly one break:
+LF; chomping acts only on trailing empty lines and the final LF), correcting
+the rev10 regression to the 1.2 values under the same test name, and recording
+the separators as SB1/SB2 structure divergences (YAML 1.1 section 5.4 vs YAML
+1.2.2 section 5.4). The same attack forced a second correction: the NEL rows
+require NEL names to install, so the installable-name gate admits exactly NEL
+among controls (YAML content, filesystem-legal, identical to LS/PS) while
+every other control stays refused fail-closed. Lesson: a "forced rule" that
+exists only to satisfy one older test expectation is a smell — check whether
+the expectation encodes the old (1.1) behavior before elevating it above the
+explicit contract.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev11: grammar character classes; separators are content except the forced trailing block break
+
+Review rev10 repeated F3 a tenth time at the character-class layer: Python
+`strip()`/`isspace()` semantics treated standalone NBSP/EM SPACE/narrow
+NBSP/ideographic-space lines as blank (the oracle raises on each), and the
+NEL/LS/PS-to-LF rewrite changed block values the oracle preserves. Fixed by
+defining the grammar classes once (white space = SPACE/TAB only; line break =
+LF/CRLF; separators never split, never rewritten) and using only them at
+every structural decision, plus one forced exception: a separator ending a
+block content line is that line's preserved break (NEL to LF, LS/PS verbatim),
+because the committed oracle-exact regression pins values no content model
+reaches (clip and strip disagree on the same trailing-LS text). Lesson: when
+a committed regression and the general rule collide, implement the narrowest
+rule the regression forces, prove no content model reaches it, and record the
+deviation with the proof instead of warping the general rule. Corpus 1407
+documents (+497: whitespace matrix over 16 Zs + 3 separators + FEFF at every
+structural position, SB1/SB2 cited divergences replacing B11, kept allowlist),
+39/39 mutants killed (36 rerun + blank-readmit + separator-normalize +
+gate-charset), zero survivors.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev10: YAML source-character gate; Unicode breaks end the line
+
+Review rev9 repeated F3 a ninth time at the character layer: raw U+0000/U+0001/
+U+007F/U+000B source characters were admitted as string content while the
+PyYAML oracle raises on each, and the differential corpus never generated
+forbidden source characters. Fixed with a c-printable gate over the framed
+frontmatter region (opening through closing fence; body never read) plus a
+BOM-only-at-start rule, and by treating NEL/LS/PS as line breaks like LF.
+The break decision is the load-bearing one: preserving NEL as content would
+diverge from the oracle in the unsafe direction (csk accepts plain-NEL docs
+the oracle rejects), while splitting keeps every divergence fail-closed
+(csk refuses quoted-break scalars the oracle folds) or value-pinned (the
+oracle's own trailing-LS/PS preservation quirk, plus its NEL-fold vs LS/PS-
+preserve inconsistency in quotes, are pinned as B11). Lesson: when the oracle
+is internally inconsistent, do not mimic it — pick the uniform fail-closed
+rule and pin both outcomes. Corpus 910 documents (+178: 173 control + 5
+framing; rev9's "730" was rounded, actual 732), allowlist unchanged, 36/36
+mutants killed with full-file runs per mutant (every rerun row re-executed
+on the rev10 tree, zero survivors).
+
+## 2026-09-16 - TASK-260916-2wjh3m rev9: chomping after baseline removal; PyYAML differential oracle
+
+Review rev8 repeated F3 an eighth time at the chomping step: whitespace-only
+physical lines were flagged empty BEFORE baseline removal, so a more-indented
+all-space line (content after removing the baseline) was chomped away instead
+of rendered. Same class lesson as rev5-rev8 at a new layer: an "empty" verdict
+about a transformed value must be computed AFTER the transform, never before
+it. Fixed by deciding empty scalar content only after baseline removal and,
+while building the mandated differential oracle, fixed two further
+oracle-found gaps instead of allowlisting them: the over-indented-leading-empty
+error now guards auto-detection only (explicit-indent leading blanks are
+ordinary lines, matching the oracle), and the tokenizer refuses `,`/`]`/`}`
+starters, `?` with space/end-of-line, and a lone `=` (YAML `ns-plain-first`;
+a full punctuation-starter sweep now agrees with the oracle except the
+documented tag/anchor subset boundary). The oracle itself
+(`tests/test_frontmatter_differential.py`, 730 documents, seed 260916,
+TEST-ONLY `pyyaml>=6`) asserts byte-exact values through `_parse_frontmatter`
+and oracle-driven gates through `read_skill_md_name` for the full corpus plus
+a 75-document sample through both public entry points, with an explicit
+1.1-vs-1.2 type allowlist (9 entries: the oracle keeps `0o`, `08`, lowercase
+exponents and signed `.5` as strings while typing `yes`, `0b`, signed hex,
+underscores and sexagesimals) and a boundary table for intended strictness
+(duplicates, tabs, below-baseline comments, anchor/tag values, single-line
+quoted/flow forms, bare `<<`), each entry pinning BOTH outcomes with its
+mandate. All 35 mutants (30 rerun, 5 new) killed, zero survivors; the
+admit-one-trailing-whitespace-line mutant dies on the committed reviewer
+regression and on 22 differential documents.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev8: YAML 1.2 section 8.1 block scalars
+
+Review rev7 kept F3 open a seventh time in the block-scalar branch: the
+header regex accepted an explicit indentation indicator the content reader
+never received, each content line was stripped independently (no baseline),
+and a legal header comment was refused. Same class lesson as rev5-rev7 at a
+new layer: a gate that parses a constraint and then discards it before the
+content decision is a bypass path, not a check. Fixed by implementing YAML
+1.2 section 8.1 for the root-mapping case as a closed pipeline: a strict
+header parser (style, chomping/indent indicators in either order, optional
+spaces/tabs, optional separated `#` comment) passes
+(style, chomping, explicit_indent) into a content reader with an explicit or
+auto-detected baseline, under-baseline refusal, over-indented-leading-empty
+refusal, literal/folded rendering (fold rule verified against the spec text
+and a PyYAML oracle: adjacent ordinary lines join with a space, `k` blanks
+between ordinary lines render `k` breaks, `k + 1` where a more-indented line
+is adjacent) and clip/strip/keep chomping. Notable spec details encoded:
+all-space lines keep their remainder beyond the baseline (spec 8.8 `  ` and
+8.10 ` ` separators), ` \t` is content `\t` (8.2), and `|#c` refuses
+(separation required, consistent with the rev4 comment rule). Committed both
+rev7 attacks under their names plus 8.1-8.13 spec-example tables through
+both entry points (values asserted as installed names where portable and
+single-line, byte-exact at the parser the entry points call since entries
+strip installed names). All 30 mutants (29 rerun on the revised tree, 1 new
+admit-one-under-indented-line mutant killed by the named regression through
+both entries), zero survivors.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev7: column-0 fence framing closes the frontmatter class
+
+Review rev6 repeated F3 a sixth time one layer earlier: the fence scan used
+`line.strip() == "---"`, so an indented `  ---` terminated the document
+before the indentation-aware grammar saw it, admitting a child under a
+scalar and hiding a duplicate root key. Same lesson as rev6, applied to
+framing: never normalize (strip, fold, translate) before a structural
+decision. The fix reads SKILL.md as bytes (text-mode universal newlines
+would hide lone CR), decodes strict UTF-8, strips one BOM, splits on LF
+with one trailing CR per line (CRLF valid, lone CR refuses), requires
+line 1 to be exactly `---` at column 0, and closes at the first later
+column-0 `---`/`...` line; indented fence-looking lines reach the block
+grammar (valid inside `|`/`>` scalars, structural errors elsewhere) and
+indent-0 `--- x`-style lines refuse. Committed the rev6 attack under its
+name, the three rev1 attacks under theirs (no previously reproduced bypass
+can return), and framing accept/refuse decision tables through both entry
+points. All 29 mutants (28 rerun on the revised tree, 1 new strip-based
+closing mutant killed by the named regression), zero survivors.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev6: indentation-aware frontmatter block grammar
+
+Review rev5 repeated F3 a fifth time at the structural layer: the parser
+stripped every line before deciding mapping structure, so `metadata:
+wrapper` plus indented `name:`/`description:` promoted nested keys to root
+requirements, and `description: nested: mapping` / `description: - item`
+were accepted as strings. Scalar tokenization was correct but answered the
+wrong question: it classified tags without first establishing the value IS
+a scalar. Fixed by rewriting `_parse_frontmatter` as an indentation-aware
+block parser (fail closed): tab indentation refuses, `key:` needs a space
+or end of line, nested blocks under other keys are consumed and ignored
+(inner keys never satisfy root requirements), `triggers` alone parses
+lists, block headers accept chomping/indent indicators, flow collections
+are consumed-and-ignored for other keys, and an indented line under a
+scalar is a structural error; the tokenizer refuses `- ` entries and
+plain scalars carrying a mapping indicator before core-schema
+classification. Quoted `"nested: mapping"` / `"- item"` stay valid.
+Committed `test_non_scalar_or_nested_frontmatter_refused` plus
+structure accept/refuse tables through both entry points. Mutant note: a
+first-draft F1 mutant in `_ensure_contained_regular_file` survived
+because `_reject_links_in_member` fires first with the same message, so
+the corrected narrowing mutant targets the pre-read walk's escape branch
+instead; unreached defense-in-depth branches cannot carry mutant
+evidence. All 28 mutants (25 rerun, 3 new) killed, zero survivors.
+Lesson: stripping input before structural analysis promotes attacker
+shapes into valid ones; classify structure first, then content.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev5: single boundary predicate and scalar tokenizer
+
+Review rev4 repeated both classes a fourth time: (1) the ancestry guard ran
+only in wildcard discovery, so `resolve_individual` and literal includes
+accepted a valid package at `source/.agents` (bypass path around the check);
+(2) comment handling both admitted absent values (`description: # only a
+comment` parsed as a nonempty string) and rejected valid ones
+(`description: "A valid description" # comment` failed as unterminated),
+because stripping before comment recognition lost the separator and the
+stripper short-circuited on any quote-leading value. Fixed by putting each
+rule in ONE function every path calls: `managed_output_boundary` (physical
+ancestry plus csk-home containment) runs before any metadata read on all
+three paths (explicit refuses `source_output_overlap`, wildcard prunes), and
+`parse_frontmatter_scalar` (explicit state machine with quote-aware `#`
+handling and REGEX-ONLY core-schema classification, zero `int()`/`float()`
+calls) parses every scalar. Committed attacks
+`test_explicit_managed_package_refused`,
+`test_comment_only_description_refused`,
+`test_quoted_description_with_comment_accepted` plus explicit/wildcard and
+accept/refuse tables. Mutant note: rapid file rewrites in one campaign can
+reuse stale `__pycache__` bytecode and fake a survivor; the rev5 campaign
+clears caches and runs with `PYTHONDONTWRITEBYTECODE=1`. Lesson: a guard
+that lives in one caller is a suggestion; the durable fix is a predicate the
+production paths cannot bypass, with tests enumerating the input space.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev4: ancestry pruning and regex-only scalars
+
+Review rev3 repeated both classes a third time: (1) anchor enumeration missed
+nested workspaces (`source/workspace/.agents/nested/generated` reached through
+a collection child alias), because no anchor list covers every intermediate
+directory; (2) scalar typing still converted (`int()` on a 5000-digit literal
+raises under the digit limit and fell back to string) and split comments on
+space only (TAB-separated `#` comments defeated bool/hex classification).
+Fixed by pruning on physical ANCESTRY (realpath the child, walk to the
+filesystem root, prune when any component carries an adapters-derived managed
+name under actual FS case-equivalence, or lies in the csk home: no anchors
+left to enumerate), and by a closed scalar pipeline (whitespace-aware comment
+separation, quoted means string, unsupported starters refused, plain scalars
+by REGEX ONLY with zero conversion calls). Regressions
+`test_nested_managed_descendant_alias_pruned` and
+`test_nonstring_description_still_refused` are the reviewer's committed
+attacks. Lesson: a fix that enumerates where the bad input can hide (anchors,
+convertible spellings, space-only separators) re-opens on the next hiding
+place; the durable fix states the positive rule (ancestry, regex, whitespace)
+so the class is unreachable.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev3: subtree pruning and core-schema scalars
+
+Review rev2 repeated two classes the rev2 fixes had closed only by example:
+(1) pruning compared root identity, so a child alias into a managed-output
+DESCENDANT (`.agents/nested/generated`, `.git/nested/...`, adapter roots)
+was discovered; (2) the scalar gate was decimal-only, so `0x2A`/`0o52`
+laundered into strings. Fixed by pruning on physical subtree containment
+(child realpath equal-or-within any managed/`.git` root anchored at both the
+collection base and the source root, plus a `samefile` ancestor probe for
+host-actual case/hard aliases), and by resolving the full YAML 1.2 core-schema
+plain-scalar space (decimal/hex/octal ints, float/exponent forms, exact
+`.inf`/`.nan` spellings, null/bool/flow) with quoted scalars as the positive
+control. Regressions `test_managed_descendant_alias_pruned` and
+`test_numeric_scalar_refused` plus narrowing class mutants (admit leaf
+`generated` only; admit `0x`-hex only) prove the classes, not the examples.
+All 18 mutants re-run killed on the rev3 tree; no reused-row evidence.
+
+## 2026-09-16 - TASK-260916-2wjh3m rev2: read boundary, physical pruning, scalar types
+
+Review rev1 returned three bypasses the green suite missed: (1) a contained
+member with `SKILL.md` symlinked outside was accepted and its external bytes
+read, (2) pruning compared raw names so `.GIT` on a case-insensitive host
+escaped as `.git`, (3) unquoted `null`/`{}`/`true`/`42` were laundered into
+strings. Fixed by resolving every metadata/package file physically before any
+content open (links rejected, escaping links name the boundary, zero external
+opens counted in tests), by pruning on realpath plus an actual-filesystem
+`samefile` case-equivalence probe and link targets, and by preserving
+core-schema scalar types for unquoted frontmatter (quoted scalars stay
+strings). No frontmatter reader exists in `csk.skillcheck` to reuse.
+
+## 2026-09-16 - TASK-260916-2wjh3m: selection code mapping and Unicode installed names
+
+Individual name mismatch (`resolve_individual`, SKILL.md name != selector
+name) fails `source_selection_invalid`, not `source_member_invalid`: the member
+may be valid while the selector names the wrong skill. Broken SKILL.md,
+manifest failures, and manifest-declared `name` != SKILL.md name fail
+`source_member_invalid`. Collection SKILL.md names admit Unicode portable
+destination names (<=128 chars, `is_portable_component`), not ASCII-only
+identifiers, so NFD+casefold destination collisions are expressible; individual
+names stay identifiers via parse. Prune set for `*` is `.git`, `.agents`,
+`.claude`, `.codex`, `.cursor`, `.gemini`; snapshot/staging live under the csk
+home and contribute no names. Frontmatter parser covers single-line scalars,
+block/flow lists, and `|`/`>` scalars; other YAML fails closed.
+
 ## 2026-09-16 - TASK-260916-2u0v5j rev2: v1 duplicate precedence and null-vs-absent sources
 
 Review rev1 caught two regressions the green suite missed: extracting
@@ -2936,3 +3328,41 @@ Reworked the machine-owned repository policy boundary after revision 1 review. T
 Fresh narrowing mutants were regenerated from the current candidate, preserving each gate and admitting only a proper subset of its forbidden class. All 21 mutant controls passed and all 21 mutants failed through production parser or loader paths. Policy corpus coverage is 18 of 18 schema cases, semantic harness coverage is 17 of 17 owned drivers with zero socket attempts, and fallback classification coverage is 30 of 30 named rows.
 
 Validation evidence is attached in `TASK-260916-1iyslr_results.md` and `TASK-260916-1iyslr_mutation-evidence.tar.gz`. The exact draft-root landing suite passed with 2429 tests and 171 skips; mypy and the focused policy/conformance suites also passed. No network or credential work was introduced; transport attempts remain assigned to TASK-260916-fsw7re. The candidate remains uncommitted in the Story worktree.
+## 2026-09-17 TASK-260916-2wjh3m revision 23: two-phase selection lifecycle
+
+Reworked the selection filesystem seam after review revision 22. Phase A now
+performs the unconfined identity preflight and freezes absolute-link replay
+plans; the transition is a fresh source-root open whose identity must match
+Phase A. Phase B retains only that fresh root capability and descends by bare
+names with descriptor-relative `O_NOFOLLOW` operations. The boundary property
+starts at the transition and attacks both descriptor-relative and path-based
+outside reads. Existing R1-R8 narrowing mutants plus the new parent-open,
+lexical-rebase, and two oracle-shape mutants were rerun against this tree and
+all were killed. Landing gate: mypy exit 0; 6856 passed, 189 skipped, exit 0.
+
+## 2026-09-17 TASK-260917-3q5h87: confined selection traversal class closure
+
+Split the traversal layer from collection semantics and closed the revision-23
+filesystem findings. Phase A now resolves only declared selector paths and
+wildcard frontiers, freezes the complete managed-root identity map and
+absolute-link replay decisions, and hands Phase B a fresh root descriptor
+whose identity is checked before descent. Phase B uses only bare-name,
+descriptor-relative opens and one traced read seam. The snapshot Path facade
+also lives in `_selection_fs.py`, so downstream validators consume captured
+bytes without a second path-based filesystem seam.
+
+The boundary property now correlates every phase-B `open` and `scandir` audit
+event with the production descriptor event and catches bare-path Python opens,
+foreign descriptors, pre-opened `os.read`/`os.pread`/`os.readv`/`os.preadv`,
+and stream reads. Class controls cover the managed-root family x
+individual/literal/wildcard table, finite link revisits, phase-A fault
+propagation, frozen descendant and boundary-alias replacement, entry/open
+identity races, and unreadable unselected siblings. Candidate-generated
+narrowing mutants for F2, F6, F10, F11, F12, F13, and F14 all fail their
+named controls; each mutant was restored before the next gate.
+
+Landing evidence from `.temp/venv-dev`: boundary property 143 passed; the
+selection regression slice 147 passed; strict mypy exit 0; compileall exit 0;
+and the ordinary draft-sources suite passed 6917 tests with 189 declared
+skips (exit 0). The candidate remains uncommitted for Story handoff; full
+evidence is attached as `TASK-260917-3q5h87_results.md`.
