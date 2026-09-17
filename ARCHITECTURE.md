@@ -157,6 +157,8 @@ additionally re-checks installed skills against registries (`attest.py`), and
 | `skillspec.py` | `agent-skill.json` parsing: commands, runtime/build roots, capabilities, dependencies, requirements, and the closed schema-6 build shape (schemas 1 through 6). |
 | `closure.py` | Transitive requirement resolution, unification, cycle detection, activation edges, topological order. |
 | `source_identity.py` | Canonical `host/path` identity for git URLs and allowlist matching. |
+| `sources/repository_policy.py` | Machine-owned source endpoint policy parsing, canonical identity, ports, mirrors, aliases, pins, and pure fallback classification. |
+| `sources/transport.py` | One-shot trusted Git endpoint attempts, bounded fallback, deadline accounting, sanitized provenance, and strict external-build lane admission. |
 | `mcp_configs.py` | Read-only resolution of declared MCP server dependencies against agent configuration surfaces, with static availability probes: PATH resolution for stdio commands, disabled-server filtering, and trust-gating hints for project-only declarations. |
 | `hybrid.py` | Hybrid-scope manifest and per-project activation targeting. |
 | `dev_substitutions.py` | `Skillfile.dev.json` parsing for local provider substitution. |
@@ -173,7 +175,9 @@ additionally re-checks installed skills against registries (`attest.py`), and
 | `whitelist.py` | Prompt-context copy rules: which skill files reach the agent. |
 | `locale.py` | Locale rendering for localized skill metadata. |
 | `shims.py` | Script runtime population plus direct protected-artifact launchers for compiled commands. |
-| `installer.py` | Project/hybrid planning, private compilation, cache publication, and transactional materialization. |
+| `git_admission.py` | Trusted Git distribution, clean environment, exact-ref fetch, raw-object proof, and manager-approved connection targets. |
+| `build_repository_pipeline.py` | External repository preflight, audit, receipt/cache pipeline, and section 7 endpoint grammar gate. |
+| `installer.py` | Project/hybrid planning, policy-bound private compilation, cache publication, and transactional materialization. |
 | `global_install.py`, `global_bins.py` | User-wide skill installs and global command shims. |
 | `transactions.py` | Journaled multi-target commit, recovery, target-preimage guards, and reverse rollback. |
 | `install_marker.py` | Marker v1/v2 parsing and canonical installed build records. |

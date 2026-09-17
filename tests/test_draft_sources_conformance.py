@@ -33,7 +33,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import socket
+import subprocess
+import sys
+import tempfile
 from collections.abc import Callable, Collection, Mapping
 from copy import deepcopy
 from pathlib import Path
@@ -44,10 +48,12 @@ import pytest
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
-from csk import manifest, protocol_json
+from csk import git_admission, manifest, protocol_json
+from csk.build_repository_pipeline import ExternalBuildError
 from csk.sources import _selection_fs
 from csk.sources import errors as source_errors
 from csk.sources import repository_policy
+from csk.sources import transport as source_transport
 
 ROOT_TEXT = os.environ.get("CSK_DRAFT_SOURCES_SUITE_ROOT")
 pytestmark = pytest.mark.skipif(not ROOT_TEXT, reason="CSK_DRAFT_SOURCES_SUITE_ROOT is not set")
@@ -988,3 +994,497 @@ register_semantic_driver("selector-escape", _drive_selector_escape)
 register_semantic_driver("missing-excluded-literal", _drive_missing_excluded_literal)
 register_semantic_driver("bad-wildcard-member", _drive_bad_wildcard_member)
 register_semantic_driver("duplicate-name", _drive_duplicate_name)
+
+
+_TRANSPORT_LOCK = git_admission.LockedCommit("sha1", "0" * 40)
+
+
+def _transport_snapshot() -> git_admission.Snapshot:
+    item = git_admission.SnapshotFile("value", b"value")
+    canonical = b"curator-build-source-v1\0value"
+    return git_admission.Snapshot(
+        object_format="sha1",
+        commit=_TRANSPORT_LOCK.hex,
+        files=(item,),
+        canonical_bytes=canonical,
+        digest="sha256:" + hashlib.sha256(canonical).hexdigest(),
+    )
+
+
+def _transport_git(root: Path, mappings: Mapping[str, Path]) -> git_admission.GitTool:
+    """Create a trusted Git stand-in that maps only listed test URLs locally."""
+
+    real = Path(shutil.which("git")).resolve()
+    version = subprocess.run(
+        (os.fspath(real), "--version"),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        check=True,
+        timeout=20,
+        text=True,
+    ).stdout.strip()
+    exec_path = Path(
+        subprocess.run(
+            (os.fspath(real), "--exec-path"),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=True,
+            timeout=20,
+            text=True,
+        ).stdout.strip()
+    ).resolve()
+    root.mkdir(parents=True)
+    script = root / "git-wrapper.py"
+    wrapper = root / ("git-wrapper.cmd" if os.name == "nt" else "git-wrapper")
+    mapping = {url: path.resolve().as_uri() for url, path in mappings.items()}
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import subprocess, sys\n"
+        f"MAPPINGS = {mapping!r}\n"
+        "args = [MAPPINGS.get(value, 'protocol.file.allow=always' if value == 'protocol.https.allow=always' else value) for value in sys.argv[1:]]\n"
+        f"raise SystemExit(subprocess.run([{os.fspath(real)!r}, *args], check=False).returncode)\n",
+        encoding="utf-8",
+    )
+    if os.name == "nt":
+        wrapper.write_text(
+            f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n',
+            encoding="utf-8",
+        )
+    else:
+        wrapper.write_bytes(script.read_bytes())
+        wrapper.chmod(0o700)
+    askpass = root / ("askpass.cmd" if os.name == "nt" else "askpass")
+    if os.name == "nt":
+        askpass.write_text("@echo off\r\nexit /b 1\r\n", encoding="utf-8")
+    else:
+        askpass.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        askpass.chmod(0o700)
+    return git_admission.GitTool(
+        executable=wrapper,
+        exec_path=exec_path,
+        allowed_versions=(version,),
+        askpass=askpass,
+    )
+
+
+def _transport_bare(root: Path) -> tuple[Path, str]:
+    """Create one local bare repository for real default-attempt drivers."""
+
+    root.mkdir(parents=True)
+    work = root / "work"
+    bare = root / "remote.git"
+    subprocess.run(
+        (os.fspath(Path(shutil.which("git")).resolve()), "init", "--quiet", os.fspath(work)),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        check=True,
+        timeout=20,
+    )
+    (work / "README.md").write_bytes(b"draft transport fixture\n")
+    git = os.fspath(Path(shutil.which("git")).resolve())
+    subprocess.run((git, "-C", os.fspath(work), "add", "--", "README.md"), check=True, timeout=20)
+    subprocess.run(
+        (
+            git,
+            "-C",
+            os.fspath(work),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.test",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        check=True,
+        timeout=20,
+    )
+    commit = subprocess.run(
+        (git, "-C", os.fspath(work), "rev-parse", "HEAD"),
+        check=True,
+        timeout=20,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        (git, "clone", "--quiet", "--bare", os.fspath(work), os.fspath(bare)),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        check=True,
+        timeout=20,
+    )
+    return bare, commit
+
+
+def _transport_failure_record(failure_class: str, url: str) -> str:
+    """Return one complete manager/transport record for call-site injection."""
+
+    records = {
+        "dns": f"fatal: unable to access '{url}': Could not resolve host: example.org",
+        "auth-rejected": "git@example.org: Permission denied (publickey).",
+        "tls": f"fatal: unable to access '{url}': SSL certificate problem: unable to get local issuer certificate",
+        "host-key": "Host key verification failed.",
+        "integrity": "error: corrupt object deadbeef; fsck failed",
+        "identity": f"fatal: repository '{url}/' not found",
+        "ref-moved": "fatal: couldn't find remote ref refs/heads/locked",
+        "audit": "csk: audit denied",
+        "unknown": "csk: transport failure has no classified evidence",
+        "http-404": f"fatal: unable to access '{url}': The requested URL returned error: 404",
+    }
+    return records[failure_class]
+
+
+def _transport_policy(case: dict[str, Any]) -> repository_policy.RepositoryPolicy:
+    case_id = case["id"]
+    case_input = case["input"]
+    identity = case_input.get("repository", "example.org/kit")
+    if case_id in {
+        "fallback-dns",
+        "fallback-auth-rejected",
+        "fallback-tls",
+        "fallback-host-key",
+        "fallback-integrity",
+        "fallback-identity",
+        "fallback-ref-moved",
+        "fallback-audit",
+        "fallback-unknown",
+        "fallback-http-404",
+        "pinned-auth",
+    }:
+        first = "https://example.org/kit.git"
+        second = "https://example.org/kit"
+        entry: dict[str, Any] = {
+            "endpoints": [
+                {"url": first, "authentication": "first"},
+                {"url": second, "authentication": "second"},
+            ],
+            "fallback": case_input["fallback"],
+        }
+        if case_id == "pinned-auth":
+            entry["pin"] = first
+        return repository_policy.parse_policy(
+            {
+                "schema_version": 1,
+                "repositories": {identity: entry},
+            },
+            reader_revision=1,
+        )
+    if case_id == "v2-external-build-mirror-admitted":
+        return repository_policy.parse_policy(
+            {
+                "schema_version": 2,
+                "repositories": {
+                    identity: {
+                        "endpoints": [
+                            {
+                                "url": case_input["endpoint"],
+                                "authentication": "team-https",
+                                "mirror_of": case_input["mirror_of"],
+                            }
+                        ],
+                        "fallback": "none",
+                    }
+                },
+            },
+            reader_revision=2,
+        )
+    if case_id == "v2-external-build-port-refused":
+        return repository_policy.parse_policy(
+            {
+                "schema_version": 2,
+                "repositories": {
+                    identity: {
+                        "endpoints": [
+                            {
+                                "url": case_input["endpoint"],
+                                "authentication": "team-ssh",
+                            }
+                        ],
+                        "fallback": "none",
+                    }
+                },
+            },
+            reader_revision=2,
+        )
+    if case_id == "v2-external-build-alias-refused":
+        return repository_policy.parse_policy(
+            {
+                "schema_version": 2,
+                "repositories": {
+                    identity: {
+                        "endpoints": [
+                            {
+                                "url": case_input["endpoint"],
+                                "authentication": "team-https",
+                                "alias": case_input["alias"],
+                                "mirror_of": case_input["mirror_of"],
+                            }
+                        ],
+                        "fallback": "none",
+                    }
+                },
+                "aliases": case_input["aliases"],
+            },
+            reader_revision=2,
+        )
+    raise AssertionError(f"no transport policy fixture for {case_id!r}")
+
+
+def _drive_transport_case(case: dict[str, Any]) -> None:
+    case_id = case["id"]
+    case_input = case["input"]
+    expected = case["expected"]
+    calls: list[str] = []
+
+    if case_id == "fallback-policy-unreadable":
+        with tempfile.TemporaryDirectory(prefix="csk-policy-case-") as raw_root:
+            path = Path(raw_root) / "source-policy.json"
+            path.write_bytes(b"{}")
+            socket_attempts = 0
+
+            def fail_socket(*args: Any, **kwargs: Any) -> Any:
+                nonlocal socket_attempts
+                socket_attempts += 1
+                raise AssertionError("unreadable policy reached network")
+
+            def unexpected_attempt(**kwargs: Any) -> git_admission.Snapshot:
+                calls.append("attempt")
+                return _transport_snapshot()
+
+            with (
+                patch.object(socket, "socket", side_effect=fail_socket),
+                patch.object(
+                    Path,
+                    "read_bytes",
+                    side_effect=PermissionError("policy unreadable"),
+                ),
+                pytest.raises(source_transport.TransportError) as excinfo,
+            ):
+                source_transport.acquire(
+                    "example.org/kit",
+                    _TRANSPORT_LOCK,
+                    policy_path=path,
+                    attempt=unexpected_attempt,
+                )
+            assert excinfo.value.code == repository_policy.CODE_POLICY_INVALID
+            assert calls == []
+            assert socket_attempts == 0
+        return
+
+    if case_id in {"v2-user-ssh-alias-ignored", "v2-user-insteadof-ignored"}:
+        with tempfile.TemporaryDirectory(prefix="csk-user-config-case-") as raw_root:
+            home = Path(raw_root)
+            ssh = home / ".ssh"
+            ssh.mkdir()
+            (ssh / "config").write_text(
+                "Host example.org\n  HostName real.example.net\n", encoding="utf-8"
+            )
+            (home / ".gitconfig").write_text(
+                "[url \"https://evil.example.net/\"]\n"
+                "    insteadOf = https://example.org/\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"HOME": os.fspath(home)}, clear=False):
+                if case_id == "v2-user-ssh-alias-ignored":
+                    with pytest.raises(source_transport.TransportError) as excinfo:
+                        source_transport.acquire(
+                            case_input["repository"],
+                            _TRANSPORT_LOCK,
+                            attempt=lambda **kwargs: _transport_snapshot(),
+                        )
+                    assert excinfo.value.code == repository_policy.CODE_ENDPOINT_UNAVAILABLE
+                    assert calls == []
+                else:
+                    declared = case_input["declaration"]
+                    declared_identity = repository_policy.canonical_endpoint_identity(
+                        declared, revision=case_input["transport_revision"]
+                    )
+                    bare, commit = _transport_bare(home / "bare")
+                    tool = _transport_git(home / "tool", {declared: bare})
+                    real_run = git_admission.subprocess.run
+                    fetches: list[tuple[object, ...]] = []
+
+                    def record_fetch(*args: Any, **kwargs: Any) -> Any:
+                        command = args[0]
+                        assert isinstance(command, tuple)
+                        if "fetch" in command:
+                            fetches.append(command)
+                        return real_run(*args, **kwargs)
+
+                    with patch.object(
+                        git_admission.subprocess, "run", new=record_fetch
+                    ):
+                        result = source_transport.acquire(
+                            declared_identity,
+                            git_admission.LockedCommit("sha1", commit),
+                            tool,
+                            declaration=declared,
+                        )
+                    assert result.snapshot.commit == commit
+                    assert result.attempt_count == 1
+                    assert len(fetches) == 1
+                    assert result.attempts[0].endpoint.listed_url == declared
+        return
+
+    if case_id in {
+        "fallback-dns",
+        "fallback-auth-rejected",
+        "fallback-tls",
+        "fallback-host-key",
+        "fallback-integrity",
+        "fallback-identity",
+        "fallback-ref-moved",
+        "fallback-audit",
+        "fallback-unknown",
+        "fallback-http-404",
+        "pinned-auth",
+    }:
+        policy = _transport_policy(case)
+        identity = case_input.get("repository", "example.org/kit")
+        plan = repository_policy.select_endpoints(policy, identity)
+        with tempfile.TemporaryDirectory(prefix="csk-transport-case-") as raw_root:
+            root = Path(raw_root)
+            bare, commit = _transport_bare(root / "bare")
+            tool = _transport_git(
+                root / "tool",
+                {plan.endpoints[-1].url: bare},
+            )
+            real_run = git_admission.subprocess.run
+            fetches: list[tuple[object, ...]] = []
+            injected = False
+
+            def inject_failure(*args: Any, **kwargs: Any) -> Any:
+                nonlocal injected
+                command = args[0]
+                assert isinstance(command, tuple)
+                if "fetch" in command:
+                    fetches.append(command)
+                    if not injected and plan.endpoints[0].url in command:
+                        injected = True
+                        record = _transport_failure_record(
+                            case_input["first_failure"], plan.endpoints[0].url
+                        )
+                        raise subprocess.CalledProcessError(
+                            128, command, stderr=record.encode("utf-8")
+                        )
+                return real_run(*args, **kwargs)
+
+            with patch.object(git_admission.subprocess, "run", new=inject_failure):
+                if expected == "attempt-second":
+                    result = source_transport.acquire_plan(
+                        plan,
+                        git_admission.LockedCommit("sha1", commit),
+                        tool,
+                    )
+                    assert result.snapshot.commit == commit
+                    assert result.attempt_count == 2
+                    assert len(fetches) == 2
+                    assert result.attempts[0].classification in {
+                        "dns",
+                        "ssh-auth-rejected",
+                    }
+                else:
+                    with pytest.raises(git_admission.GitAdmissionError) as excinfo:
+                        source_transport.acquire_plan(
+                            plan,
+                            git_admission.LockedCommit("sha1", commit),
+                            tool,
+                        )
+                    error = excinfo.value
+                    observed = (
+                        error.attempts[0].classification
+                        if isinstance(error, source_transport.TransportError)
+                        else error.failure_class
+                    )
+                    assert observed in {
+                        case_input["first_failure"],
+                        "ssh-auth-rejected",
+                        "unclassified",
+                    }
+                    assert len(fetches) == 1
+        return
+
+    policy = _transport_policy(case)
+    identity = case_input.get("repository", "example.org/kit")
+    plan = repository_policy.select_endpoints(policy, identity)
+
+    if case_id == "v2-external-build-mirror-admitted":
+        with tempfile.TemporaryDirectory(prefix="csk-external-mirror-case-") as raw_root:
+            root = Path(raw_root)
+            bare, commit = _transport_bare(root / "bare")
+            tool = _transport_git(root / "tool", {plan.endpoints[0].url: bare})
+            result = source_transport.acquire_plan(
+                plan,
+                git_admission.LockedCommit("sha1", commit),
+                tool,
+                lane=source_transport.LANE_EXTERNAL_BUILD,
+            )
+        assert result.snapshot.commit == commit
+        assert result.attempt_count == 1
+        assert result.attempts[0].endpoint.listed_url == plan.endpoints[0].url
+        return
+
+    def attempt(**kwargs: Any) -> git_admission.Snapshot:
+        endpoint = kwargs["endpoint"]
+        assert isinstance(endpoint, repository_policy.ResolvedEndpoint)
+        calls.append(endpoint.url)
+        if len(calls) == 1 and case_id != "v2-external-build-mirror-admitted":
+            raise source_transport.TransportFailure(
+                case_input.get("first_failure", "connection-refused"),
+                "classified fixture failure with token=redacted",
+            )
+        return _transport_snapshot()
+
+    if case_id in {
+        "v2-external-build-port-refused",
+        "v2-external-build-alias-refused",
+    }:
+        with pytest.raises(ExternalBuildError) as excinfo:
+            source_transport.acquire_plan(
+                plan,
+                _TRANSPORT_LOCK,
+                attempt=attempt,
+                lane=source_transport.LANE_EXTERNAL_BUILD,
+            )
+        assert excinfo.value.code == "build_repository_identity_invalid"
+        assert calls == []
+        return
+
+    if expected == "attempt-second":
+        result = source_transport.acquire_plan(plan, _TRANSPORT_LOCK, attempt=attempt)
+        assert result.snapshot.commit == _TRANSPORT_LOCK.hex
+        assert result.attempt_count == 2
+        assert len(calls) == 2
+    else:
+        with pytest.raises(source_transport.TransportError) as excinfo:
+            source_transport.acquire_plan(plan, _TRANSPORT_LOCK, attempt=attempt)
+        if isinstance(excinfo.value, source_transport.TransportFailure):
+            assert excinfo.value.failure_class == case_input["first_failure"]
+        else:
+            assert excinfo.value.attempts[0].classification == case_input["first_failure"]
+        assert len(calls) == 1
+
+
+for _case_id in (
+    "fallback-dns",
+    "fallback-auth-rejected",
+    "fallback-tls",
+    "fallback-host-key",
+    "fallback-integrity",
+    "fallback-identity",
+    "fallback-ref-moved",
+    "fallback-audit",
+    "fallback-unknown",
+    "fallback-policy-unreadable",
+    "fallback-http-404",
+    "pinned-auth",
+    "v2-user-ssh-alias-ignored",
+    "v2-user-insteadof-ignored",
+    "v2-external-build-mirror-admitted",
+    "v2-external-build-port-refused",
+    "v2-external-build-alias-refused",
+):
+    register_semantic_driver(_case_id, _drive_transport_case)

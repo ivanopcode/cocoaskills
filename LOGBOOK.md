@@ -1,5 +1,67 @@
 # Logbook
 
+## 2026-09-17 - TASK-260917-ts1s4r rev3: macOS deadline flake was the test racing the runner, not production; clock seam proves the shared deadline deterministically
+
+The `macos-latest` failure (`attempt 1=dns, attempt 2=timeout` on a 0.2 s
+budget with 0.03 s injected sleeps) is `acquire_plan` behaving correctly: a
+saturated eight-way runner pushed the second attempt's return past the
+deadline and the late success was refused, exactly as the sibling
+late-success test requires. Reproduced byte-identically locally with a
+0.15 s stall model. Fix is a defaulted clock seam on `acquire_plan`
+(`src/csk/sources/transport.py`, `clock=time.monotonic`, no call-site
+changes; four reads go through it) plus a rewritten test that drives time
+exactly and asserts the remainder arithmetic (`observed == [0.2, 0.17]`,
+elapsed `0.06 < 0.2`, no sleeping) — identical on idle and saturated
+runners (30/30 under eight hogs). The fresh-budget narrowing mutant
+(`attempt_limits` from `limits.timeout_seconds`) is killed by that test
+alone (exit 1), which also shows the sibling weak-ordering test cannot see
+it. Real-lane wrapper-delay assertions flipped to the load-safe direction
+(success proves within-budget, stopwatch guards the delay fired; refusal
+proves enforcement, stopwatch guards the budget was waited out). Budgets,
+delays, and elapsed assertions all kept; no retry/rerun/flaky. Local full
+suite reconfirms the rev2 selection-fd flake note (8/9/10 shifting
+failures, also at clean HEAD; suite-minus-file exit 0 plus file standalone
+exit 0).
+
+## 2026-09-17 - TASK-260917-ts1s4r rev2: Windows refused spelling opens the mandated fallback; POSIX-absolute SSH fixture paths are drive-relative on Windows
+
+Two windows-latest failures closed. (1) Classifier gap, same family as the
+Schannel record: git 2.55.0.windows.5 writes a closed-port refusal as
+`Failed to connect to 127.0.0.1:49844 after 2057 ms: Could not connect to
+server` (host:port rendering, uncontracted tail; verbatim bytes in
+TASK-260917-ts1s4r_results.md, hosted run 35229841321), which the grammar
+did not recognise, so the envelope fell through to `unclassified` and the
+mandated second-endpoint fallback never opened. Fix is one anchored
+alternative on the `connection-refused` frame
+(`src/csk/git_admission.py`, `host:port` + `could not connect to
+server`); the class was already in the availability set, so this opens the
+fallback the specification mandates and moves nothing else. (2) The SSH
+policy refusal was a test-fixture defect, not production: the test pinned
+POSIX-absolute literals (`Path("/private/wrapper")`) which are
+drive-relative on Windows, so the absolute-path guard correctly raised
+`IDENTITY_INVALID`; the fixture now uses real absolute paths and a
+parametrised negative test pins the guard per path. Full suite note: the
+sibling `test_selection_boundary_property.py` fd-provenance tests flake
+under local `-n 8` xdist load (9/11/10 shifting failures, also at the bare
+base without this candidate; green standalone and green on all hosted
+lanes), so the local green is the suite minus that file plus that file
+standalone, all exit 0.
+
+## 2026-09-17 - TASK-260917-ts1s4r: Windows Schannel TLS spelling was a classifier gap
+
+Windows git 2.55.0 on `windows-latest` fails a self-signed-cert fetch in
+Schannel, not OpenSSL: `fatal: unable to access 'https://...': schannel:
+SEC_E_UNTRUSTED_ROOT (0x80090325) - ...` (verbatim bytes in
+TASK-260917-ts1s4r_results.md, hosted run 35221674975). The transport grammar
+did not recognise it, so the envelope fell through to `unclassified`.
+The old `assert 'identity' == 'tls'` was not a TLS misclassification at all:
+that job never ran a fetch on Windows (`[WinError 193]` tool-probe failure,
+fixed by the portability leaf's `.bat` shim). Fix is one anchored alternative
+on the `tls` frame (`src/csk/git_admission.py:1304`,
+`schannel: .+`); Schannel verifies against the Windows store and ignores
+`GIT_SSL_CAINFO`, so CA-trusting loopback-TLS tests skip on Windows with the
+committed named reason while the no-trust hostile test asserts live `tls`.
+
 ## 2026-09-17 - TASK-260917-2b3ia1: POSIX-only selection bound; capability identity must survive os wrapping, lstat membership is version-dependent
 
 Declared-and-never-implemented bound made real: schema-2 selection now refuses `source_selection_invalid`
@@ -3463,3 +3525,63 @@ misses. Production `selection.py` is byte-identical to revision 24
 (sha256 `55410b81…a17e5`); all behaviour rows re-ran green unchanged.
 Full ordinary suite green on the final tree (7250 passed, 172 skipped).
 Full evidence in `TASK-260916-2wjh3m_results.md`.
+
+## 2026-09-17 TASK-260916-fsw7re: bounded authenticated transport resolution
+
+Added `csk.sources.transport` as the single act layer around the policy
+resolver. It consumes one immutable plan, caps execution at one attempt per
+listed endpoint and two total, carries one monotonic deadline across both
+attempts, and defaults to `git_admission.acquire_network`. The alternate gets
+its own `tool_for_endpoint` selection and independently receives the locked
+commit/tag inputs; diagnostics contain only sanitized endpoint provenance and
+failure classes.
+
+Extended the trusted Git lane with manager-approved connection targets for
+revision-2 mirrors, ports and aliases. The clean Git environment and exact-ref
+raw-object proof remain in force. Explicit Git transport/status evidence is
+classified at the fetch boundary; anything not positively classified is
+`unclassified` and cannot open fallback.
+
+External builds now load policy once, retain the immutable plan through the
+pipeline, and reject aliases or explicit endpoint ports before the acquire
+callback. The port-free mirror path uses the ordinary section 11.2 checks.
+The main diagnostic trap found during validation was a subclass field being
+overwritten by `GitAdmissionError.__init__`; the fixed test suite covers every
+fallback class and exact attempt count.
+
+Revision 3 (round 3 of 4) closed the remaining three findings. Named endpoint
+providers now resolve per attempt inside the classified boundary while legacy
+declared endpoints keep the released pre-resolution errors byte-identically;
+the fetch classifier treats git's advisory footer as envelope boilerplate
+instead of conflicting evidence; and the coverage map drives production seams
+with behavioral narrowing mutants. Attempt-bound mutants survive singly by
+construction (plan cap, transport slice, and first-failure-only continuation
+each neuter the others' widening), which the replay controls demonstrate;
+every single decision gate has a behaviorally killed narrowing mutant.
+
+Revision 4 (round 4 of 4) replaced the envelope model: only transport
+outcome records are evidence and everything else is ignored, so conflict
+means two evidence-bearing records disagreeing. `remote:` relay is never
+evidence and never conflict (a response body must neither grant nor
+suppress a fallback); askpass errors, agent signing diagnostics and host-key
+warning blocks are client-side context for the terminal outcome record.
+`fatal: Authentication failed` is explicit-rejection evidence, SSH method
+lists cover every registered name, and the unreachable `returned error:
+404` alternative is dropped. All three R4d SSH shapes were confirmed
+byte-exact against a live unprivileged sshd, including a speaking refusing
+agent; the suite now runs real loopback HTTPS statuses by body shape, live
+sshd rejections, and a refusing agent through the production lane. Interrupts
+(`KeyboardInterrupt`, `SystemExit`) propagate instead of becoming typed
+transport refusals.
+
+Revision 5 (granted fifth round) fixed the line partition the evidence
+model moved the trust boundary into. Git echoes response bodies splitting
+on LF only while the classifier used `splitlines()`, so CR, VT and FF
+bytes tore one prefixed physical line into an ignored fragment plus a
+bare evidence record: four real-server reproductions suppressed a mandated
+503 fallback, and sole attacker bytes became the only permitting record at
+classifier level. The splitter now matches the writer (LF only, one
+trailing CR stripped); the suite carries real-server 503 by CR/VT/FF plus
+a CRLF control, 404 by CR, lone-relay SSH and unmatched-status HTTP
+bypass shapes, and a narrowing LF-plus-CR mutant that kills the CR cells
+while the VT/FF siblings hold.
