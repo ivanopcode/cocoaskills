@@ -21,15 +21,14 @@ from typing import Any, Protocol
 from . import (
     adapters,
     audit_registry,
-    build_https as build_https_module,
-    build_ssh as build_ssh_module,
+    build_repository_pipeline,
     closure,
     consumers,
     dev_substitutions,
     env_files,
     gc,
-    git_ops,
     git_admission,
+    git_ops,
     gitignore_gate,
     hashing,
     hybrid,
@@ -46,22 +45,26 @@ from . import (
     transactions,
     whitelist,
 )
+from . import build_https as build_https_module
 from . import build_repository as build_repository_model
-from . import build_repository_pipeline
+from . import build_ssh as build_ssh_module
+from . import config as config_module
 from . import source_identity as source_identity_mod
 from .audit import detectors as audit_detectors
-from .audit.capabilities import CapabilityManifest
-from .audit.model import Finding as AuditFinding, Severity
 from .audit import pipeline as audit_pipeline
+from .audit.capabilities import CapabilityManifest
+from .audit.model import Finding as AuditFinding
+from .audit.model import Severity
 from .builds import cache as build_cache
 from .builds import go_v1
 from .builds import metadata as build_metadata
 from .builds import planner as build_planner
 from .builds import source as build_source
 from .builds import toolchain as build_toolchain
-from . import config as config_module
 from .config import GlobalConfig, ProjectConfig
 from .skillspec import CommandSpec
+from .sources import repository_policy
+from .sources import transport as source_transport
 
 
 class InstallError(Exception):
@@ -779,7 +782,29 @@ def _external_git_tool(
     require_ssh: bool,
     ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
     https_credentials: git_admission.OperatorHTTPSCredentials | None = None,
+    timeout_seconds: float = 10.0,
+    deadline: float | None = None,
 ) -> git_admission.GitTool:
+    def remaining_timeout() -> float:
+        remaining = timeout_seconds
+        if deadline is not None:
+            remaining = min(remaining, deadline - time.monotonic())
+        if remaining <= 0:
+            raise git_admission.GitAdmissionError(
+                git_admission.SOURCE_UNAVAILABLE,
+                "operator-provided Git identity probe deadline expired",
+                failure_class="timeout",
+            )
+        return remaining
+
+    if timeout_seconds <= 0 or (
+        deadline is not None and deadline - time.monotonic() <= 0
+    ):
+        raise git_admission.GitAdmissionError(
+            git_admission.SOURCE_UNAVAILABLE,
+            "operator-provided Git identity probe deadline expired",
+            failure_class="timeout",
+        )
     executable = _operator_program("git", operator_search_path)
     try:
         version = subprocess.run(
@@ -788,7 +813,7 @@ def _external_git_tool(
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=10,
+            timeout=remaining_timeout(),
         ).stdout.decode("ascii", "strict").strip()
         exec_path = Path(
             subprocess.run(
@@ -797,9 +822,15 @@ def _external_git_tool(
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                timeout=10,
+                timeout=remaining_timeout(),
             ).stdout.decode("utf-8", "strict").strip()
         ).resolve(strict=True)
+    except subprocess.TimeoutExpired as exc:
+        raise git_admission.GitAdmissionError(
+            git_admission.SOURCE_UNAVAILABLE,
+            "operator-provided Git identity probe timed out",
+            failure_class="timeout",
+        ) from exc
     except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
         raise InstallError("operator-provided Git identity cannot be frozen") from exc
     ssh = _operator_program("ssh", operator_search_path) if require_ssh else None
@@ -1190,6 +1221,8 @@ def _https_rule_credentials(
     rule: build_https_module.BuildHTTPSRule,
     canonical_identity: str,
     git_executable: str | None = None,
+    *,
+    resolved_host: str | None = None,
 ) -> git_admission.OperatorHTTPSCredentials:
     """Resolve one configured scope into a concrete secret, fail closed.
 
@@ -1199,7 +1232,7 @@ def _https_rule_credentials(
     supports works the same way.
     """
 
-    host = canonical_identity.split("/", 1)[0]
+    host = canonical_identity.split("/", 1)[0] if resolved_host is None else resolved_host
     home = build_https_module.resolve_operator_home()
     if rule.token_env is not None:
         value = os.environ.get(rule.token_env)
@@ -1249,6 +1282,128 @@ def _https_rule_credentials(
         username=username,
         token_value=token,
     )
+
+
+def _is_legacy_transport_plan(plan: source_transport.AttemptPlan) -> bool:
+    """True when the plan is a legacy declared endpoint with no policy entry.
+
+    The policy resolver yields exactly one shape without an entry: a single
+    endpoint whose authentication is ``None``.  Policy entries always carry a
+    validated opaque provider name, so this predicate never matches them.
+    Legacy plans keep the released lane policy byte-identically, including
+    its pre-acquisition credential errors; named plans resolve per attempt
+    inside the classified boundary.
+    """
+
+    return (
+        len(plan.endpoints) == 1 and plan.endpoints[0].authentication is None
+    )
+
+
+def _endpoint_provider_identity_refusal() -> git_admission.GitAdmissionError:
+    """Return a safe refusal for an unconfigured named endpoint provider.
+
+    ``source-policy.json`` carries only an opaque provider name.  The existing
+    operator mechanism proves that name is usable by the matching
+    transport-scoped selection below; it must never become a path, command,
+    or user-facing credential reference.  Keep the diagnostic deliberately
+    generic because the policy value is package-adjacent input.
+    """
+
+    return git_admission.GitAdmissionError(
+        git_admission.IDENTITY_INVALID,
+        "endpoint authentication provider is not configured for this transport",
+        failure_class="identity",
+    )
+
+
+def _endpoint_provider_unavailable() -> git_admission.GitAdmissionError:
+    """Return the positive auth-unavailable class without broker detail."""
+
+    return git_admission.GitAdmissionError(
+        git_admission.CREDENTIAL_POLICY_INVALID,
+        "operator authentication material is unavailable",
+        failure_class="auth-unavailable",
+    )
+
+
+def _endpoint_ssh_credentials(
+    endpoint: repository_policy.ResolvedEndpoint,
+    config: GlobalConfig,
+    run_wide: git_admission.OperatorSSHCredentials | None,
+) -> git_admission.OperatorSSHCredentials:
+    """Resolve the named SSH provider for this exact endpoint attempt.
+
+    Credential resolution intentionally happens after the immutable plan has
+    selected ``endpoint``.  A configured identity scope is the existing csk
+    provider registry; a run-wide operator selection is the explicit fallback
+    provider.  An endpoint with a named provider cannot silently degrade to an
+    anonymous/default SSH tool.
+    """
+
+    authentication = endpoint.authentication
+    if authentication == "anonymous":
+        raise _endpoint_provider_unavailable()
+
+    # Lane precedence is unchanged: an explicit run-wide operator selection
+    # covers every endpoint before any configured scope is consulted.
+    if run_wide is not None and run_wide.selected:
+        return run_wide
+
+    rule = build_ssh_module.match(config.build_ssh, endpoint.identity)
+    if rule is not None:
+        try:
+            return _rule_credentials(rule, endpoint.identity)
+        except Exception as exc:
+            # Any broker read problem becomes the positive auth-unavailable
+            # class; the broker's own message never reaches the diagnostic.
+            raise _endpoint_provider_unavailable() from exc
+
+    # ``None`` is retained for declarations without a source-policy entry. It
+    # still fails closed for SSH, but through the same classified attempt
+    # boundary as a named provider with no operator selection.
+    raise (
+        _endpoint_provider_identity_refusal()
+        if authentication is not None
+        else _endpoint_provider_unavailable()
+    )
+
+
+def _endpoint_https_credentials(
+    endpoint: repository_policy.ResolvedEndpoint,
+    config: GlobalConfig,
+    run_wide: OperatorHTTPSToken | None,
+    operator_search_path: build_toolchain.OperatorSearchPath,
+) -> git_admission.OperatorHTTPSCredentials | None:
+    """Resolve the named HTTPS provider for this exact endpoint attempt."""
+
+    authentication = endpoint.authentication
+    if authentication is None or authentication == "anonymous":
+        return None
+
+    if run_wide is not None and run_wide.covers(endpoint.host):
+        return git_admission.OperatorHTTPSCredentials(
+            scope=endpoint.identity,
+            host=endpoint.host,
+            source="env",
+            username=run_wide.username,
+            token_value=run_wide.token,
+        )
+
+    rule = build_https_module.match(config.build_https, endpoint.identity)
+    if rule is None:
+        raise _endpoint_provider_identity_refusal()
+    try:
+        return _https_rule_credentials(
+            rule,
+            endpoint.identity,
+            _operator_git_path(operator_search_path),
+            resolved_host=endpoint.host,
+        )
+    except Exception as exc:
+        # Any broker read problem becomes the positive auth-unavailable
+        # class; the broker's own message never reaches the diagnostic.
+        raise _endpoint_provider_unavailable() from exc
 
 
 def _prompt_build_https_rule(
@@ -1475,9 +1630,80 @@ def _publish_external_builds(
             "go-repository-v1 is supported only on macOS and Windows; "
             "Linux qualification is deferred"
         )
+
+    def is_network_build(item: tuple[closure.ClosureNode, str]) -> bool:
+        node, name = item
+        command = node.spec.commands[name]
+        assert command.repository is not None
+        repository = node.spec.build_repositories[command.repository]
+        substitution = substitutions.build_repository_substitution(
+            node.name, repository.name
+        )
+        return substitution is None or substitution.path is None
+
+    network_selected = [item for item in selected if is_network_build(item)]
+    local_selected = [item for item in selected if not is_network_build(item)]
+    needs_source_policy = False
+    for node, name in network_selected:
+        command = node.spec.commands[name]
+        assert command.repository is not None
+        repository = node.spec.build_repositories[command.repository]
+        substitution = substitutions.build_repository_substitution(
+            node.name, repository.name
+        )
+        if substitution is None or substitution.path is None:
+            needs_source_policy = True
+            break
+    source_policy = (
+        config_module.load_source_policy(
+            config_module.source_policy_path(config.path),
+            reader_revision=2,
+        )
+        if needs_source_policy
+        else None
+    )
+    # Resolve every network plan before any credential work.  Planning is pure:
+    # it performs no I/O, so partitioning on the plan shape cannot leak a
+    # side effect into the wrong lane.  Nothing downstream re-derives the
+    # plan from the declaration.
+    network_plans: dict[tuple[str, str], source_transport.AttemptPlan] = {}
+    for plan_node, plan_name in network_selected:
+        plan_command = plan_node.spec.commands[plan_name]
+        assert plan_command.repository is not None
+        plan_repository = plan_node.spec.build_repositories[plan_command.repository]
+        plan_substitution = substitutions.build_repository_substitution(
+            plan_node.name, plan_repository.name
+        )
+        plan_git = (
+            plan_repository.git
+            if plan_substitution is None
+            else plan_substitution.git
+        )
+        assert plan_git is not None
+        plan_source = build_repository_model.parse_repository_source(plan_git)
+        network_plans[(plan_node.name, plan_name)] = (
+            source_transport.plan_attempts(
+                plan_source.identity,
+                plan_git,
+                source_policy,
+            )
+        )
+    legacy_network_selected = [
+        item
+        for item in network_selected
+        if _is_legacy_transport_plan(network_plans[(item[0].name, item[1])])
+    ]
+    # Legacy pre-resolution covers exactly the local builds and the legacy
+    # declared endpoints, which keeps the released lane policy (including its
+    # pre-acquisition credential errors and prompts) byte-identical.  Policy
+    # plans with named providers never enter these maps: each named endpoint
+    # resolves its own provider inside the classified attempt boundary, so a
+    # missing or unavailable first-endpoint provider cannot stop a permitted
+    # alternate before acquisition starts.
+    legacy_selected = local_selected + legacy_network_selected
     ssh_selection = _resolve_build_ssh_credentials(
         config,
-        selected,
+        legacy_selected,
         substitutions,
         run_wide=ssh_credentials,
         interactive=interactive,
@@ -1486,7 +1712,7 @@ def _publish_external_builds(
     )
     https_selection = _resolve_build_https_credentials(
         config,
-        selected,
+        legacy_selected,
         substitutions,
         run_wide=https_token,
         interactive=interactive,
@@ -1494,11 +1720,9 @@ def _publish_external_builds(
         dry_run=dry_run,
         operator_search_path=operator_search_path,
     )
-    require_ssh = any(
-        credentials is not None for credentials in ssh_selection.values()
-    )
     git_tools: dict[
         tuple[
+            bool,
             git_admission.OperatorSSHCredentials | None,
             git_admission.OperatorHTTPSCredentials | None,
         ],
@@ -1508,14 +1732,21 @@ def _publish_external_builds(
     def _git_tool_for(
         credentials: git_admission.OperatorSSHCredentials | None,
         https: git_admission.OperatorHTTPSCredentials | None = None,
+        *,
+        require_ssh: bool | None = None,
+        timeout_seconds: float = 10.0,
+        deadline: float | None = None,
     ) -> git_admission.GitTool:
-        key = (credentials, https)
+        selected_ssh = credentials is not None if require_ssh is None else require_ssh
+        key = (selected_ssh, credentials, https)
         if key not in git_tools:
             git_tools[key] = _external_git_tool(
                 operator_search_path,
-                require_ssh=credentials is not None,
+                require_ssh=selected_ssh,
                 ssh_credentials=credentials,
                 https_credentials=https,
+                timeout_seconds=timeout_seconds,
+                deadline=deadline,
             )
         return git_tools[key]
     private_base = Path(
@@ -1557,21 +1788,75 @@ def _publish_external_builds(
         effective = _external_effective_state(
             project_identity, repository, substitution
         )
-        git_tool = _git_tool_for(
-            ssh_selection[(node.name, name)], https_selection[(node.name, name)]
-        )
+        network_plan = network_plans.get((node.name, name))
+        git_tool: git_admission.GitTool | None = None
+        if substitution is not None and substitution.path is not None:
+            git_tool = _git_tool_for(
+                ssh_selection[(node.name, name)], https_selection[(node.name, name)]
+            )
+        elif network_plan is not None and _is_legacy_transport_plan(network_plan):
+            # The released lane built exactly one tool from the pre-resolved
+            # declaration selection; keep that call byte-identical.
+            git_tool = _git_tool_for(
+                ssh_selection[(node.name, name)], https_selection[(node.name, name)]
+            )
+
+        def endpoint_tool(
+            endpoint: repository_policy.ResolvedEndpoint,
+            limits: git_admission.Limits | None = None,
+        ) -> git_admission.GitTool:
+            """Bind each NAMED policy endpoint to its transport's broker lane.
+
+            This callback only serves plans with policy entries: every
+            endpoint it sees carries an opaque operator provider name.  A
+            policy may reverse the declared URL's transport, so one static
+            GitTool cannot safely represent both attempts.  Resolution reads
+            the endpoint's own transport, host and provider name; legacy
+            declared endpoints never reach this callback.
+            """
+
+            timeout_seconds = 10.0 if limits is None else limits.timeout_seconds
+            deadline = None if limits is None else limits.deadline
+            if endpoint.transport == "ssh":
+                selected_ssh = _endpoint_ssh_credentials(
+                    endpoint,
+                    config,
+                    ssh_credentials,
+                )
+                return _git_tool_for(
+                    selected_ssh,
+                    None,
+                    require_ssh=True,
+                    timeout_seconds=timeout_seconds,
+                    deadline=deadline,
+                )
+
+            selected_https = _endpoint_https_credentials(
+                endpoint,
+                config,
+                https_token,
+                operator_search_path,
+            )
+            return _git_tool_for(
+                None,
+                selected_https,
+                require_ssh=False,
+                timeout_seconds=timeout_seconds,
+                deadline=deadline,
+            )
 
         def acquire(
             repository: build_repository_model.BuildRepository = repository,
             substitution: dev_substitutions.BuildRepositorySubstitution | None = substitution,
             effective: build_repository_pipeline.EffectiveState = effective,
-            git_tool: git_admission.GitTool = git_tool,
+            git_tool: git_admission.GitTool | None = git_tool,
+            network_plan: source_transport.AttemptPlan | None = network_plan,
         ) -> git_admission.Snapshot:
             if substitution is not None and substitution.path is not None:
+                assert git_tool is not None
                 return git_admission.admit_local(substitution.path, git_tool)
             git = repository.git if substitution is None else substitution.git
             assert git is not None
-            source = build_repository_model.parse_repository_source(git)
             tag = repository.tag
             if substitution is not None:
                 tag = (
@@ -1584,14 +1869,25 @@ def _publish_external_builds(
                         "network build repository branch substitutions require "
                         "an independently pinned revision"
                     )
-            return git_admission.acquire_network(
-                source,
+            assert network_plan is not None
+            # Legacy declared endpoints ride the pre-resolved released tool;
+            # named policy endpoints resolve per attempt inside the boundary.
+            # The predicate reads the same plan object the loop admitted, so
+            # the two credential routes cannot disagree about which plan
+            # they serve.
+            legacy_tool = (
+                git_tool if _is_legacy_transport_plan(network_plan) else None
+            )
+            return source_transport.acquire_plan(
+                network_plan,
                 build_repository_model.LockedCommit(
                     effective.object_format, effective.commit
                 ),
-                git_tool,
+                legacy_tool,
                 tag=tag,
-            )
+                tool_for_endpoint=None if legacy_tool is not None else endpoint_tool,
+                lane=source_transport.LANE_EXTERNAL_BUILD,
+            ).snapshot
 
         result = build_repository_pipeline.run_pipeline(
             build_repository_pipeline.PipelineRequest(
@@ -1608,6 +1904,9 @@ def _publish_external_builds(
                 audit=_external_static_audit,
                 store=store,
                 compiler=compiler,
+                endpoints=(
+                    network_plan.endpoints if network_plan is not None else ()
+                ),
                 offline_snapshot_key=_existing_external_snapshot_key(
                     marker_roots, node.name, name
                 ),

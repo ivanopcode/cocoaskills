@@ -13,20 +13,24 @@ from pathlib import Path
 from typing import NoReturn, Protocol
 
 from . import protocol_json
-from .build_repository import BuildRepository, BuildTarget, DESCRIPTOR_NAME, load_skill_build
-from .builds import go_v1
+from .build_repository import (
+    DESCRIPTOR_NAME,
+    BuildRepository,
+    BuildTarget,
+    load_skill_build,
+)
+from .builds import go_v1, toolchain
 from .builds import metadata as build_metadata
 from .builds import source as build_source
-from .builds import toolchain
 from .git_admission import (
-    GitAdmissionError,
     OBJECT_SEMANTICS_INVALID,
     REF_MOVED,
     SOURCE_UNAVAILABLE,
+    GitAdmissionError,
     Snapshot,
     SnapshotFile,
 )
-
+from .sources.repository_policy import ResolvedEndpoint
 
 DESCRIPTOR_INVALID = "build_repository_descriptor_invalid"
 AUDIT_BLOCKED = "build_repository_audit_blocked"
@@ -34,6 +38,7 @@ RECEIPT_INVALID = "build_repository_receipt_invalid"
 ARTIFACT_INVALID = "build_repository_artifact_invalid"
 PROTECTED_BOUNDARY_UNTRUSTED = "build_repository_protected_boundary_untrusted"
 UNVERIFIED_OFFLINE = "build_repository_unverified_offline"
+EXTERNAL_BUILD_IDENTITY_INVALID = "build_repository_identity_invalid"
 
 _MAX_METADATA = 4 << 20
 _MAX_ARTIFACT = 1 << 30
@@ -44,6 +49,27 @@ class ExternalBuildError(RuntimeError):
         super().__init__(f"{code}: {detail}")
         self.code = code
         self.detail = detail
+
+
+def validate_external_build_endpoint(endpoint: ResolvedEndpoint) -> None:
+    """Apply repository-transport section 7 before an external fetch starts.
+
+    External builds keep the released section 11.2 URL grammar.  A policy
+    endpoint may carry richer transport metadata for the Skillfile source
+    lane, but that metadata is not silently projected into this lane.
+    """
+
+    provenance = endpoint.provenance
+    if provenance.alias is not None:
+        raise ExternalBuildError(
+            EXTERNAL_BUILD_IDENTITY_INVALID,
+            "external-build endpoints with an alias are not admitted",
+        )
+    if provenance.url_port is not None or provenance.alias_port is not None:
+        raise ExternalBuildError(
+            EXTERNAL_BUILD_IDENTITY_INVALID,
+            "external-build endpoints with an explicit port are not admitted",
+        )
 
 
 class Operation(StrEnum):
@@ -164,6 +190,11 @@ class PipelineRequest:
     compiler: GoCompiler | None = None
     offline_snapshot_key: str | None = None
     trace: Callable[[str], None] | None = None
+    # Every policy-selected endpoint is checked before ``acquire`` is called.
+    # ``endpoint`` remains a compatibility slot for callers that have one
+    # released section-11 URL rather than a source-policy plan.
+    endpoint: ResolvedEndpoint | None = None
+    endpoints: tuple[ResolvedEndpoint, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -438,6 +469,11 @@ class DiskProtectedStore:
 
 def run_pipeline(request: PipelineRequest) -> PipelineResult:
     mutate = request.operation in {Operation.INSTALL, Operation.REPAIR}
+    endpoints = list(request.endpoints)
+    if request.endpoint is not None:
+        endpoints.append(request.endpoint)
+    for endpoint in endpoints:
+        validate_external_build_endpoint(endpoint)
     _trace(request, "exact-source-acquisition")
     try:
         snapshot = request.acquire()

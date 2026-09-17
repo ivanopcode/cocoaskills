@@ -203,6 +203,10 @@ class EndpointProvenance:
     resolved_port: int
     alias: str | None
     mirror_of: str | None
+    # Keep this separate from ``resolved_port`` so a strict lane can refuse an
+    # alias-selected port rather than treating it as an indistinguishable
+    # transport default.
+    alias_port: int | None = None
 
 
 @dataclass(frozen=True)
@@ -680,6 +684,7 @@ def resolve_endpoint(
         resolved_port=resolved_port,
         alias=endpoint.alias,
         mirror_of=endpoint.mirror_of,
+        alias_port=selected_alias.port if selected_alias is not None else None,
     )
     return ResolvedEndpoint(
         identity=key,

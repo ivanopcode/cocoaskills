@@ -659,3 +659,50 @@ never from the operating system's name.
   against green macOS and ubuntu. Linux and Windows are proved only by the
   hosted lanes; the Windows lane must be green because of declared skips
   plus the passing positive tests, not because tests disappeared.
+
+## Leaf progress: TASK-260916-fsw7re bounded authenticated transport
+
+- `csk.sources.transport` consumes the policy resolver's immutable
+  `ResolutionPlan`, makes at most one call per listed endpoint and at most two
+  calls total, passes the remaining lane deadline to each attempt, and never
+  retries an endpoint. The default attempt is the existing
+  `git_admission.acquire_network` lane; no alternate acquisition path exists.
+- Git admission now accepts a manager-approved `NetworkEndpoint` for revision-2
+  ports, mirrors and aliases while retaining the clean Git configuration,
+  exact-ref fetch, raw-object proof, and broker boundaries. Git stderr is only
+  mapped when it carries explicit transport/status evidence; unknown failures
+  remain fail-closed.
+- `build_repository_pipeline.validate_external_build_endpoint` and the
+  transport lane check refuse explicit URL ports and aliases with
+  `build_repository_identity_invalid` before the attempt callback. Port-free,
+  alias-free mirrors use the ordinary section 11.2 verification path. Installer
+  external builds load the machine policy once, create one plan, and pass it to
+  the same pipeline.
+- `tests/test_sources_transport.py` covers the fallback class table, pin and
+  fallback-none bounds, the two-bare-repository locked-commit path, user Git/SSH
+  configuration isolation, secret-free diagnostics, fault injection at the
+  trusted Git call site, and strict external-build refusal. The draft harness
+  registers all 17 cases owned by this leaf and asserts exact attempt counts.
+- Revision 3: a plan without a policy entry (single endpoint, authentication
+  `None`) keeps the released lane policy byte-identically, including its
+  pre-acquisition credential errors; every named policy endpoint resolves its
+  own operator provider inside the classified, deadline-bound attempt.
+  The two-attempt bound is enforced redundantly by the plan cap, the
+  transport slice, and the first-failure-only continuation, so no single
+  mutation admits a third attempt or a pinned fallback.
+- Revision 4: the fetch classifier partitions stderr into anchored
+  transport outcome records (evidence) and everything else (ignored).
+  Server relay (`remote:` lines), client-side helper diagnostics, the
+  advisory footer, and unknown output carry no outcome; conflict means
+  two evidence-bearing records disagreeing, and no evidence at all fails
+  closed to unclassified. `fatal: Authentication failed` is
+  explicit-rejection evidence, SSH rejection method lists cover every
+  registered method name, and the unreachable `returned error: 404`
+  alternative is dropped (real 404s render as `repository not found` or
+  the RPC-failed frame).
+- Revision 5: the envelope splitter matches the tool that wrote the
+  bytes. Git echoes an HTTP error body as `remote:` lines splitting on
+  LF only, so the classifier splits on LF only and strips one trailing
+  CR per line for the CRLF bodies git re-prefixes. CR, VT, FF and other
+  non-LF boundaries never tear a prefixed physical line into a bare
+  evidence record.

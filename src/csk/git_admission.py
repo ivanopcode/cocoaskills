@@ -15,7 +15,7 @@ import threading
 import time
 import unicodedata
 import zlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import IO, Callable, Mapping, Sequence
 
@@ -59,9 +59,12 @@ _MAX_KNOWN_HOSTS_BYTES = 1 << 20
 
 
 class GitAdmissionError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self, code: str, message: str, *, failure_class: str | None = None
+    ) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
+        self.failure_class = failure_class
 
 
 _CLEANUP_ATTEMPTS = 5
@@ -137,6 +140,10 @@ class Limits:
     max_path_bytes: int = 4096
     max_tree_depth: int = 128
     max_tag_depth: int = 16
+    # A transport plan supplies one absolute deadline for all endpoint
+    # attempts.  ``None`` keeps the legacy direct-lane API compatible; the
+    # first admission call turns it into an absolute monotonic deadline.
+    deadline: float | None = None
 
 
 @dataclass(frozen=True)
@@ -200,6 +207,36 @@ class SSHPolicy:
     identity: Path | None = None
     agent_socket: Path | None = None
     connect_timeout: int = 15
+    connect_port: int = 22
+    # Git adds this port to the SSH command line when the source URL carried
+    # an explicit SSH URI port.  It is distinct from the port passed to the
+    # real ssh executable: the wrapper must pin both shapes.
+    invocation_port: int | None = None
+
+
+@dataclass(frozen=True)
+class NetworkEndpoint:
+    """The manager-approved connection target for one Git attempt.
+
+    ``listed_url`` is the policy value and ``remote_url`` is the literal URL
+    handed to Git after the policy resolver has selected the connection host.
+    The latter is manager-owned data: it is never read from Git config or from
+    the ambient environment. ``ssh_host`` and ``repository_path`` pin the
+    arguments the SSH wrapper is allowed to receive.
+    """
+
+    listed_url: str
+    remote_url: str
+    identity: str
+    transport: str
+    host: str
+    port: int
+    ssh_host: str
+    repository_path: str
+    connect_port: int = 22
+    # ``None`` means the listed URL uses scp/default SSH spelling.  An integer
+    # preserves an explicit URI port, including explicit ``22``.
+    git_port: int | None = None
 
 
 @dataclass(frozen=True)
@@ -415,7 +452,11 @@ def ssh_endpoint(source: RepositorySource) -> tuple[str, str]:
 
 def exact_ssh_command(policy: SSHPolicy, argv: Sequence[str]) -> tuple[str, ...]:
     expected_command = f"git-upload-pack '{policy.repository_path}'"
-    expected = (os.fspath(policy.wrapper), policy.expected_host, expected_command)
+    expected_parts = [os.fspath(policy.wrapper)]
+    if policy.invocation_port is not None:
+        expected_parts.extend(("-p", str(policy.invocation_port)))
+    expected_parts.extend((policy.expected_host, expected_command))
+    expected = tuple(expected_parts)
     if tuple(argv) != expected:
         raise GitAdmissionError(
             IDENTITY_INVALID, "SSH wrapper invocation does not match protected policy"
@@ -430,6 +471,10 @@ def exact_ssh_command(policy: SSHPolicy, argv: Sequence[str]) -> tuple[str, ...]
     if (
         any(not path.is_absolute() for path in required_paths)
         or policy.connect_timeout <= 0
+        or policy.connect_port <= 0
+        or policy.connect_port > 65535
+        or policy.invocation_port is not None
+        and not 1 <= policy.invocation_port <= 65535
     ):
         raise GitAdmissionError(IDENTITY_INVALID, "SSH policy is invalid")
     command = [
@@ -545,10 +590,37 @@ def exact_ssh_command(policy: SSHPolicy, argv: Sequence[str]) -> tuple[str, ...]
             "SSH authentication policy must select an identity, an agent, or both",
         )
     command.extend((policy.expected_host, expected_command))
+    if policy.connect_port != 22:
+        command[-2:-2] = ("-p", str(policy.connect_port))
     return tuple(command)
 
 
-def validate_git_tool(tool: GitTool) -> None:
+def _admission_deadline(limits: Limits) -> float:
+    """Return the one monotonic deadline governing this admission."""
+
+    return (
+        limits.deadline
+        if limits.deadline is not None
+        else time.monotonic() + limits.timeout_seconds
+    )
+
+
+def _remaining_limits(limits: Limits, deadline: float) -> Limits:
+    """Give one blocking stage only the time left in the outer admission."""
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise GitAdmissionError(
+            SOURCE_UNAVAILABLE,
+            "trusted Git admission deadline expired",
+            failure_class="timeout",
+        )
+    return replace(limits, timeout_seconds=remaining, deadline=deadline)
+
+
+def validate_git_tool(tool: GitTool, *, timeout_seconds: float = 10.0) -> None:
+    if timeout_seconds <= 0:
+        raise GitAdmissionError(IDENTITY_INVALID, "trusted Git version probe deadline expired")
     for label, path, directory in (
         ("git", tool.executable, False),
         ("git exec path", tool.exec_path, True),
@@ -591,16 +663,27 @@ def validate_git_tool(tool: GitTool) -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=_clean_discovery_environment(),
-            timeout=10,
+            timeout=timeout_seconds,
             check=True,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise GitAdmissionError(
+            SOURCE_UNAVAILABLE,
+            "trusted Git version probe timed out",
+            failure_class="timeout",
+        ) from exc
     except (OSError, subprocess.SubprocessError) as exc:
         raise GitAdmissionError(
             IDENTITY_INVALID, "trusted Git version probe failed"
         ) from exc
     if len(result.stdout) > 256:
         raise GitAdmissionError(IDENTITY_INVALID, "trusted Git version probe failed")
-    version = result.stdout.decode("ascii", "strict").strip()
+    try:
+        version = result.stdout.decode("ascii", "strict").strip()
+    except UnicodeDecodeError as exc:
+        raise GitAdmissionError(
+            IDENTITY_INVALID, "trusted Git version probe returned invalid text"
+        ) from exc
     if not any(
         prefix and version.startswith(prefix) for prefix in tool.allowed_versions
     ):
@@ -616,15 +699,46 @@ def acquire_network(
     *,
     tag: str | None = None,
     limits: Limits = Limits(),
+    connection: NetworkEndpoint | None = None,
 ) -> Snapshot:
-    validate_git_tool(tool)
-    try:
-        parsed_source = parse_repository_source(source.git)
-    except ValueError as exc:
-        raise GitAdmissionError(IDENTITY_INVALID, "network source is invalid") from exc
-    if parsed_source != source:
+    deadline = _admission_deadline(limits)
+    # The tool probe is part of the same admission budget as init, fetch and
+    # raw-object proof.  A direct caller gets an absolute deadline here; a
+    # transport plan passes the already-created deadline through unchanged.
+    probe_limits = _remaining_limits(limits, deadline)
+    validate_git_tool(
+        tool, timeout_seconds=min(10.0, probe_limits.timeout_seconds)
+    )
+    limits = replace(limits, deadline=deadline)
+    if connection is None:
+        try:
+            parsed_source = parse_repository_source(source.git)
+        except ValueError as exc:
+            raise GitAdmissionError(IDENTITY_INVALID, "network source is invalid") from exc
+        if parsed_source != source:
+            raise GitAdmissionError(
+                IDENTITY_INVALID, "network source is not canonical parsed input"
+            )
+    elif (
+        connection.listed_url != source.git
+        or connection.identity != source.identity
+        or connection.transport != source.transport
+        or connection.transport not in {"https", "ssh"}
+        or not connection.host
+        or not connection.ssh_host
+        or not connection.repository_path
+        or connection.port <= 0
+        or connection.port > 65535
+        or connection.connect_port <= 0
+        or connection.connect_port > 65535
+        or connection.git_port is not None
+        and not 1 <= connection.git_port <= 65535
+        or connection.transport != "ssh"
+        and connection.git_port is not None
+        or not connection.remote_url
+    ):
         raise GitAdmissionError(
-            IDENTITY_INVALID, "network source is not canonical parsed input"
+            IDENTITY_INVALID, "network connection target is not canonical"
         )
     try:
         parse_locked_commit(
@@ -657,13 +771,19 @@ def acquire_network(
         )
     with tempfile.TemporaryDirectory(prefix="csk-buildrepo-") as raw_root:
         paths = _make_private_paths(Path(raw_root))
+        _remaining_limits(limits, deadline)
         ssh_command = (
-            _materialize_ssh_wrapper(paths, tool, source)
+            _materialize_ssh_wrapper(paths, tool, source, connection)
             if source.transport == "ssh"
             else None
         )
         https_broker = (
-            _materialize_https_broker(paths, source, tool.https_credentials)
+            _materialize_https_broker(
+                paths,
+                source,
+                tool.https_credentials,
+                expected_host=connection.host if connection is not None else None,
+            )
             if source.transport == "https" and tool.https_credentials is not None
             else None
         )
@@ -692,8 +812,9 @@ def acquire_network(
             f"--template={paths.template}",
             f"--object-format={lock.object_format}",
             "--ref-format=files",
-            limits=limits,
+            limits=_remaining_limits(limits, deadline),
         )
+        _remaining_limits(limits, deadline)
         destination = "refs/csk/tag" if tag is not None else "refs/csk/locked"
         source_ref = f"refs/tags/{tag}" if tag is not None else lock.hex
         _run_git(
@@ -701,17 +822,37 @@ def acquire_network(
             paths,
             environment,
             *_strict_fetch_args(
-                paths, tool, source, f"{source_ref}:{destination}", https_broker
+                paths,
+                tool,
+                source,
+                f"{source_ref}:{destination}",
+                https_broker,
+                remote_url=connection.remote_url if connection is not None else None,
             ),
-            limits=limits,
+            limits=_remaining_limits(limits, deadline),
         )
+        _remaining_limits(limits, deadline)
         _validate_private_repository(paths.repository, lock.object_format)
+        _remaining_limits(limits, deadline)
         selected = _read_single_oid(
             paths.repository.joinpath(*destination.split("/")), lock.object_format
         )
+        _remaining_limits(limits, deadline)
         snapshot = _prove_repository(
-            tool, environment, paths, lock.object_format, selected, tag, limits
+            tool,
+            environment,
+            paths,
+            lock.object_format,
+            selected,
+            tag,
+            _remaining_limits(limits, deadline),
         )
+        if time.monotonic() > deadline:
+            raise GitAdmissionError(
+                SOURCE_UNAVAILABLE,
+                "trusted Git admission completed after its deadline",
+                failure_class="timeout",
+            )
         if tag is not None and snapshot.commit != lock.hex:
             raise GitAdmissionError(
                 REF_MOVED, "exact tag terminal commit differs from lock"
@@ -789,7 +930,10 @@ def _wrapper_interpreter() -> Path:
 
 
 def _materialize_ssh_wrapper(
-    paths: _PrivatePaths, tool: GitTool, source: RepositorySource
+    paths: _PrivatePaths,
+    tool: GitTool,
+    source: RepositorySource,
+    connection: NetworkEndpoint | None = None,
 ) -> tuple[str, ...]:
     """Write the protected SSH wrapper and return the argv prefix Git must run.
 
@@ -821,7 +965,15 @@ def _materialize_ssh_wrapper(
         raise GitAdmissionError(
             IDENTITY_INVALID, "operator known hosts file exceeds the admitted size"
         )
-    host, repository_path = ssh_endpoint(source)
+    if connection is None:
+        host, repository_path = ssh_endpoint(source)
+        connect_port = 22
+        invocation_port = None
+    else:
+        host = connection.ssh_host
+        repository_path = connection.repository_path
+        connect_port = connection.connect_port
+        invocation_port = connection.git_port
     script = paths.ssh / "ssh-wrapper.py"
     policy = SSHPolicy(
         wrapper=script,
@@ -833,8 +985,13 @@ def _materialize_ssh_wrapper(
         empty_known_hosts=_write_private_file(paths.ssh / "empty_known_hosts", b""),
         identity=credentials.identity,
         agent_socket=credentials.agent_socket,
+        connect_port=connect_port,
+        invocation_port=invocation_port,
     )
-    expected = [os.fspath(script), host, f"git-upload-pack '{repository_path}'"]
+    expected = [os.fspath(script)]
+    if invocation_port is not None:
+        expected.extend(("-p", str(invocation_port)))
+    expected.extend((host, f"git-upload-pack '{repository_path}'"))
     command = list(exact_ssh_command(policy, expected))
     _write_private_file(
         script,
@@ -852,7 +1009,11 @@ def _materialize_ssh_wrapper(
 
 
 def _materialize_https_broker(
-    paths: _PrivatePaths, source: RepositorySource, credentials: OperatorHTTPSCredentials
+    paths: _PrivatePaths,
+    source: RepositorySource,
+    credentials: OperatorHTTPSCredentials,
+    *,
+    expected_host: str | None = None,
 ) -> Path:
     """Write the manager credential broker for one pinned HTTPS fetch.
 
@@ -863,7 +1024,7 @@ def _materialize_https_broker(
     same way the SSH wrapper meets it.
     """
 
-    host = source.identity.split("/", 1)[0]
+    host = source.identity.split("/", 1)[0] if expected_host is None else expected_host
     if credentials.host != host:
         raise GitAdmissionError(
             CREDENTIAL_POLICY_INVALID,
@@ -977,6 +1138,8 @@ def _strict_fetch_args(
     source: RepositorySource,
     refspec: str,
     https_broker: Path | None = None,
+    *,
+    remote_url: str | None = None,
 ) -> tuple[str, ...]:
     # core.askPass overrides GIT_ASKPASS, so the broker must win here too.
     if https_broker is not None:
@@ -1036,7 +1199,7 @@ def _strict_fetch_args(
         "--jobs=1",
         "--upload-pack=git-upload-pack",
         "--",
-        source.git,
+        source.git if remote_url is None else remote_url,
         refspec,
     )
 
@@ -1055,14 +1218,227 @@ def _run_git(
             env=environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             timeout=limits.timeout_seconds,
             check=True,
         )
-    except (OSError, subprocess.SubprocessError) as exc:
+    except subprocess.TimeoutExpired as exc:
+        raise GitAdmissionError(
+            SOURCE_UNAVAILABLE,
+            "private Git operation timed out",
+            failure_class="timeout",
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise GitAdmissionError(
+            SOURCE_UNAVAILABLE,
+            "private Git operation failed",
+            failure_class=_classify_git_failure_output(exc.stderr),
+        ) from exc
+    except OSError as exc:
         operation = "initialization" if "init" in arguments else "fetch"
-        code = SOURCE_UNAVAILABLE
-        raise GitAdmissionError(code, f"private Git {operation} failed") from exc
+        raise GitAdmissionError(
+            SOURCE_UNAVAILABLE,
+            f"private Git {operation} failed",
+            failure_class="unclassified",
+        ) from exc
+
+
+# A failing ``git fetch`` prints a transport envelope: the transport's own
+# outcome record(s), the remote server's relayed payload (``remote:``
+# lines), client-side diagnostics, and git's advisory footer.  Only outcome
+# records are evidence; everything else is ignored entirely.  Real envelopes
+# captured through the production lane (git 2.50.1, curl 8.7.1,
+# OpenSSH 10.3; the partition test and the real-server regressions pin
+# this derivation):
+#
+#     ssh: connect to host example.org port 22: Connection refused
+#     fatal: Could not read from remote repository.
+#
+#     Please make sure you have the correct access rights
+#     and the repository exists.
+#
+#     remote: <html>…</html>
+#     fatal: unable to access '…': The requested URL returned error: 503
+#
+#     error: unable to read askpass response from '…'
+#     fatal: could not read Username for '…': terminal prompts disabled
+#
+#     sign_and_send_pubkey: signing failed for ED25519 "…" from agent: …
+#     git@example.org: Permission denied (publickey).
+#
+# ``remote:`` content is the remote server's payload relayed verbatim, so it
+# is attacker-controlled by definition: it is never evidence, and it is
+# never a conflict either, because an attacker who can put bytes in a
+# response body could otherwise suppress a fallback at will.  Diagnostics
+# (askpass errors, signing failures, host-key warning blocks) state why a
+# helper step failed; the envelope's terminal outcome record states the
+# transport outcome, and the terminal record alone decides.  Unknown and
+# future output carries no positive outcome and is ignored; conflict means
+# two evidence-bearing records disagreeing, and no evidence at all fails
+# closed to unclassified.
+#
+# The evidence frames match the curl 8 / OpenSSH 9-10 record generation
+# (verified on curl 8.7.1, git 2.50.1, OpenSSH 10.3, plus the refused
+# spelling git 2.55.0.windows.5 writes); older tool prose fails closed
+# by design.
+
+
+def _evidence_class(record: str) -> str | None:
+    """Return the failure class when ``record`` states a transport outcome.
+
+    The match is always an anchored full-line frame generated by git, curl
+    or ssh itself.  Attacker-controlled bytes can only arrive ``remote:``-
+    prefixed (ignored before this runs) or inside a quoted interior such as
+    a URL or ref name, where they cannot change the frame's class.
+    """
+
+    if re.fullmatch(r"fatal: couldn't find remote ref .+", record):
+        return "ref-moved"
+    if re.fullmatch(r"fatal: repository '[^']+' not found", record):
+        return "identity"
+    if re.fullmatch(
+        r"fatal: unable to access 'https://[^']+': ssl certificate problem: .+",
+        record,
+    ) or re.fullmatch(
+        r"fatal: unable to access 'https://[^']+': server certificate verification failed.*",
+        record,
+    ) or re.fullmatch(
+        r"fatal: unable to access 'https://[^']+': schannel: .+",
+        record,
+    ):
+        return "tls"
+    if record == "host key verification failed." or re.fullmatch(
+        r"no (?:ed25519|ecdsa|rsa|dsa) host key is known for [^ ]+ and you have requested strict checking\.",
+        record,
+    ):
+        return "host-key"
+    # The parenthesised list is the server's continuable-methods offer
+    # (RFC 4252): client-side PreferredAuthentications does not change what
+    # the server offers, so a password-only or keyboard-interactive-only
+    # server still rejects authentication explicitly.  The alphabet covers
+    # every registered method name; anything else fails closed.
+    if re.fullmatch(
+        r"permission denied \([a-z0-9,-]+\)\.", record
+    ) or re.fullmatch(
+        r"[a-z0-9._-]+@[a-z0-9][a-z0-9.-]*: permission denied "
+        r"\([a-z0-9,-]+\)\.",
+        record,
+    ) or re.fullmatch(
+        r"no supported authentication methods available \(server sent: [a-z0-9, ]+\)",
+        record,
+    ):
+        return "ssh-auth-rejected"
+    if re.fullmatch(
+        r"ssh: could not resolve hostname [a-z0-9][a-z0-9.-]*: .+", record
+    ) or re.fullmatch(
+        r"fatal: unable to access 'https://[^']+': could not resolve host: [a-z0-9][a-z0-9.-]*",
+        record,
+    ):
+        return "dns"
+    if re.fullmatch(
+        r"ssh: connect to host [a-z0-9][a-z0-9.-]* port [0-9]+: connection refused",
+        record,
+    ) or re.fullmatch(
+        r"fatal: unable to access 'https://[^']+': failed to connect to [a-z0-9][a-z0-9.-]* port [0-9]+ after [0-9]+ ms: couldn't connect to server",
+        record,
+    ) or re.fullmatch(
+        r"fatal: unable to access 'https://[^']+': failed to connect to "
+        r"[a-z0-9][a-z0-9.-]*:[0-9]+ after [0-9]+ ms: could not connect to server",
+        record,
+    ):
+        return "connection-refused"
+    if re.fullmatch(
+        r"ssh: connect to host [a-z0-9][a-z0-9.-]* port [0-9]+: (?:connection timed out|operation timed out)",
+        record,
+    ) or re.fullmatch(
+        r"fatal: unable to access 'https://[^']+': failed to connect to [a-z0-9][a-z0-9.-]* port [0-9]+ after [0-9]+ ms: connection timed out",
+        record,
+    ):
+        return "timeout"
+    if re.fullmatch(
+        r"fatal: could not read username for 'https://[^']+': terminal prompts disabled",
+        record,
+    ):
+        return "auth-unavailable"
+    # Git's HTTP layer prints this when the server rejects presented
+    # credentials: curl consumes the 401 status itself, so the status never
+    # renders and the record states only the rejection.  The framed form is
+    # current git prose (observed through the production broker); the bare
+    # form is older git prose.  The class is the generic explicit rejection.
+    if re.fullmatch(
+        r"fatal: authentication failed for '[^']+'", record
+    ) or record == ("fatal: authentication failed"):
+        return "auth-rejected"
+    if re.fullmatch(
+        r"warning: redirecting to 'https://[^']+'", record
+    ) or re.fullmatch(
+        r"fatal: unable to access 'https://[^']+': the requested url returned error: 3[0-9]{2}",
+        record,
+    ):
+        return "redirect"
+    # No 404 alternative: a real info/refs 404 renders as
+    # ``fatal: repository '…' not found`` (identity) and a real POST 404 as
+    # ``error: RPC failed; HTTP 404 …`` (ignored, hence unclassified); both
+    # fail closed, so the unreachable ``returned error: 404`` alternative is
+    # dropped rather than kept.
+    status = re.fullmatch(
+        r"fatal: unable to access 'https://[^']+': the requested url returned error: (401|403|502|503|504)",
+        record,
+    )
+    if status is not None:
+        return f"http-{status.group(1)}"
+    if re.fullmatch(
+        r"error: (?:corrupt object [0-9a-f]{4,64}(?:; .*)?|object file '[^']+' is empty)",
+        record,
+    ) or re.fullmatch(r"fatal: fsck error found in pack.*", record):
+        return "integrity"
+    return None
+
+
+def _classify_git_failure_output(output: bytes | str | None) -> str:
+    """Classify complete Git protocol records, never arbitrary child text.
+
+    Git does not expose a typed HTTP response through ``subprocess``.  Every
+    non-blank stderr line is therefore either an anchored transport outcome
+    record (evidence, see :func:`_evidence_class`) or it is ignored: server
+    relay, client-side diagnostics, the advisory footer, and unknown or
+    future output all carry no transport outcome.  The output classifies
+    only when at least one evidence record exists and every evidence record
+    agrees on one class; disagreeing evidence, and no evidence at all, fail
+    closed to unclassified.  Bare status tokens, repository names, URLs and
+    object paths are deliberately not evidence: those values may be
+    controlled by the endpoint or repository.
+    """
+
+    if isinstance(output, bytes):
+        text = output.decode("utf-8", "replace").lower()
+    elif isinstance(output, str):
+        text = output.lower()
+    else:
+        return "unclassified"
+
+    records: list[str] = []
+    # Split the envelope the way git writes it: git echoes an HTTP error
+    # body as ``remote:`` lines splitting on LF only, re-prefixing each
+    # LF-separated part.  ``str.splitlines()`` also breaks on CR, VT, FF
+    # and other boundaries, so a body containing ``foo\\r<evidence>`` would
+    # tear one prefixed physical line into an ignored fragment plus a bare
+    # evidence record the tool never wrote.  Splitting on LF only, with one
+    # trailing CR stripped per line for the CRLF bodies git re-prefixes,
+    # keeps every ``remote:``-prefixed physical line prefixed.
+    for raw in text.split("\n"):
+        line = raw.removesuffix("\r")
+        record = line.strip()
+        if not record:
+            continue
+        if record.startswith("remote:"):
+            continue
+        evidence = _evidence_class(record)
+        if evidence is not None:
+            records.append(evidence)
+    if not records or len(set(records)) != 1:
+        return "unclassified"
+    return records[0]
 
 
 def _validate_private_repository(repository: Path, object_format: str) -> None:
@@ -1115,7 +1491,14 @@ def _read_single_oid(path: Path, object_format: str) -> str:
         raise GitAdmissionError(
             INCOMPLETE_SOURCE, "manager destination ref is invalid"
         ) from exc
-    value = payload.removesuffix(b"\n").removesuffix(b"\r").decode("ascii", "strict")
+    try:
+        value = payload.removesuffix(b"\n").removesuffix(b"\r").decode(
+            "ascii", "strict"
+        )
+    except UnicodeDecodeError as exc:
+        raise GitAdmissionError(
+            INCOMPLETE_SOURCE, "manager destination ref is invalid"
+        ) from exc
     if len(payload) > 66 or not _valid_oid(value, object_format):
         raise GitAdmissionError(INCOMPLETE_SOURCE, "manager destination ref is invalid")
     return value
@@ -1174,13 +1557,46 @@ class _ObjectReader:
         self._expanded = 0
         self._cache: dict[str, _RawObject] = {}
         self._timed_out = False
-        self._timer = threading.Timer(limits.timeout_seconds, self._kill_for_timeout)
+        self._deadline = limits.deadline
+        timer_seconds = limits.timeout_seconds
+        if self._deadline is not None:
+            timer_seconds = min(timer_seconds, self._deadline - time.monotonic())
+        if timer_seconds <= 0:
+            self._timed_out = True
+            self._process.kill()
+        self._timer = threading.Timer(timer_seconds, self._kill_for_timeout)
         self._timer.daemon = True
-        self._timer.start()
+        if not self._timed_out:
+            self._timer.start()
 
     def _kill_for_timeout(self) -> None:
         self._timed_out = True
-        self._process.kill()
+        try:
+            self._process.kill()
+        except OSError:
+            # A cleanly exiting reader is not a timeout by itself.  The flag
+            # is checked only after the protocol has been drained.
+            pass
+
+    def _ensure_before_deadline(self) -> None:
+        if self._timed_out or (
+            self._deadline is not None and time.monotonic() > self._deadline
+        ):
+            raise GitAdmissionError(
+                SOURCE_UNAVAILABLE,
+                "object proof exceeded the trusted Git admission deadline",
+                failure_class="timeout",
+            )
+
+    def _terminate(self) -> None:
+        try:
+            self._process.kill()
+        except OSError:
+            pass
+        try:
+            self._process.wait(timeout=1.0)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
     def __enter__(self) -> _ObjectReader:
         return self
@@ -1202,6 +1618,7 @@ class _ObjectReader:
         return bytes(data)
 
     def read(self, oid: str) -> _RawObject:
+        self._ensure_before_deadline()
         cached = self._cache.get(oid)
         if cached is not None:
             return cached
@@ -1214,12 +1631,15 @@ class _ObjectReader:
             self._stdin.flush()
             header = self._stdout.readline(257)
         except OSError as exc:
+            self._ensure_before_deadline()
             raise GitAdmissionError(INCOMPLETE_SOURCE, "object request failed") from exc
+        self._ensure_before_deadline()
         if not header.endswith(b"\n") or len(header) > 256:
             raise GitAdmissionError(INCOMPLETE_SOURCE, "malformed object header")
         try:
             parts = header[:-1].decode("ascii", "strict").split(" ")
         except UnicodeDecodeError as exc:
+            self._ensure_before_deadline()
             raise GitAdmissionError(
                 INCOMPLETE_SOURCE, "malformed object response"
             ) from exc
@@ -1242,6 +1662,7 @@ class _ObjectReader:
             raise GitAdmissionError(INCOMPLETE_SOURCE, "object size limit exceeded")
         data = self._read_exact(size)
         terminator = self._read_exact(1)
+        self._ensure_before_deadline()
         if len(data) != size or terminator != b"\n":
             raise GitAdmissionError(INCOMPLETE_SOURCE, "truncated or malformed object")
         if _compute_oid(self._format, parts[1], data) != oid:
@@ -1255,20 +1676,54 @@ class _ObjectReader:
     def close(self) -> None:
         if self._process.stdin is None:
             return
-        self._stdin.close()
-        trailing = self._stdout.read(2)
         try:
-            status = self._process.wait(timeout=10)
+            self._stdin.close()
+            trailing = self._stdout.read(2)
+        except (OSError, ValueError) as exc:
+            self._terminate()
+            self._process.stdin = None
+            self._timer.cancel()
+            if self._timed_out or (
+                self._deadline is not None and time.monotonic() > self._deadline
+            ):
+                raise GitAdmissionError(
+                    SOURCE_UNAVAILABLE,
+                    "object proof exceeded the trusted Git admission deadline",
+                    failure_class="timeout",
+                ) from exc
+            raise GitAdmissionError(
+                INCOMPLETE_SOURCE, "object reader could not close"
+            ) from exc
+        wait_timeout = 10.0
+        if self._deadline is not None:
+            wait_timeout = max(0.01, self._deadline - time.monotonic())
+        try:
+            status = self._process.wait(timeout=wait_timeout)
         except subprocess.TimeoutExpired as exc:
-            self._process.kill()
-            self._process.wait()
+            self._terminate()
+            self._process.stdin = None
+            self._timer.cancel()
+            if self._timed_out or (
+                self._deadline is not None and time.monotonic() > self._deadline
+            ):
+                raise GitAdmissionError(
+                    SOURCE_UNAVAILABLE,
+                    "object proof exceeded the trusted Git admission deadline",
+                    failure_class="timeout",
+                ) from exc
             raise GitAdmissionError(
                 INCOMPLETE_SOURCE, "object reader did not terminate"
             ) from exc
         self._process.stdin = None
         self._timer.cancel()
-        if self._timed_out:
-            raise GitAdmissionError(INCOMPLETE_SOURCE, "object reader timed out")
+        if self._timed_out or (
+            self._deadline is not None and time.monotonic() > self._deadline
+        ):
+            raise GitAdmissionError(
+                SOURCE_UNAVAILABLE,
+                "object proof exceeded the trusted Git admission deadline",
+                failure_class="timeout",
+            )
         if status != 0 or trailing:
             raise GitAdmissionError(
                 INCOMPLETE_SOURCE, "object reader did not terminate cleanly"

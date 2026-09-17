@@ -20,7 +20,8 @@ from pathlib import Path
 import pytest
 
 from csk import git_admission
-from csk.build_repository import LockedCommit, parse_repository_source
+from csk.build_repository import LockedCommit, RepositorySource, parse_repository_source
+from csk.sources import repository_policy, transport
 
 
 SOURCE = "git@fixture.test:repository.git"
@@ -368,6 +369,52 @@ def test_ssh_endpoint_matches_what_git_hands_the_ssh_program(
     source: str, host: str, path: str
 ) -> None:
     assert git_admission.ssh_endpoint(parse_repository_source(source)) == (host, path)
+
+
+@pytest.mark.parametrize("port", [None, 22, 2222])
+def test_network_lane_accepts_each_explicit_ssh_uri_port(
+    tmp_path: Path, port: int | None
+) -> None:
+    bare, commit = _fixture_repository(tmp_path / "fixture")
+    ssh, log = _stub_ssh(tmp_path / "stub", bare)
+    credentials = git_admission.OperatorSSHCredentials(
+        identity=_identity(tmp_path / "operator"),
+        known_hosts=_known_hosts(tmp_path / "operator"),
+    )
+    authority = "git@fixture.test"
+    suffix = "" if port is None else f":{port}"
+    url = f"ssh://{authority}{suffix}/repository.git"
+    policy = repository_policy.parse_policy(
+        {
+            "schema_version": 2,
+            "repositories": {
+                "fixture.test/repository": {
+                    "endpoints": [
+                        {"url": url, "authentication": "operator-ssh"}
+                    ],
+                    "fallback": "none",
+                }
+            },
+        }
+    )
+    endpoint = repository_policy.select_endpoints(
+        policy, "fixture.test/repository"
+    ).endpoints[0]
+    tool = _tool(ssh, credentials)
+    result = git_admission.acquire_network(
+        RepositorySource(url, "fixture.test/repository", "ssh"),
+        LockedCommit("sha1", commit),
+        tool,
+        connection=transport._connection_target(endpoint),
+    )
+    assert result.commit == commit
+    assert result.tag_verified is False
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 1
+    logged = json.loads(log.read_text(encoding="utf-8").splitlines()[0])
+    if port == 2222:
+        assert "-p" in logged and "2222" in logged
+    else:
+        assert "-p" not in logged
 
 
 def test_capture_prefers_command_line_over_environment(
