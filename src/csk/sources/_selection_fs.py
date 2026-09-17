@@ -20,6 +20,7 @@ import fnmatch
 import io
 import os
 import stat
+import unicodedata
 from contextlib import contextmanager
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -334,7 +335,11 @@ def _directory_flags(*, nofollow: bool = True) -> int:
 
 
 def _file_flags(*, nofollow: bool = True) -> int:
-    flags = os.O_RDONLY
+    # O_NONBLOCK is a no-op for regular files and keeps a listing-to-open
+    # race from hanging the walk: without it, an entry replaced by a FIFO
+    # between listing and open would block the reader forever instead of
+    # reaching the fstat type gate.
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
     if nofollow:
         flags |= getattr(os, "O_NOFOLLOW", 0)
     return flags
@@ -376,6 +381,72 @@ class MemberSnapshot:
     root: Path
     files: dict[tuple[str, ...], bytes]
     directories: frozenset[tuple[str, ...]]
+
+
+@dataclass(frozen=True)
+class CapturedFile:
+    """One regular file read for a snapshot through a Phase-B descriptor.
+
+    Every attribute comes from a single ``O_NOFOLLOW`` open of the file:
+    admission, executable bit, identity and bytes cannot skew against each
+    other through a concurrent replacement. ``path`` holds the components
+    relative to the capture root.
+    """
+
+    path: tuple[str, ...]
+    data: bytes
+    executable: bool
+    identity: tuple[int, int]
+    nlink: int
+
+
+@dataclass(frozen=True)
+class ConflationProbe:
+    """One captured entry usable as a filesystem-conflation probe.
+
+    ``parent`` is the still-open directory that listed ``name`` and
+    ``identity`` is the entry's lstat identity at listing time, so a probe
+    opens a variant spelling relative to ``parent.fd`` and compares
+    identities. Probes are valid only while the session that captured them
+    is open. ``axes`` names the relations this entry can probe: ``"case"``
+    when a case-variant spelling exists, ``"normalization"`` when an
+    NFC/NFD-variant spelling exists.
+    """
+
+    parent: "Directory"
+    name: str
+    identity: tuple[int, int]
+    axes: frozenset[str]
+
+
+@dataclass(frozen=True)
+class CapturedTree:
+    """Recursive descriptor capture of one package directory for snapshots."""
+
+    root: Path
+    files: dict[tuple[str, ...], CapturedFile]
+    directories: frozenset[tuple[str, ...]]
+    conflation_probes: tuple[ConflationProbe, ...] = ()
+
+
+#: Upper bound on conflation probes collected during one capture. Probing
+#: stops once every axis is decided, so the bound only caps pathological
+#: trees, never the evidence.
+_MAX_CONFLATION_PROBES: Final = 32
+
+
+def _conflation_axes(name: str) -> frozenset[str]:
+    """Name the conflation relations one entry name can probe."""
+
+    axes: set[str] = set()
+    if name.swapcase() != name:
+        axes.add("case")
+    if (
+        unicodedata.normalize("NFC", name) != name
+        or unicodedata.normalize("NFD", name) != name
+    ):
+        axes.add("normalization")
+    return frozenset(axes)
 
 
 _SNAPSHOT_PATH_BASE = type(Path())
@@ -1258,7 +1329,19 @@ class SelectionSession:
         *,
         code: str,
         context: str,
+        expected_identity: tuple[int, int] | None = None,
+        changed_code: str | None = None,
     ) -> Directory:
+        """Open one child directory, optionally binding it to a listed identity.
+
+        Callers that pass ``expected_identity`` (snapshot capture) turn a
+        listing-to-open replacement into ``changed_code`` instead of ``code``:
+        the entry changed under the walk, which is a concurrent mutation, not
+        an admission verdict. Callers that pass neither (member validation)
+        keep the historical single-code behaviour.
+        """
+
+        race_code = changed_code or code
         try:
             fd = _open_child_directory(parent.fd, name, parent_path=parent.display)
         except _FS_ERRORS as exc:
@@ -1269,13 +1352,18 @@ class SelectionSession:
             value = _fstat(fd, code=code, context=context, path=name)
             self._require_source_device(
                 value,
-                code=code,
+                code=race_code,
                 context=context,
                 path=name,
             )
             if not stat.S_ISDIR(value.st_mode):
-                raise SourceError(code, f"{context}: {name!r} is not a directory")
+                raise SourceError(race_code, f"{context}: {name!r} is not a directory")
             identity = _identity_from_stat(value)
+            if expected_identity is not None and identity != expected_identity:
+                raise SourceError(
+                    race_code,
+                    f"{context}: {name!r} changed after entry inspection",
+                )
             if any(item.identity == identity for item in parent.ancestry()):
                 raise SourceError(code, f"{context}: directory cycle at {name!r}")
             child = Directory(
@@ -1348,6 +1436,261 @@ class SelectionSession:
             raise SourceError(code, f"{context}: {name!r}: {exc}") from exc
         finally:
             _close_quietly(fd)
+
+    def read_captured_file(
+        self,
+        parent: Directory,
+        name: str,
+        *,
+        relative: tuple[str, ...],
+        code: str,
+        context: str,
+        missing_code: str | None = None,
+        changed_code: str | None = None,
+        expected_identity: tuple[int, int] | None = None,
+        expected_nlink: int = 1,
+    ) -> CapturedFile:
+        """Read one admitted file through its parent descriptor for snapshots.
+
+        The admission decision is made on the opened descriptor alone: the
+        file is opened ``O_NOFOLLOW`` relative to ``parent.fd``, then
+        ``fstat`` must report a regular file with exactly one link whose
+        identity still matches the directory entry it was listed from. Type,
+        executable bit (any POSIX execute bit on the opened descriptor),
+        identity and bytes all come from that single open. A stable link,
+        special file, hard link or cross-device file refuses with ``code``
+        and absence refuses with ``missing_code`` (or ``code`` when unset).
+        Anything the opened descriptor reports differently from the listing
+        it was read from — a changed identity, a changed type, a changed
+        link count or a changed device — is a concurrent mutation and refuses
+        with ``changed_code`` (or ``code`` when unset). Race semantics apply
+        only when ``expected_identity`` carries listing evidence; a direct
+        call without it reports every anomaly with ``code``.
+        """
+
+        if expected_identity is not None:
+            race_code = changed_code or code
+        else:
+            race_code = code
+        try:
+            fd = _open_child_file(parent.fd, name, parent_path=parent.display)
+        except SourceError:
+            raise
+        except OSError as exc:
+            if exc.errno in (errno.ENOENT, errno.ENOTDIR):
+                raise SourceError(
+                    missing_code or code,
+                    f"{context}: {name!r} does not exist",
+                ) from exc
+            raise SourceError(code, f"{context}: {name!r}: {exc}") from exc
+        except _FS_ERRORS as exc:
+            raise SourceError(code, f"{context}: {name!r}: {exc}") from exc
+        try:
+            value = _fstat(fd, code=code, context=context, path=name)
+            self._require_source_device(
+                value,
+                code=race_code,
+                context=context,
+                path=name,
+            )
+            if not stat.S_ISREG(value.st_mode):
+                raise SourceError(
+                    race_code, f"{context}: {name!r} is not a regular file"
+                )
+            opened_identity = _identity_from_stat(value)
+            opened_nlink = getattr(value, "st_nlink", 1)
+            if expected_nlink != 1:
+                raise SourceError(
+                    code,
+                    f"{context}: {name!r} is a hard link",
+                )
+            if opened_nlink != 1:
+                raise SourceError(
+                    race_code,
+                    f"{context}: {name!r} is a hard link",
+                )
+            if expected_identity is not None and opened_identity != expected_identity:
+                raise SourceError(
+                    race_code,
+                    f"{context}: {name!r} changed after entry inspection",
+                )
+            executable = bool(stat.S_IMODE(value.st_mode) & 0o111)
+            chunks: list[bytes] = []
+            while True:
+                chunk = _read_descriptor(
+                    fd,
+                    1024 * 1024,
+                    parent_fd=parent.fd,
+                    name=name,
+                )
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            return CapturedFile(
+                path=relative,
+                data=b"".join(chunks),
+                executable=executable,
+                identity=opened_identity,
+                nlink=opened_nlink,
+            )
+        except SourceError:
+            raise
+        except _FS_ERRORS as exc:
+            raise SourceError(code, f"{context}: {name!r}: {exc}") from exc
+        finally:
+            _close_quietly(fd)
+
+    def capture_tree(
+        self,
+        member: Directory,
+        *,
+        label: str,
+        code: str,
+        missing_code: str | None = None,
+        changed_code: str | None = None,
+    ) -> CapturedTree:
+        """Capture one package directory recursively for a snapshot.
+
+        Same walk shape as :meth:`snapshot_member`, but every file returns
+        its bytes together with the executable bit and identity of the same
+        opened descriptor, and managed-output subtrees are pruned silently
+        through :meth:`managed_boundary` (the frozen Phase-A identities a
+        ``*`` discovery would prune). A capture root that is itself managed
+        output refuses with ``source_output_overlap`` instead of capturing
+        an empty tree. Every other anomaly refuses with ``code``, except
+        concurrent change: an entry that disappears mid-walk refuses with
+        ``missing_code``, and an entry the opened descriptor reports
+        differently from its listing refuses with ``changed_code`` (each
+        falls back to ``code`` when unset). Links and special files name
+        their package-relative path, exactly like the snapshot capture
+        requires. Entries usable as filesystem-conflation probes are
+        collected on the returned tree.
+        """
+
+        context = f"Snapshot capture {label}"
+        reason = self.managed_boundary(member, frozenset(), context=context)
+        if reason is not None:
+            raise SourceError(
+                CODE_OUTPUT_OVERLAP,
+                f"{context}: capture root is {reason}",
+            )
+        files: dict[tuple[str, ...], CapturedFile] = {}
+        directories: set[tuple[str, ...]] = {()}
+        probes: list[ConflationProbe] = []
+        stack: list[tuple[Directory, tuple[str, ...]]] = [(member, ())]
+        while stack:
+            current, relative = stack.pop()
+            try:
+                with _scandir(current.fd, fallback_path=current.display) as entries:
+                    for entry in entries:
+                        name = entry.name
+                        child_relative = (*relative, name)
+                        shown = "/".join(child_relative)
+                        try:
+                            entry_stat = entry.stat(follow_symlinks=False)
+                        except FileNotFoundError as exc:
+                            raise SourceError(
+                                missing_code or code,
+                                f"{context}: {shown!r} disappeared during inspection",
+                            ) from exc
+                        except _FS_ERRORS as exc:
+                            raise SourceError(
+                                code,
+                                f"{context}: cannot inspect {shown!r}: {exc}",
+                            ) from exc
+                        if entry_stat.st_dev != self.root.identity[0]:
+                            raise SourceError(
+                                code,
+                                f"{context}: {shown!r} crosses the source "
+                                "filesystem boundary",
+                            )
+                        if len(probes) < _MAX_CONFLATION_PROBES:
+                            probe_axes = _conflation_axes(name)
+                            if probe_axes:
+                                probes.append(
+                                    ConflationProbe(
+                                        current,
+                                        name,
+                                        _identity_from_stat(entry_stat),
+                                        probe_axes,
+                                    )
+                                )
+                        if stat.S_ISLNK(entry_stat.st_mode):
+                            raise SourceError(
+                                code,
+                                f"{context}: {shown!r} is a link; "
+                                "links in admitted inputs are rejected",
+                            )
+                        if stat.S_ISDIR(entry_stat.st_mode):
+                            try:
+                                child = self._open_regular_child(
+                                    current,
+                                    name,
+                                    code=code,
+                                    context=context,
+                                    expected_identity=_identity_from_stat(entry_stat),
+                                    changed_code=changed_code,
+                                )
+                            except SourceError as exc:
+                                if missing_code is not None and _is_absence_error(exc):
+                                    raise SourceError(
+                                        missing_code, exc.detail
+                                    ) from exc
+                                raise
+                            if (
+                                self.managed_boundary(
+                                    child, frozenset(), context=context
+                                )
+                                is not None
+                            ):
+                                continue
+                            directories.add(child_relative)
+                            stack.append((child, child_relative))
+                            continue
+                        if stat.S_ISREG(entry_stat.st_mode):
+                            if getattr(entry_stat, "st_nlink", 1) > 1:
+                                raise SourceError(
+                                    code,
+                                    f"{context}: {shown!r} is a hard link",
+                                )
+                            files[child_relative] = self.read_captured_file(
+                                current,
+                                name,
+                                relative=child_relative,
+                                code=code,
+                                context=context,
+                                missing_code=missing_code,
+                                changed_code=changed_code,
+                                expected_identity=_identity_from_stat(entry_stat),
+                                expected_nlink=getattr(entry_stat, "st_nlink", 1),
+                            )
+                            continue
+                        raise SourceError(
+                            code,
+                            f"{context}: {shown!r} is not a regular file or directory",
+                        )
+            except SourceError:
+                raise
+            except _FS_ERRORS as exc:
+                if (
+                    missing_code is not None
+                    and isinstance(exc, OSError)
+                    and exc.errno in (errno.ENOENT, errno.ENOTDIR)
+                ):
+                    raise SourceError(
+                        missing_code,
+                        f"{context} changed during capture: {exc}",
+                    ) from exc
+                raise SourceError(
+                    code,
+                    f"{context} cannot be inspected: {exc}",
+                ) from exc
+        return CapturedTree(
+            root=member.display,
+            files=files,
+            directories=frozenset(directories),
+            conflation_probes=tuple(probes),
+        )
 
 
 def _prepare_preflight(

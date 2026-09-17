@@ -61,6 +61,26 @@ on the `tls` frame (`src/csk/git_admission.py:1304`,
 `schannel: .+`); Schannel verifies against the Windows store and ignores
 `GIT_SSL_CAINFO`, so CA-trusting loopback-TLS tests skip on Windows with the
 committed named reason while the no-trust hostile test asserts live `tls`.
+## 2026-09-17 - TASK-260916-100uew: section-2 boundaries candidate ready for review
+
+Implemented `csk.sources.boundaries` (Phase-A record, package gate, discovery
+pruning, declared-input and root_inputs admission, exported publication
+recheck) with 181 tests and six conformance drivers. No string-prefix
+containment anywhere: ancestry walks plus same-parent same-file probes.
+
+Two findings worth keeping: (1) the harness registration self-tests pinned
+`broad-root`/`SEMANTIC_CASES[0]`, so the first driver for either breaks the
+harness itself; they now address the first still-undriven case. (2) The
+managed-root freeze and the same-parent probe genuinely back each other up:
+weakening either alone admits nothing for linked roots, so the narrowing
+mutants target singly-covered shapes instead (post-freeze aliases for the
+probe, absolute-link expansion for the resolver).
+
+Story base is behind trunk (STORY-260916-14tjpk landed) and
+`refresh-candidate` refuses deterministically with an INTERNAL_ERROR
+carrying no replay; proceeding at b6558b7 with the access-layer shape
+read from trunk for compatibility. The module is standalone and enters
+no import closure of the trunk selection path.
 
 ## 2026-09-17 - TASK-260917-2b3ia1: POSIX-only selection bound; capability identity must survive os wrapping, lstat membership is version-dependent
 
@@ -468,6 +488,89 @@ names stay identifiers via parse. Prune set for `*` is `.git`, `.agents`,
 `.claude`, `.codex`, `.cursor`, `.gemini`; snapshot/staging live under the csk
 home and contribute no names. Frontmatter parser covers single-line scalars,
 block/flow lists, and `|`/`>` scalars; other YAML fails closed.
+## 2026-09-17 - TASK-260917-3qkywj rev3: str.__str__ normalization + algorithm normalize-once (F2)
+
+Review found `str()` is not normalization: it honours an overridden `__str__`,
+which may return an unrelated spelling or a still-hostile subclass instance,
+resurrecting F1; plus `_preimage` read `algorithm` twice around a
+compare-then-store, so a stateful `__str__` passed the gate honest and hashed
+evil (digest byte-matched the `evil-algorithm` preimage). Reproduced pre-fix:
+all 6 new F2 params fail on the rev2 shape (exit 1), the 3 F1 params pass.
+
+Fix: `str.__str__(x)` at all four admission sites (verified to bypass the
+override and return exact `str` by value; identity for plain `str`), and the
+algorithm gate now normalizes once, then compares and stores the same canonical
+value. Audited every other compare-then-store site: each caller string is read
+exactly once (`_unpack_entry`, mapping subscripts, validated-bytes sort keys).
+
+Evidence: CLASS test extended with `str-constant-lying`, `str-smuggle-eq`,
+`str-smuggle-encode`, `str-stateful-flip` through tuple, named and mapping
+paths, plus `type(x) is str` pins on every admitted path/sha256/algorithm; new
+TOCTOU regression test in both flip directions. Narrowing mutants: `str()` for
+exactly spelled `"b"` kills the 4 F2 CLASS params (F1 params pass — narrowing
+signature); restored algorithm double-call kills both flip params; all rev1/rev2
+row mutants rebuilt from this candidate and re-killed; M-PURITY-STAT survivor
+re-confirmed (70 passed, exit 0). The smuggled-`EqChaos` mapping mutant dies on
+the type pin (line 814) with a value-equal digest — the pin catches what the
+digest cannot. Narrow suite 70 passed / 0 skipped (locale test RAN), mypy
+clean (80 files), siblings 429 passed / 22 skipped, three vectors byte-exact.
+
+## 2026-09-17 - TASK-260917-3qkywj rev2: str-subclass admission normalization (F1)
+
+Review found string identity decided three times by three overridable things:
+`isinstance`-admitted `str` subclasses reached `==` (collision gate),
+`.encode("utf-8")` (both sort sites) and `canonical_bytes` (hash) unnormalized,
+so gates and hash could disagree. Reproduced pre-fix through production entry
+points: `__eq__`-lying duplicates accepted (`files: ['dup','dup']`), reversed
+input yielding a different digest, and an `encode`-lying spelling emitting
+`['b','a']` with digest `sha256:332c41ad…` vs plain `sha256:28973cdc…`.
+
+Fix: normalize once on admission (`path = str(raw_path)`,
+`sha256 = str(raw_sha256)` in `build_inventory`; same for `path`/`sha256` and
+`algorithm` read from mappings in `_preimage`) — accept benign subclasses by
+value rather than strict-refusing them. Both sort sites now sort on the
+validated bytes from `_validate_path` (single remaining `.encode` runs on
+exact `str`). Equivalence contract documented: a raising predicate propagates
+unwrapped, a non-`bool` return is `source_path_equivalence_invalid`.
+
+Evidence: one parametrised CLASS test (`plain-subclass`, `eq-lying`,
+`encode-lying`) through tuple, `InventoryEntry` and mapping paths; narrowing
+mutant skipping normalization for exactly spelled `"b"` kills `[plain-subclass]`
+(type pin) and `[encode-lying]` (order) with exit 1 while `[eq-lying]` still
+passes — the surviving param proves the gate still covers the rest of the
+class. All rev1 row mutants rebuilt from this candidate and re-killed; the
+M-PURITY-STAT survivor re-confirmed (64 passed, exit 0). Narrow suite 64
+passed, mypy clean, siblings 429 passed / 22 skipped — nothing moved.
+
+## 2026-09-17 - TASK-260917-3qkywj (muse continuation): determinism, behavioral purity, oracle check
+
+Continued after the provider limit killed the first run. Kept the draft seam
+and made collision naming caller-order independent (sort by UTF-8 bytes before
+the pairwise equivalence check). Added a `sys.addaudithook` behavioral purity
+test: production calls emit zero audit events. Probing showed `os.stat`,
+`time.time`, `locale.setlocale`, `os.getenv` and `os.environ` reads emit NO
+audit event, so obfuscated construction of those evades both the static walk
+and the hook — recorded as a stated bound with a surviving mutant, not a
+silent gap. Independently authenticated the suite bytes against the committed
+pin (`snapshot-cases.json` sha256 `1922256e…`) and reproduced all three
+inventories byte-exactly through `build_inventory`; the fixture schema `$defs`
+are identical to authoritative `common.schema.json`.
+
+## 2026-09-17 - TASK-260917-3qkywj: pure local snapshot inventory and digest
+
+Added `csk.sources.local_snapshot` as an in-memory-only seam. It validates
+portable paths, `sha256:` content digests and strict executable booleans,
+rejects exact and injected filesystem-equivalent collisions with both paths
+named, orders files by UTF-8 path bytes, and computes the exact local-
+snapshot-v1 CCJ-1 digest while excluding `snapshot` from its preimage.
+
+The three pinned vectors reproduce byte-for-byte through `build_inventory`;
+the new tests cover NFC/NFD, case, shared-prefix and trailing-separator
+surfaces, generated permutation/sensitivity properties, schema validation and
+CCJ-1 read-then-write identity, plus a static AST purity walk. Narrowing
+mutant evidence is recorded in the task outcome. The base shell initially had
+no `python` command (exit 127); `uv sync --extra dev` supplied the repository's
+`.venv`, and all gates were rerun via `PATH=.venv/bin:$PATH python ...`.
 
 ## 2026-09-16 - TASK-260916-2u0v5j rev2: v1 duplicate precedence and null-vs-absent sources
 
@@ -3585,3 +3688,75 @@ trailing CR stripped); the suite carries real-server 503 by CR/VT/FF plus
 a CRLF control, 404 by CR, lone-relay SSH and unmatched-status HTTP
 bypass shapes, and a narrowing LF-plus-CR mutant that kills the CR cells
 while the VT/FF siblings hold.
+## 2026-09-17 TASK-260916-sbzutf: local package snapshot capture and revalidation
+
+Shipped the narrowed capture half (the store moved to TASK-260917-34g2lq
+by recorded split): `csk.sources.snapshot` captures working-tree bytes
+through the confined descriptor layer, probes the host's real
+name-conflation relations from the capture filesystem itself, builds the
+inventory through `local_snapshot.build_inventory`, and runs revalidation
+1 (complete admitted path set plus identities, bytes and exec bits) with
+no retry; `verify_frozen_copy` is revalidation 2 over the frozen bytes,
+and revalidation 3 stays named as TASK-260916-100uew's. Admission is
+decided on the opened descriptor, listing-to-open skew reports
+`source_snapshot_changed`, and file opens are `O_NONBLOCK` so a
+file-to-FIFO swap refuses instead of hanging (found while writing the
+race tests, proven by a timeout-wrapped test). The equivalence probe
+votes only from opened-descriptor identity comparisons, so injected
+faults can push an axis to unknown but never to folding (M3 kills the
+EACCES-as-distinction weakening). Pinned seam positions rather than
+patching them: a `.git` file and nested `.git` capture as ordinary
+bytes because the frozen Phase-A record does not name them. 169 new
+tests, three conformance drivers, 15 of 15 narrowing mutants killed
+with live-byte verification, full ordinary suite green (7695 passed,
+166 skipped), mypy clean. Also riding here by recorded decision: the
+closure pin admits `csk.sources.local_snapshot` with its justification.
+Full evidence in `TASK-260916-sbzutf_results.md`.
+
+## 2026-09-17 TASK-260917-34g2lq: source-v1 snapshot store and consumer readers
+
+Split from sbzutf along the produce/store seam. `csk.sources.store` stages
+verified frozen copies under `<home>/source-v1/` (SHA-256-hex key
+components, digest-named trees, atomic record replace under
+`ManagerHomeLock`) and serves them lock-free through
+`csk.sources.consumers` (`open_for_audit/build/projection/install`),
+each a one-line delegation returning in-memory bytes, never a path.
+Missing locked snapshots fail `source_snapshot_unavailable` from all
+four readers and are never recreated -- lookup takes no source path.
+118 tests plus the owned `missing-snapshot` conformance driver (driven
+through all four consumers); 6 of 6 narrowing mutants killed with the
+behavioral suite, full ordinary suite green, mypy strict clean.
+
+Two fixes worth keeping: (1) rollback first pruned from the entry
+directory and missed its empty `trees/` child, then over-pruned a
+pre-existing empty `staging/` left by an earlier success -- it now
+snapshots the pre-existing chain and removes exactly what the stage
+created. (2) `OSError` from lock acquisition escaped `stage_snapshot`
+raw (only `LockError` was mapped); the stage fault matrix caught it
+and the lock path now maps to `source_snapshot_unavailable` like
+every other staging I/O failure. Full evidence in
+`TASK-260917-34g2lq_results.md`.
+
+## 2026-09-17 TASK-260917-34g2lq (xplat): four hosted-lane failures fixed on the Story landing head
+
+CI on `181cb7d8` was green on macOS and red on Linux (1) and Windows (3).
+(1) `replace-same-bytes-new-inode` did not raise on Linux: revalidation
+identity is `(st_dev, st_ino)` and the filesystem reused the inode, so no
+observable difference existed. Declared bound, probed at runtime
+(mtime/ctime are excluded from identity by the metadata-only design
+decision; birthtime is not in `os.stat`): byte-identical same-mode
+replacement is integrity-neutral and unreported on inode-reusing
+filesystems; nothing content-bearing goes undetected. (2) The user-bin
+collision fixture planted extensionless `review` while Windows publishes
+`review.cmd` -- a different path that correctly does not collide; the
+fixture now plants at `shims.shim_path` with a `windows` platform param
+that reproduces the CI shape on any host. (3) `lstat escaped to 'D:\'`:
+the product legitimately stats the filesystem root during the ancestry
+walk (`boundaries._ancestry_stats`); the oracle's `== os.sep` root check
+was POSIX-only. Instrument fix, corroborated by the audit-hook test
+(open/scandir only) staying green on Windows. (4) Concurrent readers on
+Windows: no replace-while-open, so a reader holding `record.json` fails
+the writer's `os.replace` with `PermissionError`; the record replace now
+retries sharing denials within a 0.75 s bound (6 attempts, 0.05 s linear
+backoff, `PermissionError` only). Full evidence in
+`TASK-260917-34g2lq_xplat-results.md`.
