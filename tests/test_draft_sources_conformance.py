@@ -54,6 +54,7 @@ from csk.sources import _selection_fs
 from csk.sources import errors as source_errors
 from csk.sources import repository_policy
 from csk.sources import transport as source_transport
+from csk.sources import lock as source_lock
 
 ROOT_TEXT = os.environ.get("CSK_DRAFT_SOURCES_SUITE_ROOT")
 pytestmark = pytest.mark.skipif(not ROOT_TEXT, reason="CSK_DRAFT_SOURCES_SUITE_ROOT is not set")
@@ -445,6 +446,39 @@ def test_draft_sources_schema_case(entry: dict[str, Any]) -> None:
         registry=SCHEMA_REGISTRY,
         suite_root=_suite_root(),
     )
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        entry
+        for entry in SCHEMA_CASES
+        if entry["schema"] == "skillfile-lock-v1.schema.json"
+    ],
+    ids=[
+        f"{entry['schema']}:{entry['instance']}"
+        for entry in SCHEMA_CASES
+        if entry["schema"] == "skillfile-lock-v1.schema.json"
+    ],
+)
+def test_draft_sources_skillfile_lock_schema_case_through_production_reader(
+    entry: dict[str, Any],
+) -> None:
+    """Drive every lock/schema-types case through csk's structural reader.
+
+    The pinned schema corpus uses synthetic values and intentionally copies one
+    digest across all cases.  The production schema-only entry validates the
+    same shape and union arms without misrepresenting those fixtures as real
+    lock digest vectors; full reader/digest coverage is supplied by
+    ``tests/test_skillfile_lock.py`` fixtures.
+    """
+    raw = (_suite_root() / Path(entry["instance"])).read_bytes()
+    if entry["valid"]:
+        parsed = source_lock.read_lock_schema(raw)
+        assert parsed.schema_version == 1
+    else:
+        with pytest.raises(source_errors.SourceError):
+            source_lock.read_lock_schema(raw)
 
 
 @pytest.mark.parametrize("valid", [True, False], ids=["valid-case", "invalid-case"])
