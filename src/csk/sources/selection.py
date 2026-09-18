@@ -1565,19 +1565,21 @@ def _parse_block_header(raw_after: str, label: str) -> tuple[str, str, int | Non
     for _ in range(2):
         if pos < len(raw_after) and raw_after[pos] in ("-", "+"):
             if chomping != "clip":
+                stripped_after = raw_after.strip(" \t")
                 raise SourceError(
                     CODE_MEMBER_INVALID,
                     f"Skill member {label} SKILL.md frontmatter block header "
-                    f"{raw_after.strip(' \t')!r} repeats the chomping indicator",
+                    f"{stripped_after!r} repeats the chomping indicator",
                 )
             chomping = "strip" if raw_after[pos] == "-" else "keep"
             pos += 1
         elif pos < len(raw_after) and raw_after[pos] in _INDENT_VALUES:
             if explicit is not None:
+                stripped_after = raw_after.strip(" \t")
                 raise SourceError(
                     CODE_MEMBER_INVALID,
                     f"Skill member {label} SKILL.md frontmatter block header "
-                    f"{raw_after.strip(' \t')!r} repeats the indentation indicator",
+                    f"{stripped_after!r} repeats the indentation indicator",
                 )
             explicit = _INDENT_VALUES[raw_after[pos]]
             pos += 1
@@ -1590,10 +1592,11 @@ def _parse_block_header(raw_after: str, label: str) -> tuple[str, str, int | Non
         return style, chomping, explicit
     if raw_after[pos] == "#" and pos > separator:
         return style, chomping, explicit
+    stripped_after = raw_after.strip(" \t")
     raise SourceError(
         CODE_MEMBER_INVALID,
         f"Skill member {label} SKILL.md frontmatter block header "
-        f"{raw_after.strip(' \t')!r} carries invalid trailing text",
+        f"{stripped_after!r} carries invalid trailing text",
     )
 
 
@@ -1710,10 +1713,11 @@ def _consume_block_scalar(
             continue
         seen_content = True
         if stored < baseline:
+            stripped_line = raw.strip(" \t")
             raise SourceError(
                 CODE_MEMBER_INVALID,
                 f"Skill member {label} SKILL.md frontmatter block scalar "
-                f"line {raw.strip(' \t')!r} is indented below the content "
+                f"line {stripped_line!r} is indented below the content "
                 f"indentation ({baseline})",
             )
     # Empty scalar content is decided AFTER baseline removal: a line whose
@@ -1935,16 +1939,18 @@ def parse_frontmatter_scalar(raw: str, label: str) -> str:
             "(null, not a string)",
         )
     if first == "-" and (pos + 1 >= length or raw[pos + 1] in (" ", "\t")):
+        stripped_value = raw[pos:].strip(" \t")
         raise SourceError(
             CODE_MEMBER_INVALID,
             f"Skill member {label} SKILL.md frontmatter value "
-            f"{raw[pos:].strip(' \t')!r} is a sequence entry, not a string",
+            f"{stripped_value!r} is a sequence entry, not a string",
         )
     if first == "?" and (pos + 1 >= length or raw[pos + 1] in (" ", "\t")):
+        stripped_value = raw[pos:].strip(" \t")
         raise SourceError(
             CODE_MEMBER_INVALID,
             f"Skill member {label} SKILL.md frontmatter value "
-            f"{raw[pos:].strip(' \t')!r} is an explicit mapping key entry, not a string",
+            f"{stripped_value!r} is an explicit mapping key entry, not a string",
         )
     if first == "'":
         pos += 1
@@ -2042,9 +2048,10 @@ def parse_frontmatter_scalar(raw: str, label: str) -> str:
         _check_scalar_trailer(raw, pos, label)
         return "".join(out)
     if first in _UNSUPPORTED_VALUE_STARTS:
+        stripped_value = raw[pos:].strip(" \t")
         raise SourceError(
             CODE_MEMBER_INVALID,
-            f"Skill member {label} SKILL.md frontmatter value {raw[pos:].strip(' \t')!r} "
+            f"Skill member {label} SKILL.md frontmatter value {stripped_value!r} "
             "is an unsupported node kind, not a string",
         )
     end = length

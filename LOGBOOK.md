@@ -1,5 +1,71 @@
 # Logbook
 
+## 2026-09-18 - BUG-260917-3txerf rev3: the rev2 closure claim was partial; two guard classes stay open under TASK-260918-16r0fm
+
+Round 2 held the fix and the interpreter-identity mechanism (the self-check
+kills T1/T4/T5: deleted, renamed, or duplicated floor wiring fails with
+`FLOOR is empty` / `floor mismatch` on the hosted shape, independent of any
+pin) but found two more classes the rev2 entry above had claimed closed. F3:
+the self-check and `compileall` are separate commands whose exits are
+separable from the step's exit (`exit 0` as the first run line, a PATH change
+between the two commands, `set +e`, `shell: bash {0}`, job-level
+`continue-on-error`), each green on all 19 committed workflow tests while
+admitting the defect. F4: `compileall` treats an unlistable target as empty
+and exits 0 (`Can't list 'src/csk'`), so a `working-directory`, a sparse or
+relocated checkout, or a package move with no workflow edit at all leaves the
+gate vacuous and green. Tamper resistance was re-decomposed out of this leaf
+into TASK-260918-16r0fm with the reviewer's executed single-process sketch
+(one command, whitelisted step shape, sentinel-checked targets); this leaf's
+gate promises only the accidental case -- a construct the floor cannot parse,
+present under the spelled `src/csk` or `tests` paths, fails every pull
+request. Lesson amended: a self-check kills the wirings it names, not the
+wirings nobody named -- closing the class needs a whitelist of the step
+shape, not a check inside it.
+
+## 2026-09-17 - BUG-260917-3txerf rev2: a gate must prove it runs on the floor, not just that it runs; twins must span the whole charset class
+
+Review round 1 held the fix (seven hoists, byte-identical over 13275
+reviewer-rendered records) and broke the guard twice. F1: three
+token-preserving `ci.yml` edits (delete `id: floor`, rename it to
+`floors`, insert a second setup-python) kept all 18 workflow tests green
+while the job fell through to the runner-default interpreter, because the
+gate proved some interpreter compiled the package but never proved it was
+the floor. Closed structurally: the compile step now reads `FLOOR` from
+`env` and fails closed unless it equals its own major.minor, and the
+committed wiring test reads step ids from the parsed YAML instead of
+spelling them (plus executed fail/fail/pass of the extracted self-check).
+Lesson: a pin can only forbid spellings someone thought of; a self-check
+kills wirings nobody named. F2: `strip("\t")` survived at the three
+`raw[pos:]` sites because `pos` advances past leading whitespace before
+slicing, so only a trailing space distinguishes the charsets there and no
+committed case had one. The 14-case base-plus-tab test is now a 35-case
+twin family over trailing `[" ", "\t", " \t", "\t "]` at all seven sites;
+both narrowings die everywhere with per-site killing ids. Same round also
+adopted compiling `tests/` (the incident showed as test collection
+errors) and `[project]`-scoping of the floor resolver (an earlier
+`[tool.*]` line used to win). Full ordinary suite green in two disjoint
+chunks (4254+3386 passed, exit 0 both).
+
+## 2026-09-17 - BUG-260917-3txerf: the 3.11 f-string class was seven sites, not three; a substring CI pin survived its own mutant
+
+`compileall` reports only the first SyntaxError per file, so the three
+reported sites in `src/csk/sources/selection.py` hid four more of the same
+PEP 701 shape (`strip(' \t')` inside f-string braces at the below-baseline,
+sequence-entry, explicit-key and unsupported-node refusals). Fix is the same
+hoist at all seven; every rendered detail proven byte-identical by string
+comparison on 3.14, then pinned by a 14-case committed test (base plus
+trailing-tab twin per site). Second lesson from the same leaf: the new
+`floor_syntax` CI test first pinned the compile command as a substring, and
+the narrowing mutant (`compileall -q src/csk/builds`, `compileall` token
+preserved) survived it -- `src/csk/builds` contains `src/csk`. Whole-line
+pins plus execution of the extracted resolve script (committed tree resolves
+3.11, raised floor resolves 3.12, no-`>=` fails closed) kill all four CI
+mutants. Unrelated observation while here:
+`test_macos_identity_guard_detects_process_graph_replacement_and_restore[tool]`
+failed once under the eight-way full run and passes standalone (2 passed,
+216 s); timing-sensitive macOS mechanism test, zero code-path overlap with
+this change, left untouched.
+
 ## 2026-09-17 - TASK-260917-ts1s4r rev3: macOS deadline flake was the test racing the runner, not production; clock seam proves the shared deadline deterministically
 
 The `macos-latest` failure (`attempt 1=dns, attempt 2=timeout` on a 0.2 s
