@@ -438,13 +438,21 @@ jobs:
     # self-verifying: it fails closed unless the interpreter running it
     # reports the resolved FLOOR, so wiring drift that falls through to the
     # runner-default interpreter cannot go green.
-    # Bounds (honest scope): this proves the interpreter identity and the
-    # compile result on the spelled targets, but its own step shape is not
-    # pinned as a whitelist, and compileall exits 0 on an unlistable target
-    # ("Can't list" is treated as empty). A deliberate edit of this job, or
-    # a target path that no longer exists, can disarm it silently; an
-    # accidental reintroduction of the class still fails every pull request.
-    # Tamper resistance is tracked in TASK-260918-16r0fm.
+    # Hardened by TASK-260918-16r0fm against the deliberate-edit class
+    # (BUG-260917-3txerf rev-2 findings F3/F4): the compile step is exactly
+    # one command running one committed gate script
+    # (.github/scripts/floor_gate.py), so the check and the compile share
+    # one process and its exit status IS the step status; the job and
+    # per-step shapes are pinned as exact key whitelists in
+    # tests/test_ci_workflow.py; and each target is proved present by a
+    # named sentinel before compiling, because compileall exits 0 on an
+    # unlistable target ("Can't list" is treated as empty).
+    # Revision 2 closes the sibling surfaces: the gate resolves the floor
+    # from pyproject.toml itself through the shared committed resolver
+    # (.github/scripts/floor_resolve.py), the resolve step's run is pinned
+    # whole exactly like the compile step's, the compile step declares
+    # shell and isolated mode explicitly, the workflow-level surfaces are
+    # pinned, and every target directory is proved listable by a walk.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -454,35 +462,17 @@ jobs:
 
       - name: Resolve the floor Python from requires-python
         id: floor
-        # Plain-regex read of pyproject.toml so this step runs on any
-        # preinstalled python3 (no tomllib needed). It resolves the >=
-        # lower bound of the PEP 621 [project] table to major.minor and
-        # fails closed when no such bound exists, so raising the floor
-        # later moves this gate with it and rewriting the specifier shape
-        # cannot silently disarm it. Scoped to [project]: a requires-python
-        # line under any other table is ignored.
-        run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import re
-
-          text = open("pyproject.toml", encoding="utf-8").read()
-          project = re.search(
-              r'(?ms)^\[project\][^\n]*\n(.*?)(?=^\[.*\]|\Z)',
-              text,
-          )
-          section = project.group(1) if project is not None else ""
-          match = re.search(
-              r'^\s*requires-python\s*=\s*"[^"]*?>=\s*(\d+)\.(\d+)',
-              section,
-              re.MULTILINE,
-          )
-          if match is None:
-              raise SystemExit(
-                  "cannot resolve a >= floor from requires-python "
-                  "in pyproject.toml"
-              )
-          print(f"version={match.group(1)}.{match.group(2)}")
-          PY
+        # The floor value has exactly one author:
+        # .github/scripts/floor_resolve.py. The gate resolves through that
+        # same file and fails closed unless the resolved floor equals the
+        # running interpreter, so this step's run value is one command with
+        # no shell around it -- no heredoc, no redirect, no text for an
+        # extra line, a pipe, or an echo to hide in. The script appends
+        # version=<floor> to $GITHUB_OUTPUT itself. Plain-regex read of
+        # pyproject.toml so this runs on any preinstalled python3 (no
+        # tomllib needed); scoped to [project]; fails closed without a >=
+        # bound, so raising the floor moves this gate with it.
+        run: python3 .github/scripts/floor_resolve.py
 
       - name: Set up floor Python ${{ steps.floor.outputs.version }}
         uses: actions/setup-python@v5
@@ -490,28 +480,23 @@ jobs:
           python-version: ${{ steps.floor.outputs.version }}
 
       - name: Compile the package on the floor interpreter
-        # Self-verifying floor check first: FLOOR arrives from the resolve
-        # step, and the step fails closed unless it is non-empty and equals
-        # the major.minor of the interpreter actually running it. Then the
-        # exact compile command: any construct the floor cannot parse fails
-        # this step. Deliberately compile-only: it cannot see runtime-only
+        # One process, one command: the gate script resolves the floor from
+        # pyproject.toml itself, cross-checks FLOOR against it, proves each
+        # target present via a named sentinel read and listable via a walk,
+        # then compiles every target, exiting non-zero on any failure. Its
+        # exit status IS the step status: there is no second command, no
+        # between for a PATH change, and no shell -e dependence, so exit 0,
+        # set +e, shell overrides and continue-on-error cannot separate the
+        # check from the compile. The shell is declared explicitly so no
+        # workflow-level default can substitute it, and -I keeps the gate
+        # immune to inherited PYTHON* variables and smuggled modules.
+        # Deliberately compile-only: it cannot see runtime-only
         # incompatibilities (a 3.12+ API that parses on the floor but fails
         # when called), which remain the Merge version matrix's job.
+        shell: bash
         env:
           FLOOR: ${{ steps.floor.outputs.version }}
-        run: |
-          python - <<'PY'
-          import os
-          import sys
-
-          floor = os.environ.get("FLOOR", "")
-          running = f"{sys.version_info[0]}.{sys.version_info[1]}"
-          if not floor:
-              raise SystemExit("FLOOR is empty: floor resolution did not run")
-          if floor != running:
-              raise SystemExit(f"floor mismatch: FLOOR={floor!r} running={running!r}")
-          PY
-          python -m compileall -q src/csk tests
+        run: python -I .github/scripts/floor_gate.py
 
   fast:
     name: fast
