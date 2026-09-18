@@ -52,6 +52,7 @@ TargetKind = Literal["bytes", "entry"]
 CleanupEntryKind = Literal["file", "directory", "link"]
 StagingEntryKind = Literal["file", "directory", "link"]
 FaultHook = Callable[[str, "JournalTarget | None"], None]
+PreWriteHook = Callable[["JournalTarget"], None]
 
 
 class TransactionError(Exception):
@@ -79,6 +80,11 @@ class MutableTarget:
     expected_generation: str | None = None
     generation_path: str | None = None
     kind: TargetKind = "bytes"
+    # Opaque publication-time recheck payload, interpreted by the engine's
+    # pre-write hook. The engine only validates that it is a JSON-safe dict
+    # carrying a string "kind" and round-trips it through the journal, so a
+    # crashed commit replays with the same recheck on recovery.
+    publication_recheck: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -126,6 +132,7 @@ class JournalTarget:
     staging_finalize_active: bool = False
     backup_digest: str | None = None
     state: CommitState = "pending"
+    publication_recheck: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -174,10 +181,17 @@ class InstallMarkerGenerationGroup:
 class TransactionEngine:
     """Durable generic replacement transactions under a caller-held home lock."""
 
-    def __init__(self, csk_home: Path, *, fault_hook: FaultHook | None = None):
+    def __init__(
+        self,
+        csk_home: Path,
+        *,
+        fault_hook: FaultHook | None = None,
+        pre_write_hook: PreWriteHook | None = None,
+    ):
         self.home = csk_home.expanduser().resolve(strict=False)
         self.journal_root = self.home / "state" / "transactions" / "v1"
         self._fault_hook = fault_hook
+        self._pre_write_hook = pre_write_hook
         self._mutex = threading.Lock()
         self._active_witness: HomeLockWitness | None = None
         self._active_home_identity: str | None = None
@@ -517,6 +531,44 @@ class TransactionEngine:
         self._emit("before_cleanup", None)
         self._cleanup_committed(journal)
 
+    def _run_pre_write_hook(self, target: JournalTarget) -> None:
+        """Run the publication recheck for one target about to be written.
+
+        Targets without a payload proceed untouched, so callers that never
+        set one observe byte-identical behavior. A payload without an
+        installed hook fails closed before any write for the target. The
+        hook also runs on crash replay, where live may already hold the
+        desired bytes; the hook receives the whole target so it can
+        recognize both the planned preimage and the desired state.
+        """
+
+        if target.publication_recheck is None:
+            return
+        if self._pre_write_hook is None:
+            raise TransactionError(
+                "publication recheck required but no hook is installed: "
+                f"{target.target_class}/{target.identifier}"
+            )
+        self._pre_write_hook(target)
+
+    def _hook_owned_live_digest(self, target: JournalTarget, live: Path) -> str:
+        """Digest a hook-owned live destination, classifying failures.
+
+        A digest failure after the entry hook passed means the boundary
+        moved in between, so the hook runs again and its refusal names
+        the move. When the hook passes too, the failure is genuine and
+        the original error propagates.
+        """
+
+        try:
+            return _target_digest(target, live)
+        except Exception as digest_error:  # noqa: BLE001 - classified below
+            try:
+                self._run_pre_write_hook(target)
+            except Exception:
+                raise
+            raise digest_error
+
     def _commit_target(self, journal: Journal, target: JournalTarget) -> None:
         self._assert_mutation_witness()
         live = Path(target.live_path)
@@ -524,6 +576,7 @@ class TransactionEngine:
         staged = Path(target.staged_path) if target.staged_path is not None else None
 
         if target.state == "pending":
+            self._run_pre_write_hook(target)
             backup_digest = _target_digest(target, backup)
             current = _target_digest(target, live)
             if backup_digest != ABSENT_DIGEST:
@@ -539,6 +592,7 @@ class TransactionEngine:
                 self._verify_expected_at(target, live)
                 if current != ABSENT_DIGEST:
                     self._assert_mutation_witness()
+                    self._run_pre_write_hook(target)
                     _rename_no_replace(live, backup)
                     _sync_tree(backup)
                     self._assert_mutation_witness()
@@ -553,6 +607,7 @@ class TransactionEngine:
                 self._save_journal(journal)
 
         if target.state == "backed_up":
+            self._run_pre_write_hook(target)
             current = _target_digest(target, live)
             if current == target.desired_digest:
                 target.state = "committed"
@@ -572,6 +627,7 @@ class TransactionEngine:
                         f"staged target changed: {target.target_class}/{target.identifier}"
                     )
                 self._assert_mutation_witness()
+                self._run_pre_write_hook(target)
                 _rename_no_replace(staged, live)
                 _sync_tree(live)
                 self._assert_mutation_witness()
@@ -603,9 +659,32 @@ class TransactionEngine:
         live = Path(target.live_path)
         backup = Path(target.backup_path)
         rollback = Path(target.rollback_path)
-        backup_digest = _target_digest(target, backup)
-        current = _target_digest(target, live)
-        rollback_digest = _target_digest(target, rollback)
+        hook_owned = target.publication_recheck is not None
+        if hook_owned:
+            # Hook-owned targets recheck the publication boundary before
+            # live is inspected: a moved boundary refuses as the hook's
+            # refusal, never as corruption of the rollback's own digests.
+            # The backup sidecar lives under the engine's staging area,
+            # never under a publication destination, so it digests safely.
+            backup_digest = _target_digest(target, backup)
+            if target.state == "pending" and backup_digest == ABSENT_DIGEST:
+                return
+            if target.state in {"backed_up", "committed"}:
+                self._run_pre_write_hook(target)
+                current = self._hook_owned_live_digest(target, live)
+            else:
+                # Pending with a backup (a crash between the backup
+                # rename and the state save): the hook's pending
+                # semantics cannot recognize the backed-up live
+                # absence, so the live check stays direct; the hook
+                # still runs before the restore below, once the target
+                # transitions to backed_up.
+                current = _target_digest(target, live)
+            rollback_digest = _target_digest(target, rollback)
+        else:
+            backup_digest = _target_digest(target, backup)
+            current = _target_digest(target, live)
+            rollback_digest = _target_digest(target, rollback)
 
         if target.state == "pending" and backup_digest == ABSENT_DIGEST:
             return
@@ -647,6 +726,7 @@ class TransactionEngine:
                     f"rollback refused unknown current bytes: {target.target_class}/{target.identifier}"
                 )
             self._assert_mutation_witness()
+            self._run_pre_write_hook(target)
             _rename_no_replace(live, rollback)
             self._assert_mutation_witness()
             rollback_digest = _target_digest(target, rollback)
@@ -681,6 +761,7 @@ class TransactionEngine:
                     f"rollback refused to overwrite live bytes: {target.target_class}/{target.identifier}"
                 )
             self._assert_mutation_witness()
+            self._run_pre_write_hook(target)
             _rename_no_replace(backup, live)
             _sync_tree(live)
             self._assert_mutation_witness()
@@ -805,6 +886,14 @@ class TransactionEngine:
                 staged = _sidecar(live, plan.transaction_id, index, "desired")
             backup = _sidecar(live, plan.transaction_id, index, "backup")
             rollback = _sidecar(live, plan.transaction_id, index, "rollback")
+            recheck: dict[str, Any] | None = None
+            if target.publication_recheck is not None:
+                _validate_recheck_payload(
+                    target.publication_recheck,
+                    subject=f"{target.target_class}/{target.identifier}",
+                    corruption=False,
+                )
+                recheck = json.loads(json.dumps(target.publication_recheck))
             records.append(
                 JournalTarget(
                     target_class=target.target_class,
@@ -820,6 +909,7 @@ class TransactionEngine:
                     expected_generation=target.expected_generation,
                     generation_path=generation_path,
                     desired_digest=desired_digest,
+                    publication_recheck=recheck,
                 )
             )
             sources.append(source)
@@ -1052,22 +1142,29 @@ class TransactionEngine:
                     f"journal staging source is invalid: {key}"
                 )
             live = Path(target.live_path)
-            try:
-                canonical_live = _canonical_target_path(
-                    live,
-                    kind=target.kind,
-                    strict=False,
-                )
-            except TransactionError as exc:
-                raise TransactionCorruptionError(
-                    f"journal live path is invalid: {key}"
-                ) from exc
-            if (
-                not live.is_absolute()
-                or Path(os.path.abspath(live)) != live
-                or (canonical_live != live)
-            ):
+            if not live.is_absolute() or Path(os.path.abspath(live)) != live:
                 raise TransactionCorruptionError(f"journal live path is invalid: {key}")
+            # Targets carrying a publication recheck skip the
+            # resolve-based comparison: the pre-write hook owns their
+            # boundary (frozen ancestor identities plus the boundary
+            # recheck, before every forward write and every rollback
+            # restore), and a boundary move the hook manages must not
+            # read as journal corruption.
+            if target.publication_recheck is None:
+                try:
+                    canonical_live = _canonical_target_path(
+                        live,
+                        kind=target.kind,
+                        strict=False,
+                    )
+                except TransactionError as exc:
+                    raise TransactionCorruptionError(
+                        f"journal live path is invalid: {key}"
+                    ) from exc
+                if canonical_live != live:
+                    raise TransactionCorruptionError(
+                        f"journal live path is invalid: {key}"
+                    )
             _validate_digest(target.desired_digest, "desired digest")
             expected_staged = (
                 None
@@ -1125,6 +1222,12 @@ class TransactionEngine:
             if target.kind == "entry" and target.generation_path is not None:
                 raise TransactionCorruptionError(
                     f"entry journal target has a generation path: {key}"
+                )
+            if target.publication_recheck is not None:
+                _validate_recheck_payload(
+                    target.publication_recheck,
+                    subject=f"{target.target_class}/{target.identifier}",
+                    corruption=True,
                 )
         _validate_namespace_independence(
             self.home,
@@ -1446,6 +1549,13 @@ class TransactionEngine:
     def _remove_journal(self, journal: Journal) -> None:
         self._assert_mutation_witness()
         self._validate_journal_removal_ready(journal)
+        # Sidecar discard must see the recorded sidecars: targets carrying
+        # a publication recheck re-verify their boundary first, because a
+        # moved ancestor hides sidecars (absent-through-link would record
+        # bogus "removed" states and leak the hidden files). Targets
+        # without a payload proceed untouched.
+        for target in journal.targets:
+            self._run_pre_write_hook(target)
         path = self._journal_path(journal.transaction_id)
         tomb = self._journal_tomb_path(journal.transaction_id)
         path_exists = _path_exists(path)
@@ -3543,6 +3653,66 @@ def _validate_generation_path(value: str | None) -> str | None:
     return path.as_posix()
 
 
+def _validate_recheck_payload(
+    value: object, *, subject: str, corruption: bool
+) -> None:
+    """Validate one publication-recheck payload as opaque JSON-safe data.
+
+    The engine interprets nothing beyond the shape: a dict carrying a
+    string "kind" whose values round-trip through canonical JSON exactly.
+    Floats are refused because NaN and infinities have no canonical JSON
+    rendering. ``corruption`` selects the error type: caller faults raise
+    TransactionError, journal faults raise TransactionCorruptionError.
+    """
+
+    error_type: type[TransactionError] = (
+        TransactionCorruptionError if corruption else TransactionError
+    )
+
+    def check_text(text: str, *, path: str) -> None:
+        try:
+            _utf8_key(text)
+        except UnicodeError as exc:
+            raise error_type(
+                f"publication recheck for {subject} is not valid Unicode at {path or 'root'}"
+            ) from exc
+
+    def check(node: object, *, path: str) -> None:
+        if node is None or isinstance(node, (bool, int, str)):
+            if isinstance(node, bool):
+                return
+            if isinstance(node, int) and not -(2**63) <= node <= 2**63 - 1:
+                raise error_type(
+                    f"publication recheck for {subject} has an out-of-range integer at {path}"
+                )
+            if isinstance(node, str):
+                check_text(node, path=path)
+            return
+        if isinstance(node, list):
+            for index, item in enumerate(node):
+                check(item, path=f"{path}[{index}]")
+            return
+        if isinstance(node, dict):
+            for key, item in node.items():
+                if not isinstance(key, str):
+                    raise error_type(
+                        f"publication recheck for {subject} has a non-string key at {path}"
+                    )
+                check_text(key, path=path)
+                check(item, path=f"{path}.{key}" if path else key)
+            return
+        raise error_type(
+            f"publication recheck for {subject} is not JSON-safe at {path or 'root'}"
+        )
+
+    if not isinstance(value, dict):
+        raise error_type(f"publication recheck for {subject} must be an object")
+    kind = value.get("kind")
+    if not isinstance(kind, str) or not kind:
+        raise error_type(f"publication recheck for {subject} has no string kind")
+    check(value, path="")
+
+
 def _journal_bytes(journal: Journal) -> bytes:
     return (
         json.dumps(
@@ -3571,8 +3741,15 @@ def _journal_from_dict(raw: object) -> Journal:
     expected_target_fields = set(JournalTarget.__dataclass_fields__)
     expected_staging_entry_fields = set(StagingTreeEntry.__dataclass_fields__)
     for value in targets_raw:
-        if not isinstance(value, dict) or set(value) != expected_target_fields:
+        if not isinstance(value, dict):
             raise ValueError("journal target fields are invalid")
+        if set(value) != expected_target_fields:
+            # Journals written before the publication-recheck extension carry
+            # every field except it; they predate rechecked targets, so the
+            # absent payload defaults to None. Any other shape still refuses.
+            if set(value) != expected_target_fields - {"publication_recheck"}:
+                raise ValueError("journal target fields are invalid")
+            value = {**value, "publication_recheck": None}
         staging_entries_raw = value["staging_entries"]
         if not isinstance(staging_entries_raw, list):
             raise TypeError("journal staging entries are invalid")

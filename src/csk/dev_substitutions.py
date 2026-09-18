@@ -74,6 +74,40 @@ class DevManifest:
         return self.build_repository_substitutions.get(skill_name, {}).get(repository_name)
 
 
+def check_source_substitution_admission(
+    *,
+    selector_kind: str,
+    operator_substitution: bool,
+    external_substitution: bool = False,
+    strict_audit: bool,
+) -> None:
+    """Admit or refuse development substitution during source planning.
+
+    Draft skillfile-sources-v1 planning gate, decided from frozen inputs
+    only: rejection structurally precedes cache reads, compiler execution and
+    publication because the gate cannot perform any of them. New ``from``
+    selectors never gain development substitution, whatever the audit mode.
+    Strict audit rejects every operator substitution, top-level and external
+    build-repository alike, during planning. Omitting the marker field cannot
+    bypass this gate: it takes no marker input at all.
+    """
+
+    if selector_kind not in ("legacy", "from"):
+        raise DevSubstitutionError(
+            f"unknown source selector kind {selector_kind!r}: expected 'legacy' or 'from'"
+        )
+    if selector_kind == "from" and operator_substitution:
+        raise DevSubstitutionError(
+            "source substitution is forbidden: "
+            "new 'from' selectors never gain development substitution"
+        )
+    if strict_audit and (operator_substitution or external_substitution):
+        raise DevSubstitutionError(
+            "strict audit rejects development substitution during planning, "
+            "before cache reads, compiler execution or publication"
+        )
+
+
 def dev_manifest_path(project_root: Path) -> Path:
     return project_root / DEV_MANIFEST_NAME
 

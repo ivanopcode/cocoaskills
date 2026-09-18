@@ -29,9 +29,14 @@ class ResolvedProject:
     path_hash: str
 
 
-def resolve(start: Path, *, worktree_alias_pattern: str = DEFAULT_WORKTREE_ALIAS_PATTERN) -> ResolvedProject:
+def resolve(
+    start: Path,
+    *,
+    worktree_alias_pattern: str = DEFAULT_WORKTREE_ALIAS_PATTERN,
+    allow_schema_2: bool | None = None,
+) -> ResolvedProject:
     root = find_project_root(start)
-    project_manifest = manifest.load_manifest(root)
+    project_manifest = manifest.load_manifest(root, allow_schema_2=allow_schema_2)
     if project_manifest is None:
         raise ProjectResolutionError(f"Skillfile.json not found at project root: {root}")
 

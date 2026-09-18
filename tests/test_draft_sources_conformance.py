@@ -1970,3 +1970,740 @@ def _drive_missing_snapshot(case: dict[str, Any]) -> None:
 
 
 register_semantic_driver("missing-snapshot", _drive_missing_snapshot)
+
+
+# Semantic drivers registered by TASK-260916-15nf0l (install marker v5).
+#
+# Each driver builds a real temporary-filesystem fixture from the case input,
+# calls a ``csk.install_marker`` or ``csk.dev_substitutions`` production entry
+# point, and asserts the exact expected outcome. Imports stay function-local
+# so this block appends without touching the shared import header. The ten
+# attestation-evidence drivers are shared with TASK-260916-11yseo (which owns
+# the assurance binding): they assert this leaf's evidence validator, and the
+# later leaf extends rather than re-registers them.
+
+
+def _marker_v5_fixture_kit() -> dict[str, Any]:
+    """Import the marker-v5 production surface for one driver call."""
+
+    from csk import dev_substitutions as dev_substitutions_module
+    from csk import install_marker as install_marker_module
+    from csk.builds.source import BuildSourceIdentity
+    from csk.sources import package_identity as source_package_module
+
+    return {
+        "dev_substitutions": dev_substitutions_module,
+        "install_marker": install_marker_module,
+        "BuildSourceIdentity": BuildSourceIdentity,
+        "source_package": source_package_module,
+    }
+
+
+_MARKER_V5_SHA1 = "0123456789abcdef0123456789abcdef01234567"
+_MARKER_V5_SHA1_OTHER = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+_MARKER_V5_REPO = "github.com/example/golden-skills"
+_MARKER_V5_REPO_OTHER = "github.com/example/other-skills"
+_MARKER_V5_LOCK = "sha256:" + "0" * 64
+_MARKER_V5_LOCK_OTHER = "sha256:" + "1" * 64
+_MARKER_V5_CONTEXT = "sha256:" + "c" * 64
+_MARKER_V5_CONTEXT_OTHER = "sha256:" + "d" * 64
+_MARKER_V5_CONTENT = "sha256:" + "a" * 64
+_MARKER_V5_KEY = "0123456789abcdef"
+_MARKER_V5_KEY_OTHER = "fedcba9876543210"
+
+
+def _marker_v5_plan(kit: dict[str, Any], **changes: Any) -> Any:
+    install_marker = kit["install_marker"]
+    source_package = kit["source_package"]
+    values: dict[str, Any] = {
+        "name": "golden-skill",
+        "package": source_package.NetworkGit(
+            repository=_MARKER_V5_REPO,
+            commit=source_package.LockedCommit(
+                object_format="sha1", hex=_MARKER_V5_SHA1
+            ),
+        ),
+        "lock_sha256": _MARKER_V5_LOCK,
+        "context_sha256": _MARKER_V5_CONTEXT,
+        "content_sha256": _MARKER_V5_CONTENT,
+        "locale": None,
+        "agents": (),
+        "commands": (),
+        "dependencies": (),
+        "skill_schema_version": 8,
+        "runtime_roots": (),
+        "build_roots": (),
+        "files": ("SKILL.md",),
+        "builds": {},
+        "requirements": None,
+        "mcp_servers": None,
+        "activation": None,
+        "requirers": None,
+        "attestation": install_marker.MarkerAttestation(
+            registry="trusted", status="audited", key_id=_MARKER_V5_KEY
+        ),
+        "substituted": None,
+        "build_source": kit["BuildSourceIdentity"](
+            algorithm="curator-build-source-v1",
+            content_sha256="sha256:" + "b" * 64,
+        ),
+    }
+    values.update(changes)
+    return install_marker.MarkerPlan(**values)
+
+
+def _marker_v5_marker(kit: dict[str, Any], **changes: Any) -> Any:
+    install_marker = kit["install_marker"]
+    source_package = kit["source_package"]
+    values: dict[str, Any] = {
+        "name": "golden-skill",
+        "package": source_package.NetworkGit(
+            repository=_MARKER_V5_REPO,
+            commit=source_package.LockedCommit(
+                object_format="sha1", hex=_MARKER_V5_SHA1
+            ),
+        ),
+        "lock_sha256": _MARKER_V5_LOCK,
+        "content_sha256": _MARKER_V5_CONTENT,
+        "locale": None,
+        "agents": (),
+        "commands": (),
+        "dependencies": (),
+        "skill_schema_version": 8,
+        "runtime_roots": (),
+        "build_roots": (),
+        "installed_at": "2000-01-01T00:00:00Z",
+        "files": ("SKILL.md",),
+        "builds": {},
+        "build_source": kit["BuildSourceIdentity"](
+            algorithm="curator-build-source-v1",
+            content_sha256="sha256:" + "b" * 64,
+        ),
+        "attestation": install_marker.MarkerAttestation(
+            registry="trusted", status="audited", key_id=_MARKER_V5_KEY
+        ),
+    }
+    values.update(changes)
+    return install_marker.InstallMarkerV5(**values)
+
+
+def _marker_v5_tree_hash(root: Path) -> str:
+    import hashlib
+    import os
+    import stat as stat_module
+
+    digest = hashlib.sha256()
+    entries = sorted(
+        root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()
+    )
+    for entry in entries:
+        relative = entry.relative_to(root).as_posix().encode("utf-8")
+        try:
+            info = entry.lstat()
+        except FileNotFoundError:
+            continue
+        if stat_module.S_ISLNK(info.st_mode):
+            digest.update(b"L" + relative + os.readlink(entry).encode("utf-8"))
+        elif stat_module.S_ISDIR(info.st_mode):
+            digest.update(b"D" + relative)
+        elif stat_module.S_ISREG(info.st_mode):
+            digest.update(b"F" + relative + entry.read_bytes())
+        else:
+            digest.update(b"S" + relative)
+    return digest.hexdigest()
+
+
+def _marker_v5_mismatch_kwargs(field: str, kit: dict[str, Any]) -> dict[str, Any]:
+    install_marker = kit["install_marker"]
+    source_package = kit["source_package"]
+    if field == "registry":
+        return {
+            "attestation": install_marker.MarkerAttestation(
+                registry="elsewhere", status="audited", key_id=_MARKER_V5_KEY
+            )
+        }
+    if field == "status":
+        return {
+            "attestation": install_marker.MarkerAttestation(
+                registry="trusted", status="deprecated", key_id=_MARKER_V5_KEY
+            )
+        }
+    if field == "key_id":
+        return {
+            "attestation": install_marker.MarkerAttestation(
+                registry="trusted", status="audited", key_id=_MARKER_V5_KEY_OTHER
+            )
+        }
+    if field == "substituted":
+        return {"substituted": "another-operator"}
+    if field == "package":
+        return {
+            "package": source_package.NetworkGit(
+                repository=_MARKER_V5_REPO_OTHER,
+                commit=source_package.LockedCommit(
+                    object_format="sha1", hex=_MARKER_V5_SHA1
+                ),
+            )
+        }
+    if field == "lock_sha256":
+        return {"lock_sha256": _MARKER_V5_LOCK_OTHER}
+    raise AssertionError(f"no mismatch fixture for {field!r}")
+
+
+def _drive_marker_plan_mismatch(case: dict[str, Any]) -> None:
+    """Drive one ``marker-plan-mismatch-*`` case through status evaluation."""
+
+    import tempfile
+
+    kit = _marker_v5_fixture_kit()
+    install_marker = kit["install_marker"]
+    field = case["input"]["marker_field"]
+    assert case["input"]["effective_plan"] == "different"
+    assert case["input"]["operation"] == "status"
+    assert case["expected"] == "noncurrent-nonzero-no-mutation"
+    with tempfile.TemporaryDirectory(prefix="csk-marker-mismatch-") as raw:
+        root = Path(raw)
+        csk_home = root / "csk-home"
+        project = root / "project"
+        (csk_home / "source-v1").mkdir(parents=True)
+        (csk_home / "source-v1" / "record.json").write_text("{}")
+        skills = project / ".agents" / "skills" / "golden-skill"
+        skills.mkdir(parents=True)
+        (skills / "SKILL.md").write_text("# golden\n")
+        plan = _marker_v5_plan(kit)
+        marker = _marker_v5_marker(kit, **_marker_v5_mismatch_kwargs(field, kit))
+        marker_path = skills / ".csk-install.json"
+        marker_path.write_bytes(install_marker.serialize_install_marker(marker.to_json()))
+        assert install_marker.compare_marker_plan(marker, plan) == (field,)
+        before_home = _marker_v5_tree_hash(csk_home)
+        before_project = _marker_v5_tree_hash(project)
+        verdict = install_marker.evaluate_marker_status(marker_path, plan)
+        assert verdict.current is False
+        assert verdict.exit_code != 0
+        assert verdict.differences == (field,)
+        assert _marker_v5_tree_hash(csk_home) == before_home
+        assert _marker_v5_tree_hash(project) == before_project
+
+
+for _mismatch_case_id in (
+    "marker-plan-mismatch-registry",
+    "marker-plan-mismatch-status",
+    "marker-plan-mismatch-key_id",
+    "marker-plan-mismatch-substituted",
+    "marker-plan-mismatch-package",
+    "marker-plan-mismatch-lock_sha256",
+):
+    register_semantic_driver(_mismatch_case_id, _drive_marker_plan_mismatch)
+
+
+def _marker_v5_evidence_payload(**changes: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "name": "golden-skill",
+        "repository": _MARKER_V5_REPO,
+        "commit": {"object_format": "sha1", "hex": _MARKER_V5_SHA1},
+        "context_sha256": _MARKER_V5_CONTEXT,
+        "key_id": _MARKER_V5_KEY,
+    }
+    payload.update(changes)
+    return payload
+
+
+def _drive_attestation_evidence(case: dict[str, Any]) -> None:
+    """Drive one ``attestation-evidence-*`` case through the one validator."""
+
+    import tempfile
+    from unittest.mock import patch as mock_patch
+
+    kit = _marker_v5_fixture_kit()
+    install_marker = kit["install_marker"]
+    source_package = kit["source_package"]
+    defect = case["input"]["required_registry_evidence"]
+    assert case["input"]["marker_summary"] == "apparently-valid"
+    assert case["input"]["operations"] == ["install", "status", "repair", "refresh"]
+    assert (
+        case["expected"]
+        == "install-repair-refresh-refuse-preserve-prior-state;status-noncurrent-or-unknown-nonzero-no-mutation"
+    )
+    expectation = install_marker.AttestationExpectation(
+        name="golden-skill",
+        repository=_MARKER_V5_REPO,
+        commit=source_package.LockedCommit(object_format="sha1", hex=_MARKER_V5_SHA1),
+        context_sha256=_MARKER_V5_CONTEXT,
+        key_id=_MARKER_V5_KEY,
+    )
+    expected_codes = {
+        "absent": "attestation_evidence_missing",
+        "unreadable": "attestation_evidence_unreadable",
+        "malformed": "attestation_evidence_malformed",
+        "stale": "attestation_evidence_stale",
+        "revoked": "attestation_evidence_revoked",
+        "wrong-name": "attestation_evidence_mismatch",
+        "wrong-repository": "attestation_evidence_mismatch",
+        "wrong-commit": "attestation_evidence_mismatch",
+        "wrong-context": "attestation_evidence_mismatch",
+        "wrong-key": "attestation_evidence_mismatch",
+    }
+    mutations: dict[str, Any] = {
+        "wrong-name": {"name": "other-skill"},
+        "wrong-repository": {"repository": _MARKER_V5_REPO_OTHER},
+        "wrong-commit": {
+            "commit": {"object_format": "sha1", "hex": _MARKER_V5_SHA1_OTHER}
+        },
+        "wrong-context": {"context_sha256": _MARKER_V5_CONTEXT_OTHER},
+        "wrong-key": {"key_id": _MARKER_V5_KEY_OTHER},
+    }
+    with tempfile.TemporaryDirectory(prefix="csk-attestation-evidence-") as raw:
+        root = Path(raw)
+        csk_home = root / "csk-home"
+        project = root / "project"
+        csk_home.mkdir()
+        project.mkdir()
+        (csk_home / "lock.json").write_text("{}")
+        (project / "Skillfile.json").write_text("{}")
+        evidence_path = project / "evidence.json"
+        fresh = defect != "stale"
+        revoked = defect == "revoked"
+        if defect == "malformed":
+            evidence_path.write_bytes(b"{oops")
+        elif defect != "absent":
+            payload = _marker_v5_evidence_payload(**mutations.get(defect, {}))
+            evidence_path.write_bytes(json.dumps(payload).encode("utf-8"))
+        before_home = _marker_v5_tree_hash(csk_home)
+        before_project = _marker_v5_tree_hash(project)
+        # Install, repair and refresh refuse through the one validator.
+        if defect == "unreadable":
+            original_read_bytes = Path.read_bytes
+
+            def _refuse(self: Path) -> bytes:
+                if self == evidence_path:
+                    raise PermissionError("evidence store denied the read")
+                return original_read_bytes(self)
+
+            with mock_patch.object(Path, "read_bytes", _refuse):
+                with pytest.raises(install_marker.InstallMarkerError) as refused:
+                    install_marker.validate_attestation_evidence(
+                        evidence_path,
+                        expectation,
+                        evidence_fresh=fresh,
+                        evidence_revoked=revoked,
+                    )
+        else:
+            with pytest.raises(install_marker.InstallMarkerError) as refused:
+                install_marker.validate_attestation_evidence(
+                    evidence_path,
+                    expectation,
+                    evidence_fresh=fresh,
+                    evidence_revoked=revoked,
+                )
+        assert refused.value.code == expected_codes[defect]
+        assert _marker_v5_tree_hash(csk_home) == before_home
+        assert _marker_v5_tree_hash(project) == before_project
+        # Status is non-current or unknown, nonzero, and read-only.
+        plan = _marker_v5_plan(kit)
+        skills = project / ".agents" / "skills" / "golden-skill"
+        skills.mkdir(parents=True)
+        marker_path = skills / ".csk-install.json"
+        marker_path.write_bytes(
+            install_marker.serialize_install_marker(
+                _marker_v5_marker(kit).to_json()
+            )
+        )
+        assert install_marker.compare_marker_plan(
+            _marker_v5_marker(kit), plan
+        ) == ()
+        before_home = _marker_v5_tree_hash(csk_home)
+        before_project = _marker_v5_tree_hash(project)
+        if defect == "unreadable":
+            with mock_patch.object(Path, "read_bytes", _refuse):
+                verdict = install_marker.evaluate_schema2_status(
+                    marker_path,
+                    plan,
+                    evidence_path=evidence_path,
+                    evidence_fresh=fresh,
+                    evidence_revoked=revoked,
+                )
+        else:
+            verdict = install_marker.evaluate_schema2_status(
+                marker_path,
+                plan,
+                evidence_path=evidence_path,
+                evidence_fresh=fresh,
+                evidence_revoked=revoked,
+            )
+        assert verdict.current is False
+        assert verdict.exit_code != 0
+        assert _marker_v5_tree_hash(csk_home) == before_home
+        assert _marker_v5_tree_hash(project) == before_project
+
+
+for _evidence_case_id in (
+    "attestation-evidence-absent",
+    "attestation-evidence-unreadable",
+    "attestation-evidence-malformed",
+    "attestation-evidence-stale",
+    "attestation-evidence-revoked",
+    "attestation-evidence-wrong-name",
+    "attestation-evidence-wrong-repository",
+    "attestation-evidence-wrong-commit",
+    "attestation-evidence-wrong-context",
+    "attestation-evidence-wrong-key",
+):
+    register_semantic_driver(_evidence_case_id, _drive_attestation_evidence)
+
+
+def _drive_attested_network_current(case: dict[str, Any]) -> None:
+    """Drive ``attested-network-current`` through the full status entry."""
+
+    import tempfile
+
+    kit = _marker_v5_fixture_kit()
+    install_marker = kit["install_marker"]
+    assert case["input"]["package"] == "network-git"
+    assert (
+        case["input"]["signed_record"]
+        == "valid-fresh-exact-name-repository-commit-context"
+    )
+    assert case["input"]["marker_attestation"] == "matches-registry-status-key"
+    assert case["input"]["operation"] == "status"
+    assert case["expected"] == "current-if-all-other-gates-pass"
+    with tempfile.TemporaryDirectory(prefix="csk-attested-current-") as raw:
+        root = Path(raw)
+        plan = _marker_v5_plan(kit)
+        marker_path = root / ".csk-install.json"
+        marker_path.write_bytes(
+            install_marker.serialize_install_marker(_marker_v5_marker(kit).to_json())
+        )
+        evidence_path = root / "evidence.json"
+        evidence_path.write_bytes(
+            json.dumps(_marker_v5_evidence_payload()).encode("utf-8")
+        )
+        verdict = install_marker.evaluate_schema2_status(
+            marker_path,
+            plan,
+            evidence_path=evidence_path,
+            evidence_fresh=True,
+            evidence_revoked=False,
+        )
+        assert verdict.current is True
+        assert verdict.exit_code == 0
+
+
+register_semantic_driver("attested-network-current", _drive_attested_network_current)
+
+
+def _drive_legacy_substitution_current(case: dict[str, Any]) -> None:
+    """Drive ``legacy-substitution-current`` through admission plus comparison."""
+
+    import tempfile
+
+    kit = _marker_v5_fixture_kit()
+    dev_substitutions = kit["dev_substitutions"]
+    install_marker = kit["install_marker"]
+    source_package = kit["source_package"]
+    assert case["input"]["selector"] == "legacy"
+    assert case["input"]["strict_audit"] is False
+    assert case["input"]["effective_committed_package"] == "matches-lock"
+    assert case["input"]["marker_substituted"] == "matches-operator-identifier"
+    assert case["expected"] == "current-if-all-other-gates-pass"
+    commit = source_package.LockedCommit(object_format="sha1", hex=_MARKER_V5_SHA1)
+    package = source_package.ConfiguredGit(source="golden-skill", commit=commit)
+    with tempfile.TemporaryDirectory(prefix="csk-legacy-substitution-") as raw:
+        root = Path(raw)
+        dev_substitutions.check_source_substitution_admission(
+            selector_kind="legacy",
+            operator_substitution=True,
+            strict_audit=False,
+        )
+        plan = _marker_v5_plan(
+            kit, package=package, attestation=None, substituted="operator-development"
+        )
+        marker = _marker_v5_marker(
+            kit, package=package, attestation=None, substituted="operator-development"
+        )
+        assert install_marker.compare_marker_plan(marker, plan) == ()
+        marker_path = root / ".csk-install.json"
+        marker_path.write_bytes(
+            install_marker.serialize_install_marker(marker.to_json())
+        )
+        verdict = install_marker.evaluate_marker_status(marker_path, plan)
+        assert verdict.current is True
+        assert verdict.exit_code == 0
+
+
+register_semantic_driver(
+    "legacy-substitution-current", _drive_legacy_substitution_current
+)
+
+
+def _drive_legacy_substitution_strict(case: dict[str, Any]) -> None:
+    """Drive ``legacy-substitution-strict`` through the planning gate."""
+
+    import sys as sys_module
+
+    kit = _marker_v5_fixture_kit()
+    dev_substitutions = kit["dev_substitutions"]
+    assert case["input"]["selector"] == "legacy"
+    assert case["input"]["strict_audit"] is True
+    assert case["input"]["marker_substituted"] == "absent"
+    assert case["input"]["operator_substitution"] == "present"
+    assert case["expected"] == "reject-before-cache-compiler-publication"
+    events: list[str] = []
+    state = {"armed": True}
+
+    def hook(event: str, args: object) -> None:
+        if state["armed"] and (event == "open" or event.startswith("socket.")):
+            events.append(event)
+
+    sys_module.addaudithook(hook)
+    try:
+        with pytest.raises(dev_substitutions.DevSubstitutionError) as refused:
+            dev_substitutions.check_source_substitution_admission(
+                selector_kind="legacy",
+                operator_substitution=True,
+                strict_audit=True,
+            )
+    finally:
+        state["armed"] = False
+    assert "strict audit" in str(refused.value)
+    assert events == []
+
+
+register_semantic_driver(
+    "legacy-substitution-strict", _drive_legacy_substitution_strict
+)
+
+
+def _drive_selector_substitution_forbidden(case: dict[str, Any]) -> None:
+    """Drive ``selector-substitution-forbidden``: reject with no publication."""
+
+    import tempfile
+
+    kit = _marker_v5_fixture_kit()
+    dev_substitutions = kit["dev_substitutions"]
+    assert case["input"]["selector"] == "from"
+    assert case["input"]["operator_substitution"] == "present"
+    assert case["expected"] == "reject-no-publication"
+    with tempfile.TemporaryDirectory(prefix="csk-selector-substitution-") as raw:
+        root = Path(raw)
+        csk_home = root / "csk-home"
+        project = root / "project"
+        csk_home.mkdir()
+        project.mkdir()
+        (csk_home / "lock.json").write_text("{}")
+        (project / "Skillfile.json").write_text("{}")
+        before_home = _marker_v5_tree_hash(csk_home)
+        before_project = _marker_v5_tree_hash(project)
+        with pytest.raises(dev_substitutions.DevSubstitutionError) as refused:
+            dev_substitutions.check_source_substitution_admission(
+                selector_kind="from",
+                operator_substitution=True,
+                strict_audit=False,
+            )
+        assert "forbidden" in str(refused.value)
+        assert _marker_v5_tree_hash(csk_home) == before_home
+        assert _marker_v5_tree_hash(project) == before_project
+
+
+register_semantic_driver(
+    "selector-substitution-forbidden", _drive_selector_substitution_forbidden
+)
+
+
+def _drive_local_required_registry(case: dict[str, Any]) -> None:
+    """Drive ``local-required-registry``: fail with no publication."""
+
+    import tempfile
+
+    kit = _marker_v5_fixture_kit()
+    install_marker = kit["install_marker"]
+    source_package = kit["source_package"]
+    assert case["input"]["package"] == "local-snapshot"
+    assert case["input"]["policy"] == "requires-network-attestation"
+    assert case["expected"] == "reject-no-publication"
+    with tempfile.TemporaryDirectory(prefix="csk-local-registry-") as raw:
+        root = Path(raw)
+        csk_home = root / "csk-home"
+        project = root / "project"
+        csk_home.mkdir()
+        project.mkdir()
+        (csk_home / "lock.json").write_text("{}")
+        (project / "Skillfile.json").write_text("{}")
+        before_home = _marker_v5_tree_hash(csk_home)
+        before_project = _marker_v5_tree_hash(project)
+        with pytest.raises(install_marker.InstallMarkerError) as refused:
+            install_marker.check_local_registry_requirement(
+                source_package.LocalSnapshot(snapshot="sha256:" + "1" * 64),
+                network_attestation_required=True,
+            )
+        assert refused.value.code == "local_registry_attestation_required"
+        assert _marker_v5_tree_hash(csk_home) == before_home
+        assert _marker_v5_tree_hash(project) == before_project
+
+
+register_semantic_driver("local-required-registry", _drive_local_required_registry)
+
+
+def _drive_external_substitution_strict(case: dict[str, Any]) -> None:
+    """Drive ``external-substitution-strict`` through the planning gate."""
+
+    import sys as sys_module
+
+    kit = _marker_v5_fixture_kit()
+    dev_substitutions = kit["dev_substitutions"]
+    assert case["input"]["package"] == "local-snapshot"
+    assert case["input"]["external_substituted"] is True
+    assert case["input"]["strict_audit"] is True
+    assert case["expected"] == "reject-before-cache-compiler-publication"
+    events: list[str] = []
+    state = {"armed": True}
+
+    def hook(event: str, args: object) -> None:
+        if state["armed"] and (event == "open" or event.startswith("socket.")):
+            events.append(event)
+
+    sys_module.addaudithook(hook)
+    try:
+        with pytest.raises(dev_substitutions.DevSubstitutionError) as refused:
+            dev_substitutions.check_source_substitution_admission(
+                selector_kind="legacy",
+                operator_substitution=False,
+                external_substitution=True,
+                strict_audit=True,
+            )
+    finally:
+        state["armed"] = False
+    assert "strict audit" in str(refused.value)
+    assert events == []
+
+
+register_semantic_driver(
+    "external-substitution-strict", _drive_external_substitution_strict
+)
+
+
+def _drive_external_only_current(case: dict[str, Any]) -> None:
+    """Drive ``external-only-current`` through the build-state check."""
+
+    import tempfile
+
+    kit = _marker_v5_fixture_kit()
+    install_marker = kit["install_marker"]
+    source_package = kit["source_package"]
+    assert case["input"]["package"] == "local-snapshot"
+    assert case["input"]["top_level_build_source"] == "absent"
+    assert case["input"]["external_record"] == "complete-matches-receipt3-input.build"
+    assert case["input"]["receipt_package"] == "matches-marker"
+    assert case["input"]["protected_artifact"] == "verified"
+    assert case["expected"] == "current-if-all-other-gates-pass"
+    with tempfile.TemporaryDirectory(prefix="csk-external-only-") as raw:
+        root = Path(raw)
+        package = source_package.LocalSnapshot(snapshot="sha256:" + "1" * 64)
+        record = install_marker.InstallMarkerBuildV5(
+            driver="go-repository-v1",
+            receipt_schema_version=3,
+            execution_policy="manager-worker-v1",
+            cache_key="sha256:" + "4" * 64,
+            receipt_sha256="sha256:" + "0" * 64,
+            artifact_sha256="sha256:" + "6" * 64,
+            artifact_path="bin/golden-tool",
+            repository="golden-tools",
+            declared_identity=install_marker.MarkerRepositoryIdentity(
+                kind="network-git", value="github.com/example/golden-tools"
+            ),
+            declared_locked_commit=install_marker.MarkerRepositoryCommit(
+                object_format="sha1", hex=_MARKER_V5_SHA1
+            ),
+            declared_tag="v1.4.0",
+            effective_identity=install_marker.MarkerRepositoryIdentity(
+                kind="network-git", value="github.com/example/golden-tools"
+            ),
+            object_format="sha1",
+            commit=_MARKER_V5_SHA1,
+            substituted=False,
+            substitution=None,
+            build_source=kit["BuildSourceIdentity"](
+                algorithm="curator-build-source-v1",
+                content_sha256="sha256:" + "b" * 64,
+            ),
+            descriptor_target="golden-tool",
+        )
+        plan = _marker_v5_plan(
+            kit,
+            package=package,
+            attestation=None,
+            build_source=None,
+            commands=("golden-tool",),
+            builds={"golden-tool": record},
+        )
+        marker = _marker_v5_marker(
+            kit,
+            package=package,
+            attestation=None,
+            builds={"golden-tool": record},
+            build_source=None,
+            commands=("golden-tool",),
+        )
+        # Receipt-3 input.build matching and protected-artifact verification
+        # are owned by the build-receipts leaf (TASK-260916-341a6q); this
+        # driver binds the marker shape and the receipt package equality.
+        install_marker.check_external_only_build_state(
+            marker, receipt_package=package
+        )
+        assert install_marker.compare_marker_plan(marker, plan) == ()
+        marker_path = root / ".csk-install.json"
+        marker_path.write_bytes(
+            install_marker.serialize_install_marker(marker.to_json())
+        )
+        verdict = install_marker.evaluate_marker_status(marker_path, plan)
+        assert verdict.current is True
+        assert verdict.exit_code == 0
+
+
+register_semantic_driver("external-only-current", _drive_external_only_current)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        entry
+        for entry in SCHEMA_CASES
+        if entry["schema"] == "install-marker-v5.schema.json"
+    ],
+    ids=[
+        f"{entry['schema']}:{entry['instance']}"
+        for entry in SCHEMA_CASES
+        if entry["schema"] == "install-marker-v5.schema.json"
+    ],
+)
+def test_draft_sources_install_marker_v5_schema_case_through_production_reader(
+    entry: dict[str, Any],
+) -> None:
+    """Drive every marker-v5 schema case through csk's production reader.
+
+    Registered by TASK-260916-15nf0l: valid fixtures must parse to the v5
+    model and reach a canonical read-write fixpoint with stable values (the
+    pinned fixtures are not key-sorted, so the fixpoint, not fixture bytes,
+    is the byte-identity property); invalid fixtures must refuse, including
+    the narrowed local attestation/substituted cases and every external
+    required-field negative.
+    """
+
+    from csk import install_marker as install_marker_module
+
+    raw = (_suite_root() / Path(entry["instance"])).read_bytes()
+    if entry["valid"]:
+        parsed = install_marker_module.read_install_marker(raw)
+        assert isinstance(parsed, install_marker_module.InstallMarkerV5)
+        assert parsed.schema_version == 5
+        once = install_marker_module.serialize_install_marker(parsed.to_json())
+        twice = install_marker_module.serialize_install_marker(
+            install_marker_module.read_install_marker(once).to_json()
+        )
+        assert once == twice
+        assert (
+            install_marker_module.read_install_marker(once).to_json()
+            == parsed.to_json()
+        )
+    else:
+        with pytest.raises(install_marker_module.InstallMarkerError):
+            install_marker_module.read_install_marker(raw)

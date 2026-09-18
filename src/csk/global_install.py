@@ -35,6 +35,7 @@ from .builds import planner as build_planner
 from .builds import source as build_source
 from .builds import toolchain as build_toolchain
 from .config import DEFAULT_AGENTS, GlobalConfig
+from .sources import publish as source_publish
 
 
 class GlobalInstallError(Exception):
@@ -135,7 +136,11 @@ def _collect_retained(
         marker = _read_installed_marker(child / ".csk-install.json")
         if marker is None:
             continue
-        references.add((marker.name, marker.commit))
+        # Schema-2 markers carry a typed package instead of a legacy commit
+        # and reference no legacy runtime directory; the skill itself stays
+        # retained through names.
+        if not isinstance(marker, install_marker.InstallMarkerV5):
+            references.add((marker.name, marker.commit))
         activation = marker.activation
         active_commands = (
             activation.commands if activation is not None else marker.commands
@@ -303,6 +308,11 @@ def load_manifest(csk_home: Path) -> manifest.ProjectManifest:
     loaded = manifest.load_manifest(global_root(csk_home), scope="global")
     if loaded is None:
         raise GlobalInstallError(f"Global Skillfile not found: {path}\n  Run 'csk global init' first.")
+    if loaded.schema_version == 2:
+        raise GlobalInstallError(
+            "schema-2 global installs are not supported by atomic source "
+            "install; global scope stays on schema 1"
+        )
     return loaded
 
 
@@ -377,7 +387,9 @@ def install(
 
 
 def _transaction_engine(csk_home: Path) -> transactions.TransactionEngine:
-    return transactions.TransactionEngine(csk_home)
+    return transactions.TransactionEngine(
+        csk_home, pre_write_hook=source_publish.make_publication_hook()
+    )
 
 
 def _install_once(

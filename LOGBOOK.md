@@ -65,6 +65,79 @@ mutants. Unrelated observation while here:
 failed once under the eight-way full run and passes standalone (2 passed,
 216 s); timing-sensitive macOS mechanism test, zero code-path overlap with
 this change, left untouched.
+## 2026-09-18 - TASK-260916-17x3o1 casing correction: on Linux a case variant is a distinct directory, so the stale sweep refused an install for bytes no target addresses
+
+Linux CI failed `test_unmanaged_destination_vectors_never_overwritten[casing-alias]`
+with `Stale skill 'REVIEW' is not managed by csk and is never removed`.
+Determined from the bytes as a product over-refusal, not a test bug: on a
+case-sensitive host REVIEW and review are distinct directories, the
+planner's own member check treated them as distinct (destination absent,
+no refusal there), yet the context stale sweep refused the install for a
+directory no publication target addresses. Spec section 2 requires
+non-overwrite through casing aliases, not refusal, and per the F-A
+decision an entry referenced by no lock this project owns is not this
+install's problem. The sweep now skips unmanaged non-members (managed
+ones are still removed through the transaction); status shares the
+planner, so it stops erroring on foreign siblings too. Pinned by a
+platform-independent class test over no/foreign/garbage markers (red
+pre-fix on every host) with narrowing mutant M-E. 88 green, mypy
+strict clean, pinned files untouched, conformance 251/22 unchanged.
+
+## 2026-09-18 - TASK-260916-17x3o1 rev2: the removal set is the lock diff; a live-home sweep deletes a sibling project, and rollback must recheck before digesting
+
+Review F-A showed a nominally no-op install deleting another
+installation's runtime: the planner swept the live home runtime tree
+against locks reachable through the config registry, so unregistering
+project B made A's install garbage-collect B's entry and A's status
+report it as A's drift. Fix is structural, per AC (e): the removal
+set is old-lock-keys minus new-lock-keys, the planner never lists the
+live runtime tree and never reads another lock, and status plans no
+runtime removals at all. Same revision: the schema-2 translation
+refuses non-regular adapter ledger paths (the shared planner still
+maps every foreign shape to "no ledger", legacy untouched); the
+live-digest seams map the whole filesystem-error family to
+`source_output_overlap` (an adapter root that is a file no longer
+escapes as raw `NotADirectoryError`); and rollback rechecks hook-owned
+targets before digesting live, so the three window shapes that broke
+the rollback's own digests (lock leaf, in-window context parent,
+bindings parent) report overlap instead of a commit-and-rollback
+group. Rollback resumption needed one hook widening: live back at the
+preimage with no backup left is recognized without waiving ancestor
+verification. 85 tests green, mypy strict clean, five fresh narrowing
+mutants each killed by exactly their target test.
+
+## 2026-09-18 - TASK-260916-17x3o1 rev1: rollback after a mid-commit boundary move needs hook-owned journal handling, or the refusal bricks recovery
+
+The between-writes retarget test (swap `.codex` to a link after the
+first commit) initially surfaced `TransactionCorruptionError: journal
+live path is invalid` instead of `source_output_overlap`, and worse,
+rollback could not proceed at all: every journal save re-resolves
+live paths through the live filesystem, so a boundary move the
+pre-write hook manages read as corruption, and sidecar discard
+recorded absent-through-link sidecars as "removed", leaking the
+hidden staged files with no journal left to clean them. Fix is three
+engine rules, all no-ops for targets without a payload (schema-1
+byte-identical, pinned suites green): (1) hook-owned targets skip the
+resolve-based path comparison on save/load — the hook's frozen
+ancestor identities plus the S3 recheck own their boundary;
+(2) rollback restores and journal removal re-run the hook before each
+restore and before sidecar bookkeeping, so rollback under a moved
+boundary fails closed with overlap and defers (journal stays in
+`rolling_back`) instead of recording bogus states; recovery after the
+swap is restored replays clean; (3) same-code commit/rollback groups
+fold to the single source diagnostic with the deferral recorded.
+Same session also found status trusting marker fields without
+verifying live bytes (tampered contexts read clean): status now
+compares every live target against the locked desired state through
+the install's own staging, so install-skip and status-current decide
+by one mechanism. Lock `selection` is a per-member expansion ordinal
+(a collection selecting two members cannot satisfy the dense schema
+with selector indices); locked installs derive members from the lock
+without expanding selectors, so a deleted member dir is
+`source_snapshot_unavailable` with store fallback. Full ordinary
+suite 8569 passed / 130 skipped, mypy strict clean, draft harness
+251/22 (no owned cases, no sideways movement), seven narrowing
+mutants each killed by exactly their target test.
 
 ## 2026-09-17 - TASK-260917-ts1s4r rev3: macOS deadline flake was the test racing the runner, not production; clock seam proves the shared deadline deterministically
 
@@ -3855,3 +3928,30 @@ backoff, `PermissionError` only). Full evidence in
 Revision 1 review reproduced the sibling-leaf `str`-subclass class here with five attacks: lying `encode` misordered the closure, lying `__eq__`/`__hash__` admitted duplicates and defeated membership, and a `== "."` shortcut tested before any type check admitted a non-`str` directory (integer `5`) into lock wire bytes. The structural fix canonicalizes every `str`-typed field, membership input, and manifest scalar to exact `str` via `str.__str__` at the trust boundary; `str()` is not normalization since it honors overridden `__str__` and can return a hostile subclass instance.
 
 While covering the manifest gate, the new CLASS test proved the reviewer's "immune via the C sorter" observation was comparison-direction luck: `json.dumps(sort_keys=True)` honors lying `__gt__`/`__eq__` through reflected comparison, so hostile manifest keys change the digest. The manifest digest now rebuilds caller dicts with exact-`str` scalars (values bit-identical, non-JSON types still refused downstream) before delegating to the Skillfile v2 helper. Also fixed in this revision: mixed `LockMember`/`str` membership input now compares each record per item, `parse_lock` is tolerant by default with a `strict=True` opt-in, and `SkillfileLock` construction validates element types. All 18 narrowing mutants killed; full suite green (2594 passed, 171 skipped); evidence in `TASK-260916-3le0i9_results.md`.
+## 2026-09-17 TASK-260916-15nf0l: install marker v5 and full currentness
+
+Implemented marker schema 5 for schema-2 installations with the exhaustive
+v4-to-v5 migration, plan comparison over one declared field table, required
+evidence validation over one defect table, and the pure substitution
+planning gate. Two findings worth keeping: (1) the pinned corpus carries
+`build_source` with empty `builds` (valid.json), so exact build-source
+presence cannot be a reader gate and moved to plan comparison; the pinned
+fixtures are also not key-sorted, so the byte-identity property is a
+canonical read-write fixpoint with stable values, asserted per valid
+fixture. (2) Two v4 tests pinned the pre-v5 version set (`SUPPORTED ==
+{1..4}`, "version 5 unsupported") and were minimally updated to the v5
+world; v3/v4 behavior is otherwise untouched. Ten narrowing mutants killed,
+zero survivors; draft harness 190/45 at base to 251/22 at head; evidence in
+`TASK-260916-15nf0l_results.md`.
+
+Revision 2 (review round 1: F1 retained rows never compared, F2 malformed
+build records crashed status): the status comparison now derives from the
+record's own members. `MarkerPlan` carries every compared expectation and a
+growth test fails when the record grows without the plan, and the build
+record validator refuses malformed members with structured errors instead
+of asserting. Lesson worth keeping: a test parametrised over the production
+table vanishes by collection (exit 4) when a mutant drops a row, so the
+CLASS tests pin literal families and a separate completeness test pins the
+literals against the table; and layered validation needs gate-level detail
+assertions, because deleting one gate still refuses downstream and no
+verdict-level test could tell it was gone.
