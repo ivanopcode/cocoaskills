@@ -357,6 +357,12 @@ def _collect_marker_directory(
         return False, "marker changed while it was read"
     if expected_name is not None and marker.name != expected_name:
         return False, f"marker name {marker.name!r} does not match store entry"
+    if isinstance(marker, install_marker.InstallMarkerV5):
+        # Schema-2 state lives under the source-v1 namespace and the
+        # receipt-3 cache namespace, which the legacy collectors below never
+        # walk: a valid v5 marker contributes no legacy reference, and the
+        # mark phase stays complete.
+        return True, None
     references.runtime.add((marker.name, marker.commit))
     references.snapshots.add((marker.source, marker.commit))
     if isinstance(marker, install_marker.InstallMarkerV2):

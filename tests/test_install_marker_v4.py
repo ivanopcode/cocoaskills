@@ -186,12 +186,12 @@ def test_currentness_bands_are_one_marker_per_manifest_version(
 
 
 def test_schema_version_four_is_a_supported_marker_schema() -> None:
-    assert install_marker.SUPPORTED_INSTALL_MARKER_SCHEMA_VERSIONS == frozenset({1, 2, 3, 4})
+    assert install_marker.SUPPORTED_INSTALL_MARKER_SCHEMA_VERSIONS == frozenset({1, 2, 3, 4, 5})
 
 
 def test_an_unsupported_marker_schema_is_still_rejected() -> None:
     payload = install_marker.InstallMarkerV4(**_base()).to_json()
-    payload["schema_version"] = 5
+    payload["schema_version"] = 6
 
     with pytest.raises(install_marker.InstallMarkerError) as raised:
         install_marker.parse_install_marker(payload)

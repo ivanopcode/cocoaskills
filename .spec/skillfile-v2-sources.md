@@ -894,3 +894,145 @@ never from the operating system's name.
   machine binding separation, and exact round trips. The draft harness drives
   all seven lock schema cases through `read_lock_schema`; the pinned schema
   cases remain schema-validity fixtures rather than digest vectors.
+## Leaf progress: TASK-260916-15nf0l install marker v5 and full currentness
+
+- `csk.install_marker` implements marker schema 5 for schema-2 installations
+  at every manifest version 1-8. `package` (the shared
+  `csk.sources.package_identity` union, never inferred from a transport
+  endpoint) replaces `source`/`git`/`ref_kind`/`ref`/`commit`, and
+  `lock_sha256` binds the installed selection; every other member keeps its
+  core section 10 meaning, requiredness and canonical set ordering.
+  `attestation` and top-level `substituted` are forbidden for
+  `local-snapshot` at plan, writer and reader depth. Build records bind
+  receipt version 3 with every v3 cross-field rule intact
+  (`InstallMarkerBuildV5` shares `_validate_receipted_build` with v3; only
+  the bound versions differ). Readers keep the v1-v4 lanes byte-identical
+  and unknown versions fail closed. The reader validates the shape of a
+  recorded `build_source` only: the pinned corpus carries `build_source`
+  with empty `builds`, so exact presence is a plan comparison.
+- `MarkerPlan` is the marker-comparable projection of the effective plan
+  (owned downstream by resolve-source-closure). `compare_marker_plan` is
+  the one comparison, derived from the record's own members: every
+  `InstallMarkerV5` member except the constant schema version and the
+  install timestamp is compared (the attestation triple expands registry,
+  status and key id), so a new record member extends the comparison by
+  construction and the growth test fails unless the plan carries it too;
+  key and attestation absence are compared values. `validate_attestation_evidence` is the one validator
+  driven by the `ATTESTATION_EVIDENCE_DEFECTS` table: absent, unreadable,
+  malformed, stale, revoked and the five wrong-field mismatches each refuse
+  with their own code, and an unreadable record is never reported as
+  absent. Freshness, revocation and signature trust arrive as explicit
+  assurance-layer verdicts; marker summaries never authorize anything.
+- `csk.dev_substitutions.check_source_substitution_admission` is the pure
+  planning gate: new `from` selectors never gain substitution, strict audit
+  rejects top-level and external substitution before cache reads, compiler
+  execution or publication, and omitting the marker field cannot bypass it
+  because the gate takes no marker input. `check_local_registry_requirement`
+  fails local content where policy requires a network attestation.
+- `evaluate_marker_status` / `evaluate_schema2_status` are the read-only
+  status entries (exit 0 current, 1 otherwise); legacy and unknown markers
+  never attest schema-2 currency. Legacy lanes (`status`, `gc`,
+  `global_install`, `installer` currentness) meet v5 markers without
+  crashing and report drift. Stated bounds for later leaves: receipt-3
+  `input.build` matching and protected-artifact verification (341a6q), the
+  canonical repository binding for configured-git evidence and the
+  signature/trust verdicts (11yseo), and the effective-plan wiring (18j5hg).
+- `tests/test_install_marker_v5.py` (233 tests) covers the migration table,
+  the marker-5 x manifest-1..8 matrix, both driving tables parametrised,
+  read-only tree hashes, fault injection at the read seams, and the
+  zero-side-effect audit counter. The draft harness drives all 38
+  install-marker-v5 schema cases through the production reader with
+  expected polarity plus 23 semantic drivers (13 owned, 10 evidence
+  drivers shared with 11yseo): 190 passed / 45 skipped at base,
+  251 passed / 22 skipped at head.
+## Leaf progress: TASK-260916-17x3o1 atomic source install publication
+
+- `csk.sources.publish` publishes schema-2 installs through one engine
+  transaction (`TransactionEngine` with a `PreWriteHook`): snapshot
+  store staging, then lock (07), member contexts (10), runtime entries
+  (20), adapter mirrors plus ledger (60), bindings (05) and removals
+  (80) commit under per-write boundary rechecks frozen in opaque
+  `publication_recheck` journal payloads, so crash replay re-verifies
+  the same boundaries. The hook reuses the S3
+  `recheck_publication_destination` for managed destinations, verifies
+  frozen ancestor identities (dev/ino) with link-aware descent, and
+  defers frozen link roots to the recheck; root and home checks use
+  resolved identity like S3 so stable link roots keep working.
+  Rollback restores re-run the hook before each restore, journal
+  removal re-verifies every target before discarding sidecars (a moved
+  ancestor would hide them as absent), and hook-owned targets skip the
+  engine's resolve-based path comparison so a managed boundary move
+  reads as `source_output_overlap`, never as corruption. Same-code
+  commit/rollback groups fold to the single diagnostic with the
+  deferred rollback recorded. Rollback rechecks the boundary before
+  digesting live (pending-no-op targets return without touching live
+  at all), so a move that breaks the rollback's own digests still
+  reports the hook refusal; a rollback interrupted after restoring
+  live resumes recognized (live at preimage, no backup left) without
+  waiving ancestor verification.
+- Selection is the selector index's expanded root-selection ordinal per
+  member (dense zero-based across the expanded set, matching the lock
+  schema); status attributes members by admission matching, never by
+  assuming the ordinal indexes selectors. Locked installs and status
+  derive members from the lock without expanding selectors, so a
+  deleted member directory surfaces as `source_snapshot_unavailable`
+  with store fallback instead of a selection failure; filesystem-side
+  membership drift is ignored under a lock and joins on refresh.
+- Status stages the locked desired state through the install's own
+  staging and compares every live target, so marker fields alone never
+  attest currency (tampered contexts, retargeted mirrors and stale
+  outputs all report drifted); status takes no locks and stages only in
+  the system temp directory. Repair revalidates locked bytes, never
+  adopts marker claims and never rewrites the lock; refresh reruns all
+  gates and replaces lock and markers atomically. Context and binding
+  removals derive from live managed state minus desired members;
+  runtime removals are exactly the installing project's lock diff
+  (old keys minus new keys), never a sweep over the live home, so
+  cleanup works with the member directory deleted on disk and never
+  touches another installation; status plans no runtime removals at
+  all and never reports a foreign entry as drift. Adapter ledger
+  live paths that are neither absent nor regular files refuse in the
+  schema-2 translation (the shared planner is untouched), and every
+  filesystem error at the live-digest seams maps to
+  `source_output_overlap` instead of escaping raw.
+- `tests/test_source_install_transactions.py` (85 tests) covers the
+  end-to-end install/status cycle, a fault at every pinned stage
+  boundary (selection, capture, re-enumeration, snapshot-store,
+  lock-create, prepare, commit-05/07/10/20/60/80, cleanup) with
+  before/after tree hashes and verified store residue, the
+  between-writes retarget with deferred rollback, the unmanaged
+  eight-vector family (link, file, dir, empty dir, case-variant
+  marker, casing alias, changed parent, adapter occupants), read-only
+  status in eight non-current cases, the five-case repair family,
+  refresh gates and cleanup-from-lock, plus the revision-2 families:
+  the unregistered-sibling runtime regression (lock-diff removal, no
+  live-home sweep), the ledger non-regular-shape class, the
+  digest-error classes at install and status seams, the managed-root
+  file classes, and the three-shape rollback-side overlap class.
+  Narrowing mutants for the revision-2 gates (kept-key removal,
+  dir-ledger admission, single-error-class mapping, committed-only
+  hook skip, shortened ancestor verification) are each killed by
+  exactly their target test with sibling controls green. Stated bounds
+  for later leaves: managed-root-as-link installs are skipped by the
+  pre-existing gitignore gate (git refuses beyond-symlink probes)
+  before publication; NFC/NFD destination collisions are
+  unrepresentable (ASCII-only identifier grammar); runtime removal is
+  the installing project's own lock diff and unreferenced runtime
+  entries remain gc's domain; a garbage regular file at the ledger
+  path is still replaced (inherited shared-planner shape, refused
+  only when non-regular); pending-with-backup crash windows keep the
+  direct live check because pending hook semantics cannot recognize
+  backed-up absence. The draft harness stays 251 passed / 22 skipped
+  (no owned cases, no sideways movement).
+- Casing-alias correction (Linux CI): the context stale sweep skips
+  unmanaged non-member siblings instead of refusing the install for
+  them. On a case-sensitive host a case variant is a distinct
+  directory no publication target addresses; where the filesystem
+  conflates the spelling, the member-destination check still refuses.
+  Managed non-members are still removed through the transaction, and
+  status (which shares the planner) no longer errors on foreign
+  siblings. Pinned by
+  `test_unmanaged_nonmember_sibling_survives_install`
+  (no/foreign/garbage marker class) and narrowing mutant M-E (the
+  skip narrowed to marker-absent only, so present-but-foreign
+  markers fall through to removal and exactly those two params fail).

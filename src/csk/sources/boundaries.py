@@ -31,7 +31,7 @@ import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from .. import adapters, identifiers
 from .errors import (
@@ -56,6 +56,8 @@ __all__ = [
     "ManagedOutputMember",
     "ManagedRoot",
     "SKILL_MD_NAME",
+    "boundary_record_from_json",
+    "boundary_record_to_json",
     "check_declared_inputs",
     "check_selected_package",
     "freeze_boundaries",
@@ -208,6 +210,141 @@ class BoundaryRecord:
             if root.identity is not None and root.identity not in result:
                 result[root.identity] = root.name
         return result
+
+
+def _identity_to_json(identity: tuple[int, int] | None) -> list[int] | None:
+    if identity is None:
+        return None
+    return [identity[0], identity[1]]
+
+
+def boundary_record_to_json(record: BoundaryRecord) -> dict[str, Any]:
+    """Render one frozen record as JSON-safe data for the transaction journal.
+
+    The publication transaction carries the record in each recheck payload
+    so crash recovery rechecks with the same frozen answers. The rendering
+    is plain JSON scalars only; identities become two-element integer lists.
+    """
+
+    if not isinstance(record, BoundaryRecord):
+        raise TypeError("boundary record must be a BoundaryRecord")
+    return {
+        "source_root": record.source_root,
+        "source_identity": _identity_to_json(record.source_identity),
+        "home_root": record.home_root,
+        "home_identity": _identity_to_json(record.home_identity),
+        "home_contains_source": record.home_contains_source,
+        "source_inside_managed": record.source_inside_managed,
+        "managed_roots": [
+            {
+                "name": root.name,
+                "identity": _identity_to_json(root.identity),
+                "entry_identity": _identity_to_json(root.entry_identity),
+                "target": root.target,
+            }
+            for root in record.managed_roots
+        ],
+    }
+
+
+def _identity_from_json(value: object, *, subject: str) -> tuple[int, int] | None:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, list)
+        or len(value) != 2
+        or not all(type(item) is int for item in value)
+    ):
+        raise ValueError(f"{subject} must be a pair of integers or null")
+    first = value[0]
+    second = value[1]
+    assert isinstance(first, int) and isinstance(second, int)
+    return (first, second)
+
+
+def _optional_str_from_json(value: object, *, subject: str) -> str | None:
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise ValueError(f"{subject} must be a string or null")
+    return value
+
+
+def boundary_record_from_json(value: object) -> BoundaryRecord:
+    """Rebuild a frozen record from journal data, refusing malformed shapes.
+
+    Every field is validated with exact types: booleans are never accepted
+    where integers are required and subclasses never smuggle through. Raises
+    ValueError or TypeError; the publication hook converts those to a
+    transaction refusal, since journal corruption is not a boundary change.
+    """
+
+    if not isinstance(value, dict):
+        raise ValueError("boundary record must be an object")
+    expected = {
+        "source_root",
+        "source_identity",
+        "home_root",
+        "home_identity",
+        "home_contains_source",
+        "source_inside_managed",
+        "managed_roots",
+    }
+    if set(value) != expected:
+        raise ValueError("boundary record fields are invalid")
+    source_root = value["source_root"]
+    if type(source_root) is not str or not source_root:
+        raise ValueError("boundary record source_root must be a non-empty string")
+    source_identity = _identity_from_json(
+        value["source_identity"], subject="boundary record source_identity"
+    )
+    if source_identity is None:
+        raise ValueError("boundary record source_identity must be a pair of integers")
+    home_identity = _identity_from_json(
+        value["home_identity"], subject="boundary record home_identity"
+    )
+    if type(value["home_contains_source"]) is not bool:
+        raise ValueError("boundary record home_contains_source must be a boolean")
+    roots_raw = value["managed_roots"]
+    if not isinstance(roots_raw, list):
+        raise ValueError("boundary record managed_roots must be a list")
+    roots: list[ManagedRoot] = []
+    for index, raw in enumerate(roots_raw):
+        subject = f"boundary record managed_roots[{index}]"
+        if not isinstance(raw, dict) or set(raw) != {
+            "name",
+            "identity",
+            "entry_identity",
+            "target",
+        }:
+            raise ValueError(f"{subject} fields are invalid")
+        name = raw["name"]
+        if type(name) is not str or not name:
+            raise ValueError(f"{subject} name must be a non-empty string")
+        roots.append(
+            ManagedRoot(
+                name=name,
+                identity=_identity_from_json(raw["identity"], subject=f"{subject} identity"),
+                entry_identity=_identity_from_json(
+                    raw["entry_identity"], subject=f"{subject} entry_identity"
+                ),
+                target=_optional_str_from_json(raw["target"], subject=f"{subject} target"),
+            )
+        )
+    return BoundaryRecord(
+        source_root=source_root,
+        source_identity=source_identity,
+        home_root=_optional_str_from_json(
+            value["home_root"], subject="boundary record home_root"
+        ),
+        home_identity=home_identity,
+        home_contains_source=value["home_contains_source"],
+        source_inside_managed=_optional_str_from_json(
+            value["source_inside_managed"],
+            subject="boundary record source_inside_managed",
+        ),
+        managed_roots=tuple(roots),
+    )
 
 
 @dataclass(frozen=True)
@@ -1392,6 +1529,7 @@ def recheck_publication_destination(
     destination: str,
     *,
     admitted: frozenset[tuple[int, int]] = frozenset(),
+    expected_link_target: str | None = None,
 ) -> None:
     """Recheck destination separation immediately before a publication write.
 
@@ -1402,6 +1540,13 @@ def recheck_publication_destination(
     stay within the planned output, and it must never overwrite an
     admitted input. Every failure is ``source_output_overlap`` and the
     caller rolls back unpublished state.
+
+    A destination that is a link refuses unless ``expected_link_target``
+    carries the readlink spelling frozen at plan time and the live link
+    still spells it: managed adapter mirrors are links by design, and only
+    the frozen binding distinguishes them from a newly introduced link.
+    The comparison is on the readlink spelling, which selects the same
+    target while the reverified parent chain stands.
     """
 
     try:
@@ -1411,6 +1556,7 @@ def recheck_publication_destination(
             planned_output,
             destination,
             admitted=admitted,
+            expected_link_target=expected_link_target,
         )
     except SourceError:
         raise
@@ -1428,6 +1574,7 @@ def _recheck_publication_destination(
     destination: str,
     *,
     admitted: frozenset[tuple[int, int]],
+    expected_link_target: str | None,
 ) -> None:
     context = f"Publication destination {destination!r}"
     if not identifiers.is_valid_portable_path(planned_output):
@@ -1515,10 +1662,21 @@ def _recheck_publication_destination(
     final = _lstat(destination_display, code=CODE_OUTPUT_OVERLAP, context=context)
     if final is not None:
         if stat.S_ISLNK(final.st_mode):
-            raise SourceError(
-                CODE_OUTPUT_OVERLAP,
-                f"{context} is a link; newly introduced links are never followed",
-            )
+            if expected_link_target is None:
+                raise SourceError(
+                    CODE_OUTPUT_OVERLAP,
+                    f"{context} is a link; newly introduced links are never followed",
+                )
+            try:
+                live_target = os.readlink(destination_display)
+            except OSError as exc:
+                raise _undetermined(CODE_OUTPUT_OVERLAP, context, exc)
+            if live_target != expected_link_target:
+                raise SourceError(
+                    CODE_OUTPUT_OVERLAP,
+                    f"{context} is a link; newly introduced links are never followed",
+                )
+            return
         if _identity_from_stat(final) in admitted:
             raise SourceError(
                 CODE_OUTPUT_OVERLAP,

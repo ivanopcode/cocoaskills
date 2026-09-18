@@ -28,7 +28,8 @@ from .builds import metadata as build_metadata
 from .builds import planner as build_planner
 from .builds import source as build_source
 from .builds import toolchain as build_toolchain
-from .config import GlobalConfig, ProjectConfig
+from .config import GlobalConfig, ProjectConfig, skillfile_sources_enabled
+from .sources import publish as source_publish
 
 
 @dataclass(frozen=True)
@@ -87,9 +88,24 @@ def collect_status(
 def collect_global_status(config: GlobalConfig) -> ProjectStatus:
     csk_home = config.path.parent
     root = csk_home / "global"
-    global_manifest = manifest.load_manifest(root)
+    global_manifest = manifest.load_manifest(
+        root, allow_schema_2=skillfile_sources_enabled(config)
+    )
     if global_manifest is None:
         return ProjectStatus("global", root, False, [])
+    if global_manifest.schema_version == 2:
+        return ProjectStatus(
+            "global",
+            root,
+            True,
+            [],
+            (),
+            (),
+            (
+                "schema-2 global installs are not supported by atomic source "
+                "install; global scope stays on schema 1",
+            ),
+        )
     status = _collect_scope(
         config,
         alias="global",
@@ -108,6 +124,55 @@ def collect_global_status(config: GlobalConfig) -> ProjectStatus:
     return _attach_capability_evidence([status])[0]
 
 
+def _collect_schema2_project_status(
+    config: GlobalConfig,
+    project: ProjectConfig,
+    project_manifest: manifest.ProjectManifest,
+    substitution_lines: tuple[str, ...],
+) -> ProjectStatus:
+    """Collect read-only currentness for one schema-2 project.
+
+    Verdicts come from the atomic source publisher: lock members are
+    revalidated against their locked sources and installed markers,
+    live outputs are compared against the locked desired state, and
+    anything but up-to-date is reported without writing anything.
+    """
+
+    evaluated = source_publish.evaluate_schema2_installation(
+        home=config.path.parent,
+        project_path=project.path,
+        manifest_value=project_manifest,
+        agents=tuple(
+            project_manifest.agents or project.agents or config.default_agents
+        ),
+        locale_value=project_manifest.locale or config.preferred_locale,
+        alias=project.alias,
+        adapter_mode=config.adapter_mode,
+    )
+    lock_ref = evaluated.lock_sha256[:16] if evaluated.lock_sha256 else "no-lock"
+    skills = [
+        SkillStatus(
+            name=verdict.name,
+            ref_kind="lock",
+            ref=lock_ref,
+            installed_commit=verdict.marker_snapshot,
+            resolved_commit=verdict.locked_snapshot,
+            label=verdict.label,
+            detail=verdict.detail,
+        )
+        for verdict in evaluated.members
+    ]
+    return ProjectStatus(
+        project.alias,
+        project.path,
+        True,
+        skills,
+        substitution_lines,
+        (),
+        evaluated.errors,
+    )
+
+
 def _collect_project_status(
     config: GlobalConfig,
     project: ProjectConfig,
@@ -122,7 +187,9 @@ def _collect_project_status(
         substitutions = {}
         substitution_lines = (f"error: {exc}",)
 
-    project_manifest = manifest.load_manifest(project.path)
+    project_manifest = manifest.load_manifest(
+        project.path, allow_schema_2=skillfile_sources_enabled(config)
+    )
     if project_manifest is None:
         return ProjectStatus(
             project.alias,
@@ -130,6 +197,10 @@ def _collect_project_status(
             False,
             [],
             substitution_lines,
+        )
+    if project_manifest.schema_version == 2:
+        return _collect_schema2_project_status(
+            config, project, project_manifest, substitution_lines
         )
 
     errors: list[str] = []
@@ -542,15 +613,31 @@ def _inspect_node_marker(
             ("build-marker-drift", detail),
         )
 
+    # A schema-2 marker carries a typed package instead of a legacy commit, so
+    # it can never match a legacy closure node: it falls through to
+    # manifest-drift below without touching legacy-only members.
+    legacy_marker = (
+        marker
+        if isinstance(
+            marker,
+            (
+                install_marker.InstallMarkerV1,
+                install_marker.InstallMarkerV2,
+                install_marker.InstallMarkerV3,
+                install_marker.InstallMarkerV4,
+            ),
+        )
+        else None
+    )
     base = SkillStatus(
         node.name,
         node.resolved.kind,
         node.resolved.ref,
-        marker.commit,
+        legacy_marker.commit if legacy_marker is not None else None,
         node.resolved.commit,
         "up-to-date",
     )
-    if marker.commit != node.resolved.commit:
+    if legacy_marker is not None and legacy_marker.commit != node.resolved.commit:
         return _MarkerInspection(
             replace(base, label="update-available"),
             marker,
@@ -580,24 +667,25 @@ def _inspect_node_marker(
     )
     expected_requirers = tuple(sorted(node.consumers())) or None
     common_current = (
-        install_marker.marker_can_be_current(
-            marker,
+        legacy_marker is not None
+        and install_marker.marker_can_be_current(
+            legacy_marker,
             skill_schema_version=node.spec.schema_version,
         )
-        and marker.name == node.name
-        and marker.source == node.decl.source
-        and marker.ref_kind == node.resolved.kind
-        and marker.ref == node.resolved.ref
-        and marker.git == node.decl.git
-        and marker.locale == effective_locale
-        and marker.agents == tuple(sorted(set(agents)))
-        and marker.commands == expected_commands
-        and marker.dependencies == tuple(sorted(node.spec.dependencies))
-        and marker.runtime_roots == tuple(sorted(node.spec.runtime_roots))
-        and marker.requirements == expected_requirements
-        and marker.activation == expected_activation
-        and marker.requirers == expected_requirers
-        and marker.substituted == node.substituted
+        and legacy_marker.name == node.name
+        and legacy_marker.source == node.decl.source
+        and legacy_marker.ref_kind == node.resolved.kind
+        and legacy_marker.ref == node.resolved.ref
+        and legacy_marker.git == node.decl.git
+        and legacy_marker.locale == effective_locale
+        and legacy_marker.agents == tuple(sorted(set(agents)))
+        and legacy_marker.commands == expected_commands
+        and legacy_marker.dependencies == tuple(sorted(node.spec.dependencies))
+        and legacy_marker.runtime_roots == tuple(sorted(node.spec.runtime_roots))
+        and legacy_marker.requirements == expected_requirements
+        and legacy_marker.activation == expected_activation
+        and legacy_marker.requirers == expected_requirers
+        and legacy_marker.substituted == node.substituted
     )
     if not common_current:
         return _MarkerInspection(
@@ -1030,12 +1118,26 @@ def _basic_skill_status(
             "error",
             str(exc),
         )
-    if marker.commit != resolved.commit:
+    # A schema-2 marker carries a typed package instead of a legacy commit and
+    # can never match a legacy declaration: it reports update-available.
+    if isinstance(
+        marker,
+        (
+            install_marker.InstallMarkerV1,
+            install_marker.InstallMarkerV2,
+            install_marker.InstallMarkerV3,
+            install_marker.InstallMarkerV4,
+        ),
+    ):
+        installed_commit: str | None = marker.commit
+    else:
+        installed_commit = None
+    if installed_commit != resolved.commit:
         return SkillStatus(
             decl.name,
             decl.ref.kind,
             decl.ref.value,
-            marker.commit,
+            installed_commit,
             resolved.commit,
             "update-available",
         )
@@ -1046,7 +1148,7 @@ def _basic_skill_status(
             decl.name,
             decl.ref.kind,
             decl.ref.value,
-            marker.commit,
+            installed_commit,
             resolved.commit,
             "error",
             str(exc),
@@ -1056,7 +1158,7 @@ def _basic_skill_status(
         decl.name,
         decl.ref.kind,
         decl.ref.value,
-        marker.commit,
+        installed_commit,
         resolved.commit,
         label,
     )

@@ -61,8 +61,9 @@ from .builds import metadata as build_metadata
 from .builds import planner as build_planner
 from .builds import source as build_source
 from .builds import toolchain as build_toolchain
-from .config import GlobalConfig, ProjectConfig
+from .config import GlobalConfig, ProjectConfig, skillfile_sources_enabled
 from .skillspec import CommandSpec
+from .sources import publish as source_publish
 from .sources import repository_policy
 from .sources import transport as source_transport
 
@@ -318,7 +319,9 @@ def _install_project(
 
 
 def _transaction_engine(csk_home: Path) -> transactions.TransactionEngine:
-    return transactions.TransactionEngine(csk_home)
+    return transactions.TransactionEngine(
+        csk_home, pre_write_hook=source_publish.make_publication_hook()
+    )
 
 
 def _concurrent_state_change(detail: str) -> build_planner.BuildPlanningError:
@@ -341,6 +344,83 @@ def _assert_generation_current(
         raise _concurrent_state_change(
             f"shared planning state changed before the atomic {scope} commit"
         )
+
+
+def _install_schema2_once(
+    config: GlobalConfig,
+    project: ProjectConfig,
+    options: InstallOptions,
+    project_manifest: manifest.ProjectManifest,
+) -> ProjectResult:
+    """Install one schema-2 (draft skillfile-sources-v1) project.
+
+    The schema-2 lane refuses development substitutions, hybrid
+    declarations and everything outside local path sources, then
+    delegates to the atomic source publisher: one recoverable
+    transaction for lock, markers, runtime, context and adapters.
+    Legacy schema-1 projects never reach here.
+    """
+
+    result = ProjectResult(alias=project.alias, path=project.path, status="ok")
+    try:
+        dev_manifest = dev_substitutions.load_manifest(project.path)
+        substitutions_present = bool(
+            dev_manifest.substitutions or dev_manifest.build_repository_substitutions
+        )
+        strict_audit = config.audit.enabled and config.audit.mode == "strict"
+        if substitutions_present and strict_audit:
+            raise InstallError(
+                f"Dev substitutions are active in {dev_substitutions.DEV_MANIFEST_NAME}; "
+                "strict audit refuses substituted installs"
+            )
+        if substitutions_present:
+            dev_substitutions.check_source_substitution_admission(
+                selector_kind="from",
+                operator_substitution=True,
+                strict_audit=strict_audit,
+            )
+        try:
+            hybrid_decls = hybrid.load_hybrid_decls(config.path.parent)
+        except hybrid.HybridError as exc:
+            raise InstallError(str(exc)) from exc
+        aliases = tuple(
+            value
+            for value in (project.alias, project.project_alias, project_manifest.project_alias)
+            if value
+        )
+        applicable = [
+            item
+            for item in hybrid_decls
+            if hybrid.applies_to_project(item, aliases=aliases, project_path=project.path)
+        ]
+        if applicable:
+            raise InstallError(
+                f"Hybrid skill declarations are not supported for schema-2 project '{project.alias}'"
+            )
+        outcome = source_publish.install_schema2(
+            home=Path(os.path.abspath(config.path.parent)),
+            project_path=project.path,
+            alias=project.alias,
+            agents=project_manifest.agents or project.agents or config.default_agents,
+            locale_value=config.preferred_locale,
+            adapter_mode=config.adapter_mode,
+            fetch=options.fetch,
+            dry_run=options.dry_run,
+        )
+        result.messages.extend(outcome.messages)
+        return result
+    except build_planner.BuildPlanningError as exc:
+        if exc.code == "concurrent_state_change":
+            raise
+        result.status = "failed"
+        result.errors.append(failure_text(exc))
+        return result
+    except locking.LockError:
+        raise
+    except Exception as exc:
+        result.status = "failed"
+        result.errors.append(failure_text(exc))
+        return result
 
 
 def _generation_after_gate_writes(
@@ -382,7 +462,9 @@ def _install_project_once(
 ) -> ProjectResult:
     result = ProjectResult(alias=project.alias, path=project.path, status="ok")
     try:
-        project_manifest = manifest.load_manifest(project.path)
+        project_manifest = manifest.load_manifest(
+            project.path, allow_schema_2=skillfile_sources_enabled(config)
+        )
         if project_manifest is None:
             result.status = "skipped"
             result.messages.append(f"{project.alias}: Skillfile.json not found; skipped")
@@ -396,6 +478,9 @@ def _install_project_once(
             result.status = "skipped"
             result.messages.append(f"{project.alias}: {exc}; skipped")
             return result
+
+        if project_manifest.schema_version == 2:
+            return _install_schema2_once(config, project, options, project_manifest)
 
         dev_manifest = dev_substitutions.load_manifest(project.path)
         substitutions = dev_manifest.substitutions

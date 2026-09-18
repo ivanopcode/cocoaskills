@@ -1359,7 +1359,9 @@ def _render_list(cfg: config.GlobalConfig, *, show_paths: bool = False) -> str:
             )
         else:
             lines.append(f"Project {alias}: {project.path}")
-        project_manifest = manifest.load_manifest(project.path)
+        project_manifest = manifest.load_manifest(
+            project.path, allow_schema_2=config.skillfile_sources_enabled(cfg)
+        )
         if project_manifest is None:
             lines.append("  Skillfile.json missing")
             continue
@@ -1397,12 +1399,18 @@ def _cfg_and_alias_for_target(
 
     path_target = path_target or Path.cwd()
     try:
-        resolved = project_resolver.resolve(path_target, worktree_alias_pattern=cfg.worktree_alias_pattern)
+        resolved = project_resolver.resolve(
+            path_target,
+            worktree_alias_pattern=cfg.worktree_alias_pattern,
+            allow_schema_2=config.skillfile_sources_enabled(cfg),
+        )
     except project_resolver.ProjectResolutionError as exc:
         if target is not None:
             raise
         raise project_resolver.ProjectResolutionError(_missing_current_project_message(args.command, path_target, cfg)) from exc
-    project_manifest = manifest.load_manifest(resolved.root)
+    project_manifest = manifest.load_manifest(
+        resolved.root, allow_schema_2=config.skillfile_sources_enabled(cfg)
+    )
     agents = project_manifest.agents if project_manifest and project_manifest.agents else cfg.default_agents
     updated = config.add_project(
         cfg,
@@ -1419,7 +1427,11 @@ def _resolve_project_root(cfg: config.GlobalConfig, target: str | None) -> Path:
     if target and not _looks_like_path(target) and target in cfg.projects:
         return cfg.projects[target].path
     start = Path(target).expanduser() if target else Path.cwd()
-    resolved = project_resolver.resolve(start, worktree_alias_pattern=cfg.worktree_alias_pattern)
+    resolved = project_resolver.resolve(
+        start,
+        worktree_alias_pattern=cfg.worktree_alias_pattern,
+        allow_schema_2=config.skillfile_sources_enabled(cfg),
+    )
     return resolved.root
 
 
@@ -1487,9 +1499,15 @@ def _render_project_resolution(cfg: config.GlobalConfig, args: argparse.Namespac
         return _render_configured_project_resolution(project, cfg.worktree_alias_pattern)
     if path_target is None and target and target not in {".", ""}:
         raise ValueError(f"Unknown project alias: {target}")
-    resolved = project_resolver.resolve(path_target or Path.cwd(), worktree_alias_pattern=cfg.worktree_alias_pattern)
+    resolved = project_resolver.resolve(
+        path_target or Path.cwd(),
+        worktree_alias_pattern=cfg.worktree_alias_pattern,
+        allow_schema_2=config.skillfile_sources_enabled(cfg),
+    )
     agents: list[str] = []
-    project_manifest = manifest.load_manifest(resolved.root)
+    project_manifest = manifest.load_manifest(
+        resolved.root, allow_schema_2=config.skillfile_sources_enabled(cfg)
+    )
     if project_manifest:
         agents = project_manifest.agents
     lines = [
