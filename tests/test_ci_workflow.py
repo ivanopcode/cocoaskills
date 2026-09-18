@@ -9,6 +9,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
@@ -42,6 +44,103 @@ def _aggregate_script(aggregate: str) -> str:
     )
     assert match is not None
     return textwrap.dedent(match.group("script"))
+
+
+def _floor_resolve_script(job: str) -> str:
+    match = re.search(
+        r"(?ms)python3 - <<'PY'.*?\n(?P<script>.*?)^          PY$",
+        job,
+    )
+    assert match is not None
+    return textwrap.dedent(match.group("script"))
+
+
+def _floor_job_steps() -> list[dict[str, object]]:
+    data = yaml.safe_load(_workflow())
+    steps = data["jobs"]["floor_syntax"]["steps"]
+    assert isinstance(steps, list)
+    return steps
+
+
+def _floor_self_check_script(run: str) -> str:
+    match = re.search(r"(?ms)python - <<'PY'\n(?P<script>.*?)\nPY\n", run)
+    assert match is not None
+    return match.group("script")
+
+
+# Specifier lines the floor resolver must fail closed on. The SET is the
+# value of the test: never drop, rename or soften one to make a filename
+# legal (see test_floor_unsupported_fixture_set_is_unchanged).
+_FLOOR_UNSUPPORTED_FIXTURES: tuple[str, ...] = (
+    'requires-python = "==3.14.*"',
+    'requires-python = ">3.11"',
+)
+
+
+def _floor_unsupported_dir(tmp_path: Path, index: int) -> Path:
+    """Scratch directory for one unsupported-specifier fixture.
+
+    Derived from the fixture INDEX, never from the specifier text: the
+    text carries characters Windows rejects (``*``, ``>``), so embedding
+    it in a path fails the test on windows-latest with WinError 123.
+    """
+    return tmp_path / f"unsupported-{index}"
+
+
+# Characters Windows rejects in a path component, plus the trailing-dot /
+# trailing-space and reserved-stem rules (WinError 123 family).
+_WINDOWS_RESERVED_STEMS = (
+    {"con", "prn", "aux", "nul"}
+    | {f"com{i}" for i in range(1, 10)}
+    | {f"lpt{i}" for i in range(1, 10)}
+)
+
+
+def test_floor_unsupported_fixture_dirs_are_portable(tmp_path: Path) -> None:
+    """Every fixture scratch name is legal on every host filesystem.
+
+    Regression for the windows-latest failure of
+    test_floor_resolve_script_reads_the_floor_from_requires_python: names
+    derived from the specifier text carried ``*`` and ``>``. The class is
+    any host-rejected character, so this test pins the whole rule (not the
+    two examples) over every name the helper can produce for this set.
+    """
+    assert _FLOOR_UNSUPPORTED_FIXTURES
+    for index in range(len(_FLOOR_UNSUPPORTED_FIXTURES)):
+        name = _floor_unsupported_dir(tmp_path, index).name
+        assert re.fullmatch(r"[a-z0-9-]+", name) is not None, name
+        assert name.lower() not in _WINDOWS_RESERVED_STEMS, name
+        assert "." not in name, name
+        # The filesystem itself is the oracle for the local host; the
+        # character rule above is the proxy for the other hosts.
+        _floor_unsupported_dir(tmp_path, index).mkdir()
+
+
+def test_floor_unsupported_fixture_dirs_are_injective(tmp_path: Path) -> None:
+    """Two fixtures must never share one scratch directory.
+
+    A sanitiser that maps two specifiers onto the same slug would silently
+    run one fixture twice and never run the other -- worse than the crash
+    it replaces, because nothing reports it.
+    """
+    dirs = [
+        _floor_unsupported_dir(tmp_path, index)
+        for index in range(len(_FLOOR_UNSUPPORTED_FIXTURES))
+    ]
+    assert len(set(dirs)) == len(dirs)
+    for index, directory in enumerate(dirs):
+        directory.mkdir()
+        (directory / "index.txt").write_text(str(index), encoding="utf-8")
+    for index, directory in enumerate(dirs):
+        assert (directory / "index.txt").read_text(encoding="utf-8") == str(index)
+
+
+def test_floor_unsupported_fixture_set_is_unchanged() -> None:
+    """The unsupported-specifier SET is pinned: change names, never fixtures."""
+    assert _FLOOR_UNSUPPORTED_FIXTURES == (
+        'requires-python = "==3.14.*"',
+        'requires-python = ">3.11"',
+    )
 
 
 def test_pull_request_lane_is_event_separated_and_bounded() -> None:
@@ -200,6 +299,7 @@ def test_stable_aggregates_always_run_and_fail_closed() -> None:
             "fast_protocol",
             "fast_go_e2e",
             "fast_draft_sources",
+            "floor_syntax",
         },
         "merge": {
             "typecheck",
@@ -235,6 +335,221 @@ def test_stable_aggregates_always_run_and_fail_closed() -> None:
             unhealthy[next(iter(children))] = {"result": result}
             env["NEEDS_JSON"] = json.dumps(unhealthy)
             assert subprocess.run([sys.executable, "-c", script], env=env, check=False).returncode != 0
+
+
+def test_floor_syntax_gate_is_a_cheap_pr_time_floor_compile() -> None:
+    """The floor gate runs on pull requests and compiles the package verbatim.
+
+    Regression for BUG-260917-3txerf: the Fast lane runs only Python 3.14,
+    so a construct that parses there but not on the declared floor reached
+    main unseen. The gate is one ubuntu runner compiling ``src/csk`` and
+    ``tests`` with the real floor interpreter -- a syntax gate, not a
+    second test matrix.
+    """
+    job = _job(_workflow(), "floor_syntax")
+    # Whole-line pins: a substring pin cannot see a narrowed target
+    # (``src/csk/builds`` contains ``src/csk``) or a live line kept as a
+    # comment, so every load-bearing line is matched newline to newline.
+    assert "\n    if: github.event_name == 'pull_request'\n" in job
+    assert "refs/heads/main" not in job
+    assert "\n    runs-on: ubuntu-latest\n" in job
+    assert re.search(r"(?m)^ +(matrix|strategy):", job) is None
+    assert "\n    timeout-minutes: 10\n" in job
+    assert "actions/checkout@v4" in job
+    assert "actions/setup-python@v5" in job
+    assert "pip install" not in job
+
+    # The floor comes from requires-python, never hardcoded: pinning a
+    # literal version here keeps every other token present while silently
+    # reintroducing the drift this gate exists to close.
+    assert "\n      - name: Resolve the floor Python from requires-python\n" in job
+    assert "\n          python-version: ${{ steps.floor.outputs.version }}\n" in job
+    assert 'python-version: "3.11"' not in job
+    assert 'python-version: "3.14"' not in job
+
+    # FLOOR reaches the compile step from the resolve step; the structural
+    # test pins that the reference names the resolve step's actual id.
+    assert "\n          FLOOR: ${{ steps.floor.outputs.version }}\n" in job
+
+    # Exactly the compile command on that interpreter. Narrowing the
+    # target to a subdirectory (e.g. ``src/csk/builds``) keeps the
+    # ``compileall`` token while dropping the defective module.
+    assert "\n          python -m compileall -q src/csk tests\n" in job
+
+
+def test_floor_resolve_script_reads_the_floor_from_requires_python(
+    tmp_path: Path,
+) -> None:
+    """The ACTUAL resolve script maps requires-python to the gate version.
+
+    Token assertions cannot see a script that keeps the ``requires-python``
+    token while printing a constant, so this test executes the extracted
+    script: the committed tree resolves ``3.11``, a raised floor moves the
+    gate to ``3.12``, a specifier without a ``>=`` bound fails closed, and
+    the read is scoped to the PEP 621 ``[project]`` table so a
+    ``requires-python`` line under any other table cannot decide the floor.
+    """
+    script = _floor_resolve_script(_job(_workflow(), "floor_syntax"))
+
+    committed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert committed.returncode == 0
+    assert committed.stdout.strip() == "version=3.11"
+
+    raised = tmp_path / "raised"
+    raised.mkdir()
+    (raised / "pyproject.toml").write_text(
+        '[project]\nrequires-python = ">=3.12"\n', encoding="utf-8"
+    )
+    moved = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=raised,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert moved.returncode == 0
+    assert moved.stdout.strip() == "version=3.12"
+
+    for index, bad in enumerate(_FLOOR_UNSUPPORTED_FIXTURES):
+        disarmed = _floor_unsupported_dir(tmp_path, index)
+        disarmed.mkdir()
+        (disarmed / "pyproject.toml").write_text(
+            f"[project]\n{bad}\n", encoding="utf-8"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=disarmed,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode != 0, bad
+
+    other_first = tmp_path / "other-table-first"
+    other_first.mkdir()
+    (other_first / "pyproject.toml").write_text(
+        '[tool.foo]\nrequires-python = ">=3.9"\n'
+        '[project]\nrequires-python = ">=3.11"\n',
+        encoding="utf-8",
+    )
+    scoped = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=other_first,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert scoped.returncode == 0
+    assert scoped.stdout.strip() == "version=3.11"
+
+    tool_only = tmp_path / "tool-only"
+    tool_only.mkdir()
+    (tool_only / "pyproject.toml").write_text(
+        '[tool.foo]\nrequires-python = ">=3.9"\n', encoding="utf-8"
+    )
+    missing = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tool_only,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert missing.returncode != 0
+
+
+def test_floor_syntax_wiring_is_structural_and_self_verifying() -> None:
+    """The floor gate proves it runs ON the resolved floor, not just somewhere.
+
+    Regression for BUG-260917-3txerf review finding F1: the resolve step's
+    output was consumed by setup-python and nothing downstream checked the
+    interpreter executing ``compileall``, so deleting the resolve id,
+    renaming it, or inserting a second setup-python kept every text pin
+    green while the job fell through to the runner-default interpreter.
+    The compile step therefore carries FLOOR from env and fails closed
+    unless it equals its own major.minor; this test pins that wiring
+    structurally over the parsed YAML (ids read, not spelled) and executes
+    the extracted self-check three ways.
+    """
+    steps = _floor_job_steps()
+    assert steps
+
+    # Advisory-step mutants (continue-on-error, step-level if) survive every
+    # text pin for this job; forbid them structurally here. The other fast
+    # children share the blind spot and are out of scope.
+    for step in steps:
+        assert "continue-on-error" not in step, step.get("name")
+        assert "if" not in step, step.get("name")
+
+    resolve = next(
+        step
+        for step in steps
+        if step.get("name") == "Resolve the floor Python from requires-python"
+    )
+    floor_id = resolve.get("id")
+    assert isinstance(floor_id, str) and floor_id, "resolve step carries no id"
+    expected_ref = f"${{{{ steps.{floor_id}.outputs.version }}}}"
+
+    setup_steps = [
+        step for step in steps if "setup-python" in str(step.get("uses", ""))
+    ]
+    assert len(setup_steps) == 1, "exactly one setup-python step wires the floor"
+    setup_with = setup_steps[0].get("with")
+    assert isinstance(setup_with, dict)
+    assert setup_with.get("python-version") == expected_ref, setup_with
+
+    compile_step = next(
+        step
+        for step in steps
+        if step.get("name") == "Compile the package on the floor interpreter"
+    )
+    compile_env = compile_step.get("env")
+    assert isinstance(compile_env, dict)
+    assert compile_env.get("FLOOR") == expected_ref, compile_env
+    run = compile_step.get("run")
+    assert isinstance(run, str)
+    assert "python -m compileall -q src/csk tests" in run.splitlines(), run
+    # The self-check itself is pinned by execution below, not by spelling;
+    # assert only that the run block carries a FLOOR-vs-running comparison.
+    assert 'os.environ.get("FLOOR"' in run
+    assert "sys.version_info" in run
+
+    script = _floor_self_check_script(run)
+    running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    base_env = {key: value for key, value in os.environ.items() if key != "FLOOR"}
+
+    unset = subprocess.run(
+        [sys.executable, "-c", script],
+        env=base_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert unset.returncode != 0
+
+    mismatched_floor = "9.9" if running != "9.9" else "8.8"
+    mismatched = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**base_env, "FLOOR": mismatched_floor},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert mismatched.returncode != 0
+
+    matched = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**base_env, "FLOOR": running},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert matched.returncode == 0
 
 
 def test_candidate_input_is_an_explicit_dispatch_contract() -> None:

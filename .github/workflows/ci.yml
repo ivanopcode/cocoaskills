@@ -424,10 +424,99 @@ jobs:
           path: draft-sources-results.xml
           if-no-files-found: error
 
+  floor_syntax:
+    name: Floor syntax / requires-python floor on ubuntu-latest
+    # The Fast lane runs only Python 3.14, so a construct that parses there
+    # but not on the declared floor (requires-python) reaches main unseen;
+    # BUG-260917-3txerf was exactly that shape (PEP 701 f-strings). This job
+    # compiles the package and the tests with the real floor interpreter on
+    # every pull request. It is a syntax gate, not a second test matrix: one
+    # runner, seconds of compile, no install, no tests. A grammar check on a
+    # newer interpreter is NOT a substitute: ast.parse(feature_version=(3, 11))
+    # does not re-impose the old f-string rule, so only the floor
+    # interpreter itself can see this class. The compile step is
+    # self-verifying: it fails closed unless the interpreter running it
+    # reports the resolved FLOOR, so wiring drift that falls through to the
+    # runner-default interpreter cannot go green.
+    # Bounds (honest scope): this proves the interpreter identity and the
+    # compile result on the spelled targets, but its own step shape is not
+    # pinned as a whitelist, and compileall exits 0 on an unlistable target
+    # ("Can't list" is treated as empty). A deliberate edit of this job, or
+    # a target path that no longer exists, can disarm it silently; an
+    # accidental reintroduction of the class still fails every pull request.
+    # Tamper resistance is tracked in TASK-260918-16r0fm.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve the floor Python from requires-python
+        id: floor
+        # Plain-regex read of pyproject.toml so this step runs on any
+        # preinstalled python3 (no tomllib needed). It resolves the >=
+        # lower bound of the PEP 621 [project] table to major.minor and
+        # fails closed when no such bound exists, so raising the floor
+        # later moves this gate with it and rewriting the specifier shape
+        # cannot silently disarm it. Scoped to [project]: a requires-python
+        # line under any other table is ignored.
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import re
+
+          text = open("pyproject.toml", encoding="utf-8").read()
+          project = re.search(
+              r'(?ms)^\[project\][^\n]*\n(.*?)(?=^\[.*\]|\Z)',
+              text,
+          )
+          section = project.group(1) if project is not None else ""
+          match = re.search(
+              r'^\s*requires-python\s*=\s*"[^"]*?>=\s*(\d+)\.(\d+)',
+              section,
+              re.MULTILINE,
+          )
+          if match is None:
+              raise SystemExit(
+                  "cannot resolve a >= floor from requires-python "
+                  "in pyproject.toml"
+              )
+          print(f"version={match.group(1)}.{match.group(2)}")
+          PY
+
+      - name: Set up floor Python ${{ steps.floor.outputs.version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.floor.outputs.version }}
+
+      - name: Compile the package on the floor interpreter
+        # Self-verifying floor check first: FLOOR arrives from the resolve
+        # step, and the step fails closed unless it is non-empty and equals
+        # the major.minor of the interpreter actually running it. Then the
+        # exact compile command: any construct the floor cannot parse fails
+        # this step. Deliberately compile-only: it cannot see runtime-only
+        # incompatibilities (a 3.12+ API that parses on the floor but fails
+        # when called), which remain the Merge version matrix's job.
+        env:
+          FLOOR: ${{ steps.floor.outputs.version }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+
+          floor = os.environ.get("FLOOR", "")
+          running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+          if not floor:
+              raise SystemExit("FLOOR is empty: floor resolution did not run")
+          if floor != running:
+              raise SystemExit(f"floor mismatch: FLOOR={floor!r} running={running!r}")
+          PY
+          python -m compileall -q src/csk tests
+
   fast:
     name: fast
     if: ${{ always() && github.event_name == 'pull_request' }}
-    needs: [typecheck, build, fast_ordinary, fast_protocol, fast_go_e2e, fast_draft_sources]
+    needs: [typecheck, build, fast_ordinary, fast_protocol, fast_go_e2e, fast_draft_sources, floor_syntax]
     runs-on: ubuntu-latest
     steps:
       - name: Require every fast child
@@ -438,7 +527,7 @@ jobs:
           import json
           import os
 
-          expected = {"typecheck", "build", "fast_ordinary", "fast_protocol", "fast_go_e2e", "fast_draft_sources"}
+          expected = {"typecheck", "build", "fast_ordinary", "fast_protocol", "fast_go_e2e", "fast_draft_sources", "floor_syntax"}
           actual = json.loads(os.environ["NEEDS_JSON"])
           if set(actual) != expected:
               raise SystemExit(f"required CI child mismatch: expected={sorted(expected)} actual={sorted(actual)}")
