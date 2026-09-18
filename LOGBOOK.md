@@ -1,5 +1,46 @@
 # Logbook
 
+## 2026-09-18 - BUG-260917-2jt7g2: the racy guard test never raced the lifetime it named; the /bin/sleep copy is SIGKILLed at exec
+
+The `test_macos_identity_guard_detects_process_graph_replacement_and_restore`
+flake was filed as "0.2 s subprocess must finish inside a 1 s budget", but an
+instrumented trace showed both executor verifies complete at ~t+5 ms while the
+main thread mutates at ~t+58 ms: a copy of `/bin/sleep` is SIGKILLed at exec
+on Apple Silicon (platform-binary enforcement, `Killed: 9` in ~2 ms from
+every location probed), so the mutation already lands after the executor
+finished and no scheduling can place work "during" that lifetime. The real
+race is verify-in-gap: `failures == []` holds only while both hash verifies
+miss the microsecond mutate-restore window, which saturation stretches. Fix
+is sequential program order (mutate+restore strictly inside the guard
+lifetime, executor run after the restore, no thread/sleep/join) plus a new
+no-mutation silence test; the only timing bound left is a 60 s executor hang
+bound. Full evidence, three narrowing mutants (mask-drop, fire-without-events,
+nonzero-exit-as-identity-failure), and 30/30 runs under 14 hogs are in
+BUG-260917-2jt7g2_results.md. Lesson carried: when a timing test's lifetime
+model is wrong (here the child never lived), re-timing the race is the wrong
+repair — check what the kernel actually did before choosing the sync mechanism.
+
+## 2026-09-18 - TASK-260918-16r0fm rev2: the floor value's provenance, the workflow-level surfaces, and the read-failure half of F4
+
+Revision 1 closed the five named evasions and whitelisted every in-job key
+(31/31) but never read `pyproject.toml`: the gate compared `FLOOR` against
+the interpreter `FLOOR` itself selected, satisfied by construction whenever
+the resolve step was wrong, and the resolve step's run text outside the
+tested heredoc was unpinned -- three one-line edits resolved 3.14, installed
+3.14, and passed a PEP-701 tree with 33/33 green. Same round: the whitelist
+read only `jobs.floor_syntax`, so workflow-level `defaults.run.shell` and
+top-level `env.PYTHONPATH` (both actionlint-clean, both suite-green)
+substituted the step shell and shadowed `compileall`; and a sentinel-backed
+but unlistable target still exited 0 on `Can't list`. Revision 2 resolves
+the floor inside the gate through one shared committed resolver (FLOOR
+demoted to a cross-check), pins the resolve run whole exactly like the
+compile run, declares `shell: bash` plus `python -I`, pins the top-level
+`defaults`/`env` surfaces, and walks every target with a raising `onerror`
+before compiling. Lesson carried: a self-check is satisfied by construction
+when the checked value chose the checker -- provenance must be resolved
+inside the gate, not passed into it; and a whitelist enforced on one surface
+is a bypass path through every surface it does not name.
+
 ## 2026-09-18 - BUG-260917-3txerf rev3: the rev2 closure claim was partial; two guard classes stay open under TASK-260918-16r0fm
 
 Round 2 held the fix and the interpreter-identity mechanism (the self-check

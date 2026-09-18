@@ -4,11 +4,13 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -46,26 +48,223 @@ def _aggregate_script(aggregate: str) -> str:
     return textwrap.dedent(match.group("script"))
 
 
-def _floor_resolve_script(job: str) -> str:
-    match = re.search(
-        r"(?ms)python3 - <<'PY'.*?\n(?P<script>.*?)^          PY$",
-        job,
-    )
-    assert match is not None
-    return textwrap.dedent(match.group("script"))
+GATE_SCRIPT = ROOT / ".github" / "scripts" / "floor_gate.py"
+RESOLVER_SCRIPT = ROOT / ".github" / "scripts" / "floor_resolve.py"
+
+_FLOOR_GATE_RUN = "python -I " + GATE_SCRIPT.relative_to(ROOT).as_posix()
+_FLOOR_RESOLVE_RUN = "python3 " + RESOLVER_SCRIPT.relative_to(ROOT).as_posix()
+_FLOOR_SETUP_USES = "actions/setup-python@v5"
+
+# Exact key whitelists for the floor_syntax job (TASK-260918-16r0fm closes
+# BUG-260917-3txerf rev-2 finding F3): a blacklist can only forbid spellings
+# someone already thought of, so the permitted shape is pinned as sets and
+# any added or renamed key fails _assert_floor_shape.
+_FLOOR_JOB_KEYS = frozenset({"name", "if", "runs-on", "timeout-minutes", "steps"})
+_FLOOR_STEP_NAMES = (
+    "Checkout",
+    "Resolve the floor Python from requires-python",
+    "Set up floor Python ${{ steps.floor.outputs.version }}",
+    "Compile the package on the floor interpreter",
+)
+_FLOOR_CHECKOUT_KEYS = frozenset({"name", "uses"})
+_FLOOR_RESOLVE_KEYS = frozenset({"name", "id", "run"})
+_FLOOR_SETUP_KEYS = frozenset({"name", "uses", "with"})
+_FLOOR_COMPILE_KEYS = frozenset({"name", "env", "run", "shell"})
+
+# The workflow-level surfaces inherited into every floor step (revision-1
+# finding whitelist-scope-job-dict-only): top-level `defaults.run` and
+# top-level `env` apply to steps that do not override them, so the
+# whitelist pins them here, not just the job dict.
+_WORKFLOW_TOP_ENV_KEYS = frozenset({"RELEASED_SUITE_PIN"})
+
+# The incident class: a backslash inside an f-string expression (PEP 701)
+# parses from 3.12 but is a SyntaxError on the 3.11 floor.
+_PEP701_MODULE = 'def bad(value):\n    return f"{value.strip(\' \\t\')}"\n'
 
 
-def _floor_job_steps() -> list[dict[str, object]]:
+def _floor_job_dict() -> dict:
     data = yaml.safe_load(_workflow())
-    steps = data["jobs"]["floor_syntax"]["steps"]
+    job = data["jobs"]["floor_syntax"]
+    assert isinstance(job, dict)
+    return job
+
+
+def _floor_workflow_dict() -> dict:
+    data = yaml.safe_load(_workflow())
+    assert isinstance(data, dict)
+    return data
+
+
+def _assert_floor_shape(job: dict) -> None:
+    """Whitelist the floor job shape: exact keys, exact wiring, one command."""
+    assert set(job) == _FLOOR_JOB_KEYS, set(job)
+    steps = job["steps"]
     assert isinstance(steps, list)
-    return steps
+    assert [step.get("name") for step in steps] == list(_FLOOR_STEP_NAMES)
+
+    checkout, resolve, setup, compile_step = steps
+    assert set(checkout) == _FLOOR_CHECKOUT_KEYS, set(checkout)
+    assert checkout.get("uses") == "actions/checkout@v4"
+
+    assert set(resolve) == _FLOOR_RESOLVE_KEYS, set(resolve)
+    floor_id = resolve.get("id")
+    assert isinstance(floor_id, str) and floor_id, "resolve step carries no id"
+    expected_ref = f"${{{{ steps.{floor_id}.outputs.version }}}}"
+    assert resolve.get("run") == _FLOOR_RESOLVE_RUN
+
+    assert set(setup) == _FLOOR_SETUP_KEYS, set(setup)
+    assert setup.get("uses") == _FLOOR_SETUP_USES
+    assert setup.get("with") == {"python-version": expected_ref}
+
+    assert set(compile_step) == _FLOOR_COMPILE_KEYS, set(compile_step)
+    assert compile_step.get("shell") == "bash"
+    assert compile_step.get("env") == {"FLOOR": expected_ref}
+    assert compile_step.get("run") == _FLOOR_GATE_RUN
 
 
-def _floor_self_check_script(run: str) -> str:
-    match = re.search(r"(?ms)python - <<'PY'\n(?P<script>.*?)\nPY\n", run)
-    assert match is not None
-    return match.group("script")
+def _assert_floor_workflow_surfaces(data: dict) -> None:
+    """Whitelist the workflow-level surfaces inherited into the floor steps.
+
+    A clause enforced on the job dict and absent from a surface that reaches
+    the same step is a bypass path (revision-1 finding
+    ``whitelist-scope-job-dict-only``): a workflow-level
+    ``defaults.run.shell`` substitutes the compile step's shell, and a
+    workflow-level ``PYTHONPATH`` reaches the gate process, with every
+    job-scope assertion green. The workflow therefore carries no top-level
+    ``defaults`` at all, and its top-level ``env`` key set is exactly the
+    committed one.
+    """
+    assert "defaults" not in data, sorted(map(str, data))
+    env = data.get("env")
+    assert isinstance(env, dict)
+    assert set(env) == _WORKFLOW_TOP_ENV_KEYS, set(env)
+
+
+def _mutate_floor_job(old: str, new: str) -> str:
+    """Apply one text-level edit inside the floor_syntax job span."""
+    workflow = _workflow()
+    span = _job(workflow, "floor_syntax")
+    assert span.count(old) == 1, old
+    start = workflow.index(span)
+    return workflow[:start] + span.replace(old, new) + workflow[start + len(span):]
+
+
+def _mutate_workflow(old: str, new: str) -> str:
+    """Apply one text-level edit anywhere in the workflow text."""
+    workflow = _workflow()
+    assert workflow.count(old) == 1, old
+    return workflow.replace(old, new)
+
+
+def _workflow_with_top_level_defaults_shell() -> str:
+    """The X6a mutant: a workflow-level shell the job dict cannot see."""
+    return _mutate_workflow(
+        "\njobs:\n",
+        "\ndefaults:\n  run:\n    shell: bash -n {0}\n\njobs:\n",
+    )
+
+
+def _workflow_with_top_level_pythonpath() -> str:
+    """The X6b mutant: a workflow-level PYTHONPATH the job dict cannot see."""
+    return _mutate_workflow(
+        "  RELEASED_SUITE_PIN: 0ed5c691e9208eea52f21db2fc05e226ce3516fd\n",
+        "  RELEASED_SUITE_PIN: 0ed5c691e9208eea52f21db2fc05e226ce3516fd\n"
+        "  PYTHONPATH: .github/ci\n",
+    )
+
+
+def _run_gate_script(
+    script: Path,
+    executable: str,
+    cwd: Path,
+    floor: str | None,
+    *,
+    isolated: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """Execute a gate script the way the workflow invokes the committed one.
+
+    ``PYTHONDONTWRITEBYTECODE`` is scrubbed so the compile result is
+    observable the same way on every host (the no-short-circuit test reads
+    the bytecode the gate writes for the second target).
+    """
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("FLOOR", "PYTHONDONTWRITEBYTECODE")
+    }
+    if floor is not None:
+        env["FLOOR"] = floor
+    argv = [executable]
+    if isolated:
+        argv.append("-I")
+    argv.append(os.fspath(script))
+    return subprocess.run(
+        argv,
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _run_gate(
+    executable: str, cwd: Path, floor: str | None
+) -> subprocess.CompletedProcess[str]:
+    """Execute the COMMITTED gate script exactly as the workflow invokes it."""
+    return _run_gate_script(GATE_SCRIPT, executable, cwd, floor)
+
+
+def _run_resolver(
+    cwd: Path, outputs: Path | None
+) -> subprocess.CompletedProcess[str]:
+    """Execute the COMMITTED resolver the way the resolve step invokes it.
+
+    ``outputs=None`` leaves ``GITHUB_OUTPUT`` unset, which the resolver must
+    fail closed on.
+    """
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "GITHUB_OUTPUT"
+    }
+    if outputs is not None:
+        env["GITHUB_OUTPUT"] = os.fspath(outputs)
+    return subprocess.run(
+        [sys.executable, os.fspath(RESOLVER_SCRIPT)],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _write_floor_tree(root: Path, floor: str) -> None:
+    """Write a minimal tree the gate accepts: floor plus both sentinels."""
+    (root / "src" / "csk").mkdir(parents=True)
+    (root / "tests").mkdir(parents=True)
+    (root / "pyproject.toml").write_text(
+        f'[project]\nrequires-python = ">={floor}"\n', encoding="utf-8"
+    )
+    (root / "src" / "csk" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "tests" / "conftest.py").write_text("", encoding="utf-8")
+
+
+def _floor_interpreter(major: int, minor: int) -> str | None:
+    if (sys.version_info[0], sys.version_info[1]) == (major, minor):
+        return sys.executable
+    return shutil.which(f"python{major}.{minor}")
+
+
+def _modern_interpreter() -> tuple[str, str] | None:
+    if (sys.version_info[0], sys.version_info[1]) >= (3, 12):
+        return sys.executable, f"{sys.version_info[0]}.{sys.version_info[1]}"
+    for minor in (14, 13, 12):
+        exe = shutil.which(f"python3.{minor}")
+        if exe is not None:
+            return exe, f"3.{minor}"
+    return None
 
 
 # Specifier lines the floor resolver must fail closed on. The SET is the
@@ -344,7 +543,9 @@ def test_floor_syntax_gate_is_a_cheap_pr_time_floor_compile() -> None:
     so a construct that parses there but not on the declared floor reached
     main unseen. The gate is one ubuntu runner compiling ``src/csk`` and
     ``tests`` with the real floor interpreter -- a syntax gate, not a
-    second test matrix.
+    second test matrix. The compile step is exactly one command running the
+    committed gate script, so the check and the compile share one process
+    and its exit status IS the step status (TASK-260918-16r0fm).
     """
     job = _job(_workflow(), "floor_syntax")
     # Whole-line pins: a substring pin cannot see a narrowed target
@@ -371,50 +572,55 @@ def test_floor_syntax_gate_is_a_cheap_pr_time_floor_compile() -> None:
     # test pins that the reference names the resolve step's actual id.
     assert "\n          FLOOR: ${{ steps.floor.outputs.version }}\n" in job
 
-    # Exactly the compile command on that interpreter. Narrowing the
-    # target to a subdirectory (e.g. ``src/csk/builds``) keeps the
-    # ``compileall`` token while dropping the defective module.
-    assert "\n          python -m compileall -q src/csk tests\n" in job
+    # The resolve step is exactly one command running the committed
+    # resolver: a heredoc here let shell text hide around the tested part
+    # with every test green (revision-1 floor-source-self-agreeing).
+    assert "\n        run: python3 .github/scripts/floor_resolve.py\n" in job
+    assert RESOLVER_SCRIPT.is_file()
+
+    # Exactly one command running the committed gate script. The old
+    # two-command block (a heredoc self-check plus a ``compileall`` CLI
+    # line) let a second run line, a PATH change, ``set +e``, a shell
+    # override or ``continue-on-error`` separate the check from the compile
+    # with every test green (rev-2 finding F3); the CLI spelling itself is
+    # gone because its "Can't list" exit-0 is finding F4. The shell is
+    # declared explicitly so no workflow-level default can substitute it,
+    # and -I keeps the gate immune to inherited PYTHON* variables. No
+    # heredoc is left in this job at all.
+    assert "\n        shell: bash\n" in job
+    assert "\n        run: python -I .github/scripts/floor_gate.py\n" in job
+    assert "python -m compileall" not in job
+    assert job.count("<<'PY'") == 0
+    assert GATE_SCRIPT.is_file()
 
 
 def test_floor_resolve_script_reads_the_floor_from_requires_python(
     tmp_path: Path,
 ) -> None:
-    """The ACTUAL resolve script maps requires-python to the gate version.
+    """The COMMITTED resolver maps requires-python to the gate version.
 
     Token assertions cannot see a script that keeps the ``requires-python``
-    token while printing a constant, so this test executes the extracted
-    script: the committed tree resolves ``3.11``, a raised floor moves the
-    gate to ``3.12``, a specifier without a ``>=`` bound fails closed, and
-    the read is scoped to the PEP 621 ``[project]`` table so a
+    token while printing a constant, so this test executes the committed
+    resolver file -- the same bytes the resolve step runs and the gate
+    resolves through: the committed tree resolves ``3.11``, a raised floor
+    moves the gate to ``3.12``, a specifier without a ``>=`` bound fails
+    closed, and the read is scoped to the PEP 621 ``[project]`` table so a
     ``requires-python`` line under any other table cannot decide the floor.
     """
-    script = _floor_resolve_script(_job(_workflow(), "floor_syntax"))
-
-    committed = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    committed_out = tmp_path / "committed.github_output"
+    committed = _run_resolver(ROOT, committed_out)
     assert committed.returncode == 0
-    assert committed.stdout.strip() == "version=3.11"
+    assert committed_out.read_text(encoding="utf-8") == "version=3.11\n"
 
     raised = tmp_path / "raised"
     raised.mkdir()
     (raised / "pyproject.toml").write_text(
         '[project]\nrequires-python = ">=3.12"\n', encoding="utf-8"
     )
-    moved = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=raised,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    raised_out = tmp_path / "raised.github_output"
+    moved = _run_resolver(raised, raised_out)
     assert moved.returncode == 0
-    assert moved.stdout.strip() == "version=3.12"
+    assert raised_out.read_text(encoding="utf-8") == "version=3.12\n"
 
     for index, bad in enumerate(_FLOOR_UNSUPPORTED_FIXTURES):
         disarmed = _floor_unsupported_dir(tmp_path, index)
@@ -422,13 +628,7 @@ def test_floor_resolve_script_reads_the_floor_from_requires_python(
         (disarmed / "pyproject.toml").write_text(
             f"[project]\n{bad}\n", encoding="utf-8"
         )
-        proc = subprocess.run(
-            [sys.executable, "-c", script],
-            cwd=disarmed,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        proc = _run_resolver(disarmed, tmp_path / f"unsupported-{index}.out")
         assert proc.returncode != 0, bad
 
     other_first = tmp_path / "other-table-first"
@@ -438,118 +638,74 @@ def test_floor_resolve_script_reads_the_floor_from_requires_python(
         '[project]\nrequires-python = ">=3.11"\n',
         encoding="utf-8",
     )
-    scoped = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=other_first,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    other_out = tmp_path / "other-table-first.out"
+    scoped = _run_resolver(other_first, other_out)
     assert scoped.returncode == 0
-    assert scoped.stdout.strip() == "version=3.11"
+    assert other_out.read_text(encoding="utf-8") == "version=3.11\n"
 
     tool_only = tmp_path / "tool-only"
     tool_only.mkdir()
     (tool_only / "pyproject.toml").write_text(
         '[tool.foo]\nrequires-python = ">=3.9"\n', encoding="utf-8"
     )
-    missing = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=tool_only,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    missing = _run_resolver(tool_only, tmp_path / "tool-only.out")
     assert missing.returncode != 0
 
+    unset = _run_resolver(ROOT, None)
+    assert unset.returncode != 0
+    assert "GITHUB_OUTPUT is empty" in unset.stderr
 
-def test_floor_syntax_wiring_is_structural_and_self_verifying() -> None:
+
+def test_floor_syntax_wiring_is_structural_and_self_verifying(
+    tmp_path: Path,
+) -> None:
     """The floor gate proves it runs ON the resolved floor, not just somewhere.
 
     Regression for BUG-260917-3txerf review finding F1: the resolve step's
     output was consumed by setup-python and nothing downstream checked the
-    interpreter executing ``compileall``, so deleting the resolve id,
+    interpreter executing the compile, so deleting the resolve id,
     renaming it, or inserting a second setup-python kept every text pin
     green while the job fell through to the runner-default interpreter.
-    The compile step therefore carries FLOOR from env and fails closed
-    unless it equals its own major.minor; this test pins that wiring
-    structurally over the parsed YAML (ids read, not spelled) and executes
-    the extracted self-check three ways.
+    The gate therefore resolves the floor from pyproject.toml itself and
+    fails closed unless it equals both FLOOR and its own major.minor (FLOOR
+    compared against the interpreter FLOOR selected was satisfied by
+    construction -- revision-1 floor-source-self-agreeing). This test pins
+    the job shape as exact key whitelists over the parsed YAML (ids read,
+    not spelled; any added or renamed key fails -- rev-2 finding F3 showed
+    a blacklist of spellings cannot close the advisory-disarm class), pins
+    the workflow-level surfaces inherited into the steps, and executes the
+    COMMITTED gate script four ways: the same bytes the workflow runs.
     """
-    steps = _floor_job_steps()
-    assert steps
+    _assert_floor_shape(_floor_job_dict())
+    _assert_floor_workflow_surfaces(_floor_workflow_dict())
 
-    # Advisory-step mutants (continue-on-error, step-level if) survive every
-    # text pin for this job; forbid them structurally here. The other fast
-    # children share the blind spot and are out of scope.
-    for step in steps:
-        assert "continue-on-error" not in step, step.get("name")
-        assert "if" not in step, step.get("name")
-
-    resolve = next(
-        step
-        for step in steps
-        if step.get("name") == "Resolve the floor Python from requires-python"
-    )
-    floor_id = resolve.get("id")
-    assert isinstance(floor_id, str) and floor_id, "resolve step carries no id"
-    expected_ref = f"${{{{ steps.{floor_id}.outputs.version }}}}"
-
-    setup_steps = [
-        step for step in steps if "setup-python" in str(step.get("uses", ""))
-    ]
-    assert len(setup_steps) == 1, "exactly one setup-python step wires the floor"
-    setup_with = setup_steps[0].get("with")
-    assert isinstance(setup_with, dict)
-    assert setup_with.get("python-version") == expected_ref, setup_with
-
-    compile_step = next(
-        step
-        for step in steps
-        if step.get("name") == "Compile the package on the floor interpreter"
-    )
-    compile_env = compile_step.get("env")
-    assert isinstance(compile_env, dict)
-    assert compile_env.get("FLOOR") == expected_ref, compile_env
-    run = compile_step.get("run")
-    assert isinstance(run, str)
-    assert "python -m compileall -q src/csk tests" in run.splitlines(), run
-    # The self-check itself is pinned by execution below, not by spelling;
-    # assert only that the run block carries a FLOOR-vs-running comparison.
-    assert 'os.environ.get("FLOOR"' in run
-    assert "sys.version_info" in run
-
-    script = _floor_self_check_script(run)
     running = f"{sys.version_info[0]}.{sys.version_info[1]}"
-    base_env = {key: value for key, value in os.environ.items() if key != "FLOOR"}
 
-    unset = subprocess.run(
-        [sys.executable, "-c", script],
-        env=base_env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    unset = _run_gate(sys.executable, ROOT, None)
     assert unset.returncode != 0
+    assert "FLOOR is empty" in unset.stderr
 
     mismatched_floor = "9.9" if running != "9.9" else "8.8"
-    mismatched = subprocess.run(
-        [sys.executable, "-c", script],
-        env={**base_env, "FLOOR": mismatched_floor},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    mismatched = _run_gate(sys.executable, ROOT, mismatched_floor)
     assert mismatched.returncode != 0
+    assert "floor mismatch" in mismatched.stderr
 
-    matched = subprocess.run(
-        [sys.executable, "-c", script],
-        env={**base_env, "FLOOR": running},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    matched_tree = tmp_path / "matched"
+    _write_floor_tree(matched_tree, running)
+    matched = _run_gate(sys.executable, matched_tree, running)
     assert matched.returncode == 0
+    assert f"floor_compiled={running}" in matched.stdout
+
+    # The committed tree declares the 3.11 floor: on the floor interpreter
+    # the gate attests the real tree, off it the gate refuses to attest a
+    # floor it is not running on -- the F1 remedy on the committed tree.
+    committed = _run_gate(sys.executable, ROOT, "3.11")
+    if running == "3.11":
+        assert committed.returncode == 0
+        assert "floor_compiled=3.11" in committed.stdout
+    else:
+        assert committed.returncode != 0
+        assert "floor mismatch" in committed.stderr
 
 
 def test_candidate_input_is_an_explicit_dispatch_contract() -> None:
@@ -828,3 +984,734 @@ def test_the_consumption_ledgers_are_declared_and_reachable() -> None:
         ]
         assert rows, f"{name} declares no row"
         assert all(len(line.split("\t")) == 3 for line in rows)
+
+
+def test_floor_evasion_exit_zero_first_line_is_rejected() -> None:
+    """T9 (rev-2 F3): ``exit 0`` as the first run line fails the whitelist.
+
+    On the old two-command block this exited the step 0 before either the
+    check or the compile ran, with all committed tests green. The run
+    block is now exactly one command, so any added line is rejected.
+    """
+    mutated = _mutate_floor_job(
+        "        run: python -I .github/scripts/floor_gate.py\n",
+        "        run: |\n"
+        "          exit 0\n"
+        "          python -I .github/scripts/floor_gate.py\n",
+    )
+    job = yaml.safe_load(mutated)["jobs"]["floor_syntax"]
+    with pytest.raises(AssertionError):
+        _assert_floor_shape(job)
+
+
+def test_floor_evasion_path_change_between_check_and_compile_is_rejected() -> None:
+    """T11b (rev-2 F3): a PATH line next to the gate fails the whitelist.
+
+    On the old shape a PATH change between the self-check and ``compileall``
+    made the check certify one interpreter while another did the compiling.
+    One process has no between; any second run line is rejected.
+    """
+    mutated = _mutate_floor_job(
+        "        run: python -I .github/scripts/floor_gate.py\n",
+        "        run: |\n"
+        '          export PATH="/tmp/evil:$PATH"\n'
+        "          python -I .github/scripts/floor_gate.py\n",
+    )
+    job = yaml.safe_load(mutated)["jobs"]["floor_syntax"]
+    with pytest.raises(AssertionError):
+        _assert_floor_shape(job)
+
+
+def test_floor_evasion_set_plus_e_is_rejected() -> None:
+    """T8 (rev-2 F3): ``set +e`` as the first run line fails the whitelist.
+
+    On the old shape this demoted the self-check from a gate to a report:
+    with wiring drift the log said ``FLOOR is empty`` and the step still
+    exited 0. A single command has no ``-e`` dependence to remove.
+    """
+    mutated = _mutate_floor_job(
+        "        run: python -I .github/scripts/floor_gate.py\n",
+        "        run: |\n"
+        "          set +e\n"
+        "          python -I .github/scripts/floor_gate.py\n",
+    )
+    job = yaml.safe_load(mutated)["jobs"]["floor_syntax"]
+    with pytest.raises(AssertionError):
+        _assert_floor_shape(job)
+
+
+def test_floor_evasion_shell_override_is_rejected() -> None:
+    """T10 (rev-2 F3): ``shell: bash {0}`` on the step fails the whitelist.
+
+    On the old shape dropping ``-e`` had the same effect as ``set +e``.
+    The compile step declares ``shell: bash`` exactly, so substituting the
+    value is rejected; the step's key set is exactly
+    ``{name, env, run, shell}``, so any added step key --
+    ``working-directory``, ``if``, ``continue-on-error`` -- is rejected too.
+    """
+    mutated = _mutate_floor_job(
+        "        shell: bash\n",
+        "        shell: bash {0}\n",
+    )
+    job = yaml.safe_load(mutated)["jobs"]["floor_syntax"]
+    with pytest.raises(AssertionError):
+        _assert_floor_shape(job)
+
+
+def test_floor_evasion_job_continue_on_error_is_rejected() -> None:
+    """T12 (rev-2 F3): job-level ``continue-on-error`` fails the whitelist.
+
+    The compile can fail while ``needs.floor_syntax.result`` still reports
+    ``success`` to the ``fast`` aggregate. The job's key set is exactly
+    ``{name, if, runs-on, timeout-minutes, steps}``.
+    """
+    mutated = _mutate_floor_job(
+        "    runs-on: ubuntu-latest\n    timeout-minutes: 10\n",
+        "    runs-on: ubuntu-latest\n"
+        "    continue-on-error: true\n"
+        "    timeout-minutes: 10\n",
+    )
+    job = yaml.safe_load(mutated)["jobs"]["floor_syntax"]
+    with pytest.raises(AssertionError):
+        _assert_floor_shape(job)
+
+
+@pytest.mark.parametrize(
+    "relocation",
+    [
+        pytest.param("        with:\n          path: checkout\n", id="path"),
+        pytest.param(
+            "        with:\n          sparse-checkout: tests\n", id="sparse"
+        ),
+    ],
+)
+def test_floor_evasion_checkout_relocation_is_rejected(relocation: str) -> None:
+    """T13/T26 (rev-2 F4): the checkout step takes no ``with:`` at all.
+
+    A relocated or sparse checkout leaves the spelled targets unlistable,
+    and ``compileall`` treats that as empty and exits 0. The checkout
+    step's key set is exactly ``{name, uses}``; even a well-formed
+    relocation is rejected statically, and the gate's sentinel check fails
+    it closed at run time if it ever gets that far.
+    """
+    mutated = _mutate_floor_job(
+        "      - name: Checkout\n        uses: actions/checkout@v4\n",
+        "      - name: Checkout\n        uses: actions/checkout@v4\n" + relocation,
+    )
+    job = yaml.safe_load(mutated)["jobs"]["floor_syntax"]
+    with pytest.raises(AssertionError):
+        _assert_floor_shape(job)
+
+
+def test_floor_gate_proves_each_target_present_before_compiling(
+    tmp_path: Path,
+) -> None:
+    """The COMMITTED gate script fails on absent and on present-but-empty targets.
+
+    Regression for rev-2 finding F4: ``compileall`` treats a target it
+    cannot list as empty and exits 0, so a working-directory change, a
+    sparse or relocated checkout, or a moved package left the gate green
+    while it proved nothing. Each target is now proved by a named sentinel
+    read (``src/csk/__init__.py``, ``tests/conftest.py``) before compiling.
+    Every scratch tree carries a matching floor so the failure asserted is
+    the target stage, not the floor stage.
+    """
+    running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+
+    absent = tmp_path / "absent"
+    absent.mkdir()
+    (absent / "pyproject.toml").write_text(
+        f'[project]\nrequires-python = ">={running}"\n', encoding="utf-8"
+    )
+    missing = _run_gate(sys.executable, absent, running)
+    assert missing.returncode != 0
+    assert "compile target missing" in missing.stderr
+
+    empty = tmp_path / "empty"
+    (empty / "src" / "csk").mkdir(parents=True)
+    (empty / "tests").mkdir(parents=True)
+    (empty / "pyproject.toml").write_text(
+        f'[project]\nrequires-python = ">={running}"\n', encoding="utf-8"
+    )
+    hollow = _run_gate(sys.executable, empty, running)
+    assert hollow.returncode != 0
+    assert "compile target missing" in hollow.stderr
+
+    real = tmp_path / "real"
+    _write_floor_tree(real, running)
+    (real / "src" / "csk" / "ok.py").write_text("x = 1\n", encoding="utf-8")
+    (real / "tests" / "test_ok.py").write_text("x = 1\n", encoding="utf-8")
+    present = _run_gate(sys.executable, real, running)
+    assert present.returncode == 0
+
+
+def test_floor_gate_compiles_every_target_before_deciding(tmp_path: Path) -> None:
+    """The gate compiles the second target even when the first one fails.
+
+    The reviewer's sketch used ``all(compile_dir(t) ...)``, which
+    short-circuits: a failure in the first target leaves the second
+    uncompiled with its state unknown. The committed gate compiles every
+    target, then decides -- proved here by the bytecode the run leaves
+    behind for the good target while still exiting 1 for the bad one.
+    """
+    running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    root = tmp_path / "tree"
+    _write_floor_tree(root, running)
+    (root / "src" / "csk" / "bad.py").write_text(
+        "def broken(:\n    pass\n", encoding="utf-8"
+    )
+    (root / "tests" / "test_ok.py").write_text("x = 1\n", encoding="utf-8")
+
+    proc = _run_gate(sys.executable, root, running)
+    assert proc.returncode != 0
+    assert "floor compile failed" in proc.stderr
+    compiled = list((root / "tests").glob("__pycache__/*.pyc"))
+    assert compiled, "tests/ was never compiled: the gate short-circuits"
+
+
+def test_floor_gate_fails_when_tests_do_not_compile(tmp_path: Path) -> None:
+    """A compile failure under ``tests/`` alone fails the gate.
+
+    Narrowing guard for the target set: a gate that compiled only
+    ``src/csk`` keeps every other token while dropping the tree whose
+    collection errors were the incident's visible symptom.
+    """
+    running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    root = tmp_path / "tree"
+    _write_floor_tree(root, running)
+    (root / "src" / "csk" / "ok.py").write_text("x = 1\n", encoding="utf-8")
+    (root / "tests" / "test_broken.py").write_text(
+        "def broken(:\n    pass\n", encoding="utf-8"
+    )
+
+    proc = _run_gate(sys.executable, root, running)
+    assert proc.returncode != 0
+    assert "floor compile failed" in proc.stderr
+
+
+def test_floor_gate_rejects_a_real_312_only_construct(tmp_path: Path) -> None:
+    """The gate still refuses the accidental case it was built for: PEP 701.
+
+    A backslash inside an f-string expression parses from Python 3.12 but
+    is a SyntaxError on the 3.11 floor. The planted module must fail the
+    gate on a real 3.11 interpreter and pass it on a 3.12+ one -- the
+    contrast proves the fixture is the version-sensitive class rather
+    than a universal syntax error. (The 3.11 run also proves the gate
+    script itself parses on the floor it runs on: a gate SyntaxError
+    reports the gate file, never ``floor compile failed``.)
+
+    Bound: the floor half skips wherever ``python3.11`` is not on PATH --
+    every hosted Fast lane (3.14 only) and windows-latest -- and executes
+    on the Merge 3.11 lanes and on developer hosts with 3.11. The PR-time
+    protection for the class on the skipping hosts is the floor job itself.
+    """
+    root = tmp_path / "tree"
+    _write_floor_tree(root, "3.11")
+    (root / "src" / "csk" / "pep701.py").write_text(_PEP701_MODULE, encoding="utf-8")
+    (root / "tests" / "test_ok.py").write_text("x = 1\n", encoding="utf-8")
+
+    floor = _floor_interpreter(3, 11)
+    if floor is None:
+        pytest.skip("no Python 3.11 interpreter on this host")
+    refused = _run_gate(floor, root, "3.11")
+    assert refused.returncode != 0
+    assert "floor compile failed" in refused.stderr
+    assert "pep701.py" in refused.stderr + refused.stdout
+
+    modern = _modern_interpreter()
+    if modern is not None:
+        executable, tag = modern
+        (root / "pyproject.toml").write_text(
+            f'[project]\nrequires-python = ">={tag}"\n', encoding="utf-8"
+        )
+        admitted = _run_gate(executable, root, tag)
+        assert admitted.returncode == 0
+
+
+def test_floor_evasion_resolve_run_extra_line_is_rejected() -> None:
+    """X6c (revision-1 F1): an appended GITHUB_OUTPUT write fails the pin.
+
+    The resolve step's run value is pinned whole, exactly like the compile
+    step's: the old heredoc let an ``echo "version=3.14"`` line after the
+    terminator win last-write on the runner with every committed test
+    green, resolving, installing, and attesting 3.14 over a 3.11 tree.
+    """
+    mutated = _mutate_floor_job(
+        "        run: python3 .github/scripts/floor_resolve.py\n",
+        "        run: |\n"
+        "          python3 .github/scripts/floor_resolve.py\n"
+        '          echo "version=3.14" >> "$GITHUB_OUTPUT"\n',
+    )
+    job = yaml.safe_load(mutated)["jobs"]["floor_syntax"]
+    with pytest.raises(AssertionError):
+        _assert_floor_shape(job)
+
+
+def test_floor_evasion_resolve_run_pipe_is_rejected() -> None:
+    """X6d (revision-1 F1): a piped resolve command fails the pin.
+
+    The heredoc body survived this edit untouched while ``sed`` rewrote
+    the output to 3.14 with no last-wins dependence. This form starts with
+    the exact pinned string, so it also kills a ``startswith`` narrowing
+    of the resolve-run pin.
+    """
+    mutated = _mutate_floor_job(
+        "        run: python3 .github/scripts/floor_resolve.py\n",
+        "        run: python3 .github/scripts/floor_resolve.py | sed 's/3\\.11/3.14/'\n",
+    )
+    job = yaml.safe_load(mutated)["jobs"]["floor_syntax"]
+    with pytest.raises(AssertionError):
+        _assert_floor_shape(job)
+
+
+def test_floor_evasion_resolve_run_redirect_and_echo_is_rejected() -> None:
+    """X6e (revision-1 F1): redirect-to-null plus echo fails the pin.
+
+    The resolver output discarded, the version minted by hand, every
+    committed test green. The whole-value pin rejects any shell around the
+    one command.
+    """
+    mutated = _mutate_floor_job(
+        "        run: python3 .github/scripts/floor_resolve.py\n",
+        "        run: |\n"
+        "          python3 .github/scripts/floor_resolve.py > /dev/null\n"
+        '          echo "version=3.14" >> "$GITHUB_OUTPUT"\n',
+    )
+    job = yaml.safe_load(mutated)["jobs"]["floor_syntax"]
+    with pytest.raises(AssertionError):
+        _assert_floor_shape(job)
+
+
+def test_floor_evasion_workflow_default_shell_is_rejected() -> None:
+    """X6a (revision-1 F2): a workflow-level shell fails the surfaces pin.
+
+    ``defaults.run.shell: bash -n {0}`` leaves the job and step dicts
+    unchanged (and actionlint clean) while the runner never executes the
+    step script: the step exits 0 with the gate never run. The job-scope
+    whitelist cannot see this edit; the workflow-level pin rejects it.
+    """
+    data = yaml.safe_load(_workflow_with_top_level_defaults_shell())
+    with pytest.raises(AssertionError):
+        _assert_floor_workflow_surfaces(data)
+
+
+def test_floor_evasion_workflow_env_pythonpath_is_rejected() -> None:
+    """X6b (revision-1 F2): a workflow-level PYTHONPATH fails the pin.
+
+    Top-level ``env`` is inherited into the gate process, and a shadow
+    module on that path turned the gate green with every committed test
+    green. The top-level ``env`` key set is exactly the committed one, and
+    the gate additionally runs under ``-I``, which ignores ``PYTHON*``.
+    """
+    data = yaml.safe_load(_workflow_with_top_level_pythonpath())
+    with pytest.raises(AssertionError):
+        _assert_floor_workflow_surfaces(data)
+
+
+def test_floor_gate_refuses_a_floor_it_is_not_running_on(
+    tmp_path: Path,
+) -> None:
+    """pyproject 3.11 + interpreter 3.14 + FLOOR=3.14 exits 1 (F1 end to end).
+
+    The revision-1 bypass replayed end to end: a tampered resolve step
+    reports 3.14, setup-python installs 3.14, and the gate used to exit 0
+    over a tree carrying the PEP-701 module. The gate now resolves 3.11
+    from pyproject.toml itself and refuses before compiling anything.
+    """
+    modern = _modern_interpreter()
+    if modern is None:
+        pytest.skip("no Python 3.12+ interpreter on this host")
+    executable, tag = modern
+    root = tmp_path / "tree"
+    _write_floor_tree(root, "3.11")
+    (root / "src" / "csk" / "pep701.py").write_text(
+        _PEP701_MODULE, encoding="utf-8"
+    )
+    proc = _run_gate(executable, root, tag)
+    assert proc.returncode != 0
+    assert "floor mismatch" in proc.stderr
+
+
+def test_floor_gate_trusts_pyproject_not_floor(tmp_path: Path) -> None:
+    """FLOOR agreeing with the interpreter is never enough by itself.
+
+    Always-on killer for the revision-1 ``floor-source-self-agreeing``
+    class: a synthetic floor no running interpreter equals, with FLOOR
+    set to the running version, exits 1; an interpreter on the resolved
+    floor with a disagreeing FLOOR exits 1 (the cross-check); a FLOOR that
+    agrees with the resolved floor on the wrong interpreter exits 1 (the
+    identity check); and a tree without pyproject.toml at all exits 1
+    (fail closed). A gate that trusts FLOOR without reading pyproject
+    exits 0 on the first scenario (committed mutant M1 below).
+    """
+    running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    other = "9.9" if running != "9.9" else "8.8"
+
+    foreign = tmp_path / "foreign-floor"
+    _write_floor_tree(foreign, other)
+    proc = _run_gate(sys.executable, foreign, running)
+    assert proc.returncode != 0
+    assert "floor mismatch" in proc.stderr
+
+    own = tmp_path / "own-floor"
+    _write_floor_tree(own, running)
+    crossed = _run_gate(sys.executable, own, other)
+    assert crossed.returncode != 0
+    assert "floor mismatch" in crossed.stderr
+
+    agreed = _run_gate(sys.executable, foreign, other)
+    assert agreed.returncode != 0
+    assert "floor mismatch" in agreed.stderr
+
+    bare = tmp_path / "no-pyproject"
+    (bare / "src" / "csk").mkdir(parents=True)
+    (bare / "tests").mkdir(parents=True)
+    missing = _run_gate(sys.executable, bare, running)
+    assert missing.returncode != 0
+    assert "pyproject.toml" in missing.stderr
+
+
+def _require_posix_permission_bits() -> None:
+    """Skip permission-bit tests where the bits do not bind."""
+    if sys.platform == "win32":
+        pytest.skip("POSIX permission bits have no effect on win32")
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("permission bits do not bind uid 0")
+
+
+def test_floor_gate_fails_when_a_target_is_unlistable(tmp_path: Path) -> None:
+    """A target the gate cannot list fails it; 'Can't list' is never success.
+
+    Residual of rev-2 F4 (revision-1
+    ``unlistable-target-read-failure-as-absence``): traverse-but-not-read
+    permission keeps ``isdir`` and the sentinel ``isfile`` true while
+    ``compileall`` reports ``Can't list`` and returns success, and no
+    sentinel covers subdirectories at all. The gate walks every target
+    with a raising ``onerror`` and reads each sentinel, so an unlistable
+    target, an unlistable subdirectory, and an unreadable sentinel each
+    exit 1 with the listing reason -- never 0, never a compile reason.
+    """
+    _require_posix_permission_bits()
+    running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+
+    locked = tmp_path / "locked-target"
+    _write_floor_tree(locked, running)
+    (locked / "src" / "csk" / "ok.py").write_text("x = 1\n", encoding="utf-8")
+    (locked / "src" / "csk").chmod(0o111)
+    try:
+        proc = _run_gate(sys.executable, locked, running)
+    finally:
+        (locked / "src" / "csk").chmod(0o755)
+    assert proc.returncode != 0
+    assert "unlistable" in proc.stderr
+
+    nested = tmp_path / "locked-subdir"
+    _write_floor_tree(nested, running)
+    fixtures = nested / "tests" / "fixtures"
+    fixtures.mkdir()
+    (fixtures / "test_hidden.py").write_text(
+        "def broken(:\n    pass\n", encoding="utf-8"
+    )
+    (nested / "tests" / "test_ok.py").write_text("x = 1\n", encoding="utf-8")
+    fixtures.chmod(0o000)
+    try:
+        proc = _run_gate(sys.executable, nested, running)
+    finally:
+        fixtures.chmod(0o755)
+    assert proc.returncode != 0
+    assert "unlistable" in proc.stderr
+
+    sealed = tmp_path / "unreadable-sentinel"
+    _write_floor_tree(sealed, running)
+    sentinel = sealed / "src" / "csk" / "__init__.py"
+    sentinel.chmod(0o000)
+    try:
+        proc = _run_gate(sys.executable, sealed, running)
+    finally:
+        sentinel.chmod(0o644)
+    assert proc.returncode != 0
+    assert "unreadable" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        pytest.param(
+            "    runs-on: ubuntu-latest\n    timeout-minutes: 10\n",
+            "    runs-on: ubuntu-latest\n"
+            "    x-never-seen: 1\n"
+            "    timeout-minutes: 10\n",
+            id="job-unknown-key",
+        ),
+        pytest.param(
+            "      - name: Checkout\n        uses: actions/checkout@v4\n",
+            "      - name: Checkout\n"
+            "        uses: actions/checkout@v4\n"
+            "        working-directory: /tmp\n",
+            id="checkout-unknown-key",
+        ),
+        pytest.param(
+            "        uses: actions/checkout@v4\n",
+            "        uses: actions/checkout@v3\n",
+            id="checkout-uses-value",
+        ),
+        pytest.param(
+            "      - name: Resolve the floor Python from requires-python\n",
+            "      - name: Resolve the floor Python from requires-python\n"
+            "        shell: bash\n",
+            id="resolve-unknown-key",
+        ),
+        pytest.param(
+            "      - name: Set up floor Python ${{ steps.floor.outputs.version }}\n",
+            "      - name: Set up floor Python ${{ steps.floor.outputs.version }}\n"
+            "        shell: bash\n",
+            id="setup-unknown-key",
+        ),
+        pytest.param(
+            "        uses: actions/setup-python@v5\n",
+            "        uses: ./tools/setup-python\n",
+            id="setup-uses-substring-trap",
+        ),
+        pytest.param(
+            "          python-version: ${{ steps.floor.outputs.version }}\n",
+            "          python-version: ${{ steps.floor.outputs.version }}\n"
+            "          allow-prereleases: true\n",
+            id="setup-with-extra-entry",
+        ),
+        pytest.param(
+            "          python-version: ${{ steps.floor.outputs.version }}\n",
+            "          python-version: '3.14'\n",
+            id="setup-with-value",
+        ),
+        pytest.param(
+            "      - name: Compile the package on the floor interpreter\n",
+            "      - name: Compile the package on the floor interpreter\n"
+            "        working-directory: /tmp\n",
+            id="compile-unknown-key",
+        ),
+        pytest.param(
+            "          FLOOR: ${{ steps.floor.outputs.version }}\n",
+            "          FLOOR: ${{ steps.floor.outputs.version }}\n"
+            "          PYTHONPATH: /tmp/evil\n",
+            id="compile-env-extra-entry",
+        ),
+        pytest.param(
+            "          FLOOR: ${{ steps.floor.outputs.version }}\n",
+            "          FLOOR: '3.14'\n",
+            id="compile-env-value",
+        ),
+        pytest.param(
+            "        run: python -I .github/scripts/floor_gate.py\n",
+            "        run: python -I .github/scripts/floor_gate.py || true\n",
+            id="compile-run-or-true-suffix",
+        ),
+        pytest.param(
+            "        run: python -I .github/scripts/floor_gate.py\n",
+            "        run: python -I .github/scripts/floor_gate.py\n"
+            "      - name: Extra step\n"
+            "        run: echo hi\n",
+            id="added-step",
+        ),
+    ],
+)
+def test_floor_shape_clause_has_a_committed_killer(old: str, new: str) -> None:
+    """Every whitelist clause has a committed negative case (revision-1 N2).
+
+    A whitelist whose clauses can be narrowed unnoticed decays into the
+    blacklist this leaf exists to replace: disabling or narrowing any one
+    clause -- an unknown key on the job or on any step, a tampered
+    ``uses``/``with``/``env``/``run`` value, an extra ``with``/``env``
+    entry, a ``|| true`` suffix, an added step -- must fail exactly the
+    param below that exercises it. The ``setup-uses-substring-trap`` param
+    carries the ``setup-python`` token while naming a different action, so
+    it kills both a disabled and a substring-narrowed ``uses`` pin.
+    """
+    mutated = _mutate_floor_job(old, new)
+    job = yaml.safe_load(mutated)["jobs"]["floor_syntax"]
+    with pytest.raises(AssertionError):
+        _assert_floor_shape(job)
+
+
+def test_floor_gate_rejects_a_non_exact_floor(tmp_path: Path) -> None:
+    """FLOOR must equal the resolved floor exactly -- no prefix, no patch.
+
+    Killer for the prefix and major-only narrowings of the identity check:
+    ``3`` is admitted by ``startswith`` and by a major-only comparison
+    while ``3.11.0`` and padded forms probe the other direction. Each exits
+    1 with a mismatch, on any host interpreter.
+    """
+    running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    root = tmp_path / "tree"
+    _write_floor_tree(root, running)
+    bad_floors = {"3", f"{running}.0", f" {running}", f"{running}\n"}
+    assert all(bad != running for bad in bad_floors)
+    for bad in sorted(bad_floors):
+        proc = _run_gate(sys.executable, root, bad)
+        assert proc.returncode != 0, bad
+        assert "floor mismatch" in proc.stderr, bad
+
+
+def test_floor_gate_requires_the_second_sentinel(tmp_path: Path) -> None:
+    """``tests/`` missing while ``src/csk`` is present fails the gate.
+
+    The three-way test fails on the first target before the second is ever
+    consulted, so a gate that checks only the first sentinel keeps it
+    green; this case names ``tests`` in the failure and kills that
+    narrowing.
+    """
+    running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    root = tmp_path / "tree"
+    (root / "src" / "csk").mkdir(parents=True)
+    (root / "pyproject.toml").write_text(
+        f'[project]\nrequires-python = ">={running}"\n', encoding="utf-8"
+    )
+    (root / "src" / "csk" / "__init__.py").write_text("", encoding="utf-8")
+    proc = _run_gate(sys.executable, root, running)
+    assert proc.returncode != 0
+    assert "compile target missing" in proc.stderr
+    assert "tests" in proc.stderr
+
+
+def _mutant_gate_source(old: str, new: str) -> str:
+    """Derive a narrowed gate from the COMMITTED gate bytes.
+
+    The anchor must match exactly once: if the gate is refactored so the
+    anchor drifts, the mutant test errors loudly instead of silently
+    executing the unmutated gate.
+    """
+    source = GATE_SCRIPT.read_text(encoding="utf-8")
+    assert source.count(old) == 1, old
+    return source.replace(old, new)
+
+
+def _write_mutant_gate(source: str, directory: Path) -> Path:
+    """Write a mutant gate next to a copy of the committed resolver bytes.
+
+    The gate loads its resolver by file location from its own directory,
+    so the mutant directory carries the committed resolver unchanged.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / RESOLVER_SCRIPT.name).write_text(
+        RESOLVER_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    mutant = directory / "floor_gate_mutant.py"
+    mutant.write_text(source, encoding="utf-8")
+    return mutant
+
+
+def test_floor_mutant_gate_trusting_floor_alone_is_killed(
+    tmp_path: Path,
+) -> None:
+    """Narrowing mutant M1 (remedy 1): resolved=FLOOR admits a wrong floor.
+
+    The mutant keeps every check but resolves nothing: it can only be told
+    apart from the committed gate by a tree whose floor disagrees with
+    FLOOR. On the trust test's scenario the mutant exits 0 (it is
+    narrowing, and the assertion proves it) while the committed gate exits
+    1 (the named test kills it).
+    """
+    running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    other = "9.9" if running != "9.9" else "8.8"
+    root = tmp_path / "tree"
+    _write_floor_tree(root, other)
+    mutant = _write_mutant_gate(
+        _mutant_gate_source(
+            "    resolved = _resolve_floor_from_pyproject()\n",
+            "    resolved = floor  # MUTANT M1: trusts FLOOR, never reads pyproject\n",
+        ),
+        tmp_path / "mutant",
+    )
+    admitted = _run_gate_script(mutant, sys.executable, root, running)
+    assert admitted.returncode == 0, admitted.stderr
+    refused = _run_gate(sys.executable, root, running)
+    assert refused.returncode != 0
+
+
+def test_floor_mutant_job_scope_only_whitelist_admits_workflow_defaults() -> None:
+    """Narrowing mutant M2 (remedy 2): the rev1 scope admits X6a.
+
+    The mutant is not a weakened copy -- it is the previous scope itself:
+    ``_assert_floor_shape`` over the job dict accepts the workflow carrying
+    top-level ``defaults.run.shell`` (the job dict is unchanged), while the
+    committed ``_assert_floor_workflow_surfaces`` rejects it. This proves
+    the top-level clause load-bearing, not merely present.
+    """
+    mutated = _workflow_with_top_level_defaults_shell()
+    data = yaml.safe_load(mutated)
+    _assert_floor_shape(data["jobs"]["floor_syntax"])
+    with pytest.raises(AssertionError):
+        _assert_floor_workflow_surfaces(data)
+
+
+def test_floor_mutant_gate_without_listability_walk_is_killed(
+    tmp_path: Path,
+) -> None:
+    """Narrowing mutant M3 (remedy 3): ``onerror`` dropped, 'Can't list' wins.
+
+    The mutant walks each target exactly as the committed gate does but
+    swallows listing errors, so ``compileall``'s treat-unlistable-as-empty
+    decides the outcome again. On the unlistable-target tree the mutant
+    exits 0 (it is narrowing, and the assertion proves it) while the
+    committed gate exits 1 with the listing reason (the named test kills
+    it).
+    """
+    _require_posix_permission_bits()
+    running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    root = tmp_path / "tree"
+    _write_floor_tree(root, running)
+    (root / "src" / "csk").chmod(0o111)
+    try:
+        mutant = _write_mutant_gate(
+            _mutant_gate_source(
+                "os.walk(target, onerror=_fail_on_list_error):",
+                "os.walk(target):  # MUTANT M3: listing errors swallowed",
+            ),
+            tmp_path / "mutant",
+        )
+        admitted = _run_gate_script(mutant, sys.executable, root, running)
+    finally:
+        (root / "src" / "csk").chmod(0o755)
+    assert admitted.returncode == 0, admitted.stderr
+    (root / "src" / "csk").chmod(0o111)
+    try:
+        refused = _run_gate(sys.executable, root, running)
+    finally:
+        (root / "src" / "csk").chmod(0o755)
+    assert refused.returncode != 0
+    assert "unlistable" in refused.stderr
+
+
+def test_floor_gate_is_immune_to_a_smuggled_compileall(tmp_path: Path) -> None:
+    """``python -I`` refuses import hijack via a shadowing compileall (N1).
+
+    A ``compileall.py`` that always reports success, placed next to the
+    gate, turns the gate green on a tree with a broken module when the
+    gate runs as ``python gate.py`` -- the attack is real, and the first
+    assertion proves it. The committed ``python -I`` invocation refuses
+    the shadow (isolated mode keeps the script directory off ``sys.path``)
+    and fails on the broken module. This pins the ``-I`` token
+    load-bearing, not decorative.
+    """
+    running = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    scripts = tmp_path / "scripts"
+    gate = _write_mutant_gate(
+        GATE_SCRIPT.read_text(encoding="utf-8"), scripts
+    )
+    (scripts / "compileall.py").write_text(
+        '"""Shadow compileall: always reports success."""\n'
+        "\n"
+        "\n"
+        "def compile_dir(*args, **kwargs):\n"
+        "    return True\n",
+        encoding="utf-8",
+    )
+    root = tmp_path / "tree"
+    _write_floor_tree(root, running)
+    (root / "src" / "csk" / "bad.py").write_text(
+        "def broken(:\n    pass\n", encoding="utf-8"
+    )
+    hijacked = _run_gate_script(gate, sys.executable, root, running, isolated=False)
+    assert hijacked.returncode == 0, hijacked.stderr
+    immune = _run_gate_script(gate, sys.executable, root, running, isolated=True)
+    assert immune.returncode != 0
+    assert "floor compile failed" in immune.stderr

@@ -1697,15 +1697,20 @@ def test_process_executor_rechecks_go_and_tool_identity_before_start(
     assert not marker.exists()
 
 
-@pytest.mark.skipif(
-    sys.platform != "darwin",
-    reason="the replacement/restore event guard is the macOS mechanism",
-)
-@pytest.mark.parametrize("target_name", ("go", "tool"))
-def test_macos_identity_guard_detects_process_graph_replacement_and_restore(
-    target_name: str,
+_MACOS_GUARD_PROCESS_TIMEOUT_SECONDS = 60.0
+"""Hang bound for the process-graph identity-guard tests.
+
+Direction: UPPER bound on a hang. The fake go executable either sleeps
+0.2 s or is SIGKILLed at exec on Apple Silicon (platform-binary
+enforcement kills a /bin/sleep copy in ~2 ms at every location probed),
+so expiry means the executor wedged, never a race a loaded host can lose.
+"""
+
+
+def _macos_process_graph_guard_fixture(
     tmp_path: Path,
-):
+) -> tuple[Path, Path, go_v1._ToolProcessIdentity]:
+    """Build the watched go/tool graph the identity guard retains."""
     goroot = tmp_path / "goroot"
     go_executable = goroot / "bin" / "go"
     go_executable.parent.mkdir(parents=True)
@@ -1720,41 +1725,105 @@ def test_macos_identity_guard_detects_process_graph_replacement_and_restore(
         go_executable,
         tool_directory,
     )
+    return go_executable, compiler, identity
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="the replacement/restore event guard is the macOS mechanism",
+)
+@pytest.mark.parametrize("target_name", ("go", "tool"))
+def test_macos_identity_guard_detects_process_graph_replacement_and_restore(
+    target_name: str,
+    tmp_path: Path,
+):
+    """A replaced-then-restored watched file verifies clean, yet the guard fires.
+
+    Ordering is by program order, not timing: the transient replacement lands
+    strictly inside the guard's lifetime because every step is sequential, and
+    the executor's before/after hashing runs after the restore, so the
+    restored state re-hashes clean while the guard's kqueue verdict latches
+    the transient write. There is no thread, no sleep, and no join: the only
+    timing bound is the generous executor hang bound. (No scheduling could
+    place work "during" the child's lifetime anyway: the kernel SIGKILLs the
+    /bin/sleep copy at exec on Apple Silicon, and the guard mechanism does not
+    depend on that lifetime.)
+    """
+    go_executable, compiler, identity = _macos_process_graph_guard_fixture(
+        tmp_path
+    )
     guard = go_v1._IdentityMutationGuard(
         go_v1.PLATFORM_MACOS,
         identity.watch_paths(),
     )
-    failures: list[BaseException] = []
-
-    def run() -> None:
-        try:
-            go_v1.SubprocessProcessExecutor().run(
-                go_v1.ProcessRequest(
-                    executable=go_executable,
-                    identity=identity,
-                    arguments=("0.2",),
-                    cwd=tmp_path,
-                    environment={},
-                    timeout_seconds=1,
-                    output_limit=4096,
-                )
+    guard_closed = False
+    try:
+        target = go_executable if target_name == "go" else compiler
+        original = target.read_bytes()
+        target.write_bytes(b"\xcf\xfa\xed\xfereplacement")
+        target.write_bytes(original)
+        result = go_v1.SubprocessProcessExecutor().run(
+            go_v1.ProcessRequest(
+                executable=go_executable,
+                identity=identity,
+                arguments=("0.2",),
+                cwd=tmp_path,
+                environment={},
+                timeout_seconds=_MACOS_GUARD_PROCESS_TIMEOUT_SECONDS,
+                output_limit=4096,
             )
-        except BaseException as exc:
-            failures.append(exc)
+        )
+        assert result.timed_out is False
+        with pytest.raises(go_v1.GoV1Error) as raised:
+            guard.close()
+        guard_closed = True
+        assert raised.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+    finally:
+        if not guard_closed:
+            try:
+                guard.close()
+            except Exception:
+                pass
 
-    thread = threading.Thread(target=run)
-    thread.start()
-    time.sleep(0.05)
-    target = go_executable if target_name == "go" else compiler
-    original = target.read_bytes()
-    target.write_bytes(b"\xcf\xfa\xed\xfereplacement")
-    target.write_bytes(original)
-    thread.join(timeout=2)
-    assert not thread.is_alive()
-    assert failures == []
-    with pytest.raises(go_v1.GoV1Error) as raised:
+
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="the replacement/restore event guard is the macOS mechanism",
+)
+def test_macos_identity_guard_stays_silent_without_process_graph_replacement(
+    tmp_path: Path,
+):
+    """An untouched process graph verifies clean and the guard stays silent.
+
+    Same shape as the replacement test minus the mutation. The executor run
+    also pins that spawning the graph generates no vnode events on the
+    watched set. Sequential; the only timing bound is the executor hang bound.
+    """
+    go_executable, _, identity = _macos_process_graph_guard_fixture(tmp_path)
+    guard = go_v1._IdentityMutationGuard(
+        go_v1.PLATFORM_MACOS,
+        identity.watch_paths(),
+    )
+    try:
+        result = go_v1.SubprocessProcessExecutor().run(
+            go_v1.ProcessRequest(
+                executable=go_executable,
+                identity=identity,
+                arguments=("0.2",),
+                cwd=tmp_path,
+                environment={},
+                timeout_seconds=_MACOS_GUARD_PROCESS_TIMEOUT_SECONDS,
+                output_limit=4096,
+            )
+        )
+        assert result.timed_out is False
+        guard.verify()
         guard.close()
-    assert raised.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+    finally:
+        try:
+            guard.close()
+        except Exception:
+            pass
 
 
 def test_worker_environment_matches_the_fixed_darwin_vector(tmp_path: Path):
