@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import NoReturn, Protocol
+from typing import Final, NoReturn, Protocol
 
 from . import protocol_json
 from .build_repository import (
@@ -22,6 +22,7 @@ from .build_repository import (
 from .builds import go_v1, toolchain
 from .builds import metadata as build_metadata
 from .builds import source as build_source
+from .sources.package_identity import PackageIdentity
 from .git_admission import (
     OBJECT_SEMANTICS_INVALID,
     REF_MOVED,
@@ -42,6 +43,22 @@ EXTERNAL_BUILD_IDENTITY_INVALID = "build_repository_identity_invalid"
 
 _MAX_METADATA = 4 << 20
 _MAX_ARTIFACT = 1 << 30
+
+ARTIFACTS_NAMESPACE: Final[str] = "artifacts"
+ARTIFACTS_V3_NAMESPACE: Final[str] = "artifacts-v3"
+SNAPSHOTS_NAMESPACE: Final[str] = "snapshots"
+# The one table driving external-cache namespaces, grouped by the GC reference
+# set that retains them: artifact namespaces hold cache entries keyed by the
+# build cache key, snapshot namespaces hold entries keyed by the snapshot key.
+# DiskProtectedStore publishes exactly these namespaces and gc sweeps exactly
+# these namespaces against those reference sets; the growth test fails unless
+# producers, sweep, and mark agree on this same table — so a future third
+# namespace cannot drift to one side only.
+EXTERNAL_ARTIFACT_NAMESPACES: Final[tuple[str, ...]] = (
+    ARTIFACTS_NAMESPACE,
+    ARTIFACTS_V3_NAMESPACE,
+)
+EXTERNAL_SNAPSHOT_NAMESPACES: Final[tuple[str, ...]] = (SNAPSHOTS_NAMESPACE,)
 
 
 class ExternalBuildError(RuntimeError):
@@ -195,6 +212,10 @@ class PipelineRequest:
     # released section-11 URL rather than a source-policy plan.
     endpoint: ResolvedEndpoint | None = None
     endpoints: tuple[ResolvedEndpoint, ...] = ()
+    # A source-types schema 1 package selects build receipt schema 3: the
+    # schema-2 driver input is wrapped with this package and addressed in the
+    # receipt-3 cache namespace. ``None`` keeps the receipt-2 lineage untouched.
+    package: PackageIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -226,7 +247,7 @@ class DiskProtectedStore:
 
     def store_snapshot(self, key: str, snapshot: Snapshot) -> None:
         self._prepare(mutate=True)
-        parent = self.root / "snapshots"
+        parent = self.root / SNAPSHOTS_NAMESPACE
         self._protected_dir(parent, create=True)
         final = parent / _key_component(key)
         if final.exists():
@@ -265,7 +286,7 @@ class DiskProtectedStore:
 
     def load_snapshot(self, key: str, *, mutate: bool) -> Snapshot:
         self._prepare(mutate=mutate)
-        entry = self.root / "snapshots" / _key_component(key)
+        entry = self.root / SNAPSHOTS_NAMESPACE / _key_component(key)
         try:
             self._protected_dir(entry.parent, create=False)
             self._protected_dir(entry, create=False)
@@ -297,7 +318,7 @@ class DiskProtectedStore:
         self, key: str, expected_input: Mapping[str, object], *, mutate: bool
     ) -> ArtifactHit | None:
         corruption_code = RECEIPT_INVALID
-        entry = self.root / "artifacts" / _key_component(key)
+        entry = self.root / ARTIFACTS_NAMESPACE / _key_component(key)
         try:
             self._prepare(mutate=mutate)
             if not entry.exists():
@@ -338,7 +359,7 @@ class DiskProtectedStore:
     def inspect_artifact(self, key: str) -> ArtifactHit | None:
         """Read-only validation of a self-authenticating receipt-v2 entry."""
 
-        entry = self.root / "artifacts" / _key_component(key)
+        entry = self.root / ARTIFACTS_NAMESPACE / _key_component(key)
         try:
             self._prepare(mutate=False)
             if not entry.exists():
@@ -360,11 +381,40 @@ class DiskProtectedStore:
         except (OSError, ValueError, protocol_json.ProtocolJSONError) as exc:
             self._corrupt(entry, RECEIPT_INVALID, False, exc)
 
+    def inspect_artifact_v3(self, key: str) -> ArtifactHit | None:
+        """Read-only validation of a self-authenticating receipt-v3 entry."""
+
+        entry = self.root / ARTIFACTS_V3_NAMESPACE / _key_component(key)
+        try:
+            self._prepare(mutate=False)
+            if not entry.exists():
+                return None
+            self._protected_dir(entry.parent, create=False)
+            self._protected_dir(entry, create=False)
+            receipt = self._read_protected(entry / "receipt.json", _MAX_METADATA)
+            parsed = build_metadata.read_receipt_v3(receipt)
+            if build_metadata.canonical_receipt_v3_bytes(parsed) != receipt:
+                raise ValueError("receipt is not exact canonical JSON")
+            if build_metadata.source_aware_cache_key(parsed.input) != key:
+                raise ValueError("receipt input does not derive its cache key")
+            return self.lookup_receipt_v3(key, parsed.input.to_json(), mutate=False)
+        except FileNotFoundError as exc:
+            if not entry.exists():
+                return None
+            self._corrupt(entry, RECEIPT_INVALID, False, exc)
+        except (
+            OSError,
+            ValueError,
+            build_metadata.BuildMetadataError,
+            protocol_json.ProtocolJSONError,
+        ) as exc:
+            self._corrupt(entry, RECEIPT_INVALID, False, exc)
+
     def store_artifact(
         self, key: str, input_value: Mapping[str, object], artifact: bytes
     ) -> bytes:
         self._prepare(mutate=True)
-        parent = self.root / "artifacts"
+        parent = self.root / ARTIFACTS_NAMESPACE
         self._protected_dir(parent, create=True)
         final = parent / _key_component(key)
         if final.exists():
@@ -390,6 +440,106 @@ class DiskProtectedStore:
                     },
                 }
             )
+            (stage / "receipt.json").write_bytes(receipt)
+            _seal_tree(stage, seal_root=False, executable=artifact_file.name)
+            os.replace(stage, final)
+            _seal_root(final)
+            return receipt
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+
+    def lookup_receipt_v3(
+        self, key: str, expected_input: Mapping[str, object], *, mutate: bool
+    ) -> ArtifactHit | None:
+        """Validate one receipt-3 entry in the distinct receipt-3 namespace.
+
+        Receipt bytes are validated through the metadata receipt-3 reader, so
+        stored-byte canonicality, the receipt's own key, the entire expected
+        wrapped input, and the manager-derived artifact path are all bound
+        before artifact bytes are compared. Entries live below
+        ``artifacts-v3``; a legacy ``artifacts`` entry can never satisfy this
+        lookup because it is never opened here.
+        """
+
+        expected = build_metadata.parse_receipt_v3_input(expected_input)
+        corruption_code = RECEIPT_INVALID
+        entry = self.root / ARTIFACTS_V3_NAMESPACE / _key_component(key)
+        try:
+            self._prepare(mutate=mutate)
+            if not entry.exists():
+                return None
+            self._protected_dir(entry.parent, create=False)
+            self._protected_dir(entry, create=False)
+            receipt_bytes = self._read_protected(entry / "receipt.json", _MAX_METADATA)
+            receipt = build_metadata.verify_receipt_v3(
+                receipt_bytes,
+                expected_input=expected,
+                expected_cache_key=key,
+            )
+            corruption_code = ARTIFACT_INVALID
+            artifact = self._read_protected(
+                entry / build_metadata.derived_cache_artifact_name(expected.artifact_path),
+                _MAX_ARTIFACT,
+            )
+            if (
+                receipt.artifact.sha256 != "sha256:" + hashlib.sha256(artifact).hexdigest()
+                or receipt.artifact.size != len(artifact)
+                or receipt.artifact.path != expected.artifact_path
+            ):
+                raise ValueError("artifact metadata differs")
+            return ArtifactHit(artifact=artifact, receipt=receipt_bytes)
+        except FileNotFoundError as exc:
+            if not entry.exists():
+                return None
+            self._corrupt(entry, corruption_code, mutate, exc)
+        except (
+            OSError,
+            ValueError,
+            build_metadata.BuildMetadataError,
+            protocol_json.ProtocolJSONError,
+        ) as exc:
+            self._corrupt(entry, corruption_code, mutate, exc)
+
+    def store_receipt_v3(
+        self, key: str, input_value: Mapping[str, object], artifact: bytes
+    ) -> bytes:
+        """Publish one receipt-3 entry below ``artifacts-v3`` atomically.
+
+        The receipt is written by the metadata receipt-3 writer over the
+        validated wrapped input, never hand-constructed here: its cache key is
+        recomputed over the wrapper and must equal the addressed key.
+        """
+
+        expected = build_metadata.parse_receipt_v3_input(input_value)
+        path = expected.artifact_path
+        receipt_object = build_metadata.build_receipt_v3(
+            expected,
+            build_metadata.BuildArtifact(
+                path=path,
+                sha256="sha256:" + hashlib.sha256(artifact).hexdigest(),
+                size=len(artifact),
+            ),
+        )
+        if receipt_object.cache_key != key:
+            raise ExternalBuildError(
+                RECEIPT_INVALID,
+                "receipt-3 cache key does not derive from the wrapped input",
+            )
+        self._prepare(mutate=True)
+        parent = self.root / ARTIFACTS_V3_NAMESPACE
+        self._protected_dir(parent, create=True)
+        final = parent / _key_component(key)
+        if final.exists():
+            hit = self.lookup_receipt_v3(key, input_value, mutate=True)
+            if hit is not None:
+                return hit.receipt
+        stage = Path(tempfile.mkdtemp(prefix=".stage-", dir=parent))
+        try:
+            artifact_file = stage / build_metadata.derived_cache_artifact_name(path)
+            artifact_file.write_bytes(artifact)
+            if os.name != "nt":
+                artifact_file.chmod(0o500)
+            receipt = build_metadata.canonical_receipt_v3_bytes(receipt_object)
             (stage / "receipt.json").write_bytes(receipt)
             _seal_tree(stage, seal_root=False, executable=artifact_file.name)
             os.replace(stage, final)
@@ -557,11 +707,23 @@ def run_pipeline(request: PipelineRequest) -> PipelineResult:
         if mutate:
             request.store.store_snapshot(snap_key, snapshot)
         input_value = receipt_input(request, effective, target, snapshot.digest, request.compiler.identity)
-        key = _digest_json(input_value)
+        if request.package is None:
+            wrapped_json: Mapping[str, object] | None = None
+            key = _digest_json(input_value)
+        else:
+            wrapped = build_metadata.wrap_receipt_v3_input(
+                request.package,
+                build_metadata.parse_repository_build_input(input_value),
+            )
+            wrapped_json = wrapped.to_json()
+            key = build_metadata.source_aware_cache_key(wrapped)
         _trace(request, "artifact-cache-lookup")
         cache_error: ExternalBuildError | None = None
         try:
-            hit = request.store.lookup_artifact(key, input_value, mutate=mutate)
+            if wrapped_json is None:
+                hit = request.store.lookup_artifact(key, input_value, mutate=mutate)
+            else:
+                hit = request.store.lookup_receipt_v3(key, wrapped_json, mutate=mutate)
         except ExternalBuildError as exc:
             cache_error = exc
             hit = None
@@ -586,7 +748,10 @@ def run_pipeline(request: PipelineRequest) -> PipelineResult:
         if not artifact:
             raise ExternalBuildError(ARTIFACT_INVALID, "compiler returned an empty artifact")
         _validate_materialized(root, snapshot)
-        receipt = request.store.store_artifact(key, input_value, artifact)
+        if wrapped_json is None:
+            receipt = request.store.store_artifact(key, input_value, artifact)
+        else:
+            receipt = request.store.store_receipt_v3(key, wrapped_json, artifact)
         _trace(request, "receipt-publication")
         return PipelineResult(
             "would-rebuild-untrusted-cache" if cache_error else "would-preflight-and-build",

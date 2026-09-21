@@ -16,7 +16,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from . import (
     adapters,
@@ -63,9 +63,13 @@ from .builds import source as build_source
 from .builds import toolchain as build_toolchain
 from .config import GlobalConfig, ProjectConfig, skillfile_sources_enabled
 from .skillspec import CommandSpec
+from .sources import modes as source_modes
 from .sources import publish as source_publish
 from .sources import repository_policy
 from .sources import transport as source_transport
+
+if TYPE_CHECKING:
+    from .sources.package_identity import PackageIdentity
 
 
 class InstallError(Exception):
@@ -351,34 +355,61 @@ def _install_schema2_once(
     project: ProjectConfig,
     options: InstallOptions,
     project_manifest: manifest.ProjectManifest,
+    *,
+    operator_search_path: build_toolchain.OperatorSearchPath | None,
+    operator_ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
+    operator_https_token: OperatorHTTPSToken | None = None,
 ) -> ProjectResult:
     """Install one schema-2 (draft skillfile-sources-v1) project.
 
-    The schema-2 lane refuses development substitutions, hybrid
-    declarations and everything outside local path sources, then
+    The schema-2 lane refuses source development substitutions (new
+    ``from`` selectors never gain them) and hybrid declarations, then
     delegates to the atomic source publisher: one recoverable
     transaction for lock, markers, runtime, context and adapters.
-    Legacy schema-1 projects never reach here.
+    Git members reach the network through the bounded transport with
+    one Git tool provisioned per resolved endpoint, exactly like the
+    external repository lane. External repository substitution is
+    independent of source substitution and stays available for local
+    packages; strict audit refuses every substitution before any
+    planning side effect. Legacy schema-1 projects never reach here.
     """
 
     result = ProjectResult(alias=project.alias, path=project.path, status="ok")
     try:
         dev_manifest = dev_substitutions.load_manifest(project.path)
-        substitutions_present = bool(
-            dev_manifest.substitutions or dev_manifest.build_repository_substitutions
+        has_source_substitution = bool(dev_manifest.substitutions)
+        has_external_substitution = bool(
+            dev_manifest.build_repository_substitutions
         )
         strict_audit = config.audit.enabled and config.audit.mode == "strict"
-        if substitutions_present and strict_audit:
+        if (
+            has_source_substitution or has_external_substitution
+        ) and strict_audit:
             raise InstallError(
                 f"Dev substitutions are active in {dev_substitutions.DEV_MANIFEST_NAME}; "
                 "strict audit refuses substituted installs"
             )
-        if substitutions_present:
+        if has_source_substitution or has_external_substitution:
             dev_substitutions.check_source_substitution_admission(
                 selector_kind="from",
-                operator_substitution=True,
+                operator_substitution=has_source_substitution,
+                external_substitution=has_external_substitution,
                 strict_audit=strict_audit,
             )
+            for skill_name in sorted(dev_manifest.build_repository_substitutions):
+                for repository_name, repository_substitution in sorted(
+                    dev_manifest.build_repository_substitutions[skill_name].items()
+                ):
+                    selected = (
+                        f"path {repository_substitution.path}"
+                        if repository_substitution.path is not None
+                        else f"git {repository_substitution.git} "
+                        f"{repository_substitution.ref_kind} {repository_substitution.ref_value}"
+                    )
+                    result.messages.append(
+                        f"{project.alias}: BUILD REPOSITORY SUBSTITUTION "
+                        f"{skill_name}.{repository_name} -> {selected}"
+                    )
         try:
             hybrid_decls = hybrid.load_hybrid_decls(config.path.parent)
         except hybrid.HybridError as exc:
@@ -397,16 +428,100 @@ def _install_schema2_once(
             raise InstallError(
                 f"Hybrid skill declarations are not supported for schema-2 project '{project.alias}'"
             )
-        outcome = source_publish.install_schema2(
-            home=Path(os.path.abspath(config.path.parent)),
-            project_path=project.path,
-            alias=project.alias,
-            agents=project_manifest.agents or project.agents or config.default_agents,
-            locale_value=config.preferred_locale,
-            adapter_mode=config.adapter_mode,
-            fetch=options.fetch,
-            dry_run=options.dry_run,
-        )
+        git_tools: dict[
+            tuple[
+                bool,
+                git_admission.OperatorSSHCredentials | None,
+                git_admission.OperatorHTTPSCredentials | None,
+            ],
+            git_admission.GitTool,
+        ] = {}
+
+        def endpoint_tool(
+            endpoint: repository_policy.ResolvedEndpoint,
+            limits: git_admission.Limits | None = None,
+        ) -> git_admission.GitTool:
+            """Provision one Git tool per resolved endpoint, memoized.
+
+            Mirrors the external repository lane: credential
+            resolution happens after the immutable plan selected the
+            endpoint, and one static tool never represents both
+            transports.
+            """
+
+            timeout_seconds = 10.0 if limits is None else limits.timeout_seconds
+            deadline = None if limits is None else limits.deadline
+            if operator_search_path is None:
+                raise git_admission.GitAdmissionError(
+                    git_admission.IDENTITY_INVALID,
+                    "network source acquisition needs the captured operator "
+                    "search path",
+                )
+            selected_ssh: git_admission.OperatorSSHCredentials | None
+            selected_https: git_admission.OperatorHTTPSCredentials | None
+            if endpoint.transport == "ssh":
+                selected_ssh = _endpoint_ssh_credentials(
+                    endpoint,
+                    config,
+                    operator_ssh_credentials,
+                )
+                selected_https = None
+                selected = True
+            else:
+                selected_ssh = None
+                selected_https = _endpoint_https_credentials(
+                    endpoint,
+                    config,
+                    operator_https_token,
+                    operator_search_path,
+                )
+                selected = False
+            key = (selected, selected_ssh, selected_https)
+            if key not in git_tools:
+                git_tools[key] = _external_git_tool(
+                    operator_search_path,
+                    require_ssh=selected,
+                    ssh_credentials=selected_ssh,
+                    https_credentials=selected_https,
+                    timeout_seconds=timeout_seconds,
+                    deadline=deadline,
+                )
+            return git_tools[key]
+
+        # The mode is decided here, where the transport grant is
+        # built: the publisher receives only the mode, so the frozen
+        # lane cannot name the grant, the fetch flag or the policy
+        # path. The acquisition workspace lives for the whole install;
+        # the frozen mode carries no workspace to name it with.
+        home = Path(os.path.abspath(config.path.parent))
+        old_lock = source_publish.read_schema2_lock(project.path)
+        with tempfile.TemporaryDirectory(
+            prefix=".csk-source-acquired-"
+        ) as workspace_tmp:
+            mode = source_modes.select(
+                home=home,
+                old_lock=old_lock,
+                fetch=options.fetch,
+                workspace=Path(workspace_tmp),
+                tool_for_endpoint=endpoint_tool,
+                policy_path=config_module.source_policy_path(config.path),
+            )
+            outcome = source_publish.install_schema2(
+                mode=mode,
+                home=home,
+                project_path=project.path,
+                alias=project.alias,
+                agents=project_manifest.agents or project.agents or config.default_agents,
+                locale_value=config.preferred_locale,
+                adapter_mode=config.adapter_mode,
+                dry_run=options.dry_run,
+                config=config,
+                operator_search_path=operator_search_path,
+                substitutions=dev_manifest,
+                ssh_credentials=operator_ssh_credentials,
+                https_token=operator_https_token,
+                interactive=options.interactive and not options.dry_run,
+            )
         result.messages.extend(outcome.messages)
         return result
     except build_planner.BuildPlanningError as exc:
@@ -480,7 +595,15 @@ def _install_project_once(
             return result
 
         if project_manifest.schema_version == 2:
-            return _install_schema2_once(config, project, options, project_manifest)
+            return _install_schema2_once(
+                config,
+                project,
+                options,
+                project_manifest,
+                operator_search_path=operator_search_path,
+                operator_ssh_credentials=operator_ssh_credentials,
+                operator_https_token=operator_https_token,
+            )
 
         dev_manifest = dev_substitutions.load_manifest(project.path)
         substitutions = dev_manifest.substitutions
@@ -1701,7 +1824,16 @@ def _publish_external_builds(
     ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
     https_token: OperatorHTTPSToken | None = None,
     interactive: bool = False,
+    packages: Mapping[str, PackageIdentity | None] | None = None,
 ) -> tuple[dict[str, dict[str, _PublishedBuild]], list[str]]:
+    """Publish external builds, binding each result to its source package.
+
+    ``packages`` maps provider names to source-types schema 1
+    identities. A provider with a package selects build receipt
+    schema 3 (the pipeline wraps the driver input with the package
+    and addresses the receipt-3 cache namespace); without one the
+    receipt-2 lineage runs untouched. Legacy callers pass nothing.
+    """
     messages: list[str] = []
     selected = [
         (node, name)
@@ -1974,6 +2106,7 @@ def _publish_external_builds(
                 lane=source_transport.LANE_EXTERNAL_BUILD,
             ).snapshot
 
+        node_package = packages.get(node.name) if packages is not None else None
         result = build_repository_pipeline.run_pipeline(
             build_repository_pipeline.PipelineRequest(
                 operation=(
@@ -1995,6 +2128,7 @@ def _publish_external_builds(
                 offline_snapshot_key=_existing_external_snapshot_key(
                     marker_roots, node.name, name
                 ),
+                package=node_package,
             )
         )
         messages.append(
@@ -2018,67 +2152,111 @@ def _publish_external_builds(
         artifact_relative = artifact_value.get("path")
         if not isinstance(artifact_relative, str):
             raise InstallError("external build receipt has no artifact path")
-        selected_state = result.subject.effective
-        marker = install_marker.InstallMarkerBuildV3(
-            driver=build_repository_model.GO_REPOSITORY_V1_DRIVER,
-            receipt_schema_version=2,
-            execution_policy=build_metadata.PORTABLE_EXECUTION_POLICY,
-            repository=repository.name,
-            declared_identity=install_marker.MarkerRepositoryIdentity(
-                "network-git", repository.identity
-            ),
-            declared_locked_commit=install_marker.MarkerRepositoryCommit(
-                repository.locked_commit.object_format,
-                repository.locked_commit.hex,
-            ),
-            declared_tag=repository.tag,
-            effective_identity=install_marker.MarkerRepositoryIdentity(
-                selected_state.identity_kind, selected_state.identity
-            ),
-            object_format=selected_state.object_format,
-            commit=selected_state.commit,
-            substituted=selected_state.substituted,
-            substitution=(
-                install_marker.MarkerRepositorySubstitution(
-                    type=selected_state.substitution.type,
-                    ref=(
-                        install_marker.MarkerRepositoryRef(
-                            selected_state.substitution.ref_kind,
-                            selected_state.substitution.ref_value or "",
-                        )
-                        if selected_state.substitution.ref_kind is not None
-                        else None
-                    ),
+        receipt_schema_version = receipt_value.get("schema_version")
+        if node_package is None:
+            if receipt_schema_version != 2:
+                raise InstallError(
+                    f"external build {node.name}.{name} returned receipt "
+                    f"schema {receipt_schema_version!r} without a source package"
                 )
-                if selected_state.substitution is not None
-                else None
-            ),
-            build_source=build_source.BuildSourceIdentity(
-                "curator-build-source-v1", result.build_source
-            ),
-            descriptor_target=command.target,
-            cache_key=result.cache_key,
-            receipt_sha256="sha256:"
-            + hashlib.sha256(result.receipt).hexdigest(),
-            artifact_sha256="sha256:"
-            + hashlib.sha256(result.artifact).hexdigest(),
-            artifact_path=artifact_relative,
+        elif receipt_schema_version != 3:
+            raise InstallError(
+                f"external build {node.name}.{name} returned receipt "
+                f"schema {receipt_schema_version!r} for a source package"
+            )
+        selected_state = result.subject.effective
+        substitution_record = (
+            install_marker.MarkerRepositorySubstitution(
+                type=selected_state.substitution.type,
+                ref=(
+                    install_marker.MarkerRepositoryRef(
+                        selected_state.substitution.ref_kind,
+                        selected_state.substitution.ref_value or "",
+                    )
+                    if selected_state.substitution.ref_kind is not None
+                    else None
+                ),
+            )
+            if selected_state.substitution is not None
+            else None
         )
+        build_source_identity = build_source.BuildSourceIdentity(
+            "curator-build-source-v1", result.build_source
+        )
+        receipt_sha256 = "sha256:" + hashlib.sha256(result.receipt).hexdigest()
+        artifact_sha256 = "sha256:" + hashlib.sha256(result.artifact).hexdigest()
+        marker_record: install_marker.MarkerBuild
+        if node_package is None:
+            marker_record = install_marker.InstallMarkerBuildV3(
+                driver=build_repository_model.GO_REPOSITORY_V1_DRIVER,
+                receipt_schema_version=2,
+                execution_policy=build_metadata.PORTABLE_EXECUTION_POLICY,
+                repository=repository.name,
+                declared_identity=install_marker.MarkerRepositoryIdentity(
+                    "network-git", repository.identity
+                ),
+                declared_locked_commit=install_marker.MarkerRepositoryCommit(
+                    repository.locked_commit.object_format,
+                    repository.locked_commit.hex,
+                ),
+                declared_tag=repository.tag,
+                effective_identity=install_marker.MarkerRepositoryIdentity(
+                    selected_state.identity_kind, selected_state.identity
+                ),
+                object_format=selected_state.object_format,
+                commit=selected_state.commit,
+                substituted=selected_state.substituted,
+                substitution=substitution_record,
+                build_source=build_source_identity,
+                descriptor_target=command.target,
+                cache_key=result.cache_key,
+                receipt_sha256=receipt_sha256,
+                artifact_sha256=artifact_sha256,
+                artifact_path=artifact_relative,
+            )
+            artifact_namespace = build_repository_pipeline.ARTIFACTS_NAMESPACE
+        else:
+            marker_record = install_marker.InstallMarkerBuildV5(
+                driver=build_repository_model.GO_REPOSITORY_V1_DRIVER,
+                receipt_schema_version=3,
+                execution_policy=build_metadata.PORTABLE_EXECUTION_POLICY,
+                repository=repository.name,
+                declared_identity=install_marker.MarkerRepositoryIdentity(
+                    "network-git", repository.identity
+                ),
+                declared_locked_commit=install_marker.MarkerRepositoryCommit(
+                    repository.locked_commit.object_format,
+                    repository.locked_commit.hex,
+                ),
+                declared_tag=repository.tag,
+                effective_identity=install_marker.MarkerRepositoryIdentity(
+                    selected_state.identity_kind, selected_state.identity
+                ),
+                object_format=selected_state.object_format,
+                commit=selected_state.commit,
+                substituted=selected_state.substituted,
+                substitution=substitution_record,
+                build_source=build_source_identity,
+                descriptor_target=command.target,
+                cache_key=result.cache_key,
+                receipt_sha256=receipt_sha256,
+                artifact_sha256=artifact_sha256,
+                artifact_path=artifact_relative,
+            )
+            artifact_namespace = build_repository_pipeline.ARTIFACTS_V3_NAMESPACE
         artifact_path = (
             store.root
-            / "artifacts"
+            / artifact_namespace
             / result.cache_key.removeprefix("sha256:")
             / build_metadata.derived_cache_artifact_name(artifact_relative)
         )
         published.setdefault(node.name, {})[name] = _PublishedBuild(
             plan=None,
             inspection=None,
-            marker=marker,
+            marker=marker_record,
             artifact_path=artifact_path,
             receipt_bytes=result.receipt,
-            build_source_identity=build_source.BuildSourceIdentity(
-                "curator-build-source-v1", result.build_source
-            ),
+            build_source_identity=build_source_identity,
         )
     return published, messages
 
@@ -2466,6 +2644,7 @@ def _build_private_misses(
     stack: ExitStack,
     *,
     operation_roots: tuple[Path, ...],
+    allow_source_aware: bool = False,
 ) -> dict[str, build_cache.CachePublication]:
     candidates = [
         plan
@@ -2507,10 +2686,21 @@ def _build_private_misses(
         )
     )
     for plan in plans:
-        if (
-            session.target != plan.input.target
-            or session.toolchain != plan.input.toolchain
-        ):
+        if isinstance(plan.input, build_metadata.SourceAwareBuildInput):
+            if not allow_source_aware:
+                raise InstallError(
+                    f"{plan.provider}.{plan.command} selected a receipt-3 build input, "
+                    "which the legacy build lane cannot publish"
+                )
+            plan_toolchain = plan.input.build.toolchain
+        else:
+            if allow_source_aware:
+                raise InstallError(
+                    f"{plan.provider}.{plan.command} selected a legacy build input, "
+                    "which the source-aware build lane cannot publish"
+                )
+            plan_toolchain = plan.input.toolchain
+        if session.target != plan.input.target or session.toolchain != plan_toolchain:
             raise _concurrent_state_change(
                 "the selected Go toolchain changed between planning and build"
             )
@@ -2518,6 +2708,17 @@ def _build_private_misses(
     providers_by_name = {provider.name: provider for provider in providers}
     publications: dict[str, build_cache.CachePublication] = {}
     for plan in candidates:
+        if isinstance(plan.input, build_metadata.SourceAwareBuildInput):
+            if not allow_source_aware:
+                raise InstallError(
+                    f"{plan.provider}.{plan.command} selected a receipt-3 build input, "
+                    "which the legacy build lane cannot publish"
+                )
+        elif allow_source_aware:
+            raise InstallError(
+                f"{plan.provider}.{plan.command} selected a legacy build input, "
+                "which the source-aware build lane cannot publish"
+            )
         provider = providers_by_name.get(plan.provider)
         if provider is None:
             raise _concurrent_state_change(
@@ -2586,19 +2787,22 @@ def _build_private_misses(
             # private operation root, but only POSIX gives it the private,
             # owner-controlled state publication requires.
             build_cache.make_publication_source_private(artifact.staged_path)
-            receipt = build_metadata.build_receipt(
-                plan.input,
-                build_metadata.BuildArtifact(
-                    path=artifact.metadata.path,
-                    sha256=artifact.metadata.sha256,
-                    size=artifact.metadata.size,
-                ),
+            built_artifact = build_metadata.BuildArtifact(
+                path=artifact.metadata.path,
+                sha256=artifact.metadata.sha256,
+                size=artifact.metadata.size,
             )
+            if isinstance(plan.input, build_metadata.SourceAwareBuildInput):
+                receipt_bytes = build_metadata.canonical_receipt_v3_bytes(
+                    build_metadata.build_receipt_v3(plan.input, built_artifact)
+                )
+            else:
+                receipt_bytes = build_metadata.canonical_receipt_bytes(
+                    build_metadata.build_receipt(plan.input, built_artifact)
+                )
             publications[plan.cache_key] = build_cache.CachePublication(
                 input=plan.input,
-                receipt_bytes=build_metadata.canonical_receipt_bytes(
-                    receipt
-                ),
+                receipt_bytes=receipt_bytes,
                 artifact_source=artifact.staged_path,
             )
     return publications
@@ -2927,11 +3131,18 @@ def _stage_materialization(
                 and published.marker.driver
                 == build_repository_model.GO_REPOSITORY_V1_DRIVER
             )
-            identity = (
-                published.plan.input.build_source
-                if published.plan is not None
-                else published.build_source_identity
-            )
+            identity: build_source.BuildSourceIdentity | None
+            if published.plan is not None:
+                if isinstance(
+                    published.plan.input, build_metadata.SourceAwareBuildInput
+                ):
+                    raise InstallError(
+                        f"build provider {node.name}.{name} selected a receipt-3 "
+                        "build input, which the legacy build lane cannot publish"
+                    )
+                identity = published.plan.input.build_source
+            else:
+                identity = published.build_source_identity
             if identity is None:
                 raise InstallError(
                     f"build provider {node.name}.{name} has no source identity"

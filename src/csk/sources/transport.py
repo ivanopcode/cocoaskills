@@ -72,6 +72,18 @@ class ToolProvider(Protocol):
     def __call__(self, endpoint: ResolvedEndpoint) -> GitTool: ...
 
 
+class ResolveAttemptCallable(Protocol):
+    def __call__(
+        self,
+        *,
+        endpoint: ResolvedEndpoint,
+        ref_kind: str,
+        ref_value: str,
+        tool: GitTool | None,
+        limits: Limits,
+    ) -> LockedCommit: ...
+
+
 def _call_tool_provider(
     provider: ToolProvider, endpoint: ResolvedEndpoint, limits: Limits
 ) -> GitTool:
@@ -156,6 +168,22 @@ class AcquisitionResult:
     """The verified snapshot and sanitized attempt evidence."""
 
     snapshot: Snapshot
+    attempts: tuple[AttemptDiagnostic, ...]
+
+    @property
+    def attempt_count(self) -> int:
+        return len(self.attempts)
+
+
+@dataclass(frozen=True)
+class ResolutionResult:
+    """One resolved ref with sanitized attempt evidence.
+
+    The commit is advertised, not proven: the caller acquires it through
+    :func:`acquire_network` before trusting any bytes.
+    """
+
+    lock: LockedCommit
     attempts: tuple[AttemptDiagnostic, ...]
 
     @property
@@ -575,6 +603,191 @@ def acquire(
         attempt=attempt,
         tool_for_endpoint=tool_for_endpoint,
         lane=lane,
+    )
+
+
+def default_resolve_attempt(
+    *,
+    endpoint: ResolvedEndpoint,
+    ref_kind: str,
+    ref_value: str,
+    tool: GitTool | None,
+    limits: Limits,
+) -> LockedCommit:
+    """Resolve exactly one ref through the trusted Git admission lane."""
+
+    if tool is None:
+        raise TransportFailure(
+            "identity",
+            "a trusted Git tool is required",
+            code=git_admission.IDENTITY_INVALID,
+        )
+    source = RepositorySource(
+        git=endpoint.url,
+        identity=endpoint.identity,
+        transport=endpoint.transport,
+    )
+    try:
+        return git_admission.resolve_network_ref(
+            source,
+            ref_kind,
+            ref_value,
+            tool,
+            limits=limits,
+            connection=_connection_target(endpoint),
+        )
+    except GitAdmissionError as exc:
+        failure_class = _classify_git_error(exc)
+        code = _failure_code(failure_class, exc.code)
+        failure = TransportFailure(
+            failure_class,
+            "trusted Git ref resolution failed",
+            code=code,
+        )
+        failure.original = _original_failure(exc, failure_class, code)
+        raise failure from exc
+
+
+def resolve_plan(
+    plan: AttemptPlan,
+    ref_kind: str,
+    ref_value: str,
+    tool: GitTool | None = None,
+    *,
+    limits: Limits = _DEFAULT_LIMITS,
+    attempt: ResolveAttemptCallable | None = None,
+    tool_for_endpoint: ToolProvider | None = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> ResolutionResult:
+    """Resolve one ref against a resolved plan with bounded attempts.
+
+    Mirrors :func:`acquire_plan`: one shared deadline, at most two
+    endpoints, and the policy layer's fail-closed fallback decision.
+    """
+
+    runner = default_resolve_attempt if attempt is None else attempt
+    deadline = (
+        limits.deadline
+        if limits.deadline is not None
+        else clock() + limits.timeout_seconds
+    )
+    limits = replace(limits, deadline=deadline)
+    diagnostics: list[AttemptDiagnostic] = []
+    maximum = min(plan.max_attempts, 2, len(plan.endpoints))
+    for index, endpoint in enumerate(plan.endpoints[:maximum]):
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise TransportResolutionError(tuple(diagnostics))
+        attempt_limits = replace(limits, timeout_seconds=remaining)
+        try:
+            selected_tool = (
+                _call_tool_provider(tool_for_endpoint, endpoint, attempt_limits)
+                if tool_for_endpoint is not None
+                else tool
+            )
+            if deadline - clock() <= 0:
+                raise GitAdmissionError(
+                    git_admission.SOURCE_UNAVAILABLE,
+                    "endpoint provider exceeded the transport deadline",
+                    failure_class="timeout",
+                )
+            lock = runner(
+                endpoint=endpoint,
+                ref_kind=ref_kind,
+                ref_value=ref_value,
+                tool=selected_tool,
+                limits=attempt_limits,
+            )
+            if clock() > deadline:
+                raise TransportFailure(
+                    "timeout",
+                    "endpoint resolution completed after the transport deadline",
+                    code=git_admission.SOURCE_UNAVAILABLE,
+                )
+        except Exception as error:  # noqa: BLE001 - every lane failure is typed
+            failure = _normalise_failure(error)
+            failure_class = _safe_class(failure.failure_class)
+            diagnostics.append(
+                AttemptDiagnostic(
+                    ordinal=index + 1,
+                    endpoint=endpoint.provenance,
+                    classification=failure_class,
+                    code=_safe_code(failure.code, "build_repository_transport_failure"),
+                )
+            )
+            alternate = plan.next_endpoint(
+                failure_class,
+                failed_index=index,
+            )
+            if alternate is not None and index == 0:
+                continue
+            if repository_policy.classify_failure(failure_class) == "forbidden":
+                _raise_first_failure(failure)
+            raise TransportResolutionError(tuple(diagnostics))
+        diagnostics.append(
+            AttemptDiagnostic(
+                ordinal=index + 1,
+                endpoint=endpoint.provenance,
+                classification="success",
+                code="ok",
+            )
+        )
+        return ResolutionResult(lock=lock, attempts=tuple(diagnostics))
+    raise TransportResolutionError(tuple(diagnostics))
+
+
+def resolve_ref(
+    plan_or_identity: AttemptPlan | str,
+    ref_kind: str,
+    ref_value: str,
+    tool: GitTool | None = None,
+    *,
+    policy: RepositoryPolicy | None = None,
+    declaration: str | None = None,
+    declared_url: str | None = None,
+    declared_authentication: str | None = None,
+    policy_path: Path | None = None,
+    limits: Limits = _DEFAULT_LIMITS,
+    attempt: ResolveAttemptCallable | None = None,
+    tool_for_endpoint: ToolProvider | None = None,
+) -> ResolutionResult:
+    """Resolve policy once, then resolve one ref with bounded attempts."""
+
+    if isinstance(plan_or_identity, ResolutionPlan):
+        plan = plan_or_identity
+    else:
+        selected_policy = policy
+        try:
+            if selected_policy is None and policy_path is not None:
+                selected_policy = repository_policy.load_policy(
+                    policy_path,
+                    reader_revision=repository_policy.TRANSPORT_REVISION_V2,
+                )
+            plan = plan_attempts(
+                plan_or_identity,
+                declaration,
+                selected_policy,
+                declared_url=declared_url,
+                declared_authentication=declared_authentication,
+            )
+        except repository_policy.RepositoryPolicyError as error:
+            raise TransportError(
+                error.code,
+                "source policy could not produce an attempt plan",
+            ) from error
+        except (TypeError, ValueError) as error:
+            raise TransportError(
+                CODE_POLICY_INVALID,
+                "source policy could not produce an attempt plan",
+            ) from error
+    return resolve_plan(
+        plan,
+        ref_kind,
+        ref_value,
+        tool,
+        limits=limits,
+        attempt=attempt,
+        tool_for_endpoint=tool_for_endpoint,
     )
 
 

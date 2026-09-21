@@ -10,11 +10,30 @@ from .model import CapabilityViolation, Decision, Finding, Location, Severity, S
 
 
 SCHEMA_VERSION = 1
+CODE_TRUST_UNREADABLE = "audit_trust_unreadable"
 PROMPT_VERSION = 1
 # Bump RULESET_VERSION whenever detector semantics or severity classification
 # changes. Cache hits intentionally skip canary and detector execution.
 RULESET_VERSION = 1
 HASH_RE = re.compile(r"^(?:sha256:)?([A-Fa-f0-9]{64})$")
+
+
+class TrustRecordError(ValueError):
+    """One stable trust-store diagnostic with a machine-readable code.
+
+    A ``ValueError`` so the ``csk audit`` path (``audit_plans`` via
+    ``audit/runner.py``, with no boundary of its own) reaches ``cli.main``'s
+    existing ``ValueError`` catch as a structured refusal — the same
+    convention ``SourceAuditError(ValueError)`` already uses. No
+    intermediate ``except ValueError`` sits between the reader and
+    ``cli.main`` on either path: ``gate_plans`` converts the type
+    explicitly, and the source-audit wrapper catches it first.
+    """
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(f"{code}: {detail}")
+        self.code = code
+        self.detail = detail
 
 
 def load_cached_verdict(
@@ -53,12 +72,23 @@ def store_verdict(csk_home: Path, verdict: Verdict) -> Path:
 
 
 def load_trust_record(csk_home: Path, content_sha256: str) -> TrustRecord:
+    """Load the pin record for one content hash.
+
+    Absent means "no pin". Unreadable raises: the existence probe and the
+    read share one boundary, so an I/O failure at either seam is a typed
+    refusal naming the trust path, never a silent absence. A present but
+    malformed record still means "no pin" (garbage never counts as a pin).
+    """
     path = trust_path(csk_home, content_sha256)
-    if not path.exists():
-        return TrustRecord()
     try:
+        if not path.exists():
+            return TrustRecord()
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError as exc:
+        raise TrustRecordError(CODE_TRUST_UNREADABLE, f"{path}: {exc}") from exc
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return TrustRecord()
+    if not isinstance(payload, dict):
         return TrustRecord()
     if payload.get("schema_version") != SCHEMA_VERSION:
         return TrustRecord()
@@ -185,6 +215,11 @@ def _finding_to_payload(finding: Finding) -> dict[str, Any]:
             "observed": finding.capability_violation.observed,
         }
     return payload
+
+
+def finding_from_payload(payload: dict[str, Any]) -> Finding:
+    """Parse one persisted finding payload (source-audit evidence)."""
+    return _finding_from_payload(payload)
 
 
 def _finding_from_payload(payload: dict[str, Any]) -> Finding:

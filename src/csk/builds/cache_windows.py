@@ -6,7 +6,13 @@ opened with reparse processing disabled and checked through its handle::
     <manager-home>/builds/go-v1/<64-hex-key>/
         csk-receipt.ccj.json
         bin/<command>.exe
+    <manager-home>/builds/go-v1-receipt-v3/<64-hex-key>/
+        csk-receipt.ccj.json
+        bin/<command>.exe
 
+The second namespace holds receipt-3 entries addressed by a complete wrapped
+input; a legacy entry can never satisfy a receipt-3 lookup because the lookup
+never opens the legacy namespace.
 The live, staging, and quarantine roots have protected DACLs. A sealed entry
 has a protected read/execute DACL for the manager principal and full control
 only for SYSTEM and the built-in Administrators group. Publication seals the
@@ -37,6 +43,9 @@ from typing import Any, Final
 from . import metadata as _metadata
 from ._windows import named_data_streams
 from .cache import (
+    GO_V1_CACHE_NAMESPACE,
+    GO_V1_RECEIPT_V3_CACHE_NAMESPACE,
+    LOCAL_BUILD_CACHE_NAMESPACES,
     BuildCacheError,
     CacheCollectionResult,
     CacheConflictError,
@@ -53,8 +62,6 @@ LIVE_ROOT_NAME: Final = "builds"
 STAGING_ROOT_NAME: Final = ".builds-staging"
 QUARANTINE_ROOT_NAME: Final = ".builds-quarantine"
 RECEIPT_FILENAME: Final = "csk-receipt.ccj.json"
-
-_DRIVER_DIRECTORY: Final[str] = str(_metadata.GO_V1_DRIVER)
 _MAX_RECEIPT_BYTES: Final = 1 << 20
 _READ_CHUNK: Final = 128 * 1024
 
@@ -367,7 +374,7 @@ class _ObjectState:
 
 @dataclass(frozen=True)
 class _VerifiedEntry:
-    receipt: _metadata.BuildReceipt
+    receipt: _metadata.AnyBuildReceipt
     receipt_bytes: bytes
     receipt_sha256: str
     artifact_sha256: str
@@ -409,7 +416,7 @@ class WindowsBuildCache:
                 reason="required Windows protection primitives are unavailable",
             )
         try:
-            key = _metadata.cache_key(expectation.input)
+            key = _metadata.cache_key_for_input(expectation.input)
             artifact_name = _artifact_name(expectation.input)
             with _open_manager_home(self._manager_home) as home:  # noqa: SIM117
                 with _open_protected_child_directory(
@@ -421,7 +428,7 @@ class WindowsBuildCache:
                 ) as builds:
                     with _open_protected_child_directory(
                         builds,
-                        _DRIVER_DIRECTORY,
+                        _driver_directory_for_input(expectation.input),
                         "build driver cache",
                         _MUTABLE_DIRECTORY,
                         missing=_MissingState("build driver cache is absent"),
@@ -486,14 +493,15 @@ class WindowsBuildCache:
                 "publication receipt exceeds the supported size",
             )
         try:
-            key = _metadata.cache_key(publication.input)
-            receipt = _metadata.verify_receipt(
+            key = _metadata.cache_key_for_input(publication.input)
+            receipt = _metadata.verify_receipt_for_input(
                 publication.receipt_bytes,
                 expected_input=publication.input,
                 expected_cache_key=key,
             )
             receipt_hash = _metadata.receipt_sha256(publication.receipt_bytes)
             artifact_name = _artifact_name(publication.input)
+            namespace = _driver_directory_for_input(publication.input)
         except (_metadata.BuildMetadataError, ValueError) as exc:
             raise BuildCacheError(
                 "cache_publication_invalid",
@@ -575,10 +583,10 @@ class WindowsBuildCache:
                                 ) as builds:
                                     with _open_or_create_mutable_directory(
                                         builds,
-                                        _DRIVER_DIRECTORY,
+                                        namespace,
                                         "build driver cache",
                                         replacement_parent=quarantine,
-                                        replacement_prefix="boundary-go-v1",
+                                        replacement_prefix=f"boundary-{namespace}",
                                         guard=guard,
                                     ) as driver:
                                         result = self._select_winner(
@@ -787,28 +795,34 @@ class WindowsBuildCache:
                             _MUTABLE_DIRECTORY,
                             missing=_MissingState("build cache root is absent"),
                         ) as builds:
-                            with _open_protected_child_directory(
-                                builds,
-                                _DRIVER_DIRECTORY,
-                                "build driver cache",
-                                _MUTABLE_DIRECTORY,
-                                missing=_MissingState(
-                                    "build driver cache is absent"
-                                ),
-                            ) as driver:
-                                _require_guard(guard)
-                                moved = _move_aside(
-                                    driver,
-                                    component,
-                                    quarantine,
-                                    f"entry-{component}",
-                                    missing_ok=True,
-                                )
+                            for namespace in LOCAL_BUILD_CACHE_NAMESPACES:
+                                try:
+                                    with _open_protected_child_directory(
+                                        builds,
+                                        namespace,
+                                        "build driver cache",
+                                        _MUTABLE_DIRECTORY,
+                                        missing=_MissingState(
+                                            "build driver cache is absent"
+                                        ),
+                                    ) as driver:
+                                        _require_guard(guard)
+                                        moved = _move_aside(
+                                            driver,
+                                            component,
+                                            quarantine,
+                                            f"entry-{component}",
+                                            missing_ok=True,
+                                        )
+                                except _MissingState:
+                                    continue
+                                if moved is not None:
+                                    return (
+                                        self._manager_home / QUARANTINE_ROOT_NAME / moved
+                                    )
+                            return None
                     except _MissingState:
                         return None
-            if moved is None:
-                return None
-            return self._manager_home / QUARANTINE_ROOT_NAME / moved
         except BuildCacheError:
             raise
         except _UntrustedState as exc:
@@ -852,79 +866,40 @@ class WindowsBuildCache:
                         _MUTABLE_DIRECTORY,
                         missing=_MissingState("build cache root is absent"),
                     ) as builds:
-                        with _open_protected_child_directory(
-                            builds,
-                            _DRIVER_DIRECTORY,
-                            "build driver cache",
-                            _MUTABLE_DIRECTORY,
-                            missing=_MissingState(
-                                "build driver cache is absent"
-                            ),
-                        ) as driver:
-                            names = _directory_names(
-                                driver,
-                                "build driver cache",
-                            )
-                            with _open_or_create_mutable_directory(
-                                home,
-                                QUARANTINE_ROOT_NAME,
-                                "build cache quarantine",
-                                replacement_parent=home,
-                                replacement_prefix="builds-quarantine-untrusted",
-                                guard=guard,
-                            ) as quarantine:
-                                for component in names:
-                                    if not _is_key_component(component):
-                                        warnings.append(
-                                            "build cache retained unknown entry "
-                                            f"{component!r}"
-                                        )
-                                        continue
-                                    if component in referenced:
-                                        continue
-                                    try:
-                                        _verified, expected_state = _inspect_gc_entry(
-                                            driver,
-                                            component,
-                                            f"sha256:{component}",
-                                            older_than=float(older_than),
-                                        )
-                                    except _YoungEntry:
-                                        continue
-                                    except _MissingState:
-                                        continue
-                                    except (
-                                        _UntrustedState,
-                                        _CorruptState,
-                                        _metadata.BuildMetadataError,
-                                        BuildCacheError,
-                                        OSError,
-                                        ValueError,
-                                    ) as exc:
-                                        warnings.append(
-                                            "build cache retained uncertain entry "
-                                            f"sha256:{component}: {exc}"
-                                        )
-                                        continue
-                                    _require_guard(guard)
-                                    moved = _move_aside(
+                        for namespace in LOCAL_BUILD_CACHE_NAMESPACES:
+                            try:
+                                with _open_protected_child_directory(
+                                    builds,
+                                    namespace,
+                                    "build driver cache",
+                                    _MUTABLE_DIRECTORY,
+                                    missing=_MissingState(
+                                        "build driver cache is absent"
+                                    ),
+                                ) as driver:
+                                    names = _directory_names(
                                         driver,
-                                        component,
-                                        quarantine,
-                                        f"gc-entry-{component}",
-                                        missing_ok=True,
-                                        expected_state=expected_state,
+                                        "build driver cache",
                                     )
-                                    if moved is None:
-                                        continue
-                                    removed += 1
-                                    try:
-                                        _remove_stage(quarantine, moved)
-                                    except OSError as exc:
-                                        warnings.append(
-                                            "swept build entry remains in quarantine "
-                                            f"{moved}: {exc}"
+                                    with _open_or_create_mutable_directory(
+                                        home,
+                                        QUARANTINE_ROOT_NAME,
+                                        "build cache quarantine",
+                                        replacement_parent=home,
+                                        replacement_prefix="builds-quarantine-untrusted",
+                                        guard=guard,
+                                    ) as quarantine:
+                                        removed += _sweep_driver_entries(
+                                            driver,
+                                            quarantine,
+                                            names,
+                                            referenced,
+                                            older_than,
+                                            guard,
+                                            warnings,
                                         )
+                            except _MissingState:
+                                continue
                 except _MissingState:
                     return CacheCollectionResult()
         except _MissingState:
@@ -940,15 +915,83 @@ class WindowsBuildCache:
             warnings=tuple(warnings),
         )
 
-    def _artifact_path(self, key: str, build_input: _metadata.GoBuildInput) -> Path:
+    def _artifact_path(self, key: str, build_input: _metadata.AnyBuildInput) -> Path:
         artifact_path = str(build_input.artifact_path)
         return (
             self._manager_home
             / LIVE_ROOT_NAME
-            / _DRIVER_DIRECTORY
+            / _driver_directory_for_input(build_input)
             / _key_component(key)
             / Path(*artifact_path.split("/"))
         )
+
+
+def _sweep_driver_entries(
+    driver: _Handle,
+    quarantine: _Handle,
+    names: list[str],
+    referenced: set[str],
+    older_than: float,
+    guard: CacheMutationGuard,
+    warnings: list[str],
+) -> int:
+    """Sweep one live driver namespace, returning the entries removed."""
+
+    swept = 0
+    for component in names:
+            if not _is_key_component(component):
+                warnings.append(
+                    "build cache retained unknown entry "
+                    f"{component!r}"
+                )
+                continue
+            if component in referenced:
+                continue
+            try:
+                _verified, expected_state = _inspect_gc_entry(
+                    driver,
+                    component,
+                    f"sha256:{component}",
+                    older_than=float(older_than),
+                )
+            except _YoungEntry:
+                continue
+            except _MissingState:
+                continue
+            except (
+                _UntrustedState,
+                _CorruptState,
+                _metadata.BuildMetadataError,
+                BuildCacheError,
+                OSError,
+                ValueError,
+            ) as exc:
+                warnings.append(
+                    "build cache retained uncertain entry "
+                    f"sha256:{component}: {exc}"
+                )
+                continue
+            _require_guard(guard)
+            moved = _move_aside(
+                driver,
+                component,
+                quarantine,
+                f"gc-entry-{component}",
+                missing_ok=True,
+                expected_state=expected_state,
+            )
+            if moved is None:
+                continue
+            swept += 1
+            try:
+                _remove_stage(quarantine, moved)
+            except OSError as exc:
+                warnings.append(
+                    "swept build entry remains in quarantine "
+                    f"{moved}: {exc}"
+                )
+
+    return swept
 
 
 def _protection_supported() -> bool:
@@ -2371,7 +2414,7 @@ def _inspect_entry(
                         "cache receipt",
                     )
                     try:
-                        receipt = _metadata.verify_receipt(
+                        receipt = _metadata.verify_receipt_for_input(
                             receipt_bytes,
                             expected_input=expectation.input,
                             expected_cache_key=key,
@@ -2441,9 +2484,9 @@ def _inspect_gc_entry(
                 _MAX_RECEIPT_BYTES,
                 "cache receipt",
             )
-        receipt = _metadata.read_receipt(receipt_bytes)
+        receipt = _metadata.read_any_receipt(receipt_bytes)
         if (
-            _metadata.cache_key(receipt.input) != key
+            _metadata.cache_key_for_input(receipt.input) != key
             or receipt.cache_key != key
         ):
             raise _CorruptState(
@@ -2866,7 +2909,14 @@ def _make_path_mutable(
         _validate_security_profile(handle, profile, os.fspath(path))
 
 
-def _artifact_name(build_input: _metadata.GoBuildInput) -> str:
+def _driver_directory_for_input(build_input: _metadata.AnyBuildInput) -> str:
+    """Return the live namespace a logical input is addressed in."""
+    if isinstance(build_input, _metadata.SourceAwareBuildInput):
+        return GO_V1_RECEIPT_V3_CACHE_NAMESPACE
+    return GO_V1_CACHE_NAMESPACE
+
+
+def _artifact_name(build_input: _metadata.AnyBuildInput) -> str:
     parts = str(build_input.artifact_path).split("/")
     if len(parts) != 2 or parts[0] != "bin" or not parts[1]:
         raise ValueError("manager-derived artifact path is not a direct bin child")

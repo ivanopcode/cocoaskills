@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import stat
 import tempfile
+from collections.abc import Callable, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,7 +10,18 @@ from pathlib import Path
 from . import git_ops, manifest, skillspec, snapshot
 from .config import GlobalConfig
 from .dev_substitutions import Substitution
-from .source_identity import canonical_source_identity, is_allowed
+from .source_identity import (
+    SourceIdentityError,
+    canonical_source_identity,
+    is_allowed,
+)
+from .sources.errors import (
+    CODE_MEMBER_INVALID,
+    CODE_MEMBER_MISSING,
+    CODE_NAME_CONFLICT,
+    CODE_SELECTION_INVALID,
+    SourceError,
+)
 
 
 # The synthetic consumer name for direct Skillfile.json entries. A direct
@@ -84,11 +96,26 @@ def build_closure(
     fetched_repos: set[Path] | None = None,
     stack: ExitStack | None = None,
     read_only: bool = False,
+    node_resolver: Callable[[_Pending], ClosureNode] | None = None,
+    error_factory: Callable[[str, str], BaseException] | None = None,
+    ref_comparator: Callable[[ClosureNode, _Pending], str] | None = None,
 ) -> list[ClosureNode]:
     """Expand direct skills and their requirements into an ordered closure.
 
     Within one closure a skill name resolves to one commit and one canonical
     source; providers precede consumers in the returned order.
+
+    ``node_resolver`` replaces the schema-1 node acquisition for every new
+    name; the schema-2 full closure (:func:`build_source_closure`) supplies
+    it so transitive requirements resolve through the bounded transport and
+    the source-v1 store instead of the legacy cache layout. ``error_factory``
+    maps ``(kind, message)`` to the raised error for the ``"unify"``,
+    ``"requirement_commands"`` and ``"cycle"`` failures; ``None`` raises
+    :class:`ClosureError` exactly as before. ``ref_comparator`` resolves a
+    repeated requirement to its commit for the unification comparison; the
+    schema-2 closure supplies it because its nodes carry materialized
+    snapshot directories rather than git repositories. ``None`` resolves
+    through the node's repository exactly as before.
     """
     nodes: dict[str, ClosureNode] = {}
     fetched_repos = fetched_repos if fetched_repos is not None else set()
@@ -108,16 +135,19 @@ def build_closure(
         item = pending.pop(0)
         node = nodes.get(item.name)
         if node is None:
-            node = _resolve_node(
-                config,
-                item,
-                substitutions.get(item.name),
-                use_cache=use_cache,
-                fetch_existing=fetch_existing,
-                fetched_repos=fetched_repos,
-                stack=stack,
-                read_only=read_only,
-            )
+            if node_resolver is not None:
+                node = node_resolver(item)
+            else:
+                node = _resolve_node(
+                    config,
+                    item,
+                    substitutions.get(item.name),
+                    use_cache=use_cache,
+                    fetch_existing=fetch_existing,
+                    fetched_repos=fetched_repos,
+                    stack=stack,
+                    read_only=read_only,
+                )
             nodes[item.name] = node
             for requirement in node.spec.requirements.values():
                 pending.append(
@@ -135,12 +165,22 @@ def build_closure(
                     )
                 )
         else:
-            _unify(node, item)
+            _unify(node, item, error_factory=error_factory, ref_comparator=ref_comparator)
         node.edges.append(item.edge)
         node.chains.append(item.chain)
 
-    _validate_requirement_commands(nodes)
-    return _topological_order(nodes)
+    _validate_requirement_commands(nodes, error_factory=error_factory)
+    return _topological_order(nodes, error_factory=error_factory)
+
+
+def _closure_failure(
+    error_factory: Callable[[str, str], BaseException] | None,
+    kind: str,
+    message: str,
+) -> BaseException:
+    if error_factory is not None:
+        return error_factory(kind, message)
+    return ClosureError(message)
 
 
 def detect_active_command_collisions(nodes: list[ClosureNode]) -> None:
@@ -155,7 +195,13 @@ def detect_active_command_collisions(nodes: list[ClosureNode]) -> None:
             owners[command] = node.name
 
 
-def _unify(node: ClosureNode, item: _Pending) -> None:
+def _unify(
+    node: ClosureNode,
+    item: _Pending,
+    *,
+    error_factory: Callable[[str, str], BaseException] | None = None,
+    ref_comparator: Callable[[ClosureNode, _Pending], str] | None = None,
+) -> None:
     if node.substituted is not None:
         # A development substitution replaces every requirement of this name.
         return
@@ -165,24 +211,34 @@ def _unify(node: ClosureNode, item: _Pending) -> None:
             if node.identity is None:
                 node.identity = identity
             elif node.identity != identity:
-                raise ClosureError(
+                raise _closure_failure(
+                    error_factory,
+                    "unify",
                     f"Source conflict for {node.name}: {node.identity} (via {_best_chain(node.chains)}) "
-                    f"and {identity} (via {item.chain}) name different repositories"
+                    f"and {identity} (via {item.chain}) name different repositories",
                 )
     if (item.ref.kind, item.ref.value) == (node.resolved.kind, node.resolved.ref):
         return
-    try:
-        other = git_ops.resolve_ref(node.repo, item.ref.kind, item.ref.value)
-    except git_ops.GitError as exc:
-        raise ClosureError(
-            f"Cannot resolve {item.ref.kind} {item.ref.value!r} for {node.name} (via {item.chain}): {exc}"
-        ) from exc
-    if other.commit != node.resolved.commit:
-        raise ClosureError(
+    if ref_comparator is not None:
+        other_commit = ref_comparator(node, item)
+    else:
+        try:
+            other = git_ops.resolve_ref(node.repo, item.ref.kind, item.ref.value)
+        except git_ops.GitError as exc:
+            raise _closure_failure(
+                error_factory,
+                "unify",
+                f"Cannot resolve {item.ref.kind} {item.ref.value!r} for {node.name} (via {item.chain}): {exc}",
+            ) from exc
+        other_commit = other.commit
+    if other_commit != node.resolved.commit:
+        raise _closure_failure(
+            error_factory,
+            "unify",
             f"Version conflict for {node.name}: {node.resolved.kind} {node.resolved.ref} "
             f"-> {node.resolved.commit[:12]} (via {_best_chain(node.chains)}) and {item.ref.kind} "
-            f"{item.ref.value} -> {other.commit[:12]} (via {item.chain}); "
-            "align the requirement refs at their declarations"
+            f"{item.ref.value} -> {other_commit[:12]} (via {item.chain}); "
+            "align the requirement refs at their declarations",
         )
 
 
@@ -432,7 +488,11 @@ def _gate_source(config: GlobalConfig, name: str, git_url: str, chain: str) -> N
     )
 
 
-def _validate_requirement_commands(nodes: dict[str, ClosureNode]) -> None:
+def _validate_requirement_commands(
+    nodes: dict[str, ClosureNode],
+    *,
+    error_factory: Callable[[str, str], BaseException] | None = None,
+) -> None:
     errors: list[str] = []
     for node in nodes.values():
         for requirement in node.spec.requirements.values():
@@ -447,10 +507,14 @@ def _validate_requirement_commands(nodes: dict[str, ClosureNode]) -> None:
                         f"but {requirement.name} does not export a script command named {command!r}"
                     )
     if errors:
-        raise ClosureError("; ".join(errors))
+        raise _closure_failure(error_factory, "requirement_commands", "; ".join(errors))
 
 
-def _topological_order(nodes: dict[str, ClosureNode]) -> list[ClosureNode]:
+def _topological_order(
+    nodes: dict[str, ClosureNode],
+    *,
+    error_factory: Callable[[str, str], BaseException] | None = None,
+) -> list[ClosureNode]:
     # Providers install before consumers: an edge provider -> consumer.
     dependents: dict[str, set[str]] = {name: set() for name in nodes}
     indegree: dict[str, int] = {name: 0 for name in nodes}
@@ -474,5 +538,302 @@ def _topological_order(nodes: dict[str, ClosureNode]) -> list[ClosureNode]:
         ready.sort()
     if len(ordered) != len(nodes):
         remaining = sorted(name for name in nodes if nodes[name] not in ordered)
-        raise ClosureError(f"Dependency cycle between skills: {', '.join(remaining)}")
+        raise _closure_failure(
+            error_factory,
+            "cycle",
+            f"Dependency cycle between skills: {', '.join(remaining)}",
+        )
     return ordered
+
+
+#: The pseudo ref kind carried by local (path) members inside the schema-2
+#: full closure. Local members never unify with a Git requirement: any
+#: repeated requirement disagrees with this kind and fails closed.
+SOURCE_LOCAL_REF_KIND = "local"
+
+
+@dataclass(frozen=True)
+class SourceClosureRoot:
+    """One pre-resolved schema-2 root member entering the full closure.
+
+    Roots are expanded, acquired and captured by the resolving caller before
+    the closure runs; ``materialized`` is the member's frozen bytes directory
+    (caller-owned lifetime, alive for the whole closure build). Local roots
+    carry ``local=True``, ``identity=None`` and the ``"local"`` ref kind;
+    Git roots carry the canonical repository identity and the alias-resolved
+    ``(ref_kind, ref_value, commit)`` triple.
+    """
+
+    name: str
+    from_alias: str
+    directory: str
+    local: bool
+    materialized: Path
+    identity: str | None
+    ref_kind: str
+    ref_value: str
+    commit: str
+
+
+@dataclass(frozen=True)
+class SourceGitAcquisition:
+    """One transport-acquired Git source for a transitive requirement.
+
+    ``materialized`` is the acquired tree root (caller-owned lifetime); the
+    required skill always sits at its root, exactly like a schema-1
+    requirement resolves to its repository root.
+    """
+
+    commit: str
+    object_format: str
+    identity: str
+    materialized: Path
+
+
+def _source_closure_error(kind: str, message: str) -> SourceError:
+    if kind == "unify":
+        # Every _unify failure is a repeated requirement disagreeing with the
+        # node one installed name already unified to: a different repository,
+        # an unresolvable ref, or a different commit. A network-git package
+        # identity includes the commit, so all three are conflicting
+        # dependency identities over one installed name.
+        return SourceError(CODE_NAME_CONFLICT, message)
+    if kind == "requirement_commands":
+        return SourceError(CODE_MEMBER_MISSING, message)
+    return SourceError(CODE_MEMBER_INVALID, message)
+
+
+def _refuse_transitive_ref(
+    requirement: skillspec.SkillRequirement, *, chain: str
+) -> None:
+    """Refuse any transitive requirement that does not pin a revision.
+
+    Branches are admitted only in the root project and the extension adds
+    no floating transitive refs, so a transitive tag, branch or unknown ref
+    kind fails here, before it can enter the pending queue.
+    """
+    if requirement.ref_kind == "revision":
+        return
+    if requirement.ref_kind == "branch":
+        raise SourceError(
+            CODE_SELECTION_INVALID,
+            f"Requirement {requirement.name} (via {chain}) declares branch "
+            f"{requirement.ref_value!r}, but branches are admitted only in "
+            "the root project Skillfile",
+        )
+    raise SourceError(
+        CODE_SELECTION_INVALID,
+        f"Requirement {requirement.name} (via {chain}) declares "
+        f"{requirement.ref_kind} {requirement.ref_value!r}, but transitive "
+        "requirements must pin a revision",
+    )
+
+
+def _source_ref_commit(node: ClosureNode, item: _Pending) -> str:
+    """Resolve one repeated schema-2 requirement to its commit, without I/O.
+
+    Schema-2 nodes carry materialized snapshot directories, never git
+    repositories, so the legacy resolver cannot run against them; and
+    every transitive requirement pins a revision, so the pinned value
+    already is the commit. Unification therefore compares resolved
+    identities (commits), never ref spellings: a root declared
+    ``tag: v1`` and a requirement pinning the same commit unify, while
+    two different commits conflict however they are spelled. A
+    non-revision requirement fails closed here, with the same code the
+    outgoing transitive gate uses.
+    """
+
+    if item.ref.kind != "revision":
+        raise SourceError(
+            CODE_SELECTION_INVALID,
+            f"Requirement {item.name} (via {item.chain}) declares "
+            f"{item.ref.kind} {item.ref.value!r}, but transitive "
+            "requirements must pin a revision",
+        )
+    return item.ref.value
+
+
+def _gate_source_requirements(
+    spec: skillspec.SkillSpec, *, chain: str
+) -> None:
+    """Refuse floating transitive refs in one newly loaded member spec.
+
+    Every requirement enters the traversal from exactly one spec load, so
+    gating each load gates the whole traversal, including requirements that
+    unify with an already-resolved node without reaching the resolver.
+    """
+    for requirement in spec.requirements.values():
+        _refuse_transitive_ref(requirement, chain=chain)
+
+
+def _load_source_spec(materialized: Path, *, name: str, chain: str) -> skillspec.SkillSpec:
+    try:
+        spec = skillspec.load_skill_spec(materialized)
+    except skillspec.SkillSpecError as exc:
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"Invalid skill manifest for {name} (via {chain}): {exc}",
+        ) from exc
+    _gate_source_requirements(spec, chain=f"{chain} -> {name}")
+    return spec
+
+
+def _canonical_requirement_identity(git_url: str, *, name: str, chain: str) -> str:
+    try:
+        identity = canonical_source_identity(git_url)
+    except SourceIdentityError as exc:
+        raise SourceError(
+            CODE_SELECTION_INVALID,
+            f"Requirement {name} (via {chain}) names malformed Git source {git_url!r}: {exc}",
+        ) from exc
+    if identity is None:
+        raise SourceError(
+            CODE_SELECTION_INVALID,
+            f"Requirement {name} (via {chain}) names a local Git source, "
+            "but transitive requirements carry no package-owned local bindings",
+        )
+    return identity
+
+
+def build_source_closure(
+    config: GlobalConfig,
+    roots: Sequence[SourceClosureRoot],
+    *,
+    acquire_git: Callable[[str, str, str], SourceGitAcquisition],
+) -> list[ClosureNode]:
+    """Expand schema-2 root members and their requirements into one closure.
+
+    This is the schema-2 full closure: the traversal, unification, command
+    validation and ordering are :func:`build_closure` itself, so identical
+    transitive requirements unify under the existing closure rules including
+    diamonds, and cycles fail. ``acquire_git`` is the resolving capability
+    ``(git_url, commit, chain) -> SourceGitAcquisition``; the frozen mode
+    never calls this function because it holds no such capability. Every
+    transitive requirement must pin a revision; every acquired root skill
+    name must equal the requiring name.
+    """
+    by_name: dict[str, SourceClosureRoot] = {}
+    for root in roots:
+        if root.name in by_name:
+            raise SourceError(
+                CODE_NAME_CONFLICT,
+                f"Repeated root selection of installed skill name {root.name!r}",
+            )
+        by_name[root.name] = root
+
+    prebuilt: dict[str, ClosureNode] = {}
+    for root in roots:
+        spec = _load_source_spec(root.materialized, name=root.name, chain=PROJECT_EDGE)
+        if root.local:
+            decl = manifest.SkillDecl(
+                name=root.name,
+                source=f"{root.from_alias}:{root.directory}",
+                ref=manifest.SkillRef(SOURCE_LOCAL_REF_KIND, root.directory),
+                git=None,
+            )
+            resolved = git_ops.ResolvedRef(SOURCE_LOCAL_REF_KIND, root.directory, "")
+        else:
+            if root.identity is None:
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"Skill {root.name!r} Git root carries no repository identity",
+                )
+            decl = manifest.SkillDecl(
+                name=root.name,
+                source=f"{root.from_alias}:{root.directory}",
+                ref=manifest.SkillRef(root.ref_kind, root.ref_value),
+                git=root.identity,
+            )
+            resolved = git_ops.ResolvedRef(root.ref_kind, root.ref_value, root.commit)
+        prebuilt[root.name] = ClosureNode(
+            name=root.name,
+            decl=decl,
+            resolved=resolved,
+            repo=root.materialized,
+            snapshot=root.materialized,
+            spec=spec,
+            identity=root.identity,
+            substituted=None,
+        )
+
+    def resolve_item(item: _Pending) -> ClosureNode:
+        prebuilt_node = prebuilt.get(item.name)
+        if prebuilt_node is not None:
+            return prebuilt_node
+        if not item.git:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Requirement {item.name} (via {item.chain}) carries no Git source",
+            )
+        # The outgoing gate pinned every queued requirement to a revision;
+        # recheck here so a direct resolver caller cannot smuggle a float.
+        if item.ref.kind != "revision":
+            raise SourceError(
+                CODE_SELECTION_INVALID,
+                f"Requirement {item.name} (via {item.chain}) declares "
+                f"{item.ref.kind} {item.ref.value!r}, but transitive "
+                "requirements must pin a revision",
+            )
+        identity = _canonical_requirement_identity(item.git, name=item.name, chain=item.chain)
+        acquired = acquire_git(item.git, item.ref.value, item.chain)
+        if acquired.identity != identity:
+            raise SourceError(
+                CODE_NAME_CONFLICT,
+                f"Requirement {item.name} (via {item.chain}) names {identity} "
+                f"but acquisition served {acquired.identity}",
+            )
+        spec = _load_source_spec(acquired.materialized, name=item.name, chain=item.chain)
+        # Imported lazily: selection is downstream of the closure and the
+        # name check runs only for newly acquired transitive requirements.
+        from .sources.selection import read_skill_md_name
+
+        skill_name = read_skill_md_name(
+            acquired.materialized,
+            f"requirement {item.name}",
+            resolved_root=acquired.materialized,
+        )
+        if skill_name != item.name:
+            raise SourceError(
+                CODE_MEMBER_MISSING,
+                f"Requirement {item.name} (via {item.chain}) resolves to skill "
+                f"{skill_name!r}, which does not satisfy it",
+            )
+        return ClosureNode(
+            name=item.name,
+            decl=manifest.SkillDecl(
+                name=item.name,
+                source=item.name,
+                ref=manifest.SkillRef(item.ref.kind, item.ref.value),
+                git=item.git,
+            ),
+            resolved=git_ops.ResolvedRef(item.ref.kind, item.ref.value, acquired.commit),
+            repo=acquired.materialized,
+            snapshot=acquired.materialized,
+            spec=spec,
+            identity=identity,
+            substituted=None,
+        )
+
+    synthesized = manifest.ProjectManifest(
+        path=Path("."),
+        skills=[
+            manifest.SkillDecl(
+                name=root.name,
+                source=f"{root.from_alias}:{root.directory}",
+                ref=manifest.SkillRef(
+                    SOURCE_LOCAL_REF_KIND if root.local else root.ref_kind,
+                    root.directory if root.local else root.ref_value,
+                ),
+                git=None if root.local else root.identity,
+            )
+            for root in roots
+        ],
+    )
+    return build_closure(
+        config,
+        synthesized,
+        {},
+        node_resolver=resolve_item,
+        error_factory=_source_closure_error,
+        ref_comparator=_source_ref_commit,
+    )

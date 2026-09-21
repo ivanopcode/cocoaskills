@@ -148,6 +148,7 @@ def _collect_schema2_project_status(
         locale_value=project_manifest.locale or config.preferred_locale,
         alias=project.alias,
         adapter_mode=config.adapter_mode,
+        config=config,
     )
     lock_ref = evaluated.lock_sha256[:16] if evaluated.lock_sha256 else "no-lock"
     skills = [

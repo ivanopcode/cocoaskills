@@ -1731,6 +1731,33 @@ def check_local_registry_requirement(
         )
 
 
+def check_top_level_build_source(
+    builds: Mapping[str, InstallMarkerBuildV5],
+    build_source: BuildSourceIdentity | None,
+) -> None:
+    """Require top-level build source exactly for active local go-v1 records.
+
+    The top-level ``build_source`` must be present exactly when the builds map
+    carries at least one active local ``go-v1`` record, and absent otherwise:
+    an external-only build binds its source solely per external record, and an
+    empty builds map carries no build source at all. Both directions refuse.
+    """
+
+    has_local = any(
+        build.driver == GO_V1_DRIVER for build in builds.values()
+    )
+    if has_local == (build_source is None):
+        if has_local:
+            raise InstallMarkerError(
+                "top_level_build_source_mismatch",
+                "top-level build_source is required for active local go-v1 builds",
+            )
+        raise InstallMarkerError(
+            "top_level_build_source_mismatch",
+            "top-level build_source must be absent without active local go-v1 builds",
+        )
+
+
 def check_external_only_build_state(
     marker: InstallMarkerV5,
     *,
@@ -1741,8 +1768,9 @@ def check_external_only_build_state(
     The marker must describe a local snapshot with no top-level build source
     and no local go-v1 records, and the receipt package must equal the marker
     package. Receipt-3 ``input.build`` matching and protected-artifact
-    verification are owned by the build-receipts leaf and are a stated bound
-    here: this check binds the marker shape and the package equality only.
+    verification are owned by the build-receipts comparison in
+    ``csk.builds.currentness.compare_external_build_evidence``: this check
+    binds the marker shape and the package equality only.
     """
 
     if not isinstance(marker.package, source_package.LocalSnapshot):
@@ -2469,6 +2497,7 @@ __all__ = [
     "build_install_marker_v5",
     "check_external_only_build_state",
     "check_local_registry_requirement",
+    "check_top_level_build_source",
     "compare_marker_plan",
     "evaluate_marker_status",
     "evaluate_schema2_status",

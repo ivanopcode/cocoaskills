@@ -16,9 +16,28 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
-from .metadata import BuildReceipt, GoBuildInput
+from .metadata import (
+    GO_V1_DRIVER,
+    AnyBuildInput,
+    AnyBuildReceipt,
+    GoBuildInput,
+    SourceAwareBuildInput,
+)
+
+GO_V1_CACHE_NAMESPACE: Final[str] = GO_V1_DRIVER
+GO_V1_RECEIPT_V3_CACHE_NAMESPACE: Final[str] = "go-v1-receipt-v3"
+# The one table driving local build-cache namespaces: the legacy receipt
+# namespace and the receipt-3 namespace. Both protected backends sweep and
+# quarantine exactly these namespaces, the GC mark phase retains entries in
+# all of them, and the growth test fails unless producers, sweep, and mark
+# agree on this same table — so a future third namespace cannot drift to one
+# side only.
+LOCAL_BUILD_CACHE_NAMESPACES: Final[tuple[str, ...]] = (
+    GO_V1_CACHE_NAMESPACE,
+    GO_V1_RECEIPT_V3_CACHE_NAMESPACE,
+)
 
 _SHA256_IDENTITY = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
@@ -64,12 +83,14 @@ class CachePublicationStatus(str, Enum):
 class CacheExpectation:
     """Complete independently derived state required for one lookup."""
 
-    input: GoBuildInput
+    input: AnyBuildInput
     receipt_sha256: str | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.input, GoBuildInput):
-            raise TypeError("cache expectation input must be a GoBuildInput")
+        if not isinstance(self.input, (GoBuildInput, SourceAwareBuildInput)):
+            raise TypeError(
+                "cache expectation input must be a GoBuildInput or SourceAwareBuildInput"
+            )
         if self.receipt_sha256 is not None:
             _require_sha256(self.receipt_sha256, "expected receipt SHA-256")
 
@@ -85,7 +106,7 @@ class CacheInspection:
 
     status: CacheEntryStatus
     reason: str
-    receipt: BuildReceipt | None = None
+    receipt: AnyBuildReceipt | None = None
     receipt_bytes: bytes | None = None
     receipt_sha256: str | None = None
     artifact_path: Path | None = None
@@ -113,13 +134,15 @@ class CacheInspection:
 class CachePublication:
     """A verified private build offered for protected publication."""
 
-    input: GoBuildInput
+    input: AnyBuildInput
     receipt_bytes: bytes
     artifact_source: Path
 
     def __post_init__(self) -> None:
-        if not isinstance(self.input, GoBuildInput):
-            raise TypeError("cache publication input must be a GoBuildInput")
+        if not isinstance(self.input, (GoBuildInput, SourceAwareBuildInput)):
+            raise TypeError(
+                "cache publication input must be a GoBuildInput or SourceAwareBuildInput"
+            )
         if not isinstance(self.receipt_bytes, bytes):
             raise TypeError("cache publication receipt_bytes must be bytes")
         object.__setattr__(self, "artifact_source", Path(self.artifact_source))

@@ -5,11 +5,17 @@ The live physical layout is deliberately csk-specific and non-portable::
     <manager-home>/builds/go-v1/<64-hex-key>/
         csk-receipt.ccj.json
         bin/<command>
+    <manager-home>/builds/go-v1-receipt-v3/<64-hex-key>/
+        csk-receipt.ccj.json
+        bin/<command>
 
-Protocol callers never provide those paths. They provide only a complete
-logical build input, an optional receipt hash, and a private artifact source.
-Publication staging and quarantine live in separate manager-home namespaces so
-an entry appears below ``builds`` only as one complete atomic directory.
+The second namespace holds receipt-3 entries addressed by a complete wrapped
+input; a legacy entry can never satisfy a receipt-3 lookup because the lookup
+never opens the legacy namespace. Protocol callers never provide those paths.
+They provide only a complete logical build input, an optional receipt hash,
+and a private artifact source. Publication staging and quarantine live in
+separate manager-home namespaces so an entry appears below ``builds`` only as
+one complete atomic directory.
 """
 
 from __future__ import annotations
@@ -32,6 +38,9 @@ from typing import Final
 
 from . import metadata as _metadata
 from .cache import (
+    GO_V1_CACHE_NAMESPACE,
+    GO_V1_RECEIPT_V3_CACHE_NAMESPACE,
+    LOCAL_BUILD_CACHE_NAMESPACES,
     BuildCacheError,
     CacheCollectionResult,
     CacheConflictError,
@@ -48,8 +57,6 @@ LIVE_ROOT_NAME: Final = "builds"
 STAGING_ROOT_NAME: Final = ".builds-staging"
 QUARANTINE_ROOT_NAME: Final = ".builds-quarantine"
 RECEIPT_FILENAME: Final = "csk-receipt.ccj.json"
-
-_DRIVER_DIRECTORY: Final = _metadata.GO_V1_DRIVER
 _MAX_RECEIPT_BYTES: Final = 1 << 20
 _DIRECTORY_PRIVATE_MODE: Final = 0o700
 _DIRECTORY_IMMUTABLE_MODE: Final = 0o500
@@ -76,7 +83,7 @@ class _CorruptState(Exception):
 
 @dataclass(frozen=True)
 class _VerifiedEntry:
-    receipt: _metadata.BuildReceipt
+    receipt: _metadata.AnyBuildReceipt
     receipt_bytes: bytes
     receipt_sha256: str
     artifact_sha256: str
@@ -121,7 +128,7 @@ class PosixBuildCache:
                 reason="required POSIX protection primitives are unavailable",
             )
         try:
-            key = _metadata.cache_key(expectation.input)
+            key = _metadata.cache_key_for_input(expectation.input)
             artifact_name = _artifact_name(expectation.input)
             with _open_manager_home(self._manager_home) as home_fd:  # noqa: SIM117
                 with _open_private_directory_at(
@@ -132,7 +139,7 @@ class PosixBuildCache:
                 ) as builds_fd:
                     with _open_private_directory_at(
                         builds_fd,
-                        _DRIVER_DIRECTORY,
+                        _driver_directory_for_input(expectation.input),
                         "build driver cache",
                         missing=_MissingState("build driver cache is absent"),
                     ) as driver_fd:
@@ -201,8 +208,8 @@ class PosixBuildCache:
                 "publication receipt exceeds the supported size",
             )
         try:
-            key = _metadata.cache_key(publication.input)
-            receipt = _metadata.verify_receipt(
+            key = _metadata.cache_key_for_input(publication.input)
+            receipt = _metadata.verify_receipt_for_input(
                 publication.receipt_bytes,
                 expected_input=publication.input,
                 expected_cache_key=key,
@@ -281,6 +288,9 @@ class PosixBuildCache:
                             with _open_live_driver_for_publish(
                                 home_fd,
                                 guard,
+                                driver_directory=_driver_directory_for_input(
+                                    publication.input
+                                ),
                             ) as (driver_fd, quarantine_fd):
                                 for _attempt in range(8):
                                     _require_guard(guard)
@@ -516,27 +526,34 @@ class PosixBuildCache:
                             LIVE_ROOT_NAME,
                             "build cache root",
                             missing=_MissingState("build cache root is absent"),
-                        ) as builds_fd, _open_private_directory_at(
-                            builds_fd,
-                            _DRIVER_DIRECTORY,
-                            "build driver cache",
-                            missing=_MissingState(
-                                "build driver cache is absent"
-                            ),
-                        ) as driver_fd:
-                            _require_guard(guard)
-                            moved = _move_aside(
-                                driver_fd,
-                                component,
-                                quarantine_fd,
-                                f"entry-{component}",
-                                missing_ok=True,
-                            )
+                        ) as builds_fd:
+                            for namespace in LOCAL_BUILD_CACHE_NAMESPACES:
+                                try:
+                                    with _open_private_directory_at(
+                                        builds_fd,
+                                        namespace,
+                                        "build driver cache",
+                                        missing=_MissingState(
+                                            "build driver cache is absent"
+                                        ),
+                                    ) as driver_fd:
+                                        _require_guard(guard)
+                                        moved = _move_aside(
+                                            driver_fd,
+                                            component,
+                                            quarantine_fd,
+                                            f"entry-{component}",
+                                            missing_ok=True,
+                                        )
+                                except _MissingState:
+                                    continue
+                                if moved is not None:
+                                    return (
+                                        self._manager_home / QUARANTINE_ROOT_NAME / moved
+                                    )
+                            return None
                     except _MissingState:
                         return None
-            if moved is None:
-                return None
-            return self._manager_home / QUARANTINE_ROOT_NAME / moved
         except BuildCacheError:
             raise
         except _UntrustedState as exc:
@@ -581,90 +598,35 @@ class PosixBuildCache:
                         "build cache root",
                         missing=_MissingState("build cache root is absent"),
                     ) as builds_fd:
-                        with _open_private_directory_at(
-                            builds_fd,
-                            _DRIVER_DIRECTORY,
-                            "build driver cache",
-                            missing=_MissingState(
-                                "build driver cache is absent"
-                            ),
-                        ) as driver_fd:
-                            names = _directory_names(
-                                driver_fd,
-                                "build driver cache",
-                            )
-                            with _open_or_replace_auxiliary_root(
-                                home_fd,
-                                QUARANTINE_ROOT_NAME,
-                            ) as quarantine_fd:
-                                for component in names:
-                                    if not _is_key_component(component):
-                                        warnings.append(
-                                            "build cache retained unknown entry "
-                                            f"{component!r}"
-                                        )
-                                        continue
-                                    if component in referenced:
-                                        continue
-                                    try:
-                                        with _open_private_directory_at(
+                        for namespace in LOCAL_BUILD_CACHE_NAMESPACES:
+                            try:
+                                with _open_private_directory_at(
+                                    builds_fd,
+                                    namespace,
+                                    "build driver cache",
+                                    missing=_MissingState(
+                                        "build driver cache is absent"
+                                    ),
+                                ) as driver_fd:
+                                    names = _directory_names(
+                                        driver_fd,
+                                        "build driver cache",
+                                    )
+                                    with _open_or_replace_auxiliary_root(
+                                        home_fd,
+                                        QUARANTINE_ROOT_NAME,
+                                    ) as quarantine_fd:
+                                        removed += _sweep_driver_entries(
                                             driver_fd,
-                                            component,
-                                            "cache entry",
-                                            missing=_MissingState(
-                                                "cache entry is absent"
-                                            ),
-                                            immutable=True,
-                                        ) as entry_fd:
-                                            before = os.fstat(entry_fd)
-                                            if before.st_mtime >= older_than:
-                                                continue
-                                            _inspect_gc_entry(
-                                                entry_fd,
-                                                f"sha256:{component}",
-                                            )
-                                            after = os.fstat(entry_fd)
-                                            if not _stable_directory_state(
-                                                before,
-                                                after,
-                                            ):
-                                                raise _UntrustedState(
-                                                    "cache entry changed during GC inspection"
-                                                )
-                                            _require_guard(guard)
-                                            moved = _move_aside(
-                                                driver_fd,
-                                                component,
-                                                quarantine_fd,
-                                                f"gc-entry-{component}",
-                                                missing_ok=True,
-                                                expected_state=after,
-                                            )
-                                    except _MissingState:
-                                        continue
-                                    except (
-                                        _UntrustedState,
-                                        _CorruptState,
-                                        _metadata.BuildMetadataError,
-                                        BuildCacheError,
-                                        OSError,
-                                        ValueError,
-                                    ) as exc:
-                                        warnings.append(
-                                            "build cache retained uncertain entry "
-                                            f"sha256:{component}: {exc}"
+                                            quarantine_fd,
+                                            names,
+                                            referenced,
+                                            older_than,
+                                            guard,
+                                            warnings,
                                         )
-                                        continue
-                                    if moved is None:
-                                        continue
-                                    removed += 1
-                                    try:
-                                        _remove_stage(quarantine_fd, moved)
-                                    except OSError as exc:
-                                        warnings.append(
-                                            "swept build entry remains in quarantine "
-                                            f"{moved}: {exc}"
-                                        )
+                            except _MissingState:
+                                continue
                 except _MissingState:
                     return CacheCollectionResult()
         except _MissingState:
@@ -680,14 +642,98 @@ class PosixBuildCache:
             warnings=tuple(warnings),
         )
 
-    def _artifact_path(self, key: str, build_input: _metadata.GoBuildInput) -> Path:
+    def _artifact_path(self, key: str, build_input: _metadata.AnyBuildInput) -> Path:
         return (
             self._manager_home
             / LIVE_ROOT_NAME
-            / _DRIVER_DIRECTORY
+            / _driver_directory_for_input(build_input)
             / _key_component(key)
             / Path(*build_input.artifact_path.split("/"))
         )
+
+
+def _sweep_driver_entries(
+    driver_fd: int,
+    quarantine_fd: int,
+    names: list[str],
+    referenced: set[str],
+    older_than: float,
+    guard: CacheMutationGuard,
+    warnings: list[str],
+) -> int:
+    """Sweep one live driver namespace, returning the entries removed."""
+
+    swept = 0
+    for component in names:
+        if not _is_key_component(component):
+            warnings.append(
+                "build cache retained unknown entry "
+                f"{component!r}"
+            )
+            continue
+        if component in referenced:
+            continue
+        try:
+            with _open_private_directory_at(
+                driver_fd,
+                component,
+                "cache entry",
+                missing=_MissingState(
+                    "cache entry is absent"
+                ),
+                immutable=True,
+            ) as entry_fd:
+                before = os.fstat(entry_fd)
+                if before.st_mtime >= older_than:
+                    continue
+                _inspect_gc_entry(
+                    entry_fd,
+                    f"sha256:{component}",
+                )
+                after = os.fstat(entry_fd)
+                if not _stable_directory_state(
+                    before,
+                    after,
+                ):
+                    raise _UntrustedState(
+                        "cache entry changed during GC inspection"
+                    )
+                _require_guard(guard)
+                moved = _move_aside(
+                    driver_fd,
+                    component,
+                    quarantine_fd,
+                    f"gc-entry-{component}",
+                    missing_ok=True,
+                    expected_state=after,
+                )
+        except _MissingState:
+            continue
+        except (
+            _UntrustedState,
+            _CorruptState,
+            _metadata.BuildMetadataError,
+            BuildCacheError,
+            OSError,
+            ValueError,
+        ) as exc:
+            warnings.append(
+                "build cache retained uncertain entry "
+                f"sha256:{component}: {exc}"
+            )
+            continue
+        if moved is None:
+            continue
+        swept += 1
+        try:
+            _remove_stage(quarantine_fd, moved)
+        except OSError as exc:
+            warnings.append(
+                "swept build entry remains in quarantine "
+                f"{moved}: {exc}"
+            )
+
+    return swept
 
 
 def _protection_supported() -> bool:
@@ -733,7 +779,14 @@ def _effective_uid() -> int:
         ) from exc
 
 
-def _artifact_name(build_input: _metadata.GoBuildInput) -> str:
+def _driver_directory_for_input(build_input: _metadata.AnyBuildInput) -> str:
+    """Return the live namespace a logical input is addressed in."""
+    if isinstance(build_input, _metadata.SourceAwareBuildInput):
+        return GO_V1_RECEIPT_V3_CACHE_NAMESPACE
+    return GO_V1_CACHE_NAMESPACE
+
+
+def _artifact_name(build_input: _metadata.AnyBuildInput) -> str:
     parts = build_input.artifact_path.split("/")
     if len(parts) != 2 or parts[0] != "bin" or not parts[1]:
         raise ValueError("manager-derived artifact path is not a direct bin child")
@@ -1007,7 +1060,7 @@ def _inspect_open_entry(
                 "cache receipt",
             )
             try:
-                receipt = _metadata.verify_receipt(
+                receipt = _metadata.verify_receipt_for_input(
                     receipt_bytes,
                     expected_input=expectation.input,
                     expected_cache_key=key,
@@ -1051,8 +1104,8 @@ def _inspect_gc_entry(entry_fd: int, key: str) -> _VerifiedEntry:
             _MAX_RECEIPT_BYTES,
             "cache receipt",
         )
-    receipt = _metadata.read_receipt(receipt_bytes)
-    if _metadata.cache_key(receipt.input) != key or receipt.cache_key != key:
+    receipt = _metadata.read_any_receipt(receipt_bytes)
+    if _metadata.cache_key_for_input(receipt.input) != key or receipt.cache_key != key:
         raise _CorruptState(
             "cache directory name does not match its canonical receipt input"
         )
@@ -1261,6 +1314,8 @@ def _open_or_replace_auxiliary_root(
 def _open_live_driver_for_publish(
     home_fd: int,
     guard: CacheMutationGuard,
+    *,
+    driver_directory: str,
 ) -> Iterator[tuple[int, int]]:
     with _open_or_replace_auxiliary_root(
         home_fd,
@@ -1276,9 +1331,9 @@ def _open_live_driver_for_publish(
             _require_guard(guard)
             with _open_or_create_private_directory(
                 builds_fd,
-                _DRIVER_DIRECTORY,
+                driver_directory,
                 replacement_parent_fd=quarantine_fd,
-                replacement_prefix="boundary-go-v1",
+                replacement_prefix=f"boundary-{driver_directory}",
             ) as driver_fd:
                 yield driver_fd, quarantine_fd
 
