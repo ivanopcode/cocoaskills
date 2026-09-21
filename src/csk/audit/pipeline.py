@@ -174,6 +174,11 @@ def gate_plans(
         return GateResult(reports=(), errors=(f"audit blocked: audit canary failed: {exc}",))
     except AuditEgressError as exc:
         return GateResult(reports=(), errors=(f"audit blocked: {exc}",))
+    except trust.TrustRecordError as exc:
+        # An unreadable pin store blocks in every mode: converting it to
+        # the advisory warning path would launder the failure into
+        # "proceeding without audit" (and into "unpinned" downstream).
+        return GateResult(reports=(), errors=(f"audit blocked: {exc}",))
     except AuditBackendError as exc:
         message = f"audit backend failed: {exc}"
         if config.audit.mode == "strict":
@@ -197,6 +202,11 @@ def reports_to_payload(reports: tuple[AuditReport, ...]) -> dict[str, Any]:
         "schema_version": 1,
         "reports": [_report_to_payload(report) for report in reports],
     }
+
+
+def finding_to_payload(finding: Finding) -> dict[str, Any]:
+    """Return the persisted payload of one finding (source-audit evidence)."""
+    return _finding_to_payload(finding)
 
 
 def render_reports(reports: tuple[AuditReport, ...]) -> str:
@@ -445,14 +455,20 @@ def _decide(
     return policy.decide(findings, mode=config.audit.mode, fail_on=config.audit.fail_on)
 
 
-def _revocation_reason(
-    config: GlobalConfig,
+def revocation_reason_for(
+    *,
+    revocations: tuple[str, ...] | list[str],
     content_sha256: str,
     source: str,
     git: str | None,
 ) -> str | None:
+    """Return the revocation reason for one content hash, if it is revoked.
+
+    The one revocation matcher shared by the pipeline decision and by
+    source-audit use-time validation, so both refuse the same inputs.
+    """
     normalized = trust.normalize_content_sha256(content_sha256)
-    for item in config.audit.revocations:
+    for item in revocations:
         if item.startswith("source:"):
             pattern = item.removeprefix("source:")
             if _source_revocation_matches(pattern, source, git):
@@ -461,6 +477,20 @@ def _revocation_reason(
         if trust.normalize_content_sha256(item) == normalized:
             return f"content hash {content_sha256}"
     return None
+
+
+def _revocation_reason(
+    config: GlobalConfig,
+    content_sha256: str,
+    source: str,
+    git: str | None,
+) -> str | None:
+    return revocation_reason_for(
+        revocations=config.audit.revocations,
+        content_sha256=content_sha256,
+        source=source,
+        git=git,
+    )
 
 
 def _source_revocation_matches(pattern: str, source: str, git: str | None) -> bool:

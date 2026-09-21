@@ -1,45 +1,20 @@
 # Logbook
 
-## 2026-09-18 - BUG-260917-2jt7g2: the racy guard test never raced the lifetime it named; the /bin/sleep copy is SIGKILLed at exec
+## 2026-09-18 - TASK-260916-nawehj: never capture the xdist suite with a shell redirect
 
-The `test_macos_identity_guard_detects_process_graph_replacement_and_restore`
-flake was filed as "0.2 s subprocess must finish inside a 1 s budget", but an
-instrumented trace showed both executor verifies complete at ~t+5 ms while the
-main thread mutates at ~t+58 ms: a copy of `/bin/sleep` is SIGKILLed at exec
-on Apple Silicon (platform-binary enforcement, `Killed: 9` in ~2 ms from
-every location probed), so the mutation already lands after the executor
-finished and no scheduling can place work "during" that lifetime. The real
-race is verify-in-gap: `failures == []` holds only while both hash verifies
-miss the microsecond mutate-restore window, which saturation stretches. Fix
-is sequential program order (mutate+restore strictly inside the guard
-lifetime, executor run after the restore, no thread/sleep/join) plus a new
-no-mutation silence test; the only timing bound left is a 60 s executor hang
-bound. Full evidence, three narrowing mutants (mask-drop, fire-without-events,
-nonzero-exit-as-identity-failure), and 30/30 runs under 14 hogs are in
-BUG-260917-2jt7g2_results.md. Lesson carried: when a timing test's lifetime
-model is wrong (here the child never lived), re-timing the race is the wrong
-repair — check what the kernel actually did before choosing the sync mechanism.
-
-## 2026-09-18 - TASK-260918-16r0fm rev2: the floor value's provenance, the workflow-level surfaces, and the read-failure half of F4
-
-Revision 1 closed the five named evasions and whitelisted every in-job key
-(31/31) but never read `pyproject.toml`: the gate compared `FLOOR` against
-the interpreter `FLOOR` itself selected, satisfied by construction whenever
-the resolve step was wrong, and the resolve step's run text outside the
-tested heredoc was unpinned -- three one-line edits resolved 3.14, installed
-3.14, and passed a PEP-701 tree with 33/33 green. Same round: the whitelist
-read only `jobs.floor_syntax`, so workflow-level `defaults.run.shell` and
-top-level `env.PYTHONPATH` (both actionlint-clean, both suite-green)
-substituted the step shell and shadowed `compileall`; and a sentinel-backed
-but unlistable target still exited 0 on `Can't list`. Revision 2 resolves
-the floor inside the gate through one shared committed resolver (FLOOR
-demoted to a cross-check), pins the resolve run whole exactly like the
-compile run, declares `shell: bash` plus `python -I`, pins the top-level
-`defaults`/`env` surfaces, and walks every target with a raising `onerror`
-before compiling. Lesson carried: a self-check is satisfied by construction
-when the checked value chose the checker -- provenance must be resolved
-inside the gate, not passed into it; and a whitelist enforced on one surface
-is a bypass path through every surface it does not name.
+Running the ordinary suite as `pytest -n 8 ... > file.log` fails
+`tests/test_selection_boundary_property.py` spuriously (8-11 failures,
+all `stream.read on fd=9`). F_GETPATH on the tripped worker shows fd 9
+is the redirect target itself: workers inherit the controller's
+stdout/stderr, the selection fd-offset tripwire snapshots every open
+regular fd including it, and the controller's progress output advances
+the shared offset mid-test. Piping the identical command (`2>&1 | tail`)
+is green twice (9035 passed, 132 skipped, exit 0). The tripwire belongs
+to the selection leaf; until it scopes inherited controller fds out,
+capture full-suite output via pipes only. Same investigation also fixed
+a real pre-existing leak on the shared external-admission path:
+`git_admission._ObjectReader.close()` never closed the stdout pipe
+(`ResourceWarning` at GC, also emitted by the v1 external tests).
 
 ## 2026-09-18 - BUG-260917-3txerf rev3: the rev2 closure claim was partial; two guard classes stay open under TASK-260918-16r0fm
 
@@ -3996,3 +3971,254 @@ CLASS tests pin literal families and a separate completeness test pins the
 literals against the table; and layered validation needs gate-level detail
 assertions, because deleting one gate still refuses downstream and no
 verdict-level test could tell it was gone.
+
+## 2026-09-18 TASK-260916-341a6q: source-aware build receipts and cache
+
+Implemented build receipt schema 3 (wrapper over unchanged driver inputs),
+package-bound cache keys, receipt-3 cache namespaces for both arms, marker-5
+record retention, the seventeen-field external-evidence comparison, top-level
+build-source presence, and audit-before-cache/compiler ordering with counters.
+
+Notable: a top-level `sources.package_identity` import from
+`builds/metadata.py`/`builds/planner.py` tripped the selection boundary
+instrument (runtime-loaded but never scanned); fixed with function-level lazy
+imports, the codebase's established decoupling tool. No instrument change.
+
+Evidence: `TASK-260916-341a6q_results.md` (board outcome resource).
+
+## 2026-09-18 TASK-260916-341a6q rev2: gc namespace parity (F1), ordering counters (N2), genuine positive control (N1)
+
+Fixed the review-round-1 bypass: `csk gc` swept `builds/go-v1-receipt-v3/`
+while the mark contributed no marker-5 reference, destroying live entries.
+Mark and sweep now derive from one namespace table per cache family
+(`LOCAL_BUILD_CACHE_NAMESPACES`, `EXTERNAL_ARTIFACT/SNAPSHOT_NAMESPACES`),
+the mark shares one `_mark_receipted_builds` across markers v3-v5, and
+growth tests fail when a namespace appears on one side only. The growth
+test then caught a second, pre-existing defect on the same path: the
+external snapshot sweep relaxed only the top directory and died on the
+nested sealed `files` tree (Permission denied, whole external collection
+retained with a warning) — fixed by relaxing the proved subtree without
+following links. Also added cache-read counters to the pipeline normal
+path and the repair path (reviewer mutant R5 now dies in the repair test
+and all seventeen drivers) and rebuilt `external-only-current` on a
+genuine install (real hashes, `compare_external_build_evidence == ()`,
+store-verified protected artifact).
+
+## 2026-09-18 TASK-260916-11yseo: source audit is a binding because the store path cannot be supplied
+
+Built `source-audit-v1` as a record that cannot authorize by itself:
+`validate_source_audit` takes the expected package and content and derives
+the report path from the content hash, so no caller can point validation at
+a package-supplied attestation, and the decision is recomputed under the
+current machine policy (fresh static canary, the shared revocation
+matcher, current pins, current mode/fail_on). Two findings worth keeping.
+First, a record-vs-expected check masked by a later stored-vs-expected
+check with the same code survives its own mutant (M-binding v1, exit 0):
+defense in depth is real, but the mutant only dies once the fixture swaps
+the record side instead of the expected side, so the two layers need
+distinct fixtures, not just distinct lines. Second, the pipeline
+revocation matcher raises a raw ValueError on a garbage non-source entry
+(a pre-existing shape outside this leaf's contract); the source-audit
+policy constructor refuses such entries structurally instead, so the new
+surface never inherits the unstructured escape. Pins satisfy require_pin
+only (three named gate tests); registry evidence needs a live attestation
+plus the exact four-way match; the build-input binder names the context
+hash it refuses to return. 20 narrowing-mutant runs, 19 killed,
+1 measured survivor (the masked v1, superseded by a killing fixture).
+
+Evidence: `TASK-260916-11yseo_results.md` (board outcome resource).
+
+Evidence: `TASK-260916-341a6q_results.md` rev2 appendix (board outcome resource).
+
+## 2026-09-18 TASK-260916-11yseo rev2: a check needs an independent side
+
+Revision 1 came back with five findings, three sharing one mechanism:
+the verified value was supplied by its verifier (live-resolve identity
+as separate parameters next to the expectation; hook content hash
+taken from the package claim; stored-path labels parsed but never
+compared). Fixed each by construction rather than by guard: the query
+identity derives from the expectation and cannot be pointed
+elsewhere; the hook recomputes the content hash over the frozen tree
+with the pipeline's own function; the stored path compares every
+label it does not recompute. Two smaller fixes rode along
+(case-normalizing policy bridge with structural enum validation;
+field-naming CCJ-1 refusal for finding strings) plus two review notes
+(dangling link reads as unreadable via lstat; unparseable stored
+source refuses as malformed instead of leaking the matcher's
+ValueError). Deliberately left open with stated bounds: semantic
+store tamper on the recordless path has no integrity anchor by
+construction (the record path catches it via the evidence digest),
+and the five entry points still await their wiring leaf, so the
+results name module entry points instead of claiming callers.
+
+Evidence: `TASK-260916-11yseo_results.md` revision 2 (board outcome resource).
+
+## 2026-09-18 TASK-260916-11yseo rev3: the fixture that certified the gap
+
+Round 2 returned four findings, two of them repeats. The sharpest was
+F-D2: the fourth member of the live binding (context hash) was still
+compared only between two caller-supplied values, and the leaf's own
+positive fixture had the live record attest one hash while the evidence
+claimed another, and it passed, certifying the gap. Fixed structurally
+(the query parameter is gone, not guarded; every evidence member must
+name the live record) and corrected the fixture with a note on what it
+used to assert. F-D3 was a verdict depending on config order (freshness
+looked up by non-unique registry name); now deny-wins over every URL
+carrying the name. The two robustness repeats closed as classes: one
+error boundary over the whole writer surface with fault injection at
+each seam, and the trust reader failing non-object payloads closed
+down the branch it already had. Three non-blocking notes (deprecated
+warning, revocation dedupe, attestation summary) rode along; all prior
+mutants still die.
+
+Evidence: `TASK-260916-11yseo_results.md` revision 3 (board outcome resource).
+
+## 2026-09-18 TASK-260916-11yseo rev4: the one seam, closed both ways
+
+Round 3 closed all four round-2 findings and left one robustness
+finding: the trust reader's stat seam escaped raw while the read seam
+silently meant no pin. The round budget was exhausted, so the
+orchestrator re-decomposed: the cross-module seam family moved to
+`BUG-260918-2krem5`, and this leaf kept exactly the one seam. The fix
+is a few lines (probe and read under one boundary, typed at both
+layers) with the distinction committed as tests both ways: absent
+trust admits as no pin, unreadable trust refuses on both validators
+and through `plan_builds`, proved by fault injection at both seams
+and mock-free (chmod-0 directory, directory-at-file). The narrowing
+mutant restores the early return ahead of the try and dies to
+exactly the stat-path tests. All rounds 1-3 mutants still die by
+name; conformance holds at 274/3 with no reappeared skip.
+
+Evidence: `TASK-260916-11yseo_results.md` revision 4 (board outcome resource).
+
+## 2026-09-18 TASK-260916-11yseo rev5: the caller boundary the seam fix owed
+
+Revision 4 changed the failure contract of a shared reader
+(`load_trust_record` now raises `TrustRecordError`) and adapted two
+of its three production callers; `csk audit` raised raw through the
+third. The lesson is the survey: changing what a shared function
+raises means grepping every caller first, and that survey is the
+work. The boundary is a few lines — `gate_plans` converts the new
+type to a mode-independent block, and the error subclasses
+`ValueError` so `cli.main`'s existing catch renders it structured
+(the `SourceAuditError` convention; `cli.py` untouched) — proved by
+one parametrised test over the three unreadable-trust shapes times
+the three reaches (`csk audit`, gate advisory, gate strict) and two
+narrowing mutants (advisory downgrade, PermissionError-only
+conversion). No failure anywhere launders into "unpinned".
+
+Evidence: `TASK-260916-11yseo_results.md` revision 5 (board outcome resource).
+
+## 2026-09-18 TASK-260916-nawehj rev2: note 8 catches its second instance in review, not in a lane
+
+The first instance cost a whole hosted Windows lane (83 of 88 tests);
+this one cost a rework round: `tests/test_source_runtime.py` installed
+through POSIX-only selection in 21 tests with no traversal guard, 12
+of them unmarked. The fix shape worth keeping: guard the install
+helpers (the paths that need selection), not the module — and give the
+failure helper a default-guarded keyword so the two tests whose
+refusals precede selection (`installer.py` raises before
+`install_schema2`) keep running on Windows. Forced-off proof gives 9
+passed / 21 skipped with the shared reason verbatim, matching the
+reviewer's 12/9 accounting exactly.
+
+Evidence: `TASK-260916-nawehj_results.md` revision 2 (board outcome resource).
+
+## 2026-09-18 TASK-260916-18j5hg rev1: the resolve side of the bounded transport, and two first-exercise findings
+
+The transport leaf landed acquisition only, so ref resolution
+(`transport.resolve_ref` down to a bounded `ls-remote`) belongs
+to the closure leaf: it mirrors `acquire_plan`'s deadline and
+fallback and shares acquisition's tool validation, credentials,
+environment, and budget helpers, while byte acquisition stays
+exclusively on `acquire_network` and revision pins resolve with
+zero I/O. Two N3 wirings got their first production call sites;
+the status-side one (`compare_external_build_evidence` in
+external reconstruction) was unreached suite-wide because the
+existing external test never collects status — covered by a new
+hermetic tamper test instead of a second external fixture.
+Two process notes worth keeping: a narrowing mutant that
+survives is a test gap, not a pass (the memo-bypass survival
+forced a repeated-resolution assertion into the one-commit
+test); and a revision-pinned dependency cycle is a hash
+fixed-point no pair of real commits can form, so the cycle
+test drives the closure directly with stubbed acquisition.
+
+Evidence: `TASK-260916-18j5hg_results.md` revision 1 (board outcome resource).
+
+## 2026-09-19 TASK-260916-18j5hg rev2: a marker type is not a capability boundary, and a substring is not a verdict
+
+Three review findings, one root: the frozen mode was a marker type
+sitting beside the transport grant (`install_schema2` still took
+`fetch`, `tool_for_endpoint` and `policy_path` as plain parameters),
+so a `FrozenSources`-typed function could enumerate, capture, stage,
+advance a ref and write a lock under `mypy --strict`. The fix is
+enforcement by absence — the installer decides via `modes.select`
+and passes only the mode; the frozen lane is its own function whose
+parameter list cannot name the grant — proved the way it was
+disproved, with the attack failing to type-check (`arg-type` on the
+resolving-only entry points, `name-defined` on the grant).
+
+The same round fixed two real behaviors: the frozen lane consulted
+live bytes before the store and healed a missing entry from them
+(the sibling `[store-heals]` case pinned the recreation; the spec
+and the corpus say refuse, so it now refuses
+`source_snapshot_unavailable`); and `closure._unify` compared ref
+spellings and pointed the legacy resolver at a materialized
+snapshot directory, refusing a legitimate tag-root plus
+same-commit revision requirement (now unifies on the resolved
+commit via a `ref_comparator` hook; schema 1 untouched).
+
+One self-found shape worth keeping: refusal details chain the
+causing error, which embeds its own code — so a substring
+assertion (`CODE in errors[0]`) passes while answering the wrong
+class, exactly the failure the brief warns about. The collapse
+mutant MR3 proved it against our own old unavailable test; every
+refusal assertion in the leaf module now pins the HEAD code
+(`_assert_head_code`, matching the sibling helper's `startswith`
+discipline).
+
+Evidence: `TASK-260916-18j5hg_results.md` revision 2 (board outcome resource).
+
+## 2026-09-21 TASK-260916-18j5hg rev3: the test helper must resolve git before the admission layer sees it
+
+macos-latest failed nine tests in `test_source_closure_refresh.py`
+with `build_repository_identity_invalid: git path is not an admitted
+ordinary object`: Homebrew's git is a symlink, `shutil.which` returns
+the link, and the admission layer refuses a symlinked executable by
+contract. Every other test module already resolved its discovered git;
+this one was the only site that did not. The fix is two lines in
+`_real_tool` (`Path(discovered).resolve()`), plus a regression test
+that builds the runner's shape (a symlinked git first on PATH) and
+asserts the helper hands over the resolved object. The product is
+untouched — the refusal is the contract working. Proven the way the
+failure would have been caught: the same symlinked-PATH setup fails 9
+on the old helper and passes 52 on the new one.
+
+Evidence: `TASK-260916-18j5hg_results.md` revision 3 (board outcome resource).
+
+## 2026-09-21 TASK-260916-18j5hg rev4: the third POSIX-bound instance, and a unix verdict that cannot exist on Windows
+
+windows-latest failed sixteen tests, two unrelated causes. Fifteen
+were the third instance of the same omission in this epic:
+`test_source_audit.py` captures a real tree through
+`capture_package_snapshot` (hence `SelectionSession.open`, hence the
+POSIX-only refusal) and never carried the shared guard. The guard
+went into `_real_tree_identities`, the one helper that needs
+selection — forced-off locally it skips exactly those fifteen with
+the shared reason while the other 246 pass. The sixteenth was a
+test defect of a different shape: a darwin receipt classified under
+forced unix activation reports `build-marker-drift` on Windows
+because activation requires owner-execute as observed through
+`st_mode`, and Windows `st_mode` never carries execute bits. The
+product is fail-closed and correct in every production path
+(production always resolves the platform from the host); the test
+now carries the established `POSIX activation layout` skip, and a
+new pinning test proves a `0o644` artifact classifies
+`build-marker-drift` naming the owner-executable cause on every
+host. The sweep is done for all four Story modules this time:
+closure-refresh and runtime already guard their install helpers
+(Windows green), audit is fixed here, receipt-v3 reaches no
+selection entry point at all.
+
+Evidence: `TASK-260916-18j5hg_results.md` revision 4 (board outcome resource).

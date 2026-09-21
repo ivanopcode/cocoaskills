@@ -562,15 +562,14 @@ def test_draft_sources_driver_registration_rejects_unknown_case() -> None:
 
 
 def test_draft_sources_driver_registration_rejects_duplicate() -> None:
+    # A second registration for an already-driven id fails without
+    # touching the registry, so no cleanup is needed. (The suite is
+    # fully driven; the pre-coverage form picked an undriven case.)
     case_id = next(
-        case["id"] for case in SEMANTIC_CASES if case["id"] not in SEMANTIC_DRIVERS
+        case["id"] for case in SEMANTIC_CASES if case["id"] in SEMANTIC_DRIVERS
     )
-    register_semantic_driver(case_id, lambda case: None)
-    try:
-        with pytest.raises(AssertionError, match="duplicate driver"):
-            register_semantic_driver(case_id, lambda case: None)
-    finally:
-        del SEMANTIC_DRIVERS[case_id]
+    with pytest.raises(AssertionError, match="duplicate driver"):
+        register_semantic_driver(case_id, lambda case: None)
 
 
 @pytest.mark.parametrize(
@@ -599,29 +598,37 @@ def test_draft_sources_registered_driver_dispatch_through_the_semantic_entry() -
     driver fails the entry. It kills the one-case narrowing mutant
     ``if case_id != "<that case>": driver(case)`` in either phase.
     """
-    case = next(entry for entry in SEMANTIC_CASES if entry["id"] not in SEMANTIC_DRIVERS)
-    received: list[dict[str, Any]] = []
-
-    def _record(driven: dict[str, Any]) -> None:
-        received.append(driven)
-
-    register_semantic_driver(case["id"], _record)
+    # The suite is fully driven, so the probe driver temporarily
+    # replaces the registered one instead of filling an undriven id.
+    # (Pop-then-restore keeps the registry identical in every state.)
+    case = SEMANTIC_CASES[0]
+    real = SEMANTIC_DRIVERS.pop(case["id"], None)
     try:
-        test_draft_sources_semantic_case(case)
-    finally:
-        del SEMANTIC_DRIVERS[case["id"]]
-    assert received == [case]
-    assert received[0] is case
+        received: list[dict[str, Any]] = []
 
-    def _boom(driven: dict[str, Any]) -> None:
-        raise AssertionError("driver failure propagates through the semantic entry")
+        def _record(driven: dict[str, Any]) -> None:
+            received.append(driven)
 
-    register_semantic_driver(case["id"], _boom)
-    try:
-        with pytest.raises(AssertionError, match="driver failure propagates"):
+        register_semantic_driver(case["id"], _record)
+        try:
             test_draft_sources_semantic_case(case)
+        finally:
+            del SEMANTIC_DRIVERS[case["id"]]
+        assert received == [case]
+        assert received[0] is case
+
+        def _boom(driven: dict[str, Any]) -> None:
+            raise AssertionError("driver failure propagates through the semantic entry")
+
+        register_semantic_driver(case["id"], _boom)
+        try:
+            with pytest.raises(AssertionError, match="driver failure propagates"):
+                test_draft_sources_semantic_case(case)
+        finally:
+            del SEMANTIC_DRIVERS[case["id"]]
     finally:
-        del SEMANTIC_DRIVERS[case["id"]]
+        if real is not None:
+            SEMANTIC_DRIVERS[case["id"]] = real
 
 
 def _drive_unknown_alias(case: dict[str, Any]) -> None:
@@ -2586,6 +2593,9 @@ def _drive_external_only_current(case: dict[str, Any]) -> None:
 
     import tempfile
 
+    from csk.builds import currentness as build_currentness
+    from csk.builds import metadata as build_metadata
+
     kit = _marker_v5_fixture_kit()
     install_marker = kit["install_marker"]
     source_package = kit["source_package"]
@@ -2597,57 +2607,50 @@ def _drive_external_only_current(case: dict[str, Any]) -> None:
     assert case["expected"] == "current-if-all-other-gates-pass"
     with tempfile.TemporaryDirectory(prefix="csk-external-only-") as raw:
         root = Path(raw)
-        package = source_package.LocalSnapshot(snapshot="sha256:" + "1" * 64)
-        record = install_marker.InstallMarkerBuildV5(
-            driver="go-repository-v1",
-            receipt_schema_version=3,
-            execution_policy="manager-worker-v1",
-            cache_key="sha256:" + "4" * 64,
-            receipt_sha256="sha256:" + "0" * 64,
-            artifact_sha256="sha256:" + "6" * 64,
-            artifact_path="bin/golden-tool",
-            repository="golden-tools",
-            declared_identity=install_marker.MarkerRepositoryIdentity(
-                kind="network-git", value="github.com/example/golden-tools"
-            ),
-            declared_locked_commit=install_marker.MarkerRepositoryCommit(
-                object_format="sha1", hex=_MARKER_V5_SHA1
-            ),
-            declared_tag="v1.4.0",
-            effective_identity=install_marker.MarkerRepositoryIdentity(
-                kind="network-git", value="github.com/example/golden-tools"
-            ),
-            object_format="sha1",
-            commit=_MARKER_V5_SHA1,
-            substituted=False,
-            substitution=None,
-            build_source=kit["BuildSourceIdentity"](
-                algorithm="curator-build-source-v1",
-                content_sha256="sha256:" + "b" * 64,
-            ),
-            descriptor_target="golden-tool",
+        package = source_package.LocalSnapshot(snapshot=_RECEIPT_V3_PACKAGE)
+        # The positive control is genuine end to end: a production install
+        # publishes the receipt-3 bytes, the protected artifact, and the
+        # cache key, and the record mirrors that evidence exactly. This is
+        # the control that keeps the seventeen refusals honest — it passes
+        # one mutation away from every case that must refuse.
+        store, _, genuine = _receipt_v3_install(root, package, substituted=True)
+        assert genuine.receipt is not None and genuine.artifact is not None
+        wrapped = build_metadata.read_receipt_v3(genuine.receipt).input
+        record = _receipt_v3_genuine_record(kit, genuine, package)
+        assert (
+            build_currentness.compare_external_build_evidence(
+                record,
+                wrapped,
+                marker_package=package,
+                receipt_bytes=genuine.receipt,
+                artifact_bytes=genuine.artifact,
+            )
+            == ()
         )
+        hit = store.lookup_receipt_v3(
+            genuine.cache_key, wrapped.to_json(), mutate=False
+        )
+        assert hit is not None
+        assert hit.artifact == genuine.artifact
+        assert hit.receipt == genuine.receipt
         plan = _marker_v5_plan(
             kit,
             package=package,
             attestation=None,
             build_source=None,
-            commands=("golden-tool",),
-            builds={"golden-tool": record},
+            commands=("tool",),
+            builds={"tool": record},
         )
         marker = _marker_v5_marker(
             kit,
             package=package,
             attestation=None,
-            builds={"golden-tool": record},
+            builds={"tool": record},
             build_source=None,
-            commands=("golden-tool",),
+            commands=("tool",),
         )
-        # Receipt-3 input.build matching and protected-artifact verification
-        # are owned by the build-receipts leaf (TASK-260916-341a6q); this
-        # driver binds the marker shape and the receipt package equality.
         install_marker.check_external_only_build_state(
-            marker, receipt_package=package
+            marker, receipt_package=wrapped.package
         )
         assert install_marker.compare_marker_plan(marker, plan) == ()
         marker_path = root / ".csk-install.json"
@@ -2707,3 +2710,1144 @@ def test_draft_sources_install_marker_v5_schema_case_through_production_reader(
     else:
         with pytest.raises(install_marker_module.InstallMarkerError):
             install_marker_module.read_install_marker(raw)
+
+
+# --- Drivers registered by TASK-260916-341a6q (source-aware build receipts) ---
+#
+# The seventeen ``external-evidence-mismatch-*`` cases are one declared field
+# table driving one comparison: registration below derives the case ids from
+# the production table, and the single driver builds the positive control
+# (matching receipt-3 hashes and protected artifacts) before applying each
+# mutation, then asserts the exact field-level refusal, the non-current
+# nonzero status, and a repair that revalidates the exact source and rebuilds
+# rather than adopting the record.
+
+_RECEIPT_V3_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+_RECEIPT_V3_COMMIT_OTHER = "abcdef0123456789abcdef0123456789abcdef01"
+_RECEIPT_V3_REVISION = "1111111111111111111111111111111111111111"
+_RECEIPT_V3_REVISION_OTHER = "2222222222222222222222222222222222222222"
+_RECEIPT_V3_PACKAGE = "sha256:" + "1" * 64
+_RECEIPT_V3_PACKAGE_OTHER = "sha256:" + "2" * 64
+
+
+def _receipt_v3_snapshot() -> Any:
+    from csk.git_admission import Snapshot, SnapshotFile
+
+    files = tuple(
+        sorted(
+            (
+                SnapshotFile("repo/go.mod", b"module example.test/tool\n\ngo 1.25\n"),
+                SnapshotFile(
+                    "repo/cmd/tool/main.go", b"package main\nfunc main() {}\n"
+                ),
+                SnapshotFile(
+                    "skill-build.json",
+                    protocol_json.canonical_bytes(
+                        {
+                            "schema_version": 1,
+                            "targets": {
+                                "tool": {
+                                    "driver": "go-repository-v1",
+                                    "build_root": "repo",
+                                    "source_dir": "repo/cmd/tool",
+                                }
+                            },
+                        }
+                    ),
+                ),
+            ),
+            key=lambda item: item.path,
+        )
+    )
+    framed = bytearray(b"curator-build-source-v1\0")
+    for item in files:
+        path = item.path.encode()
+        framed.extend(b"F")
+        framed.extend(len(path).to_bytes(8, "big"))
+        framed.extend(path)
+        framed.extend(len(item.content).to_bytes(8, "big"))
+        framed.extend(item.content)
+    canonical = bytes(framed)
+    return Snapshot(
+        object_format="sha1",
+        commit=_RECEIPT_V3_COMMIT,
+        files=files,
+        canonical_bytes=canonical,
+        digest="sha256:" + hashlib.sha256(canonical).hexdigest(),
+        tag_verified=True,
+    )
+
+
+class _ReceiptV3Compiler:
+    """A deterministic fake Go compiler with an invocation counter."""
+
+    def __init__(self) -> None:
+        from csk.build_repository_pipeline import CompilerIdentity
+
+        self.calls = 0
+        self.identity = CompilerIdentity(
+            content_sha256="sha256:" + "c" * 64,
+            go_version="go version go1.26.1 darwin/arm64",
+            go_relpath="bin/go",
+            goos="darwin",
+            goarch="arm64",
+            tuning={"GOARM64": "v8.0"},
+        )
+
+    def compile(self, root: Path, source_dir: str, command: str) -> bytes:
+        self.calls += 1
+        assert command == "tool"
+        return b"compiled-tool"
+
+
+def _receipt_v3_install(
+    root: Path, package: Any, *, substituted: bool
+) -> tuple[Any, Any, Any]:
+    from csk.build_repository_pipeline import (
+        DeclaredState,
+        DiskProtectedStore,
+        EffectiveState,
+        Operation,
+        PipelineRequest,
+        SubstitutionState,
+        run_pipeline,
+    )
+
+    store = DiskProtectedStore(root / "store")
+    compiler = _ReceiptV3Compiler()
+    snapshot = _receipt_v3_snapshot()
+    declared = DeclaredState(
+        repository="tools",
+        identity="github.com/example/tools",
+        transport="https",
+        object_format="sha1",
+        commit=_RECEIPT_V3_COMMIT,
+        tag="v1.0.0",
+    )
+    if substituted:
+        effective = EffectiveState(
+            identity_kind="network-git",
+            identity="github.com/example/tools",
+            transport="https",
+            object_format="sha1",
+            commit=_RECEIPT_V3_COMMIT,
+            substituted=True,
+            substitution=SubstitutionState(
+                type="network-git",
+                ref_kind="revision",
+                ref_value=_RECEIPT_V3_REVISION,
+            ),
+        )
+    else:
+        effective = EffectiveState(
+            identity_kind="network-git",
+            identity="github.com/example/tools",
+            transport="https",
+            object_format="sha1",
+            commit=_RECEIPT_V3_COMMIT,
+        )
+    result = run_pipeline(
+        PipelineRequest(
+            operation=Operation.INSTALL,
+            command="tool",
+            target="tool",
+            declared=declared,
+            effective=effective,
+            acquire=lambda: snapshot,
+            audit=lambda subject: None,
+            store=store,
+            compiler=compiler,
+            package=package,
+        )
+    )
+    assert result.receipt is not None and result.artifact is not None
+    return store, compiler, result
+
+
+def _receipt_v3_genuine_record(kit: dict[str, Any], result: Any, package: Any) -> Any:
+    from csk.builds import metadata as build_metadata
+
+    install_marker = kit["install_marker"]
+    receipt = build_metadata.read_receipt_v3(result.receipt)
+    build = receipt.input.build
+    assert receipt.input.package == package
+    declared = build.source.declared
+    effective = build.source.effective
+    substitution = effective.substitution
+    return install_marker.InstallMarkerBuildV5(
+        driver="go-repository-v1",
+        receipt_schema_version=3,
+        execution_policy="manager-worker-v1",
+        cache_key=result.cache_key,
+        receipt_sha256=build_metadata.receipt_sha256(result.receipt),
+        artifact_sha256="sha256:" + hashlib.sha256(result.artifact).hexdigest(),
+        artifact_path=build.artifact_path,
+        repository=build.source.repository,
+        declared_identity=install_marker.MarkerRepositoryIdentity(
+            kind=declared.identity.kind, value=declared.identity.value
+        ),
+        declared_locked_commit=install_marker.MarkerRepositoryCommit(
+            object_format=declared.locked_commit.object_format,
+            hex=declared.locked_commit.hex,
+        ),
+        declared_tag=declared.tag,
+        effective_identity=install_marker.MarkerRepositoryIdentity(
+            kind=effective.identity.kind, value=effective.identity.value
+        ),
+        object_format=effective.object_format,
+        commit=effective.commit,
+        substituted=effective.substituted,
+        substitution=(
+            None
+            if substitution is None
+            else install_marker.MarkerRepositorySubstitution(
+                type=substitution.type,
+                ref=(
+                    None
+                    if substitution.ref is None
+                    else install_marker.MarkerRepositoryRef(
+                        kind=substitution.ref.kind,
+                        value=substitution.ref.value,
+                    )
+                ),
+            )
+        ),
+        build_source=effective.build_source,
+        descriptor_target=build.source.descriptor.target,
+    )
+
+
+def _receipt_v3_mutate_record(
+    kit: dict[str, Any], record: Any, field: str
+) -> Any:
+    from dataclasses import replace
+
+    install_marker = kit["install_marker"]
+    if field == "repository":
+        return replace(record, repository="other-tools")
+    if field == "declared_identity":
+        return replace(
+            record,
+            declared_identity=install_marker.MarkerRepositoryIdentity(
+                kind="network-git", value="github.com/example/other"
+            ),
+        )
+    if field == "declared_locked_commit":
+        return replace(
+            record,
+            declared_locked_commit=install_marker.MarkerRepositoryCommit(
+                object_format="sha1", hex=_RECEIPT_V3_COMMIT_OTHER
+            ),
+        )
+    if field == "declared_tag":
+        return replace(record, declared_tag="v2.0.0")
+    if field == "effective_identity":
+        return replace(
+            record,
+            effective_identity=install_marker.MarkerRepositoryIdentity(
+                kind="network-git", value="github.com/example/mirror"
+            ),
+        )
+    if field == "commit":
+        return replace(record, commit=_RECEIPT_V3_COMMIT_OTHER)
+    if field == "substitution":
+        return replace(
+            record,
+            substitution=install_marker.MarkerRepositorySubstitution(
+                type="network-git",
+                ref=install_marker.MarkerRepositoryRef(
+                    kind="revision", value=_RECEIPT_V3_REVISION_OTHER
+                ),
+            ),
+        )
+    if field == "build_source":
+        return replace(
+            record,
+            build_source=kit["BuildSourceIdentity"](
+                algorithm="curator-build-source-v1",
+                content_sha256="sha256:" + "9" * 64,
+            ),
+        )
+    if field == "descriptor_target":
+        return replace(record, descriptor_target="other-target")
+    if field == "cache_key":
+        return replace(record, cache_key="sha256:" + "f" * 64)
+    if field == "receipt_sha256":
+        return replace(record, receipt_sha256="sha256:" + "e" * 64)
+    if field == "artifact_sha256":
+        return replace(record, artifact_sha256="sha256:" + "d" * 64)
+    if field == "artifact_path":
+        return replace(record, artifact_path="bin/other-tool")
+    raise AssertionError(f"no single-field mutation for {field!r}")
+
+
+def _drive_external_evidence_mismatch(case: dict[str, Any]) -> None:
+    """Drive one ``external-evidence-mismatch-*`` case through production."""
+
+    import tempfile
+    from dataclasses import replace
+
+    from csk.builds import currentness as build_currentness
+    from csk.builds import metadata as build_metadata
+    from csk.build_repository_pipeline import (
+        DeclaredState,
+        DiskProtectedStore,
+        EffectiveState,
+        Operation,
+        PipelineRequest,
+        SubstitutionState,
+        run_pipeline,
+    )
+
+    kit = _marker_v5_fixture_kit()
+    install_marker = kit["install_marker"]
+    source_package = kit["source_package"]
+    field = case["input"]["marker_receipt_or_plan_field"]
+    assert case["input"]["comparison"] == "mismatch"
+    assert case["input"]["operations"] == ["status", "repair"]
+    assert case["input"]["package"] == "local-snapshot"
+    assert (
+        case["expected"]
+        == "status-noncurrent-nonzero;repair-revalidate-exact-source-rebuild-not-adopt"
+    )
+    assert field in build_currentness.EXTERNAL_EVIDENCE_FIELDS
+    package = source_package.LocalSnapshot(snapshot=_RECEIPT_V3_PACKAGE)
+    with tempfile.TemporaryDirectory(prefix="csk-evidence-mismatch-") as raw:
+        root = Path(raw)
+        # The positive control first: a genuine install whose record agrees
+        # with the receipt-3 evidence on every compared field, so the refusal
+        # below is one mutation away from a case that genuinely passes.
+        _, _, genuine = _receipt_v3_install(
+            root, package, substituted=(field != "substituted")
+        )
+        record = _receipt_v3_genuine_record(kit, genuine, package)
+        assert genuine.receipt is not None and genuine.artifact is not None
+        wrapped = build_metadata.read_receipt_v3(genuine.receipt).input
+        assert (
+            build_currentness.compare_external_build_evidence(
+                record,
+                wrapped,
+                marker_package=package,
+                receipt_bytes=genuine.receipt,
+                artifact_bytes=genuine.artifact,
+            )
+            == ()
+        )
+        if field == "substituted":
+            mutated = replace(
+                record,
+                substituted=True,
+                substitution=install_marker.MarkerRepositorySubstitution(
+                    type="network-git",
+                    ref=install_marker.MarkerRepositoryRef(
+                        kind="revision", value=_RECEIPT_V3_REVISION
+                    ),
+                ),
+            )
+            differing = build_currentness.compare_external_build_evidence(
+                mutated,
+                wrapped,
+                marker_package=package,
+                receipt_bytes=genuine.receipt,
+                artifact_bytes=genuine.artifact,
+            )
+            assert "substituted" in differing
+            assert "substitution" in differing
+        elif field == "object_format":
+            mutated = replace(
+                record,
+                object_format="sha256",
+                commit="ab" * 32,
+                substitution=install_marker.MarkerRepositorySubstitution(
+                    type="network-git",
+                    ref=install_marker.MarkerRepositoryRef(
+                        kind="revision", value="cd" * 32
+                    ),
+                ),
+            )
+            differing = build_currentness.compare_external_build_evidence(
+                mutated,
+                wrapped,
+                marker_package=package,
+                receipt_bytes=genuine.receipt,
+                artifact_bytes=genuine.artifact,
+            )
+            assert "object_format" in differing
+            assert "commit" in differing
+        elif field == "execution_policy":
+            # No second valid execution policy exists: any differing value
+            # refuses at construction, and the status below proves the
+            # resulting marker unreadable rather than current.
+            with pytest.raises(install_marker.InstallMarkerError):
+                replace(record, execution_policy="arbitrary")
+            mutated = None
+        elif field == "input.package":
+            other_wrapped = build_metadata.wrap_receipt_v3_input(
+                source_package.LocalSnapshot(snapshot=_RECEIPT_V3_PACKAGE_OTHER),
+                wrapped.build,
+            )
+            differing = build_currentness.compare_external_build_evidence(
+                record,
+                other_wrapped,
+                marker_package=package,
+                receipt_bytes=genuine.receipt,
+                artifact_bytes=genuine.artifact,
+            )
+            assert set(differing) == {"input.package", "cache_key"}
+            mutated = None
+        else:
+            mutated = _receipt_v3_mutate_record(kit, record, field)
+            assert (
+                build_currentness.compare_external_build_evidence(
+                    mutated,
+                    wrapped,
+                    marker_package=package,
+                    receipt_bytes=genuine.receipt,
+                    artifact_bytes=genuine.artifact,
+                )
+                == (field,)
+            )
+        # Status: non-current with a nonzero exit, and read-only.
+        csk_home = root / "csk-home"
+        project = root / "project"
+        (csk_home / "source-v1").mkdir(parents=True)
+        (csk_home / "source-v1" / "record.json").write_text("{}")
+        skills = project / ".agents" / "skills" / "golden-skill"
+        skills.mkdir(parents=True)
+        (skills / "SKILL.md").write_text("# golden\n")
+        marker_path = skills / ".csk-install.json"
+        if field == "input.package":
+            plan = _marker_v5_plan(
+                kit,
+                package=source_package.LocalSnapshot(
+                    snapshot=_RECEIPT_V3_PACKAGE_OTHER
+                ),
+                attestation=None,
+                build_source=None,
+                commands=("tool",),
+                builds={"tool": record},
+            )
+            marker = _marker_v5_marker(
+                kit,
+                package=package,
+                attestation=None,
+                builds={"tool": record},
+                build_source=None,
+                commands=("tool",),
+            )
+            marker_path.write_bytes(
+                install_marker.serialize_install_marker(marker.to_json())
+            )
+            assert install_marker.compare_marker_plan(marker, plan) == ("package",)
+        elif field in {"execution_policy", "artifact_path"}:
+            plan = _marker_v5_plan(
+                kit,
+                package=package,
+                attestation=None,
+                build_source=None,
+                commands=("tool",),
+                builds={"tool": record},
+            )
+            marker = _marker_v5_marker(
+                kit,
+                package=package,
+                attestation=None,
+                builds={"tool": record},
+                build_source=None,
+                commands=("tool",),
+            )
+            payload = marker.to_json()
+            if field == "execution_policy":
+                payload["builds"]["tool"]["execution_policy"] = "arbitrary"
+            else:
+                payload["builds"]["tool"]["artifact_path"] = "bin/other-tool"
+            marker_path.write_bytes(
+                install_marker.serialize_install_marker(payload)
+            )
+            with pytest.raises(install_marker.InstallMarkerError):
+                install_marker.read_install_marker(marker_path.read_bytes())
+        else:
+            assert mutated is not None
+            plan = _marker_v5_plan(
+                kit,
+                package=package,
+                attestation=None,
+                build_source=None,
+                commands=("tool",),
+                builds={"tool": record},
+            )
+            marker = _marker_v5_marker(
+                kit,
+                package=package,
+                attestation=None,
+                builds={"tool": mutated},
+                build_source=None,
+                commands=("tool",),
+            )
+            marker_path.write_bytes(
+                install_marker.serialize_install_marker(marker.to_json())
+            )
+            assert install_marker.compare_marker_plan(marker, plan) == ("builds",)
+        before_home = _marker_v5_tree_hash(csk_home)
+        before_project = _marker_v5_tree_hash(project)
+        verdict = install_marker.evaluate_marker_status(marker_path, plan)
+        assert verdict.current is False
+        assert verdict.exit_code != 0
+        assert _marker_v5_tree_hash(csk_home) == before_home
+        assert _marker_v5_tree_hash(project) == before_project
+        # Repair: revalidate the exact locked source and rebuild the exact
+        # receipt rather than adopting the mutated record.
+        repair_store = DiskProtectedStore(root / "repair-store")
+        compiler = _ReceiptV3Compiler()
+        snapshot = _receipt_v3_snapshot()
+        observed: list[str] = []
+        repair_events: list[str] = []
+        real_repair_lookup = repair_store.lookup_receipt_v3
+
+        def counting_repair_lookup(*args: Any, **kwargs: Any) -> Any:
+            repair_events.append("cache")
+            return real_repair_lookup(*args, **kwargs)
+
+        repair_store.lookup_receipt_v3 = counting_repair_lookup  # type: ignore[method-assign]
+
+        def acquire() -> Any:
+            observed.append(snapshot.commit)
+            repair_events.append("acquire")
+            return snapshot
+
+        def audit(subject: Any) -> None:
+            repair_events.append("audit")
+
+        repaired = run_pipeline(
+            PipelineRequest(
+                operation=Operation.REPAIR,
+                command="tool",
+                target="tool",
+                declared=DeclaredState(
+                    repository="tools",
+                    identity="github.com/example/tools",
+                    transport="https",
+                    object_format="sha1",
+                    commit=_RECEIPT_V3_COMMIT,
+                    tag="v1.0.0",
+                ),
+                effective=(
+                    EffectiveState(
+                        identity_kind="network-git",
+                        identity="github.com/example/tools",
+                        transport="https",
+                        object_format="sha1",
+                        commit=_RECEIPT_V3_COMMIT,
+                    )
+                    if field == "substituted"
+                    else EffectiveState(
+                        identity_kind="network-git",
+                        identity="github.com/example/tools",
+                        transport="https",
+                        object_format="sha1",
+                        commit=_RECEIPT_V3_COMMIT,
+                        substituted=True,
+                        substitution=SubstitutionState(
+                            type="network-git",
+                            ref_kind="revision",
+                            ref_value=_RECEIPT_V3_REVISION,
+                        ),
+                    )
+                ),
+                acquire=acquire,
+                audit=audit,
+                store=repair_store,
+                compiler=compiler,
+                package=package,
+            )
+        )
+        assert observed == [_RECEIPT_V3_COMMIT]
+        # Repair audits before its first cache read; a repair-only lookup
+        # moved before the audit reorders these events in every driver.
+        assert repair_events == ["acquire", "audit", "cache"]
+        assert compiler.calls == 1
+        assert repaired.receipt == genuine.receipt
+        assert repaired.cache_key == genuine.cache_key
+
+
+def _register_receipt_v3_drivers() -> None:
+    from csk.builds import currentness as build_currentness
+
+    for _field in build_currentness.EXTERNAL_EVIDENCE_FIELDS:
+        register_semantic_driver(
+            f"external-evidence-mismatch-{_field}",
+            _drive_external_evidence_mismatch,
+        )
+
+
+_register_receipt_v3_drivers()
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        entry
+        for entry in SCHEMA_CASES
+        if entry["schema"] == "build-receipt-v3.schema.json"
+    ],
+    ids=[
+        f"{entry['schema']}:{entry['instance']}"
+        for entry in SCHEMA_CASES
+        if entry["schema"] == "build-receipt-v3.schema.json"
+    ],
+)
+def test_draft_sources_build_receipt_v3_schema_case_through_production_reader(
+    entry: dict[str, Any],
+) -> None:
+    """Drive every build-receipt-v3 schema case through csk's production reader.
+
+    Registered by TASK-260916-341a6q: the valid fixture must parse to the v3
+    model with its pinned cache key and reach a canonical read-write fixpoint
+    (the pinned fixtures are not key-sorted, so the fixpoint, not fixture
+    bytes, is the byte-identity property); invalid fixtures must refuse.
+    """
+
+    from csk.builds import metadata as build_metadata_module
+
+    raw = (_suite_root() / Path(entry["instance"])).read_bytes()
+    if entry["valid"]:
+        parsed = build_metadata_module.parse_receipt_v3(json.loads(raw))
+        assert parsed.schema_version == 3
+        assert parsed.cache_key == json.loads(raw)["cache_key"]
+        assert parsed.cache_key == build_metadata_module.source_aware_cache_key(
+            parsed.input
+        )
+        once = build_metadata_module.canonical_receipt_v3_bytes(parsed)
+        twice = build_metadata_module.canonical_receipt_v3_bytes(
+            build_metadata_module.read_receipt_v3(once)
+        )
+        assert once == twice
+        assert build_metadata_module.read_receipt_v3(once) == parsed
+    else:
+        with pytest.raises(build_metadata_module.BuildMetadataError):
+            build_metadata_module.parse_receipt_v3(json.loads(raw))
+
+
+# Semantic drivers registered by TASK-260916-11yseo (source audit binding).
+#
+# The ten attestation-evidence drivers and local-required-registry were
+# registered by TASK-260916-15nf0l through the same production entry points
+# this leaf binds (install_marker.validate_attestation_evidence and
+# install_marker.check_local_registry_requirement); registering them again
+# would fail on duplication, so this leaf registers only the two cases it
+# owns that have no driver yet, and extends the shared family through its
+# own binding in tests/test_source_audit.py.
+
+
+def _drive_missing_audit_report(case: dict[str, Any]) -> None:
+    """Drive ``missing-audit-report``: an unreadable report rejects."""
+
+    from csk.audit import pipeline as audit_pipeline_module
+    from csk.audit.model import Decision as audit_decision_module
+    from csk.sources import package_identity as source_package_module
+    from csk.sources import source_audit as source_audit_module
+
+    assert case["input"]["decision"] == "allow"
+    assert case["input"]["report"] == "unreadable"
+    assert case["expected"] == "reject"
+    with tempfile.TemporaryDirectory(prefix="csk-missing-audit-report-") as raw:
+        root = Path(raw)
+        csk_home = root / "csk-home"
+        csk_home.mkdir()
+        content = "sha256:" + "a" * 64
+        package = source_package_module.LocalSnapshot(snapshot="sha256:" + "1" * 64)
+        policy = source_audit_module.SourceAuditPolicy(
+            mode="advisory",
+            fail_on="high",
+            backend="null",
+            registry_policy="advisory",
+            revocations=(),
+            script_policy="manager-worker-v1",
+        )
+        report = audit_pipeline_module.AuditReport(
+            scope="test",
+            skill="golden",
+            source="local:packages/golden",
+            ref_kind="branch",
+            ref="main",
+            commit="0" * 40,
+            schema_version=3,
+            source_file=None,
+            runtime_roots=(),
+            content_sha256=content,
+            findings=(),
+            decision=audit_decision_module.ALLOW,
+            ran_at="2026-09-10T00:00:00Z",
+        )
+        record = source_audit_module.record_source_audit(
+            report,
+            csk_home=csk_home,
+            package=package,
+            git=None,
+            policy=policy,
+            created_at="2026-09-10T00:00:00Z",
+        )
+        target = source_audit_module.source_audit_report_path(csk_home, content)
+        before = _marker_v5_tree_hash(csk_home)
+        original_read_bytes = Path.read_bytes
+
+        def _refuse(self: Path) -> bytes:
+            if self == target:
+                raise PermissionError("audit store denied the read")
+            return original_read_bytes(self)
+
+        with patch.object(Path, "read_bytes", _refuse):
+            with pytest.raises(source_audit_module.SourceAuditError) as refused:
+                source_audit_module.validate_source_audit(
+                    record,
+                    csk_home=csk_home,
+                    policy=policy,
+                    expected_package=package,
+                    expected_content_sha256=content,
+                )
+        assert refused.value.code == source_audit_module.CODE_REPORT_UNREADABLE
+        assert _marker_v5_tree_hash(csk_home) == before
+
+
+register_semantic_driver("missing-audit-report", _drive_missing_audit_report)
+
+
+def _drive_strict_network_attestation_local(case: dict[str, Any]) -> None:
+    """Drive ``strict-network-attestation-local``: fail with no publication."""
+
+    from csk import install_marker as install_marker_module
+    from csk.sources import package_identity as source_package_module
+
+    assert case["input"]["kind"] == "local-snapshot"
+    assert case["input"]["policy"] == "require-network-attestation"
+    assert case["expected"] == "reject"
+    with tempfile.TemporaryDirectory(prefix="csk-strict-network-local-") as raw:
+        root = Path(raw)
+        csk_home = root / "csk-home"
+        project = root / "project"
+        csk_home.mkdir()
+        project.mkdir()
+        (csk_home / "lock.json").write_text("{}")
+        (project / "Skillfile.json").write_text("{}")
+        before_home = _marker_v5_tree_hash(csk_home)
+        before_project = _marker_v5_tree_hash(project)
+        with pytest.raises(install_marker_module.InstallMarkerError) as refused:
+            install_marker_module.check_local_registry_requirement(
+                source_package_module.LocalSnapshot(snapshot="sha256:" + "1" * 64),
+                network_attestation_required=True,
+            )
+        assert refused.value.code == "local_registry_attestation_required"
+        assert _marker_v5_tree_hash(csk_home) == before_home
+        assert _marker_v5_tree_hash(project) == before_project
+
+
+register_semantic_driver(
+    "strict-network-attestation-local", _drive_strict_network_attestation_local
+)
+
+
+# TASK-260916-18j5hg resolve-source-closure-and-explicit-refresh owns
+# frozen-membership, runtime-only-refresh and build-only-refresh. Each
+# driver builds its fixture from the case input, drives a production
+# entry point, and asserts the exact expected outcome.
+
+
+def _closure_refresh_fixture(
+    root: Path,
+) -> tuple[Any, Any, Any, Any, Any]:
+    """Provision an isolated schema-2 project: (config, project, source, home, skills)."""
+
+    from dataclasses import replace as _replace
+
+    from tests.conftest import make_config, make_project
+
+    from csk import config as _config_module
+    from csk import locking as _locking_module
+
+    csk_home = root / ".cocoaskills"
+    _locking_module.provision_new_manager_home(csk_home)
+    skills_root = root / "skills"
+    skills_root.mkdir()
+    project = make_project(root)
+    source = root / "pkgs"
+    source.mkdir()
+    base = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    cfg = _replace(
+        base,
+        experimental=_config_module.ExperimentalConfig(skillfile_sources=True),
+    )
+    return cfg, project, source, csk_home, skills_root
+
+
+def _closure_refresh_write_skill(
+    directory: Path,
+    name: str,
+    *,
+    manifest_extra: dict[str, Any] | None = None,
+    extra_files: dict[str, str | bytes] | None = None,
+) -> None:
+    from tests.conftest import write_files
+
+    manifest_payload: dict[str, Any] = {"schema_version": 7, "capabilities": {}}
+    if manifest_extra:
+        manifest_payload.update(manifest_extra)
+    files: dict[str, str | bytes] = {
+        "SKILL.md": f"---\nname: {name}\ndescription: fixture {name}\n---\n\n# {name}\n",
+        "agent-skill.json": json.dumps(manifest_payload),
+    }
+    if extra_files:
+        files.update(extra_files)
+    write_files(directory, files)
+
+
+def _closure_refresh_skillfile(
+    project: Path, sources: dict[str, dict[str, Any]], selectors: list[dict[str, Any]]
+) -> None:
+    from tests.conftest import write_skillfile
+
+    write_skillfile(
+        project, {"schema_version": 2, "sources": sources, "skills": selectors}
+    )
+
+
+def _drive_frozen_membership(case: dict[str, Any]) -> None:
+    """Drive ``frozen-membership`` through the frozen production paths.
+
+    ``csk`` has no launch command; launch is frozen consumption, and
+    its two production paths are the locked install and status. Both
+    must use the locked review-only membership while a new member
+    directory sits on disk, without enumerating or fetching. The
+    collection selector makes the outcome assert the frozen
+    membership too: under a rescan ``docs`` would install.
+    """
+
+    from csk import installer as _installer_module
+    from csk import status as _status_module
+    from csk.sources import lock as _lock_module
+    from csk.sources import publish as _publish_module
+    from csk.sources import transport as _transport_module
+
+    assert case["input"]["locked"] == ["review"]
+    assert case["input"]["live"] == ["review", "docs"]
+    assert case["input"]["operation"] == "launch"
+    assert case["expected"] == "use-locked-review-only"
+    if not _selection_fs.supports_descriptor_traversal():
+        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+    with tempfile.TemporaryDirectory(prefix="csk-frozen-membership-") as raw:
+        root = Path(raw)
+        cfg, project, source, _home, _skills = _closure_refresh_fixture(root)
+        _closure_refresh_write_skill(source / "coll" / "review", "review")
+        _closure_refresh_skillfile(
+            project,
+            {"local": {"path": os.fspath(source)}},
+            [{"from": "local", "directory": "coll", "include": ["*"]}],
+        )
+        results = _installer_module.install(
+            cfg, alias="app", options=_installer_module.InstallOptions()
+        )
+        assert len(results) == 1 and results[0].status == "ok", results[0].errors
+        lock_before = (project / _publish_module.SKILLFILE_LOCK_NAME).read_bytes()
+        assert [
+            member.name for member in _lock_module.read_lock(lock_before).members
+        ] == case["input"]["locked"]
+
+        _closure_refresh_write_skill(source / "coll" / "docs", "docs")
+
+        def _boom(*args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("frozen launch must not enumerate or fetch")
+
+        with (
+            patch.object(_transport_module, "resolve_ref", _boom),
+            patch.object(_transport_module, "acquire_network", _boom),
+            patch.object(_publish_module, "expand_selectors", _boom),
+            patch.object(_publish_module, "expand_collection", _boom),
+        ):
+            relaunched = _installer_module.install(
+                cfg, alias="app", options=_installer_module.InstallOptions()
+            )
+            assert len(relaunched) == 1 and relaunched[0].status == "ok", (
+                relaunched[0].errors
+            )
+            assert any(
+                "review up-to-date" in message for message in relaunched[0].messages
+            )
+            assert not (project / ".agents" / "skills" / "docs").exists()
+            assert (
+                project / _publish_module.SKILLFILE_LOCK_NAME
+            ).read_bytes() == lock_before
+            collected = _status_module.collect_status(cfg, alias="app")
+            assert len(collected) == 1
+            assert [skill.name for skill in collected[0].skills] == ["review"]
+            assert [skill.label for skill in collected[0].skills] == ["up-to-date"]
+            assert collected[0].errors == ()
+
+
+register_semantic_driver("frozen-membership", _drive_frozen_membership)
+
+
+def _closure_refresh_context_bytes(project: Path, name: str) -> dict[str, bytes]:
+    """Read one installed context tree, excluding the install marker."""
+
+    root = project / ".agents" / "skills" / name
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and path.name != ".csk-install.json"
+    }
+
+
+def _drive_runtime_only_refresh(case: dict[str, Any]) -> None:
+    """Drive ``runtime-only-refresh`` through install plus refresh.
+
+    The script changes (B to C) while the projected context stays A:
+    after explicit refresh the package identity, the runtime store
+    entry and the lock identity are all new.
+    """
+
+    from csk import installer as _installer_module
+    from csk.sources import lock as _lock_module
+    from csk.sources import publish as _publish_module
+    from csk.sources.package_identity import package_identity_sha256 as _package_key
+
+    assert case["input"]["context_before"] == "A"
+    assert case["input"]["context_after"] == "A"
+    assert case["input"]["script_before"] == "B"
+    assert case["input"]["script_after"] == "C"
+    assert case["expected"] == "new-package-runtime-and-cache-identity"
+    if not _selection_fs.supports_descriptor_traversal():
+        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+    with tempfile.TemporaryDirectory(prefix="csk-runtime-only-refresh-") as raw:
+        root = Path(raw)
+        cfg, project, source, csk_home, _skills = _closure_refresh_fixture(root)
+        _closure_refresh_write_skill(
+            source / "review",
+            "review",
+            manifest_extra={
+                "commands": {"run": {"type": "script", "unix_path": "scripts/run"}},
+                "runtime_roots": ["scripts"],
+            },
+            extra_files={"scripts/run": "#!/bin/sh\necho B\n"},
+        )
+        _closure_refresh_skillfile(
+            project,
+            {"local": {"path": os.fspath(source)}},
+            [{"name": "review", "from": "local", "directory": "review"}],
+        )
+
+        def _install(fetch: bool) -> None:
+            results = _installer_module.install(
+                cfg, alias="app", options=_installer_module.InstallOptions(fetch=fetch)
+            )
+            assert len(results) == 1 and results[0].status == "ok", results[0].errors
+
+        _install(False)
+        lock_path = project / _publish_module.SKILLFILE_LOCK_NAME
+        before = _lock_module.read_lock(lock_path.read_bytes())
+        key_before = _package_key(before.members[0].package)
+        entry_before = _publish_module.runtime_entry_path(csk_home, "review", key_before)
+        assert entry_before.is_dir()
+        context_before = _closure_refresh_context_bytes(project, "review")
+
+        (source / "review" / "scripts" / "run").write_text(
+            "#!/bin/sh\necho C\n", encoding="utf-8"
+        )
+        _install(True)
+
+        after = _lock_module.read_lock(lock_path.read_bytes())
+        key_after = _package_key(after.members[0].package)
+        assert key_after != key_before
+        assert after.lock_sha256 != before.lock_sha256
+        entry_after = _publish_module.runtime_entry_path(csk_home, "review", key_after)
+        assert entry_after.is_dir()
+        assert not entry_before.exists()
+        assert _closure_refresh_context_bytes(project, "review") == context_before
+
+
+register_semantic_driver("runtime-only-refresh", _drive_runtime_only_refresh)
+
+
+def _closure_refresh_stub_build_toolchain() -> Any:
+    """Return an undo closure stubbing the go-v1 compiler hermetically."""
+
+    import platform as _platform_module
+    from unittest.mock import patch as _mock_patch
+
+    from csk.builds import go_v1 as _go_v1
+    from csk.builds import metadata as _build_metadata
+    from csk.builds import toolchain as _build_toolchain
+
+    machine = _platform_module.machine().lower()
+    if machine in {"arm64", "aarch64"}:
+        goarch, tuning = "arm64", {"GOARM64": "v8.0"}
+    else:
+        goarch, tuning = "amd64", {"GOAMD64": "v1"}
+    if sys.platform == "darwin":
+        goos = "darwin"
+    elif os.name == "nt":
+        goos = "windows"
+    else:
+        goos = "linux"
+    host = _build_toolchain.NativeTarget(goos=goos, goarch=goarch, tuning=tuning)
+
+    class _FakeSession:
+        target = host
+        toolchain = _build_toolchain.ToolchainIdentity(
+            algorithm=_build_toolchain.TOOLCHAIN_ALGORITHM,
+            content_sha256="sha256:" + "b" * 64,
+            go_relpath=_build_toolchain.GO_RELPATH,
+            go_version=f"go version go1.25.5 {host.goos}/{host.goarch}",
+        )
+
+        def __init__(self, toolchain_config: _build_toolchain.ToolchainConfig):
+            self.operation_root = toolchain_config.private_base / "operation"
+            self.operation_root.mkdir(mode=0o700)
+            self.executable = self.operation_root / "go"
+            self.goroot = self.operation_root / "goroot"
+
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    def _fake_build(request: _go_v1.BuildRequest) -> _go_v1.BuildResult:
+        marker = (
+            request.source_snapshot.path / request.source_dir / "marker.txt"
+        ).read_bytes()
+        payload = b"#!/bin/sh\necho " + marker.strip() + b"\n"
+        artifact_path = request.toolchain_session.operation_root / (
+            f"artifact-{request.command}"
+        )
+        artifact_path.write_bytes(payload)
+        artifact_path.chmod(0o700)
+        return _go_v1.BuildResult(
+            artifact=_go_v1.BuildArtifact(
+                staged_path=artifact_path,
+                metadata=_go_v1.ArtifactMetadata(
+                    path=_build_metadata.derived_artifact_path(
+                        request.command, goos=host.goos
+                    ),
+                    sha256="sha256:" + hashlib.sha256(payload).hexdigest(),
+                    size=len(payload),
+                ),
+            ),
+            capability_evidence=_go_v1.CapabilityEvidence(
+                record_version="capability-evidence-v1",
+                execution_policy="manager-worker-v1",
+                platform=host.goos,
+                controls=(),
+            ),
+        )
+
+    patches = (
+        _mock_patch.object(
+            _build_toolchain,
+            "capture_operator_search_path",
+            lambda: _build_toolchain.OperatorSearchPath(("/fixture/bin",)),
+        ),
+        _mock_patch.object(_build_toolchain, "establish_toolchain", _FakeSession),
+        _mock_patch.object(_build_toolchain, "preflight_toolchain", lambda config: None),
+        _mock_patch.object(_go_v1, "build", _fake_build),
+    )
+    for entered in patches:
+        entered.start()
+    return patches
+
+
+def _drive_build_only_refresh(case: dict[str, Any]) -> None:
+    """Drive ``build-only-refresh`` through install plus refresh.
+
+    The build input changes (B to C) while the projected context
+    stays A: after explicit refresh the package identity and the
+    receipt-3 cache key are both new.
+    """
+
+    from dataclasses import replace as _replace
+
+    from csk import install_marker as _install_marker_module
+    from csk import installer as _installer_module
+    from csk.sources import lock as _lock_module
+    from csk.sources import publish as _publish_module
+    from csk.sources.package_identity import package_identity_sha256 as _package_key
+
+    assert case["input"]["context_before"] == "A"
+    assert case["input"]["context_after"] == "A"
+    assert case["input"]["build_before"] == "B"
+    assert case["input"]["build_after"] == "C"
+    assert case["expected"] == "new-package-and-cache-identity"
+    if not _selection_fs.supports_descriptor_traversal():
+        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+    with tempfile.TemporaryDirectory(prefix="csk-build-only-refresh-") as raw:
+        root = Path(raw)
+        base, project, source, _home, _skills = _closure_refresh_fixture(root)
+        cfg = _replace(base, audit=_replace(base.audit, enabled=True))
+        _closure_refresh_write_skill(
+            source / "built",
+            "built",
+            manifest_extra={
+                "commands": {
+                    "greet": {
+                        "type": "build",
+                        "driver": "go-v1",
+                        "source_dir": "build/cmd/greet",
+                    }
+                },
+                "build_roots": ["build"],
+            },
+            extra_files={
+                "build/go.mod": "module example.com/greet\n\ngo 1.23\n",
+                "build/cmd/greet/main.go": "package main\n\nfunc main() {}\n",
+                "build/cmd/greet/marker.txt": "B\n",
+            },
+        )
+        _closure_refresh_skillfile(
+            project,
+            {"local": {"path": os.fspath(source)}},
+            [{"name": "built", "from": "local", "directory": "built"}],
+        )
+        patches = _closure_refresh_stub_build_toolchain()
+        try:
+
+            def _install(fetch: bool) -> None:
+                results = _installer_module.install(
+                    cfg,
+                    alias="app",
+                    options=_installer_module.InstallOptions(fetch=fetch),
+                )
+                assert len(results) == 1 and results[0].status == "ok", (
+                    results[0].errors
+                )
+
+            _install(False)
+            lock_path = project / _publish_module.SKILLFILE_LOCK_NAME
+            before = _lock_module.read_lock(lock_path.read_bytes())
+            key_before = _package_key(before.members[0].package)
+            marker_before = _install_marker_module.read_install_marker(
+                (project / ".agents" / "skills" / "built" / ".csk-install.json")
+                .read_bytes()
+            )
+            assert isinstance(marker_before, _install_marker_module.InstallMarkerV5)
+            cache_before = marker_before.builds["greet"].cache_key
+            context_before = _closure_refresh_context_bytes(project, "built")
+
+            (source / "built" / "build" / "cmd" / "greet" / "marker.txt").write_text(
+                "C\n", encoding="utf-8"
+            )
+            _install(True)
+
+            after = _lock_module.read_lock(lock_path.read_bytes())
+            key_after = _package_key(after.members[0].package)
+            assert key_after != key_before
+            marker_after = _install_marker_module.read_install_marker(
+                (project / ".agents" / "skills" / "built" / ".csk-install.json")
+                .read_bytes()
+            )
+            assert isinstance(marker_after, _install_marker_module.InstallMarkerV5)
+            assert marker_after.builds["greet"].cache_key != cache_before
+            assert _closure_refresh_context_bytes(project, "built") == context_before
+        finally:
+            for entered in patches:
+                entered.stop()
+
+
+register_semantic_driver("build-only-refresh", _drive_build_only_refresh)

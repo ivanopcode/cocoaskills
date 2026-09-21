@@ -498,6 +498,7 @@ def test_stage_boundaries_are_pinned() -> None:
         "commit-07-lock",
         "commit-10-context",
         "commit-20-runtime",
+        "commit-30-shim-canonical",
         "commit-60-adapter-ledger",
         "commit-80-removal",
         "cleanup",
@@ -1631,8 +1632,10 @@ def test_locked_repair_revalidates_without_trust_or_rewrite(
 
     Tampered outputs and lying markers are rebuilt from revalidated
     locked bytes; a lost snapshot with a lost source refuses instead
-    of recreating; a lost store entry heals from verified live bytes;
-    a changed manifest refuses lock-stale. No case rewrites the lock.
+    of recreating; a lost store entry refuses unavailable even when
+    live bytes match the lock (the store is the frozen record, and
+    live bytes never recreate it); a changed manifest refuses
+    lock-stale. No case rewrites the lock.
     """
 
     import shutil
@@ -1679,7 +1682,7 @@ def test_locked_repair_revalidates_without_trust_or_rewrite(
     else:  # pragma: no cover - parametrization is closed above
         raise AssertionError(f"unknown case {case}")
 
-    if case in {"tampered-context", "forged-marker", "store-heals"}:
+    if case in {"tampered-context", "forged-marker"}:
         result = _install_ok(cfg)
         assert lock_path.read_bytes() == lock_bytes
         repaired = install_marker.read_install_marker(marker_path.read_bytes())
@@ -1687,25 +1690,21 @@ def test_locked_repair_revalidates_without_trust_or_rewrite(
         assert repaired.package.snapshot == member.package.snapshot
         assert repaired.lock_sha256 == lock.lock_sha256
         assert _collect(cfg).clean
-        if case == "store-heals":
-            assert any(
-                "review up-to-date" in message for message in result.messages
-            )
-            key = package_identity_sha256(member.package)
-            stored = store_module.lookup_snapshot(csk_home, member.name, key)
-            assert stored.snapshot == member.package.snapshot
-        else:
-            assert not any(
-                "up-to-date" in message for message in result.messages
-            ), "repair skipped instead of republishing"
+        assert not any(
+            "up-to-date" in message for message in result.messages
+        ), "repair skipped instead of republishing"
     else:
         code = (
-            "source_snapshot_unavailable"
-            if case == "snapshot-gone"
-            else "source_lock_stale"
+            "source_lock_stale"
+            if case == "lock-stale"
+            else "source_snapshot_unavailable"
         )
         _install_failed(cfg, code)
         assert lock_path.read_bytes() == lock_bytes
+        if case == "store-heals":
+            # The store stays absent: live bytes never recreate it.
+            key = package_identity_sha256(member.package)
+            assert not store_module.entry_dir(csk_home, member.name, key).exists()
     _assert_no_journal(csk_home)
 
 

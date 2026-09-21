@@ -692,24 +692,16 @@ def validate_git_tool(tool: GitTool, *, timeout_seconds: float = 10.0) -> None:
         )
 
 
-def acquire_network(
+def _require_network_target(
     source: RepositorySource,
-    lock: LockedCommit,
-    tool: GitTool,
-    *,
-    tag: str | None = None,
-    limits: Limits = Limits(),
-    connection: NetworkEndpoint | None = None,
-) -> Snapshot:
-    deadline = _admission_deadline(limits)
-    # The tool probe is part of the same admission budget as init, fetch and
-    # raw-object proof.  A direct caller gets an absolute deadline here; a
-    # transport plan passes the already-created deadline through unchanged.
-    probe_limits = _remaining_limits(limits, deadline)
-    validate_git_tool(
-        tool, timeout_seconds=min(10.0, probe_limits.timeout_seconds)
-    )
-    limits = replace(limits, deadline=deadline)
+    connection: NetworkEndpoint | None,
+) -> None:
+    """Validate the connection target against the source for one operation.
+
+    Shared by lock-based acquisition and ref resolution so the two cannot
+    drift: without a connection the source must be canonical parsed input,
+    and with one every connection field must agree with the source.
+    """
     if connection is None:
         try:
             parsed_source = parse_repository_source(source.git)
@@ -740,12 +732,18 @@ def acquire_network(
         raise GitAdmissionError(
             IDENTITY_INVALID, "network connection target is not canonical"
         )
-    try:
-        parse_locked_commit(
-            {"object_format": lock.object_format, "hex": lock.hex}, field="lock"
-        )
-    except ValueError as exc:
-        raise GitAdmissionError(IDENTITY_INVALID, "invalid immutable lock") from exc
+
+
+def _require_transport_credentials(
+    source: RepositorySource,
+    tool: GitTool,
+) -> None:
+    """Validate the tool carries the credential surface the transport needs.
+
+    Shared by lock-based acquisition and ref resolution: HTTPS needs the
+    manager credential broker and SSH needs the operator program with
+    selected identity material.
+    """
     if source.transport == "https" and tool.askpass is None:
         raise GitAdmissionError(
             IDENTITY_INVALID, "HTTPS requires a manager credential broker"
@@ -763,6 +761,34 @@ def acquire_network(
             f"pass --build-ssh-identity/--build-ssh-agent or set "
             f"{OPERATOR_SSH_IDENTITY_ENV}/{OPERATOR_SSH_AGENT_ENV}",
         )
+
+
+def acquire_network(
+    source: RepositorySource,
+    lock: LockedCommit,
+    tool: GitTool,
+    *,
+    tag: str | None = None,
+    limits: Limits = Limits(),
+    connection: NetworkEndpoint | None = None,
+) -> Snapshot:
+    deadline = _admission_deadline(limits)
+    # The tool probe is part of the same admission budget as init, fetch and
+    # raw-object proof.  A direct caller gets an absolute deadline here; a
+    # transport plan passes the already-created deadline through unchanged.
+    probe_limits = _remaining_limits(limits, deadline)
+    validate_git_tool(
+        tool, timeout_seconds=min(10.0, probe_limits.timeout_seconds)
+    )
+    limits = replace(limits, deadline=deadline)
+    _require_network_target(source, connection)
+    try:
+        parse_locked_commit(
+            {"object_format": lock.object_format, "hex": lock.hex}, field="lock"
+        )
+    except ValueError as exc:
+        raise GitAdmissionError(IDENTITY_INVALID, "invalid immutable lock") from exc
+    _require_transport_credentials(source, tool)
     if source.transport not in {"https", "ssh"} or (
         tag is not None and not is_valid_ref_name(tag)
     ):
@@ -862,6 +888,225 @@ def acquire_network(
                 INCOMPLETE_SOURCE, "locked object is not the selected commit"
             )
         return Snapshot(**{**snapshot.__dict__, "tag_verified": tag is not None})
+
+
+#: The largest ``ls-remote`` answer the resolver accepts. One advertised ref
+#: is two short lines; anything larger is not an answer to our query.
+_LS_REMOTE_MAX_BYTES = 65536
+
+
+def _parse_ls_remote(
+    output: bytes, *, wanted: str, ref_kind: str
+) -> LockedCommit:
+    """Parse one ``ls-remote`` answer into the advertised commit.
+
+    ``wanted`` is the exact full ref (``refs/tags/<name>`` or
+    ``refs/heads/<name>``). Only lines naming exactly that ref — or its
+    ``^{}`` peeled commit for tags — are evidence; anything else fails
+    closed. An annotated tag resolves to its peeled commit.
+    """
+    if len(output) > _LS_REMOTE_MAX_BYTES:
+        raise GitAdmissionError(
+            OBJECT_SEMANTICS_INVALID, "remote ref advertisement is oversized"
+        )
+    try:
+        text = output.decode("ascii", "strict")
+    except UnicodeDecodeError as exc:
+        raise GitAdmissionError(
+            OBJECT_SEMANTICS_INVALID, "remote ref advertisement is not ASCII"
+        ) from exc
+    direct: str | None = None
+    peeled: str | None = None
+    for line in text.split("\n"):
+        if not line:
+            continue
+        oid, separator, ref = line.partition("\t")
+        if not separator:
+            raise GitAdmissionError(
+                OBJECT_SEMANTICS_INVALID, "remote ref advertisement is malformed"
+            )
+        if ref == wanted:
+            if direct is not None:
+                raise GitAdmissionError(
+                    OBJECT_SEMANTICS_INVALID,
+                    "remote ref advertisement repeats the ref",
+                )
+            direct = oid
+        elif ref_kind == "tag" and ref == f"{wanted}^{{}}":
+            if peeled is not None:
+                raise GitAdmissionError(
+                    OBJECT_SEMANTICS_INVALID,
+                    "remote ref advertisement repeats the peeled ref",
+                )
+            peeled = oid
+        else:
+            raise GitAdmissionError(
+                OBJECT_SEMANTICS_INVALID,
+                "remote ref advertisement names an unrequested ref",
+            )
+    selected = peeled if peeled is not None else direct
+    if selected is None:
+        raise GitAdmissionError(
+            SOURCE_UNAVAILABLE,
+            "remote ref is not advertised",
+            failure_class="ref-missing",
+        )
+    if _HEX_BY_FORMAT["sha1"].fullmatch(selected) is not None:
+        return LockedCommit("sha1", selected)
+    if _HEX_BY_FORMAT["sha256"].fullmatch(selected) is not None:
+        return LockedCommit("sha256", selected)
+    raise GitAdmissionError(
+        OBJECT_SEMANTICS_INVALID, "remote ref advertisement names no object id"
+    )
+
+
+def _run_git_ls_remote(
+    tool: GitTool,
+    paths: _PrivatePaths,
+    environment: Mapping[str, str],
+    arguments: Sequence[str],
+    *,
+    limits: Limits,
+) -> bytes:
+    """Run one ``ls-remote`` under the admission budget, capturing stdout."""
+    try:
+        completed = subprocess.run(
+            (os.fspath(tool.executable), *arguments),
+            cwd=paths.work,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=limits.timeout_seconds,
+            check=True,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitAdmissionError(
+            SOURCE_UNAVAILABLE,
+            "private Git resolution timed out",
+            failure_class="timeout",
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise GitAdmissionError(
+            SOURCE_UNAVAILABLE,
+            "private Git resolution failed",
+            failure_class=_classify_git_failure_output(exc.stderr),
+        ) from exc
+    except OSError as exc:
+        raise GitAdmissionError(
+            SOURCE_UNAVAILABLE,
+            "private Git resolution failed",
+            failure_class="unclassified",
+        ) from exc
+    return completed.stdout
+
+
+def resolve_network_ref(
+    source: RepositorySource,
+    ref_kind: str,
+    ref_value: str,
+    tool: GitTool,
+    *,
+    limits: Limits = Limits(),
+    connection: NetworkEndpoint | None = None,
+) -> LockedCommit:
+    """Resolve one tag or branch to its advertised commit, bounded.
+
+    Runs a single ``ls-remote`` for the exact full ref through the admitted
+    endpoint with the same tool probe, credential surface, environment
+    lockdown and protocol pins as lock-based acquisition. The returned
+    commit is unproven until the caller acquires and proves it; the caller
+    records it into the lock as the resolved ref.
+    """
+    deadline = _admission_deadline(limits)
+    probe_limits = _remaining_limits(limits, deadline)
+    validate_git_tool(
+        tool, timeout_seconds=min(10.0, probe_limits.timeout_seconds)
+    )
+    limits = replace(limits, deadline=deadline)
+    _require_network_target(source, connection)
+    _require_transport_credentials(source, tool)
+    if source.transport not in {"https", "ssh"}:
+        raise GitAdmissionError(IDENTITY_INVALID, "network source is invalid")
+    if ref_kind not in {"tag", "branch"} or not is_valid_ref_name(ref_value):
+        raise GitAdmissionError(
+            IDENTITY_INVALID, "network ref kind or name is invalid"
+        )
+    wanted = f"refs/tags/{ref_value}" if ref_kind == "tag" else f"refs/heads/{ref_value}"
+    remote_url = source.git if connection is None else connection.remote_url
+    with tempfile.TemporaryDirectory(prefix="csk-buildrepo-") as raw_root:
+        paths = _make_private_paths(Path(raw_root))
+        _remaining_limits(limits, deadline)
+        ssh_command = (
+            _materialize_ssh_wrapper(paths, tool, source, connection)
+            if source.transport == "ssh"
+            else None
+        )
+        https_broker = (
+            _materialize_https_broker(
+                paths,
+                source,
+                tool.https_credentials,
+                expected_host=connection.host if connection is not None else None,
+            )
+            if source.transport == "https" and tool.https_credentials is not None
+            else None
+        )
+        environment = _clean_git_environment(
+            paths,
+            tool,
+            source.transport,
+            ssh_command=ssh_command,
+            https_broker=https_broker,
+            https_token=(
+                tool.https_credentials.token_value
+                if https_broker is not None and tool.https_credentials is not None
+                else None
+            ),
+        )
+        if https_broker is not None:
+            askpass = os.fspath(https_broker)
+        else:
+            askpass = "" if tool.askpass is None else os.fspath(tool.askpass)
+        output = _run_git_ls_remote(
+            tool,
+            paths,
+            environment,
+            (
+                "--no-replace-objects",
+                "--no-lazy-fetch",
+                "--no-optional-locks",
+                "-c",
+                "protocol.allow=never",
+                "-c",
+                f"protocol.{source.transport}.allow=always",
+                "-c",
+                "protocol.version=0",
+                "-c",
+                "credential.helper=",
+                "-c",
+                f"core.askPass={askpass}",
+                "-c",
+                f"core.hooksPath={paths.hooks}",
+                "-c",
+                "http.followRedirects=false",
+                "-c",
+                "http.sslVerify=true",
+                "-c",
+                "http.proxy=",
+                "-c",
+                "https.proxy=",
+                "ls-remote",
+                "--quiet",
+                "--upload-pack=git-upload-pack",
+                "--",
+                remote_url,
+                wanted,
+            ),
+            limits=_remaining_limits(limits, deadline),
+        )
+        _remaining_limits(limits, deadline)
+        return _parse_ls_remote(output, wanted=wanted, ref_kind=ref_kind)
 
 
 def _make_private_paths(root: Path) -> _PrivatePaths:
@@ -1546,6 +1791,12 @@ class _ObjectReader:
             ) from exc
         if self._process.stdin is None or self._process.stdout is None:
             self._process.kill()
+            for stream in (self._process.stdin, self._process.stdout):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except (OSError, ValueError):
+                        pass
             raise GitAdmissionError(
                 INCOMPLETE_SOURCE, "object reader pipes are unavailable"
             )
@@ -1676,6 +1927,18 @@ class _ObjectReader:
     def close(self) -> None:
         if self._process.stdin is None:
             return
+        try:
+            self._close_guarded()
+        finally:
+            # The stdout pipe stays open for the trailing read and must
+            # close on every path; a leaked pipe warns at GC time, which
+            # lands inside whatever test happens to be running then.
+            try:
+                self._stdout.close()
+            except (OSError, ValueError):
+                pass
+
+    def _close_guarded(self) -> None:
         try:
             self._stdin.close()
             trailing = self._stdout.read(2)

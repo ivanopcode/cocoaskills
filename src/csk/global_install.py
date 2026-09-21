@@ -31,6 +31,7 @@ from . import (
 )
 from .audit import pipeline as audit_pipeline
 from .builds import cache as build_cache
+from .builds import metadata as build_metadata
 from .builds import planner as build_planner
 from .builds import source as build_source
 from .builds import toolchain as build_toolchain
@@ -1000,11 +1001,18 @@ def _stage_global_materialization(
                 )
                 and published.marker.driver == "go-repository-v1"
             )
-            identity = (
-                published.plan.input.build_source
-                if published.plan is not None
-                else published.build_source_identity
-            )
+            identity: build_source.BuildSourceIdentity | None
+            if published.plan is not None:
+                if isinstance(
+                    published.plan.input, build_metadata.SourceAwareBuildInput
+                ):
+                    raise installer.InstallError(
+                        f"build provider {node.name}.{name} selected a receipt-3 "
+                        "build input, which the legacy build lane cannot publish"
+                    )
+                identity = published.plan.input.build_source
+            else:
+                identity = published.build_source_identity
             if identity is None:
                 raise installer.InstallError(
                     f"build provider {node.name}.{name} has no source identity"

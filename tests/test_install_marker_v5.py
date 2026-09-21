@@ -34,6 +34,7 @@ from csk import (
     manifest,
     skillspec,
 )
+from csk.build_repository_pipeline import EffectiveState, snapshot_key
 from csk.builds.source import BuildSourceIdentity
 from csk.sources import package_identity as source_package
 
@@ -2177,7 +2178,13 @@ def test_legacy_installer_currentness_rejects_v5_markers(tmp_path: Path) -> None
     )
 
 
-def test_legacy_gc_collects_no_reference_from_v5_markers(tmp_path: Path) -> None:
+def test_gc_collects_build_but_no_legacy_state_references_from_v5_markers(
+    tmp_path: Path,
+) -> None:
+    # Contract change ordered by the TASK-260916-341a6q review round 1 (F1):
+    # v5 build records mark their receipt-3 references, or the sweep
+    # destroys live entries by construction. Only legacy runtime/snapshot
+    # state stays unmarked.
     entry = tmp_path / "golden-skill"
     entry.mkdir()
     _write_marker(entry, install_marker.InstallMarkerV5(**_base_marker()).to_json())
@@ -2188,7 +2195,21 @@ def test_legacy_gc_collects_no_reference_from_v5_markers(tmp_path: Path) -> None
     assert (found, warning) == (True, None)
     assert references.runtime == set()
     assert references.snapshots == set()
-    assert references.builds == set()
+    assert references.builds == {"sha256:" + "1" * 64}
+    assert references.external_builds == {"sha256:" + "4" * 64}
+    assert references.external_snapshots == {
+        snapshot_key(
+            EffectiveState(
+                identity_kind="network-git",
+                identity="github.com/example/golden-tools",
+                transport=None,
+                object_format="sha1",
+                commit=SHA1,
+                substituted=False,
+            ),
+            "sha256:" + "b" * 64,
+        )
+    }
 
 
 def test_legacy_global_retention_skips_v5_runtime_references(tmp_path: Path) -> None:

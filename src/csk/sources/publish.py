@@ -1,13 +1,13 @@
 """Atomic publication of schema-2 source installs and locks.
 
 Implements the install side of protocol skillfile-sources sections 2
-through 4 for local ``path`` sources: one recoverable transaction
-publishes the lock, marker v5 records, runtime store entries, context
-projection and adapter mirrors, with the physical boundary rechecked
-immediately before each publication write. Status, locked install
-(repair) and explicit refresh all revalidate the exact locked source
-and required evidence; marker summaries never authorize anything and
-locks are never silently refreshed.
+through 4 for local ``path`` and Git sources: one recoverable
+transaction publishes the lock, marker v5 records, runtime store
+entries, context projection and adapter mirrors, with the physical
+boundary rechecked immediately before each publication write. Status,
+locked install (repair) and explicit refresh all revalidate the exact
+locked source and required evidence; marker summaries never authorize
+anything and locks are never silently refreshed.
 
 The transaction itself is the existing :class:`csk.transactions`
 engine, extended with a per-target recheck payload and a pre-write
@@ -23,17 +23,35 @@ import hashlib
 import os
 import shutil
 import stat
+import sys
 import tempfile
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
-from .. import adapters, hashing, identifiers, install_marker, locale, locking, manifest
+from .. import adapters, build_repository_pipeline, closure, git_admission, git_ops, hashing
+from .. import identifiers, install_marker, locale, locking, manifest, shims
+from ..source_identity import canonical_source_identity
+from ..build_repository import GO_REPOSITORY_V1_DRIVER
 from .. import protocol_json, skillspec, whitelist
+from ..builds import cache as build_cache
+from ..builds import currentness as build_currentness
+from ..builds import metadata as build_metadata
 from ..builds import planner as build_planner
+from ..builds import source as build_source
+
+if TYPE_CHECKING:
+    from ..audit.pipeline import GateResult
+    from ..builds.toolchain import OperatorSearchPath
+    from ..config import GlobalConfig
+    from ..dev_substitutions import DevManifest
+    from ..git_admission import OperatorSSHCredentials
+    from ..installer import OperatorHTTPSToken
 from ..transactions import (
     ABSENT_DIGEST,
     JournalTarget,
@@ -46,7 +64,8 @@ from ..transactions import (
     TransactionPlan,
     digest_target,
 )
-from . import boundaries, consumers, skillfile_v2, snapshot, store
+from . import boundaries, consumers, modes, skillfile_v2, snapshot, source_audit, store
+from . import transport as source_transport
 from .errors import (
     CODE_LOCK_STALE,
     CODE_MEMBER_INVALID,
@@ -67,9 +86,17 @@ from .lock import (
     read_machine_private_binding,
     serialize_lock,
     serialize_machine_private_binding,
+    sort_lock_members_by_utf8,
     validate_lock,
 )
-from .package_identity import LocalSnapshot, package_identity_sha256
+from .package_identity import (
+    ConfiguredGit,
+    LocalSnapshot,
+    LockedCommit,
+    NetworkGit,
+    PackageIdentity,
+    package_identity_sha256,
+)
 from .selection import (
     SelectedSkill,
     destination_key,
@@ -80,6 +107,7 @@ from .selection import (
 __all__ = [
     "BINDINGS_DIRNAME",
     "CLASS_ADAPTER_LEDGER",
+    "CLASS_BIN",
     "CLASS_BINDINGS",
     "CLASS_CONTEXT",
     "CLASS_LOCK",
@@ -123,6 +151,9 @@ CLASS_BINDINGS: Final = "05-bindings"
 CLASS_LOCK: Final = "07-lock"
 CLASS_CONTEXT: Final = "10-context"
 CLASS_RUNTIME: Final = "20-runtime"
+# One command owns one launcher path, whatever produced it: the class string
+# is the legacy lane's own vocabulary for project command shims.
+CLASS_BIN: Final = "30-shim-canonical"
 # Adapter classes mirror csk.adapters._plan_adapter_targets, the single
 # planner for both install lanes; the enumeration test fails if they drift.
 CLASS_ADAPTER_LEDGER: Final = "60-adapter-ledger"
@@ -142,6 +173,7 @@ STAGE_BOUNDARIES: Final[tuple[str, ...]] = (
     "commit-07-lock",
     "commit-10-context",
     "commit-20-runtime",
+    "commit-30-shim-canonical",
     "commit-60-adapter-ledger",
     "commit-80-removal",
     "cleanup",
@@ -166,14 +198,17 @@ class ResolvedMember:
     ``selection_ordinal`` is the member's index in expansion order: the
     lock schema requires every root member selection to be unique and
     zero-based dense, which a selector index cannot satisfy when one
-    collection selects several members.
+    collection selects several members. Transitive closure members
+    carry no selector, so ``from_alias``, ``selection_ordinal`` and
+    ``source_root`` are all ``None`` for them: no binding is written,
+    the lock selection is null, and frozen serving is store-only.
     """
 
     name: str
-    from_alias: str
+    from_alias: str | None
     directory: str
-    selection_ordinal: int
-    source_root: Path
+    selection_ordinal: int | None
+    source_root: Path | None
 
 
 @dataclass(frozen=True)
@@ -182,13 +217,14 @@ class CapturedMember:
 
     ``captured`` is None only on the locked-repair path, where live
     bytes cannot be captured and the verified store copy serves
-    instead; ``package`` always carries the authoritative snapshot
-    digest either way.
+    instead; ``package`` always carries the authoritative identity —
+    a local snapshot digest or a Git repository, commit and directory —
+    either way.
     """
 
     member: ResolvedMember
     captured: snapshot.CapturedPackage | None
-    package: LocalSnapshot
+    package: PackageIdentity
     package_key: str
 
 
@@ -307,11 +343,11 @@ def resolve_source_root(
 ) -> Path:
     """Resolve one source alias to its local source root.
 
-    Only ``path`` acquisitions install through the atomic publisher: a
-    literal native path, resolved against the project directory when
-    relative. Git and repository acquisitions refuse here; their
-    acquisition pipeline belongs to a later leaf, and silently dropping
-    them would install an incomplete closure.
+    Only ``path`` acquisitions resolve here: a literal native path,
+    resolved against the project directory when relative. Git and
+    repository acquisitions resolve through
+    :func:`acquire_git_source_root`, which needs the resolving mode;
+    reaching this function with one is a caller error.
     """
 
     if isinstance(acquisition, skillfile_v2.PathSource):
@@ -322,9 +358,83 @@ def resolve_source_root(
         return project_path / declared
     raise SourceError(
         CODE_SELECTION_INVALID,
-        f"Source {alias!r} uses a network acquisition, which atomic source "
-        "install does not acquire; only local path sources install here",
+        f"Source {alias!r} uses a network acquisition, which resolves "
+        "through the bounded transport, not through local source roots",
     )
+
+
+def acquire_git_source_root(
+    mode: modes.ResolvingSources,
+    alias: str,
+    acquisition: skillfile_v2.GitSource | skillfile_v2.RepositorySource,
+) -> tuple[Path, modes.AliasResolution]:
+    """Resolve and materialize one Git alias inside the resolving workspace.
+
+    Resolution is memoized per declaration, so every member from one Git
+    alias uses the same resolved commit. Acquisition goes through the
+    bounded transport only; the verified snapshot materializes into the
+    private workspace, which expansion then treats exactly like a local
+    source root. Frozen mode cannot reach this function: it holds no
+    resolving mode to pass.
+    """
+
+    resolution = modes.resolve_git_alias(mode, alias, acquisition)
+    acquired = modes.acquire_git_alias(mode, alias, acquisition, resolution)
+    materialized = mode.workspace / "acquired" / alias
+    if materialized.exists():
+        # One alias materializes once per operation: the workspace is a
+        # fresh private directory, so an existing tree holds exactly the
+        # bytes this operation acquired for this alias.
+        return materialized, resolution
+    try:
+        acquired.materialize(materialized)
+    except git_admission.GitAdmissionError as exc:
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"Source {alias!r} acquired bytes cannot be staged: {exc}",
+        ) from exc
+    except _FS_ERRORS as exc:
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"Source {alias!r} acquired bytes cannot be staged: {exc}",
+        ) from exc
+    return materialized, resolution
+
+
+def resolve_schema2_source_roots(
+    project_path: Path,
+    manifest_value: manifest.ProjectManifest,
+    *,
+    mode: modes.ResolvingSources,
+) -> tuple[dict[str, Path], dict[str, modes.AliasResolution]]:
+    """Resolve every referenced alias: paths directly, Git via transport.
+
+    Only aliases a selector references are resolved; unreferenced Git
+    aliases cost no network. Git aliases resolve and materialize into
+    the resolving workspace; path aliases resolve against the project
+    directory as before.
+    """
+
+    referenced = {selector.from_alias for selector in manifest_value.selectors}
+    source_roots: dict[str, Path] = {}
+    git_resolutions: dict[str, modes.AliasResolution] = {}
+    for alias in sorted(referenced):
+        acquisition = manifest_value.sources.get(alias)
+        if acquisition is None:
+            # Unknown aliases refuse at expansion with the admission
+            # error; resolving nothing here keeps that refusal exact.
+            continue
+        if isinstance(acquisition, skillfile_v2.PathSource):
+            source_roots[alias] = resolve_source_root(
+                project_path, alias, acquisition
+            )
+        else:
+            materialized, resolution = acquire_git_source_root(
+                mode, alias, acquisition
+            )
+            source_roots[alias] = materialized
+            git_resolutions[alias] = resolution
+    return source_roots, git_resolutions
 
 
 def _selector_admits_member(
@@ -389,15 +499,24 @@ def _attribute_unique_selector(
 
 
 def resolve_schema2_members(
-    project_path: Path, manifest_value: manifest.ProjectManifest
+    project_path: Path,
+    manifest_value: manifest.ProjectManifest,
+    *,
+    mode: modes.ResolvingSources,
+    source_roots: dict[str, Path] | None = None,
+    git_resolutions: dict[str, modes.AliasResolution] | None = None,
 ) -> tuple[ResolvedMember, ...]:
-    """Expand and validate every schema-2 selector against local roots.
+    """Expand and validate every schema-2 selector against resolved roots.
 
-    Refusals are explicit and never silent: network acquisitions, legacy
-    declarations, root packages (which need admitted-subset capture the
-    snapshot leaf does not provide) and members with transitive
-    requirements (which need closure resolution) all fail here, before
-    any filesystem work beyond expansion itself.
+    Refusals are explicit and never silent: legacy declarations and
+    project-root packages fail here, before any filesystem work beyond
+    expansion itself. Git aliases resolve through the bounded transport
+    (see :func:`resolve_schema2_source_roots`); members with transitive
+    requirements no longer refuse — the schema-2 full closure resolves
+    them after expansion. A ``directory: "."`` selector over a Git alias
+    selects the repository root as the package, which is a complete
+    tree and needs no admitted subset; over a path alias it still
+    refuses.
     """
 
     if manifest_value.skills:
@@ -408,16 +527,20 @@ def resolve_schema2_members(
             f"schema-2 Skillfile by atomic install: {names[0]!r}",
         )
     selectors = list(manifest_value.selectors)
-    if any(selector.directory == "." for selector in selectors):
-        raise SourceError(
-            CODE_SELECTION_INVALID,
-            "Root package publication needs admitted-subset capture, which "
-            "atomic install does not provide; select a nested package",
+    for selector in selectors:
+        if selector.directory != ".":
+            continue
+        acquisition = manifest_value.sources.get(selector.from_alias)
+        if acquisition is None or isinstance(acquisition, skillfile_v2.PathSource):
+            raise SourceError(
+                CODE_SELECTION_INVALID,
+                "Root package publication needs admitted-subset capture, which "
+                "atomic install does not provide; select a nested package",
+            )
+    if source_roots is None or git_resolutions is None:
+        source_roots, git_resolutions = resolve_schema2_source_roots(
+            project_path, manifest_value, mode=mode
         )
-    source_roots = {
-        alias: resolve_source_root(project_path, alias, acquisition)
-        for alias, acquisition in manifest_value.sources.items()
-    }
     try:
         selected = expand_selectors(selectors, source_roots)
     except SourceError:
@@ -429,13 +552,6 @@ def resolve_schema2_members(
         ) from exc
     resolved: list[ResolvedMember] = []
     for ordinal, member in enumerate(selected):
-        if member.requirements:
-            missing = sorted({requirement.name for requirement in member.requirements})
-            raise SourceError(
-                CODE_MEMBER_MISSING,
-                f"Skill {member.name!r} requires {missing[0]!r}, which needs "
-                "transitive closure resolution",
-            )
         if (
             _attribute_unique_selector(
                 selectors,
@@ -463,7 +579,7 @@ def resolve_schema2_members(
 
 
 def locked_schema2_members(
-    old_lock: SkillfileLock,
+    mode: modes.FrozenSources,
     selectors: list[skillfile_v2.SkillSelector],
     source_roots: dict[str, Path],
 ) -> tuple[ResolvedMember, ...]:
@@ -473,11 +589,14 @@ def locked_schema2_members(
     each lock member is attributed to its source by admission matching
     (no filesystem expansion), so a deleted member directory surfaces
     as an unavailable snapshot at capture time instead of a selection
-    failure. Non-local packages, root packages, unknown sources,
-    unattributable members and filesystem-equivalent name collisions
-    (the selection leaf's own folding rule) refuse explicitly.
+    failure. Git members serve store-only; transitive members (null
+    selection) carry no selector. Configured-git packages, local root
+    packages, unknown sources, unattributable members and
+    filesystem-equivalent name collisions (the selection leaf's own
+    folding rule) refuse explicitly.
     """
 
+    old_lock = mode.lock
     seen_folded: dict[str, str] = {}
     for lock_member in old_lock.members:
         folded = destination_key(lock_member.name)
@@ -491,22 +610,48 @@ def locked_schema2_members(
         seen_folded.setdefault(folded, lock_member.name)
     members: list[ResolvedMember] = []
     for lock_member in old_lock.members:
-        if not isinstance(lock_member.package, LocalSnapshot):
+        package = lock_member.package
+        if isinstance(package, ConfiguredGit):
             raise SourceError(
                 CODE_SELECTION_INVALID,
-                f"Skill {lock_member.name!r} lock member is not a local "
-                "snapshot, which atomic install does not serve",
+                f"Skill {lock_member.name!r} lock member is a legacy "
+                "configured-git package, which schema-2 install does not serve",
             )
-        if lock_member.directory == ".":
+        if not isinstance(package, (LocalSnapshot, NetworkGit)):
+            raise SourceError(
+                CODE_SELECTION_INVALID,
+                f"Skill {lock_member.name!r} lock member carries an "
+                "unsupported package identity",
+            )
+        if lock_member.directory == "." and isinstance(package, LocalSnapshot):
             raise SourceError(
                 CODE_SELECTION_INVALID,
                 "Root package publication needs admitted-subset capture, "
                 "which atomic install does not provide; select a nested package",
             )
+        if lock_member.selection is None:
+            # Transitive closure members carry no selector: they serve
+            # from the store alone, with no source root to verify.
+            if not isinstance(package, NetworkGit):
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"Skill {lock_member.name!r} transitive lock member is "
+                    "not a Git package",
+                )
+            members.append(
+                ResolvedMember(
+                    name=lock_member.name,
+                    from_alias=None,
+                    directory=lock_member.directory,
+                    selection_ordinal=None,
+                    source_root=None,
+                )
+            )
+            continue
         index = _attribute_unique_selector(
             selectors, name=lock_member.name, directory=lock_member.directory
         )
-        if index is None or lock_member.selection is None:
+        if index is None:
             raise SourceError(
                 CODE_MEMBER_INVALID,
                 f"Skill {lock_member.name!r} lock member cannot be "
@@ -514,6 +659,19 @@ def locked_schema2_members(
             )
         from_alias = selectors[index].from_alias
         if from_alias not in source_roots:
+            if isinstance(package, NetworkGit):
+                # Git root members serve from the store alone; no local
+                # source root exists for them.
+                members.append(
+                    ResolvedMember(
+                        name=lock_member.name,
+                        from_alias=from_alias,
+                        directory=lock_member.directory,
+                        selection_ordinal=lock_member.selection,
+                        source_root=None,
+                    )
+                )
+                continue
             raise SourceError(
                 CODE_MEMBER_INVALID,
                 f"Skill {lock_member.name!r} lock member names source "
@@ -534,14 +692,22 @@ def locked_schema2_members(
 def capture_schema2_members(
     members: tuple[ResolvedMember, ...], *, home: Path
 ) -> dict[str, snapshot.CapturedPackage]:
-    """Capture every resolved member as an immutable snapshot.
+    """Capture every resolved root member as an immutable snapshot.
 
     Capture reads working-tree bytes with revalidation inside; failures
-    carry the snapshot leaf's codes unchanged.
+    carry the snapshot leaf's codes unchanged. Every member needs a
+    source root: transitive closure members capture from their
+    acquisition materialization instead (see
+    :func:`capture_transitive_member`).
     """
 
     captured: dict[str, snapshot.CapturedPackage] = {}
     for member in members:
+        if member.source_root is None:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {member.name!r} has no source root to capture",
+            )
         try:
             package = snapshot.capture_package_snapshot(
                 member.source_root, member.directory, home=home
@@ -557,15 +723,46 @@ def capture_schema2_members(
     return captured
 
 
+def capture_transitive_member(
+    materialized: Path, *, name: str, home: Path
+) -> snapshot.CapturedPackage:
+    """Capture one transitive member from its acquisition materialization.
+
+    The materialized directory holds exactly the acquired skill bytes
+    (the skill sits at the acquisition root, like a schema-1
+    requirement), so capturing ``"."`` admits precisely the package
+    with no subset problem. Reuses the snapshot leaf's capture,
+    including its revalidation; failures carry its codes unchanged.
+    """
+
+    try:
+        return snapshot.capture_package_snapshot(materialized, ".", home=home)
+    except SourceError:
+        raise
+    except _FS_ERRORS as exc:
+        raise SourceError(
+            CODE_SNAPSHOT_CHANGED,
+            f"Skill {name!r} cannot be captured: {exc}",
+        ) from exc
+
+
 def collection_membership(
     selectors: list[skillfile_v2.SkillSelector],
     source_roots: dict[str, Path],
+    skip_aliases: frozenset[str] = frozenset(),
 ) -> dict[int, tuple[str, ...]]:
-    """Expand every collection selector to its ordered member names."""
+    """Expand every collection selector to its ordered member names.
+
+    Aliases in ``skip_aliases`` are omitted: Git aliases enumerate
+    private acquisition workspace paths that no concurrent writer can
+    reach, so there is no membership race to detect for them.
+    """
 
     membership: dict[int, tuple[str, ...]] = {}
     for index, selector in enumerate(selectors):
         if isinstance(selector, skillfile_v2.IndividualSelector):
+            continue
+        if selector.from_alias in skip_aliases:
             continue
         try:
             members = expand_collection(source_roots[selector.from_alias], selector)
@@ -672,6 +869,248 @@ def materialize_frozen(
         ) from exc
 
 
+def script_command_relative_path(
+    command: skillspec.CommandSpec, *, name: str
+) -> str:
+    """Select one script command's platform path, like the shim layer.
+
+    Mirrors the legacy lane's selection exactly: the Windows path on
+    Windows, the Unix path elsewhere, refused when the member declares
+    no path for the activating platform.
+    """
+
+    relative = command.win_path if os.name == "nt" else command.unix_path
+    if not relative:
+        platform = "windows" if os.name == "nt" else "unix"
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"Skill {name!r} command {command.name!r} has no path for {platform}",
+        )
+    if not identifiers.is_valid_portable_path(relative):
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"Skill {name!r} command {command.name!r} path is not a "
+            "portable relative path",
+        )
+    return relative
+
+
+def script_bin_filename(command_name: str) -> str:
+    """Return the runtime ``bin/`` filename for one rootless script command.
+
+    Mirrors the legacy lane's single-file activation layout: the
+    command name, with the launcher suffix on Windows.
+    """
+
+    if os.name == "nt" and not command_name.endswith(".cmd"):
+        return f"{command_name}.cmd"
+    return command_name
+
+
+def _grant_staged_execute(path: Path, *, name: str, command: str) -> None:
+    """Add execute bits to one staged command file on POSIX hosts.
+
+    Mirrors the shim layer's grant exactly: through a descriptor that
+    follows no link, only onto a regular file. Windows activates
+    commands through ``.cmd`` launchers instead.
+    """
+
+    if os.name != "posix":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except _FS_ERRORS as exc:
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"Skill {name!r} command {command!r} staged state cannot be "
+            f"opened: {exc}",
+        ) from exc
+    try:
+        try:
+            info = os.fstat(descriptor)
+        except _FS_ERRORS as exc:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {name!r} command {command!r} staged state cannot be "
+                f"inspected: {exc}",
+            ) from exc
+        if not stat.S_ISREG(info.st_mode):
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {name!r} command {command!r} staged state is not a "
+                "regular file",
+            )
+        mode = stat.S_IMODE(info.st_mode)
+        execute = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        if mode | execute != mode:
+            try:
+                os.fchmod(descriptor, mode | execute)
+            except _FS_ERRORS as exc:
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"Skill {name!r} command {command!r} staged state cannot "
+                    f"be made executable: {exc}",
+                ) from exc
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+
+
+def _relative_within_root(root: str, relative: str) -> bool:
+    """Return whether one portable path sits at or below a portable root."""
+
+    root_parts = tuple(root.split("/"))
+    path_parts = tuple(relative.split("/"))
+    return len(path_parts) >= len(root_parts) and path_parts[: len(root_parts)] == root_parts
+
+
+def refuse_build_root_script(
+    command: skillspec.CommandSpec, relative: str, spec: skillspec.SkillSpec, *, name: str
+) -> None:
+    """Refuse a script command file that sits below a build root.
+
+    Build roots are compiled inputs; they never enter installed
+    script runtime. Members with runtime roots exclude build roots
+    structurally (the manifest grammar keeps the two disjoint and
+    every command path inside a runtime root), so this gate bites
+    for rootless members whose script may name any package file.
+    """
+
+    for root in spec.build_roots:
+        if _relative_within_root(root, relative):
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {name!r} command {command.name!r} path {relative!r} "
+                f"is below build root {root!r}, which never enters "
+                "installed script runtime",
+            )
+
+
+def stage_member_runtime(
+    frozen_dir: Path,
+    runtime_staged: Path,
+    spec: skillspec.SkillSpec,
+    *,
+    name: str,
+) -> None:
+    """Stage one member's script runtime from its frozen bytes.
+
+    Members with runtime roots stage those roots; members without
+    roots but with script commands stage each command file into the
+    legacy lane's ``bin/`` single-file layout. Every byte comes from
+    the frozen materialization, never from the live authored tree;
+    command files gain owner execute bits on POSIX hosts, and a
+    command file below a build root refuses.
+    """
+
+    try:
+        if runtime_staged.exists():
+            shutil.rmtree(runtime_staged)
+        runtime_staged.mkdir(parents=True)
+        if spec.runtime_roots:
+            for root in spec.runtime_roots:
+                if not identifiers.is_valid_portable_path(root):
+                    raise SourceError(
+                        CODE_MEMBER_INVALID,
+                        f"Skill {name!r} carries a non-portable runtime root "
+                        f"{root!r}",
+                    )
+                shutil.copytree(frozen_dir / root, runtime_staged / root, symlinks=True)
+        script_names = active_script_commands(spec)
+        for command_name in script_names:
+            command = spec.commands[command_name]
+            relative = script_command_relative_path(command, name=name)
+            refuse_build_root_script(command, relative, spec, name=name)
+            if spec.runtime_roots:
+                staged_file = runtime_staged / relative
+            else:
+                staged_file = runtime_staged / "bin" / script_bin_filename(command_name)
+                source = frozen_dir / relative
+                try:
+                    data = source.read_bytes()
+                except _FS_ERRORS as exc:
+                    raise SourceError(
+                        CODE_MEMBER_INVALID,
+                        f"Skill {name!r} command {command_name!r} frozen file "
+                        f"{relative!r} cannot be read: {exc}",
+                    ) from exc
+                staged_file.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    staged_file.write_bytes(data)
+                except _FS_ERRORS as exc:
+                    raise SourceError(
+                        CODE_MEMBER_INVALID,
+                        f"Skill {name!r} command {command_name!r} cannot be "
+                        f"staged: {exc}",
+                    ) from exc
+            _grant_staged_execute(staged_file, name=name, command=command_name)
+    except SourceError:
+        raise
+    except _FS_ERRORS as exc:
+        raise SourceError(
+            CODE_MEMBER_INVALID, f"Skill {name!r} runtime cannot be staged: {exc}"
+        ) from exc
+
+
+def schema2_shim_path_entries(
+    spec: skillspec.SkillSpec, *, final_bin: Path
+) -> tuple[Path, ...]:
+    """Derive the launcher PATH entries for one member's shims.
+
+    Mirrors the legacy lane exactly: the final project bin dir
+    first (so a consumer script reaches provider commands by bare
+    name), then the running interpreter's directory, then the
+    resolved directory of every declared system dependency,
+    deduplicated by normalized spelling. Entries are absolute
+    final paths, so staged and live launchers carry identical
+    bytes.
+    """
+
+    candidates = [final_bin.absolute()]
+    if sys.executable:
+        candidates.append(Path(sys.executable).resolve().parent)
+    for dependency in spec.dependencies.values():
+        if dependency.type != "system" or not dependency.command:
+            continue
+        executable = shutil.which(dependency.command)
+        if executable:
+            candidates.append(Path(executable).resolve().parent)
+    entries: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = os.path.normcase(os.path.abspath(candidate))
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append(candidate)
+    return tuple(entries)
+
+
+def schema2_script_target(
+    home: Path,
+    name: str,
+    package_key: str,
+    command: skillspec.CommandSpec,
+    spec: skillspec.SkillSpec,
+) -> Path:
+    """Return the protected-store file one script shim launches.
+
+    Members with runtime roots address the command path inside the
+    runtime entry; rootless members address the single-file
+    ``bin/`` layout. The entry is keyed by ``(skill name,
+    SHA-256(CCJ-1(package)))`` in the ``source-v1`` namespace and
+    never resolves into the authored directory.
+    """
+
+    entry = runtime_entry_path(home, name, package_key)
+    relative = script_command_relative_path(command, name=name)
+    if spec.runtime_roots:
+        return entry / relative
+    return entry / "bin" / script_bin_filename(command.name)
+
+
 def load_member_spec(frozen_dir: Path, *, name: str) -> skillspec.SkillSpec:
     """Load one member skill spec from its frozen materialization."""
 
@@ -687,29 +1126,255 @@ def load_member_spec(frozen_dir: Path, *, name: str) -> skillspec.SkillSpec:
         ) from exc
 
 
-def require_context_only(spec: skillspec.SkillSpec, *, name: str) -> None:
-    """Refuse members needing materialization this leaf does not publish.
+def require_installable_member(
+    spec: skillspec.SkillSpec, *, name: str, satisfied_by: frozenset[str]
+) -> None:
+    """Refuse members whose skill requirements are not in the closure.
 
-    Exported commands need runtime activation and shims, owned by the
-    runtime-materialization story, and skill requirements need closure
-    resolution: both refuse explicitly here rather than installing an
-    incomplete skill.
+    Script commands materialize from the frozen snapshot into the
+    protected runtime store with shims in ``.agents/bin``; build
+    commands materialize through the existing build pipeline with the
+    member package bound. Every skill requirement
+    (``dependencies.skills``) must name a member of the resolved
+    closure (or the consumed lock): a requirement the closure did not
+    satisfy refuses here rather than installing an incomplete skill.
     """
 
-    if spec.commands:
-        first = sorted(spec.commands)[0]
-        raise SourceError(
-            CODE_MEMBER_INVALID,
-            f"Skill {name!r} exports command {first!r}, which needs command "
-            "materialization that atomic install does not publish",
+    for requirement in sorted(spec.requirements):
+        if requirement not in satisfied_by:
+            raise SourceError(
+                CODE_MEMBER_MISSING,
+                f"Skill {name!r} requires {requirement!r}, which is not a "
+                "member of the resolved closure",
+            )
+
+
+def check_schema2_requirement_commands(
+    specs_map: Mapping[str, skillspec.SkillSpec],
+) -> None:
+    """Refuse requirements naming commands the provider does not export.
+
+    Mirrors the closure's own requirement-command validation for the
+    frozen path, where no traversal runs: every requirement command
+    must name a script command its closure member exports.
+    """
+
+    errors: list[str] = []
+    for name in sorted(specs_map):
+        spec = specs_map[name]
+        for requirement in spec.requirements.values():
+            provider = specs_map.get(requirement.name)
+            if provider is None:
+                continue
+            for command in requirement.commands:
+                provided = provider.commands.get(command)
+                if provided is None or provided.type != "script":
+                    errors.append(
+                        f"Requirement {name} -> {requirement.name} names command {command!r}, "
+                        f"but {requirement.name} does not export a script command named {command!r}"
+                    )
+    if errors:
+        raise SourceError(CODE_MEMBER_MISSING, "; ".join(errors))
+
+
+def active_script_commands(spec: skillspec.SkillSpec) -> tuple[str, ...]:
+    """Return the sorted script commands one member activates.
+
+    Every selected member is fully active: schema-2 selection has no
+    partial activation edges, so each member activates all the script
+    commands it exports. Build commands activate through the build
+    providers instead.
+    """
+
+    return tuple(
+        sorted(
+            command.name
+            for command in spec.commands.values()
+            if command.type == "script"
         )
-    if spec.requirements:
-        first = sorted(spec.requirements)[0]
-        raise SourceError(
-            CODE_MEMBER_MISSING,
-            f"Skill {name!r} requires {first!r}, which needs transitive "
-            "closure resolution",
+    )
+
+
+def active_build_commands(spec: skillspec.SkillSpec) -> tuple[str, ...]:
+    """Return the sorted build commands one member activates."""
+
+    return tuple(
+        sorted(
+            command.name
+            for command in spec.commands.values()
+            if command.type == "build"
         )
+    )
+
+
+def claim_schema2_command_owner(
+    owners: dict[str, str], command: str, owner: str
+) -> None:
+    """Claim one command name for its owning member, refusing collisions.
+
+    The single collision predicate for both the plan-time script
+    gate and the planning-time owner map, so the two cannot drift:
+    one name owns one launcher path, whoever reports it.
+    """
+
+    previous = owners.get(command)
+    if previous is not None:
+        raise SourceError(
+            CODE_NAME_CONFLICT,
+            f"Command collision for {command!r}: exported by "
+            f"{previous} and {owner}",
+        )
+    owners[command] = owner
+
+
+def check_schema2_command_collisions(
+    members: tuple[ResolvedMember, ...],
+    specs_map: dict[str, skillspec.SkillSpec],
+) -> None:
+    """Refuse script commands two members export under one name.
+
+    One name owns one launcher path, so a repeated script command
+    name refuses before any staging. Build collisions are refused by
+    the build planner's own detector once providers exist.
+    """
+
+    owners: dict[str, str] = {}
+    for member in members:
+        for command in active_script_commands(specs_map[member.name]):
+            claim_schema2_command_owner(owners, command, member.name)
+
+
+def check_schema2_system_commands(
+    members: tuple[ResolvedMember, ...],
+    specs_map: dict[str, skillspec.SkillSpec],
+) -> None:
+    """Refuse members whose required system commands are not ready.
+
+    Mirrors the legacy lane's readiness check exactly: every declared
+    system dependency names an executable that must resolve on the
+    operator PATH before any shim is published.
+    """
+
+    for member in members:
+        spec = specs_map[member.name]
+        for dependency in spec.dependencies.values():
+            if dependency.type != "system":
+                continue
+            if not dependency.command or shutil.which(dependency.command) is None:
+                hint = f" Hint: {dependency.hint}" if dependency.hint else ""
+                raise SourceError(
+                    CODE_MEMBER_MISSING,
+                    f"Missing system command {dependency.command!r} for "
+                    f"{member.name}.{hint}",
+                )
+
+
+def check_schema2_skill_dependencies(
+    members: tuple[ResolvedMember, ...],
+    specs_map: dict[str, skillspec.SkillSpec],
+) -> None:
+    """Refuse members whose skill command dependencies are unsatisfied.
+
+    A skill dependency is satisfied exactly when a selected member
+    exports the named script command. Members outside the selected
+    set cannot satisfy a dependency: locked installs and status
+    derive membership from the lock, so filesystem-side siblings
+    never count.
+    """
+
+    for member in members:
+        spec = specs_map[member.name]
+        for dependency in spec.dependencies.values():
+            if dependency.type != "skill":
+                continue
+            if not dependency.skill or not dependency.command:
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"Invalid skill dependency for {member.name}: "
+                    f"{dependency.name}",
+                )
+            provider = specs_map.get(dependency.skill)
+            if provider is None:
+                hint = f" Hint: {dependency.hint}" if dependency.hint else ""
+                raise SourceError(
+                    CODE_MEMBER_MISSING,
+                    f"Missing skill dependency {dependency.skill!r} for "
+                    f"{member.name}; add {dependency.skill} to "
+                    f"Skillfile.json.{hint}",
+                )
+            provided = provider.commands.get(dependency.command)
+            if provided is None or provided.type != "script":
+                raise SourceError(
+                    CODE_MEMBER_MISSING,
+                    f"Skill dependency {member.name} requires "
+                    f"{dependency.skill}.{dependency.command}, but "
+                    f"{dependency.skill} does not export a script command "
+                    f"named {dependency.command!r}",
+                )
+
+
+def check_schema2_script_execution_policy(
+    members: tuple[ResolvedMember, ...],
+    specs_map: dict[str, skillspec.SkillSpec],
+) -> None:
+    """Refuse members selecting a script policy this manager cannot run.
+
+    The check is the legacy lane's own fail-closed call at the single
+    shim publication point: a manager that does not implement the
+    selected script execution policy never publishes the shim, not
+    even declared-only.
+    """
+
+    for member in members:
+        spec = specs_map[member.name]
+        if not active_script_commands(spec):
+            continue
+        rejection = skillspec.script_execution_policy_rejection(spec)
+        if rejection is not None:
+            raise SourceError(
+                CODE_MEMBER_INVALID, f"{member.name}: {rejection}"
+            )
+
+
+def check_schema2_build_root_scripts(
+    members: tuple[ResolvedMember, ...],
+    specs_map: dict[str, skillspec.SkillSpec],
+) -> None:
+    """Refuse script commands whose files sit below a build root.
+
+    Build roots are compiled inputs; they never enter installed
+    script runtime. The check is pure spec, so it refuses here at
+    plan time, before audit, compilation, or staging; the staging
+    seam rechecks through the same predicate.
+    """
+
+    for member in members:
+        spec = specs_map[member.name]
+        for command_name in active_script_commands(spec):
+            command = spec.commands[command_name]
+            relative = script_command_relative_path(command, name=member.name)
+            refuse_build_root_script(command, relative, spec, name=member.name)
+
+
+def run_schema2_command_gates(
+    members: tuple[ResolvedMember, ...],
+    specs_map: dict[str, skillspec.SkillSpec],
+) -> None:
+    """Run every plan-time command gate over the selected members.
+
+    Capabilities are mandatory at skill-spec parse time
+    (``load_member_spec`` refuses schema-3 members without them);
+    collisions, system-command readiness, skill command
+    dependencies, the script execution policy and build-root
+    script placement are refused here, before any staging. Build
+    collisions join once the build providers exist.
+    """
+
+    check_schema2_command_collisions(members, specs_map)
+    check_schema2_system_commands(members, specs_map)
+    check_schema2_skill_dependencies(members, specs_map)
+    check_schema2_script_execution_policy(members, specs_map)
+    check_schema2_build_root_scripts(members, specs_map)
 
 
 def stage_member_context(
@@ -723,9 +1388,9 @@ def stage_member_context(
     """Project one member context from frozen bytes and hash it.
 
     The projection reuses the existing context rules unchanged:
-    ``scripts/`` is context only when no commands are exported (always
-    here, since commands refuse above), runtime and build roots stay
-    excluded, and the content hash runs after locale rendering.
+    ``scripts/`` is context only when no commands are exported,
+    runtime and build roots stay excluded, and the content hash runs
+    after locale rendering.
     """
 
     try:
@@ -772,16 +1437,39 @@ def stage_member_context(
 def build_marker_plan(
     *,
     name: str,
-    package: LocalSnapshot,
+    package: PackageIdentity,
     lock_sha256: str,
     content_sha256: str,
     spec: skillspec.SkillSpec,
     files: tuple[str, ...],
     agents: tuple[str, ...],
     locale_value: str | None,
+    builds: Mapping[str, install_marker.InstallMarkerBuildV5] | None = None,
+    build_source: build_source.BuildSourceIdentity | None = None,
 ) -> install_marker.MarkerPlan:
-    """Build the marker-comparable plan projection for one member."""
+    """Build the marker-comparable plan projection for one member.
 
+    Every selected member is fully active, so the plan carries all
+    the script and build commands the member exports. Build records
+    arrive from the build publication that just ran; members without
+    builds carry the empty map and no top-level build source. The
+    top-level build source is exact here: present exactly with active
+    local go-v1 records, in both directions.
+    """
+
+    try:
+        install_marker.check_top_level_build_source(dict(builds or {}), build_source)
+    except install_marker.InstallMarkerError as exc:
+        raise SourceError(
+            CODE_MEMBER_INVALID, f"Skill {name!r} plan is not valid: {exc}"
+        ) from exc
+    active = tuple(
+        sorted(
+            command.name
+            for command in spec.commands.values()
+            if command.type in {"script", "build"}
+        )
+    )
     try:
         return install_marker.MarkerPlan(
             name=name,
@@ -791,17 +1479,18 @@ def build_marker_plan(
             content_sha256=content_sha256,
             locale=locale_value,
             agents=agents,
-            commands=(),
+            commands=active,
             dependencies=tuple(spec.dependencies),
             skill_schema_version=spec.schema_version,
             runtime_roots=spec.runtime_roots,
             build_roots=spec.build_roots,
             files=files,
-            builds={},
+            builds=dict(builds or {}),
             requirements=None,
             mcp_servers=None,
-            activation=install_marker.MarkerActivation(context=True, commands=()),
+            activation=install_marker.MarkerActivation(context=True, commands=active),
             requirers=None,
+            build_source=build_source,
         )
     except install_marker.InstallMarkerError as exc:
         raise SourceError(
@@ -830,6 +1519,7 @@ def build_marker(
             installed_at=installed_at,
             files=plan.files,
             builds=dict(plan.builds),
+            build_source=plan.build_source,
             requirements=plan.requirements,
             mcp_servers=plan.mcp_servers,
             activation=plan.activation,
@@ -1047,6 +1737,7 @@ def _refuse_unless_absent_or_regular(path: Path, *, subject: str) -> None:
 
 def plan_schema2_targets(
     *,
+    mode: modes.ResolvingSources | modes.FrozenSources,
     home: Path,
     project_path: Path,
     slug: str,
@@ -1054,30 +1745,42 @@ def plan_schema2_targets(
     agents: list[str],
     members: tuple[ResolvedMember, ...],
     package_keys: dict[str, str],
-    runtime_roots: dict[str, tuple[str, ...]],
+    specs_map: dict[str, skillspec.SkillSpec],
     new_runtime_refs: set[tuple[str, str]],
     old_runtime_refs: set[tuple[str, str]],
+    git_aliases: frozenset[str] = frozenset(),
 ) -> tuple[tuple[TargetSpec, ...], tuple[adapters.AdapterTarget, ...], list[str]]:
     """Plan every publication target for one schema-2 install.
 
     The plan covers machine bindings, the lock, one context target per
-    member, one runtime target per member with runtime roots, adapter
-    mirrors with their ledger, and removals for dropped skills and
-    stale managed entries. The runtime removal set is the lock diff:
-    keys the old lock referenced and the new lock does not. Nothing
-    else is removable by an install; an entry referenced by no lock
-    this project owns stays for ``gc``. The planner never lists the
-    live home runtime tree and never reads another project's lock, so
+    member, one runtime target per member with a script runtime, one
+    command shim per active command, adapter mirrors with their
+    ledger, and removals for dropped skills and stale managed
+    entries. The runtime removal set is the lock diff: keys the old
+    lock referenced and the new lock does not. Nothing else is
+    removable by an install; an entry referenced by no lock this
+    project owns stays for ``gc``. The planner never lists the live
+    home runtime tree and never reads another project's lock, so
     cleanup works with the source member directory deleted and never
     touches another installation. Unmanaged destinations refuse here,
-    before any write.
+    before any write. Bindings are written for path aliases only: a
+    binding records a physical source location, and Git aliases
+    refresh through their declared endpoint instead. The lock target
+    is planned only in resolving mode: frozen mode cannot write a
+    lock, so the lock target never enters its commit set.
     """
 
     messages: list[str] = []
     skills_root = project_path / ".agents" / "skills"
+    project_bin = project_path / ".agents" / "bin"
     member_names = {member.name for member in members}
-    used_aliases = {member.from_alias for member in members}
+    used_aliases = {
+        member.from_alias
+        for member in members
+        if member.from_alias is not None and member.from_alias not in git_aliases
+    }
     specs: list[TargetSpec] = []
+    command_owners = schema2_command_owners(members, specs_map)
 
     bindings_root = store.store_root(home) / BINDINGS_DIRNAME / slug
     for binding_alias in sorted(used_aliases):
@@ -1094,7 +1797,7 @@ def plan_schema2_targets(
         if not stale.endswith(".json"):
             continue
         stale_alias = stale[: -len(".json")]
-        if stale_alias in {member.from_alias for member in members}:
+        if stale_alias in used_aliases:
             continue
         if not identifiers.is_valid_identifier(stale_alias):
             continue
@@ -1108,15 +1811,16 @@ def plan_schema2_targets(
             )
         )
 
-    specs.append(
-        TargetSpec(
-            target_class=CLASS_LOCK,
-            identifier="Skillfile.lock.json",
-            live_path=project_path / SKILLFILE_LOCK_NAME,
-            kind="bytes",
-            staged=None,
+    if isinstance(mode, modes.ResolvingSources):
+        specs.append(
+            TargetSpec(
+                target_class=CLASS_LOCK,
+                identifier="Skillfile.lock.json",
+                live_path=project_path / SKILLFILE_LOCK_NAME,
+                kind="bytes",
+                staged=None,
+            )
         )
-    )
 
     for member in members:
         live = skills_root / member.name
@@ -1157,12 +1861,45 @@ def plan_schema2_targets(
                 staged=None,
             )
         )
-        if runtime_roots.get(member.name):
+        spec = specs_map[member.name]
+        if spec.runtime_roots or active_script_commands(spec):
             specs.append(
                 TargetSpec(
                     target_class=CLASS_RUNTIME,
                     identifier=f"{member.name}/{package_keys[member.name]}",
                     live_path=runtime_entry_path(home, member.name, package_keys[member.name]),
+                    kind="entry",
+                    staged=None,
+                )
+            )
+        for command_name in sorted(
+            set(active_script_commands(spec)) | set(active_build_commands(spec))
+        ):
+            try:
+                shim_live = shims.shim_path(project_bin, command_name)
+            except shims.ShimError as exc:
+                raise SourceError(CODE_MEMBER_INVALID, str(exc)) from exc
+            try:
+                shim_info = shim_live.lstat()
+            except FileNotFoundError:
+                shim_info = None
+            except _FS_ERRORS as exc:
+                raise SourceError(
+                    CODE_OUTPUT_OVERLAP,
+                    f"Command {command_name!r} destination cannot be "
+                    f"inspected: {exc}",
+                ) from exc
+            if shim_info is not None and stat.S_ISDIR(shim_info.st_mode):
+                raise SourceError(
+                    CODE_OUTPUT_OVERLAP,
+                    f"Command {command_name!r} destination is a directory "
+                    "and is never overwritten",
+                )
+            specs.append(
+                TargetSpec(
+                    target_class=CLASS_BIN,
+                    identifier=command_name,
+                    live_path=shim_live,
                     kind="entry",
                     staged=None,
                 )
@@ -1223,6 +1960,65 @@ def plan_schema2_targets(
             )
         )
 
+    expected_shims = {
+        shims.shim_path(project_bin, command_name)
+        for command_name in command_owners
+    }
+    try:
+        bin_info = project_bin.lstat()
+    except FileNotFoundError:
+        bin_info = None
+    except _FS_ERRORS as exc:
+        raise SourceError(
+            CODE_OUTPUT_OVERLAP,
+            f"Command directory {project_bin} cannot be inspected: {exc}",
+        ) from exc
+    if bin_info is not None:
+        if stat.S_ISLNK(bin_info.st_mode):
+            raise SourceError(
+                CODE_OUTPUT_OVERLAP,
+                f"Command directory {project_bin} is a link; newly "
+                "introduced links are never followed",
+            )
+        if not stat.S_ISDIR(bin_info.st_mode):
+            raise SourceError(
+                CODE_OUTPUT_OVERLAP,
+                f"Command directory {project_bin} is not a directory",
+            )
+        try:
+            bin_children = sorted(project_bin.iterdir(), key=lambda p: p.name)
+        except _FS_ERRORS as exc:
+            raise SourceError(
+                CODE_OUTPUT_OVERLAP,
+                f"Command directory {project_bin} cannot be listed: {exc}",
+            ) from exc
+        for child in bin_children:
+            if child in expected_shims:
+                continue
+            try:
+                child_info = child.lstat()
+            except FileNotFoundError:
+                continue
+            except _FS_ERRORS as exc:
+                raise SourceError(
+                    CODE_OUTPUT_OVERLAP,
+                    f"Command directory entry {child.name!r} cannot be "
+                    f"inspected: {exc}",
+                ) from exc
+            if not stat.S_ISREG(child_info.st_mode) and not stat.S_ISLNK(
+                child_info.st_mode
+            ):
+                continue
+            specs.append(
+                TargetSpec(
+                    target_class=CLASS_REMOVAL,
+                    identifier=f"shim/{child.name}",
+                    live_path=child,
+                    kind="entry",
+                    staged=None,
+                )
+            )
+
     try:
         adapter_targets = adapters.plan_project_adapter_targets(
             project_path,
@@ -1263,7 +2059,9 @@ def plan_schema2_targets(
 def used_source_aliases(members: tuple[ResolvedMember, ...]) -> tuple[str, ...]:
     """Return the sorted source aliases bindings are written for."""
 
-    return tuple(sorted({member.from_alias for member in members}))
+    return tuple(
+        sorted({member.from_alias for member in members if member.from_alias is not None})
+    )
 
 
 def _stat_identity(path: str, *, subject: str) -> os.stat_result:
@@ -1471,6 +2269,7 @@ def build_recheck_payloads(
             }
             continue
         if relative is not None and spec.target_class in {
+            CLASS_BIN,
             CLASS_CONTEXT,
             CLASS_ADAPTER_LEDGER,
             CLASS_REMOVAL,
@@ -1810,6 +2609,7 @@ def _utc_now_stamp() -> str:
 
 def collect_admitted_identities(
     members: tuple[ResolvedMember, ...],
+    git_aliases: frozenset[str] = frozenset(),
 ) -> frozenset[tuple[int, int]]:
     """Collect the admitted source-package identities for the recheck.
 
@@ -1817,10 +2617,19 @@ def collect_admitted_identities(
     mutation and fails ``source_snapshot_changed``; a member path that
     became a link is a boundary change and fails
     ``source_output_overlap``. Neither is ever treated as absent.
+    Git members resolve from private acquisition workspace paths that
+    no concurrent writer can reach, so there is nothing to recheck
+    for them.
     """
 
     admitted: set[tuple[int, int]] = set()
     for member in members:
+        if member.source_root is None:
+            # Transitive members serve from the store alone; there is no
+            # live directory to recheck.
+            continue
+        if member.from_alias is not None and member.from_alias in git_aliases:
+            continue
         path = member.source_root / member.directory
         try:
             info = path.lstat()
@@ -2022,6 +2831,7 @@ def _marker_reusable(
 def stage_schema2_desired(
     staging_root: Path,
     *,
+    mode: modes.ResolvingSources | modes.FrozenSources,
     home: Path,
     project_path: Path,
     alias: str,
@@ -2037,14 +2847,20 @@ def stage_schema2_desired(
     specs: tuple[TargetSpec, ...],
     adapter_targets: tuple[adapters.AdapterTarget, ...],
     slug: str,
+    build_outputs: Schema2BuildOutputs | None = None,
+    git_aliases: frozenset[str] = frozenset(),
 ) -> StagedDesired:
     """Stage the desired bytes for every planned target.
 
     Context is projected from frozen bytes, hashed, and bound into a
     new lock created only after all gates succeed; markers are written
-    into the staged contexts, runtime entries and bindings are staged,
-    and adapters mirror the staged canonical roots. Members whose live
-    state already matches reuse the live bytes so the target skips.
+    into the staged contexts, runtime entries, command shims and
+    bindings are staged, and adapters mirror the staged canonical
+    roots. Members whose live state already matches reuse the live
+    bytes so the target skips. Build records and build shims derive
+    from the published or reconstructed build bundle. The lock bytes
+    are staged only in resolving mode; in frozen mode the rebuilt lock
+    is computed for the determinism comparison only and never staged.
     """
 
     staged_members: dict[str, StagedMember] = {}
@@ -2103,6 +2919,7 @@ def stage_schema2_desired(
         )
     lock_digest = new_lock.lock_sha256
     installed_at = _utc_now_stamp()
+    bundle = build_outputs if build_outputs is not None else empty_build_outputs()
     up_to_date: list[str] = []
     for name in sorted(staged_members):
         staged = staged_members[name]
@@ -2115,6 +2932,8 @@ def stage_schema2_desired(
             files=staged.files,
             agents=agents,
             locale_value=locale_value,
+            builds=bundle.marker_builds.get(name),
+            build_source=bundle.build_sources.get(name),
         )
         live = project_path / ".agents" / "skills" / name
         if _marker_reusable(live, plan, staged.content_sha256, name=name):
@@ -2144,7 +2963,13 @@ def stage_schema2_desired(
             ) from exc
 
     bindings: dict[str, bytes] = {}
-    for binding_alias in sorted({member.from_alias for member in members}):
+    for binding_alias in sorted(
+        {
+            member.from_alias
+            for member in members
+            if member.from_alias is not None and member.from_alias not in git_aliases
+        }
+    ):
         binding_root = source_roots[binding_alias]
         try:
             location = os.path.realpath(os.fspath(binding_root))
@@ -2169,14 +2994,15 @@ def stage_schema2_desired(
     for key, planned_spec in by_key.items():
         if planned_spec.target_class == CLASS_REMOVAL:
             desired[key] = None
-    lock_staged = staging_root / SKILLFILE_LOCK_NAME
-    try:
-        lock_staged.write_bytes(lock_bytes)
-    except _FS_ERRORS as exc:
-        raise SourceError(
-            CODE_MEMBER_INVALID, f"Lock for {alias} cannot be staged: {exc}"
-        ) from exc
-    desired[(CLASS_LOCK, "Skillfile.lock.json")] = lock_staged
+    if isinstance(mode, modes.ResolvingSources):
+        lock_staged = staging_root / SKILLFILE_LOCK_NAME
+        try:
+            lock_staged.write_bytes(lock_bytes)
+        except _FS_ERRORS as exc:
+            raise SourceError(
+                CODE_MEMBER_INVALID, f"Lock for {alias} cannot be staged: {exc}"
+            ) from exc
+        desired[(CLASS_LOCK, "Skillfile.lock.json")] = lock_staged
     bindings_root = staging_root / "bindings"
     bindings_root.mkdir(parents=True, exist_ok=True)
     for binding_alias, binding_bytes in bindings.items():
@@ -2191,21 +3017,62 @@ def stage_schema2_desired(
         desired[(CLASS_BINDINGS, f"{slug}/{binding_alias}")] = staged_binding
     for name, staged in staged_members.items():
         desired[(CLASS_CONTEXT, f"project/{name}")] = staged.context_dir
-        if staged.spec.runtime_roots:
+        if staged.spec.runtime_roots or active_script_commands(staged.spec):
             runtime_staged = staging_root / "runtime" / name
+            frozen_dir = staging_root / "frozen" / name
+            stage_member_runtime(frozen_dir, runtime_staged, staged.spec, name=name)
+            desired[(CLASS_RUNTIME, f"{name}/{captured[name].package_key}")] = runtime_staged
+    staged_bin = staging_root / "bin"
+    final_bin = project_path / ".agents" / "bin"
+    for name, staged in staged_members.items():
+        entries = schema2_shim_path_entries(staged.spec, final_bin=final_bin)
+        for command_name in active_script_commands(staged.spec):
+            command = staged.spec.commands[command_name]
+            target = schema2_script_target(
+                home, name, captured[name].package_key, command, staged.spec
+            )
             try:
-                if runtime_staged.exists():
-                    shutil.rmtree(runtime_staged)
-                runtime_staged.mkdir(parents=True)
-                frozen_dir = staging_root / "frozen" / name
-                for root in staged.spec.runtime_roots:
-                    shutil.copytree(frozen_dir / root, runtime_staged / root, symlinks=True)
+                staged_shim = shims.write_bin_shim(
+                    staged_bin, command_name, target, path_entries=entries
+                )
+            except shims.ShimError as exc:
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"Skill {name!r} command {command_name!r} launcher "
+                    f"cannot be staged: {exc}",
+                ) from exc
             except _FS_ERRORS as exc:
                 raise SourceError(
                     CODE_MEMBER_INVALID,
-                    f"Skill {name!r} runtime cannot be staged: {exc}",
+                    f"Skill {name!r} command {command_name!r} launcher "
+                    f"cannot be staged: {exc}",
                 ) from exc
-            desired[(CLASS_RUNTIME, f"{name}/{captured[name].package_key}")] = runtime_staged
+            desired[(CLASS_BIN, command_name)] = staged_shim
+        for command_name in active_build_commands(staged.spec):
+            activation = bundle.activations.get(command_name)
+            if activation is None:
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"Skill {name!r} command {command_name!r} has no staged "
+                    "build activation",
+                )
+            try:
+                staged_shim = shims.activate_build_command(
+                    staged_bin, activation, path_entries=entries
+                )
+            except shims.ShimError as exc:
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"Skill {name!r} command {command_name!r} launcher "
+                    f"cannot be staged: {exc}",
+                ) from exc
+            except _FS_ERRORS as exc:
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"Skill {name!r} command {command_name!r} launcher "
+                    f"cannot be staged: {exc}",
+                ) from exc
+            desired[(CLASS_BIN, command_name)] = staged_shim
     desired.update(
         adapters.stage_project_adapter_targets(
             staging_root / "adapters",
@@ -2254,63 +3121,19 @@ def _concurrent_state_change(detail: str) -> build_planner.BuildPlanningError:
     return build_planner.BuildPlanningError("concurrent_state_change", detail)
 
 
-def _capture_locked_member(
+def _serve_locked_git_member(
     member: ResolvedMember,
-    package: LocalSnapshot,
+    package: NetworkGit,
     *,
     home: Path,
-    heal: bool,
-) -> tuple[snapshot.CapturedPackage | None, store.StoredSnapshot | None]:
-    """Capture one locked member or serve its locked snapshot from the store.
-
-    A successful capture must digest-match the lock or the install
-    refuses ``source_snapshot_changed`` without writing anything, and
-    the locked snapshot is never silently recreated from current
-    bytes. When live bytes cannot be captured, the verified store copy
-    serves instead; when neither serves, the snapshot is unavailable.
-    With ``heal`` false (dry run) the store is never written.
-    """
-
-    try:
-        captured = snapshot.capture_package_snapshot(
-            member.source_root, member.directory, home=home
-        )
-    except SourceError as capture_error:
-        return _serve_locked_fallback(member, package, home=home, cause=capture_error)
-    except _FS_ERRORS as capture_error:
-        return _serve_locked_fallback(member, package, home=home, cause=capture_error)
-    if captured.inventory["snapshot"] != package.snapshot:
-        raise SourceError(
-            CODE_SNAPSHOT_CHANGED,
-            f"Skill {member.name!r} changed since the lock was written; "
-            "run an explicit refresh",
-        )
-    if not heal:
-        return captured, None
-    key = package_identity_sha256(package)
-    try:
-        stored = consumers.open_for_install(home, member.name, key)
-    except SourceError:
-        stored = None
-    if stored is not None and stored.snapshot == package.snapshot:
-        return captured, stored
-    healed = store.stage_snapshot(home, member.name, key, captured)
-    if healed.snapshot != package.snapshot:
-        raise SourceError(
-            CODE_SNAPSHOT_UNAVAILABLE,
-            f"Skill {member.name!r} locked snapshot cannot be served",
-        )
-    return captured, healed
-
-
-def _serve_locked_fallback(
-    member: ResolvedMember,
-    package: LocalSnapshot,
-    *,
-    home: Path,
-    cause: BaseException,
 ) -> tuple[None, store.StoredSnapshot]:
-    """Serve one locked member from the store when live capture fails."""
+    """Serve one locked Git member from the source-v1 store alone.
+
+    Git members have no live bytes to verify against: the store entry
+    addressed by ``(skill name, SHA-256(CCJ-1(package)))`` is the locked
+    snapshot, and a missing or mismatching entry is unavailable. Live
+    bytes are never captured and the network is never touched.
+    """
 
     key = package_identity_sha256(package)
     try:
@@ -2318,14 +3141,73 @@ def _serve_locked_fallback(
     except SourceError as exc:
         raise SourceError(
             CODE_SNAPSHOT_UNAVAILABLE,
-            f"Skill {member.name!r} locked snapshot is unavailable: {cause}",
+            f"Skill {member.name!r} locked snapshot is unavailable: {exc}",
+        ) from exc
+    return None, stored
+
+
+def _capture_locked_member(
+    member: ResolvedMember,
+    package: PackageIdentity,
+    *,
+    home: Path,
+) -> tuple[snapshot.CapturedPackage | None, store.StoredSnapshot]:
+    """Serve one locked member's frozen bytes, revalidating live drift.
+
+    The store is consulted FIRST: a missing entry, or an entry whose
+    snapshot differs from the lock, is ``source_snapshot_unavailable``
+    whatever the live bytes are — before any live read and without
+    writing anything. Live bytes are then re-captured for drift
+    detection only: drifted bytes refuse ``source_snapshot_changed``
+    with the store untouched, uncapturable bytes fall back to the
+    verified store copy, and matching bytes serve the frozen copy.
+    Live bytes are never staged: this function never writes to the
+    store, so frozen mode cannot recreate a snapshot from current
+    bytes. Git members serve from the store alone and never capture
+    live bytes.
+    """
+
+    if isinstance(package, NetworkGit):
+        return _serve_locked_git_member(member, package, home=home)
+    if not isinstance(package, LocalSnapshot):
+        raise SourceError(
+            CODE_SELECTION_INVALID,
+            f"Skill {member.name!r} lock member carries an unsupported "
+            "package identity",
+        )
+    if member.source_root is None:
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"Skill {member.name!r} lock member has no source root to verify",
+        )
+    key = package_identity_sha256(package)
+    try:
+        stored = consumers.open_for_install(home, member.name, key)
+    except SourceError as exc:
+        raise SourceError(
+            CODE_SNAPSHOT_UNAVAILABLE,
+            f"Skill {member.name!r} locked snapshot is unavailable: {exc}",
         ) from exc
     if stored.snapshot != package.snapshot:
         raise SourceError(
             CODE_SNAPSHOT_UNAVAILABLE,
-            f"Skill {member.name!r} locked snapshot cannot be served: {cause}",
-        ) from cause
-    return None, stored
+            f"Skill {member.name!r} locked snapshot cannot be served",
+        )
+    try:
+        captured = snapshot.capture_package_snapshot(
+            member.source_root, member.directory, home=home
+        )
+    except SourceError:
+        return None, stored
+    except _FS_ERRORS:
+        return None, stored
+    if captured.inventory["snapshot"] != package.snapshot:
+        raise SourceError(
+            CODE_SNAPSHOT_CHANGED,
+            f"Skill {member.name!r} changed since the lock was written; "
+            "run an explicit refresh",
+        )
+    return captured, stored
 
 
 def _commit_schema2(
@@ -2427,16 +3309,329 @@ def _fold_engine_group(group: ExceptionGroup) -> BaseException:
     return group
 
 
+def _transitive_git_acquirer(
+    mode: modes.ResolvingSources,
+) -> Callable[[str, str, str], closure.SourceGitAcquisition]:
+    """Build the closure's transitive Git acquisition over the mode.
+
+    One ``(identity, commit)`` pair materializes once per operation
+    into the resolving workspace; the shared acquisition memo serves
+    every further requirement of the same pair without re-fetching.
+    Every fetch goes through the bounded transport.
+    """
+
+    materialized_by_commit: dict[tuple[str, str], Path] = {}
+
+    def acquire(
+        git_url: str, commit: str, chain: str
+    ) -> closure.SourceGitAcquisition:
+        identity = canonical_source_identity(git_url)
+        if identity is None:
+            raise SourceError(
+                CODE_SELECTION_INVALID,
+                f"Git source {git_url!r} (via {chain}) has no network identity",
+            )
+        object_format = (
+            "sha1" if len(commit) == 40 else "sha256" if len(commit) == 64 else ""
+        )
+        acquired = modes.acquire_git_commit(
+            mode,
+            identity=identity,
+            commit=commit,
+            object_format=object_format,
+            declared_url=git_url,
+            label=f"Requirement {git_url}@{commit[:12]}",
+        )
+        key = (identity, commit)
+        materialized = materialized_by_commit.get(key)
+        if materialized is None:
+            materialized = mode.workspace / "transitive" / str(
+                len(materialized_by_commit)
+            )
+            try:
+                acquired.materialize(materialized)
+            except git_admission.GitAdmissionError as exc:
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"Requirement {git_url}@{commit[:12]} acquired bytes "
+                    f"cannot be staged: {exc}",
+                ) from exc
+            except _FS_ERRORS as exc:
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"Requirement {git_url}@{commit[:12]} acquired bytes "
+                    f"cannot be staged: {exc}",
+                ) from exc
+            materialized_by_commit[key] = materialized
+        return closure.SourceGitAcquisition(
+            commit=commit,
+            object_format=object_format,
+            identity=identity,
+            materialized=materialized,
+        )
+
+    return acquire
+
+
+def resolve_source_closure(
+    config: GlobalConfig,
+    members: tuple[ResolvedMember, ...],
+    raw_captures: Mapping[str, snapshot.CapturedPackage],
+    manifest_value: manifest.ProjectManifest,
+    git_resolutions: Mapping[str, modes.AliasResolution],
+    *,
+    mode: modes.ResolvingSources,
+) -> list[closure.ClosureNode]:
+    """Expand resolved roots and their requirements into one closure.
+
+    The traversal, unification, command validation and ordering are
+    the existing closure itself; transitive requirements resolve
+    through the bounded transport and fail on floating refs, name
+    mismatches and conflicting identities. Command collisions are
+    enforced across the full closure including transitive members.
+    Runs in resolving mode only: frozen installs consume the lock
+    membership without traversing.
+    """
+
+    closure_workspace = mode.workspace / "closure"
+    roots: list[closure.SourceClosureRoot] = []
+    for member in members:
+        if member.from_alias is None or member.source_root is None:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {member.name!r} root member carries no selector",
+            )
+        acquisition = manifest_value.sources.get(member.from_alias)
+        if acquisition is None:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {member.name!r} names source {member.from_alias!r}, "
+                "which the manifest does not declare",
+            )
+        materialized = closure_workspace / member.name
+        try:
+            materialize_frozen(
+                raw_captures[member.name].frozen_files(),
+                materialized,
+                subject=f"Skill {member.name!r}",
+            )
+        except _FS_ERRORS as exc:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {member.name!r} frozen bytes cannot be staged: {exc}",
+            ) from exc
+        if isinstance(acquisition, skillfile_v2.PathSource):
+            roots.append(
+                closure.SourceClosureRoot(
+                    name=member.name,
+                    from_alias=member.from_alias,
+                    directory=member.directory,
+                    local=True,
+                    materialized=materialized,
+                    identity=None,
+                    ref_kind=closure.SOURCE_LOCAL_REF_KIND,
+                    ref_value=member.directory,
+                    commit="",
+                )
+            )
+        else:
+            resolution = git_resolutions[member.from_alias]
+            roots.append(
+                closure.SourceClosureRoot(
+                    name=member.name,
+                    from_alias=member.from_alias,
+                    directory=member.directory,
+                    local=False,
+                    materialized=materialized,
+                    identity=resolution.identity,
+                    ref_kind=acquisition.ref_kind,
+                    ref_value=acquisition.ref_value,
+                    commit=resolution.commit,
+                )
+            )
+    nodes = closure.build_source_closure(
+        config, roots, acquire_git=_transitive_git_acquirer(mode)
+    )
+    try:
+        closure.detect_active_command_collisions(nodes)
+    except closure.ClosureError as exc:
+        raise SourceError(CODE_NAME_CONFLICT, str(exc)) from exc
+    return nodes
+
+
+def _require_frozen_lock_unchanged(
+    old_lock: SkillfileLock, rebuilt: SkillfileLock
+) -> None:
+    """Determinism guard: a frozen rebuild must describe the same closure.
+
+    The comparison is order-insensitive (locks sort by UTF-8 name
+    bytes, but readers accept any member order): what must match is
+    the manifest digest and every member's name, selection,
+    directory, package identity and content digest. A mismatch is a
+    determinism violation and refuses; frozen mode never writes.
+    """
+
+    if old_lock.manifest_sha256 != rebuilt.manifest_sha256:
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            "Frozen install rebuilt a lock for a different manifest; refusing",
+        )
+    old_members = sort_lock_members_by_utf8(old_lock.members)
+    new_members = sort_lock_members_by_utf8(rebuilt.members)
+    if old_members != new_members:
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            "Frozen install rebuilt a different lock closure; refusing",
+        )
+
+
+@dataclass(frozen=True)
+class _Schema2Capture:
+    """One install's capture outputs plus the planning reads behind them.
+
+    Both lanes produce this bundle and the shared pipeline consumes
+    it; it carries data only — members, captures, roots, the planning
+    manifest reads — and no capability. The frozen lane fills
+    ``node_specs`` and ``frozen_membership`` with ``None`` (no
+    traversal ran, no membership was enumerated) and ``old_lock``
+    with the frozen lock.
+    """
+
+    members: tuple[ResolvedMember, ...]
+    captured_members: dict[str, CapturedMember]
+    pred_files: dict[str, Mapping[str, snapshot.FrozenFile]]
+    source_roots: dict[str, Path]
+    node_specs: dict[str, skillspec.SkillSpec] | None
+    frozen_membership: dict[int, tuple[str, ...]] | None
+    old_lock: SkillfileLock | None
+    manifest_sha: str
+    selectors: list[skillfile_v2.SkillSelector]
+    git_aliases: frozenset[str]
+
+
+def _read_planning_inputs(
+    project_path: Path,
+) -> tuple[
+    manifest.ProjectManifest, str, list[skillfile_v2.SkillSelector], frozenset[str]
+]:
+    """Read the manifest once for planning: manifest, digest, selectors, Git aliases."""
+
+    _manifest_data, fresh = _read_fresh_manifest(project_path)
+    if fresh.schema_version != 2 or fresh.manifest_sha256 is None:
+        raise _concurrent_state_change("Skillfile changed during install planning")
+    manifest_sha = fresh.manifest_sha256
+    selectors = list(fresh.selectors)
+    git_aliases = frozenset(
+        source_alias
+        for source_alias, acquisition in fresh.sources.items()
+        if not isinstance(acquisition, skillfile_v2.PathSource)
+    )
+    return fresh, manifest_sha, selectors, git_aliases
+
+
+def _serve_frozen_publication_files(
+    captured_members: dict[str, CapturedMember], *, home: Path
+) -> dict[str, Mapping[str, snapshot.FrozenFile]]:
+    """Serve frozen publication bytes from the store alone, without healing.
+
+    The store is the frozen record: a missing entry, or an entry that
+    no longer matches the lock, is ``source_snapshot_unavailable``.
+    A member's live capture is never staged here — this function has
+    no path to ``store.stage_snapshot``.
+    """
+
+    frozen_files: dict[str, Mapping[str, snapshot.FrozenFile]] = {}
+    for name, captured_member in captured_members.items():
+        try:
+            served = consumers.open_for_install(
+                home, name, captured_member.package_key
+            )
+        except SourceError as exc:
+            raise SourceError(
+                CODE_SNAPSHOT_UNAVAILABLE,
+                f"Skill {name!r} locked snapshot cannot be served: {exc}",
+            ) from exc
+        if (
+            isinstance(captured_member.package, LocalSnapshot)
+            and served.snapshot != captured_member.package.snapshot
+        ):
+            raise SourceError(
+                CODE_SNAPSHOT_UNAVAILABLE,
+                f"Skill {name!r} locked snapshot cannot be served",
+            )
+        frozen_files[name] = served.files
+    return frozen_files
+
+
+def _serve_resolving_publication_files(
+    captured_members: dict[str, CapturedMember], *, home: Path
+) -> dict[str, Mapping[str, snapshot.FrozenFile]]:
+    """Serve resolving publication bytes, healing superseded records.
+
+    Publication consumes the frozen store copy, rehashed here. A
+    superseded record heals from verified captured bytes, which the
+    resolving lane captured moments ago from the admitted sources.
+    Git members serve key-bound from the store with no live bytes to
+    heal from. Only the resolving lane calls this function.
+    """
+
+    frozen_files: dict[str, Mapping[str, snapshot.FrozenFile]] = {}
+    for name, captured_member in captured_members.items():
+        if not isinstance(captured_member.package, LocalSnapshot):
+            try:
+                served_git = consumers.open_for_install(
+                    home, name, captured_member.package_key
+                )
+            except SourceError as exc:
+                raise SourceError(
+                    CODE_SNAPSHOT_UNAVAILABLE,
+                    f"Skill {name!r} locked snapshot cannot be "
+                    f"served: {exc}",
+                ) from exc
+            frozen_files[name] = served_git.files
+            continue
+        served = consumers.open_for_install(
+            home, name, captured_member.package_key
+        )
+        if served.snapshot == captured_member.package.snapshot:
+            frozen_files[name] = served.files
+            continue
+        if captured_member.captured is None:
+            raise SourceError(
+                CODE_SNAPSHOT_UNAVAILABLE,
+                f"Skill {name!r} locked snapshot cannot be served",
+            )
+        healed = store.stage_snapshot(
+            home,
+            name,
+            captured_member.package_key,
+            captured_member.captured,
+        )
+        if healed.snapshot != captured_member.package.snapshot:
+            raise SourceError(
+                CODE_SNAPSHOT_UNAVAILABLE,
+                f"Skill {name!r} locked snapshot cannot be served",
+            )
+        frozen_files[name] = healed.files
+    return frozen_files
+
+
 def install_schema2(
     *,
+    mode: modes.ResolvingSources | modes.FrozenSources,
     home: Path,
     project_path: Path,
     alias: str,
     agents: list[str],
     locale_value: str | None,
     adapter_mode: str,
-    fetch: bool,
     dry_run: bool,
+    config: GlobalConfig,
+    operator_search_path: OperatorSearchPath | None,
+    substitutions: DevManifest,
+    ssh_credentials: OperatorSSHCredentials | None = None,
+    https_token: OperatorHTTPSToken | None = None,
+    interactive: bool = False,
 ) -> Schema2InstallResult:
     """Install one schema-2 project: resolve, freeze, publish atomically.
 
@@ -2445,77 +3640,342 @@ def install_schema2(
     re-resolving; explicit refresh re-runs every gate and atomically
     replaces the lock and markers only after success. Every failure
     preserves the prior lock, markers and installed state.
+
+    Members with script commands materialize their frozen runtime
+    into the protected store with shims in ``.agents/bin``; members
+    with build commands additionally run the existing build lanes
+    with the member package bound, and their receipt-3 records join
+    the markers. Capabilities, dependencies, system-command
+    readiness, the script execution policy, toolchain admission and
+    the assurance gate all run before any write.
+
+    The caller decides the mode with :func:`modes.select` and passes
+    only the mode: this function takes no fetch flag, no transport
+    grant and no policy path, and each lane below receives only the
+    mode type it runs under.
     """
 
-    project_identity = locking.canonical_project_identity(project_path)
-    slug = project_slug(project_identity)
-    manifest_data, fresh = _read_fresh_manifest(project_path)
-    if fresh.schema_version != 2 or fresh.manifest_sha256 is None:
-        raise _concurrent_state_change("Skillfile changed during install planning")
-    manifest_sha = fresh.manifest_sha256
-    old_lock = read_schema2_lock(project_path)
-    refresh = fetch and old_lock is not None
+    if isinstance(mode, modes.FrozenSources):
+        return _install_schema2_frozen(
+            mode=mode,
+            home=home,
+            project_path=project_path,
+            alias=alias,
+            agents=agents,
+            locale_value=locale_value,
+            adapter_mode=adapter_mode,
+            dry_run=dry_run,
+            config=config,
+            operator_search_path=operator_search_path,
+            substitutions=substitutions,
+            ssh_credentials=ssh_credentials,
+            https_token=https_token,
+            interactive=interactive,
+        )
+    return _install_schema2_resolving(
+        mode=mode,
+        home=home,
+        project_path=project_path,
+        alias=alias,
+        agents=agents,
+        locale_value=locale_value,
+        adapter_mode=adapter_mode,
+        dry_run=dry_run,
+        config=config,
+        operator_search_path=operator_search_path,
+        substitutions=substitutions,
+        ssh_credentials=ssh_credentials,
+        https_token=https_token,
+        interactive=interactive,
+    )
 
+
+def _install_schema2_frozen(
+    *,
+    mode: modes.FrozenSources,
+    home: Path,
+    project_path: Path,
+    alias: str,
+    agents: list[str],
+    locale_value: str | None,
+    adapter_mode: str,
+    dry_run: bool,
+    config: GlobalConfig,
+    operator_search_path: OperatorSearchPath | None,
+    substitutions: DevManifest,
+    ssh_credentials: OperatorSSHCredentials | None = None,
+    https_token: OperatorHTTPSToken | None = None,
+    interactive: bool = False,
+) -> Schema2InstallResult:
+    """Run one locked install: frozen bytes in, published outputs out.
+
+    This lane receives the home directory and the lock and nothing
+    else: no fetch flag, no tool provider, no policy path, no
+    workspace, no selection surface. It derives members from the lock,
+    serves frozen bytes from the store (revalidating live drift
+    without trusting it), and publishes through the shared pipeline,
+    which plans no lock target for a frozen mode.
+    """
+
+    fresh, manifest_sha, selectors, git_aliases = _read_planning_inputs(project_path)
+    validate_lock(mode.lock, current_manifest_sha256=manifest_sha)
     source_roots = {
-        source_alias: resolve_source_root(project_path, source_alias, acquisition)
+        source_alias: resolve_source_root(
+            project_path, source_alias, acquisition
+        )
         for source_alias, acquisition in fresh.sources.items()
+        if isinstance(acquisition, skillfile_v2.PathSource)
     }
-    selectors = list(fresh.selectors)
-
+    members = locked_schema2_members(mode, selectors, source_roots)
+    lock_packages = {
+        lock_member.name: lock_member.package for lock_member in mode.lock.members
+    }
     captured_members: dict[str, CapturedMember] = {}
     pred_files: dict[str, Mapping[str, snapshot.FrozenFile]] = {}
-    frozen_membership: dict[int, tuple[str, ...]] | None = None
-    if old_lock is not None and not fetch:
-        validate_lock(old_lock, current_manifest_sha256=manifest_sha)
-        members = locked_schema2_members(old_lock, selectors, source_roots)
-        lock_packages = {
-            lock_member.name: lock_member.package
-            for lock_member in old_lock.members
-            if isinstance(lock_member.package, LocalSnapshot)
-        }
-        for member in members:
-            package = lock_packages[member.name]
-            raw, served = _capture_locked_member(
-                member, package, home=home, heal=not dry_run
-            )
-            captured_members[member.name] = CapturedMember(
-                member=member,
-                captured=raw,
-                package=package,
-                package_key=package_identity_sha256(package),
-            )
-            if raw is not None:
-                pred_files[member.name] = raw.frozen_files()
-            elif served is not None:
-                pred_files[member.name] = served.files
-            else:
-                raise SourceError(
-                    CODE_SNAPSHOT_UNAVAILABLE,
-                    f"Skill {member.name!r} locked snapshot cannot be served",
-                )
-    else:
-        members = resolve_schema2_members(project_path, fresh)
-        frozen_membership = collection_membership(selectors, source_roots)
-        raw_captures = capture_schema2_members(members, home=home)
-        require_membership_unchanged(
-            frozen_membership, collection_membership(selectors, source_roots)
+    for member in members:
+        package = lock_packages[member.name]
+        raw, served = _capture_locked_member(member, package, home=home)
+        captured_members[member.name] = CapturedMember(
+            member=member,
+            captured=raw,
+            package=package,
+            package_key=package_identity_sha256(package),
         )
-        for member in members:
-            raw = raw_captures[member.name]
-            package = LocalSnapshot(snapshot=raw.inventory["snapshot"])
-            captured_members[member.name] = CapturedMember(
-                member=member,
-                captured=raw,
-                package=package,
-                package_key=package_identity_sha256(package),
-            )
+        if raw is not None:
             pred_files[member.name] = raw.frozen_files()
-        if not dry_run:
-            stage_schema2_store(home, captured_members)
+        else:
+            pred_files[member.name] = served.files
+    capture = _Schema2Capture(
+        members=members,
+        captured_members=captured_members,
+        pred_files=pred_files,
+        source_roots=source_roots,
+        node_specs=None,
+        frozen_membership=None,
+        old_lock=mode.lock,
+        manifest_sha=manifest_sha,
+        selectors=selectors,
+        git_aliases=git_aliases,
+    )
+    return _plan_and_publish_schema2(
+        mode=mode,
+        home=home,
+        project_path=project_path,
+        alias=alias,
+        agents=agents,
+        locale_value=locale_value,
+        adapter_mode=adapter_mode,
+        dry_run=dry_run,
+        config=config,
+        operator_search_path=operator_search_path,
+        substitutions=substitutions,
+        ssh_credentials=ssh_credentials,
+        https_token=https_token,
+        interactive=interactive,
+        capture=capture,
+    )
 
-    with tempfile.TemporaryDirectory(prefix=".csk-source-install-") as staging_tmp:
+
+def _install_schema2_resolving(
+    *,
+    mode: modes.ResolvingSources,
+    home: Path,
+    project_path: Path,
+    alias: str,
+    agents: list[str],
+    locale_value: str | None,
+    adapter_mode: str,
+    dry_run: bool,
+    config: GlobalConfig,
+    operator_search_path: OperatorSearchPath | None,
+    substitutions: DevManifest,
+    ssh_credentials: OperatorSSHCredentials | None = None,
+    https_token: OperatorHTTPSToken | None = None,
+    interactive: bool = False,
+) -> Schema2InstallResult:
+    """Run one initial resolve or explicit refresh, then publish.
+
+    This lane holds the resolving capability: it re-enumerates the
+    admitted member set, resolves refs, captures snapshots,
+    re-resolves the closure, re-runs every gate, and atomically
+    replaces the lock and markers only after success. The acquisition
+    workspace lives on the mode; the caller owns its lifetime.
+    """
+
+    fresh, manifest_sha, selectors, git_aliases = _read_planning_inputs(project_path)
+    old_lock = read_schema2_lock(project_path)
+    source_roots, git_resolutions = resolve_schema2_source_roots(
+        project_path, fresh, mode=mode
+    )
+    members = resolve_schema2_members(
+        project_path,
+        fresh,
+        mode=mode,
+        source_roots=source_roots,
+        git_resolutions=git_resolutions,
+    )
+    frozen_membership = collection_membership(
+        selectors, source_roots, git_aliases
+    )
+    raw_captures = capture_schema2_members(members, home=home)
+    require_membership_unchanged(
+        frozen_membership,
+        collection_membership(selectors, source_roots, git_aliases),
+    )
+    closure_nodes = resolve_source_closure(
+        config,
+        members,
+        raw_captures,
+        fresh,
+        git_resolutions,
+        mode=mode,
+    )
+    node_specs = {node.name: node.spec for node in closure_nodes}
+    captured_members: dict[str, CapturedMember] = {}
+    pred_files: dict[str, Mapping[str, snapshot.FrozenFile]] = {}
+    for member in members:
+        raw = raw_captures[member.name]
+        acquisition = fresh.sources.get(member.from_alias or "")
+        if acquisition is not None and not isinstance(
+            acquisition, skillfile_v2.PathSource
+        ):
+            resolution = git_resolutions[member.from_alias or ""]
+            assert resolution.object_format in ("sha1", "sha256")
+            resolved_format: Literal["sha1", "sha256"] = (
+                "sha1" if resolution.object_format == "sha1" else "sha256"
+            )
+            root_package: PackageIdentity = NetworkGit(
+                repository=resolution.identity,
+                commit=LockedCommit(
+                    resolved_format, resolution.commit
+                ),
+                directory=member.directory,
+            )
+        else:
+            root_package = LocalSnapshot(snapshot=raw.inventory["snapshot"])
+        captured_members[member.name] = CapturedMember(
+            member=member,
+            captured=raw,
+            package=root_package,
+            package_key=package_identity_sha256(root_package),
+        )
+        pred_files[member.name] = raw.frozen_files()
+    root_names = {member.name for member in members}
+    transitive: list[ResolvedMember] = []
+    for node in closure_nodes:
+        if node.name in root_names:
+            continue
+        raw = capture_transitive_member(
+            node.snapshot, name=node.name, home=home
+        )
+        assert node.identity is not None
+        transitive_package = NetworkGit(
+            repository=node.identity,
+            commit=LockedCommit(
+                "sha1" if len(node.resolved.commit) == 40 else "sha256",
+                node.resolved.commit,
+            ),
+            directory=".",
+        )
+        transitive_member = ResolvedMember(
+            name=node.name,
+            from_alias=None,
+            directory=".",
+            selection_ordinal=None,
+            source_root=None,
+        )
+        transitive.append(transitive_member)
+        captured_members[node.name] = CapturedMember(
+            member=transitive_member,
+            captured=raw,
+            package=transitive_package,
+            package_key=package_identity_sha256(transitive_package),
+        )
+        pred_files[node.name] = raw.frozen_files()
+    members = (*members, *transitive)
+    if not dry_run:
+        stage_schema2_store(home, captured_members)
+    capture = _Schema2Capture(
+        members=members,
+        captured_members=captured_members,
+        pred_files=pred_files,
+        source_roots=source_roots,
+        node_specs=node_specs,
+        frozen_membership=frozen_membership,
+        old_lock=old_lock,
+        manifest_sha=manifest_sha,
+        selectors=selectors,
+        git_aliases=git_aliases,
+    )
+    return _plan_and_publish_schema2(
+        mode=mode,
+        home=home,
+        project_path=project_path,
+        alias=alias,
+        agents=agents,
+        locale_value=locale_value,
+        adapter_mode=adapter_mode,
+        dry_run=dry_run,
+        config=config,
+        operator_search_path=operator_search_path,
+        substitutions=substitutions,
+        ssh_credentials=ssh_credentials,
+        https_token=https_token,
+        interactive=interactive,
+        capture=capture,
+    )
+
+
+def _plan_and_publish_schema2(
+    *,
+    mode: modes.ResolvingSources | modes.FrozenSources,
+    home: Path,
+    project_path: Path,
+    alias: str,
+    agents: list[str],
+    locale_value: str | None,
+    adapter_mode: str,
+    dry_run: bool,
+    config: GlobalConfig,
+    operator_search_path: OperatorSearchPath | None,
+    substitutions: DevManifest,
+    ssh_credentials: OperatorSSHCredentials | None,
+    https_token: OperatorHTTPSToken | None,
+    interactive: bool,
+    capture: _Schema2Capture,
+) -> Schema2InstallResult:
+    """Run the shared gates, builds, planning and atomic publication.
+
+    Both lanes converge here once their captures are frozen bytes:
+    specs, command gates, audit, builds, target planning, and the
+    single atomic commit. The only mode dispatch left is on the mode
+    TYPE — the lock target is planned for resolving modes only, and
+    publication bytes heal superseded records for resolving modes
+    only. This function takes no fetch flag, no transport grant and
+    no policy path.
+    """
+
+    members = capture.members
+    captured_members = capture.captured_members
+    pred_files = capture.pred_files
+    source_roots = capture.source_roots
+    node_specs = capture.node_specs
+    frozen_membership = capture.frozen_membership
+    old_lock = capture.old_lock
+    manifest_sha = capture.manifest_sha
+    selectors = capture.selectors
+    git_aliases = capture.git_aliases
+    project_identity = locking.canonical_project_identity(project_path)
+    slug = project_slug(project_identity)
+    refresh = old_lock is not None and isinstance(mode, modes.ResolvingSources)
+
+    with (
+        tempfile.TemporaryDirectory(prefix=".csk-source-install-") as staging_tmp,
+        ExitStack() as build_stack,
+    ):
         staging_root = Path(staging_tmp)
         specs_map: dict[str, skillspec.SkillSpec] = {}
+        satisfied_by = frozenset(pred_files)
         for name in sorted(pred_files):
             frozen_dir = staging_root / "predspec" / name
             materialize_frozen(
@@ -2523,14 +3983,99 @@ def install_schema2(
                 frozen_dir,
                 subject=f"Skill {name!r}",
             )
-            spec = load_member_spec(frozen_dir, name=name)
-            require_context_only(spec, name=name)
+            if node_specs is not None and name in node_specs:
+                # The closure already loaded this spec from the same
+                # captured bytes the store verified; reuse it instead of
+                # parsing the same bytes twice.
+                spec = node_specs[name]
+            else:
+                spec = load_member_spec(frozen_dir, name=name)
+            require_installable_member(spec, name=name, satisfied_by=satisfied_by)
             specs_map[name] = spec
+        check_schema2_requirement_commands(specs_map)
+        run_schema2_command_gates(members, specs_map)
+        check_schema2_registry_requirement(members, captured_members, config)
+        adapted = tuple(
+            adapt_schema2_member(
+                member,
+                specs_map[member.name],
+                staging_root / "predspec" / member.name,
+                captured_members[member.name].package,
+            )
+            for member in members
+        )
+        gate = run_schema2_audit_gate(adapted, config, alias=alias, dry_run=dry_run)
+        audit_policy = source_audit.policy_from_config(
+            config, script_policy=skillspec.SCRIPT_WORKER_V1_POLICY
+        )
+        # Frozen providers, compiler sessions and operation roots live on
+        # the install's stack, like the legacy lane: compilation happens
+        # before the home lock but its operation roots must survive until
+        # cache publication under the lock.
+        providers = local_build_providers(
+            tuple(
+                FrozenBuildMember(
+                    name=member.name,
+                    spec=specs_map[member.name],
+                    frozen_dir=staging_root / "predspec" / member.name,
+                    package=captured_members[member.name].package,
+                )
+                for member in members
+            ),
+            stack=build_stack,
+        )
+        if providers and not config.audit.enabled:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                "local builds need audit enabled: the source audit "
+                "binding cannot be recorded while audit is disabled",
+            )
+        record_home = home
+        if dry_run and providers:
+            record_home = staging_root / "audit-dry-run"
+            try:
+                record_home.mkdir(parents=True, exist_ok=True)
+            except _FS_ERRORS as exc:
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"dry-run audit binding cannot be staged: {exc}",
+                ) from exc
+        record_schema2_source_audits(
+            gate,
+            adapted,
+            captured_members,
+            record_home=record_home,
+            policy=audit_policy,
+        )
+        hook = partial(
+            source_audit.source_audit_plan_hook,
+            csk_home=record_home,
+            policy=audit_policy,
+        )
+        script_owners = {
+            command: member.name
+            for member in members
+            for command in active_script_commands(specs_map[member.name])
+        }
+        cache_backend = build_cache.cache_for_manager_home(home)
+        plans = plan_schema2_local_builds(
+            providers,
+            home=home,
+            operator_search_path=operator_search_path,
+            forbidden_roots=(
+                project_path,
+                config.skills_root,
+                *sorted(source_roots.values()),
+            ),
+            cache_backend=cache_backend,
+            occupied=script_owners,
+            audit=hook,
+        )
+        provider_identities = {
+            provider.name: provider.snapshot.identity for provider in providers
+        }
 
         package_keys = {name: item.package_key for name, item in captured_members.items()}
-        runtime_roots_map = {
-            name: specs_map[name].runtime_roots for name in captured_members
-        }
         new_runtime_refs = runtime_hex_pairs(
             {(name, package_keys[name]) for name in captured_members}
         )
@@ -2538,6 +4083,7 @@ def install_schema2(
             _referenced_runtime_keys(old_lock) if old_lock is not None else set()
         )
         planned, adapter_targets, plan_messages = plan_schema2_targets(
+            mode=mode,
             home=home,
             project_path=project_path,
             slug=slug,
@@ -2545,9 +4091,10 @@ def install_schema2(
             agents=agents,
             members=members,
             package_keys=package_keys,
-            runtime_roots=runtime_roots_map,
+            specs_map=specs_map,
             new_runtime_refs=new_runtime_refs,
             old_runtime_refs=old_runtime_refs,
+            git_aliases=git_aliases,
         )
         try:
             preimages = digest_live_targets(planned)
@@ -2556,8 +4103,26 @@ def install_schema2(
                 "shared install state changed before the atomic commit"
             ) from exc
 
+        external_outputs, external_messages = publish_schema2_external_builds(
+            config,
+            project_path,
+            [item.node for item in adapted],
+            specs_map,
+            captured_members,
+            substitutions,
+            operator_search_path,
+            build_stack,
+            home=home,
+            dry_run=dry_run,
+            ssh_credentials=ssh_credentials,
+            https_token=https_token,
+            interactive=interactive,
+        )
+
         if dry_run:
             messages = list(plan_messages)
+            messages.extend(gate.warnings)
+            messages.extend(external_messages)
             for member in members:
                 messages.append(f"{alias}: {member.name} (planned)")
             messages.append(f"{alias}: dry-run; no files modified")
@@ -2568,6 +4133,24 @@ def install_schema2(
                 removed=(),
                 lock_replaced=False,
                 transaction_id=None,
+            )
+
+        publications: dict[str, build_cache.CachePublication] = {}
+        if plans:
+            if operator_search_path is None:
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    "local builds need the captured operator search path",
+                )
+            publications = compile_schema2_builds(
+                config,
+                [item.node for item in adapted],
+                providers,
+                plans,
+                operator_search_path,
+                cache_backend,
+                build_stack,
+                project_path=project_path,
             )
 
         with locking.ManagerHomeLock(home) as home_lock:
@@ -2596,40 +4179,36 @@ def install_schema2(
             if frozen_membership is not None:
                 require_membership_unchanged(
                     frozen_membership,
-                    collection_membership(selectors, source_roots),
+                    collection_membership(selectors, source_roots, git_aliases),
                 )
-            admitted = collect_admitted_identities(members)
+            admitted = collect_admitted_identities(members, git_aliases)
 
-            # Publication consumes the frozen store copy, rehashed here.
-            # A superseded record heals from verified captured bytes.
-            frozen_files: dict[str, Mapping[str, snapshot.FrozenFile]] = {}
-            for name, captured_member in captured_members.items():
-                served = consumers.open_for_install(
-                    home, name, captured_member.package_key
+            # Publication consumes the frozen store copy, rehashed here
+            # under the lock. Only the resolving lane heals a superseded
+            # record from verified captured bytes; the frozen lane serves
+            # the store alone and refuses a missing or superseded entry.
+            if isinstance(mode, modes.FrozenSources):
+                frozen_files = _serve_frozen_publication_files(
+                    captured_members, home=home
                 )
-                if served.snapshot == captured_member.package.snapshot:
-                    frozen_files[name] = served.files
-                    continue
-                if captured_member.captured is None:
-                    raise SourceError(
-                        CODE_SNAPSHOT_UNAVAILABLE,
-                        f"Skill {name!r} locked snapshot cannot be served",
-                    )
-                healed = store.stage_snapshot(
-                    home,
-                    name,
-                    captured_member.package_key,
-                    captured_member.captured,
+            else:
+                frozen_files = _serve_resolving_publication_files(
+                    captured_members, home=home
                 )
-                if healed.snapshot != captured_member.package.snapshot:
-                    raise SourceError(
-                        CODE_SNAPSHOT_UNAVAILABLE,
-                        f"Skill {name!r} locked snapshot cannot be served",
-                    )
-                frozen_files[name] = healed.files
 
+            local_outputs = publish_schema2_local_builds(
+                home,
+                plans,
+                publications,
+                cache_backend,
+                home_lock,
+                specs_map,
+                provider_identities=provider_identities,
+            )
+            build_outputs = merge_build_outputs(local_outputs, external_outputs)
             staged = stage_schema2_desired(
                 staging_root,
+                mode=mode,
                 home=home,
                 project_path=project_path,
                 alias=alias,
@@ -2645,7 +4224,14 @@ def install_schema2(
                 specs=planned,
                 adapter_targets=adapter_targets,
                 slug=slug,
+                build_outputs=build_outputs,
+                git_aliases=git_aliases,
             )
+            if isinstance(mode, modes.FrozenSources):
+                # The planner excluded the lock target structurally, so
+                # there is nothing to filter here; the rebuilt lock must
+                # still describe the same closure (determinism guard).
+                _require_frozen_lock_unchanged(mode.lock, staged.new_lock)
             created_parents = ensure_live_parents(planned, staged=staged.desired)
             # The record freezes after our own parents exist, so the
             # frozen managed bindings already include them; anything
@@ -2696,13 +4282,17 @@ def install_schema2(
                 remove_created_parents(created_parents)
                 raise
 
-    installed = _touched_members(committed)
+    installed = _touched_members(
+        committed, schema2_command_owners(members, specs_map)
+    )
     removed = _removed_names(old_lock, staged.new_lock)
     up_to_date = tuple(
         sorted(set(captured_members) - set(installed) - set(removed))
     )
     lock_replaced = (CLASS_LOCK, "Skillfile.lock.json") in committed
     messages = list(plan_messages)
+    messages.extend(gate.warnings)
+    messages.extend(external_messages)
     for name in sorted(installed):
         messages.append(f"{alias}: {name} installed")
     for name in up_to_date:
@@ -2720,7 +4310,12 @@ def install_schema2(
     if refresh:
         messages.extend(
             _binding_move_messages(
-                home=home, slug=slug, alias=alias, members=members, source_roots=source_roots
+                home=home,
+                slug=slug,
+                alias=alias,
+                members=members,
+                source_roots=source_roots,
+                git_aliases=git_aliases,
             )
         )
     return Schema2InstallResult(
@@ -2745,8 +4340,14 @@ def _removed_names(
 
 def _touched_members(
     committed: tuple[tuple[str, str], ...],
+    command_owners: Mapping[str, str] | None = None,
 ) -> tuple[str, ...]:
-    """Map committed target keys to the member names they publish."""
+    """Map committed target keys to the member names they publish.
+
+    Command shims attribute through the caller-supplied owner map;
+    without one a shim key touches no member and surfaces as a
+    global output instead.
+    """
 
     touched: set[str] = set()
     for target_class, identifier in committed:
@@ -2754,9 +4355,1049 @@ def _touched_members(
             touched.add(identifier[len("project/"):])
         elif target_class == CLASS_RUNTIME and "/" in identifier:
             touched.add(identifier.split("/", 1)[0])
+        elif target_class == CLASS_BIN and command_owners is not None:
+            owner = command_owners.get(identifier)
+            if owner is not None:
+                touched.add(owner)
         elif target_class == CLASS_ADAPTER_LEDGER and "/entry/" in identifier:
             touched.add(identifier.split("/entry/", 1)[1])
     return tuple(sorted(touched))
+
+
+def schema2_command_owners(
+    members: tuple[ResolvedMember, ...],
+    specs_map: dict[str, skillspec.SkillSpec],
+) -> dict[str, str]:
+    """Map every active command to its owning member.
+
+    Command gates run before planning, so ownership here is unique;
+    a repeated name fails closed instead of attributing either
+    owner.
+    """
+
+    owners: dict[str, str] = {}
+    for member in members:
+        spec = specs_map[member.name]
+        for command_name in sorted(
+            set(active_script_commands(spec)) | set(active_build_commands(spec))
+        ):
+            claim_schema2_command_owner(owners, command_name, member.name)
+    return owners
+
+
+# ---------------------------------------------------------------------------
+# Schema-2 builds: frozen members feeding the existing build lanes.
+#
+# Local acquisition feeds the complete existing package pipeline. Members
+# adapt to closure nodes and skill plans over their frozen bytes (never the
+# live authored tree); local go-v1 commands plan through the build planner
+# with the source-audit hook, compile on cache misses, and publish receipt-3
+# artifacts into the immutable cache; external go-repository-v1 commands run
+# the existing repository pipeline with the member package bound. Markers
+# carry receipt-3 build records and shims launch the protected artifacts.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Schema2BuildOutputs:
+    """Published or reconstructed build evidence for one install.
+
+    Install assembles this from compilation and cache publication;
+    status reconstructs it read-only from re-planning and protected
+    store reads. Either way the marker plans and the staged shims
+    derive from the same bundle.
+    """
+
+    marker_builds: Mapping[str, Mapping[str, install_marker.InstallMarkerBuildV5]]
+    activations: Mapping[str, shims.BuildCommandActivation]
+    build_sources: Mapping[str, build_source.BuildSourceIdentity | None]
+
+
+def empty_build_outputs() -> Schema2BuildOutputs:
+    """Return the build bundle for members without build commands."""
+
+    return Schema2BuildOutputs(marker_builds={}, activations={}, build_sources={})
+
+
+@dataclass(frozen=True)
+class AdaptedSchema2Member:
+    """One member adapted to the existing closure/audit/build lanes."""
+
+    member: ResolvedMember
+    spec: skillspec.SkillSpec
+    node: closure.ClosureNode
+    # installer.SkillPlan under TYPE_CHECKING would still be a runtime
+    # import cycle; the plan is built by a lazy installer import below and
+    # only audit/build lanes consume it.
+    plan: Any
+
+
+def adapt_schema2_member(
+    member: ResolvedMember,
+    spec: skillspec.SkillSpec,
+    frozen_dir: Path,
+    package: PackageIdentity,
+) -> AdaptedSchema2Member:
+    """Adapt one member to a closure node and skill plan over frozen bytes.
+
+    The node carries a full activation edge: schema-2 selection has no
+    partial activation, so every member activates all its commands.
+    Provenance labels name the selection (``local:<alias>/<dir>`` for
+    path members, ``git:<alias>/<dir>`` for Git roots,
+    ``transitive:<name>`` for closure members) and the frozen
+    identity; no git identity is forged for local content, and Git
+    members carry their canonical repository identity.
+    """
+
+    from ..installer import SkillPlan
+
+    if isinstance(package, LocalSnapshot):
+        label = f"local:{member.from_alias}/{member.directory}"
+        ref = manifest.SkillRef(kind="snapshot", value=package.snapshot)
+        resolved = git_ops.ResolvedRef(
+            kind="snapshot",
+            ref=package.snapshot,
+            commit=package.snapshot.removeprefix("sha256:"),
+        )
+        git: str | None = None
+        identity: str | None = None
+    elif isinstance(package, NetworkGit):
+        if member.from_alias is None:
+            label = f"transitive:{member.name}"
+        else:
+            label = f"git:{member.from_alias}/{member.directory}"
+        ref = manifest.SkillRef(kind="revision", value=package.commit.hex)
+        resolved = git_ops.ResolvedRef(
+            kind="revision", ref=package.commit.hex, commit=package.commit.hex
+        )
+        git = package.repository
+        identity = package.repository
+    else:
+        raise SourceError(
+            CODE_SELECTION_INVALID,
+            f"Skill {member.name!r} carries an unsupported package identity",
+        )
+    decl = manifest.SkillDecl(
+        name=member.name,
+        source=label,
+        ref=ref,
+        git=git,
+    )
+    # Local members adapt over their live source root; Git source roots
+    # are private acquisition workspace paths that do not outlive
+    # resolution, so Git members adapt over their frozen bytes, which
+    # the audit gate consumes.
+    if isinstance(package, LocalSnapshot) and member.source_root is not None:
+        repo = member.source_root
+    else:
+        repo = frozen_dir
+    node = closure.ClosureNode(
+        name=member.name,
+        decl=decl,
+        resolved=resolved,
+        repo=repo,
+        snapshot=frozen_dir,
+        spec=spec,
+        identity=identity,
+        chains=[],
+        substituted=None,
+        edges=[
+            closure.ActivationEdge(
+                consumer="project", mode="full", commands=()
+            )
+        ],
+    )
+    plan = SkillPlan(
+        decl=decl, resolved=resolved, repo=repo,
+        snapshot=frozen_dir, spec=spec,
+    )
+    return AdaptedSchema2Member(member=member, spec=spec, node=node, plan=plan)
+
+
+def check_schema2_registry_requirement(
+    members: tuple[ResolvedMember, ...],
+    captured: Mapping[str, CapturedMember],
+    config: GlobalConfig,
+) -> None:
+    """Refuse local members where policy requires a network attestation.
+
+    Mirrors the legacy lane's trigger exactly: configured trusted
+    registries under a strict registry policy require an attestation
+    local content cannot supply. The checker's own structured error
+    propagates unchanged so the conformance case keeps its code.
+    """
+
+    required = (
+        config.audit.registry_policy == "strict"
+        and bool(config.trusted_registries())
+    )
+    for member in members:
+        install_marker.check_local_registry_requirement(
+            captured[member.name].package,
+            network_attestation_required=required,
+        )
+
+
+def run_schema2_audit_gate(
+    adapted: tuple[AdaptedSchema2Member, ...],
+    config: GlobalConfig,
+    *,
+    alias: str,
+    dry_run: bool,
+) -> GateResult:
+    """Run the existing assurance gate over the selected members.
+
+    The gate is the legacy lane's own call over the adapted plans:
+    static detectors, pins, revocations and backends run over the
+    frozen bytes, and a block refuses with the gate's message. Audit
+    records persist exactly when this is not a dry run.
+    """
+
+    # Imported lazily: the audit pipeline imports installer, which imports
+    # this module; a top-level import here would fail on the partially
+    # initialized installer. The builds/metadata module lazy-imports the
+    # sources package for the same reason.
+    from ..audit import pipeline as audit_pipeline
+
+    gate = audit_pipeline.gate_plans(
+        [item.plan for item in adapted],
+        config,
+        scope=alias,
+        record=not dry_run,
+    )
+    if gate.blocked:
+        raise SourceError(CODE_MEMBER_INVALID, "; ".join(gate.errors))
+    return gate
+
+
+def record_schema2_source_audits(
+    gate: GateResult,
+    adapted: tuple[AdaptedSchema2Member, ...],
+    captured: Mapping[str, CapturedMember],
+    *,
+    record_home: Path,
+    policy: source_audit.SourceAuditPolicy,
+) -> None:
+    """Persist one source audit per member with local builds.
+
+    The stored report is what the planning hook re-validates before
+    any toolchain probe or cache read. Members without local builds
+    record nothing: the gate above is their whole preflight.
+    """
+
+    reports = {report.skill: report for report in gate.reports}
+    for item in adapted:
+        if not _local_build_command_names(item.spec):
+            continue
+        report = reports.get(item.member.name)
+        if report is None:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {item.member.name!r} produced no audit report; "
+                "local builds cannot be bound without one",
+            )
+        member_package = captured[item.member.name].package
+        source_audit.record_source_audit(
+            report,
+            csk_home=record_home,
+            package=member_package,
+            git=(
+                member_package.repository
+                if isinstance(member_package, NetworkGit)
+                else None
+            ),
+            policy=policy,
+        )
+
+
+def _local_build_command_names(spec: skillspec.SkillSpec) -> tuple[str, ...]:
+    """Return the sorted local go-v1 build commands one member activates."""
+
+    return tuple(
+        sorted(
+            command.name
+            for command in spec.commands.values()
+            if command.type == "build"
+            and command.driver == build_metadata.GO_V1_DRIVER
+        )
+    )
+
+
+def _external_build_command_names(spec: skillspec.SkillSpec) -> tuple[str, ...]:
+    """Return the sorted external build commands one member activates."""
+
+    return tuple(
+        sorted(
+            command.name
+            for command in spec.commands.values()
+            if command.type == "build"
+            and command.driver != build_metadata.GO_V1_DRIVER
+        )
+    )
+
+
+@dataclass(frozen=True)
+class FrozenBuildMember:
+    """The frozen inputs one local build provider freezes."""
+
+    name: str
+    spec: skillspec.SkillSpec
+    frozen_dir: Path
+    package: PackageIdentity
+
+
+def local_build_providers(
+    frozen_members: tuple[FrozenBuildMember, ...],
+    *,
+    stack: ExitStack,
+) -> tuple[build_planner.BuildProvider, ...]:
+    """Freeze one build provider per member with local builds.
+
+    Each provider freezes the member's frozen bytes (never the live
+    tree) and carries the member package, which selects receipt-3
+    planning, cache namespaces and markers downstream.
+    """
+
+    providers: list[build_planner.BuildProvider] = []
+    for item in frozen_members:
+        names = _local_build_command_names(item.spec)
+        if not names:
+            continue
+        try:
+            frozen = stack.enter_context(
+                build_source.freeze_snapshot(item.frozen_dir)
+            )
+        except build_planner.BuildPlanningError as exc:
+            raise SourceError(CODE_MEMBER_INVALID, str(exc)) from exc
+        except (ValueError, OSError) as exc:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {item.name!r} frozen source cannot be used "
+                f"for builds: {exc}",
+            ) from exc
+        try:
+            providers.append(
+                build_planner.provider_from_spec(
+                    item.name,
+                    frozen,
+                    item.spec,
+                    active_commands=names,
+                    package=item.package,
+                )
+            )
+        except build_planner.BuildPlanningError as exc:
+            raise SourceError(CODE_MEMBER_INVALID, str(exc)) from exc
+    return tuple(providers)
+
+
+def plan_schema2_local_builds(
+    providers: tuple[build_planner.BuildProvider, ...],
+    *,
+    home: Path,
+    operator_search_path: OperatorSearchPath | None,
+    forbidden_roots: tuple[Path, ...],
+    cache_backend: build_cache.BuildCacheBackend,
+    occupied: Mapping[str, str],
+    audit: Callable[[tuple[build_planner.BuildProvider, ...]], None],
+    read_only: bool = False,
+) -> tuple[build_planner.BuildPlan, ...]:
+    """Plan local builds with the source-audit hook first.
+
+    Command collisions refuse before planning; the audit hook then
+    runs inside planning before any toolchain probe or cache read.
+    ``concurrent_state_change`` propagates as a planning error for
+    the installer's retry protocol, everything else becomes a
+    structured source refusal.
+    """
+
+    if not providers:
+        return ()
+    if operator_search_path is None:
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            "local builds need the captured operator search path",
+        )
+    try:
+        build_planner.detect_command_collisions(providers, occupied=occupied)
+    except build_planner.BuildPlanningError as exc:
+        raise SourceError(CODE_NAME_CONFLICT, str(exc)) from exc
+    try:
+        return build_planner.plan_builds(
+            providers,
+            manager_home=home,
+            operator_search_path=operator_search_path,
+            forbidden_roots=forbidden_roots,
+            cache_backend=cache_backend,
+            audit=audit,
+            read_only_preflight=read_only,
+        )
+    except build_planner.BuildPlanningError as exc:
+        if exc.code == "concurrent_state_change":
+            raise
+        raise SourceError(CODE_MEMBER_INVALID, str(exc)) from exc
+
+
+def compile_schema2_builds(
+    config: GlobalConfig,
+    nodes: list[closure.ClosureNode],
+    providers: tuple[build_planner.BuildProvider, ...],
+    plans: tuple[build_planner.BuildPlan, ...],
+    operator_search_path: OperatorSearchPath,
+    cache_backend: build_cache.BuildCacheBackend,
+    stack: ExitStack,
+    *,
+    project_path: Path,
+) -> dict[str, build_cache.CachePublication]:
+    """Compile planned local builds that miss the cache.
+
+    The worker boundary is the legacy lane's own: per-key worker
+    locks, a private native session, and receipt-3 construction from
+    the wrapped input. Legacy inputs cannot reach this lane and
+    refuse if they do.
+    """
+
+    # Imported lazily for the installer cycle documented above.
+    from ..installer import InstallError, _build_private_misses
+
+    try:
+        return _build_private_misses(
+            config,
+            nodes,
+            providers,
+            plans,
+            operator_search_path,
+            cache_backend,
+            stack,
+            operation_roots=(project_path,),
+            allow_source_aware=True,
+        )
+    except build_planner.BuildPlanningError:
+        raise
+    except InstallError as exc:
+        raise SourceError(CODE_MEMBER_INVALID, str(exc)) from exc
+
+
+def marker_build_v5_from_inspection(
+    provider_name: str,
+    command_name: str,
+    plan: build_planner.BuildPlan,
+    inspection: build_cache.CacheInspection,
+) -> install_marker.InstallMarkerBuildV5:
+    """Build one local receipt-3 marker record from a cache HIT.
+
+    Mirrors the legacy lane's winner checks: the inspection must
+    carry a receipt-3 record, its hash, and a physical artifact
+    path, and the record fields come from the receipt itself.
+    """
+
+    receipt = inspection.receipt
+    if not isinstance(receipt, build_metadata.BuildReceiptV3):
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"Skill {provider_name!r} command {command_name!r} cache entry "
+            "is not a receipt-3 record",
+        )
+    if inspection.receipt_sha256 is None or inspection.artifact_path is None:
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"Skill {provider_name!r} command {command_name!r} cache did "
+            "not yield a verified winner",
+        )
+    try:
+        return install_marker.InstallMarkerBuildV5(
+            driver=build_metadata.GO_V1_DRIVER,
+            receipt_schema_version=3,
+            execution_policy=build_metadata.PORTABLE_EXECUTION_POLICY,
+            cache_key=plan.cache_key,
+            receipt_sha256=inspection.receipt_sha256,
+            artifact_sha256=receipt.artifact.sha256,
+            artifact_path=receipt.artifact.path,
+        )
+    except install_marker.InstallMarkerError as exc:
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"Skill {provider_name!r} command {command_name!r} build record "
+            f"is not valid: {exc}",
+        ) from exc
+
+
+def publish_schema2_local_builds(
+    home: Path,
+    plans: tuple[build_planner.BuildPlan, ...],
+    publications: Mapping[str, build_cache.CachePublication],
+    cache_backend: build_cache.BuildCacheBackend,
+    home_lock: locking.ManagerHomeLock,
+    specs_map: Mapping[str, skillspec.SkillSpec],
+    *,
+    provider_identities: Mapping[str, build_source.BuildSourceIdentity],
+) -> Schema2BuildOutputs:
+    """Publish planned local builds to the immutable cache.
+
+    Mirrors the legacy lane's publication exactly: each plan's cache
+    winner is inspected or published under the home lock, the HIT
+    inspection becomes the marker record, and the activation binds
+    the marker to the protected artifact. Runs under the install's
+    home lock alongside the atomic publication.
+    """
+
+    marker_builds: dict[str, dict[str, install_marker.InstallMarkerBuildV5]] = {}
+    activations: dict[str, shims.BuildCommandActivation] = {}
+    build_sources: dict[str, build_source.BuildSourceIdentity | None] = dict(
+        provider_identities
+    )
+    for plan in plans:
+        try:
+            inspection = cache_backend.inspect(
+                build_cache.CacheExpectation(input=plan.input)
+            )
+            if inspection.status is not build_cache.CacheEntryStatus.HIT:
+                publication = publications.get(plan.cache_key)
+                if publication is None:
+                    raise _concurrent_state_change(
+                        "cache winner changed before commit: "
+                        f"{plan.provider}.{plan.command}"
+                    )
+                cache_backend.publish(publication, guard=home_lock)
+                inspection = cache_backend.inspect(
+                    build_cache.CacheExpectation(input=plan.input)
+                )
+            if inspection.status is not build_cache.CacheEntryStatus.HIT:
+                raise _concurrent_state_change(
+                    f"local build {plan.provider}.{plan.command} changed "
+                    "during publication"
+                )
+        except build_planner.BuildPlanningError:
+            raise
+        except SourceError:
+            raise
+        except (OSError, ValueError) as exc:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {plan.provider!r} command {plan.command!r} cache "
+                f"publication failed: {exc}",
+            ) from exc
+        marker = marker_build_v5_from_inspection(
+            plan.provider, plan.command, plan, inspection
+        )
+        command = specs_map[plan.provider].commands[plan.command]
+        try:
+            activation = shims.select_build_activation(
+                csk_home=home,
+                command=command,
+                marker_build=marker,
+                inspection=inspection,
+            )
+        except shims.ShimError as exc:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {plan.provider!r} command {plan.command!r} "
+                f"activation failed: {exc}",
+            ) from exc
+        marker_builds.setdefault(plan.provider, {})[plan.command] = marker
+        activations[plan.command] = activation
+    return Schema2BuildOutputs(
+        marker_builds=marker_builds,
+        activations=activations,
+        build_sources=build_sources,
+    )
+
+
+def publish_schema2_external_builds(
+    config: GlobalConfig,
+    project_path: Path,
+    nodes: list[closure.ClosureNode],
+    specs_map: Mapping[str, skillspec.SkillSpec],
+    captured: Mapping[str, CapturedMember],
+    substitutions: DevManifest,
+    operator_search_path: OperatorSearchPath | None,
+    stack: ExitStack,
+    *,
+    home: Path,
+    dry_run: bool,
+    ssh_credentials: OperatorSSHCredentials | None,
+    https_token: OperatorHTTPSToken | None,
+    interactive: bool,
+) -> tuple[Schema2BuildOutputs, list[str]]:
+    """Run external builds through the existing repository pipeline.
+
+    Each member package binds its pipeline request, which selects
+    receipt-3 lineage and the receipt-3 cache namespace; results
+    become marker-v5 records and validated activations. Manager
+    section 11 governs throughout: acquisition admits the effective
+    state (committed HEAD under a substitution, never dirty bytes),
+    and local acquisition never snapshots the external repository.
+    """
+
+    # Imported lazily for the installer cycle documented above.
+    from ..installer import InstallError, _publish_external_builds
+
+    packages = {
+        node.name: captured[node.name].package
+        for node in nodes
+        if _external_build_command_names(specs_map[node.name])
+    }
+    if not packages:
+        return empty_build_outputs(), []
+    if operator_search_path is None:
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            "external builds need the captured operator search path",
+        )
+    marker_roots = (project_path / ".agents" / "skills",)
+    try:
+        published, messages = _publish_external_builds(
+            config,
+            project_root=project_path,
+            nodes=nodes,
+            substitutions=substitutions,
+            operator_search_path=operator_search_path,
+            stack=stack,
+            dry_run=dry_run,
+            marker_roots=marker_roots,
+            ssh_credentials=ssh_credentials,
+            https_token=https_token,
+            interactive=interactive,
+            packages=packages,
+        )
+    except build_planner.BuildPlanningError:
+        raise
+    except InstallError as exc:
+        raise SourceError(CODE_MEMBER_INVALID, str(exc)) from exc
+    marker_builds: dict[str, dict[str, install_marker.InstallMarkerBuildV5]] = {}
+    activations: dict[str, shims.BuildCommandActivation] = {}
+    for provider_name, commands in published.items():
+        for command_name, build in commands.items():
+            marker = build.marker
+            receipt_bytes = build.receipt_bytes
+            artifact_path = build.artifact_path
+            if (
+                not isinstance(marker, install_marker.InstallMarkerBuildV5)
+                or receipt_bytes is None
+                or artifact_path is None
+            ):
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"Skill {provider_name!r} command {command_name!r} "
+                    "external result is not a receipt-3 publication",
+                )
+            command = specs_map[provider_name].commands[command_name]
+            try:
+                activation = shims.select_external_build_activation_v3(
+                    csk_home=home,
+                    command=command,
+                    marker_build=marker,
+                    receipt_bytes=receipt_bytes,
+                    artifact_path=artifact_path,
+                    expected_package=captured[provider_name].package,
+                )
+            except shims.ShimError as exc:
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"Skill {provider_name!r} command {command_name!r} "
+                    f"activation failed: {exc}",
+                ) from exc
+            marker_builds.setdefault(provider_name, {})[command_name] = marker
+            activations[command_name] = activation
+    return (
+        Schema2BuildOutputs(
+            marker_builds=marker_builds,
+            activations=activations,
+            build_sources={},
+        ),
+        messages,
+    )
+
+
+def merge_build_outputs(
+    *bundles: Schema2BuildOutputs,
+) -> Schema2BuildOutputs:
+    """Merge local and external build bundles into one install bundle."""
+
+    marker_builds: dict[str, dict[str, install_marker.InstallMarkerBuildV5]] = {}
+    activations: dict[str, shims.BuildCommandActivation] = {}
+    build_sources: dict[str, build_source.BuildSourceIdentity | None] = {}
+    for bundle in bundles:
+        for provider_name, commands in bundle.marker_builds.items():
+            marker_builds.setdefault(provider_name, {}).update(commands)
+        activations.update(bundle.activations)
+        build_sources.update(bundle.build_sources)
+    return Schema2BuildOutputs(
+        marker_builds=marker_builds,
+        activations=activations,
+        build_sources=build_sources,
+    )
+
+
+def reconstruct_schema2_local_builds(
+    *,
+    home: Path,
+    project_path: Path,
+    name: str,
+    spec: skillspec.SkillSpec,
+    frozen_dir: Path,
+    package: PackageIdentity,
+    source_root: Path | None,
+    config: GlobalConfig | None,
+) -> Schema2BuildOutputs:
+    """Reconstruct one member's local build bundle read-only.
+
+    Re-planning runs the audit hook over the stored reports, the
+    toolchain probe and the cache reads, but never compiles,
+    records or publishes: a cache miss means the install evidence
+    is gone and the member cannot be current. The marker is never
+    an input here; the plan comparison downstream decides.
+    """
+
+    if not _local_build_command_names(spec):
+        return empty_build_outputs()
+    if config is None:
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"Skill {name!r} build evidence cannot be verified without "
+            "the machine policy",
+        )
+    from ..builds import toolchain as build_toolchain
+
+    policy = source_audit.policy_from_config(
+        config, script_policy=skillspec.SCRIPT_WORKER_V1_POLICY
+    )
+    hook = partial(
+        source_audit.source_audit_plan_hook, csk_home=home, policy=policy
+    )
+    with ExitStack() as stack:
+        providers = local_build_providers(
+            (
+                FrozenBuildMember(
+                    name=name, spec=spec, frozen_dir=frozen_dir,
+                    package=package,
+                ),
+            ),
+            stack=stack,
+        )
+        cache_backend = build_cache.cache_for_manager_home(home)
+        plans = plan_schema2_local_builds(
+            providers,
+            home=home,
+            operator_search_path=build_toolchain.capture_operator_search_path(),
+            forbidden_roots=(
+                (project_path, config.skills_root, source_root)
+                if source_root is not None
+                else (project_path, config.skills_root)
+            ),
+            cache_backend=cache_backend,
+            occupied={
+                command: name for command in active_script_commands(spec)
+            },
+            audit=hook,
+            read_only=True,
+        )
+        identities = {
+            provider.name: provider.snapshot.identity for provider in providers
+        }
+    marker_builds: dict[str, install_marker.InstallMarkerBuildV5] = {}
+    activations: dict[str, shims.BuildCommandActivation] = {}
+    for plan in plans:
+        try:
+            inspection = cache_backend.inspect(
+                build_cache.CacheExpectation(input=plan.input)
+            )
+        except (OSError, ValueError) as exc:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {name!r} command {plan.command!r} build evidence "
+                f"cannot be read: {exc}",
+            ) from exc
+        if inspection.status is not build_cache.CacheEntryStatus.HIT:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {name!r} command {plan.command!r} build evidence "
+                "is missing from the cache; run csk install to repair",
+            )
+        marker = marker_build_v5_from_inspection(
+            name, plan.command, plan, inspection
+        )
+        command = spec.commands[plan.command]
+        try:
+            activation = shims.select_build_activation(
+                csk_home=home,
+                command=command,
+                marker_build=marker,
+                inspection=inspection,
+            )
+        except shims.ShimError as exc:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {name!r} command {plan.command!r} build evidence "
+                f"does not validate: {exc}",
+            ) from exc
+        marker_builds[plan.command] = marker
+        activations[plan.command] = activation
+    return Schema2BuildOutputs(
+        marker_builds={name: marker_builds} if marker_builds else {},
+        activations=activations,
+        build_sources={name: identities[name]} if marker_builds else {},
+    )
+
+
+def reconstruct_schema2_external_builds(
+    *,
+    home: Path,
+    name: str,
+    spec: skillspec.SkillSpec,
+    package: PackageIdentity,
+    live_marker_path: Path,
+) -> Schema2BuildOutputs:
+    """Reconstruct one member's external build bundle read-only.
+
+    The live marker supplies cache-key locators only; every expected
+    record derives from the verified protected-store receipt bytes
+    and the member spec, and the plan comparison downstream decides
+    whether the marker matches. The recorded marker record is also
+    compared field by field against the receipt-3 evidence and the
+    protected artifact bytes, so a record the evidence no longer
+    supports refuses here instead of comparing current. No network,
+    no acquisition, no toolchain probe.
+    """
+
+    external = _external_build_command_names(spec)
+    if not external:
+        return empty_build_outputs()
+    try:
+        raw = live_marker_path.read_bytes()
+    except _FS_ERRORS as exc:
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"Skill {name!r} install marker cannot be read: {exc}",
+        ) from exc
+    try:
+        marker = install_marker.read_install_marker(raw)
+    except install_marker.InstallMarkerError as exc:
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"Skill {name!r} install marker is not usable: {exc}",
+        ) from exc
+    if not isinstance(marker, install_marker.InstallMarkerV5):
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"Skill {name!r} install marker is not a schema-2 marker",
+        )
+    store = build_repository_pipeline.DiskProtectedStore(home / "external-builds")
+    marker_builds: dict[str, install_marker.InstallMarkerBuildV5] = {}
+    activations: dict[str, shims.BuildCommandActivation] = {}
+    for command_name in external:
+        recorded = marker.builds.get(command_name)
+        if recorded is None:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {name!r} command {command_name!r} build evidence "
+                "is missing from the marker; run csk install to repair",
+            )
+        try:
+            hit = store.inspect_artifact_v3(recorded.cache_key)
+        except build_repository_pipeline.ExternalBuildError as exc:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {name!r} command {command_name!r} build evidence "
+                f"is not usable: {exc}",
+            ) from exc
+        if hit is None:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {name!r} command {command_name!r} build evidence "
+                "is missing from the protected store; run csk install "
+                "to repair",
+            )
+        command = spec.commands[command_name]
+        try:
+            receipt = build_metadata.read_receipt_v3(hit.receipt)
+        except build_metadata.BuildMetadataError as exc:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {name!r} command {command_name!r} build evidence "
+                f"receipt is not usable: {exc}",
+            ) from exc
+        expected = _expected_external_v5(
+            name, command_name, command, spec, package, receipt, hit.receipt
+        )
+        artifact_relative = expected.artifact_path
+        artifact_path = (
+            home
+            / "external-builds"
+            / "artifacts-v3"
+            / expected.cache_key.removeprefix("sha256:")
+            / build_metadata.derived_cache_artifact_name(artifact_relative)
+        )
+        try:
+            artifact_bytes = artifact_path.read_bytes()
+        except FileNotFoundError as exc:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {name!r} command {command_name!r} build evidence "
+                "is missing from the protected store; run csk install "
+                "to repair",
+            ) from exc
+        except _FS_ERRORS as exc:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {name!r} command {command_name!r} build evidence "
+                f"artifact cannot be read: {exc}",
+            ) from exc
+        try:
+            differing = build_currentness.compare_external_build_evidence(
+                recorded,
+                receipt.input,
+                marker_package=package,
+                receipt_bytes=hit.receipt,
+                artifact_bytes=artifact_bytes,
+            )
+        except build_currentness.BuildCurrentnessError as exc:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {name!r} command {command_name!r} build evidence "
+                f"does not match the installed record: {exc}",
+            ) from exc
+        if differing:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {name!r} command {command_name!r} installed build "
+                "record differs from receipt evidence: "
+                + ", ".join(differing)
+                + "; run csk install to repair",
+            )
+        try:
+            activation = shims.select_external_build_activation_v3(
+                csk_home=home,
+                command=command,
+                marker_build=expected,
+                receipt_bytes=hit.receipt,
+                artifact_path=artifact_path,
+                expected_package=package,
+            )
+        except shims.ShimError as exc:
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill {name!r} command {command_name!r} build evidence "
+                f"does not validate: {exc}",
+            ) from exc
+        marker_builds[command_name] = expected
+        activations[command_name] = activation
+    return Schema2BuildOutputs(
+        marker_builds={name: marker_builds},
+        activations=activations,
+        build_sources={},
+    )
+
+
+def _expected_external_v5(
+    member_name: str,
+    command_name: str,
+    command: skillspec.CommandSpec,
+    spec: skillspec.SkillSpec,
+    package: PackageIdentity,
+    receipt: build_metadata.BuildReceiptV3,
+    receipt_bytes: bytes,
+) -> install_marker.InstallMarkerBuildV5:
+    """Derive one expected external record from verified receipt bytes.
+
+    The receipt was validated self-consistent by the protected store
+    read; every field here is either recomputed from those bytes or
+    cross-checked against the member spec and package. The live
+    marker contributes nothing but the locator key its caller used.
+    """
+
+    def _refuse(reason: str) -> install_marker.InstallMarkerBuildV5:
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"Skill {member_name!r} command {command_name!r} build evidence "
+            f"{reason}",
+        )
+
+    if (
+        build_metadata.canonical_receipt_v3_bytes(receipt) != receipt_bytes
+        or build_metadata.source_aware_cache_key(receipt.input)
+        != receipt.cache_key
+    ):
+        return _refuse("receipt does not authenticate its cache key")
+    if receipt.input.package != package:
+        return _refuse("receipt package differs from the installing member")
+    build = receipt.input.build
+    if not isinstance(build, build_metadata.GoRepositoryBuildInput):
+        return _refuse("receipt input is not an external build input")
+    if build.command != command_name or build.driver != command.driver:
+        return _refuse("receipt identity differs from the member command")
+    repository_name = build.source.repository
+    repository = spec.build_repositories.get(repository_name)
+    if repository is None or command.repository != repository_name:
+        return _refuse("receipt repository differs from the member command")
+    declared = build.source.declared
+    if (
+        declared.identity.value != repository.identity
+        or declared.transport != repository.transport
+        or declared.locked_commit.object_format
+        != repository.locked_commit.object_format
+        or declared.locked_commit.hex != repository.locked_commit.hex
+        or declared.tag != repository.tag
+    ):
+        return _refuse("receipt declared source differs from the member")
+    if build.source.descriptor.target != command.target:
+        return _refuse("receipt descriptor target differs from the member")
+    effective = build.source.effective
+    if effective.build_source.algorithm != "curator-build-source-v1":
+        return _refuse("receipt build source algorithm differs from the manager")
+    artifact = receipt.artifact
+    try:
+        expected_relative = build_metadata.derived_artifact_path(
+            command_name, goos=build.target.goos
+        )
+    except shims.ShimError as exc:
+        return _refuse(f"receipt target is not usable: {exc}")
+    if artifact.path != expected_relative:
+        return _refuse("receipt artifact is not manager-derived")
+    substitution = None
+    if effective.substitution is not None:
+        raw_substitution = effective.substitution
+        ref = None
+        if raw_substitution.ref is not None:
+            ref = install_marker.MarkerRepositoryRef(
+                raw_substitution.ref.kind, raw_substitution.ref.value
+            )
+        substitution = install_marker.MarkerRepositorySubstitution(
+            type=raw_substitution.type, ref=ref
+        )
+    try:
+        return install_marker.InstallMarkerBuildV5(
+            driver=GO_REPOSITORY_V1_DRIVER,
+            receipt_schema_version=3,
+            execution_policy=build_metadata.PORTABLE_EXECUTION_POLICY,
+            cache_key=receipt.cache_key,
+            receipt_sha256="sha256:"
+            + hashlib.sha256(receipt_bytes).hexdigest(),
+            artifact_sha256=artifact.sha256,
+            artifact_path=artifact.path,
+            repository=repository_name,
+            declared_identity=install_marker.MarkerRepositoryIdentity(
+                "network-git", declared.identity.value
+            ),
+            declared_locked_commit=install_marker.MarkerRepositoryCommit(
+                declared.locked_commit.object_format,
+                declared.locked_commit.hex,
+            ),
+            declared_tag=declared.tag,
+            effective_identity=install_marker.MarkerRepositoryIdentity(
+                effective.identity.kind, effective.identity.value
+            ),
+            object_format=effective.object_format,
+            commit=effective.commit,
+            substituted=effective.substituted,
+            substitution=substitution,
+            build_source=build_source.BuildSourceIdentity(
+                "curator-build-source-v1",
+                effective.build_source.content_sha256,
+            ),
+            descriptor_target=build.source.descriptor.target,
+        )
+    except install_marker.InstallMarkerError as exc:
+        return _refuse(f"record is not valid: {exc}")
 
 
 def _binding_move_messages(
@@ -2766,11 +5407,18 @@ def _binding_move_messages(
     alias: str,
     members: tuple[ResolvedMember, ...],
     source_roots: dict[str, Path],
+    git_aliases: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Report source relocations on refresh; bindings are diagnostic only."""
 
     messages: list[str] = []
-    for source_alias in sorted({member.from_alias for member in members}):
+    for source_alias in sorted(
+        {
+            member.from_alias
+            for member in members
+            if member.from_alias is not None and member.from_alias not in git_aliases
+        }
+    ):
         try:
             location = os.path.realpath(os.fspath(source_roots[source_alias]))
         except _FS_ERRORS:
@@ -2805,9 +5453,11 @@ def _marker_snapshot(marker_path: Path) -> str | None:
         return None
     if not isinstance(marker, install_marker.InstallMarkerV5):
         return None
-    if not isinstance(marker.package, LocalSnapshot):
-        return None
-    return marker.package.snapshot
+    if isinstance(marker.package, LocalSnapshot):
+        return marker.package.snapshot
+    if isinstance(marker.package, NetworkGit):
+        return marker.package.commit.hex
+    return None
 
 
 def _evaluate_locked_member(
@@ -2817,28 +5467,55 @@ def _evaluate_locked_member(
     project_path: Path,
     lock_member: LockMember,
     lock_sha256: str,
-    source_root: Path,
+    source_root: Path | None,
     agents: tuple[str, ...],
     locale_value: str | None,
+    config: GlobalConfig | None,
 ) -> MemberVerdict:
     """Evaluate one lock member against live source and installed marker.
 
     The live source is re-captured at the locked directory (frozen, no
     collection expansion) and must digest-match the lock; the plan is
     then derived from those verified bytes and the installed marker is
-    compared against it. Marker summaries never authorize currency:
-    the plan comes from the lock and the re-captured bytes alone.
-    Read-only: staging stays in the system temporary directory.
+    compared against it. Git members serve from the store alone and
+    skip live re-capture. Marker summaries never authorize currency:
+    the plan comes from the lock and the verified bytes alone.
+    Build records reconstruct read-only from re-planning and
+    protected store reads. Read-only: staging stays in the system
+    temporary directory.
     """
 
     name = lock_member.name
+    if isinstance(lock_member.package, NetworkGit):
+        return _evaluate_locked_git_member(
+            staging_root,
+            home=home,
+            project_path=project_path,
+            lock_member=lock_member,
+            lock_sha256=lock_sha256,
+            agents=agents,
+            locale_value=locale_value,
+            config=config,
+        )
     if not isinstance(lock_member.package, LocalSnapshot):
         return MemberVerdict(
             name=name,
             current=False,
             label="error",
-            detail=f"Skill {name!r} lock member is not a local snapshot",
+            detail=f"Skill {name!r} lock member carries an unsupported package identity",
             locked_snapshot=None,
+            current_snapshot=None,
+            marker_snapshot=_marker_snapshot(
+                project_path / ".agents" / "skills" / name / ".csk-install.json"
+            ),
+        )
+    if source_root is None:
+        return MemberVerdict(
+            name=name,
+            current=False,
+            label="error",
+            detail=f"Skill {name!r} lock member has no source root to revalidate",
+            locked_snapshot=lock_member.package.snapshot,
             current_snapshot=None,
             marker_snapshot=_marker_snapshot(
                 project_path / ".agents" / "skills" / name / ".csk-install.json"
@@ -2899,25 +5576,88 @@ def _evaluate_locked_member(
             current_snapshot=current_snapshot,
             marker_snapshot=None,
         )
+    return _evaluate_member_plan(
+        staging_root,
+        home=home,
+        project_path=project_path,
+        name=name,
+        package=lock_member.package,
+        lock_sha256=lock_sha256,
+        frozen_files=captured.frozen_files(),
+        source_root=source_root,
+        agents=agents,
+        locale_value=locale_value,
+        config=config,
+        locked_snapshot=locked_snapshot,
+        current_snapshot=current_snapshot,
+    )
+
+
+def _evaluate_member_plan(
+    staging_root: Path,
+    *,
+    home: Path,
+    project_path: Path,
+    name: str,
+    package: PackageIdentity,
+    lock_sha256: str,
+    frozen_files: Mapping[str, snapshot.FrozenFile],
+    source_root: Path | None,
+    agents: tuple[str, ...],
+    locale_value: str | None,
+    config: GlobalConfig | None,
+    locked_snapshot: str | None,
+    current_snapshot: str | None,
+) -> MemberVerdict:
+    """Derive the install plan from verified bytes and compare the marker.
+
+    Shared by the local and Git status paths: the plan comes from the
+    verified bytes alone, build records reconstruct read-only, and the
+    installed marker is compared against the plan. Read-only.
+    """
+
+    marker_path = project_path / ".agents" / "skills" / name / ".csk-install.json"
+    claimed = _marker_snapshot(marker_path)
     try:
         frozen_dir = staging_root / "status" / name
         materialize_frozen(
-            captured.frozen_files(), frozen_dir, subject=f"Skill {name!r}"
+            frozen_files, frozen_dir, subject=f"Skill {name!r}"
         )
         spec = load_member_spec(frozen_dir, name=name)
         context_dir = staging_root / "status-context" / name
         files, content = stage_member_context(
             frozen_dir, context_dir, spec, name=name, locale_value=locale_value
         )
+        bundle = merge_build_outputs(
+            reconstruct_schema2_local_builds(
+                home=home,
+                project_path=project_path,
+                name=name,
+                spec=spec,
+                frozen_dir=frozen_dir,
+                package=package,
+                source_root=source_root,
+                config=config,
+            ),
+            reconstruct_schema2_external_builds(
+                home=home,
+                name=name,
+                spec=spec,
+                package=package,
+                live_marker_path=marker_path,
+            ),
+        )
         plan = build_marker_plan(
             name=name,
-            package=lock_member.package,
+            package=package,
             lock_sha256=lock_sha256,
             content_sha256=content,
             spec=spec,
             files=tuple(files),
             agents=agents,
             locale_value=locale_value,
+            builds=bundle.marker_builds.get(name),
+            build_source=bundle.build_sources.get(name),
         )
     except SourceError as exc:
         return MemberVerdict(
@@ -2979,6 +5719,71 @@ def _evaluate_locked_member(
     )
 
 
+def _evaluate_locked_git_member(
+    staging_root: Path,
+    *,
+    home: Path,
+    project_path: Path,
+    lock_member: LockMember,
+    lock_sha256: str,
+    agents: tuple[str, ...],
+    locale_value: str | None,
+    config: GlobalConfig | None,
+) -> MemberVerdict:
+    """Evaluate one locked Git member from the store alone.
+
+    Git members have no live bytes to re-capture: the store entry
+    addressed by the package key is the verified frozen copy, and a
+    missing entry is unavailable. The plan then derives from those
+    bytes exactly like the local path.
+    """
+
+    name = lock_member.name
+    package = lock_member.package
+    assert isinstance(package, NetworkGit)
+    commit = package.commit.hex
+    marker_path = project_path / ".agents" / "skills" / name / ".csk-install.json"
+    try:
+        served = consumers.open_for_install(
+            home, name, package_identity_sha256(package)
+        )
+    except SourceError as exc:
+        return MemberVerdict(
+            name=name,
+            current=False,
+            label="snapshot-unavailable",
+            detail=f"Skill {name!r} locked snapshot is unavailable: {exc}",
+            locked_snapshot=commit,
+            current_snapshot=None,
+            marker_snapshot=_marker_snapshot(marker_path),
+        )
+    if not marker_path.exists():
+        return MemberVerdict(
+            name=name,
+            current=False,
+            label="missing-marker",
+            detail=f"Skill {name!r} install marker is missing",
+            locked_snapshot=commit,
+            current_snapshot=commit,
+            marker_snapshot=None,
+        )
+    return _evaluate_member_plan(
+        staging_root,
+        home=home,
+        project_path=project_path,
+        name=name,
+        package=package,
+        lock_sha256=lock_sha256,
+        frozen_files=served.files,
+        source_root=None,
+        agents=agents,
+        locale_value=locale_value,
+        config=config,
+        locked_snapshot=commit,
+        current_snapshot=commit,
+    )
+
+
 def evaluate_schema2_installation(
     *,
     home: Path,
@@ -2988,6 +5793,7 @@ def evaluate_schema2_installation(
     locale_value: str | None,
     alias: str,
     adapter_mode: str,
+    config: GlobalConfig | None = None,
 ) -> Schema2Status:
     """Evaluate one schema-2 installation without writing anything.
 
@@ -2998,7 +5804,8 @@ def evaluate_schema2_installation(
     against the locked desired state through the install's own
     staging, so marker fields alone never attest currency. All staging
     stays in the system temporary directory, so project and home trees
-    are byte-identical afterwards.
+    are byte-identical afterwards. Build evidence reconstructs
+    read-only; without the machine policy it cannot be verified.
     """
 
     try:
@@ -3085,6 +5892,24 @@ def evaluate_schema2_installation(
     with tempfile.TemporaryDirectory(prefix=".csk-source-status-") as staging_tmp:
         staging_root = Path(staging_tmp)
         for lock_member in lock.members:
+            if lock_member.selection is None and isinstance(
+                lock_member.package, NetworkGit
+            ):
+                # Transitive closure members serve from the store alone.
+                verdicts.append(
+                    _evaluate_locked_member(
+                        staging_root,
+                        home=home,
+                        project_path=project_path,
+                        lock_member=lock_member,
+                        lock_sha256=lock_digest,
+                        source_root=None,
+                        agents=agents,
+                        locale_value=locale_value,
+                        config=config,
+                    )
+                )
+                continue
             member_alias = _lock_member_alias(
                 lock_member, manifest_value, source_roots
             )
@@ -3121,9 +5946,10 @@ def evaluate_schema2_installation(
                     project_path=project_path,
                     lock_member=lock_member,
                     lock_sha256=lock_digest,
-                    source_root=source_roots[member_alias],
+                    source_root=source_roots.get(member_alias),
                     agents=agents,
                     locale_value=locale_value,
+                    config=config,
                 )
             )
         if all(verdict.current for verdict in verdicts):
@@ -3140,6 +5966,7 @@ def evaluate_schema2_installation(
                 lock_digest=lock_digest,
                 source_roots=source_roots,
                 verdicts=tuple(verdicts),
+                config=config,
             )
     return Schema2Status(
         members=tuple(verdicts), errors=(), lock_sha256=lock_digest
@@ -3160,6 +5987,7 @@ def _evaluate_live_outputs(
     lock_digest: str,
     source_roots: dict[str, Path],
     verdicts: tuple[MemberVerdict, ...],
+    config: GlobalConfig | None,
 ) -> Schema2Status:
     """Compare every live target against the locked desired state.
 
@@ -3174,21 +6002,18 @@ def _evaluate_live_outputs(
     """
 
     try:
+        frozen_mode = modes.FrozenSources(home=home, lock=lock)
         members = locked_schema2_members(
-            lock, list(manifest_value.selectors), source_roots
+            frozen_mode,
+            list(manifest_value.selectors),
+            source_roots,
         )
-        packages = {
-            lock_member.name: lock_member.package
-            for lock_member in lock.members
-            if isinstance(lock_member.package, LocalSnapshot)
-        }
+        packages = {lock_member.name: lock_member.package for lock_member in lock.members}
         captured_members: dict[str, CapturedMember] = {}
         pred_files: dict[str, Mapping[str, snapshot.FrozenFile]] = {}
         for member in members:
             package = packages[member.name]
-            raw, served = _capture_locked_member(
-                member, package, home=home, heal=False
-            )
+            raw, served = _capture_locked_member(member, package, home=home)
             captured_members[member.name] = CapturedMember(
                 member=member,
                 captured=raw,
@@ -3197,13 +6022,8 @@ def _evaluate_live_outputs(
             )
             if raw is not None:
                 pred_files[member.name] = raw.frozen_files()
-            elif served is not None:
-                pred_files[member.name] = served.files
             else:
-                raise SourceError(
-                    CODE_SNAPSHOT_UNAVAILABLE,
-                    f"Skill {member.name!r} locked snapshot cannot be served",
-                )
+                pred_files[member.name] = served.files
         specs_map: dict[str, skillspec.SkillSpec] = {}
         for name in sorted(pred_files):
             frozen_dir = staging_root / "status-spec" / name
@@ -3211,11 +6031,47 @@ def _evaluate_live_outputs(
                 pred_files[name], frozen_dir, subject=f"Skill {name!r}"
             )
             specs_map[name] = load_member_spec(frozen_dir, name=name)
+        bundles = []
+        for member in members:
+            member_spec = specs_map[member.name]
+            member_package = packages[member.name]
+            bundles.append(
+                reconstruct_schema2_local_builds(
+                    home=home,
+                    project_path=project_path,
+                    name=member.name,
+                    spec=member_spec,
+                    frozen_dir=staging_root / "status-spec" / member.name,
+                    package=member_package,
+                    source_root=member.source_root,
+                    config=config,
+                )
+            )
+            bundles.append(
+                reconstruct_schema2_external_builds(
+                    home=home,
+                    name=member.name,
+                    spec=member_spec,
+                    package=member_package,
+                    live_marker_path=project_path
+                    / ".agents"
+                    / "skills"
+                    / member.name
+                    / ".csk-install.json",
+                )
+            )
+        build_outputs = merge_build_outputs(*bundles)
         package_keys = {
             name: item.package_key for name, item in captured_members.items()
         }
         lock_runtime_refs = _referenced_runtime_keys(lock)
+        git_aliases = frozenset(
+            source_alias
+            for source_alias, acquisition in manifest_value.sources.items()
+            if not isinstance(acquisition, skillfile_v2.PathSource)
+        )
         planned, adapter_targets, _plan_messages = plan_schema2_targets(
+            mode=frozen_mode,
             home=home,
             project_path=project_path,
             slug=project_slug(locking.canonical_project_identity(project_path)),
@@ -3223,15 +6079,15 @@ def _evaluate_live_outputs(
             agents=list(agents),
             members=tuple(members),
             package_keys=package_keys,
-            runtime_roots={
-                name: specs_map[name].runtime_roots for name in captured_members
-            },
+            specs_map=specs_map,
             new_runtime_refs=lock_runtime_refs,
             old_runtime_refs=lock_runtime_refs,
+            git_aliases=git_aliases,
         )
         manifest_data, _reread = _read_fresh_manifest(project_path)
         staged = stage_schema2_desired(
             staging_root / "status-desired",
+            mode=frozen_mode,
             home=home,
             project_path=project_path,
             alias=alias,
@@ -3247,6 +6103,8 @@ def _evaluate_live_outputs(
             specs=planned,
             adapter_targets=adapter_targets,
             slug=project_slug(locking.canonical_project_identity(project_path)),
+            build_outputs=build_outputs,
+            git_aliases=git_aliases,
         )
     except SourceError as exc:
         return Schema2Status(
@@ -3291,7 +6149,9 @@ def _evaluate_live_outputs(
             continue
         if live_digest == wanted_digest:
             continue
-        touched = _touched_members((key,))
+        touched = _touched_members(
+            (key,), schema2_command_owners(tuple(members), specs_map)
+        )
         if touched:
             for name in touched:
                 drifted.setdefault(
@@ -3356,5 +6216,9 @@ def _lock_member_alias(
         return None
     selector = selectors[index]
     if selector.from_alias not in source_roots:
+        # Git roots have no local source root; they attribute by
+        # package kind and serve from the store alone.
+        if isinstance(lock_member.package, NetworkGit):
+            return selector.from_alias
         return None
     return selector.from_alias

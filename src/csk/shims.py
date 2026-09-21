@@ -21,6 +21,7 @@ from collections.abc import Iterable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 
 from .builds.cache import CacheEntryStatus, CacheInspection
 from . import protocol_json
@@ -31,8 +32,11 @@ from .builds.metadata import (
     derived_cache_artifact_name,
 )
 from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_portable_path
-from .install_marker import InstallMarkerBuildV3, MarkerBuild
+from .install_marker import InstallMarkerBuildV3, InstallMarkerBuildV5, MarkerBuild
 from .skillspec import CommandSpec
+
+if TYPE_CHECKING:
+    from .sources.package_identity import PackageIdentity
 
 UNIX_PLATFORM = "unix"
 WINDOWS_PLATFORM = "windows"
@@ -441,6 +445,133 @@ def _require_external_cache_artifact(
         command_name=command_name,
         expected_size=expected_size,
         platform=platform,
+    )
+
+
+def _require_external_v3_cache_artifact(
+    csk_home: Path,
+    artifact_path: Path,
+    *,
+    command_name: str,
+    cache_key: str,
+    expected_relative: str,
+    expected_size: int,
+    platform: str,
+) -> None:
+    # The namespace literal mirrors the pipeline's ARTIFACTS_V3_NAMESPACE;
+    # the receipt-2 "artifacts" namespace can never satisfy this check.
+    _require_sha256(cache_key, "external build cache_key")
+    expected = (
+        Path(csk_home)
+        / "external-builds"
+        / "artifacts-v3"
+        / cache_key.removeprefix("sha256:")
+        / derived_cache_artifact_name(expected_relative)
+    )
+    if artifact_path != expected:
+        raise ShimError(f"Command {command_name!r} artifact is not the manager-derived external cache path")
+    _require_cache_artifact_shape(
+        artifact_path,
+        command_name=command_name,
+        expected_size=expected_size,
+        platform=platform,
+    )
+
+
+def select_external_build_activation_v3(
+    *,
+    csk_home: Path,
+    command: CommandSpec,
+    marker_build: InstallMarkerBuildV5,
+    receipt_bytes: bytes,
+    artifact_path: Path,
+    expected_package: PackageIdentity,
+    platform_name: str | None = None,
+) -> BuildCommandActivation:
+    """Validate one receipt-v3 artifact structurally without executing it.
+
+    Mirrors the receipt-2 selector with the receipt-3 shape: the wrapped
+    input's package must equal the installing member's package, and the
+    artifact must live in the receipt-3 external namespace.
+    """
+
+    # Imported lazily: importing the sources package at this module's import
+    # time would load it for every consumer of the shim layer, including
+    # paths that never touch source-aware receipts.
+    from .sources.errors import SourceError
+    from .sources.package_identity import parse_package_identity
+
+    platform = _resolve_platform(platform_name)
+    _require_command_name(command.name)
+    if command.type != "build" or command.driver != GO_REPOSITORY_V1_DRIVER:
+        raise ShimError(f"Command {command.name!r} is not an external build command")
+    if marker_build.driver != GO_REPOSITORY_V1_DRIVER or marker_build.receipt_schema_version != 3:
+        raise ShimError(f"Command {command.name!r} marker is not a receipt-v3 external build")
+    try:
+        receipt = protocol_json.loads_canonical(receipt_bytes)
+    except protocol_json.ProtocolJSONError as exc:
+        raise ShimError(f"Command {command.name!r} receipt is not canonical JSON") from exc
+    if not isinstance(receipt, dict) or set(receipt) != {"schema_version", "cache_key", "input", "artifact"}:
+        raise ShimError(f"Command {command.name!r} receipt has an open or incomplete shape")
+    input_value = receipt.get("input")
+    artifact = receipt.get("artifact")
+    if not isinstance(input_value, dict) or not isinstance(artifact, dict):
+        raise ShimError(f"Command {command.name!r} receipt input or artifact is invalid")
+    if (
+        receipt.get("schema_version") != 3
+        or receipt.get("cache_key") != marker_build.cache_key
+        or input_value.get("schema_version") != 3
+    ):
+        raise ShimError(f"Command {command.name!r} receipt-v3 identity differs from marker or descriptor")
+    build_value = input_value.get("build")
+    if not isinstance(build_value, dict):
+        raise ShimError(f"Command {command.name!r} receipt-v3 build input is invalid")
+    if (
+        build_value.get("driver") != GO_REPOSITORY_V1_DRIVER
+        or build_value.get("command") != command.name
+    ):
+        raise ShimError(f"Command {command.name!r} receipt-v3 identity differs from marker or descriptor")
+    try:
+        receipt_package = parse_package_identity(input_value.get("package"))
+    except SourceError as exc:
+        raise ShimError(f"Command {command.name!r} receipt-v3 package is invalid: {exc}") from exc
+    if receipt_package != expected_package:
+        raise ShimError(f"Command {command.name!r} receipt-v3 package differs from the installing member")
+    receipt_hash = "sha256:" + hashlib.sha256(receipt_bytes).hexdigest()
+    if receipt_hash != marker_build.receipt_sha256:
+        raise ShimError(f"Command {command.name!r} receipt hash differs from marker")
+    target = build_value.get("target")
+    goos = target.get("goos") if isinstance(target, dict) else None
+    expected_relative = derived_artifact_path(command.name, goos=goos if isinstance(goos, str) else "")
+    expected_artifact = {
+        "path": expected_relative,
+        "sha256": marker_build.artifact_sha256,
+        "size": artifact.get("size"),
+    }
+    if artifact != expected_artifact or marker_build.artifact_path != expected_relative:
+        raise ShimError(f"Command {command.name!r} receipt artifact is not manager-derived")
+    size = artifact.get("size")
+    if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+        raise ShimError(f"Command {command.name!r} receipt artifact size is invalid")
+    _require_external_v3_cache_artifact(
+        csk_home,
+        artifact_path,
+        command_name=command.name,
+        cache_key=marker_build.cache_key,
+        expected_relative=expected_relative,
+        expected_size=size,
+        platform=platform,
+    )
+    if "sha256:" + hashlib.sha256(artifact_path.read_bytes()).hexdigest() != marker_build.artifact_sha256:
+        raise ShimError(f"Command {command.name!r} artifact hash differs from marker")
+    return BuildCommandActivation(
+        command_name=command.name,
+        artifact_path=artifact_path,
+        cache_key=marker_build.cache_key,
+        receipt_sha256=marker_build.receipt_sha256,
+        artifact_sha256=marker_build.artifact_sha256,
+        artifact_size=size,
+        driver=GO_REPOSITORY_V1_DRIVER,
     )
 
 

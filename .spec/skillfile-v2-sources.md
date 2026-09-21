@@ -1036,3 +1036,347 @@ never from the operating system's name.
   (no/foreign/garbage marker class) and narrowing mutant M-E (the
   skip narrowed to marker-absent only, so present-but-foreign
   markers fall through to removal and exactly those two params fail).
+
+## Leaf progress: TASK-260916-nawehj local runtime and command dependencies
+
+- Local acquisition feeds the complete existing package pipeline:
+  `csk.sources.publish` stages each member's script runtime from its
+  frozen snapshot into the protected store keyed by `(skill name,
+  SHA-256(CCJ-1(package)))` in the `source-v1` namespace (members
+  with runtime roots stage the roots, rootless members stage each
+  command file into the legacy `bin/` single-file layout), local
+  go-v1 commands plan through `build_planner.plan_builds` with the
+  source-audit hook and compile into the immutable receipt-3 cache,
+  external go-repository-v1 commands run the existing repository
+  pipeline with the member package bound (receipt-3 lineage), and
+  every active command gets a launcher in `.agents/bin` as a new
+  `30-shim-canonical` transaction class with journal-carried
+  write-time rechecks. Capabilities, dependencies, system-command
+  readiness, the script execution policy, toolchain admission and
+  the assurance gate all run before any write; no live links and no
+  package install hooks are introduced.
+- Context projection keeps its eligibility rules (`scripts/` is
+  context only when no commands are exported; runtime and build
+  roots excluded) and build roots never enter installed script
+  runtime: the pure-spec `refuse_build_root_script` predicate
+  refuses at plan time and is rechecked at the staging seam.
+  Command collisions refuse through the single
+  `claim_schema2_command_owner` predicate shared by the plan-time
+  script gate and the planning-time owner map. External repository
+  substitution stays independent of source substitution per spec
+  section 10 (`installer` admits `build_repository_substitutions`
+  on schema-2, still refuses `substitutions`, strict audit still
+  refuses every substitution), so committed-HEAD admission governs
+  external repositories while local path acquisition snapshots
+  dirty bytes. `plan_builds(audit=None)` refuses any provider
+  carrying a package (`source_audit_required`); the schema-2 call
+  site takes the hook as a required parameter.
+- `tests/test_source_runtime.py` (30 tests) drives `installer.install`
+  (and `cli.main(["upgrade"])` for the refresh twin) on real local
+  fixtures: the deciding edit-after-install frozen-bytes proof over
+  roots/rootless, the refresh twin under a new store key via the
+  production CLI, the context-eligibility matrix, the store-key and
+  no-live-links proof, the committed-HEAD external build with dirty
+  worktree bytes (marker commit, baked artifact bytes, receipt-3
+  input package), the fault-injection/staging-boundary tree-hash
+  test with positive control, the destination-became-link
+  freeze-to-commit refusal with sentinel intact, and the negative
+  family (collisions, build-root scripts, missing system/skill
+  dependencies, pruned-path and dotdot command paths, source
+  substitution, strict audit). Narrowing mutants M1-M6 (collision
+  admission for exactly one name, one error class escaping the
+  shim seam, one non-portable shape admitted, one contained path
+  admitted, per-member key aliasing, one packaged provider admitted
+  without audit) are each killed by exactly their target tests
+  with sibling controls green. Cross-leaf fix on the shared
+  external-admission path: `_ObjectReader.close()` now closes the
+  stdout pipe on every path (pre-existing `ResourceWarning`
+  leak, also emitted by the v1 external tests).
+
+## TASK-260916-341a6q: source-aware build receipts (schema 3) and cache
+
+- Receipt 3 is a wrapper, not a replacement: `input =
+  {schema_version: 3, package, build}` where `package` is the
+  source-types schema 1 identity and `build` is the closed driver
+  input byte-for-byte (go-v1 schema 1 or go-repository-v1 schema 2).
+  `wrap_receipt_v3_input` in `src/csk/builds/metadata.py` is the one
+  wrapper construction, called from the local planner and from the
+  repository pipeline; `source_aware_cache_key` is the one key
+  computation (SHA-256 over CCJ-1 of the whole input, recomputed,
+  never copied); `protocol_json.canonical_bytes` is the one
+  serializer.
+- The external driver input has a typed read model
+  (`GoRepositoryBuildInput` and its source section) mirroring
+  `goRepositoryBuildInputV1`; the pipeline constructor
+  `receipt_input()` stays the writer of record and a byte-identity
+  test pins `parse(receipt_input(...)).to_json()` CCJ-1-equal to
+  `receipt_input(...)`.
+- Distinct receipt-3 cache namespaces: `builds/go-v1-receipt-v3/`
+  beside the untouched `builds/go-v1/` in both cache backends, and
+  `artifacts-v3/` beside `artifacts/` in the external protected
+  store (snapshots stay shared). A byte-identical driver input
+  seeded in a legacy namespace can never satisfy a receipt-3 lookup:
+  the lookup never opens the legacy namespace, and the keys also
+  separate. Quarantine and collection sweep both namespaces.
+- Marker-5 build records keep every `buildRecordV1WithReceiptVersion`
+  / `buildRecordV2` field with only `receipt_schema_version` changed
+  to 3. Top-level `build_source` is required exactly for active
+  local go-v1 records and absent otherwise
+  (`install_marker.check_top_level_build_source`, both directions
+  tested).
+- External currentness is one declared field table
+  (`currentness.EXTERNAL_EVIDENCE_FIELDS`, seventeen fields) driving
+  one comparison (`compare_external_build_evidence`): record versus
+  receipt-3 `input.build`, receipt/artifact hashes versus protected
+  bytes, `input.package` versus the marker package. Status goes
+  through `evaluate_marker_status` (non-current, nonzero);
+  repair re-runs the pipeline from the exact locked source and
+  rebuilds rather than adopting the record.
+- Strict audit rejects external substitution of a local package
+  before cache reads, compiler execution, or publication: the
+  planner runs an `audit` hook over the whole provider set before
+  any toolchain probe or cache read, and the pipeline keeps its
+  audit-before-lookup order. Both are asserted with counters (zero
+  cache reads, zero compiler invocations on refusal).
+- `builds/metadata.py` and `builds/planner.py` import
+  `sources.package_identity` lazily (function level): a top-level
+  import loads the sources package for every selection-probe
+  consumer and trips the selection boundary instrument's
+  runtime-vs-static completeness gate. The typed design is
+  unchanged; annotations resolve under `TYPE_CHECKING`.
+- Revision 2 (review round 1, F1: `csk gc` destroyed live receipt-3
+  entries): cache namespaces are one declared table per family
+  (`builds/cache.py` `LOCAL_BUILD_CACHE_NAMESPACES`,
+  `build_repository_pipeline.py` `EXTERNAL_ARTIFACT_NAMESPACES` /
+  `EXTERNAL_SNAPSHOT_NAMESPACES`). Both protected backends sweep
+  and quarantine exactly the declared local namespaces; `gc` marks
+  marker-5 references for both record arms through the one
+  `_mark_receipted_builds` shared with markers v3/v4, and sweeps
+  exactly the declared external namespaces. The invariant is that
+  the sweep never walks a namespace the mark cannot populate, and
+  growth tests fail when a namespace appears on one side only.
+  The same revision fixed the external snapshot sweep, which
+  relaxed only the top directory and could not remove the nested
+  sealed `files` tree: `_remove_unreferenced_entry` now relaxes
+  the proved subtree without following links.
+
+## TASK-260916-11yseo: machine-local source audit bound to the assurance gates
+
+- `source-audit-v1` is a binding, not a credential, and the shape makes
+  self-authorization unwritable: `sources/source_audit.py` parses the
+  record (`parse_source_audit`, the hand-written production reader
+  mirroring the draft schema), but authorization comes only from
+  `validate_source_audit` / `validate_stored_report`, which load the
+  persisted complete audit report from a machine-store path DERIVED
+  from the expected content hash (`csk_home/audit/source-audit-v1/`),
+  never from a caller-supplied location. A missing, unreadable,
+  malformed or mismatching report fails with distinct codes; missing
+  and unreadable are never confused.
+- Evidence is the persisted complete existing audit report: pipeline
+  finding payloads (via the one serializer), pin state, the effective
+  revocation list, and the effective script and assurance policy
+  labels. `evidence_sha256` covers the raw stored bytes (identity is a
+  function of the bytes; CCJ-1 is the one serializer). `policy_sha256`
+  covers the trusted machine policy (`SourceAuditPolicy`, bridged from
+  `GlobalConfig` by `policy_from_config`). At use time both digests
+  are recomputed and the decision is re-derived under the CURRENT
+  policy: fresh static canary, the one revocation matcher (now public
+  as `pipeline.revocation_reason_for`), current pin state, current
+  mode/fail_on. A block record never authorizes; a pin satisfies only
+  require_pin, never canary, revocation or a required gate.
+- Local inputs have no network registry identity: no code path builds
+  `audit-record-v1` for local content (that module is untouched), and
+  `install_marker.check_local_registry_requirement` still refuses
+  where policy needs a network attestation, with before/after tree
+  hashes proving no publication. Network members use
+  `admit_network_git_evidence`, which derives freshness/revocation
+  from a live `audit_registry.resolve` (deny-wins, signature trust)
+  and then requires the existing validator's exact name, canonical
+  repository, commit and context hash; evidence without a live
+  attestation is refused, not adopted.
+- Assurance bindings use `bind_assurance_build_input`: the exact
+  receipt-3 build input digest recomputed via `source_aware_cache_key`
+  over real pipeline receipt bytes. Absent or unparseable receipts
+  refuse with `assurance_build_input_unavailable`, which names the
+  context hash it refuses to return; no verified-provider script
+  operation was added and no registry shape changed.
+- Audit-before-cache/compiler for local packages runs through the
+  `plan_builds(audit=...)` hook (`source_audit_plan_hook`) and is
+  asserted with the 341a6q counter instrument (recording cache and
+  toolchain fakes plus the shared events list, imported from that
+  leaf's test module, not copied): order `audit, toolchain, cache` on
+  success and exactly `["audit"]` on refusal.
+
+## TASK-260916-11yseo revision 2: the verified side must be independent of the verifier
+
+Revision 1 review found three instances of one shape: the thing being
+verified was supplied by the thing it is verified against. Each fix
+makes the independence structural.
+
+- `admit_network_git_evidence` derives the live-resolve identity from
+  the expectation alone (no separate source/commit parameters) and
+  then requires the evidence to name the live registry record exactly
+  (name, canonical repository, commit, key id including absence).
+  The live record is registry data; the evidence/expectation pair is
+  caller data; the check binds the two.
+- `source_audit_plan_hook` recomputes the section-8 content hash over
+  the provider's frozen tree (`hashing.content_sha256`, the same
+  function the pipeline audits with) instead of reusing the package
+  inventory digest. Package identity stays the provider claim checked
+  against the stored binding; content identity is observed.
+- `validate_stored_report` compares every persisted label the
+  recomputation does not re-derive (backend, registry policy, script
+  policy) with the current policy and requires the record-time canary
+  outcome, so the stored path refuses the same stale-policy class as
+  the record path. `record_source_audit` persists the OBSERVED static
+  canary outcome instead of a constant.
+- `SourceAuditPolicy` normalizes revocation digests through the shared
+  normalizer (one identity, no case) and validates the mode/fail_on/
+  registry_policy enums structurally, mirroring `config.py`.
+- Finding location/evidence strings are checked for CCJ-1
+  encodability with field-naming typed refusals; the envelope
+  serialization is wrapped so no raw parser error escapes.
+- Two review notes fixed leaf-locally: a dangling link at the report
+  path reads as unreadable (lstat distinguishes it from absence), and
+  a stored source string the revocation matcher cannot parse refuses
+  as malformed store data instead of escaping the matcher's raw
+  ValueError.
+
+Stated bounds carried into revision 2: the five entry points have no
+in-repo caller yet (wiring owned by TASK-260916-nawehj /
+TASK-260916-18j5hg; call order `check_local_registry_requirement` ->
+`source_audit_plan_hook` / `validate_source_audit` ->
+`admit_network_git_evidence` -> `bind_assurance_build_input`); AC (e)
+artifacts (permits/receipts/checkpoints) have no producer in csk, so
+"rejects execution" is the binder raising; semantic store tamper that
+preserves schema validity is undetectable on the recordless
+recompute path by construction (no integrity anchor without the
+record; the record path refuses it via the evidence digest).
+
+### Revision 3 (TASK-260916-11yseo): the fourth member and the order-dependent verdict
+
+- `_require_live_record_match` compares all five members including
+  `evidence.context_sha256 == record.content_sha256`: content and context
+  are one quantity (the registry is queried with the section-8 content
+  hash; the lock and the conformance adapter name it the context hash).
+  The separate `content_sha256` query parameter is gone; the live query
+  derives from `expectation.context_sha256`, so it cannot be pointed at
+  another artifact than the one the evidence must name. The positive
+  fixture now has the live record attest the claimed context.
+- Freshness is deny-wins over every live URL carrying the attestation's
+  registry name: names are not unique in a loadable config, so consulting
+  one URL made the verdict depend on config order. Evidence is fresh only
+  when none of the name's URLs served stale data.
+- `record_source_audit` wraps the store write (`mkdir` + `write_bytes`)
+  in one error boundary raising `source_audit_store_unwritable` naming
+  the path; no writer-seam `OSError` escapes raw.
+- `audit.trust.load_trust_record` returns the unpinned record for any
+  payload that is not an object (and for undecodable bytes), the same
+  fail-closed branch unreadable and malformed trust files already take.
+- Three review notes closed leaf-locally: a deprecated live attestation
+  admits with a deprecation warning; revocation spellings dedupe after
+  normalization so the policy digest is a function of the identity set;
+  `AdmittedRegistryEvidence` carries the live `attestation` summary
+  (registry, status, key id) so the marker wiring never re-resolves.
+
+### Revision 4 (TASK-260916-11yseo): absent trust is no pin, unreadable trust refuses
+
+- `audit.trust.load_trust_record` keeps the existence probe and the read
+  under one `except OSError` boundary raising `TrustRecordError` with
+  code `audit_trust_unreadable` naming the trust path. Absent still
+  returns the empty record; malformed still means no pin; unreadable
+  now refuses instead of silently meaning no pin (rev3 treated the
+  read seam that way; the stat seam escaped raw).
+- `source_audit._load_trust_record` wraps both call sites (the plan
+  hook reaches it through `validate_stored_report`) and converts the
+  reader error to `source_audit_trust_unreadable` naming the trust
+  path and the expected content hash.
+- The cross-module seam family (every filesystem seam across
+  `trust.py`, `source_audit.py`, `cli.py`, `manifest.py`) is owned by
+  `BUG-260918-2krem5` and was deliberately not built here.
+
+### Revision 5 (TASK-260916-11yseo): the third caller gets a boundary
+
+- `audit.pipeline.gate_plans` converts `TrustRecordError` to a blocking
+  `GateResult` (`audit blocked: audit_trust_unreadable: ...`) in every
+  mode: an unreadable pin store is never an advisory warning and never
+  reads as unpinned downstream.
+- `TrustRecordError` subclasses `ValueError` (the `SourceAuditError`
+  convention), so `csk audit` reaches `cli.main`'s existing `ValueError`
+  catch as `error: audit_trust_unreadable: ...`, exit 2. `cli.py` itself
+  is untouched: no intermediate `except ValueError` sits between the
+  reader and `cli.main` on either path. No other caller of another
+  reader was surveyed or changed here; that remains `BUG-260918-2krem5`.
+
+## Leaf progress: TASK-260916-18j5hg source closure and explicit refresh
+
+- The two modes are disjoint capability types in
+  `csk.sources.modes`: `ResolvingSources` carries the transport
+  grant, workspace, policy path, and the alias/acquisition
+  memos; `FrozenSources` carries only home and lock.
+  `modes.select` is the single mode-decision point (the
+  `install_schema2` inline boolean was routed through it);
+  everything downstream dispatches on the type, so a frozen
+  call site cannot enumerate, resolve, capture, or lock: the
+  capability is not in scope.
+- `closure.build_source_closure` extends the existing
+  `build_closure` (traversal), `_unify` (identity/commit
+  unification), `_topological_order` (cycles fail,
+  providers first), and `detect_active_command_collisions`
+  to the schema-2 full closure via injected `node_resolver`
+  / `error_factory`; transitive requirements resolve through
+  the bounded transport, must pin revisions (branches are
+  root-only), and conflicting identities fail
+  `source_name_conflict`. No second resolver.
+- Floating refs resolve through the new `transport.resolve_ref`
+  / `resolve_plan` (mirroring `acquire_plan`'s deadline and
+  fallback) down to `git_admission.resolve_network_ref`, a
+  bounded `ls-remote` for one exact ref sharing the acquisition
+  lane's tool validation, credentials, environment, and budget.
+  Byte acquisition stays exclusively on
+  `transport.acquire_network`; revision pins resolve with zero
+  I/O. The installer provisions one Git tool per resolved
+  endpoint, mirroring the external lane.
+- Lock creation is all-or-nothing across selection, snapshot,
+  closure, audit, and publication (each fault leaves the
+  previous lock and installed state byte-identical); stale and
+  unavailable are distinct refusals that never re-resolve or
+  recreate bytes; refresh swaps lock and markers atomically
+  after all gates pass; the N3 surfaces
+  (`check_top_level_build_source`, `compare_external_build_
+  evidence`) are wired to their first production call sites.
+- `tests/test_source_closure_refresh.py` (43 tests) drives
+  `installer.install`, `status.collect_status`, and the
+  closure/resolve seams directly where an install cannot reach
+  (revision-pinned cycles are a hash fixed-point; repeated
+  roots and transitive branches refuse earlier through an
+  install). Narrowing mutants M1-M7 (early lock write, one
+  misordered topo pair, one-alias memo bypass, one-member
+  silent recreation, one admitted branch, single-lock
+  re-resolve, one suffixed ref admission) are each killed by
+  exactly their target tests. Closes conformance cases
+  `frozen-membership`, `runtime-only-refresh`,
+  `build-only-refresh` — the last three undriven cases, so
+  the suite is now fully driven (277/277).
+- Revision 2 (review rework): the two lanes are separate
+  functions with disjoint parameter sets —
+  `_install_schema2_frozen` receives home, lock and install
+  data only (no fetch flag, tool provider, policy path or
+  workspace), while `_install_schema2_resolving` receives
+  the resolving mode; the installer decides via
+  `modes.select` and passes only the mode. The frozen lane
+  consults the store before any live read and never stages
+  (`_capture_locked_member` lost its `heal` flag; the
+  sibling `[store-heals]` case now refuses
+  `source_snapshot_unavailable`); the planner stages the
+  lock target in resolving mode only. `closure._unify`
+  takes a `ref_comparator` hook so the schema-2 closure
+  unifies on resolved commits instead of ref spellings
+  (schema 1 resolves through the node repository exactly
+  as before). Refusal tests assert the HEAD code
+  (`_assert_head_code`), because chained causes embed
+  their own codes and a substring assertion passes while
+  answering the wrong class. 51 tests; mutants M1-M7
+  regenerated plus M-F1 (digest-match heal admission),
+  M-F2b (cross-kind admission), MR1 (frozen lock target),
+  MR3/MR3b (collapse checks) — all killed, zero survivors.

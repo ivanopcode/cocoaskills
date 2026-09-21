@@ -1277,8 +1277,9 @@ class SelectionSession:
                         if stat.S_ISLNK(entry_stat.st_mode):
                             raise SourceError(
                                 CODE_MEMBER_INVALID,
-                                f"Skill member {label} contains rejected link {name!r}; "
-                                "the link escapes the source root or links in admitted inputs are not allowed",
+                                f"Skill member {label} contains rejected link "
+                                f"{'/'.join(child_relative)!r}; the link escapes the source "
+                                "root or links in admitted inputs are not allowed",
                             )
                         if stat.S_ISDIR(entry_stat.st_mode):
                             child = self._open_regular_child(

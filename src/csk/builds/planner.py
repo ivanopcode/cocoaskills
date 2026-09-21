@@ -18,10 +18,14 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType, TracebackType
+from typing import TYPE_CHECKING
 from typing import Any, Protocol
 
 from .. import skillspec
 from . import cache, metadata, source, toolchain
+
+if TYPE_CHECKING:
+    from ..sources.package_identity import PackageIdentity
 
 
 class BuildPlanningError(RuntimeError):
@@ -31,6 +35,15 @@ class BuildPlanningError(RuntimeError):
         self.code = code
         self.detail = detail
         super().__init__(f"{code}: {detail}")
+
+
+def _package_identity_types() -> tuple[type, ...]:
+    # Imported lazily: importing the sources package at this module's import
+    # time would load it for every consumer of the planner, including paths
+    # that never touch source-aware receipts.
+    from ..sources.package_identity import ConfiguredGit, LocalSnapshot, NetworkGit
+
+    return (LocalSnapshot, NetworkGit, ConfiguredGit)
 
 
 @dataclass(frozen=True)
@@ -70,6 +83,7 @@ class BuildProvider:
     commands: tuple[BuildCommand, ...]
     build_roots: tuple[str, ...] = ()
     runtime_roots: tuple[str, ...] = ()
+    package: PackageIdentity | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -81,6 +95,13 @@ class BuildProvider:
             raise BuildPlanningError(
                 "build_plan_invalid",
                 f"build provider {self.name!r} has no frozen snapshot",
+            )
+        if self.package is not None and not isinstance(
+            self.package, _package_identity_types()
+        ):
+            raise BuildPlanningError(
+                "build_plan_invalid",
+                f"build provider {self.name!r} package must be a source-types schema 1 identity",
             )
         names = [command.name for command in self.commands]
         if len(names) != len(set(names)):
@@ -95,7 +116,7 @@ class BuildPlan:
     """Exact logical input and read-only cache outcome for one command."""
 
     provider: str
-    input: metadata.GoBuildInput
+    input: metadata.AnyBuildInput
     cache_key: str
     inspection: cache.CacheInspection
 
@@ -122,23 +143,38 @@ class BuildPlan:
     def to_json(self) -> dict[str, Any]:
         """Return the stable user-facing dry-run record from the protocol."""
 
-        return {
-            "build_root": self.input.build_root,
+        inner = (
+            self.input.build
+            if isinstance(self.input, metadata.SourceAwareBuildInput)
+            else self.input
+        )
+        if isinstance(inner, metadata.GoRepositoryBuildInput):
+            raise BuildPlanningError(
+                "build_plan_invalid",
+                "local planning cannot record an external driver input",
+            )
+        record: dict[str, Any] = {
+            "build_root": inner.build_root,
             "build_source": {
-                "algorithm": self.input.build_source.algorithm,
-                "content_sha256": self.input.build_source.content_sha256,
+                "algorithm": inner.build_source.algorithm,
+                "content_sha256": inner.build_source.content_sha256,
             },
             "cache_key": self.cache_key,
-            "command": self.input.command,
-            "driver": self.input.driver,
-            "result": self.result,
-            "source_dir": self.input.source_dir,
-            "target": {
-                "goarch": self.input.target.goarch,
-                "goos": self.input.target.goos,
-                "tuning": dict(self.input.target.tuning),
-            },
+            "command": inner.command,
+            "driver": inner.driver,
         }
+        if isinstance(self.input, metadata.SourceAwareBuildInput):
+            from ..sources.package_identity import package_identity_to_json
+
+            record["package"] = package_identity_to_json(self.input.package)
+        record["result"] = self.result
+        record["source_dir"] = inner.source_dir
+        record["target"] = {
+            "goarch": inner.target.goarch,
+            "goos": inner.target.goos,
+            "tuning": dict(inner.target.tuning),
+        }
+        return record
 
 
 class GenerationProbe(Protocol):
@@ -198,6 +234,7 @@ def provider_from_spec(
     spec: skillspec.SkillSpec,
     *,
     active_commands: Collection[str] | None = None,
+    package: PackageIdentity | None = None,
 ) -> BuildProvider:
     """Project active build declarations into one frozen provider."""
 
@@ -251,6 +288,7 @@ def provider_from_spec(
         commands=tuple(commands),
         build_roots=spec.build_roots,
         runtime_roots=spec.runtime_roots,
+        package=package,
     )
 
 
@@ -289,6 +327,7 @@ def plan_builds(
     expected_generation: Mapping[str, str] | None = None,
     max_generation_attempts: int = 2,
     read_only_preflight: bool = False,
+    audit: Callable[[tuple[BuildProvider, ...]], None] | None = None,
 ) -> tuple[BuildPlan, ...]:
     """Produce a complete immutable plan without source-aware Go or mutation.
 
@@ -296,6 +335,16 @@ def plan_builds(
     toolchain/cache portion.  A caller that needs to retry validation and trust
     gates as well supplies ``expected_generation`` and one attempt, catches
     ``concurrent_state_change``, and repeats its complete read-only operation.
+
+    When ``audit`` is supplied it runs once over the whole active provider set
+    before any toolchain probe or cache read, so a refusal structurally
+    precedes cache reads, compiler execution, and publication.  Its error
+    propagates unchanged and is never retried.
+
+    A provider that carries a source package without an audit hook refuses:
+    the default must never silently disable source admission, and a later
+    call site cannot forget the hook.  Legacy providers without a package
+    plan exactly as before.
     """
 
     active = tuple(provider for provider in providers if provider.commands)
@@ -305,6 +354,17 @@ def plan_builds(
         raise ValueError("max_generation_attempts must be at least one")
     if expected_generation is not None and generation_probe is None:
         raise ValueError("expected_generation requires a generation_probe")
+    if audit is None:
+        for provider in active:
+            if provider.package is not None:
+                raise BuildPlanningError(
+                    "source_audit_required",
+                    f"build provider {provider.name!r} carries a source "
+                    "package but no audit hook was supplied",
+                )
+    else:
+        if active:
+            audit(active)
 
     baseline = (
         dict(expected_generation)
@@ -426,12 +486,19 @@ def _inspect_provider(
             toolchain=identity,
             driver=command.driver,
         )
-        key = metadata.cache_key(build_input)
-        inspection = backend.inspect(cache.CacheExpectation(input=build_input))
+        if provider.package is None:
+            key = metadata.cache_key(build_input)
+            inspection = backend.inspect(cache.CacheExpectation(input=build_input))
+            planned: metadata.AnyBuildInput = build_input
+        else:
+            wrapped = metadata.wrap_receipt_v3_input(provider.package, build_input)
+            key = metadata.source_aware_cache_key(wrapped)
+            inspection = backend.inspect(cache.CacheExpectation(input=wrapped))
+            planned = wrapped
         plans.append(
             BuildPlan(
                 provider=provider.name,
-                input=build_input,
+                input=planned,
                 cache_key=key,
                 inspection=inspection,
             )

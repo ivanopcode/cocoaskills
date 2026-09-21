@@ -6,12 +6,19 @@ import re
 import shutil
 import stat
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 from . import consumers, install_marker, locking, protocol_json, transactions
-from .build_repository_pipeline import EffectiveState, DiskProtectedStore, snapshot_key
+from .build_repository_pipeline import (
+    EXTERNAL_ARTIFACT_NAMESPACES,
+    EXTERNAL_SNAPSHOT_NAMESPACES,
+    DiskProtectedStore,
+    EffectiveState,
+    snapshot_key,
+)
 from .builds import cache as build_cache
 from .config import GlobalConfig
 from .locking import _pid_alive
@@ -358,38 +365,60 @@ def _collect_marker_directory(
     if expected_name is not None and marker.name != expected_name:
         return False, f"marker name {marker.name!r} does not match store entry"
     if isinstance(marker, install_marker.InstallMarkerV5):
-        # Schema-2 state lives under the source-v1 namespace and the
-        # receipt-3 cache namespace, which the legacy collectors below never
-        # walk: a valid v5 marker contributes no legacy reference, and the
-        # mark phase stays complete.
+        # Both v5 record arms bind receipt 3, and the collectors below sweep
+        # the receipt-3 namespaces: every arm must be marked here, or the
+        # sweep destroys live entries by construction. Schema-2 runtime and
+        # snapshot state lives under the source-v1 namespace, which no
+        # collector walks, so a v5 marker contributes build references only.
+        _mark_receipted_builds(marker.builds.values(), references)
         return True, None
     references.runtime.add((marker.name, marker.commit))
     references.snapshots.add((marker.source, marker.commit))
     if isinstance(marker, install_marker.InstallMarkerV2):
         references.builds.update(build.cache_key for build in marker.builds.values())
     elif isinstance(marker, (install_marker.InstallMarkerV3, install_marker.InstallMarkerV4)):
-        for build in marker.builds.values():
-            if build.driver == "go-v1":
-                references.builds.add(build.cache_key)
-                continue
-            references.external_builds.add(build.cache_key)
-            assert build.effective_identity is not None
-            assert build.object_format is not None and build.commit is not None
-            assert build.build_source is not None
-            references.external_snapshots.add(
-                snapshot_key(
-                    EffectiveState(
-                        identity_kind=build.effective_identity.kind,
-                        identity=build.effective_identity.value,
-                        transport=None,
-                        object_format=build.object_format,
-                        commit=build.commit,
-                        substituted=bool(build.substituted),
-                    ),
-                    build.build_source.content_sha256,
-                )
-            )
+        _mark_receipted_builds(marker.builds.values(), references)
     return True, None
+
+
+def _mark_receipted_builds(
+    builds: Iterable[
+        install_marker.InstallMarkerBuildV3 | install_marker.InstallMarkerBuildV5
+    ],
+    references: _References,
+) -> None:
+    """Mark every local or external build reference one marker carries.
+
+    Local ``go-v1`` records retain the shared ``builds`` reference set across
+    both the legacy and the receipt-3 namespaces; external
+    ``go-repository-v1`` records retain the shared external build set across
+    both artifact namespaces plus the snapshot their evidence binds. Markers
+    v3 through v5 share these record rules and only move the bound receipt
+    version, so all three mark through this one function: a record arm added
+    here is necessarily retained in every namespace the sweep walks.
+    """
+
+    for build in builds:
+        if build.driver == "go-v1":
+            references.builds.add(build.cache_key)
+            continue
+        references.external_builds.add(build.cache_key)
+        assert build.effective_identity is not None
+        assert build.object_format is not None and build.commit is not None
+        assert build.build_source is not None
+        references.external_snapshots.add(
+            snapshot_key(
+                EffectiveState(
+                    identity_kind=build.effective_identity.kind,
+                    identity=build.effective_identity.value,
+                    transport=None,
+                    object_format=build.object_format,
+                    commit=build.commit,
+                    substituted=bool(build.substituted),
+                ),
+                build.build_source.content_sha256,
+            )
+        )
 
 
 def _collect_journal_marker_group(
@@ -435,29 +464,59 @@ def _collect_external_cache(csk_home: Path, references: _References) -> tuple[in
     if not root.exists():
         return 0, 0
     # Reuse the store's boundary proof before deleting anything. GC does not
-    # repair permissions or infer liveness from receipt contents.
+    # repair permissions or infer liveness from receipt contents. Both sides
+    # derive from the one external-namespace table: artifact namespaces sweep
+    # against the external build references, snapshot namespaces against the
+    # external snapshot references.
     DiskProtectedStore(root)._prepare(mutate=False)
-    removed: list[int] = []
-    for kind, live in (
-        ("artifacts", references.external_builds),
-        ("snapshots", references.external_snapshots),
-    ):
-        parent = root / kind
-        if not parent.exists():
-            removed.append(0)
+    removed_builds = sum(
+        _sweep_external_namespace(root, kind, references.external_builds)
+        for kind in EXTERNAL_ARTIFACT_NAMESPACES
+    )
+    removed_snapshots = sum(
+        _sweep_external_namespace(root, kind, references.external_snapshots)
+        for kind in EXTERNAL_SNAPSHOT_NAMESPACES
+    )
+    return removed_builds, removed_snapshots
+
+
+def _sweep_external_namespace(root: Path, kind: str, live: set[str]) -> int:
+    """Sweep one external-cache namespace, returning the entries removed."""
+
+    parent = root / kind
+    if not parent.exists():
+        return 0
+    DiskProtectedStore(root)._protected_dir(parent, create=False)
+    count = 0
+    for entry in parent.iterdir():
+        key = "sha256:" + entry.name
+        if key in live:
             continue
-        DiskProtectedStore(root)._protected_dir(parent, create=False)
-        count = 0
-        for entry in parent.iterdir():
-            key = "sha256:" + entry.name
-            if key in live:
-                continue
-            DiskProtectedStore(root)._protected_dir(entry, create=False)
-            entry.chmod(0o700)
-            shutil.rmtree(entry)
-            count += 1
-        removed.append(count)
-    return removed[0], removed[1]
+        DiskProtectedStore(root)._protected_dir(entry, create=False)
+        _remove_unreferenced_entry(entry)
+        count += 1
+    return count
+
+
+def _remove_unreferenced_entry(entry: Path) -> None:
+    """Remove one proved unreferenced entry, however deeply it nests.
+
+    Sealed entries are read-only by design, and snapshot entries nest a
+    sealed ``files`` tree, so relaxing only the top directory leaves the
+    removal failing part-way. The entry already passed the store's boundary
+    proof; relax the proved subtree just long enough to remove it, never
+    following a link.
+    """
+
+    for child in sorted(entry.rglob("*"), reverse=True):
+        if child.is_symlink():
+            child.unlink()
+        elif child.is_dir():
+            child.chmod(0o700)
+        else:
+            child.chmod(0o600)
+    entry.chmod(0o700)
+    shutil.rmtree(entry)
 
 
 def _generation_states(
