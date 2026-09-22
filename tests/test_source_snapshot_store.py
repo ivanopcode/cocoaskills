@@ -1364,3 +1364,330 @@ def test_capture_to_serve_end_to_end(tmp_path: Path) -> None:
     shutil.rmtree(root)
     for opener in consumers.ALL_CONSUMERS:
         assert opener(home, SKILL, PACKAGE).files["tracked.txt"].data == b"B"
+
+
+# BUG-260922-1ulkcl: the reader retries the transient sharing denial the
+# writer already guards, and absence is never decided by re-probing.
+
+
+def _is_record_read_open(*args: Any, **kwargs: Any) -> bool:
+    if not args:
+        return False
+    try:
+        name = os.fspath(args[0])
+    except TypeError:
+        return False
+    if not name.endswith("record.json") or ".record-" in name:
+        return False
+    mode = kwargs.get("mode", args[1] if len(args) > 1 else "")
+    return mode == "rb"
+
+
+def test_record_read_retries_transient_sharing_denial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient denial at the reader's open is retried, not refused.
+
+    Mirror of the writer's replace retry: on Windows a record replace in
+    flight denies a concurrent reader's open with PermissionError. The
+    reader retries within the same bound and serves the record.
+
+    Production call site: ``store.lookup_snapshot`` -> ``store._read_record`` open.
+    """
+    home = tmp_path / "home"
+    captured = _seed_single_file(home, tmp_path)
+    real_open = builtins.open
+    attempts: list[str] = []
+    monkeypatch.setattr(store_module, "_RECORD_REPLACE_BACKOFF_SECONDS", 0)
+
+    def _flaky_open(*args: Any, **kwargs: Any) -> Any:
+        if _is_record_read_open(*args, **kwargs) and len(attempts) < 2:
+            attempts.append("denied")
+            raise PermissionError("[WinError 5] Access is denied")
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", _flaky_open)
+    served = store_module.lookup_snapshot(home, SKILL, PACKAGE)
+    assert served.snapshot == captured.inventory["snapshot"]
+    assert len(attempts) == 2
+
+
+def test_record_read_refuses_immediately_on_non_transient_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-transient read failure is never retried: one attempt, then refuse.
+
+    Only PermissionError is transient. A mutant that widens the retried
+    class (e.g. retries OSError) would retry here and serve; correct code
+    refuses on the first failure. The record is also held at
+    ``exists() == False``: a re-probing mutant would report absence here,
+    correct code still reports failure without probing.
+
+    Production call site: ``store.lookup_snapshot`` -> ``store._read_record`` open.
+    """
+    home = tmp_path / "home"
+    _seed_single_file(home, tmp_path)
+    real_open = builtins.open
+    real_exists = Path.exists
+    attempts: list[str] = []
+    probed: list[str] = []
+    monkeypatch.setattr(store_module, "_RECORD_REPLACE_BACKOFF_SECONDS", 0)
+
+    def _tracking_exists(self: Path) -> bool:
+        if self.name == "record.json":
+            probed.append(str(self))
+            return False
+        return real_exists(self)
+
+    def _once_failing_open(*args: Any, **kwargs: Any) -> Any:
+        if _is_record_read_open(*args, **kwargs):
+            attempts.append("open")
+            if len(attempts) == 1:
+                raise OSError("injected non-transient")
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", _tracking_exists)
+    monkeypatch.setattr(builtins, "open", _once_failing_open)
+    detail = _raises(
+        source_errors.CODE_SNAPSHOT_UNAVAILABLE,
+        lambda: store_module.lookup_snapshot(home, SKILL, PACKAGE),
+    ).detail
+    assert len(attempts) == 1, "a non-transient failure must not be retried"
+    assert probed == [], "failure must not be re-probed as absence"
+    assert "cannot be read" in detail
+    assert "no locked snapshot is stored" not in detail
+
+
+def test_record_read_shares_writer_retry_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reader's retry bound IS the writer's constant, not a second one.
+
+    Patching ``_RECORD_REPLACE_ATTEMPTS`` changes the reader: with bound 3,
+    two denials then success serves, three denials then success refuses. A
+    separately spelled reader constant would ignore the patch (still 6)
+    and serve in both cases, failing this test.
+
+    Production call site: ``store.lookup_snapshot`` -> ``store._read_record`` open.
+    """
+    home = tmp_path / "home"
+    captured = _seed_single_file(home, tmp_path)
+    monkeypatch.setattr(store_module, "_RECORD_REPLACE_ATTEMPTS", 3)
+    monkeypatch.setattr(store_module, "_RECORD_REPLACE_BACKOFF_SECONDS", 0)
+    real_open = builtins.open
+
+    first: list[str] = []
+
+    def _two_denials(*args: Any, **kwargs: Any) -> Any:
+        if _is_record_read_open(*args, **kwargs) and len(first) < 2:
+            first.append("denied")
+            raise PermissionError("[WinError 5] Access is denied")
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", _two_denials)
+    served = store_module.lookup_snapshot(home, SKILL, PACKAGE)
+    assert served.snapshot == captured.inventory["snapshot"]
+    assert len(first) == 2
+
+    second: list[str] = []
+
+    def _three_denials(*args: Any, **kwargs: Any) -> Any:
+        if _is_record_read_open(*args, **kwargs) and len(second) < 3:
+            second.append("denied")
+            raise PermissionError("[WinError 5] Access is denied")
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", _three_denials)
+    _raises(
+        source_errors.CODE_SNAPSHOT_UNAVAILABLE,
+        lambda: store_module.lookup_snapshot(home, SKILL, PACKAGE),
+    )
+    assert len(second) == 3
+
+
+def test_record_read_retry_uses_writer_constant() -> None:
+    """Static guard: _read_record spells the writer's bound, not a second one.
+
+    The behavioral bound test proves the two cannot disagree at runtime;
+    this names the shared spelling so a separately introduced constant
+    fails here too.
+    """
+    import inspect
+    import re
+
+    reader_source = inspect.getsource(store_module._read_record)
+    writer_source = inspect.getsource(store_module._replace_record)
+    assert "_RECORD_REPLACE_ATTEMPTS" in writer_source
+    attempts_names = set(re.findall(r"_[A-Z0-9_]*ATTEMPTS\b", reader_source))
+    assert attempts_names == {"_RECORD_REPLACE_ATTEMPTS"}, attempts_names
+    backoff_names = set(re.findall(r"_[A-Z0-9_]*BACKOFF[A-Z0-9_]*\b", reader_source))
+    assert backoff_names == {"_RECORD_REPLACE_BACKOFF_SECONDS"}, backoff_names
+
+
+def test_denied_record_read_is_never_reported_as_absence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A denied read is a failure, never 'no locked snapshot is stored'.
+
+    The old shape re-probed with ``path.exists()`` after a failure: a
+    transient False turned an I/O failure into the positive claim of
+    absence. Correct code distinguishes where each occurs
+    (FileNotFoundError vs other errors) and never re-probes.
+
+    Production call site: ``store.lookup_snapshot`` -> ``store._read_record`` open.
+    """
+    home = tmp_path / "home"
+    _seed_single_file(home, tmp_path)
+    monkeypatch.setattr(store_module, "_RECORD_REPLACE_BACKOFF_SECONDS", 0)
+    real_open = builtins.open
+    real_exists = Path.exists
+    probed: list[str] = []
+
+    def _tracking_exists(self: Path) -> bool:
+        if self.name == "record.json":
+            probed.append(str(self))
+            return False
+        return real_exists(self)
+
+    def _always_denied(*args: Any, **kwargs: Any) -> Any:
+        if _is_record_read_open(*args, **kwargs):
+            raise PermissionError("[WinError 5] Access is denied")
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", _tracking_exists)
+    monkeypatch.setattr(builtins, "open", _always_denied)
+    detail = _raises(
+        source_errors.CODE_SNAPSHOT_UNAVAILABLE,
+        lambda: store_module.lookup_snapshot(home, SKILL, PACKAGE),
+    ).detail
+    assert "no locked snapshot is stored" not in detail
+    assert "cannot be read" in detail
+    assert probed == [], "absence must not be decided by re-probing after failure"
+
+
+def test_absent_record_reports_no_locked_snapshot(tmp_path: Path) -> None:
+    """A truly absent record still reports 'no locked snapshot is stored'.
+
+    Companion to the denied-read test: absence (FileNotFoundError at the
+    open) keeps the absence message, while any other failure reports
+    'cannot be read'. Removing the absence branch fails this test.
+
+    Production call site: ``store.lookup_snapshot`` -> ``store._read_record`` open.
+    """
+    home = tmp_path / "home"
+    _seed_single_file(home, tmp_path)
+    (store_module.entry_dir(home, SKILL, PACKAGE) / "record.json").unlink()
+    detail = _raises(
+        source_errors.CODE_SNAPSHOT_UNAVAILABLE,
+        lambda: store_module.lookup_snapshot(home, SKILL, PACKAGE),
+    ).detail
+    assert "no locked snapshot is stored" in detail
+
+
+# BUG-260922-1ulkcl revision 2 (H-1): only the OPEN is classified for
+# retry/absence. A failure from read() or close() after a successful open
+# refuses as a read failure - never retried, never reported as absence.
+
+
+class _FailingRecordHandle:
+    """Wrap a real record handle, failing exactly one post-open operation."""
+
+    def __init__(
+        self, real: Any, *, method: str, error: type[BaseException]
+    ) -> None:
+        self._real = real
+        self._method = method
+        self._error = error
+
+    def read(self, *args: Any, **kwargs: Any) -> Any:
+        if self._method == "read":
+            raise self._error("injected post-open read failure")
+        return self._real.read(*args, **kwargs)
+
+    def close(self) -> None:
+        try:
+            self._real.close()
+        finally:
+            if self._method == "close":
+                raise self._error("injected post-open close failure")
+
+    def __enter__(self) -> _FailingRecordHandle:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        self.close()
+
+
+def _inject_post_open_failure(
+    monkeypatch: pytest.MonkeyPatch, *, method: str, error: type[BaseException]
+) -> list[str]:
+    """Fail one post-open operation on the first record open; count opens."""
+    real_open = builtins.open
+    attempts: list[str] = []
+    monkeypatch.setattr(store_module, "_RECORD_REPLACE_BACKOFF_SECONDS", 0)
+
+    def _post_open_failing(*args: Any, **kwargs: Any) -> Any:
+        handle = real_open(*args, **kwargs)
+        if _is_record_read_open(*args, **kwargs):
+            attempts.append("open")
+            if len(attempts) == 1:
+                return _FailingRecordHandle(handle, method=method, error=error)
+        return handle
+
+    monkeypatch.setattr(builtins, "open", _post_open_failing)
+    return attempts
+
+
+@pytest.mark.parametrize("method", ["read", "close"])
+def test_record_post_open_permission_error_is_read_failure_without_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """A PermissionError after a successful open is a read failure, not a retry.
+
+    Only an open-time sharing denial is transient. A mutant that widens the
+    open-only try back over read()/close() would retry here and serve on the
+    second attempt, hiding the real I/O failure; correct code refuses on the
+    first attempt without retrying and without reporting absence.
+
+    Production call site: ``store.lookup_snapshot`` -> ``store._read_record`` read/close.
+    """
+    home = tmp_path / "home"
+    _seed_single_file(home, tmp_path)
+    attempts = _inject_post_open_failure(
+        monkeypatch, method=method, error=PermissionError
+    )
+    detail = _raises(
+        source_errors.CODE_SNAPSHOT_UNAVAILABLE,
+        lambda: store_module.lookup_snapshot(home, SKILL, PACKAGE),
+    ).detail
+    assert len(attempts) == 1, "a post-open failure must not be retried"
+    assert "cannot be read" in detail
+    assert "no locked snapshot is stored" not in detail
+
+
+@pytest.mark.parametrize("method", ["read", "close"])
+def test_record_post_open_not_found_is_read_failure_not_absence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """A FileNotFoundError after a successful open never asserts absence.
+
+    Absence is established only by FileNotFoundError AT the open. A failure
+    after a successful open means the record existed and could not be
+    served: reporting 'no locked snapshot is stored' would be a wrong
+    answer, not an error. A mutant that widens the open-only try back over
+    read()/close() reports absence here and fails this test.
+
+    Production call site: ``store.lookup_snapshot`` -> ``store._read_record`` read/close.
+    """
+    home = tmp_path / "home"
+    _seed_single_file(home, tmp_path)
+    attempts = _inject_post_open_failure(
+        monkeypatch, method=method, error=FileNotFoundError
+    )
+    detail = _raises(
+        source_errors.CODE_SNAPSHOT_UNAVAILABLE,
+        lambda: store_module.lookup_snapshot(home, SKILL, PACKAGE),
+    ).detail
+    assert len(attempts) == 1, "a post-open failure must not be retried"
+    assert "cannot be read" in detail
+    assert "no locked snapshot is stored" not in detail
