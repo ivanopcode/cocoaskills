@@ -93,13 +93,16 @@ _FS_ERRORS: Final[tuple[type[Exception], ...]] = (
     UnicodeError,
 )
 
-#: Record-replace attempts against a transient sharing denial. Windows has
+#: Record-publish attempts against a transient sharing denial. Windows has
 #: no replace-while-open: a lock-free reader holding ``record.json`` makes
-#: the writer's ``os.replace`` fail with ``PermissionError``. Readers hold
-#: the record only for one small read, so a short linear backoff outlasts
-#: any holder that is already closing (including a descheduled reader on a
-#: saturated runner); a still-held file keeps refusing afterwards, and
-#: every other failure refuses immediately without retry.
+#: the writer's ``os.replace`` fail with ``PermissionError``, and a replace
+#: in flight makes the reader's ``open`` fail the same way. Both sides
+#: retry within this SAME bound (a single constant, never two that can
+#: disagree): holders close promptly after one small read, so a short
+#: linear backoff outlasts any holder that is already closing (including a
+#: descheduled peer on a saturated runner); a still-held file keeps
+#: refusing afterwards, and every other failure refuses immediately
+#: without retry.
 _RECORD_REPLACE_ATTEMPTS: Final = 6
 _RECORD_REPLACE_BACKOFF_SECONDS: Final = 0.05
 
@@ -202,21 +205,50 @@ def _trees_dir(entry: Path) -> Path:
 
 
 def _read_record(entry: Path, skill: str, package: str) -> _ValidatedRecord:
-    """Read and structurally validate one entry record, failing closed."""
+    """Read and structurally validate one entry record, failing closed.
+
+    A transient sharing denial at the open (Windows: the writer's
+    ``os.replace`` in flight denies the reader's ``open`` with
+    ``PermissionError``) is retried within the SAME bound the writer uses
+    (``_RECORD_REPLACE_ATTEMPTS``); only that shape is retried. Absence
+    (``FileNotFoundError`` at the open) and failure (any other I/O error)
+    are distinguished where each occurs, never by re-probing the
+    filesystem after a failure. Once the open succeeds, a failure from
+    ``read()`` or ``close()`` refuses as a read failure: it is never
+    retried and never reported as absence.
+    """
     subject = f"snapshot record for skill {skill!r} package {package!r}"
     path = _record_path(entry)
     if path.is_symlink():
         raise _StoreUnavailable(f"{subject} is a link, not a stored record")
-    try:
-        with open(path, "rb") as handle:
-            raw = handle.read()
-    except _FS_ERRORS as exc:
-        if not path.exists():
+    raw: bytes | None = None
+    for attempt in range(_RECORD_REPLACE_ATTEMPTS):
+        try:
+            handle = open(path, "rb")
+        except PermissionError as exc:
+            if attempt + 1 >= _RECORD_REPLACE_ATTEMPTS:
+                raise _StoreUnavailable(f"{subject} cannot be read: {exc}") from exc
+            time.sleep(_RECORD_REPLACE_BACKOFF_SECONDS * (attempt + 1))
+            continue
+        except FileNotFoundError as exc:
             raise _StoreUnavailable(
                 f"snapshot for skill {skill!r} package {package!r} is unavailable: "
                 "no locked snapshot is stored"
             ) from exc
-        raise _StoreUnavailable(f"{subject} cannot be read: {exc}") from exc
+        except _FS_ERRORS as exc:
+            raise _StoreUnavailable(f"{subject} cannot be read: {exc}") from exc
+        else:
+            # The open succeeded, so the open-only classification above no
+            # longer applies: read() and close() run in their own try whose
+            # only outcome is a read failure, never a retry, never absence.
+            try:
+                with handle:
+                    raw = handle.read()
+            except _FS_ERRORS as exc:
+                raise _StoreUnavailable(f"{subject} cannot be read: {exc}") from exc
+            break
+    if raw is None:
+        raise _StoreUnavailable(f"{subject} cannot be read: retry bound exhausted")
     try:
         text = raw.decode("utf-8", errors="strict")
     except UnicodeError as exc:

@@ -1,5 +1,38 @@
 # Logbook
 
+## 2026-09-23 - BUG-260922-1ulkcl rev2 revalidation after Story reparent
+
+Revalidated the inherited H-1 candidate on the Story checkpoint at `f1941128`; no source or test edits were made in this run. The reader classifies only `open()` for retry/absence; injected `PermissionError` and `FileNotFoundError` at both `read()` and `close()` refuse as read failures. M1-M7 were killed again, and M8 (wide try restored) failed all four named post-open cases. Store suite: 129 passed, exit 0; ordinary CI suite: 9,098 passed / 132 skipped, exit 0; mypy: 92 files, exit 0; `uv build`: exit 0. All pytest basetemp/cache paths were under `/tmp`; hosted Windows CI remains the orchestrator's post-landing step. Fresh task-scoped evidence and the coverage map are attached to BUG-260922-1ulkcl. Candidate remains uncommitted.
+
+## 2026-09-22 - BUG-260922-1ulkcl rev2 (H-1): post-open failures leave the retry/absence classification
+
+REVIEW FINDING: rev1 put `open`, `read()` and `close()` in one `try`, so the open-only
+`PermissionError`/`FileNotFoundError` handlers also classified post-open failures: a `PermissionError`
+from `read()`/`close()` was retried (hiding a real I/O failure) and a `FileNotFoundError` from
+`read()`/`close()` asserted "no locked snapshot is stored" (the wrong-answer shape the leaf removes).
+FIX: the `try` covers the `open` alone; after a successful open, `read()`/`close()` run in their own
+`try` whose only outcome is "cannot be read" - never retried, never absence. Two parametrized
+regressions inject `PermissionError`/`FileNotFoundError` at `read()` and at `close()` through
+`lookup_snapshot`; mutant M8 (wide `try` restored) dies on all four nodes; M1-M7 re-killed, 0 survivors.
+NOTE: the ordinary suite must run as `python -m pytest` (as CI does) - the bare `pytest` script does
+not put the rootdir on `sys.path` and collection-errors on `from tests.conftest import ...`.
+
+## 2026-09-22 - BUG-260922-1ulkcl: snapshot-record read retries the sharing denial on the writer's bound
+
+ROOT CAUSE: `src/csk/sources/store.py:_read_record` opened `record.json` once with no retry while
+`_replace_record` retried `PermissionError`; on Windows a replace in flight denies a concurrent reader's
+open, flaking `test_concurrent_readers_always_serve_a_complete_snapshot` one random matrix cell per run.
+Same function also decided absence by re-probing `path.exists()` after any failure (read-failure-as-absence).
+FIX: reader retries only `PermissionError` within the SAME `_RECORD_REPLACE_ATTEMPTS`/`_BACKOFF` constants
+(no second spelling); `FileNotFoundError` at open is absence, everything else is "cannot be read", no
+`exists()` call remains. Six tests in `tests/test_source_snapshot_store.py` inject the denial at the
+reader's open; seven narrowing mutants (removed retry, widened class, second constant, both re-probe
+shapes, removed absence branch, token-preserving literal bound) all die on named tests.
+ANOMALY (pre-existing, out of scope): full ordinary suite on this macOS host shows 1 failure in
+`tests/test_sources_transport.py::test_live_sshd_rejection_bytes_match_stand_in_frames[publickey,password-server_options2]`
+(live-sshd banner bytes differ); fails identically on the clean tree with this candidate stashed, and the
+file never imports the store. STATUS: candidate ready for review, uncommitted, 2 code files + this entry.
+
 ## 2026-09-18 - TASK-260916-nawehj: never capture the xdist suite with a shell redirect
 
 Running the ordinary suite as `pytest -n 8 ... > file.log` fails
