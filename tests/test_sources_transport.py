@@ -3423,6 +3423,21 @@ def test_loopback_https_probe_passes_where_tls_trust_works(
     assert server.port > 0
 
 
+def _ssh_environment_without_agent() -> dict[str, str]:
+    """Copy the process environment with every agent handle removed.
+
+    The live-sshd equality test must measure the product's ssh behaviour,
+    not the operator: with an agent holding MaxAuthTries keys or more, a
+    client that offers ambient identities is disconnected before printing
+    the rejection line the test asserts byte-for-byte.
+    """
+
+    environment = dict(os.environ)
+    environment.pop("SSH_AUTH_SOCK", None)
+    environment.pop("SSH_AGENT_PID", None)
+    return environment
+
+
 @_posix_ssh_only
 @_requires_sshd
 @pytest.mark.parametrize(
@@ -3466,6 +3481,9 @@ def test_live_sshd_rejection_bytes_match_stand_in_frames(
     against a live password-only, keyboard-interactive-only, or
     multi-method server prints the server's method list verbatim:
     client-side PreferredAuthentications does not change the display.
+    The client offers no identity at all — IdentitiesOnly with no -i,
+    IdentityAgent=none, and no agent handle in the environment — so the
+    verdict cannot depend on how many keys the operator's agent holds.
     """
 
     sshd = _start_live_sshd(tmp_path / "sshd", server_options)
@@ -3479,6 +3497,10 @@ def test_live_sshd_rejection_bytes_match_stand_in_frames(
                 "/dev/null",
                 "-o",
                 "BatchMode=yes",
+                "-o",
+                "IdentitiesOnly=yes",
+                "-o",
+                "IdentityAgent=none",
                 "-o",
                 "PreferredAuthentications=publickey",
                 "-o",
@@ -3502,6 +3524,7 @@ def test_live_sshd_rejection_bytes_match_stand_in_frames(
             text=True,
             timeout=30,
             check=False,
+            env=_ssh_environment_without_agent(),
         )
         assert completed.returncode == 255
         terminal = [
