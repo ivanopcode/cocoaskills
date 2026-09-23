@@ -14,7 +14,7 @@ from typing import Any
 
 
 TASK_ID = "TASK-260803-2ol7ok"
-EXPECTED_SOURCE = "2bfe3d64e9142d62e8ea3f92558eeee331f4578a"
+EXPECTED_SOURCE = "8026a2ee1eb22f98c57c42ccb3cf8fd06f166fcf"
 EXPECTED_PROTOCOL = "0ed5c691e9208eea52f21db2fc05e226ce3516fd"
 # The released suite at EXPECTED_PROTOCOL decides this number: rc.9 publishes
 # eight schema cases that rc.6 did not, each of which parametrises one more

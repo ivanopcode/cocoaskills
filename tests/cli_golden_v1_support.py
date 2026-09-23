@@ -188,6 +188,11 @@ def _init_repo(path: Path) -> None:
     run_git(["config", "commit.gpgsign", "false"], path)
     run_git(["config", "core.autocrlf", "false"], path)
     run_git(["config", "core.eol", "lf"], path)
+    # Fixture repositories are copied with shutil.copytree right after they are
+    # built. Git's automatic maintenance can run detached after a commit and
+    # create objects/maintenance.lock mid-copy, so the copy races it.
+    run_git(["config", "maintenance.auto", "false"], path)
+    run_git(["config", "gc.auto", "0"], path)
 
 
 def build_pristine_fixture(root: Path) -> dict[str, Path]:

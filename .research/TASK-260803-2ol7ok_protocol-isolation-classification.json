@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "task_id": "TASK-260803-2ol7ok",
-  "source_commit": "2bfe3d64e9142d62e8ea3f92558eeee331f4578a",
+  "source_commit": "8026a2ee1eb22f98c57c42ccb3cf8fd06f166fcf",
   "protocol_commit": "0ed5c691e9208eea52f21db2fc05e226ce3516fd",
   "audited_files_sha256": {
     "tests/test_protocol_conformance.py": "666c712dc4e9f2784b2c1f26aa1f313e22bf764e2d2b8e82661e225ad1a71e5a",
