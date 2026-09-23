@@ -2,19 +2,77 @@
 
 There are exactly two modes, and the code must not be able to confuse
 them. Resolving mode (``csk install`` with no lock, ``csk upgrade``) may
-enumerate members, capture snapshots, resolve refs and write a lock.
-Frozen mode (``csk install`` with a lock, launch, status) may read the
-lock and the source-v1 store and nothing else: it cannot enumerate a
-collection, advance a ref, capture a snapshot or write a lock.
+enumerate members, resolve refs, capture snapshots, write the source-v1
+store and write a lock. Frozen mode (``csk install`` with a lock, launch,
+status) reads the lock and the store, and is forbidden four operations:
+enumerate a collection, advance a ref, write the store, write a lock.
+
+Frozen mode does capture, but only on one source arm, and it never
+stages. :func:`csk.sources.publish._capture_locked_member` dispatches on
+the locked package identity, and the two arms differ:
+
+* ``LocalSnapshot``: the store is read first, and then the live bytes
+  are re-captured exactly once for that member. That capture is
+  load-bearing rather than an exception to the rule: re-reading the live
+  bytes is how ``source_snapshot_changed`` is produced at all, so a
+  local lane unable to capture would be a lane unable to detect drift.
+  The capture is for comparison only and is never staged.
+* ``NetworkGit``: served from the source-v1 store alone, through
+  :func:`csk.sources.publish._serve_locked_git_member`. A Git member has
+  no live bytes to compare against — the store entry addressed by
+  ``(skill name, SHA-256(CCJ-1(package)))`` *is* the locked snapshot, and
+  a missing or mismatching entry is unavailable — so nothing is captured
+  and the network is not touched. Drift detection is not weaker here; it
+  is answered by the identity instead of by a re-read.
+
+Both arms are measured, not assumed. Counting
+:func:`csk.sources.snapshot.capture_package_snapshot` and
+:func:`csk.sources.store.stage_snapshot` across one locked install per
+arm gives frozen ``capture=1 stage=0`` local and ``capture=0 stage=0``
+Git, each against resolving ``1/1``.
+
+The four forbidden operations are not refused by the same mechanism, and
+the difference is what a new call site has to know:
+
+* Advance a ref: refused by type. :func:`resolve_git_alias`,
+  :func:`acquire_git_alias` and :func:`acquire_git_commit` take a
+  :class:`ResolvingSources`, the only carrier of the transport grant.
+* Enumerate a collection: refused by type at the entry point. Selector
+  expansion is reachable only through
+  :func:`csk.sources.publish.resolve_schema2_source_roots` and
+  :func:`csk.sources.publish.resolve_schema2_members`, both typed
+  :class:`ResolvingSources`. The re-enumeration guard
+  :func:`csk.sources.publish.collection_membership` takes no mode and is
+  confined instead: only the resolving lane records a membership to
+  compare against, and the frozen lane passes ``None``.
+* Write the store: refused by call-graph confinement, not by type.
+  :func:`csk.sources.snapshot.capture_package_snapshot` and
+  :func:`csk.sources.store.stage_snapshot` take a plain
+  :class:`~pathlib.Path` and would run under either mode.
+  :func:`csk.sources.publish.stage_schema2_store` is unreachable because
+  its only caller is
+  :func:`csk.sources.publish._install_schema2_resolving`, and the healing
+  write sits in
+  :func:`csk.sources.publish._serve_resolving_publication_files`, which
+  the shared pipeline reaches only from the ``else`` branch of its mode
+  check.
+* Write a lock: refused by an explicit runtime mode branch. Both
+  :func:`csk.sources.publish.plan_schema2_targets` and
+  :func:`csk.sources.publish.stage_schema2_desired` take the union type
+  and gate the lock target and the lock bytes on
+  ``isinstance(mode, ResolvingSources)``. Frozen mode still rebuilds the
+  lock in memory for the determinism comparison; it never stages it.
 
 The modes are two disjoint types, not a boolean a later call site can
 forget. :class:`ResolvingSources` carries the transport grant (the Git
 tool factory, the policy path, the acquisition workspace and the
 operation-scoped resolution memo); :class:`FrozenSources` carries only
-the home directory and the validated lock. Resolving-only operations
-take a :class:`ResolvingSources`, so a frozen call site cannot reach
-them: the capability is not in scope. :func:`select` is the single
-mode-decision point; everything downstream dispatches on the type.
+the home directory and the validated lock. :func:`select` is the single
+mode-decision point; everything downstream dispatches on the type. Where
+an operation is refused by type, the capability is simply not in scope
+and a frozen call site cannot spell it. Where it is refused by
+confinement or by a mode branch, the guarantee lives in the call graph
+above it, and a new call site can break it without a type error.
 """
 
 from __future__ import annotations
@@ -89,8 +147,14 @@ class FrozenSources:
 
     Deliberately disconnected from everything resolving mode holds: no
     tool provider, no policy path, no workspace, no memo. A frozen call
-    site cannot enumerate, resolve, capture or lock because the type it
-    runs under offers none of those operations.
+    site therefore cannot advance a ref or enumerate a collection: those
+    operations are typed against :class:`ResolvingSources` and this type
+    offers them nothing. It does capture on one arm — once per locked
+    ``LocalSnapshot`` member, for drift detection — while locked
+    ``NetworkGit`` members are served from the store and capture
+    nothing. The store write and the lock write are held off by
+    call-graph confinement and an explicit mode branch rather than by
+    this type. See the module docstring for which is which.
     """
 
     home: Path

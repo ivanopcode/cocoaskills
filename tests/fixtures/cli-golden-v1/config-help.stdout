@@ -1,0 +1,12 @@
+usage: csk config [-h] {show,build-ssh,build-https} ...
+
+positional arguments:
+  {show,build-ssh,build-https}
+    show                Print resolved config path and content.
+    build-ssh           Manage operator SSH credential scopes for external
+                        build repositories.
+    build-https         Manage operator HTTPS token scopes for external build
+                        repositories.
+
+options:
+  -h, --help            show this help message and exit

@@ -26,11 +26,12 @@ Entry points:
 from __future__ import annotations
 
 import re
+import stat
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, TypeVar
+from typing import Final, Protocol, TypeVar
 
 from .. import (
     adapters,
@@ -47,6 +48,8 @@ from ._selection_fs import (
     PreflightPath,
     PreflightRequest,
     SelectionSession,
+    _is_absence_error,
+    _lstat_at,
     _snapshot_path,
     read_optional_regular_path,
     read_regular_path,
@@ -288,6 +291,24 @@ class SelectedSkill:
     requirements: tuple[skillspec.SkillRequirement, ...] = ()
 
 
+class RootInputsPolicy(Protocol):
+    """Structural policy surface the live root gate consults.
+
+    Only ``root_inputs`` is read here; membership validation arrives as
+    a caller-provided gate so this module never imports the boundary
+    implementation (its import closure is pinned).
+    """
+
+    root_inputs: Mapping[str, tuple[str, ...]]
+
+
+#: Root-input validation wired by the caller: ``(source_root, alias,
+#: required_inputs)`` answers the admitted entry paths. Production
+#: callers pass ``csk.sources.boundaries.root_inputs_gate``; every
+#: refusal carries the shared validator's own code.
+RootInputsGate = Callable[[Path, str, tuple[str, ...]], tuple[str, ...]]
+
+
 def _configured_csk_home() -> Path:
     try:
         return config.config_path().expanduser().parent
@@ -353,12 +374,13 @@ def _validate_selected_member(
     *,
     selector_directory: str,
     folder: str | None,
+    allowlist: tuple[str, ...] | None = None,
 ) -> tuple[str, MemberSnapshot, tuple[skillspec.SkillRequirement, ...]]:
     label = _member_label(selector_directory, folder)
     snapshot = _run_member_reader(
         label,
         _member_path(directory),
-        lambda: session.snapshot_member(directory, label=label),
+        lambda: session.snapshot_member(directory, label=label, allowlist=allowlist),
     )
     skill_name = validate_member_package(
         _member_path(directory),
@@ -624,9 +646,190 @@ def expand_collection(
         return members
 
 
+def _probe_manifest_bytes(
+    session: SelectionSession,
+    member: Directory,
+    name: str,
+) -> bytes | None:
+    """Read one manifest spelling through the member descriptor.
+
+    Single-component spellings read exactly like the historical probe. A
+    nested spelling descends one descriptor at a time: a missing
+    intermediate and a present-but-not-a-directory intermediate both mean
+    the manifest is certainly absent (the latter is the ``ENOTDIR`` the
+    file read itself already reports as missing), while a link at an
+    intermediate refuses -- it could conceal the manifest, and links are
+    never followed. ``None`` reports absence; every other anomaly refuses.
+    """
+
+    parts = tuple(name.split("/"))
+    current = member
+    for part in parts[:-1]:
+        try:
+            intermediate = _lstat_at(
+                current.fd,
+                part,
+                parent_path=current.display,
+                code=CODE_MEMBER_INVALID,
+                context="Root package manifest probe",
+            )
+        except SourceError as exc:
+            if _is_absence_error(exc):
+                return None
+            raise
+        if stat.S_ISLNK(intermediate.st_mode):
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Root package manifest probe contains rejected link {part!r} "
+                f"on manifest path {name!r}; the link escapes the source root "
+                "or links in admitted inputs are not allowed",
+            )
+        if not stat.S_ISDIR(intermediate.st_mode):
+            return None
+        current = session._open_regular_child(
+            current,
+            part,
+            code=CODE_MEMBER_INVALID,
+            context="Root package manifest probe",
+        )
+    try:
+        captured = session.read_captured_file(
+            current,
+            parts[-1],
+            relative=parts,
+            code=CODE_MEMBER_INVALID,
+            context="Root package manifest probe",
+            missing_code=CODE_MEMBER_MISSING,
+        )
+    except SourceError as exc:
+        if exc.code == CODE_MEMBER_MISSING:
+            return None
+        raise
+    return captured.data
+
+
+def _effective_manifest_probe(
+    session: SelectionSession,
+    member: Directory,
+) -> tuple[tuple[str, ...], tuple[str, str, bytes] | None]:
+    """Probe the root package for the effective manifest.
+
+    Every spelling in ``skillspec.MANIFEST_PROBE_ORDER`` (canonical, then
+    legacy, then the nested runtime fallback) is always required input
+    when present; the order is derived from the manifest model, never
+    retyped here. Each probe reads through the member descriptor; absence
+    is reported by the missing code and skipped, while any other anomaly
+    refuses. The effective manifest and its grammar come from
+    ``skillspec.select_effective_manifest`` -- the same decision
+    ``load_skill_spec`` uses, so the gate and the loader cannot disagree
+    about which manifest is effective or which grammar parses it. The
+    effective (name, grammar, bytes) triple is returned for
+    required-input derivation, and admission still requires allowlist
+    coverage of every name through the gate below.
+    """
+
+    found: list[str] = []
+    payloads: dict[str, bytes] = {}
+    for name in skillspec.MANIFEST_PROBE_ORDER:
+        data = _probe_manifest_bytes(session, member, name)
+        if data is None:
+            continue
+        found.append(name)
+        payloads[name] = data
+    if not found:
+        return (), None
+    decision = skillspec.select_effective_manifest(tuple(found), payloads.__getitem__)
+    assert decision is not None
+    return tuple(found), (decision.name, decision.grammar, payloads[decision.name])
+
+
+def _manifest_declared_inputs(
+    effective: tuple[str, str, bytes] | None, snapshot: Path
+) -> tuple[str, ...]:
+    """Derive the required inputs the effective manifest declares.
+
+    Full manifest validation against the source root through the one
+    implementation per grammar (``skillspec.parse_manifest_bytes`` for
+    the schema grammar, ``skillspec.parse_runtime_fallback_bytes`` for
+    the runtime grammar), dispatched on the grammar carried by the
+    shared effective-manifest decision -- never on a spelling
+    comparison here -- then the manifest model's own
+    ``declared_required_inputs``: runtime roots, build roots, and every
+    command path including a schema-1 ``unix_path`` and every runtime
+    script path. An absent manifest yields no inputs; a malformed
+    document or a manifest invalid against the source also yields none
+    here and refuses later on the admitted snapshot through
+    ``skillcheck`` (the one implementation), so both orders fail closed.
+    """
+
+    if effective is None:
+        return ()
+    name, grammar, raw = effective
+    if grammar == skillspec.MANIFEST_GRAMMAR_RUNTIME:
+        try:
+            spec = skillspec.parse_runtime_fallback_bytes(raw, name)
+        except skillspec.SkillSpecError:
+            return ()
+        return skillspec.declared_required_inputs(spec)
+    try:
+        spec = skillspec.parse_manifest_bytes(raw, snapshot, name)
+    except skillspec.SkillSpecError:
+        return ()
+    return skillspec.declared_required_inputs(spec)
+
+
+def _require_root_inputs(
+    session: SelectionSession,
+    member: Directory,
+    source_root: Path,
+    alias: str,
+    policy: RootInputsPolicy | None,
+    root_inputs_gate: RootInputsGate | None,
+) -> tuple[str, ...]:
+    """Admit a project-root package through the operator allowlist.
+
+    A root selection without explicit ``root_inputs`` for the alias
+    refuses ``source_output_overlap``: separation cannot be proved. A
+    declared allowlist is validated through the caller-provided gate
+    (the shared validator, never a second implementation). The required
+    set is derived from the effective manifest read through the member
+    descriptor -- the manifest itself plus every path the manifest
+    model declares (``SKILL.md`` is added by the gate) -- never from a
+    caller-supplied tuple, so no caller can forget a declared input.
+    Coverage is ancestry: a declared input is satisfied only when the
+    path itself (or an ancestor of it) is listed, never by a descendant
+    of it. The returned entry paths restrict the member read to
+    admitted bytes.
+    """
+
+    entries = policy.root_inputs.get(alias) if policy is not None else None
+    if not entries:
+        raise SourceError(
+            CODE_OUTPUT_OVERLAP,
+            "Selector directory '.' selects the project root without "
+            f"root_inputs for {alias!r}: separation cannot be proved",
+        )
+    if root_inputs_gate is None:
+        raise SourceError(
+            CODE_OUTPUT_OVERLAP,
+            "Selector directory '.' selects the project root without "
+            "a root-input validator: separation cannot be proved",
+        )
+    manifest_names, effective = _effective_manifest_probe(session, member)
+    required = (
+        *manifest_names,
+        *_manifest_declared_inputs(effective, source_root),
+    )
+    return root_inputs_gate(source_root, alias, tuple(dict.fromkeys(required)))
+
+
 def resolve_individual(
     source_root: Path,
     selector: IndividualSelector,
+    *,
+    policy: RootInputsPolicy | None = None,
+    root_inputs_gate: RootInputsGate | None = None,
+    root_inputs_aliases: frozenset[str] | None = None,
 ) -> SelectedSkill:
     """Resolve one individual selector to its validated package.
 
@@ -635,6 +838,16 @@ def resolve_individual(
     the resolved target is not a directory). A package inside managed output
     (the single :func:`managed_output_boundary` predicate on the physical
     path, before any metadata read) refuses with ``source_output_overlap``.
+    A ``directory: "."`` selector names the project root as the package:
+    without explicit ``root_inputs`` for the selector alias it refuses
+    ``source_output_overlap``, and a declared allowlist is validated
+    through ``root_inputs_gate`` (with the required set derived from the
+    effective manifest: the manifest itself plus every path the manifest
+    model declares) before the member read, which is then restricted to
+    exactly the admitted entries. ``root_inputs_aliases``
+    scopes that enforcement to local path sources (a materialized Git root
+    is a complete tree and needs no admitted subset); ``None`` enforces
+    every root, which is the fail-closed default for direct callers.
     The package must carry valid SKILL.md frontmatter and satisfy the
     ordinary package/manifest rules (``source_member_invalid``), and the
     selector name must equal the validated SKILL.md name and the resolved
@@ -676,11 +889,24 @@ def resolve_individual(
                 CODE_MEMBER_INVALID,
                 f"Selector directory {selector.directory!r} is a symbolic link",
             )
+        allowlist: tuple[str, ...] | None = None
+        if selector.directory == "." and (
+            root_inputs_aliases is None or selector.from_alias in root_inputs_aliases
+        ):
+            allowlist = _require_root_inputs(
+                session,
+                target,
+                source_root,
+                selector.from_alias,
+                policy,
+                root_inputs_gate,
+            )
         skill_name, _, requirements = _validate_selected_member(
             session,
             target,
             selector_directory=selector.directory,
             folder=None,
+            allowlist=allowlist,
         )
         if skill_name != selector.name:
             raise SourceError(
@@ -704,6 +930,9 @@ def expand_selectors(
     source_roots: dict[str, Path],
     *,
     reserved_names: tuple[str, ...] = (),
+    policy: RootInputsPolicy | None = None,
+    root_inputs_gate: RootInputsGate | None = None,
+    root_inputs_aliases: frozenset[str] | None = None,
 ) -> list[SelectedSkill]:
     """Expand every selector and validate the whole set before publication.
 
@@ -717,7 +946,12 @@ def expand_selectors(
     dependency with different repository identities fail
     ``source_name_conflict``. Ref-vs-ref comparison needs repository access
     and belongs to the closure validation at publication, which re-examines
-    every deferred requirement.
+    every deferred requirement. Root packages (``directory: "."``
+    individuals) enforce the ``root_inputs`` allowlist from ``policy``
+    through ``root_inputs_gate``; without either the root refuses
+    ``source_output_overlap``. ``root_inputs_aliases`` scopes that
+    enforcement to local path sources when given; ``None`` enforces
+    every root.
     """
     for alias in {selector.from_alias for selector in selectors}:
         if alias not in source_roots:
@@ -729,7 +963,15 @@ def expand_selectors(
     for selector in selectors:
         root = source_roots[selector.from_alias]
         if isinstance(selector, IndividualSelector):
-            members.append(resolve_individual(root, selector))
+            members.append(
+                resolve_individual(
+                    root,
+                    selector,
+                    policy=policy,
+                    root_inputs_gate=root_inputs_gate,
+                    root_inputs_aliases=root_inputs_aliases,
+                )
+            )
         else:
             members.extend(expand_collection(root, selector))
     _check_installed_name_conflicts(

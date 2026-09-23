@@ -33,6 +33,178 @@ ANOMALY (pre-existing, out of scope): full ordinary suite on this macOS host sho
 (live-sshd banner bytes differ); fails identically on the clean tree with this candidate stashed, and the
 file never imports the store. STATUS: candidate ready for review, uncommitted, 2 code files + this entry.
 
+## 2026-09-23 - BUG-260922-1383no rev3: one selection rule, v1 bytes restored (G-1/G-2/G-3 closed)
+
+Rev2 unified the list but not the selection rule: the gate picked the first
+present registry entry and dispatched runtime by `== RUNTIME_FALLBACK`, while
+the loader preferred schema manifests and inferred unknown grammars from
+content. G-1 (`agents/v2.json` runtime input admitted) and G-2 (loader chose an
+appended `extra-manifest.json` while the gate derived the earlier runtime
+bytes) came from that duplicated decision. `MANIFEST_GRAMMAR` now carries each
+registered spelling's grammar and `MANIFEST_PROBE_ORDER` derives from that
+registry. `select_effective_manifest` is the shared effective-manifest and
+grammar decision used by `load_skill_spec`, `manifest_source_path`, and the
+live probe; `_manifest_declared_inputs` dispatches using that decision's
+grammar. The G-2 regression also caught `manifest_source_path` still selecting
+the first present spelling; it now delegates to the shared selector too.
+G-3 keeps source identity separate from diagnostic label in
+`parse_runtime_fallback_bytes(..., label=...)`; the malformed-runtime message
+matches the reference bytes through both `load_skill_spec` and
+`skillcheck.validate_skill`.
+
+Named live regressions cover registry growth (`test_manifest_probe_growth_check_names_an_uncovered_spelling`),
+registered runtime grammar (`test_live_root_grown_runtime_spelling_declared_input_must_be_required`),
+effective-manifest agreement (`test_live_root_grown_schema_effective_inputs_match_loader`),
+and the G-3 message (`test_runtime_fallback_malformed_message_matches_reference`).
+Seven narrowing mutants all died on named tests: runtime-fallback exemption,
+dropping `agents/v2.json` runtime grammar, first-present gate selection,
+diagnostic-label collapse, skipping canonical/legacy conflict refusal,
+omitting the runtime spelling from the probe order, and skipping nested
+intermediate-link refusal. The original canonical/legacy omissions and the
+nested refusal/absence cases remain green: 60 live root-input tests passed;
+R3–R6's held variants account for 13 cases (2 intermediate links, 6 leaf
+anomalies, 3 nested absence layouts, and 2 existing spelling omissions);
+registry-removal coverage adds 3 further cases.
+
+Validation on Python 3.11.14 / pytest 8.3.4: loader consumers
+(`test_skillspec.py`, `test_skillcheck.py`, `test_install.py`, `test_status.py`,
+`test_cli.py`) 251 passed, 1 skipped; selection/boundaries 1,875 passed, 5
+skipped; strict mypy found no issues in 92 files; wheel build and `git diff
+--check` exited 0. Exact commands and exit codes are in the task-scoped
+handoff resource. The uncommitted candidate remains within the same four
+paths: this logbook, `src/csk/skillspec.py`, `src/csk/sources/selection.py`,
+and `tests/test_root_inputs_live.py`. The checkpointed
+`tests/test_draft_sources_conformance.py` changes remain untouched (R7).
+
+## 2026-09-22 - BUG-260922-1383no rev2: runtime inputs derived, registry controls loading (R1/R2 closed)
+
+R1 was a hole, not a bound: `(SKILL.md, agents/runtime.json)` admitted with a
+dangling `scripts/run.sh` because the gate routed runtime bytes through the
+schema parser. Fix adds `skillspec.parse_runtime_fallback_bytes`, the one
+runtime-grammar implementation shared by the gate (`_manifest_declared_inputs`
+dispatches on the effective spelling) and the loader (`_load_runtime_fallback`
+is now a wrapper); no second grammar lives in `selection.py`. R2 made the
+registry control loading: `load_skill_spec` iterates `MANIFEST_PROBE_ORDER`
+instead of a private if-chain, keeps the canonical/legacy conflict check
+(generalized to all schema spellings present, original message preserved for
+the two-case), and infers an unknown spelling's grammar from content so a
+newly registered spelling is honoured. Pinned by
+`test_live_root_omitted_runtime_script_refuses` (live `resolve_individual`
+refusal naming the script) and `test_load_skill_spec_honours_registered_spelling[schema/runtime]`
+(loader honours a patched-in spelling); the prior admission control now lists
+the script. Three narrowing mutants killed: runtime-derivation exemption,
+resolver-ignores-last-spelling, probe-exempts-runtime. R3-R6 re-run green.
+Delta stays to the same four paths; `test_draft_sources_conformance.py` lines
+are BUG-260922-1o40hs's checkpoint, untouched.
+
+## 2026-09-22 - BUG-260922-1383no: root-input probe derived from skillspec, nested runtime fallback covered
+
+`_effective_manifest_probe` (`src/csk/sources/selection.py`) hand-listed two
+manifest spellings while `load_skill_spec` resolves three, so a root whose
+commands come only from `agents/runtime.json` probed as manifest-free and was
+admitted with `root_inputs=("SKILL.md",)` (reproduced pre-fix). Fix exports
+the order once as `skillspec.MANIFEST_PROBE_ORDER`, which both loops now read,
+and descends nested spellings one descriptor at a time: missing or
+non-directory intermediates mean certain absence (skip), a link at an
+intermediate refuses without being followed, and the leaf keeps the unchanged
+`read_captured_file` call. Pinned by live-path refusal/admission tests, a
+growth test that names uncovered spellings, and two narrowing mutants (spelling
+exemption, link-refusal weakening), all killed. Known remainder, not silent:
+runtime command paths (scripts/) are still not derived at the gate
+(`parse_manifest_bytes` needs `schema_version`, which the runtime grammar
+lacks) and the snapshot loader does not check their existence (pinned by
+`test_runtime_json_fallback`), so `(SKILL.md, agents/runtime.json)` admits with
+dangling scripts -- closing that needs a shared bytes-based runtime parser, a
+follow-up, not a second grammar in selection.py.
+
+## 2026-09-22 - BUG-260922-1o40hs: root_inputs enforced on the live path via an injected gate
+
+`policy.root_inputs` was consulted only by dead `check_selected_package` /
+`validate_root_inputs` (zero production callers); live `resolve_individual`
+admitted root packages unconditionally (reproduced: root resolves with
+`reason is None`). Fix wires the shared validator into the live path as a
+caller-provided `RootInputsGate` (`boundaries.root_inputs_gate`) instead of
+importing it: the selection import-closure pin
+(`test_closure_matches_reviewed_selection_tree`, exact six-module set) plus
+the seam and runtime-vs-static instruments forbid a static
+selection→boundaries edge, and any AST-visible import including
+function-local or TYPE_CHECKING breaks the pin. Enforcement is fail-closed
+(no policy / unknown alias / empty entries / no gate all refuse
+`source_output_overlap`) and scoped to path aliases via
+`root_inputs_aliases`, because a materialized Git root is a complete tree
+needing no admitted subset -- the first unscoped cut broke three committed
+closure-refresh Git-root tests, fixed by having `publish` pass exactly its
+path aliases. The member read for admitted roots is restricted to the
+allowlist (`snapshot_member(allowlist=)`); install-time admitted-subset
+capture stays future work behind publish's explicit root refusal.
+
+## 2026-09-22 - BUG-260922-rqgxzd: frozen mode is not one mechanism, it is three
+
+The `csk.sources.modes` module docstring claimed frozen mode "cannot
+enumerate a collection, advance a ref, capture a snapshot or write a lock".
+Two things were wrong. Frozen does capture — on one arm — and the four
+denials do not share a mechanism: ref-advance is refused by type
+(`modes.resolve_git_alias`
+takes `ResolvingSources`); enumerate is refused by type at the entry point
+(`publish.resolve_schema2_members`) while the re-enumeration guard
+`publish.collection_membership` takes no mode and is confined behind
+`frozen_membership is not None`; the store write is refused by call-graph
+confinement only, because `snapshot.capture_package_snapshot` and
+`store.stage_snapshot` take a plain `Path`; the lock write is refused by an
+explicit `isinstance(mode, ResolvingSources)` branch inside union-typed
+`publish.plan_schema2_targets` and `publish.stage_schema2_desired`. The
+spawn brief asserted enumerate and lock-write were type-refused; reading
+the landed head shows only ref-advance is, so the brief's sentence was not
+copied into the docstring. Only the second and third mechanisms hold
+without a type error, which is exactly what a new frozen call site needs
+to know.
+
+The capture claim is per source arm, and the first correction got this
+wrong in the same way the original did. Revision 1 replaced "frozen
+cannot capture" with "frozen captures exactly once per locked member",
+unqualified; the exact-head reviewer drove a second `installer.install`
+with a Git member and showed that is false for that arm.
+`publish.py:3171` dispatches `NetworkGit` to
+`publish._serve_locked_git_member`, which returns stored bytes and never
+captures — a Git member has no live bytes to compare against, so the
+store entry keyed by the package identity *is* the locked snapshot.
+Trading one false sentence for a narrower false sentence is the exact
+failure mode this element exists to end, so revision 2 states the
+behaviour per arm and measures both.
+
+Instrumented through `csk.installer.install`, counting
+`snapshot.capture_package_snapshot` and `store.stage_snapshot` over one
+locked install per arm: local frozen `capture=1 stage=0`, Git frozen
+`capture=0 stage=0`, both against resolving `1/1`. Four narrowing
+mutants kill those counts, each moving one coordinate — `frozen-stage`
+(local stage 0→1), `frozen-no-capture` (local capture 1→0),
+`git-capture` (Git capture 0→1), `git-stage` (Git stage 0→1). The
+general lesson is cheaper than the incident: do not write a sentence
+about a dispatching function without driving every arm it dispatches to.
+
+`.spec/skillfile-v2-sources.md:1320` still carries the old claim in a
+`Leaf progress: TASK-260916-18j5hg` entry; left alone as out of scope.
+
+## 2026-09-22 - BUG-260922-rqgxzd: an operator ssh-agent turns the live-sshd test red
+
+`tests/test_sources_transport.py::test_live_sshd_rejection_bytes_match_stand_in_frames[publickey,password-server_options2]`
+fails on a developer machine whose ssh-agent holds keys. The client
+offers every agent key, exhausts the fixture sshd's `MaxAuthTries`, and
+the terminal frame becomes `Received disconnect ...: Too many
+authentication failures` instead of the expected `Permission denied
+(publickey,password).` The test asserts the rejection frame, so it reads
+as a failure of the rejection path when nothing in the repository is
+wrong. `env -u SSH_AUTH_SOCK` makes it pass: 3 passed, exit 0 isolated,
+and the full ordinary suite goes 9082 passed / 288 skipped at exit 0
+versus 1 failed / 9081 passed with the agent attached. Nothing in the
+test, the fixture or the source was changed between those runs. Until
+that test pins the client's identity set (`-o IdentitiesOnly=yes`, an
+empty `IdentityAgent`, or an explicit `-o IdentityFile`), run the
+ordinary suite with the agent detached and do not read this node as a
+transport regression. Diagnosed while correcting the frozen-mode
+docstring; the test is outside that leaf's scope, so it is recorded here
+rather than edited.
+
 ## 2026-09-18 - TASK-260916-nawehj: never capture the xdist suite with a shell redirect
 
 Running the ordinary suite as `pytest -n 8 ... > file.log` fails
@@ -48,6 +220,83 @@ capture full-suite output via pipes only. Same investigation also fixed
 a real pre-existing leak on the shared external-admission path:
 `git_admission._ObjectReader.close()` never closed the stdout pipe
 (`ResourceWarning` at GC, also emitted by the v1 external tests).
+
+## 2026-09-18 - BUG-260917-2jt7g2: the racy guard test never raced the lifetime it named; the /bin/sleep copy is SIGKILLed at exec
+
+The `test_macos_identity_guard_detects_process_graph_replacement_and_restore`
+flake was filed as "0.2 s subprocess must finish inside a 1 s budget", but an
+instrumented trace showed both executor verifies complete at ~t+5 ms while the
+main thread mutates at ~t+58 ms: a copy of `/bin/sleep` is SIGKILLed at exec
+on Apple Silicon (platform-binary enforcement, `Killed: 9` in ~2 ms from
+every location probed), so the mutation already lands after the executor
+finished and no scheduling can place work "during" that lifetime. The real
+race is verify-in-gap: `failures == []` holds only while both hash verifies
+miss the microsecond mutate-restore window, which saturation stretches. Fix
+is sequential program order (mutate+restore strictly inside the guard
+lifetime, executor run after the restore, no thread/sleep/join) plus a new
+no-mutation silence test; the only timing bound left is a 60 s executor hang
+bound. Full evidence, three narrowing mutants (mask-drop, fire-without-events,
+nonzero-exit-as-identity-failure), and 30/30 runs under 14 hogs are in
+BUG-260917-2jt7g2_results.md. Lesson carried: when a timing test's lifetime
+model is wrong (here the child never lived), re-timing the race is the wrong
+repair — check what the kernel actually did before choosing the sync mechanism.
+
+## 2026-09-18 - TASK-260918-16r0fm rev2: the floor value's provenance, the workflow-level surfaces, and the read-failure half of F4
+
+Revision 1 closed the five named evasions and whitelisted every in-job key
+(31/31) but never read `pyproject.toml`: the gate compared `FLOOR` against
+the interpreter `FLOOR` itself selected, satisfied by construction whenever
+the resolve step was wrong, and the resolve step's run text outside the
+tested heredoc was unpinned -- three one-line edits resolved 3.14, installed
+3.14, and passed a PEP-701 tree with 33/33 green. Same round: the whitelist
+read only `jobs.floor_syntax`, so workflow-level `defaults.run.shell` and
+top-level `env.PYTHONPATH` (both actionlint-clean, both suite-green)
+substituted the step shell and shadowed `compileall`; and a sentinel-backed
+but unlistable target still exited 0 on `Can't list`. Revision 2 resolves
+the floor inside the gate through one shared committed resolver (FLOOR
+demoted to a cross-check), pins the resolve run whole exactly like the
+compile run, declares `shell: bash` plus `python -I`, pins the top-level
+`defaults`/`env` surfaces, and walks every target with a raising `onerror`
+before compiling. Lesson carried: a self-check is satisfied by construction
+when the checked value chose the checker -- provenance must be resolved
+inside the gate, not passed into it; and a whitelist enforced on one surface
+is a bypass path through every surface it does not name.
+## 2026-09-18 - BUG-260917-865lqe rev2: harness baseline replaces access-mode exclusion; readable harness fds covered
+
+The rev1 write-only guard keyed on one access mode, so an O_RDWR harness
+log (`1<>file 2>&1`) still produced spurious `operation='stream.read'`
+failures (reviewer: 9 failed under that shape). Fix in
+tests/test_selection_boundary_property.py: the harness-held descriptor
+table is snapshotted once at module import, and offset synthesis now
+skips a descriptor only when its (number, (st_dev, st_ino)) continues
+from that baseline; the write-only guard stays as a second, independent
+reason to skip. Full ordinary suite green under all three shapes (8645
+passed, 130 skipped, exit 0 each: `>`, `1<>`, pipe); the `== O_RDONLY`
+gate-narrowing mutant dies to the new `r+b` control params and the
+number-only baseline mutant dies to the number-reuse control (exit 1
+each, both exactly narrow over the full module). Stated bound corrected:
+a pre-snapshot descriptor read and then closed/replaced before the
+verdict is invisible to the offset tripwire (pre-existing evasion, not
+introduced by the exclusion).
+
+## 2026-09-18 - BUG-260917-865lqe: boundary oracle no longer reads the harness log; write-only fds excluded by capability
+
+The pre-Phase-B fd-offset tripwire treated any offset motion as a product
+read. Under `pytest … > file 2>&1` with xdist, fd 9 is the suite's own log
+file (O_WRONLY, regular, one open file description shared across workers),
+so sibling progress writes moved its offset between snapshot and verdict:
+11 spurious `operation='stream.read', fd=9` failures, while the pipe shape
+stayed green because a pipe fd is never snapshotted. Fix in
+tests/test_selection_boundary_property.py: offset synthesis now skips
+write-only descriptions after the fstat identity-continuity check (fcntl
+F_GETFL on the live description -- capability, never fd number, so the
+readable foreign-fd controls keep firing). Full ordinary suite green under
+both shapes (8635 passed, 130 skipped, exit 0 both); 18 committed
+outside-read controls re-run green; the narrowing mutant (skip first
+synthesized read) dies to
+test_oracle_catches_preopened_buffered_stream_read (exit 1). Lesson: an
+offset is a shared cursor, not a read receipt -- a write-only fd's motion
+is proof of writes.
 
 ## 2026-09-18 - BUG-260917-3txerf rev3: the rev2 closure claim was partial; two guard classes stay open under TASK-260918-16r0fm
 
@@ -4255,3 +4504,645 @@ closure-refresh and runtime already guard their install helpers
 selection entry point at all.
 
 Evidence: `TASK-260916-18j5hg_results.md` revision 4 (board outcome resource).
+
+## 2026-09-18 TASK-260916-1lv2ky: source workflow and actionable diagnostics
+
+First delivery. `csk install`/`upgrade`/`status` reuse the accepted
+leaves' entries for schema-2; new opt-in-only `csk check` validates
+(structure, pure policy planning, lock); thirteen classes render with
+subject, reason, one remediation and no secrets from one table and one
+renderer; 55-command golden matrix from clean origin/main is
+byte-identical; docs carry the draft label and no-conformance
+statement in every surface. Two findings worth keeping. (1) A new
+`errors -> repository_policy` import broke four sibling selection
+closure tests that pin the exact module set reachable from selection;
+the table and renderer moved to a leaf-owned `diagnostics` module so
+`errors` keeps zero intra-package imports. A leaf that adds any import
+to a pinned-closure module must run the full ordinary suite at its own
+head, not only its narrow tests. (2) The literal-label static test
+passes while the label line is dropped from the renderer (mutant M7),
+so the static check alone proves nothing and the behavioral shape
+tests carry the row. Seven narrowing mutants killed, zero survivors;
+evidence in `TASK-260916-1lv2ky_results.md`.
+
+## 2026-09-18 TASK-260916-1lv2ky rev2: the vacuous corpus, the second gate, and the guide that promised a refused workflow
+
+Review of revision 1 returned five findings. The credential-leak fix
+taught the durable lesson: the corpus test passed because `{...!r}`
+rewrote the newline, so the asserted-absent string could never occur
+while the key bytes sat in the output. A vacuous assertion is worse
+than a missing one, so every corpus case now asserts its secret
+PRESENT with the sanitizer disabled before asserting it absent with
+the sanitizer on; the proof caught a second vacuity during the rework
+itself (newline URLs take a non-echoing entry refusal, so CLI
+generation excludes them by construction). The other repairs: the
+parse-time opt-in gate is gone (one decision in
+`config.skillfile_sources_enabled`, fail-open on load errors so
+dispatch names the broken config), status ERROR rows render through
+the shared renderer with per-class text+JSON coverage, `check`
+catches `OSError` on the Skillfile read, and every document now
+states that network acquisition is unimplemented with `check`
+summaries marking network sources planned, not acquired. Evidence in
+`TASK-260916-1lv2ky_results.md` revision 2.
+
+## 2026-09-18 TASK-260916-1lv2ky rev3: do not sanitize an echo, do not echo
+
+Review of revision 2 returned two findings, both repeats of revision-1
+classes with the same cause: the fix was applied where the symptom
+appeared rather than where the defect is. The sanitizer grew quoted-span
+detection, a `://` userinfo anchor and a query-name denylist around an
+unchanged `{value!r}` echo, and 10 of 22 class members still rendered
+verbatim; the opt-in fix mapped load failure to enabled instead of
+disabled, printing the draft label from a file that could not be read.
+Revision 3 implements the two decided designs: (1) the git refusal
+takes the source alias and never the declaration, so there is nothing
+to redact, with the sanitizer kept only as a second line of defence;
+(2) the opt-in is one three-state decision (enabled/disabled/unknown)
+where unknown renders v1 display while `check` stays parseable so
+dispatch names the unloadable config. The durable lesson: a corpus
+fitted to the guard ("quotes stay out so repr keeps single-quote
+spelling") tests the guard's author, not the guard; generate over the
+whole class and assert on every surface. Evidence in
+`TASK-260916-1lv2ky_results.md` revision 3.
+
+## 2026-09-18 TASK-260916-1lv2ky rev4: remove the half-state, derive the test
+
+Review of revision 3 returned one finding, the third instance of one
+class: under the unknown config state a draft surface still rendered
+(`csk check --help`, which argparse renders before dispatch). The
+cause was not the implementation but the pre-approved concession that
+`check` stays parseable under unknown: a partially-draft parser shape
+whose boundary had to be remembered at each surface. The
+orchestrator withdrew the concession, so revision 4 deletes
+`_draft_check_available`: under unknown the parser is the released v1
+parser, and the reviewer's 18-state probe re-run against origin/main
+`2675276` shows every unknown cell byte-identical. The test that had
+been written three times is now one parametrised (surface x state)
+test with the 46 surfaces walked from the live parser, so a verb
+added later enters the matrix by construction. The durable lesson: a
+boundary that must be remembered at each surface will eventually be
+missed at one; remove the state instead of guarding it. Evidence in
+`TASK-260916-1lv2ky_results.md` revision 4.
+
+## 2026-09-18 TASK-260916-1lv2ky rev5: a read is not a load
+
+Review of revision 4 returned one finding, a direct consequence of
+the ordered design change rather than an implementation slip: to know
+the parser shape the CLI must read the config, and the config loader
+is not silent (the system-config locked-key warning) and not free
+(it runs before argparse on every surface). The bytes differed on
+all 51 surfaces in a loadable non-opted-in state that neither the
+12-state unknown matrix (unknown versus absent, in one process) nor
+the 56 goldens (one fixed config, no system config) could reach.
+Revision 5 separates reading the config for a decision from loading
+it for use: the decision reads with `quiet=True` through the same
+full loader, `main` evaluates it once and shares the value, and
+dispatch keeps the trunk load with its single warning. The durable
+lesson: an instrument that cannot reach the differing state proves
+nothing, and a byte-identity claim needs the comparison against the
+reference in the state the change touches, not only in the states
+the existing fixtures happen to cover. Evidence in
+`TASK-260916-1lv2ky_results.md` revision 5.
+
+## 2026-09-18 BUG-260918-wvfoqa: the adapter ledger gate moved into the shared planner with an explicit adoption rule
+
+A regular file with user bytes at `<adapter-root>/.csk-managed.json` was
+silently overwritten with install status ok on both lanes, because the
+shared planner's reader mapped every foreign shape to "no ledger" and the
+F-B fix had refused only non-regular shapes in the schema-2 translation.
+The fix refuses in `_read_managed` itself: a live ledger is adopted only
+when its full bytes strictly validate as the csk ledger document (exact
+keys, integer schema_version 1, duplicate-free identifier entries), and
+everything else refuses naming the path and the observed shape. No new
+marker was added — a marker cannot be present in ledgers csk already wrote,
+so frictionless reinstall bottoms out at exact-shape recognition regardless,
+and a copyable marker proves no authorship. The residual (a foreign file
+that happens to form a strictly valid ledger is adopted) is stated in the
+code, the spec, and the results rather than left implicit. Evidence: the
+reviewer's reproduction committed as a regression, both directions tested on
+both lanes through `installer.install`, two narrowing mutants (version-value
+admission, duplicate-entry admission) each killed by exactly their target
+param, mypy exit 0, ordinary suite 10095 passed / 280 skipped / 0 failed.
+Full evidence in `BUG-260918-wvfoqa_results.md`.
+
+## 2026-09-18 BUG-260918-2krem5: on 3.14 the trust seam does not crash, it silently unpins
+
+`Path.exists()` swallows only ENOENT/ENOTDIR/EBADF/ELOOP on Python ≤ 3.13
+but is `os.path.exists()` on 3.14 and swallows everything: the canonical
+chmod-0 trust directory raised raw `PermissionError` on 3.11 yet read a
+*pinned* record as unpinned `TrustRecord()` on 3.14 — fail-open, worse
+than the crash. Because `exists()` returns False for ELOOP on every
+version, "exists inside try" cannot refuse ELOOP; all 20 derived seams
+in trust.py/manifest.py/cli.py now attempt the real operation and map
+only `FileNotFoundError` to absence, everything else to the existing
+refusal types. The suite derives its completeness from the modules (AST
+enumeration + guard/multiplicity/linkage tests, 80 fault cases), and the
+`resolve()` exclusion is a committed probe, not an assumption
+(non-strict resolve never raises OSError; ELOOP-as-RuntimeError on
+≤ 3.13 is hardened at init only). Full evidence in
+`BUG-260918-2krem5_results.md`.
+
+## 2026-09-21 BUG-260918-2krem5 rev2: the vocabulary was the defect, so the boundary is the test
+
+Rev-1 review (F1) showed the seam derivation consulted a hand-written
+callee-name allowlist: 11 of 13 realistic unguarded seams added to
+`cli.py` (`shutil.rmtree`, `os.readlink`, `os.walk`, `os.access`,
+`Path.rmdir`, `Path.readlink`, `tempfile.mkdtemp`, `os.path.getmtime`,
+aliased `os.stat`, `os.fsync`, `Path.is_mount`) left all three static
+tests green — a list wearing a derivation's clothes. Per the rework
+decision the invariant is now tested at the boundary instead: 36 CLI
+leaves derived from parser choices plus 14 public API functions derived
+via inspect, pinned so any addition fails; beneath each of the 20
+covered entry points a broad fault (every `os` function via `dir(os)`
+plus `io.open`/`builtins.open` on the marker path) must produce a
+structured refusal. All 13 shapes re-run as live mutants fail the
+boundary test, and a new command plus a new public function each fail
+their pin. Rev-1 review (F2) showed `load_manifest`/`_read_payload`
+mapped only ENOENT to absence, so a file-blocked (ENOTDIR) project
+refused `csk list`/`status --all` exit 2 where v1 printed exit 0
+"Skillfile.json missing"; rev-2 restores ENOENT+ENOTDIR as absence at
+all 10 absence sites (plus `config show`/`hybrid status` on the same
+reading) while ELOOP still refuses per the AC matrix. Full evidence in
+`BUG-260918-2krem5_results.md` (rev-2 section).
+
+## 2026-09-21 BUG-260918-2krem5 rev3: state the bound, do not extend the instrument
+
+Rev-2 review (F1-rev2 `boundary-derivation-first-touch-only`, repeat of
+rev-1 `derivation-vocabulary-allowlist`) measured that `broad_fault`
+raises on the first touching call, so each driver executes exactly one
+seam: 13 shapes placed after a guarded stat are 0 of 13 caught by the
+boundary family, 6 of the 20 known seams are never reached by any
+boundary firing, and on 3.14 `Path.exists`/`Path.is_mount` swallow the
+injected error in the callee. The sweep (Nth-touch ordinal, full leaf
+enumeration) is re-decomposed into `BUG-260921-hv5upg`; this revision
+commits only the coverage statement in the instrument docstring — a
+first-touch sample, not a sweep — so no green run implies completeness
+it does not have. Full evidence in `BUG-260918-2krem5_results.md`
+(rev-3 section).
+
+## 2026-09-21 BUG-260921-hv5upg: the sweep is the ordinal, the enumeration is the linkage
+
+The first-touch sample is now a sweep: `broad_fault(..., nth=N)` fails
+the Nth touching call with K observed per entry via dry-run (max K=3:
+mkdir pairs, require→present→write) and K+1 asserted silent, so a seam
+behind a guarded one gets its own firing — position B goes from 0 of 13
+by the boundary family to 13 of 13 (10 by the sweep alone, 3 also by the
+static oracle), and the 6 masked/unforced seams (store/pin writes,
+present/write, draft stat, parent probe) all fire. Below-swallow
+wrappers on `Path.exists/is_mount` (and `os.path` predicates) raise
+directly, so the two 3.14 predicates are caught where the os fault was
+swallowed. Enumeration is linkage, not prose: covered leaves equal a
+driver registry (R2d now dies), every derived leaf is fault-driven or
+census-declared with its handler proven seam-free (position-D in-vocab
+now fails the boundary census too), and adding a leaf dies until handled.
+Full evidence in `BUG-260921-hv5upg_results.md`.
+
+## 2026-09-21 BUG-260921-hv5upg rev2: the sweep is now every pair, and the rev1 claim above overstated
+
+Correction to the entry above: rev1 swept 7 of 25 pairs and described
+the family as a sweep anyway — the same completeness-by-implication
+defect this element exists to remove. Rev2 sweeps 27 of 27 (entry,
+marker, fixture) pairs with 0 unswept: every breadth pair has a
+same-marker sweep firing every (ordinal, errno) combination with a
+pinned per-ordinal (call, module, func) sequence, and a linkage test
+fails any breadth-only pair. The two fixture branches rev1 avoided
+(bootstrap create path, init target marker) are swept with their
+non-named ordinals declared, not refused; the draft pair is swept both
+mocked and unmocked. The handler-map `()` hatch is closed (mapping
+verified against dispatch branches; hatch-alone dies), glob is measured
+per version (visible-except table, not a blanket bound), and the matrix
+closed errno×ordinal (narrow guards at depth now die to boundary).
+Position B 13/13 and the 6 other-entry behind-guard pairs die to named
+boundary sweeps on 3.11 and 3.14; one curiosity found by the matrix:
+`resolve()` internals differ by interpreter (lstat+stat vs one lstat),
+and ELOOP through them refuses on one pair but escapes raw RuntimeError
+on another — both pinned per combination. The per-pair table and the
+honestly narrower bounds live in the support-module coverage statement;
+full evidence in `BUG-260921-hv5upg_results_rev2.md`. Lesson carried:
+write the coverage statement last, from measurement, narrower than it
+feels — an understatement costs nothing here, and this element has now
+paid for an overstatement twice.
+
+## 2026-09-21 TASK-260921-qe62bu: the trust-reader replay, and why exists() cannot be the boundary
+
+Decided the `load_trust_record` collision between trunk (shared-boundary
+probe, TASK-260916-11yseo rev 5) and this Story (direct read, only
+`FileNotFoundError` maps to absence, BUG-260918-2krem5 rev 3) for the
+direct read. The deciding measurement is a 6-shape × 2-interpreter matrix
+(absent, chmod-0 parent, file-as-parent, symlink loop, overlong
+component, directory-at-file on 3.11 and 3.14): the survivor refuses
+typed on all five sick shapes on both interpreters, while the probe
+spelling reads ENOTDIR/ELOOP as silent absence even on 3.11 (classic
+`pathlib` ignores exactly ENOENT/EBADF/ENOTDIR/ELOOP) and reads every
+stat failure as absence on 3.14 (new `pathlib` delegates to
+`os.path.exists`, which swallows all `OSError`). The trunk docstring
+promise — "an I/O failure at either seam is a typed refusal" — is
+therefore version-dependent and false in four cells; the survivor's
+promise holds in all twelve. Cost side: the probe is also an extra
+syscall plus a TOCTOU window (deleted-between-probe-and-read refuses
+instead of reading absent) for strictly less coverage.
+
+Replay notes: the real merge conflicts are four files, not five —
+`publish.py` auto-merges cleanly (our ledger-deletion plus trunk's
+bin-inspection land together with no dangling reference), and
+`pipeline.py`/`status.py`/install-transactions auto-merge identically.
+`installer.py` keeps all three imports; LOGBOOK/`.spec` keep both sides
+(the merge drops the story's prepended header by line alignment — it was
+re-inserted, not lost). Two losing-side rewrites, both named: trunk's
+`stat`-seam fault tests now pin the survivor (a faulted `Path.exists` is
+never consulted, validation succeeds, reached-flag empty), and the
+story's `test_cli_network_sources_planned_not_acquired` install/upgrade
+half now asserts the admission refusal (trunk implemented the network
+acquisition the story premise says is unimplemented). One added pin:
+mock-free file-as-parent (ENOTDIR) refusal, which kills the probe
+spelling on every interpreter. Full evidence, mutant table (three
+narrowing mutants, zero survivors), and exit codes in
+`TASK-260921-qe62bu_results.md`.
+
+## 2026-09-21 TASK-260916-2je9f6: corpus closure instruments, and a fixture that lied about skips
+
+Worktree base sat one commit behind trunk (S7 `5ed6553` landed after the
+cut) and `worktree refresh-candidate` refused with
+`change_request_checkpoint_conflict`; per the epic operational notes the
+base gap is the orchestrator's to carry, so the leaf proceeded in place
+and recorded the refusal. The gap turned out to be content-free for this
+leaf: the worktree already carries S7-equivalent harness and production
+content (harness byte-identical to main, 277/277 green before any edit).
+
+The hollow-driver gate first shipped with an autouse fixture recording
+outcomes via try/except around the yield. A forced-skip probe (traversal
+disabled) showed six skips recorded as passed: test outcomes never
+propagate through a fixture yield. The fixture was replaced by a
+`pytest_runtest_logreport` hook in `tests/conftest.py` (scoped by node-id
+filename) plus `tests/draft_sources_accounting.py`; the same probe then
+reads 0/6/0/6. Lesson restated: an instrument is guilty until a probe
+that must move it moves it.
+
+## 2026-09-21 TASK-260916-2je9f6 rev2: the allowlist was a vocabulary nobody checked
+
+Review round 1 found the gate's whole definition of "production entry
+point" was a hand-typed table, and one entry
+(`boundaries.check_selected_package`) had zero production callers while
+vouching for five corpus cases. Deriving the check (an AST call-site
+scan over `src/csk`) flagged four dead entries, not one: the review
+named the example, the scan found the class. All four left the table
+and ten cases were re-pointed at the implementations production
+actually calls. Nine answers were unchanged; `root-no-inputs` now
+answers allow on the live path against a corpus expectation of
+refusal, because no live selection path reads `policy.root_inputs`
+(finding against TASK-260916-100uew). Lesson restated one level up:
+the verifier needs the same treatment as the thing it verifies; a
+list whose membership is checked is defensible, one that is merely
+typed is what the closing leaf exists to prevent.
+
+Two environment notes from the same round. The accounting hook
+recorded skips only in the call phase, so the canonical shape of a
+platform-declared control (a skip marker, which raises in setup)
+tripped the dropped-outcome guard; fixed by recording `skipped` in
+any phase, proved by a hook unit test plus a perpetual setup-skip
+probe. And a sibling live-sshd byte-exact test failed deterministically
+until the ambient ssh-agent (nine keys) was isolated: the real client
+offered agent keys past the test sshd's MaxAuthTries, so the bytes
+under test were never produced. Full evidence in
+`TASK-260916-2je9f6_results.md` (revision 2).
+
+Revision 3 of the same leaf closed the finding that the one-hop
+membership check admitted: a forwarding function in `src/` with no
+production caller laundered the dead `check_selected_package` back
+into the table. Reachability is now transitive from derived roots
+(console script, `__main__` delegation, top-level package API), and
+the walk terminates on a visited set, so cycles and recursion cannot
+fake liveness. Two things the fix surfaced are worth keeping. First,
+per-module `__all__` cannot be a liveness root: `boundaries` exports
+the dead entry itself, so the "exported API" root had to be scoped to
+the top-level package surface, which in `csk` declares no function
+API at all. Second, the transitive check found the same shape in the
+wild: `canonical_endpoint_identity` was vouched for by the caller-less
+compat wrapper `canonical_repository_identity`, a fifth dead entry no
+review named (finding against TASK-260916-1iyslr). A six-shape CLASS
+test pins the family; a narrowing mutant admits exactly the one-hop
+member. Full evidence in `TASK-260916-2je9f6_results.md` (revision 3).
+
+## 2026-09-22 TASK-260922-2syjr9: the replay that changed nothing, and the proof that nothing was lost
+
+Scratch merge of the worktree (story tip 4ab67d1 + uncommitted 2je9f6
+rev 3) against trunk 5ed6553 conflicts in exactly the brief's six paths
+and resolves to the worktree tree (262e535e): every trunk byte is
+already present via qe62bu or decided-superseded (wvfoqa shared planner
+over the translation check, qe62bu no-probe trust reader over the
+exists probe, 2je9f6 drivers over the pre-rework bodies). The two
+add/add files lose zero tests (conformance 21→30 via 2je9f6's +9;
+audit 79→79 with the two stat-param bodies following the accepted
+contract). Re-verified, not assumed: 6×2 trust matrix 12/12 on
+3.11+3.14, mypy strict exit 0 (93 files), ordinary suite 10765 passed /
+146 skipped exit 0, draft-sources corpus with the pinned suite 290
+passed / 1 deliberate skip on both interpreters. One suite failure on
+the host (live-sshd rejection bytes) is the 9-key ssh-agent tripping
+MaxAuthTries, green with an empty agent. 2je9f6 rev 3 carried
+byte-identical; this entry is the only authored hunk. Full evidence in
+`TASK-260922-2syjr9_results.md`.
+
+## 2026-09-22 TASK-260916-2je9f6: revision-3 gate re-verified at the replayed base, every mutant re-killed
+
+Second producer run on the revision-3 brief; the transitive-reachability
+candidate was already on the Story branch inside the replay commit, so
+this run changed no gate line and re-verified everything fresh instead
+of carrying evidence forward. Corpus: 290 passed / 1 deliberate skip
+(before, round-2 logs: 283/1; +7 are the six chain-shape params and the
+roots test), 94/94 semantic rows with non-empty call sites, junit
+per-category properties confirmed in the artifact. Reviewer round-2
+attack file now 5 passed (was 1 failed / 4 passed on the forwarder);
+probe prints dead / test-only / test-only-forwarder REJECTED. Full
+ordinary suite green in landing-gate shape: 11079 passed / 104 skipped,
+exit 0, with the ambient ssh-agent neutralized; without it the live-sshd
+rejection-bytes param fails on "Too many authentication failures" (host
+agent offers 8+ keys, the test sets no IdentitiesOnly: pre-existing,
+sibling-owned, left untouched per the bounded-diff rule). Mutants
+M1-M7 killed and P1 sensitive, each built from this tree in place and
+restored byte-identical (`cmp`; `git status --short src/` clean):
+M7 admits exactly the one-hop forwarder and dies only on `[one-hop]`,
+M5 keeps the `select_endpoints` token while removing its last call and
+dies statically (membership names it UNREACHABLE) and behaviorally (15
+installer-provider failures, 482 passed; clean 497 passed). No
+production change. Full evidence in `TASK-260916-2je9f6_results.md`.
+
+## 2026-09-22 TASK-260916-2je9f6: missing-category gate closes the checklist deadlock, all evidence re-measured
+
+Attempts 1-4 left board items 25/26 unchecked (item 25's
+missing-category clause was not literally implemented) and handoff
+refused. This run implements it as a test-only change inside the
+named harness module: `_assert_all_categories_collected` fails
+naming any report bucket with zero collected tests, wired into the
+accounting test, with a 4-param CLASS unit test plus positive
+control. A pre-change probe proved the gap (a collected set with no
+snapshot node id returned `snapshot total 0` silently). Corpus:
+295 passed / 1 skip (94/94 semantic, 0 NYI); junit 16/16
+properties; reviewer attacks 5 passed, probe 3xREJECTED; mypy 0.
+Mutants M1-M8 + P1 killed fresh, zero survivors (M8 admits exactly
+empty-snapshot, dies only on `[snapshot]`); full ordinary suite
+11084/104 exit 0 in landing-gate shape (+5 new tests, groups cover
+exactly the 101 files). `src/` clean. Items 25/26 checked with this
+evidence; PR/main lanes stay the orchestrator post-landing step.
+
+## 2026-09-22 TASK-260916-2je9f6: intervention round replaces the static gate with observed execution
+
+Three reviews laundered a dead entry through the static membership
+gate (test-only caller, forwarder, uncalled nested bodies and
+references-as-data), so per the orchestrator intervention this round
+stops inferring reachability and observes it: the gate runs the
+product's own install/upgrade/status/check paths on hermetic
+fixtures under `sys.settrace` and requires every tabled entry to
+have executed. Design A (ordinary-suite coverage) was measured and
+rejected first: the dead `check_selected_package` is executed 23
+times by direct unit tests, so suite coverage would certify the hole.
+The tracer found a sixth dead entry in the wild:
+`install_marker.validate_attestation_evidence` never executes in
+production (finding vs 11yseo), so it left the table with its
+drivers intact. Corpus: 294 passed / 1 skip (94/94 semantic, 0 NYI);
+junit 16/16 properties (harness 81/1/0/82); the four controls plus
+the dead shape reject as committed CLASS params; mypy 0. Mutants
+M-new/M1-M6/M8 + P1 killed fresh, zero survivors (M-new exempts
+exactly the dead entry and dies only on `[dead]`; M5's
+token-preserving production mutation dies behaviorally on the plan
+scenario). Full ordinary suite 11083/104 exit 0 in landing-gate
+shape (groups cover exactly the 101 files). `src/` clean; the
+`root-no-inputs` divergence and BUG-260922-1o40hs stay pinned. Full
+evidence in `TASK-260916-2je9f6_results.md`.
+
+## 2026-09-22 TASK-260916-2je9f6 rev2: the observed gate dies on Linux, and the refused lane must be proven, not skipped
+
+Hosted CI found what macOS could not: on ubuntu-latest the
+external-build scenario asserts exit 0 while the product refuses by
+design (`go-repository-v1` runs on macOS/Windows only; Linux
+qualification deferred), so `_run_observed_scenarios` raised and all
+six gate tests died with it (6 failed / 287 passed / 2 skipped). The
+refusal is correct; the gate's unstated assumption (every
+scenario runs everywhere) was not. Fix is shape (B): where
+`installer.supports_external_builds()` — extracted as the product's
+own predicate, called by the installer and the gate alike — is
+false, the scenario asserts the structured refusal (exit 1,
+`source_member_invalid`, the product's refusal text) and the three
+entries covered only by that scenario are excluded by
+machine-recorded labels (`tests/draft_sources_observed_labels.json`),
+re-approved against the live trace on every capable run. Shape (A)
+(skip the gate) was rejected because the five controls would skip
+with it and M-new-class mutants would survive on Linux; forced
+admission was rejected because it would certify counterfactual
+executions on paths the product refuses, coupling the gate to the
+deferred Linux qualification. A pure single-run derivation is
+impossible (an unobserved dead entry and an unobserved
+external-only entry are indistinguishable in one record), so the
+cross-platform data lives in the golden — machine-recorded, never
+author-enumerated, stale-proof via growth guards (unrecorded tabled
+entry fails every lane; live/recorded mismatch fails capable
+lanes; empty sets refused at write and load). Corpus: ordinary
+297/1, forced-false (`CSK_SIMULATE_NO_EXTERNAL_BUILDS=1`) 296/2,
+junit harness 84/1/85 and 83/2/85, semantic 94/0 both lanes, zero
+NYI. Mutants M-new/M-branch/M-subset/M-golden/M-reinline killed
+per the matrix (M-new dies on `[dead]` on both lanes; M-branch
+survives only where support is natural and dies refused with the
+exact CI `assert 1 == 0`); mypy 0. Story base was one commit behind
+trunk (mz020a); `refresh-candidate` replayed all 7 checkpoints with
+5 conflict resolutions (LOGBOOK/spec/installer/trust/audit-tests),
+the replayed tree is byte-identical to the old tip and the
+candidate delta byte-identical to its backup. Full ordinary suite
+at the end of this run: 1 pre-existing environmental red (live-sshd
+agent overflow, green detached, sibling-owned) with everything else
+green. Full evidence in `TASK-260916-2je9f6_results.md` (rev 2).
+
+## 2026-09-22 TASK-260916-2je9f6: revision 3 closes the three review bypasses, all in the harness
+
+F-1 (simulation disarms the capable pin): the autouse fixture that
+forced the support predicate false for every test is gone;
+`CSK_SIMULATE_NO_EXTERNAL_BUILDS=1` now adds a refused-lane run
+beside the native one, and the pin obligation reads an import-time
+capture of the product predicate, never the live value. Wrong
+golden plus both ambient variables fails 10 gate consumers (was a
+full-file green). F-2 (recorder credits an unexecuted callable):
+the tracer keys on `__code__` identity instead of
+`(module, name)`; new 3-param CLASS test over nested/method
+collisions. F-3 (dead control tests the wrong branch): the
+laundering CLASS test asserts resolvability first and pins the
+never-executed branch, with the unresolvable branch pinned from
+the other side. No production change; the golden is byte-identical
+(the pin passes against it under code-identity keying, proving no
+live collision). Corpus both lanes: 302/1 with zero NYI, junit
+harness 89/1/0/90 on each. Mutants M-f1/M-f2/M-f3-gate killed on
+their named tests (each dies on exactly its target set), M-new
+re-killed on `[dead]`, the prescribed production deletion kills
+`[dead]` via the resolvability assert, and the reviewer's four
+attack tests pass on the candidate. Full evidence in
+`TASK-260916-2je9f6_results.md` (rev 3).
+
+## 2026-09-23 TASK-260916-2je9f6: revision 3 verified on refreshed trunk
+
+`refresh-candidate` advanced this Story onto trunk `f1941128`; the
+candidate remained uncommitted. Refresh had replayed away the PR #64
+live-SSH agent isolation (`IdentityAgent=none`), so I restored that
+trunk prerequisite before verification: the named live-SSH rejection
+case passed (1 passed, exit 0), and the final ordinary suite passed
+without agent overflow. The first full-suite run before restoration
+was red only on that known case (1 failed, 11090 passed, 104 skipped,
+exit 1); the final refreshed-base run is green.
+
+On 2026-09-23, both full draft-corpus runs passed: native macOS and
+`CI=true CSK_SIMULATE_NO_EXTERNAL_BUILDS=1` each report 303 passed,
+1 harness accounting-probe skip, exit 0. In each junit artifact:
+schema 115/0/0/115, snapshot 3/0/0/3, semantic 94/0/0/94, harness
+90/1/0/91. The semantic dispatch printed 94 distinct driver call-site
+records on each run. The capability-bound skip messages now include
+`sys.platform` and the mechanism required; the new reason-shape test
+passed. The golden remains machine-derived, and the wrong-golden F1
+test, F2 code-object collision class, F3 branch-specific CLASS test,
+and both narrowing mutants were attacked under the simulated lane.
+
+Narrowing mutants on this candidate: F1 re-adds the live predicate to
+the capable-pin obligation and dies on
+`test_draft_sources_simulation_cannot_disarm_the_capable_pin`; F2
+restores `(filename, co_name)` recorder keys and dies on all three
+`test_draft_sources_same_name_code_cannot_certify_an_unexecuted_entry`
+params; F3 exempts the dead boundary entry and dies on the `[dead]`
+param; its branch-reroute mutant makes the unresolved sentinel fall
+through to the never-executed branch and dies on
+`test_draft_sources_unresolvable_entry_rejected_as_unresolvable`.
+Each mutant pytest invocation exited 1 for its named assertion; all
+temporary source mutations were restored. `mypy` passed (93 source
+files, exit 0). The final full ordinary suite passed 11092 tests with
+104 declared skips (exit 0, 184.69s). Ubuntu hosted CI remains the
+orchestrator post-landing step, not locally claimed. Full commands,
+mutant evidence, and case-to-entry table are attached in
+`TASK-260916-2je9f6_results.md`.
+
+## 2026-09-23 TASK-260916-2je9f6: revision 4 closes value-equality collision
+
+The revision-3 reviewer reproduction was run before the fix: two modules
+contained byte-identical `entry(x): return x + 1` functions, the recorder
+observed only `live.entry`, and `_check_table_observed` accepted the uncalled
+`dead.entry`. The new recorder maps `id(code)` to records retaining `code`;
+membership, golden-label projection, and reporting compare the retained object
+with `is`. The committed CLASS test now covers nested functions, methods,
+nested-in-method functions, and byte-identical cross-file clones. The same
+reviewer-style probe is green after the fix.
+
+The capable pin no longer reads `CSK_REGENERATE_OBSERVED_LABELS` as an escape.
+Only the agreement test's explicit golden-write call requests an unpinned
+record. The named regression test plants a narrowed golden while the
+regeneration variable is set. A value-keyed membership mutant failed that
+cross-file parameter (`DID NOT RAISE`, exit 1); a mutant that disabled the pin
+when the regeneration variable was set failed the named `-k` test on its wrong
+golden (`DID NOT RAISE`, exit 1). Both mutations were restored and byte-checked.
+
+Final local evidence on 2026-09-23: both the native macOS lane and
+`CI=true CSK_SIMULATE_NO_EXTERNAL_BUILDS=1` report 305 passed / 1 harness
+accounting-probe skip, exit 0. Each JUnit reports schema 115/0/0/115, snapshot
+3/0/0/3, semantic 94/0/0/94, harness 92/1/0/93. The full ordinary suite
+reports 11094 passed / 104 skipped, exit 0, in 266.29s. Mypy and
+`git diff --check` both exit 0. The result artifact carries the exact commands,
+out-of-contract rows, per-case driver map, and mutant table.
+
+The base check found the workspace at `502b12cbe49956fd380287dd22d0c0379ddc2913`,
+one commit behind fetched `origin/main` `a0aa6a4b834c2dccffd7243d72bfab62dee06819`.
+Per the task's operational note, the candidate remains uncommitted in the Story
+worktree for orchestration to carry forward; no refresh or rebase was attempted.
+The `root-no-inputs` ownership note remains unchanged.
+
+## 2026-09-23 BUG-260922-2ce4j2: Windows golden rework
+
+The trust reader now checks the parent chain before treating `FileNotFoundError` as an absent trust record. A file in a directory slot refuses, including the Windows-shaped `ERROR_PATH_NOT_FOUND` raised at open; EACCES, EIO, ENAMETOOLONG, and ELOOP faults at the parent-stat seam also refuse. Missing components are walked to the nearest existing directory. The fault sweeps discover callable `_path_*` entry points from the live `nt` and `os.path` modules on Windows and keep the POSIX premise test platform-specific. Golden status JSON tokenizes native and JSON-escaped Windows roots without rewriting escaped separators. The sanitizer corpus now includes a raw Windows path and retains its non-vacuity assertion.
+
+Local evidence is macOS only: the Windows-shaped open error and file-as-parent layout were injected on macOS, and the fast-path wrapper was exercised with a synthetic `nt` module. No hosted Windows result is claimed; the orchestrator owns the Windows probe before review. Three of four primary acceptance clauses are locally established; the hosted platform matrix in clause (a) is pending. Exact command counts, mutants, declared bounds, and seven-case macOS verification are in `BUG-260922-2ce4j2_results.md`.
+
+## 2026-09-23 BUG-260922-2ce4j2: accepted candidate refresh boundary
+
+The retried `task-board worktree refresh-candidate BUG-260922-2ce4j2` refused with exit 1 because CR revision 1 is still accepted. `git merge-base --is-ancestor d78b66de HEAD` exited 1, confirming the candidate remains on the old anchor. `refresh-candidate` only admits initial/rework leaves; the board's documented accepted-revision route is `worktree converge`, an orchestrator-only command that refuses tracked runs. This producer run did not alter source files or rerun validation on the stale base. The task-scoped result records the exact refusal and required operator action.
+
+## 2026-09-23 BUG-260922-2ce4j2: refreshed candidate verification
+
+The requested candidate refresh was retried before source inspection. The
+refreshed Story tip is `f54de180eee883839d3ab62196b79d2e4de98c8d`, and
+`git merge-base --is-ancestor d78b66de HEAD` exited 0. The full configured
+CPython 3.14.7 suite was rerun against that tree with
+`CSK_DRAFT_SOURCES_SUITE_ROOT` set, `-n 4 --dist=loadfile`, and an external
+`/tmp` basetemp: 11,115 passed, 260 skipped in 367.28s, exit 0. `uv run mypy`,
+`uv build --out-dir /tmp/BUG-260922-2ce4j2-refresh-dist`, and `git diff --check`
+also exited 0.
+
+The refreshed commit range from `f406db6` to `f54de18` has no changes in the
+CLI source, golden support, or golden test paths. The earlier full golden runs
+(CPython 3.12.13 and 3.14.7), width probes, and narrowing mutant therefore
+remain applicable; both interpreter patch versions were resolved again.
+No hosted Windows result is claimed. A dirty `tests/test_sources_transport.py`
+diff is present in the shared Story worktree outside this bug's acceptance
+scope; it was preserved, not edited here, and was included in the green full
+suite. The refreshed task result records this carry-over explicitly.
+
+## 2026-09-23 BUG-260922-2ce4j2: rev3 handoff evidence
+
+The final `[audit-alias]` test now tokenizes and compares the message body after removing only the terminal CR/LF bytes, then separately requires the exact LF output bytes. Its narrowing mutant leaves `projects.demo.path` pointing at the pristine fixture while rewriting only `skills_root`; the named test fails because `add-skill` leaks `extra-skill` into the pristine `Skillfile.json` (exit 1). The release-v1 comparator runs candidate and release source under the same Python interpreter, and the shared environment seam pins `COLUMNS=80` and LF output.
+
+Final full golden-file evidence on macOS: CPython 3.12.13 reports 69 passed / exit 0 with `COLUMNS` unset, 80, and 200; CPython 3.14.7 reports 69 passed / exit 0 at `COLUMNS=200`. The final configured ordinary suite with `CSK_DRAFT_SOURCES_SUITE_ROOT` set, `-n 4 --dist=loadfile`, and an external basetemp reports 11,122 passed / 110 skipped / exit 0 in 207.88s. No hosted Windows or Ubuntu result is claimed; the orchestrator owns those lanes.
+
+Rev3-A is corrected: `git checkout HEAD -- tests/test_sources_transport.py` exited 0; the path hash equals `HEAD` blob `8ced555853853b03ebb1a803a7b249e010e12fdf` and its diff is empty. Final diff has exactly eight task-intended paths: `LOGBOOK.md`, `src/csk/audit/trust.py`, `tests/cli_golden_v1_support.py`, `tests/fs_boundary_support.py`, `tests/test_cli_golden_v1.py`, `tests/test_filesystem_boundary_refusals.py`, `tests/test_filesystem_seam_refusals.py`, and `tests/test_source_diagnostics.py`. The prior note that described the transport test as a preserved dirty carry-over is superseded by this restoration and final path audit.
+
+The result resource `BUG-260922-2ce4j2_results.md` carries exact commands, full acceptance-to-test coverage, Windows rework bounds, mutant evidence, declared out-of-contract rows, and the missing-surface-table brief gap. Candidate remains uncommitted in the Story worktree.
+
+## 2026-09-23 BUG-260922-2ce4j2: rev4 globber class probes
+
+CPython source inspection confirmed the import-time alias seam on macOS. CPython 3.14.7's `Path.glob()` uses `glob._StringGlobber.lexists`, which is the same Python function object as `os.path.lexists` (`genericpath.lexists`). CPython 3.13.15 exposes class aliases `glob._StringGlobber.lstat -> os.lstat` and `glob._StringGlobber.scandir -> os.scandir`; the literal and wildcard Path.glob shapes observe those bindings. The injector now scans class attributes in loaded `glob` and `pathlib`, matches discovered OS/path/NT probes by identity, preserves descriptors, and wraps the matches in both dry-run and fault-run paths. No globber attribute names are listed manually.
+
+The named glob tests and all 141 tests in `tests/test_filesystem_boundary_refusals.py` pass on CPython 3.12.13, 3.13.15, and 3.14.7. A narrowing mutant that omitted the first discovered class alias failed `test_globber_class_probe_alias_is_discovered_and_observed` with exit 1, seeing `os.lstat` but not the class binding; the mutant was removed. The full configured CPython 3.14.7 suite ran with `CSK_DRAFT_SOURCES_SUITE_ROOT`, `-n 4 --dist=loadfile`, and an external basetemp: 11,123 passed, 260 skipped, 220.96s, exit 0. Mypy, compileall, package build, and `git diff --check` also exited 0.
+
+The Windows touch-baseline bound is explicit: a refusal touch dropped from the product also disappears from Windows' measured baseline and is caught only by fixed POSIX pins. This run makes no Windows claim; the orchestrator owns hosted probe PR #67. Rev4's source delta is confined to `tests/fs_boundary_support.py` and `tests/test_filesystem_boundary_refusals.py`. The handoff result resource now contains the exact run commands, counts, mutant evidence, source inspection, and bounds; its full-suite JUnit report is attached separately. The candidate remains uncommitted.
+
+## 2026-09-22 BUG-260922-1o40hs rev2: a declared root admitted in part is a root omitted
+
+Revision 1 refused a root without `root_inputs` but still admitted a
+declared runtime root in part: with `runtime_roots=["scripts"]` and
+`root_inputs=[SKILL.md, agent-skill.json, scripts/run.sh]` the live
+path admitted, because the required set came from a caller-supplied
+tuple (plus manifest filenames) and nothing derived root coverage from
+the effective manifest. The listed file creates the `scripts` directory
+in the snapshot, package validation passes on the partial tree, and
+`scripts/required.dat` never arrives -- worse than a visible miss.
+
+The fix derives the required set in `selection._require_root_inputs`
+from the effective-manifest bytes read through the member descriptor
+(canonical, else legacy): the manifest itself plus every declared
+`runtime_roots`/`build_roots` entry, using only the shared
+protocol-JSON and portable-path shapes. Full manifest validation still
+runs once, later, on the admitted snapshot through `skillcheck`, so the
+derivation is lenient extraction (malformed manifests yield no roots
+here and refuse there) and stays fail-closed. Coverage was already
+ancestry in `boundaries._require_covered_inputs` (required at-or-below
+admitted); it finally has the complete required set to check. The
+caller-supplied `required_inputs` tuple is gone from the live path, so
+no caller can forget a declared root.
+
+Evidence: `BUG-260922-1o40hs_results.md` revision 2 (board outcome resource).
+
+## 2026-09-22 BUG-260922-1o40hs rev3: required inputs move into the manifest model
+
+Revision 2 derived `runtime_roots`/`build_roots` from the effective
+manifest but missed a schema-1 command's `unix_path`: a root was
+admitted without its declared executable, because the required set
+enumerated the fields someone remembered. Third instance of the shape
+in this epic (seam vocabulary, entry-point vocabulary, now this), so
+the fix is not another field.
+
+`skillspec` now owns the derivation: `SKILLSPEC_PATH_MEMBERS` and
+`COMMANDSPEC_PATH_MEMBERS` are built from the records' own
+`dataclass_fields` minus pinned exclusion sets (the install-marker
+idiom), and `declared_required_inputs` enumerates runtime roots, build
+roots, and every command path (`unix_path`/`win_path` on every schema,
+`source_dir`, schema-8 `modules`). The live gate validates the
+descriptor-read manifest bytes through the one implementation
+(`parse_manifest_bytes`, refactored out of the snapshot loader) and
+requires coverage of the model's property. A growth test pins the
+exclusion sets and fails on any unclassified new member; a second test
+proves it by growing a synthetic record and watching the assertion
+fail. The reviewer schema-1 reproduction now refuses, the whole-root
+control still admits with recursive contents, and presence-based
+context eligibility (references/, data/, ...) stays a stated bound:
+it is not manifest-declared, so the model cannot see it.
+
+Evidence: `BUG-260922-1o40hs_results_rev3.md` (board outcome resource).

@@ -11,6 +11,8 @@ import pytest
 from csk import deprecation, locking
 from csk.config import GlobalConfig, ProjectConfig
 
+from draft_sources_accounting import record as _record_draft_sources_outcome
+
 
 def run(cmd: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
     proc = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
@@ -139,6 +141,32 @@ def stable_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("CSK_CONFIG", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Feed the draft-sources category counts; a no-op for every other file.
+
+    Scoped by node-id filename to ``test_draft_sources_conformance.py``:
+    the accounting test at the end of that module needs per-test
+    outcomes, which only a hook can see. A skip records as skipped in
+    whatever phase raised it (a setup-phase skip is the canonical
+    shape of a skip marker or a fixture-level skip); a setup failure
+    records the test as failed without a body run; a teardown failure
+    overwrites the call-phase outcome.
+    """
+    if not report.nodeid.split("::")[0].endswith("test_draft_sources_conformance.py"):
+        return
+    if report.when == "call":
+        if report.passed:
+            _record_draft_sources_outcome(report.nodeid, "passed")
+        elif report.skipped:
+            _record_draft_sources_outcome(report.nodeid, "skipped")
+        else:
+            _record_draft_sources_outcome(report.nodeid, "failed")
+    elif report.skipped:
+        _record_draft_sources_outcome(report.nodeid, "skipped")
+    elif report.failed:
+        _record_draft_sources_outcome(report.nodeid, "failed")
 
 
 @pytest.fixture

@@ -1,0 +1,28 @@
+usage: csk skill check [-h] [--locale LOCALE] [--json] path
+
+Validates intrinsic skill requirements in a working tree directory.
+
+positional arguments:
+  path             skill directory to validate
+
+options:
+  -h, --help       show this help message and exit
+  --locale LOCALE  selected locale to validate
+  --json           print machine-readable issues
+
+Files read:
+  <skill>/SKILL.md, <skill>/agent-skill.json, <skill>/csk-skill.json (legacy),
+  <skill>/agents/runtime.json,
+  <skill>/locales/metadata.json, <skill>/.skill_triggers.
+
+Notes:
+  This command reads the working tree as-is. csk install validates the committed
+  git snapshot resolved from Skillfile.json.
+
+Exit codes:
+  0 no errors, 1 one or more strict errors.
+
+Examples:
+  csk skill check .
+  csk skill check /path/to/skill --locale ru
+  csk skill check . --json

@@ -1,0 +1,29 @@
+usage: csk bootstrap [-h] [--skills-root SKILLS_ROOT]
+                     [--preferred-locale PREFERRED_LOCALE]
+                     [--default-agents DEFAULT_AGENTS] [--non-interactive]
+                     [--force | --if-missing]
+
+Asks for machine-level settings: skills_root, preferred_locale, and default_agents. Shell profile changes are not required. Flags override the prompts; --non-interactive disables prompting entirely.
+
+options:
+  -h, --help            show this help message and exit
+  --skills-root SKILLS_ROOT
+                        directory containing skill git repositories
+  --preferred-locale PREFERRED_LOCALE
+                        preferred install locale, e.g. ru
+  --default-agents DEFAULT_AGENTS
+                        comma-separated agent ids, e.g. codex_cli,claude_code
+                        (known: claude_code, codex_cli, cursor, gemini,
+                        opencode, windsurf)
+  --non-interactive     never prompt; fail instead
+  --force               overwrite an existing config without asking
+  --if-missing          create config only when absent; keep an existing
+                        config unchanged
+
+Files written:
+  ~/.cocoaskills/config.json.
+
+Examples:
+  csk bootstrap
+  csk bootstrap --non-interactive --skills-root ~/skills --default-agents codex_cli,claude_code
+  csk bootstrap --if-missing --non-interactive --skills-root ~/skills

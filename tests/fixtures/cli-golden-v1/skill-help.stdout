@@ -1,0 +1,8 @@
+usage: csk skill [-h] {check} ...
+
+positional arguments:
+  {check}
+    check     Validate one skill directory without requiring csk config.
+
+options:
+  -h, --help  show this help message and exit

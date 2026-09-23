@@ -1,0 +1,52 @@
+usage: csk install [-h] [--all] [--dry-run] [--verbose] [--fix-gitignore]
+                   [--strict-tags] [--audit [{advisory,strict}]]
+                   [--build-ssh-identity PATH] [--build-ssh-agent [SOCKET]]
+                   [--build-ssh-known-hosts PATH]
+                   [target]
+
+Apply Skillfile.json using local refs. Missing git URL sources are cloned.
+
+positional arguments:
+  target                project alias, '.', or project path
+
+options:
+  -h, --help            show this help message and exit
+  --all                 operate on all registered projects
+  --dry-run             plan work without modifying files
+  --verbose             print detailed progress
+  --fix-gitignore       deprecated; prefer csk init
+  --strict-tags         fail if an installed tag moved to another commit
+  --audit [{advisory,strict}]
+                        run audit gate for this install (default mode:
+                        advisory)
+  --build-ssh-identity PATH
+                        SSH identity for private build repositories; a private
+                        key, or the matching public key when combined with
+                        --build-ssh-agent (env: CSK_BUILD_SSH_IDENTITY)
+  --build-ssh-agent [SOCKET]
+                        SSH agent socket for private build repositories; bare
+                        flag or 'auto' adopts SSH_AUTH_SOCK (env:
+                        CSK_BUILD_SSH_AGENT)
+  --build-ssh-known-hosts PATH
+                        known_hosts file pinning build repository host keys
+                        (default: operator home .ssh/known_hosts; env:
+                        CSK_BUILD_SSH_KNOWN_HOSTS)
+
+Files read:
+  ~/.cocoaskills/config.json, <project>/Skillfile.json, local skill git repositories.
+  Missing repositories declared with `git` may be cloned into skills_root.
+
+Files written:
+  <project>/.agents/skills, <project>/.agents/bin, .agents/env.sh, .agents/env.ps1,
+  agent adapter directories, ~/.cocoaskills/runtime, ~/.cocoaskills/cache.
+
+Exit codes:
+  0 success, 1 one or more projects/skills failed, 2 config error, 3 lock contention.
+
+Examples:
+  csk install
+  csk install --all
+  csk install demo-app-ios
+  csk install .
+  csk install /path/to/project
+  csk install --fix-gitignore

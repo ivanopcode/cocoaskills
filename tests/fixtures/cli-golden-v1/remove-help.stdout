@@ -1,0 +1,8 @@
+usage: csk remove [-h] [--project PROJECT] name
+
+positional arguments:
+  name
+
+options:
+  -h, --help         show this help message and exit
+  --project PROJECT  project alias, '.', or path (default: current project)

@@ -1,0 +1,2 @@
+error: Global Skillfile not found: {{GOLDEN_ROOT}}/home/global/Skillfile.json
+  Run 'csk global init' first.

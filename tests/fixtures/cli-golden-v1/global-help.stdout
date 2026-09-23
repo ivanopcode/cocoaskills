@@ -1,0 +1,26 @@
+usage: csk global [-h]
+                  {init,add,remove,list,status,install,update,upgrade} ...
+
+positional arguments:
+  {init,add,remove,list,status,install,update,upgrade}
+    init                create ~/.cocoaskills/global/Skillfile.json
+    add                 add or replace a global skill declaration
+    remove              remove a global skill declaration
+    list                list declared global skills
+    status              show global installed state
+    install             install global skills
+    update              fetch global skill source repositories
+    upgrade             fetch global skill sources, then install
+
+options:
+  -h, --help            show this help message and exit
+
+Global scope:
+  Uses ~/.cocoaskills/global/Skillfile.json and installs adapters into user-level agent dirs.
+
+Examples:
+  csk global init
+  csk global add skill-metrics --git git@example.com:skills/skill-metrics.git --tag v1.0.0
+  csk global install
+  csk global install --only skill-metrics
+  csk global upgrade

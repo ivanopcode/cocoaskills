@@ -28,6 +28,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Callable, ContextManager, Final, Iterator, cast
 
+from .. import identifiers
 from .errors import (
     CODE_MEMBER_INVALID,
     CODE_OUTPUT_OVERLAP,
@@ -1254,12 +1255,45 @@ class SelectionSession:
         member: Directory,
         *,
         label: str,
+        allowlist: tuple[str, ...] | None = None,
     ) -> MemberSnapshot:
-        """Read every member entry before downstream readers run."""
+        """Read member entries before downstream readers run.
+
+        Without ``allowlist`` every member entry is read. With one (a root
+        package validated through the ``root_inputs`` gate), exactly the
+        listed entries are read: a file selects itself, a directory its
+        recursive contents, and nothing else is opened. Every descent
+        stays descriptor-relative and keeps the same link, hard-link and
+        special-file refusals as the full walk.
+        """
 
         files: dict[tuple[str, ...], bytes] = {}
         directories: set[tuple[str, ...]] = {()}
-        stack: list[tuple[Directory, tuple[str, ...]]] = [(member, ())]
+        if allowlist is None:
+            self._snapshot_subtree(member, (), files, directories, label=label)
+        else:
+            for entry in allowlist:
+                self._snapshot_allowlist_entry(
+                    member, entry, files, directories, label=label
+                )
+        return MemberSnapshot(
+            root=member.display,
+            files=files,
+            directories=frozenset(directories),
+        )
+
+    def _snapshot_subtree(
+        self,
+        root: Directory,
+        prefix: tuple[str, ...],
+        files: dict[tuple[str, ...], bytes],
+        directories: set[tuple[str, ...]],
+        *,
+        label: str,
+    ) -> None:
+        """Read one subtree recursively into the accumulating snapshot."""
+
+        stack: list[tuple[Directory, tuple[str, ...]]] = [(root, prefix)]
         while stack:
             current, relative = stack.pop()
             try:
@@ -1317,11 +1351,87 @@ class SelectionSession:
                     CODE_MEMBER_INVALID,
                     f"Skill member {label} cannot be inspected: {exc}",
                 ) from exc
-        return MemberSnapshot(
-            root=member.display,
-            files=files,
-            directories=frozenset(directories),
-        )
+
+    def _snapshot_allowlist_entry(
+        self,
+        member: Directory,
+        entry: str,
+        files: dict[tuple[str, ...], bytes],
+        directories: set[tuple[str, ...]],
+        *,
+        label: str,
+    ) -> None:
+        """Read one allowlisted entry: a file selects itself, a directory
+        its recursive contents. Components descend one descriptor at a
+        time from the member root, so ``..`` and absolute spellings can
+        never escape: they are refused before any descent."""
+
+        if not identifiers.is_valid_portable_path(entry):
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"Skill member {label} root-input entry {entry!r} "
+                "is not a portable relative path",
+            )
+        parts = entry.split("/")
+        current = member
+        context = f"Skill member {label}"
+        for depth, part in enumerate(parts):
+            child_relative = tuple(parts[: depth + 1])
+            shown = "/".join(child_relative)
+            child_stat = _lstat_at(
+                current.fd,
+                part,
+                parent_path=current.display,
+                code=CODE_MEMBER_INVALID,
+                context=context,
+            )
+            if stat.S_ISLNK(child_stat.st_mode):
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"{context} contains rejected link {shown!r}; the link "
+                    "escapes the source root or links in admitted inputs "
+                    "are not allowed",
+                )
+            last = depth == len(parts) - 1
+            if stat.S_ISDIR(child_stat.st_mode):
+                child = self._open_regular_child(
+                    current,
+                    part,
+                    code=CODE_MEMBER_INVALID,
+                    context=context,
+                )
+                directories.add(child_relative)
+                if last:
+                    self._snapshot_subtree(
+                        child, child_relative, files, directories, label=label
+                    )
+                else:
+                    current = child
+                continue
+            if stat.S_ISREG(child_stat.st_mode):
+                if getattr(child_stat, "st_nlink", 1) > 1:
+                    raise SourceError(
+                        CODE_MEMBER_INVALID,
+                        f"{context} entry {shown!r} is a hard link",
+                    )
+                if not last:
+                    raise SourceError(
+                        CODE_MEMBER_INVALID,
+                        f"{context} entry {shown!r} is not a directory",
+                    )
+                files[child_relative] = self._read_regular_file(
+                    current,
+                    part,
+                    code=CODE_MEMBER_INVALID,
+                    context=context,
+                    expected_identity=_identity_from_stat(child_stat),
+                    expected_nlink=getattr(child_stat, "st_nlink", 1),
+                )
+                continue
+            raise SourceError(
+                CODE_MEMBER_INVALID,
+                f"{context} entry {shown!r} is not a regular file or directory",
+            )
 
     def _open_regular_child(
         self,

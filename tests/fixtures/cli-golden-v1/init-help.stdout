@@ -1,0 +1,24 @@
+usage: csk init [-h] [--alias ALIAS] [--agents AGENTS] [--no-interactive]
+                [path]
+
+Initializes CocoaSkill files in one project without installing skills.
+
+positional arguments:
+  path              project directory to initialize
+
+options:
+  -h, --help        show this help message and exit
+  --alias ALIAS     project.alias to write into Skillfile.json
+  --agents AGENTS   comma-separated agents list for Skillfile.json (known:
+                    claude_code, codex_cli, cursor, gemini, opencode,
+                    windsurf; opencode and windsurf read .agents/skills
+                    natively, no mirror is created)
+  --no-interactive  accepted for scripting; prompts are not used
+
+Files written:
+  <project>/Skillfile.json and <project>/.gitignore.
+
+Examples:
+  csk init
+  csk init --alias demo-ios --agents codex_cli,cursor
+  csk init /path/to/project

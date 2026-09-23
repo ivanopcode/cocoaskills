@@ -1,0 +1,3 @@
+Wrote {{GOLDEN_ROOT}}/home-fresh/config.json
+Shell profile changes are not required: agent skills resolve project and global command shims directly.
+Optional bare project commands for humans: csk shell-init --install

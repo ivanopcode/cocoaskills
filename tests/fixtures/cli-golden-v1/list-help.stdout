@@ -1,0 +1,12 @@
+usage: csk list [-h] [--paths]
+
+options:
+  -h, --help  show this help message and exit
+  --paths     include project_alias, checkout_alias, and paths
+
+Files read:
+  ~/.cocoaskills/config.json and project Skillfile.json files when present.
+
+Examples:
+  csk list
+  csk list --paths

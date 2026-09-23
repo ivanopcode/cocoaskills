@@ -319,67 +319,67 @@ def _parse_git_declaration(alias: str, value: Any) -> tuple[str, str]:
             f"Source {alias!r} field 'git' must be a non-empty endpoint URL",
         )
     if value.startswith("https://"):
-        return "https", _git_identity(alias, value, _split_https(value))
+        return "https", _git_identity(alias, _split_https(alias, value))
     if value.startswith("ssh://"):
-        return "ssh", _git_identity(alias, value, _split_ssh_uri(value))
+        return "ssh", _git_identity(alias, _split_ssh_uri(alias, value))
     if "://" in value:
         raise SourceError(
             CODE_SELECTION_INVALID,
             f"Source {alias!r} field 'git' must use https, ssh, or scp spelling",
         )
-    return "ssh", _git_identity(alias, value, _split_scp(value))
+    return "ssh", _git_identity(alias, _split_scp(alias, value))
 
 
-def _split_https(value: str) -> tuple[str, str]:
+def _split_https(alias: str, value: str) -> tuple[str, str]:
     rest = value[len("https://") :]
     authority, separator, path = rest.partition("/")
     if not separator or not path:
-        raise _git_error(value, "requires a repository path")
+        raise _git_error(alias, "requires a repository path")
     if "@" in authority or ":" in authority:
-        raise _git_error(value, "must not contain userinfo, a password, or a port")
-    _check_host(value, authority)
-    _check_https_path(value, path)
+        raise _git_error(alias, "must not contain userinfo, a password, or a port")
+    _check_host(alias, authority)
+    _check_https_path(alias, path)
     return authority, path
 
 
-def _split_ssh_uri(value: str) -> tuple[str, str]:
+def _split_ssh_uri(alias: str, value: str) -> tuple[str, str]:
     rest = value[len("ssh://") :]
     authority, separator, path = rest.partition("/")
     if not separator or not path:
-        raise _git_error(value, "requires a repository path")
+        raise _git_error(alias, "requires a repository path")
     if "@" in authority:
         user, _, host = authority.partition("@")
         if "@" in host or not _SSH_USER_RE.fullmatch(user):
-            raise _git_error(value, "carries an invalid SSH username")
+            raise _git_error(alias, "carries an invalid SSH username")
     else:
         host = authority
     if ":" in host:
-        raise _git_error(value, "must not contain a password or an explicit port")
-    _check_host(value, host)
-    _check_ssh_path(value, path)
+        raise _git_error(alias, "must not contain a password or an explicit port")
+    _check_host(alias, host)
+    _check_ssh_path(alias, path)
     return host, path
 
 
-def _split_scp(value: str) -> tuple[str, str]:
+def _split_scp(alias: str, value: str) -> tuple[str, str]:
     if value.startswith(":") or ":" not in value:
-        raise _git_error(value, "must use https, ssh, or scp spelling")
+        raise _git_error(alias, "must use https, ssh, or scp spelling")
     head, _, path = value.partition(":")
     if not path:
-        raise _git_error(value, "requires a repository path")
+        raise _git_error(alias, "requires a repository path")
     if "@" in head:
         user, _, host = head.partition("@")
         if "@" in host or not _SSH_USER_RE.fullmatch(user):
-            raise _git_error(value, "carries an invalid SSH username")
+            raise _git_error(alias, "carries an invalid SSH username")
     else:
         host = head
     if not host:
-        raise _git_error(value, "requires a host")
-    _check_host(value, host)
-    _check_ssh_path(value, path)
+        raise _git_error(alias, "requires a host")
+    _check_host(alias, host)
+    _check_ssh_path(alias, path)
     return host, path
 
 
-def _git_identity(alias: str, value: str, parts: tuple[str, str]) -> str:
+def _git_identity(alias: str, parts: tuple[str, str]) -> str:
     host, path = parts
     canonical_path = path.strip("/")
     if canonical_path.endswith(".git"):
@@ -388,7 +388,7 @@ def _git_identity(alias: str, value: str, parts: tuple[str, str]) -> str:
     if not canonical_path:
         raise SourceError(
             CODE_SELECTION_INVALID,
-            f"Source {alias!r} field 'git' has an empty repository path: {value!r}",
+            f"Source {alias!r} field 'git' has an empty repository path",
         )
     identity = f"{host.lower()}/{canonical_path}"
     if len(identity) > _MAX_DECLARATION_CHARS:
@@ -399,36 +399,46 @@ def _git_identity(alias: str, value: str, parts: tuple[str, str]) -> str:
     return identity
 
 
-def _git_error(value: str, reason: str) -> SourceError:
-    return SourceError(CODE_SELECTION_INVALID, f"git declaration {value!r} {reason}")
+def _git_error(alias: str, reason: str) -> SourceError:
+    """Refuse a git declaration without echoing it.
+
+    The refusal names the source alias, the field and the shape of
+    the violation. The raw declaration is never reproduced: it may
+    carry credentials (userinfo, tokens, query parameters) that no
+    display-time redaction can reliably remove.
+    """
+
+    return SourceError(
+        CODE_SELECTION_INVALID, f"Source {alias!r} field 'git' {reason}"
+    )
 
 
-def _check_host(value: str, host: str) -> None:
+def _check_host(alias: str, host: str) -> None:
     if not host or _HOST_RE.fullmatch(host) is None:
-        raise _git_error(value, "carries an invalid host")
+        raise _git_error(alias, "carries an invalid host")
 
 
-def _check_https_path(value: str, path: str) -> None:
+def _check_https_path(alias: str, path: str) -> None:
     for component in path.split("/"):
         if not component or component in {".", ".."}:
-            raise _git_error(value, "carries an empty, dot, or parent path component")
+            raise _git_error(alias, "carries an empty, dot, or parent path component")
         for character in component:
             if (
                 character.isspace()
                 or _is_control_scalar(character)
                 or character in "%?#\\:"
             ):
-                raise _git_error(value, "carries an invalid repository path")
+                raise _git_error(alias, "carries an invalid repository path")
 
 
-def _check_ssh_path(value: str, path: str) -> None:
+def _check_ssh_path(alias: str, path: str) -> None:
     for component in path.split("/"):
         if (
             not component
             or component in {".", ".."}
             or _SSH_PATH_COMPONENT_RE.fullmatch(component) is None
         ):
-            raise _git_error(value, "carries an invalid repository path")
+            raise _git_error(alias, "carries an invalid repository path")
 
 
 def _parse_repository_declaration(alias: str, value: Any) -> str:

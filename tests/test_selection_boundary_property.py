@@ -400,12 +400,72 @@ def _capture_regular_file_offsets() -> dict[int, tuple[tuple[int, int], int]]:
     return offsets
 
 
+# Descriptors the harness held before any test ran (BUG-260917-865lqe).
+# Captured once at module import: in every xdist worker the suite log and
+# pytest's own capture temp files are already open here, while no test has
+# had a chance to plant a foreign capability yet.  Only the identity is
+# kept; the verdict consults this table to tell harness motion apart from
+# product reads whatever the access mode (O_WRONLY or O_RDWR).
+_HARNESS_FD_BASELINE: dict[int, tuple[int, int]] = {
+    descriptor: identity
+    for descriptor, (identity, _offset) in _capture_regular_file_offsets().items()
+}
+
+
 def _read_provenance_is_owned(
     observation: _ReadObservation, owned_fds: set[int]
 ) -> bool:
     """Return whether a read primitive used a descriptor opened in Phase B."""
 
     return observation.fd in owned_fds
+
+
+def _descriptor_continues_from_harness_baseline(
+    descriptor: int, identity: tuple[int, int]
+) -> bool:
+    """Return whether one descriptor is still the harness-held file from import.
+
+    Both the number and the ``(st_dev, st_ino)`` identity must continue
+    from ``_HARNESS_FD_BASELINE``: a reused number naming a different
+    file stays under the tripwire.  Descriptors opened after the import
+    baseline -- the controls' foreign fds and pre-opened streams, and the
+    product's own descriptors -- are never excluded here, whatever their
+    access mode.
+    """
+
+    return _HARNESS_FD_BASELINE.get(descriptor) == identity
+
+
+def _descriptor_is_readable(descriptor: int) -> bool:
+    """Return whether one pre-snapshot descriptor can be read through.
+
+    A descriptor opened write-only (the harness's log file under
+    ``O_WRONLY`` file capture) cannot be read: offset motion on it is
+    proof of writes, not of a product read.  This guard is one of two
+    independent reasons to skip offset synthesis; the harness baseline
+    (``_descriptor_continues_from_harness_baseline``) is the other, and
+    the only one that covers readable harness descriptors.
+
+    Stated bound: the offset tripwire only sees descriptors that are
+    still open with a continuing identity at verdict time.  A
+    pre-snapshot descriptor that is read and then closed (fstat fails
+    with EBADF) — or replaced over its number with ``dup2`` — before the
+    verdict is invisible to the tripwire.  That read-then-close evasion
+    predates this exclusion: it already worked against the pre-fix
+    oracle, which had no readability guard at all.
+    """
+
+    if os.name != "posix":
+        return True
+    try:
+        import fcntl
+    except ImportError:
+        return True
+    try:
+        flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
+    except (OSError, ValueError):
+        return True
+    return (flags & os.O_ACCMODE) != os.O_WRONLY
 
 
 def _assert_descriptor_boundary(
@@ -571,6 +631,20 @@ def _assert_descriptor_boundary(
         except (OSError, ValueError, UnicodeError):
             continue
         if current_offset != initial_offset and descriptor not in observed_read_fds:
+            if _descriptor_continues_from_harness_baseline(
+                descriptor, (current.st_dev, current.st_ino)
+            ):
+                # Held by the harness since before any test ran
+                # (BUG-260917-865lqe): sibling-writer motion on the suite
+                # log or pytest's own capture files, whatever the access
+                # mode.  Only a continuing (number, identity) pair is
+                # excluded; everything opened later stays below.
+                continue
+            if not _descriptor_is_readable(descriptor):
+                # Write-only motion is harness writes, not a product read
+                # (BUG-260917-865lqe): the log file stays excluded while
+                # every readable foreign descriptor keeps its tripwire.
+                continue
             offset_reads.append(_ReadObservation("stream.read", descriptor))
     phase_b_read_observations.extend(offset_reads)
     for observation in phase_b_read_observations:
@@ -1915,7 +1989,7 @@ def test_selection_boundary_property(
                 denied_child_directories,
             )
         else:
-            def denied_snapshot(self, member, *, label):  # type: ignore[no-untyped-def]
+            def denied_snapshot(self, member, *, label, allowlist=None):  # type: ignore[no-untyped-def]
                 raise PermissionError("property-injected scandir denial")
 
             monkeypatch.setattr(
@@ -2733,6 +2807,114 @@ def test_oracle_all_read_seams(
             _assert_descriptor_boundary(root, markers[-1])
     finally:
         os.close(foreign_fd)
+        stream.close()
+        del _AUDIT_EVENTS[:]
+        del _OPEN_OBSERVATIONS[:]
+        del _SCANDIR_OBSERVATIONS[:]
+        del _DESCRIPTOR_EVENTS[:]
+        del _READ_OBSERVATIONS[:]
+        global _SESSION_ROOT_INDEX, _SESSION_AUDIT_INDEX, _SESSION_SCANDIR_INDEX
+        global _SESSION_READ_INDEX
+        _SESSION_ROOT_INDEX = None
+        _SESSION_AUDIT_INDEX = None
+        _SESSION_SCANDIR_INDEX = None
+        _SESSION_READ_INDEX = None
+
+
+@pytest.mark.parametrize("entry", ["individual", "collection"])
+def test_oracle_ignores_write_only_harness_offsets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry: str,
+) -> None:
+    """Offset motion on a write-only descriptor is not an outside read.
+
+    Regression test for BUG-260917-865lqe: under file capture the suite's
+    own log file is a write-only regular descriptor whose offset moves
+    between the pre-Phase-B snapshot and the verdict (xdist workers share
+    one open file description, so sibling writes move it). A write-only
+    descriptor cannot be read through, so its motion must not synthesize
+    an outside read and the property verdict must not depend on the
+    capture shape.
+    """
+
+    monkeypatch.setenv("CSK_CONFIG", str(tmp_path / "home" / "config.json"))
+    root = tmp_path / "source"
+    _write_skill(root / "review", "review")
+    log = tmp_path / "harness.log"
+    log.write_bytes(b"boot\n")
+    harness_fd = os.open(log, os.O_WRONLY)
+    original = selection._validate_selected_member
+
+    def noisy(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        os.write(harness_fd, b"sibling-worker progress\n")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(selection, "_validate_selected_member", noisy)
+    markers = _install_session_marker(monkeypatch)
+    try:
+        _run_entry(root, entry, "review")
+        assert markers
+        _assert_descriptor_boundary(root, markers[-1])
+    finally:
+        os.close(harness_fd)
+        del _AUDIT_EVENTS[:]
+        del _OPEN_OBSERVATIONS[:]
+        del _SCANDIR_OBSERVATIONS[:]
+        del _DESCRIPTOR_EVENTS[:]
+        del _READ_OBSERVATIONS[:]
+        global _SESSION_ROOT_INDEX, _SESSION_AUDIT_INDEX, _SESSION_SCANDIR_INDEX
+        global _SESSION_READ_INDEX
+        _SESSION_ROOT_INDEX = None
+        _SESSION_AUDIT_INDEX = None
+        _SESSION_SCANDIR_INDEX = None
+        _SESSION_READ_INDEX = None
+
+
+@pytest.mark.parametrize("entry", ["individual", "collection"])
+@pytest.mark.parametrize("mode", ["rb", "r+b"])
+def test_oracle_catches_preopened_buffered_stream_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry: str,
+    mode: str,
+) -> None:
+    """A buffered read through a pre-Phase-B stream still fails the oracle.
+
+    The stream is opened before the session marker, so no traced open,
+    read, or builtins.open primitive fires during Phase B: the fd-offset
+    tripwire is the only seam that sees it. Both readable access modes
+    are covered -- narrowing mutants that weaken offset synthesis, or
+    that exclude O_RDWR from the readable class
+    (``(flags & os.O_ACCMODE) == os.O_RDONLY``), must die to the ``r+b``
+    params here while harness descriptors stay excluded (see
+    test_oracle_ignores_write_only_harness_offsets and
+    test_oracle_ignores_harness_held_rdwr_offsets).
+    """
+
+    monkeypatch.setenv("CSK_CONFIG", str(tmp_path / "home" / "config.json"))
+    root = tmp_path / "source"
+    _write_skill(root / "review")
+    leak = tmp_path / "leak"
+    leak.write_bytes(b"secret")
+    stream = open(leak, mode)
+    original = selection._validate_selected_member
+    verified: list[bytes] = []
+
+    def evil(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        raw = stream.read(6)
+        assert raw == b"secret"
+        verified.append(raw)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(selection, "_validate_selected_member", evil)
+    markers = _install_session_marker(monkeypatch)
+    try:
+        _run_entry(root, entry, "review")
+        assert verified == [b"secret"]
+        with pytest.raises(AssertionError):
+            _assert_descriptor_boundary(root, markers[-1])
+    finally:
         stream.close()
         del _AUDIT_EVENTS[:]
         del _OPEN_OBSERVATIONS[:]
@@ -4689,3 +4871,193 @@ def test_boundary_decision_table(
         else:
             expand_collection(home_arg, _collection(subdir, ("pkg",), ()))
     assert excinfo.value.code == source_errors.CODE_OUTPUT_OVERLAP
+
+
+@pytest.mark.parametrize("entry", ["individual", "collection"])
+def test_oracle_ignores_harness_held_rdwr_offsets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry: str,
+) -> None:
+    """Offset motion on a harness-held O_RDWR descriptor is not an outside read.
+
+    Regression test for BUG-260917-865lqe round 2: a harness log opened
+    O_RDWR (shell ``1<>file 2>&1``, ``open(log, 'w+')``, Go's
+    ``os.Create``) is readable, so the write-only guard cannot exclude
+    it -- only the import-time harness baseline can.  The test registers
+    its log descriptor in ``_HARNESS_FD_BASELINE`` to simulate a file the
+    harness held since before any test ran (``monkeypatch.setitem``
+    restores the baseline afterwards); sibling-writer motion during
+    Phase B must not synthesize an outside read.
+    """
+
+    monkeypatch.setenv("CSK_CONFIG", str(tmp_path / "home" / "config.json"))
+    root = tmp_path / "source"
+    _write_skill(root / "review", "review")
+    log = tmp_path / "harness.log"
+    log.write_bytes(b"boot\n")
+    harness_fd = os.open(log, os.O_RDWR | os.O_APPEND)
+    harness_stat = os.fstat(harness_fd)
+    monkeypatch.setitem(
+        _HARNESS_FD_BASELINE,
+        harness_fd,
+        (harness_stat.st_dev, harness_stat.st_ino),
+    )
+    original = selection._validate_selected_member
+
+    def noisy(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        os.write(harness_fd, b"sibling-worker progress\n")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(selection, "_validate_selected_member", noisy)
+    markers = _install_session_marker(monkeypatch)
+    try:
+        _run_entry(root, entry, "review")
+        assert markers
+        _assert_descriptor_boundary(root, markers[-1])
+    finally:
+        os.close(harness_fd)
+        del _AUDIT_EVENTS[:]
+        del _OPEN_OBSERVATIONS[:]
+        del _SCANDIR_OBSERVATIONS[:]
+        del _DESCRIPTOR_EVENTS[:]
+        del _READ_OBSERVATIONS[:]
+        global _SESSION_ROOT_INDEX, _SESSION_AUDIT_INDEX, _SESSION_SCANDIR_INDEX
+        global _SESSION_READ_INDEX
+        _SESSION_ROOT_INDEX = None
+        _SESSION_AUDIT_INDEX = None
+        _SESSION_SCANDIR_INDEX = None
+        _SESSION_READ_INDEX = None
+
+
+@pytest.mark.parametrize("entry", ["individual", "collection"])
+@pytest.mark.parametrize(
+    "read_shape",
+    [
+        "read",
+        pytest.param(
+            "pread",
+            marks=pytest.mark.skipif(
+                not hasattr(os, "pread"),
+                reason="os.pread is unavailable on this platform; read-provenance bound",
+            ),
+        ),
+    ],
+)
+def test_oracle_catches_rdwr_foreign_fd_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry: str,
+    read_shape: str,
+) -> None:
+    """A genuine read through an O_RDWR foreign fd fails the oracle.
+
+    The readable class is O_RDONLY *and* O_RDWR: a foreign capability
+    held open read-write before the session marker must stay under the
+    tripwire for the traced read shapes, whatever exclusion the harness
+    baseline or the write-only guard grants to harness descriptors.
+    """
+
+    monkeypatch.setenv("CSK_CONFIG", str(tmp_path / "home" / "config.json"))
+    root = tmp_path / "source"
+    _write_skill(root / "review")
+    leak = tmp_path / "leak"
+    leak.write_bytes(b"secret")
+    foreign_fd = os.open(leak, os.O_RDWR)
+    original = selection._validate_selected_member
+    verified: list[bytes] = []
+
+    def evil(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        if read_shape == "read":
+            raw = os.read(foreign_fd, 6)
+        else:
+            raw = os.pread(foreign_fd, 6, 0)
+        assert raw == b"secret"
+        verified.append(raw)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(selection, "_validate_selected_member", evil)
+    markers = _install_session_marker(monkeypatch)
+    try:
+        _run_entry(root, entry, "review")
+        assert verified == [b"secret"]
+        with pytest.raises(AssertionError):
+            _assert_descriptor_boundary(root, markers[-1])
+    finally:
+        os.close(foreign_fd)
+        del _AUDIT_EVENTS[:]
+        del _OPEN_OBSERVATIONS[:]
+        del _SCANDIR_OBSERVATIONS[:]
+        del _DESCRIPTOR_EVENTS[:]
+        del _READ_OBSERVATIONS[:]
+        global _SESSION_ROOT_INDEX, _SESSION_AUDIT_INDEX, _SESSION_SCANDIR_INDEX
+        global _SESSION_READ_INDEX
+        _SESSION_ROOT_INDEX = None
+        _SESSION_AUDIT_INDEX = None
+        _SESSION_SCANDIR_INDEX = None
+        _SESSION_READ_INDEX = None
+
+
+@pytest.mark.parametrize("entry", ["individual", "collection"])
+def test_oracle_catches_read_on_reused_harness_number(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry: str,
+) -> None:
+    """A genuine read on a reused harness number still fails the oracle.
+
+    The baseline exclusion requires the (number, identity) pair to
+    continue: when a harness-held number is closed and reused for a
+    different file, offset motion on it is a genuine outside read, not
+    harness motion.  Narrowing mutants that match the baseline by number
+    alone (``descriptor in _HARNESS_FD_BASELINE``) must die here.
+    """
+
+    monkeypatch.setenv("CSK_CONFIG", str(tmp_path / "home" / "config.json"))
+    root = tmp_path / "source"
+    _write_skill(root / "review")
+    log = tmp_path / "harness.log"
+    log.write_bytes(b"boot\n")
+    leak = tmp_path / "leak"
+    leak.write_bytes(b"secret")
+    harness_fd = os.open(log, os.O_RDWR)
+    harness_stat = os.fstat(harness_fd)
+    monkeypatch.setitem(
+        _HARNESS_FD_BASELINE,
+        harness_fd,
+        (harness_stat.st_dev, harness_stat.st_ino),
+    )
+    leak_fd = os.open(leak, os.O_RDONLY)
+    os.close(harness_fd)
+    os.dup2(leak_fd, harness_fd)
+    os.close(leak_fd)
+    stream = os.fdopen(harness_fd, "rb")
+    original = selection._validate_selected_member
+    verified: list[bytes] = []
+
+    def evil(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        raw = stream.read(6)
+        assert raw == b"secret"
+        verified.append(raw)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(selection, "_validate_selected_member", evil)
+    markers = _install_session_marker(monkeypatch)
+    try:
+        _run_entry(root, entry, "review")
+        assert verified == [b"secret"]
+        with pytest.raises(AssertionError):
+            _assert_descriptor_boundary(root, markers[-1])
+    finally:
+        stream.close()
+        del _AUDIT_EVENTS[:]
+        del _OPEN_OBSERVATIONS[:]
+        del _SCANDIR_OBSERVATIONS[:]
+        del _DESCRIPTOR_EVENTS[:]
+        del _READ_OBSERVATIONS[:]
+        global _SESSION_ROOT_INDEX, _SESSION_AUDIT_INDEX, _SESSION_SCANDIR_INDEX
+        global _SESSION_READ_INDEX
+        _SESSION_ROOT_INDEX = None
+        _SESSION_AUDIT_INDEX = None
+        _SESSION_SCANDIR_INDEX = None
+        _SESSION_READ_INDEX = None

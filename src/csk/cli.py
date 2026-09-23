@@ -3,10 +3,13 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
+import stat
 import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
+from typing import Literal
 
 from . import (
     __version__,
@@ -37,6 +40,13 @@ from .audit import trust as audit_trust
 from .audit.backends import AuditBackendError
 from .audit.model import Decision
 from .locking import GlobalLock, LockError
+from .sources import diagnostics as source_diagnostics
+from .sources import errors as source_errors
+from .sources import lock as source_lock
+from .sources import publish as source_publish
+from .sources import repository_policy
+from .sources import skillfile_v2
+from .sources import transport as source_transport
 
 EXIT_OK = 0
 EXIT_PARTIAL_FAIL = 1
@@ -58,13 +68,16 @@ def main(argv: list[str] | None = None) -> int:
             pass
         else:
             return go_v1.run_worker(_launch_context=launch_context)
-    parser = build_parser()
+    draft = _draft_parser_shape()
+    parser = build_parser(draft=draft)
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else EXIT_CONFIG
     if args.version:
         print(f"csk {__version__}")
+        if draft:
+            print(source_errors.DRAFT_SKILLFILE_SOURCES_LABEL)
         return EXIT_OK
     if not args.command:
         parser.print_help()
@@ -83,36 +96,114 @@ def main(argv: list[str] | None = None) -> int:
         git_ops.GitError,
         ValueError,
     ) as exc:
+        rendered = source_diagnostics.format_exception(exc)
+        if rendered is not None:
+            print(rendered, file=sys.stderr)
+            return EXIT_CONFIG
         print(f"error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+    except source_transport.TransportError as exc:
+        rendered = source_diagnostics.format_transport_exception(exc)
+        if rendered is not None:
+            print(rendered, file=sys.stderr)
+        else:
+            print(f"error: {exc}", file=sys.stderr)
         return EXIT_CONFIG
     except LockError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_LOCK
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _draft_sources_decision() -> Literal["enabled", "disabled", "unknown"]:
+    """Return the one three-state draft opt-in decision.
+
+    ``"enabled"``: the environment opts in, or a successfully loaded
+    config declares the opt-in. ``"disabled"``: no environment opt-in
+    and the config is absent or loaded without the opt-in.
+    ``"unknown"``: the config is present but cannot be read or parsed.
+
+    Unknown is neither enabled nor disabled. The parser shape
+    (:func:`_draft_parser_shape`) treats it as disabled, so under an
+    unloadable config the parser is the released v1 parser on every
+    surface: no ``check`` verb, no draft label, no draft paragraphs.
+    A machine whose config cannot be read has not been shown to have
+    opted in. Where a command actually runs, dispatch loads the config
+    again and refuses with the real error naming the config.
+
+    The decision read is silent: it loads with ``quiet=True`` so the
+    system-config locked-key warning stays exactly where v1 emits it,
+    once at dispatch, never at parse time. It reads the same full
+    loader (no second looser reader), so ``optin-true-plus-error``
+    still classifies unknown.
+    """
+
+    if os.environ.get(config.SKILLFILE_SOURCES_ENV_VAR) == "1":
+        return "enabled"
+    try:
+        loaded = config.load_config(quiet=True)
+    except config.ConfigError:
+        try:
+            os.stat(config.config_path())
+        except OSError as stat_error:
+            if isinstance(stat_error, FileNotFoundError):
+                return "disabled"
+        return "unknown"
+    except Exception:  # noqa: BLE001 - dispatch reports the real load failure
+        return "unknown"
+    return "enabled" if loaded.experimental.skillfile_sources else "disabled"
+
+
+def _draft_parser_shape() -> bool:
+    """Return whether the parser shows draft schema-2 surfaces.
+
+    Display shape only: true exactly when the one decision in
+    :func:`_draft_sources_decision` is ``"enabled"``. An unloadable
+    config renders the v1 shape, byte-identical; dispatch still
+    reports the real load failure for every verb.
+    """
+
+    return _draft_sources_decision() == "enabled"
+
+
+def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
+    """Build the CLI parser, draft surfaces included only when ``draft``.
+
+    ``main`` evaluates the one decision once and passes it in, so one
+    invocation performs one decision read. Direct callers that omit
+    ``draft`` evaluate it on the spot.
+    """
+
+    if draft is None:
+        draft = _draft_parser_shape()
+    epilog = (
+        "Local documentation index:\n"
+        "  csk bootstrap          create ~/.cocoaskills/config.json\n"
+        "  csk init [path]        create project Skillfile.json and gitignore block\n"
+        "  csk install [target]   apply Skillfile.json; clone missing URL sources\n"
+        "  csk update             fetch local skill repositories\n"
+        "  csk upgrade [target]   fetch the target dependency closure, then install\n"
+        "  csk status [target]    show manifest vs installed state\n"
+        "  csk global <command>   manage user-wide global skills\n"
+        "  csk audit [target]     run deterministic security audit\n"
+        "  csk skill check <dir>  validate one skill directory\n"
+        "  csk list               list configured projects and skills\n"
+        "  csk project add        add a configured project\n"
+        "  csk project resolve    show current checkout resolution\n"
+        "  csk config show        show config path and content\n"
+        "  csk shell-init         print or install shell hook code\n\n"
+        "Run 'csk <command> --help' for command-specific documentation."
+    )
+    if draft:
+        epilog += (
+            "\n\nDraft schema-2 sources "
+            f"({source_errors.DRAFT_SKILLFILE_SOURCES_LABEL}):\n"
+            "  csk check [target]     validate a schema-2 Skillfile without installing"
+        )
     parser = argparse.ArgumentParser(
         prog="csk",
         description="CocoaSkill local skill manager",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Local documentation index:\n"
-            "  csk bootstrap          create ~/.cocoaskills/config.json\n"
-            "  csk init [path]        create project Skillfile.json and gitignore block\n"
-            "  csk install [target]   apply Skillfile.json; clone missing URL sources\n"
-            "  csk update             fetch local skill repositories\n"
-            "  csk upgrade [target]   fetch the target dependency closure, then install\n"
-            "  csk status [target]    show manifest vs installed state\n"
-            "  csk global <command>   manage user-wide global skills\n"
-            "  csk audit [target]     run deterministic security audit\n"
-            "  csk skill check <dir>  validate one skill directory\n"
-            "  csk list               list configured projects and skills\n"
-            "  csk project add        add a configured project\n"
-            "  csk project resolve    show current checkout resolution\n"
-            "  csk config show        show config path and content\n"
-            "  csk shell-init         print or install shell hook code\n\n"
-            "Run 'csk <command> --help' for command-specific documentation."
-        ),
+        epilog=epilog,
     )
     parser.add_argument("--version", action="store_true", help="print csk version and exit")
     sub = parser.add_subparsers(dest="command")
@@ -120,7 +211,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_bootstrap(sub)
     _add_init(sub)
     _add_skill(sub)
-    _add_install(sub, "install", "Apply Skillfile.json using local refs. Missing git URL sources are cloned.")
+    _add_install(
+        sub,
+        "install",
+        "Apply Skillfile.json using local refs. Missing git URL sources are cloned.",
+        draft=draft,
+    )
     sub.add_parser(
         "update",
         help="Fetch all local skill repositories under skills_root.",
@@ -132,18 +228,34 @@ def build_parser() -> argparse.ArgumentParser:
             "Example:\n  csk update"
         ),
     )
-    _add_install(sub, "upgrade", "Fetch the selected project dependency closure, then install.")
+    _add_install(
+        sub,
+        "upgrade",
+        "Fetch the selected project dependency closure, then install.",
+        draft=draft,
+    )
+    if draft:
+        _add_check(sub)
     _add_global(sub)
     _add_audit(sub)
+    status_epilog = (
+        "Labels:\n  up-to-date, missing, update-available, content-drift, error\n\n"
+        "Files read:\n  ~/.cocoaskills/config.json, Skillfile.json, .agents/skills/*/.csk-install.json\n\n"
+        "Examples:\n  csk status\n  csk status --all\n  csk status demo-app-ios\n  csk status ."
+    )
+    if draft:
+        status_epilog += (
+            "\n\nSchema 2 sources "
+            f"({source_errors.DRAFT_SKILLFILE_SOURCES_LABEL}):\n"
+            "  Read-only currentness against Skillfile.lock.json; exit non-zero\n"
+            "  with --check unless every member is up-to-date. Launch reads\n"
+            "  installed state only and never rescans live source inputs."
+        )
     status_parser = sub.add_parser(
         "status",
         help="Show manifest vs installed state.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Labels:\n  up-to-date, missing, update-available, content-drift, error\n\n"
-            "Files read:\n  ~/.cocoaskills/config.json, Skillfile.json, .agents/skills/*/.csk-install.json\n\n"
-            "Examples:\n  csk status\n  csk status --all\n  csk status demo-app-ios\n  csk status ."
-        ),
+        epilog=status_epilog,
     )
     status_parser.add_argument("target", nargs="?", help="project alias, '.', or project path")
     status_parser.add_argument("--all", action="store_true", help="show all registered projects")
@@ -467,29 +579,54 @@ def _add_skill(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     check.add_argument("--json", action="store_true", dest="json_output", help="print machine-readable issues")
 
 
-def _add_install(sub: argparse._SubParsersAction[argparse.ArgumentParser], name: str, description: str) -> None:
+def _add_install(
+    sub: argparse._SubParsersAction[argparse.ArgumentParser],
+    name: str,
+    description: str,
+    *,
+    draft: bool = False,
+) -> None:
+    epilog = (
+        "Files read:\n"
+        "  ~/.cocoaskills/config.json, <project>/Skillfile.json, local skill git repositories.\n"
+        "  Missing repositories declared with `git` may be cloned into skills_root.\n\n"
+        "Files written:\n"
+        "  <project>/.agents/skills, <project>/.agents/bin, .agents/env.sh, .agents/env.ps1,\n"
+        "  agent adapter directories, ~/.cocoaskills/runtime, ~/.cocoaskills/cache.\n\n"
+        "Exit codes:\n"
+        "  0 success, 1 one or more projects/skills failed, 2 config error, 3 lock contention.\n\n"
+        "Examples:\n"
+        f"  csk {name}\n"
+        f"  csk {name} --all\n"
+        f"  csk {name} demo-app-ios\n"
+        f"  csk {name} .\n"
+        f"  csk {name} /path/to/project\n"
+        f"  csk {name} --fix-gitignore\n"
+    )
+    if draft:
+        if name == "install":
+            workflow = (
+                "  Initial resolve+install with no lock, locked install with one."
+            )
+        else:
+            workflow = (
+                "  Explicit refresh: the only operation that replaces locked refs,\n"
+                "  admitted bytes or membership."
+            )
+        epilog += (
+            "\nSchema 2 sources "
+            f"({source_errors.DRAFT_SKILLFILE_SOURCES_LABEL}):\n"
+            f"{workflow}\n"
+            "  Network sources (git, repository) are refused;\n"
+            "  this draft acquires path sources only.\n"
+            "  Validate first with 'csk check'."
+        )
     parser = sub.add_parser(
         name,
         help=description,
         description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Files read:\n"
-            "  ~/.cocoaskills/config.json, <project>/Skillfile.json, local skill git repositories.\n"
-            "  Missing repositories declared with `git` may be cloned into skills_root.\n\n"
-            "Files written:\n"
-            "  <project>/.agents/skills, <project>/.agents/bin, .agents/env.sh, .agents/env.ps1,\n"
-            "  agent adapter directories, ~/.cocoaskills/runtime, ~/.cocoaskills/cache.\n\n"
-            "Exit codes:\n"
-            "  0 success, 1 one or more projects/skills failed, 2 config error, 3 lock contention.\n\n"
-            "Examples:\n"
-            f"  csk {name}\n"
-            f"  csk {name} --all\n"
-            f"  csk {name} demo-app-ios\n"
-            f"  csk {name} .\n"
-            f"  csk {name} /path/to/project\n"
-            f"  csk {name} --fix-gitignore\n"
-        ),
+        epilog=epilog,
     )
     parser.add_argument("target", nargs="?", help="project alias, '.', or project path")
     parser.add_argument("--all", action="store_true", help="operate on all registered projects")
@@ -505,6 +642,41 @@ def _add_install(sub: argparse._SubParsersAction[argparse.ArgumentParser], name:
         help="run audit gate for this install (default mode: advisory)",
     )
     _add_build_ssh_arguments(parser)
+
+
+def _add_check(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    # Registered only when the draft is enabled, so the description
+    # and epilog below always carry the draft label legitimately.
+    parser = sub.add_parser(
+        "check",
+        help="Validate a schema-2 Skillfile without installing.",
+        description="Validate a schema-2 Skillfile without installing.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Validates the Skillfile structurally, plans every network source\n"
+            "against source-policy.json without network I/O, and verifies\n"
+            "Skillfile.lock.json consistency when a lock is present.\n"
+            "No traversal, no acquisition, nothing is written. Check plans\n"
+            "network sources but never acquires them.\n\n"
+            "Files read:\n"
+            "  ~/.cocoaskills/config.json, <project>/Skillfile.json,\n"
+            "  <project>/Skillfile.lock.json when present, ~/.cocoaskills/source-policy.json\n"
+            "  when present.\n\n"
+            "Exit codes:\n"
+            "  0 every checked Skillfile is valid, 1 one or more are invalid,\n"
+            "  2 config error, 3 lock contention.\n\n"
+            "Examples:\n"
+            "  csk check\n"
+            "  csk check --all\n"
+            "  csk check demo-app-ios\n"
+            "  csk check .\n"
+            "\n"
+            f"Support is {source_errors.DRAFT_SKILLFILE_SOURCES_LABEL}: no release\n"
+            "qualification and no conformance claim is made."
+        ),
+    )
+    parser.add_argument("target", nargs="?", help="project alias, '.', or project path")
+    parser.add_argument("--all", action="store_true", help="check all registered projects")
 
 
 def _add_global_only_argument(parser: argparse.ArgumentParser) -> None:
@@ -726,6 +898,9 @@ def _dispatch(args: argparse.Namespace) -> int:
             return EXIT_PARTIAL_FAIL
         return EXIT_OK
 
+    if args.command == "check":
+        return _cmd_check(cfg, args)
+
     if args.command in {"add", "remove"}:
         project_root = _resolve_project_root(cfg, args.project)
         if args.command == "add":
@@ -892,14 +1067,23 @@ def _cmd_hybrid(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
         line = f"{item.decl.name:<24} {item.decl.ref.kind:<8} {item.decl.ref.value:<12} targets: {', '.join(item.targets)}"
         if args.hybrid_command == "status":
             marker_path = store / item.decl.name / ".csk-install.json"
-            state = "missing"
-            if marker_path.exists():
+            try:
+                marker_text = marker_path.read_text(encoding="utf-8")
+            except (FileNotFoundError, NotADirectoryError):
+                state = "missing"
+            except OSError:
+                state = "unreadable marker"
+            else:
                 try:
-                    marker = json.loads(marker_path.read_text(encoding="utf-8"))
-                    commit = marker.get("commit")
-                    state = f"installed {str(commit)[:7]}" if isinstance(commit, str) else "installed"
+                    marker = json.loads(marker_text)
                 except ValueError:
                     state = "unreadable marker"
+                else:
+                    if not isinstance(marker, dict):
+                        state = "unreadable marker"
+                    else:
+                        commit = marker.get("commit")
+                        state = f"installed {str(commit)[:7]}" if isinstance(commit, str) else "installed"
             line += f"  [{state}]"
         print(line)
     return EXIT_OK
@@ -908,7 +1092,16 @@ def _cmd_hybrid(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
 def _cmd_bootstrap(args: argparse.Namespace) -> int:
     path = config.config_path()
     non_interactive = getattr(args, "non_interactive", False)
-    if path.exists():
+    try:
+        path.stat()
+    except FileNotFoundError:
+        config_present = False
+    except OSError as exc:
+        print(f"error: cannot inspect config at {path}: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+    else:
+        config_present = True
+    if config_present:
         if getattr(args, "if_missing", False):
             print(f"Kept existing config: {path}")
             return EXIT_OK
@@ -988,7 +1181,15 @@ def _cmd_init(args: argparse.Namespace) -> int:
         root = target.resolve()
     except FileNotFoundError as exc:
         raise manifest.ManifestError(f"target path does not exist: {target}") from exc
-    if not root.exists() or not root.is_dir():
+    except (OSError, RuntimeError) as exc:
+        raise manifest.ManifestError(f"cannot access target path {target}: {exc}") from exc
+    try:
+        mode = root.stat().st_mode
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        raise manifest.ManifestError(f"target path does not exist: {root}") from exc
+    except OSError as exc:
+        raise manifest.ManifestError(f"cannot access target path {root}: {exc}") from exc
+    if not stat.S_ISDIR(mode):
         raise manifest.ManifestError(f"target path does not exist: {root}")
 
     parent = _nearest_parent_manifest(root)
@@ -1021,10 +1222,15 @@ def _cmd_init(args: argparse.Namespace) -> int:
 def _cmd_config_show() -> int:
     path = config.config_path()
     print(f"Config path: {path}")
-    if path.exists():
-        print(path.read_text(encoding="utf-8"), end="")
-    else:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (FileNotFoundError, NotADirectoryError):
         print("Config does not exist")
+    except OSError as exc:
+        print(f"error: cannot read config at {path}: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+    else:
+        print(content, end="")
     return EXIT_OK
 
 
@@ -1206,6 +1412,144 @@ def _cmd_skill_check(args: argparse.Namespace) -> int:
     return EXIT_PARTIAL_FAIL if skillcheck.has_errors(issues) else EXIT_OK
 
 
+def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
+    """Validate Skillfiles without installing (draft, opt-in only).
+
+    The subcommand parses only when the draft is enabled, so reaching
+    here implies the opt-in held at parse time. Every failure below is
+    a validation verdict (exit 1); configuration and usage failures
+    propagate to the shared handler (exit 2), exactly like the other
+    commands.
+    """
+
+    cfg, alias = _cfg_and_alias_for_target(cfg, args)
+    projects = _select_check_projects(cfg, alias)
+    print(source_errors.DRAFT_SKILLFILE_SOURCES_LABEL)
+    # Pass 1 validates structure only: a malformed Skillfile refuses
+    # before the machine policy is even read, let alone planned.
+    loaded_manifests: list[
+        tuple[config.ProjectConfig, manifest.ProjectManifest | None]
+    ] = []
+    failed = False
+    allow_schema_2 = config.skillfile_sources_enabled(cfg)
+    for project in projects:
+        try:
+            loaded = manifest.load_manifest(
+                project.path, allow_schema_2=allow_schema_2
+            )
+        except (
+            source_errors.SourceError,
+            manifest.ManifestError,
+            OSError,
+        ) as exc:
+            _print_check_failure(exc)
+            failed = True
+            continue
+        loaded_manifests.append((project, loaded))
+    needs_policy = any(
+        item is not None and item.schema_version == manifest.SCHEMA_VERSION_2
+        for _, item in loaded_manifests
+    )
+    policy: repository_policy.RepositoryPolicy | None = None
+    if needs_policy:
+        try:
+            policy = config.load_source_policy(
+                config.source_policy_path(cfg.path), reader_revision=2
+            )
+        except repository_policy.RepositoryPolicyError as exc:
+            _print_check_failure(exc)
+            return EXIT_PARTIAL_FAIL
+    # Pass 2 plans network sources and verifies locks. Everything here
+    # is read-only and network-free; traversal and acquisition stay
+    # install's job.
+    for project, item in loaded_manifests:
+        if item is None:
+            print(f"{project.alias}: Skillfile.json missing")
+            failed = True
+            continue
+        if item.schema_version != manifest.SCHEMA_VERSION_2:
+            print(
+                f"{project.alias}: schema_version 1 valid "
+                f"({len(item.skills)} skills, no draft sources)"
+            )
+            continue
+        try:
+            _verify_schema2_project(project, item, policy)
+        except (
+            source_errors.SourceError,
+            repository_policy.RepositoryPolicyError,
+        ) as exc:
+            _print_check_failure(exc)
+            failed = True
+            continue
+    return EXIT_PARTIAL_FAIL if failed else EXIT_OK
+
+
+def _print_check_failure(exc: Exception) -> None:
+    rendered = source_diagnostics.format_exception(exc)
+    if rendered is None:
+        rendered = f"error: {exc}\n{source_errors.DRAFT_SKILLFILE_SOURCES_LABEL}"
+    print(rendered, file=sys.stderr)
+
+
+def _select_check_projects(
+    cfg: config.GlobalConfig, alias: str | None
+) -> list[config.ProjectConfig]:
+    if alias is None:
+        return list(cfg.projects.values())
+    project = cfg.projects.get(alias)
+    if project is None:
+        raise ValueError(f"Unknown project alias: {alias}")
+    return [project]
+
+
+def _verify_schema2_project(
+    project: config.ProjectConfig,
+    loaded: manifest.ProjectManifest,
+    policy: repository_policy.RepositoryPolicy | None,
+) -> None:
+    """Verify plans and lock for one parsed schema-2 manifest.
+
+    Network plans come from the transport planner (pure: it performs
+    no I/O) and lock consistency from the lock reader and validator.
+    """
+
+    digest = loaded.manifest_sha256
+    if digest is None:
+        raise source_errors.SourceError(
+            source_errors.CODE_SELECTION_INVALID,
+            f"Skillfile {loaded.path} schema-2 manifest digest is missing",
+        )
+    has_network_sources = False
+    for acquisition in loaded.sources.values():
+        if isinstance(acquisition, skillfile_v2.GitSource):
+            has_network_sources = True
+            source_transport.plan_attempts(
+                acquisition.identity, None, policy, declared_url=acquisition.git
+            )
+        elif isinstance(acquisition, skillfile_v2.RepositorySource):
+            has_network_sources = True
+            source_transport.plan_attempts(acquisition.repository, None, policy)
+    lock = source_publish.read_schema2_lock(project.path)
+    if lock is None:
+        lock_note = "lock absent"
+    else:
+        source_lock.validate_lock(lock, current_manifest_sha256=digest)
+        lock_note = "lock current"
+    if policy is None:
+        policy_note = "policy absent"
+    else:
+        policy_note = f"policy schema {policy.schema_version}"
+    acquisition_note = (
+        ", network sources planned, not acquired" if has_network_sources else ""
+    )
+    print(
+        f"{project.alias}: schema_version 2 valid "
+        f"({len(loaded.sources)} sources, {len(loaded.selectors)} selectors, "
+        f"{lock_note}, {policy_note}{acquisition_note})"
+    )
+
+
 def _cmd_update(cfg: config.GlobalConfig) -> int:
     results = git_ops.fetch_all(cfg.skills_root)
     failed = False
@@ -1331,7 +1675,10 @@ def _cmd_audit_publish(args: argparse.Namespace) -> int:
     token = args.token or os.environ.get("CSK_REGISTRY_TOKEN")
     if not token:
         raise ValueError("--publish requires --token or the CSK_REGISTRY_TOKEN environment variable")
-    record_json = Path(args.publish).read_bytes()
+    try:
+        record_json = Path(args.publish).read_bytes()
+    except OSError as exc:
+        raise ValueError(f"cannot read audit record file {args.publish}: {exc}") from exc
     try:
         registry_url = config.canonical_registry_url(args.registry, field="--registry")
         response = audit_registry.http_publish_record(registry_url, token, record_json)
@@ -1348,11 +1695,27 @@ def _cfg_with_audit_override(cfg: config.GlobalConfig, args: argparse.Namespace)
     return replace(cfg, audit=replace(cfg.audit, enabled=True, mode=audit_mode))
 
 
+def _project_path_suffix(path: Path) -> str:
+    """Render the list-row state of one project path.
+
+    Only a missing path reports " (missing)". An entry that cannot
+    be inspected reports " (unreadable)" instead of escaping raw.
+    """
+
+    try:
+        path.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return " (missing)"
+    except OSError:
+        return " (unreadable)"
+    return ""
+
+
 def _render_list(cfg: config.GlobalConfig, *, show_paths: bool = False) -> str:
     lines = [f"Config: {cfg.path}", f"Skills root: {cfg.skills_root}"]
     for alias, project in cfg.projects.items():
         if show_paths:
-            suffix = "" if project.path.exists() else " (missing)"
+            suffix = _project_path_suffix(project.path)
             lines.append(
                 f"Project {alias}: path={project.path}{suffix} "
                 f"project_alias={project.project_alias or alias} checkout_alias={project.checkout_alias or alias}"
@@ -1476,8 +1839,13 @@ def _init_agents(args: argparse.Namespace) -> list[str]:
 
 def _nearest_parent_manifest(root: Path) -> Path | None:
     for parent in root.parents:
-        if (parent / manifest.MANIFEST_NAME).exists():
-            return parent
+        try:
+            (parent / manifest.MANIFEST_NAME).stat()
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError as exc:
+            raise manifest.ManifestError(f"Cannot inspect {parent} for a parent Skillfile: {exc}") from exc
+        return parent
     return None
 
 
@@ -1536,7 +1904,14 @@ def _render_configured_project_resolution(project: config.ProjectConfig, worktre
     root = project.path
     branch = project_resolver.git_branch(root)
     task_id = project_resolver.task_id_from_branch(branch, worktree_alias_pattern)
-    path_hash = project_resolver.stable_path_hash(root) if root.exists() else ""
+    try:
+        root.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        path_hash = ""
+    except OSError as exc:
+        raise manifest.ManifestError(f"Cannot access project path {root}: {exc}") from exc
+    else:
+        path_hash = project_resolver.stable_path_hash(root)
     return "\n".join(
         [
             f"project_alias: {project.project_alias or project.alias}",

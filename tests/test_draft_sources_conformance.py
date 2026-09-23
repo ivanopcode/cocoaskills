@@ -25,12 +25,64 @@ Without ``CSK_DRAFT_SOURCES_SUITE_ROOT`` every test in this module skips with
 ``CSK_DRAFT_SOURCES_SUITE_ROOT is not set``. Later leaves register drivers
 with :func:`register_semantic_driver`; a driver must call a production entry
 point on a fixture built from the case input and assert the exact expected
-outcome, never merely reproduce the expected label.
+outcome, never merely reproduce the expected label. The semantic dispatch
+enforces that contract: every driver run is wrapped in a production-entry
+observer, and a driver that returns without touching any entry fails as
+hollow, naming its case and owning task. The last test in this file reports
+passed/skipped/failed/total per category (schema, snapshot, semantic,
+harness) into the junit artifact.
+
+The observer's guarantee is exactly "at least one tabled in-process
+entry was called", and three bounds come with it: it sees in-process
+calls only (a driver that shells out to the real CLI counts as
+hollow); it is table-defined (real but untabled production code
+counts as hollow); it is provenance-blind (one tabled call of any
+kind, on any argument, satisfies it, so a tribute call followed by a
+label assertion passes). The table's membership is itself observed,
+not inferred: every entry must have executed during the traced CLI
+scenarios (see ``_PRODUCTION_ENTRY_POINTS``), so a dead entry,
+however many test-only callers, forwarders, uncalled nested bodies
+or references-as-data point at it, fails a test instead of vouching
+for drivers. An uncalled function is never observed, whatever the
+source around it says.
+
+Where the product itself refuses a scenario, the gate certifies what
+runs instead of failing the run: on a platform without external-build
+support (``csk.installer.supports_external_builds`` is false) the
+external-build scenario asserts the product's structured refusal and
+the membership check covers the entries the runnable scenarios
+reach. The entries the refused scenario alone covers are excluded
+from the check, and the excluded set is derived, never enumerated:
+``tests/draft_sources_observed_labels.json`` records the
+machine-observed scenario labels per tabled entry, and an entry is
+excluded only when every recorded label names a refused scenario. The
+record is self-checking on capable hosts (the live labels must equal
+it exactly, entry sets and label sets both) and a tabled entry with
+no record fails on every lane, so the derivation cannot silently
+swallow a new entry; an empty label set is refused at write and at
+load, since an empty set is a subset of every lane. The pin
+obligation is derived from the real platform, never from the live
+predicate, so no ambient variable can remove it. Regenerate the
+record on a capable host with ``CSK_REGENERATE_OBSERVED_LABELS=1``;
+simulate the refused lane anywhere with
+``CSK_SIMULATE_NO_EXTERNAL_BUILDS=1``, which adds that lane's run
+beside the native one — forcing the same predicate the product
+calls, scoped to the added run — while the capable-lane pin still
+runs on a capable host.
+
+The draft lanes run on ubuntu-latest and macos-latest only. windows-latest
+is a declared unsupported lane for the draft suite: draft schema-2 source
+selection is POSIX-only (descriptor-relative traversal), so the traversal
+drivers skip there by platform bound rather than running.
 """
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import hashlib
+import importlib
+import io
 import json
 import os
 import shutil
@@ -38,9 +90,11 @@ import socket
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Collection, Mapping
+import tomllib
+from collections.abc import Callable, Collection, Iterator, Mapping
 from copy import deepcopy
 from pathlib import Path
+from types import CodeType
 from typing import Any
 from unittest.mock import patch
 
@@ -48,13 +102,16 @@ import pytest
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
-from csk import git_admission, manifest, protocol_json
+from csk import git_admission, installer, manifest, protocol_json
 from csk.build_repository_pipeline import ExternalBuildError
 from csk.sources import _selection_fs
 from csk.sources import errors as source_errors
 from csk.sources import repository_policy
 from csk.sources import transport as source_transport
 from csk.sources import lock as source_lock
+from draft_sources_accounting import OUTCOMES as _HOOK_OUTCOMES
+from draft_sources_accounting import REPORT_CATEGORIES as _REPORT_CATEGORIES
+from draft_sources_accounting import check_accounting as _check_outcome_accounting
 
 ROOT_TEXT = os.environ.get("CSK_DRAFT_SOURCES_SUITE_ROOT")
 pytestmark = pytest.mark.skipif(not ROOT_TEXT, reason="CSK_DRAFT_SOURCES_SUITE_ROOT is not set")
@@ -216,6 +273,1325 @@ def register_semantic_driver(case_id: str, driver: SemanticDriver) -> None:
     assert case_id not in SEMANTIC_DRIVERS, f"duplicate driver for case {case_id!r}"
     SEMANTIC_DRIVERS[case_id] = driver
 
+
+# Production entry points a semantic driver must reach, as
+# (defining module, attribute) pairs. The semantic dispatch wraps every
+# entry below while a driver runs and records the call sites the driver
+# actually touched; a driver that returns without touching any of them
+# fails as hollow (see ``test_draft_sources_semantic_case``). Fixture
+# plumbing is deliberately absent: error and data classes, fixture
+# writers, hash helpers, platform probes, path helpers and the git
+# test-double tool. Touching only plumbing is exactly the hollow shape
+# the gate must catch, so none of it may count as a call site.
+#
+# Membership rule (checked, not asserted): every entry below must have
+# EXECUTED during the traced CLI scenarios
+# (``_observed_scenario_entries``), which run the product's own
+# install, upgrade, status and check paths under a call tracer
+# starting at the derived console-script entry point. The evidence is
+# an execution record, not a reachability argument: an entry with no
+# execution fails
+# ``test_draft_sources_production_table_entries_have_production_callers``
+# instead of quietly vouching for drivers. The check reads no
+# production source at all and keys on code-object identity, so no
+# source shape — test-only caller, forwarding chain, nested body or
+# method, reference passed as data, called or not — can certify an
+# entry; only the entry's own code object executing counts.
+# Removed entries stay removed:
+# ``csk.sources.boundaries:check_selected_package``,
+# ``csk.sources.selection:resolve_selector_directory``,
+# ``csk.sources.source_audit:validate_source_audit``,
+# ``csk.sources.transport:acquire``,
+# ``csk.sources.repository_policy:canonical_endpoint_identity`` (its
+# only production caller is the caller-less compat wrapper
+# ``canonical_repository_identity``) and
+# ``csk.install_marker:validate_attestation_evidence`` (production
+# never executes it: the one production caller passes
+# ``evidence_path=None``, which returns before the validator, and the
+# other caller has no production callers itself; finding against
+# TASK-260916-11yseo, and its drivers still touch observed marker
+# entries, so no driver changed).
+_PRODUCTION_ENTRY_POINTS: tuple[tuple[str, str], ...] = (
+    ("csk.build_repository_pipeline", "run_pipeline"),
+    ("csk.builds.currentness", "compare_external_build_evidence"),
+    ("csk.builds.metadata", "parse_receipt_v3"),
+    ("csk.builds.metadata", "read_receipt_v3"),
+    ("csk.builds.metadata", "source_aware_cache_key"),
+    ("csk.dev_substitutions", "check_source_substitution_admission"),
+    ("csk.install_marker", "check_local_registry_requirement"),
+    ("csk.install_marker", "compare_marker_plan"),
+    ("csk.install_marker", "evaluate_marker_status"),
+    ("csk.install_marker", "evaluate_schema2_status"),
+    ("csk.install_marker", "read_install_marker"),
+    ("csk.installer", "install"),
+    ("csk.manifest", "parse_manifest"),
+    ("csk.sources.boundaries", "freeze_boundaries"),
+    ("csk.sources.boundaries", "recheck_publication_destination"),
+    ("csk.sources.lock", "read_lock"),
+    ("csk.sources.repository_policy", "load_policy"),
+    ("csk.sources.repository_policy", "parse_policy"),
+    ("csk.sources.repository_policy", "select_endpoints"),
+    ("csk.sources.selection", "expand_collection"),
+    ("csk.sources.selection", "expand_selectors"),
+    ("csk.sources.selection", "managed_output_boundary"),
+    ("csk.sources.selection", "resolve_individual"),
+    ("csk.sources.snapshot", "capture_package_snapshot"),
+    ("csk.sources.snapshot", "revalidate_capture"),
+    ("csk.sources.snapshot", "verify_frozen_copy"),
+    ("csk.sources.source_audit", "record_source_audit"),
+    ("csk.sources.source_audit", "validate_stored_report"),
+    ("csk.sources.transport", "acquire_plan"),
+    ("csk.sources.transport", "plan_attempts"),
+    ("csk.status", "collect_status"),
+)
+
+# Observed production call sites per semantic case id, filled by the
+# semantic dispatch as drivers run. A case id appears here only after its
+# driver returned having touched at least one entry above.
+CASE_CALL_SITES: dict[str, list[str]] = {}
+
+
+def _recording_entry(
+    site: str, original: Callable[..., Any], observed: list[str]
+) -> Callable[..., Any]:
+    """Wrap one production entry so its calls append ``site`` to ``observed``."""
+
+    @functools.wraps(original)
+    def _call(*args: Any, **kwargs: Any) -> Any:
+        observed.append(site)
+        return original(*args, **kwargs)
+
+    return _call
+
+
+@contextlib.contextmanager
+def _observe_production_entries() -> Iterator[list[str]]:
+    """Record every production entry call made inside the window.
+
+    Each tabled entry is replaced by a delegating wrapper for the
+    duration of the window; the snapshot-store consumer openers (reached
+    through the ``ALL_CONSUMERS`` list rather than by attribute) are
+    wrapped by replacing the list. Everything is restored even when the
+    body raises, and a partially installed window is unwound before the
+    error escapes, so a failure here can neither leak wrappers into the
+    next test nor hide behind them.
+    """
+    observed: list[str] = []
+    installed: list[tuple[Any, str, Any]] = []
+    consumers_module: Any = None
+    original_consumers: Any = None
+    try:
+        for module_name, attribute in _PRODUCTION_ENTRY_POINTS:
+            module = importlib.import_module(module_name)
+            original = getattr(module, attribute)
+            assert callable(original), (
+                f"entry point is not callable: {module_name}:{attribute}"
+            )
+            setattr(
+                module,
+                attribute,
+                _recording_entry(f"{module_name}:{attribute}", original, observed),
+            )
+            installed.append((module, attribute, original))
+        consumers_module = importlib.import_module("csk.sources.consumers")
+        original_consumers = consumers_module.ALL_CONSUMERS
+        consumers_module.ALL_CONSUMERS = tuple(
+            _recording_entry(
+                f"csk.sources.consumers:{opener.__name__}", opener, observed
+            )
+            for opener in original_consumers
+        )
+    except BaseException:
+        for module, attribute, original in reversed(installed):
+            setattr(module, attribute, original)
+        if consumers_module is not None and original_consumers is not None:
+            consumers_module.ALL_CONSUMERS = original_consumers
+        raise
+    try:
+        yield observed
+    finally:
+        for module, attribute, original in reversed(installed):
+            setattr(module, attribute, original)
+        if consumers_module is not None and original_consumers is not None:
+            consumers_module.ALL_CONSUMERS = original_consumers
+
+
+# Per-test outcomes for the category counts live in
+# ``tests/draft_sources_accounting.py``: only a pytest hook can observe
+# outcomes, and hooks cannot live in a test module, so the
+# ``pytest_runtest_logreport`` hook in ``tests/conftest.py`` records
+# there while the accounting test at the end of this file reads back.
+# (Imported at the top of this module next to the other helpers.)
+
+# Observed production-entry membership.
+#
+# The static call-graph gate was removed in the intervention round:
+# three reviews laundered a dead entry through it (test-only caller,
+# test-only forwarder, uncalled nested bodies and references passed
+# as data), because a sound static call graph for Python is not
+# obtainable. This gate observes instead of inferring: it runs the
+# CLI paths the product offers (install, upgrade, status, check) on
+# hermetic fixtures under a call tracer, and every tabled entry must
+# have executed. Membership keys on code-object identity: a
+# same-named nested function or method is a different code object
+# and cannot stand in for the entry. An uncalled function is never
+# observed, whatever the source around it says, so no source shape
+# can forge membership.
+
+
+def _derive_console_root(repo_root: Path) -> tuple[str, str, Callable[..., Any]]:
+    """Resolve the installed console-script entry to its callable.
+
+    Reads ``[project.scripts]`` from ``pyproject.toml`` (failing
+    closed when the file, the table, or the ``csk`` target is missing
+    or malformed), imports the named ``module:attr``, and returns
+    ``(module, attr, callable)``. The traced scenarios start at this
+    callable, so the gate observes the product's own entry point
+    rather than a function the gate chose. A rename the manifest does
+    not follow breaks loudly here instead of tracing a stale import.
+    """
+    pyproject = repo_root / "pyproject.toml"
+    assert pyproject.is_file(), f"console-script manifest is missing: {pyproject}"
+    scripts = (
+        tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        .get("project", {})
+        .get("scripts", {})
+    )
+    assert isinstance(scripts, dict) and "csk" in scripts, (
+        f"console-script manifest names no csk entry point: {pyproject}"
+    )
+    target = scripts["csk"]
+    assert isinstance(target, str) and ":" in target.split()[0], (
+        f"csk console script names no module:function target: {target!r}"
+    )
+    ref = target.split()[0].split("[")[0]
+    module_name, _, attr = (part.strip() for part in ref.partition(":"))
+    assert module_name and attr, (
+        f"csk console script names no module:function target: {target!r}"
+    )
+    module = importlib.import_module(module_name)
+    candidate = getattr(module, attr, None)
+    assert callable(candidate), (
+        f"csk console script names no callable: {target!r}"
+    )
+    return module_name, attr, candidate
+
+
+_ObservedCodeCount = tuple[CodeType, int]
+_ObservedCodeLabels = tuple[CodeType, set[str]]
+
+
+class _ProductionCallRecorder:
+    """Record executed code objects under ``src/csk`` via ``settrace``.
+
+    The trace function records the code object of every ``call``
+    event whose file lives under the production tree and ignores
+    everything else (the tracer itself lives in this test module, so
+    it can never record itself). Records are keyed by ``id(code)``
+    and retain that code object as the value, preventing id reuse
+    while the record is alive. Consumers confirm ``record[0] is
+    code``; they never rely on ``CodeType`` value equality, which
+    can make byte-identical functions from different files compare
+    equal. A nested function, method, or any other same-named code
+    object therefore cannot certify the untouched module-level
+    entry (F-2 / gate-table-admits-dead-entry). Subprocesses are not traced: only
+    in-process execution counts, which is exactly the hollow gate's
+    definition of a production touch. Threads are not traced either:
+    production spawns threads only around real compiler runs, and
+    every scenario stubs the compiler, so the traced runs are
+    single-threaded. ``run`` restores the previous trace function
+    even when the body raises.
+    """
+
+    def __init__(self, src_root: Path) -> None:
+        self._prefix = os.fspath(src_root) + os.sep
+        self.counts: dict[int, _ObservedCodeCount] = {}
+        self.labels: dict[int, _ObservedCodeLabels] = {}
+
+    def _trace(self, frame: Any, event: str, arg: Any) -> Any:
+        if event == "call":
+            filename = frame.f_code.co_filename
+            if filename.startswith(self._prefix) and filename.endswith(".py"):
+                code = frame.f_code
+                code_id = id(code)
+                count_record = self.counts.get(code_id)
+                if count_record is None:
+                    self.counts[code_id] = (code, 1)
+                else:
+                    recorded_code, count = count_record
+                    assert recorded_code is code, (
+                        "live code-object id was reused in the execution record"
+                    )
+                    self.counts[code_id] = (recorded_code, count + 1)
+                labels_record = self.labels.get(code_id)
+                if labels_record is None:
+                    self.labels[code_id] = (code, {self._label})
+                else:
+                    recorded_code, labels = labels_record
+                    assert recorded_code is code, (
+                        "live code-object id was reused in the label record"
+                    )
+                    labels.add(self._label)
+        return self._trace
+
+    def run(self, label: str, func: Callable[..., Any], *args: Any) -> Any:
+        """Run ``func(*args)`` under the tracer, attributing calls to ``label``."""
+        self._label = label
+        previous = sys.gettrace()
+        sys.settrace(self._trace)
+        try:
+            return func(*args)
+        finally:
+            sys.settrace(previous)
+
+    _label: str = ""
+
+
+# Recorded scenario coverage per tabled entry ("the golden"). The file
+# is machine-written on a capable host
+# (``CSK_REGENERATE_OBSERVED_LABELS=1``) from the live traced record,
+# never hand-maintained: ``entries`` maps ``"module:attr"`` to the
+# sorted scenario labels that executed it, ``scenarios`` lists every
+# scenario label the run knows. Where a scenario is refused by
+# product design, an entry is excluded from the membership check only
+# when every recorded label names a refused scenario.
+OBSERVED_LABELS_PATH = Path(__file__).with_name("draft_sources_observed_labels.json")
+SIMULATE_NO_EXTERNAL_BUILDS_ENV = "CSK_SIMULATE_NO_EXTERNAL_BUILDS"
+REGENERATE_OBSERVED_LABELS_ENV = "CSK_REGENERATE_OBSERVED_LABELS"
+
+#: Whether the REAL platform publishes external builds, asked of the
+#: product predicate once at import — before any fixture or monkeypatch
+#: can run. The capable-lane pin obligation (F-1 /
+#: simulation-disarms-capable-pin) reads this capture, never the live
+#: predicate: simulation may add the refused lane, but no ambient
+#: variable and no patch may remove the pin a capable host owes. This
+#: is the same predicate the installer calls, not a retyped rule.
+_HOST_SUPPORTS_EXTERNAL_BUILDS: bool = installer.supports_external_builds()
+
+
+def _load_observed_labels(
+    path: Path | None = None,
+) -> tuple[dict[str, tuple[str, ...]], tuple[str, ...]]:
+    """Load the recorded entry-to-scenario coverage, failing closed.
+
+    Refuses a missing file, a misshapen document, an unknown or
+    duplicated scenario label, and — the laundering shape — an empty
+    label set, which is a subset of every lane and would exclude its
+    entry everywhere without ever executing it. The default path is
+    read from the module global at call time (not bound as a
+    default) so the wrong-golden regression test can plant a
+    hostile record exactly as a stale file on disk would appear.
+    """
+    resolved = OBSERVED_LABELS_PATH if path is None else path
+    assert resolved.is_file(), f"observed-labels record is missing: {resolved}"
+    raw = json.loads(resolved.read_bytes())
+    assert isinstance(raw, dict), "observed-labels record must be a JSON object"
+    assert set(raw) == {"entries", "scenarios"}, (
+        f"observed-labels record declares {sorted(raw)}"
+    )
+    entries_raw = raw["entries"]
+    scenarios_raw = raw["scenarios"]
+    assert isinstance(entries_raw, dict) and entries_raw, (
+        "observed-labels record entries must be a non-empty object"
+    )
+    assert (
+        isinstance(scenarios_raw, list)
+        and scenarios_raw
+        and all(isinstance(label, str) and label for label in scenarios_raw)
+    ), "observed-labels record scenarios must be a non-empty string list"
+    assert len(set(scenarios_raw)) == len(scenarios_raw), (
+        "observed-labels record scenarios repeat a label"
+    )
+    known = set(scenarios_raw)
+    entries: dict[str, tuple[str, ...]] = {}
+    for site, labels in entries_raw.items():
+        assert isinstance(site, str) and ":" in site, (
+            f"observed-labels record names no module:attr entry: {site!r}"
+        )
+        assert (
+            isinstance(labels, list)
+            and labels
+            and all(isinstance(label, str) and label for label in labels)
+        ), (
+            f"observed-labels record covers {site} with no scenario: "
+            "an empty set would exclude the entry on every lane; "
+            "regenerate on a capable host instead of recording it"
+        )
+        assert set(labels) <= known, (
+            f"observed-labels record covers {site} with an unknown "
+            f"scenario: {sorted(set(labels) - known)}"
+        )
+        assert len(set(labels)) == len(labels), (
+            f"observed-labels record repeats a scenario for {site}"
+        )
+        entries[site] = tuple(sorted(labels))
+    return entries, tuple(sorted(scenarios_raw))
+
+
+def _write_observed_labels(
+    path: Path,
+    table: tuple[tuple[str, str], ...],
+    live_labels: Mapping[tuple[str, str], set[str]],
+    scenarios: Collection[str],
+) -> None:
+    """Record the live traced coverage for the table, deterministically.
+
+    Every tabled entry must have executed under at least one scenario:
+    a dead entry is refused here rather than recorded with an empty
+    set, which would exclude it on every lane. Entries the tracer saw
+    outside the table are not recorded; the record certifies the
+    table, not the trace.
+    """
+    entries: dict[str, list[str]] = {}
+    for module_name, attribute in table:
+        site = f"{module_name}:{attribute}"
+        labels = sorted(live_labels.get((module_name, attribute), ()))
+        assert labels, (
+            f"observed-labels regen refuses to record {site} with no "
+            "covering scenario: remove the dead entry or cover it, do "
+            "not record an empty set"
+        )
+        entries[site] = labels
+    payload = {"entries": entries, "scenarios": sorted(scenarios)}
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def _assert_labels_agree(
+    table: tuple[tuple[str, str], ...],
+    live_labels: Mapping[tuple[str, str], set[str]],
+    golden_entries: Mapping[str, tuple[str, ...]],
+    *,
+    ran: Collection[str],
+    refused: Collection[str],
+    golden_scenarios: Collection[str],
+) -> None:
+    """Fail unless the live record matches the recorded coverage exactly.
+
+    Three equalities, narrowest last: the scenario universe the run
+    knows (ran plus refused) must equal the recorded one, the tabled
+    entry set must equal the recorded one, and every entry's live
+    label set must equal its recorded label set. Comparing label
+    sets, not just entry sets, is what keeps a narrowed record (one
+    label dropped) from certifying a drifted product.
+    """
+    live_universe = set(ran) | set(refused)
+    recorded_universe = set(golden_scenarios)
+    assert live_universe == recorded_universe, (
+        "observed scenarios disagree with the recorded universe: "
+        f"unrecorded {sorted(live_universe - recorded_universe)}, "
+        f"unrun {sorted(recorded_universe - live_universe)}; regenerate "
+        "the record on a capable host"
+    )
+    tabled = {f"{module_name}:{attribute}" for module_name, attribute in table}
+    recorded = set(golden_entries)
+    assert tabled == recorded, (
+        "tabled entries disagree with the recorded coverage: "
+        f"unrecorded {sorted(tabled - recorded)}, "
+        f"removed {sorted(recorded - tabled)}; regenerate the record "
+        "on a capable host"
+    )
+    drifted = [
+        f"{site}: live {sorted(live_labels.get((module_name, attribute), ()))} "
+        f"!= recorded {sorted(golden_entries[site])}"
+        for module_name, attribute in table
+        for site in (f"{module_name}:{attribute}",)
+        if set(live_labels.get((module_name, attribute), ()))
+        != set(golden_entries[site])
+    ]
+    assert not drifted, (
+        f"live scenario coverage drifted for {len(drifted)} tabled "
+        f"entr{'y' if len(drifted) == 1 else 'ies'}: {drifted[:5]}; "
+        "regenerate the record on a capable host"
+    )
+
+
+def _external_builds_unavailable_reason() -> str:
+    """Declared reason for the refused external-build lane.
+
+    Names the measured platform and the product rule that causes the
+    refusal, both asked of the product (``sys.platform`` as observed,
+    the message constant the installer itself raises), never retyped.
+    """
+    return (
+        "external-build scenario refused by product design on this "
+        f"platform (sys.platform={sys.platform}): "
+        f"{installer.EXTERNAL_BUILDS_UNSUPPORTED_MESSAGE}"
+    )
+
+
+def _descriptor_traversal_unavailable_reason() -> str:
+    """Name the platform and product capability behind traversal skips."""
+    return (
+        f"sys.platform={sys.platform}: "
+        f"{_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON}"
+    )
+
+
+def _case_alias_unavailable_reason() -> str:
+    """Name the platform and filesystem capability behind case-alias skips."""
+    return (
+        f"sys.platform={sys.platform}: case-alias requires a case-insensitive "
+        "filesystem to prove physical casing equivalence"
+    )
+
+
+@contextlib.contextmanager
+def _observed_scenario_env(home: Path, config_path: Path) -> Iterator[None]:
+    """Isolate the process environment for one traced scenario.
+
+    Points the manager home, the user home and the config locator at
+    the scenario fixture, clears the source-policy override and the
+    env opt-in (the fixture config carries the opt-in), and neuters
+    the ambient ssh-agent. Everything is restored afterwards, so a
+    scenario can neither read the real user home nor leak its
+    pointers into the next test.
+    """
+    saved = dict(os.environ)
+    os.environ["CSK_CONFIG"] = os.fspath(config_path)
+    os.environ.pop("CSK_SOURCE_POLICY", None)
+    os.environ.pop("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", None)
+    os.environ["HOME"] = os.fspath(home)
+    os.environ["USERPROFILE"] = os.fspath(home)
+    os.environ["SSH_AUTH_SOCK"] = "/nonexistent-agent.sock"
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+
+
+def _observed_gate_home(root: Path) -> tuple[Path, Path]:
+    """Provision an isolated manager home and skills root under ``root``."""
+
+    from csk import locking as _locking_module
+
+    csk_home = root / ".cocoaskills"
+    _locking_module.provision_new_manager_home(csk_home)
+    skills_root = root / "skills"
+    skills_root.mkdir()
+    return csk_home, skills_root
+
+
+def _observed_gate_save_config(
+    csk_home: Path,
+    skills_root: Path,
+    projects: Mapping[str, Path],
+    *,
+    audit_enabled: bool = False,
+) -> Path:
+    """Write a draft-enabled manager config registering ``projects``."""
+
+    from dataclasses import replace as _replace
+
+    from csk import config as _config_module
+
+    base = _config_module.GlobalConfig(
+        path=csk_home / "config.json",
+        skills_root=skills_root,
+        preferred_locale="ru",
+        default_agents=["codex_cli"],
+        adapter_mode="auto",
+        worktree_alias_pattern="[A-Z]+-[0-9]+",
+        projects={
+            alias: _config_module.ProjectConfig(
+                alias=alias, path=path, agents=["codex_cli"]
+            )
+            for alias, path in projects.items()
+        },
+        experimental=_config_module.ExperimentalConfig(skillfile_sources=True),
+    )
+    if audit_enabled:
+        base = _replace(base, audit=_replace(base.audit, enabled=True))
+    _config_module.save_config(base)
+    return csk_home / "config.json"
+
+
+def _observed_gate_external_repo(repo_dir: Path) -> tuple[Path, str]:
+    """Create a local git repo carrying a go-repository-v1 target.
+
+    Returns the repo directory and its HEAD commit. The repo is an
+    ordinary working-tree checkout (not bare): the acquisition
+    fixture clones it bare, the way the transport drivers do.
+    """
+
+    from tests.conftest import commit_all, init_git_repo, write_files
+
+    repository = init_git_repo(repo_dir)
+    write_files(
+        repository,
+        {
+            "skill-build.json": json.dumps(
+                {
+                    "schema_version": 1,
+                    "targets": {
+                        "external-tool": {
+                            "driver": "go-repository-v1",
+                            "build_root": ".",
+                            "source_dir": "cmd/external-tool",
+                        }
+                    },
+                }
+            ),
+            "go.mod": "module example.test/external-tool\n\ngo 1.25\n",
+            "cmd/external-tool/main.go": "package main\nfunc main() {}\n",
+            "README.md": "external tool\n",
+        },
+    )
+    return repository, commit_all(repository, "external tool")
+
+
+def _observed_gate_stub_external_build() -> Any:
+    """Stub the trusted toolchain for external-build scenarios.
+
+    Mirrors ``test_install._stub_trusted_toolchain`` without depending
+    on a sibling test module: the operator search path and the
+    toolchain session are faked, and the go-v1 build writes a small
+    shell artifact instead of invoking a compiler. Returns started
+    patches; the caller stops them. Unlike
+    ``_closure_refresh_stub_build_toolchain`` the fake build reads no
+    marker file, so it serves repository builds too.
+    """
+
+    import platform as _platform_module
+    from unittest.mock import patch as _mock_patch
+
+    from csk.builds import go_v1 as _go_v1
+    from csk.builds import metadata as _build_metadata
+    from csk.builds import toolchain as _build_toolchain
+
+    machine = _platform_module.machine().lower()
+    if machine in {"arm64", "aarch64"}:
+        goarch, tuning = "arm64", {"GOARM64": "v8.0"}
+    else:
+        goarch, tuning = "amd64", {"GOAMD64": "v1"}
+    if sys.platform == "darwin":
+        goos = "darwin"
+    elif os.name == "nt":
+        goos = "windows"
+    else:
+        goos = "linux"
+    host = _build_toolchain.NativeTarget(goos=goos, goarch=goarch, tuning=tuning)
+
+    class _FakeSession:
+        target = host
+        toolchain = _build_toolchain.ToolchainIdentity(
+            algorithm=_build_toolchain.TOOLCHAIN_ALGORITHM,
+            content_sha256="sha256:" + "a" * 64,
+            go_relpath=_build_toolchain.GO_RELPATH,
+            go_version=f"go version go1.25.5 {host.goos}/{host.goarch}",
+        )
+
+        def __init__(self, toolchain_config: _build_toolchain.ToolchainConfig):
+            self.operation_root = toolchain_config.private_base / "operation"
+            self.operation_root.mkdir(mode=0o700)
+            self.executable = self.operation_root / "go"
+            self.goroot = self.operation_root / "goroot"
+
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    def _fake_build(request: _go_v1.BuildRequest) -> _go_v1.BuildResult:
+        payload = (
+            "#!/bin/sh\n" f"printf '%s\\n' {request.command}\n"
+        ).encode()
+        artifact_path = request.toolchain_session.operation_root / (
+            f"artifact-{request.command}"
+        )
+        artifact_path.write_bytes(payload)
+        artifact_path.chmod(0o700)
+        return _go_v1.BuildResult(
+            artifact=_go_v1.BuildArtifact(
+                staged_path=artifact_path,
+                metadata=_go_v1.ArtifactMetadata(
+                    path=_build_metadata.derived_artifact_path(
+                        request.command, goos=host.goos
+                    ),
+                    sha256="sha256:" + hashlib.sha256(payload).hexdigest(),
+                    size=len(payload),
+                ),
+            ),
+            capability_evidence=_go_v1.CapabilityEvidence(
+                record_version="capability-evidence-v1",
+                execution_policy="manager-worker-v1",
+                platform=host.goos,
+                controls=(),
+            ),
+        )
+
+    patches = (
+        _mock_patch.object(
+            _build_toolchain,
+            "capture_operator_search_path",
+            lambda: _build_toolchain.OperatorSearchPath(("/fixture/bin",)),
+        ),
+        _mock_patch.object(_build_toolchain, "establish_toolchain", _FakeSession),
+        _mock_patch.object(_build_toolchain, "preflight_toolchain", lambda config: None),
+        _mock_patch.object(_go_v1, "build", _fake_build),
+    )
+    for entered in patches:
+        entered.start()
+    return patches
+
+
+def _observed_scenario_local_lifecycle(
+    root: Path, recorder: _ProductionCallRecorder, main: Callable[..., Any]
+) -> None:
+    """Run install, status, check, upgrade, install on a local project.
+
+    The project selects a collection and an individual member from a
+    local source; the upgrade adds a member, so the run covers the
+    initial, refresh and locked paths. Every command must succeed:
+    a scenario that errors proves nothing about the entries it
+    skipped, so a nonzero exit fails the gate loudly.
+    """
+
+    from tests.conftest import make_project
+
+    csk_home, skills_root = _observed_gate_home(root)
+    project = make_project(root)
+    source = root / "pkgs"
+    _closure_refresh_write_skill(source / "coll" / "review", "review")
+    _closure_refresh_write_skill(source / "solo", "solo")
+    _closure_refresh_skillfile(
+        project,
+        {"local": {"path": os.fspath(source)}},
+        [
+            {"from": "local", "directory": "coll", "include": ["*"]},
+            {"name": "solo", "from": "local", "directory": "solo"},
+        ],
+    )
+    config_path = _observed_gate_save_config(
+        csk_home, skills_root, {"app": project}
+    )
+    with _observed_scenario_env(root / "home", config_path):
+        assert recorder.run("local", main, ["install", "app"]) == 0
+        assert recorder.run("local", main, ["status", "app"]) == 0
+        assert recorder.run("local", main, ["check", "app"]) == 0
+        _closure_refresh_write_skill(source / "coll" / "docs", "docs")
+        assert recorder.run("local", main, ["upgrade", "app"]) == 0
+        assert recorder.run("local", main, ["install", "app"]) == 0
+
+
+def _observed_scenario_planned_check(
+    root: Path, recorder: _ProductionCallRecorder, main: Callable[..., Any]
+) -> None:
+    """Run check on a repository source with a matching policy entry.
+
+    Planning is pure and network-free: the run enters the policy and
+    transport planning seams without fetching anything.
+    """
+
+    from tests.conftest import make_project
+
+    csk_home, skills_root = _observed_gate_home(root)
+    project = make_project(root)
+    _closure_refresh_skillfile(
+        project,
+        {"net": {"repository": "example.org/kit", "tag": "v1.0.0"}},
+        [{"name": "x", "from": "net", "directory": "."}],
+    )
+    (csk_home / "source-policy.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "repositories": {
+                    "example.org/kit": {
+                        "endpoints": [
+                            {
+                                "url": "https://example.org/kit.git",
+                                "authentication": "team-https",
+                            }
+                        ],
+                        "fallback": "none",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_path = _observed_gate_save_config(
+        csk_home, skills_root, {"netapp": project}
+    )
+    with _observed_scenario_env(root / "home", config_path):
+        assert recorder.run("plan", main, ["check", "netapp"]) == 0
+
+
+def _observed_scenario_substituted_install(
+    root: Path, recorder: _ProductionCallRecorder, main: Callable[..., Any]
+) -> None:
+    """Run install with a dev manifest carrying a build substitution.
+
+    The substitution is external (not an operator source override)
+    and audit is not strict, so the admission gate is entered and
+    the install succeeds.
+    """
+
+    from tests.conftest import make_project
+
+    csk_home, skills_root = _observed_gate_home(root)
+    project = make_project(root)
+    source = root / "pkgs"
+    _closure_refresh_write_skill(source / "coll" / "review", "review")
+    _closure_refresh_skillfile(
+        project,
+        {"local": {"path": os.fspath(source)}},
+        [{"from": "local", "directory": "coll", "include": ["*"]}],
+    )
+    (project / "Skillfile.dev.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "substitutions": {},
+                "build_repository_substitutions": {
+                    "review": {"tools": {"path": "../external-tool"}}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_path = _observed_gate_save_config(
+        csk_home, skills_root, {"subapp": project}
+    )
+    with _observed_scenario_env(root / "home", config_path):
+        assert recorder.run("substitution", main, ["install", "subapp"]) == 0
+
+
+def _observed_scenario_local_build(
+    root: Path, recorder: _ProductionCallRecorder, main: Callable[..., Any]
+) -> None:
+    """Run install and status on a member with local go-v1 builds.
+
+    Audit is enabled, so the install records source audits and the
+    planning hook re-validates them; the compiler is stubbed, so no
+    toolchain runs. Covers the audit, receipt and cache-key seams.
+    """
+
+    from tests.conftest import make_project
+
+    csk_home, skills_root = _observed_gate_home(root)
+    project = make_project(root)
+    source = root / "pkgs"
+    _closure_refresh_write_skill(
+        source / "built",
+        "built",
+        manifest_extra={
+            "commands": {
+                "greet": {
+                    "type": "build",
+                    "driver": "go-v1",
+                    "source_dir": "build/cmd/greet",
+                }
+            },
+            "build_roots": ["build"],
+        },
+        extra_files={
+            "build/go.mod": "module example.com/greet\n\ngo 1.23\n",
+            "build/cmd/greet/main.go": "package main\n\nfunc main() {}\n",
+            "build/cmd/greet/marker.txt": "B\n",
+        },
+    )
+    _closure_refresh_skillfile(
+        project,
+        {"local": {"path": os.fspath(source)}},
+        [{"name": "built", "from": "local", "directory": "built"}],
+    )
+    config_path = _observed_gate_save_config(
+        csk_home, skills_root, {"app": project}, audit_enabled=True
+    )
+    patches = _closure_refresh_stub_build_toolchain()
+    try:
+        with _observed_scenario_env(root / "home", config_path):
+            assert recorder.run("local-build", main, ["install", "app"]) == 0
+            assert recorder.run("local-build", main, ["status", "app"]) == 0
+    finally:
+        for entered in patches:
+            entered.stop()
+
+
+@contextlib.contextmanager
+def _observed_external_build_ready(root: Path) -> Iterator[None]:
+    """Provision the external-build fixture with stubs and env active.
+
+    The member's repository is declared but unsubstituted, so an
+    install plans and acquires it; acquisition is hermetic because
+    the git tool is the drivers' local-bare broker, and the compiler
+    is stubbed. Shared by the supported scenario (install and status
+    succeed) and the refused one (the product's structured refusal is
+    asserted): the fixture is identical either way, only the platform
+    admission differs. No network, no real home, no prompts.
+    """
+
+    from unittest.mock import patch as _mock_patch
+
+    from tests.conftest import make_project
+
+    git_url = "https://example.test/external-tool.git"
+    csk_home, skills_root = _observed_gate_home(root)
+    project = make_project(root)
+    source = root / "pkgs"
+    external, commit = _observed_gate_external_repo(root / "external-tool")
+    skill_dir = source / "ext"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: ext\ndescription: fixture ext\n---\n\n# ext\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "agent-skill.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 7,
+                "capabilities": {},
+                "build_repositories": {
+                    "tools": {
+                        "git": git_url,
+                        "locked_commit": {
+                            "object_format": "sha1",
+                            "hex": commit,
+                        },
+                    }
+                },
+                "commands": {
+                    "external-tool": {
+                        "type": "build",
+                        "driver": "go-repository-v1",
+                        "repository": "tools",
+                        "target": "external-tool",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    _closure_refresh_skillfile(
+        project,
+        {"local": {"path": os.fspath(source)}},
+        [{"name": "ext", "from": "local", "directory": "ext"}],
+    )
+    config_path = _observed_gate_save_config(
+        csk_home, skills_root, {"app": project}, audit_enabled=True
+    )
+    bare = root / "bare.git"
+    git = os.fspath(Path(shutil.which("git")).resolve())
+    subprocess.run(
+        (git, "clone", "--quiet", "--bare", os.fspath(external), os.fspath(bare)),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        check=True,
+        timeout=30,
+    )
+    tool = _transport_git(root / "tool", {git_url: bare})
+    patches = _observed_gate_stub_external_build()
+    tool_patch = _mock_patch.object(
+        installer, "_external_git_tool", lambda *_args, **_kwargs: tool
+    )
+    tool_patch.start()
+    try:
+        with _observed_scenario_env(root / "home", config_path):
+            yield
+    finally:
+        tool_patch.stop()
+        for entered in patches:
+            entered.stop()
+
+
+def _assert_external_build_refusal(exit_code: int, stderr_text: str) -> None:
+    """Assert an install exit is the structured external-build refusal.
+
+    Pins the exit code, the error class and the product's own refusal
+    text, all asked of the product (the class constant, the message
+    constant the installer raises), so a differently failing install
+    cannot pose as the deferred-qualification refusal.
+    """
+    assert exit_code == 1, (
+        "external-build install on a platform without support must "
+        f"exit 1, got {exit_code}"
+    )
+    assert source_errors.CODE_MEMBER_INVALID in stderr_text, (
+        "external-build refusal names no "
+        f"{source_errors.CODE_MEMBER_INVALID}: {stderr_text!r}"
+    )
+    assert installer.EXTERNAL_BUILDS_UNSUPPORTED_MESSAGE in stderr_text, (
+        f"external-build refusal carries no product refusal text: {stderr_text!r}"
+    )
+
+
+def _observed_scenario_external_build(
+    root: Path, recorder: _ProductionCallRecorder, main: Callable[..., Any]
+) -> None:
+    """Run install and status on a member with external builds.
+
+    Runs only where the product admits external builds. Covers the
+    pipeline, acquisition and external currentness seams. Every
+    command must succeed: a scenario that errors proves nothing about
+    the entries it skipped, so a nonzero exit fails the gate loudly.
+    """
+    with _observed_external_build_ready(root):
+        assert recorder.run("external-build", main, ["install", "app"]) == 0
+        assert recorder.run("external-build", main, ["status", "app"]) == 0
+
+
+def _observed_scenario_external_build_refused(
+    root: Path, recorder: _ProductionCallRecorder, main: Callable[..., Any]
+) -> None:
+    """Run install where the product refuses external builds by design.
+
+    Same fixture as the supported scenario; the install must exit 1
+    with the structured deferred-qualification refusal (class plus
+    product text), which is this scenario's evidence on the refused
+    lane. The partial trace still records the entries the refusing
+    run executes; the entries past the refusal stay unobserved and
+    are excluded by recorded coverage, never by enumeration.
+    """
+    with _observed_external_build_ready(root):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            exit_code = recorder.run("external-build", main, ["install", "app"])
+        _assert_external_build_refusal(exit_code, stderr.getvalue())
+
+
+def _run_observed_scenarios(
+    repo_root: Path,
+    *,
+    refused_lane: bool = False,
+) -> tuple[
+    dict[int, _ObservedCodeCount],
+    dict[int, _ObservedCodeLabels],
+    tuple[str, str],
+    frozenset[str],
+    frozenset[str],
+]:
+    """Run every traced CLI scenario for one lane; return the record plus ran/refused.
+
+    Skips (rather than failing) where the platform provides no
+    descriptor-relative traversal: selection, capture and audit all
+    descend that way, so the scenarios cannot run without it. Each
+    scenario gets an isolated fixture tree; every command must exit
+    as its scenario demands, so a broken fixture or a production
+    regression fails here instead of certifying a partial execution
+    record. The lane is selected explicitly, never by branching on
+    the live predicate: the refused lane forces the product's own
+    support predicate false for the duration of the run (scoped, so
+    the forcing cannot leak into any pin decision) and the
+    external-build scenario asserts the structured refusal instead
+    of succeeding. The native lane always matches the real platform;
+    the simulated refused lane is an additional run, never a
+    replacement. Returns the per-code-object call counts, the
+    per-code-object scenario labels, the derived ``(module, attr)``
+    console root the runs started at, and the ran and refused
+    scenario label sets.
+    """
+
+    if not _selection_fs.supports_descriptor_traversal():
+        pytest.skip(_descriptor_traversal_unavailable_reason())
+    module_name, attr, main = _derive_console_root(repo_root)
+    recorder = _ProductionCallRecorder(repo_root / "src")
+    ran: set[str] = set()
+    refused: set[str] = set()
+    with tempfile.TemporaryDirectory(prefix="csk-observed-gate-") as raw:
+        base = Path(raw)
+        _observed_scenario_local_lifecycle(base / "local", recorder, main)
+        ran.add("local")
+        _observed_scenario_planned_check(base / "plan", recorder, main)
+        ran.add("plan")
+        _observed_scenario_substituted_install(
+            base / "substitution", recorder, main
+        )
+        ran.add("substitution")
+        _observed_scenario_local_build(base / "local-build", recorder, main)
+        ran.add("local-build")
+        if refused_lane:
+            with patch.object(
+                installer, "supports_external_builds", return_value=False
+            ):
+                _observed_scenario_external_build_refused(
+                    base / "external-build", recorder, main
+                )
+            refused.add("external-build")
+        else:
+            _observed_scenario_external_build(
+                base / "external-build", recorder, main
+            )
+            ran.add("external-build")
+    assert recorder.counts, "the traced scenarios recorded no production calls"
+    return (
+        recorder.counts,
+        recorder.labels,
+        (module_name, attr),
+        frozenset(ran),
+        frozenset(refused),
+    )
+
+
+def _entry_code_object(module_name: str, attribute: str) -> CodeType | None:
+    """Resolve a tabled entry to its code object, or None when unobservable.
+
+    The observed membership check keys on this identity: the entry
+    counts as executed only when THIS code object ran under the
+    tracer. A same-named nested function or method owns a different
+    code object and can never stand in for it (F-2 /
+    gate-table-admits-dead-entry).
+    """
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError:
+        return None
+    code = getattr(getattr(module, attribute, None), "__code__", None)
+    return code if isinstance(code, CodeType) else None
+
+
+def _project_table_labels(
+    table: tuple[tuple[str, str], ...],
+    code_labels: Mapping[int, _ObservedCodeLabels],
+) -> dict[tuple[str, str], set[str]]:
+    """Project the code-keyed label record onto table entries.
+
+    Each entry resolves to its own code object (see
+    ``_entry_code_object``); an unresolvable entry projects to
+    nothing, so the pin and the regen writer fail closed on it
+    exactly as the membership check does.
+    """
+    projected: dict[tuple[str, str], set[str]] = {}
+    for module_name, attribute in table:
+        code = _entry_code_object(module_name, attribute)
+        record = code_labels.get(id(code)) if code is not None else None
+        if record is not None and record[0] is code:
+            projected[(module_name, attribute)] = set(record[1])
+    return projected
+
+
+def _check_table_observed(
+    table: tuple[tuple[str, str], ...],
+    observed: Mapping[int, _ObservedCodeCount],
+    refused: Collection[str],
+) -> None:
+    """Fail naming every tabled entry neither executed nor excluded.
+
+    Each entry must first name a real callable resolving to a code
+    object: a typo, a nonexistent module, or a name without code
+    fails here, not as a mystery unobserved entry. An entry that
+    resolves but whose code never executed fails as missing,
+    whatever source points at it — a test-only caller, a forwarder,
+    a nested body or a reference passed as data, called or not,
+    never executes the entry's own code object. The check reads no
+    production source, so there is no token to preserve and no graph
+    to launder through.
+
+    Where scenarios were refused by product design, an entry the
+    runnable scenarios never executed is excluded only when the
+    recorded coverage proves every covering scenario was refused;
+    the excluded set is derived from that record, never enumerated,
+    and an entry with no record is required on every lane, so a new
+    tabled entry cannot be silently swallowed. With nothing refused
+    the record is not consulted, so the first regen needs no record
+    to compare against.
+    """
+    unresolvable: list[str] = []
+    for module_name, attribute in table:
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            unresolvable.append(f"{module_name}:{attribute} (no such module)")
+            continue
+        if not callable(getattr(module, attribute, None)):
+            unresolvable.append(
+                f"{module_name}:{attribute} (names no callable)"
+            )
+            continue
+        if _entry_code_object(module_name, attribute) is None:
+            unresolvable.append(
+                f"{module_name}:{attribute} (names no code object)"
+            )
+    assert not unresolvable, (
+        "tabled production entries naming no production callable: "
+        f"{unresolvable}; fix the table"
+    )
+    golden = _load_observed_labels()[0] if refused else {}
+    refused_set = set(refused)
+    missing: list[str] = []
+    excluded: list[str] = []
+    for module_name, attribute in table:
+        site = f"{module_name}:{attribute}"
+        code = _entry_code_object(module_name, attribute)
+        record = observed.get(id(code)) if code is not None else None
+        if record is not None and record[0] is code:
+            continue
+        covered = golden.get(site)
+        if covered and set(covered) <= refused_set:
+            excluded.append(site)
+            continue
+        missing.append(site)
+    if excluded:
+        reason = _external_builds_unavailable_reason()
+        for site in excluded:
+            print(f"draft-sources table {site} <- EXCLUDED ({reason})")
+    detail = (
+        "tabled production entries never executed by the traced CLI "
+        f"scenarios: {missing}; "
+    )
+    if refused:
+        detail += (
+            f"excluded by recorded coverage: {excluded or 'none'} "
+            f"({_external_builds_unavailable_reason()}); "
+        )
+    detail += (
+        "re-point their drivers at entries the product executes, remove "
+        "the entries, or (new production entries) regenerate the "
+        "recorded coverage on a capable host"
+    )
+    assert not missing, detail
+
+
+_ObservedRecord = tuple[
+    dict[int, _ObservedCodeCount],
+    dict[int, _ObservedCodeLabels],
+    tuple[str, str],
+    frozenset[str],
+    frozenset[str],
+]
+
+_OBSERVED_SCENARIO_CACHE: _ObservedRecord | None = None
+_SIMULATED_REFUSED_CACHE: _ObservedRecord | None = None
+_SIMULATED_REFUSED_COMPUTED: bool = False
+
+
+def _capable_pin_required() -> bool:
+    """Whether this process owes the capable-lane golden pin.
+
+    Derived only from the REAL platform (the import-time capture),
+    never from the live predicate or a regeneration environment
+    variable: no ambient variable and no patch may remove it (F-1 /
+    simulation-disarms-capable-pin).
+    """
+    return _HOST_SUPPORTS_EXTERNAL_BUILDS
+
+
+def _pin_native_labels_against_golden(
+    code_labels: Mapping[int, _ObservedCodeLabels],
+    *,
+    ran: Collection[str],
+    refused: Collection[str],
+) -> None:
+    """Pin the native capable record against the recorded coverage.
+
+    No-op unless ``_capable_pin_required``: on an incapable host the
+    native record is partial and cannot re-approve the whole. The
+    projection resolves each tabled entry to its own code object, so
+    the pin compares exactly what the membership check observes.
+    """
+    if not _capable_pin_required():
+        return
+    golden_entries, golden_scenarios = _load_observed_labels()
+    _assert_labels_agree(
+        _PRODUCTION_ENTRY_POINTS,
+        _project_table_labels(_PRODUCTION_ENTRY_POINTS, code_labels),
+        golden_entries,
+        ran=ran,
+        refused=refused,
+        golden_scenarios=golden_scenarios,
+    )
+
+
+def _observed_scenario_entries(*, pin: bool = True) -> _ObservedRecord:
+    """Return the NATIVE traced execution record, computing it once per process.
+
+    The scenarios are the slow part of the gate; the membership test
+    and every control param share one record. The record depends on
+    nothing the tests mutate (scenarios never consult the table and
+    run outside the hollow observer), so sharing cannot mask a
+    failure: a mutant that weakens the check still dies in the
+    control that plants what the check must reject. The native lane
+    always matches the real platform, and on a capable host the
+    record is pinned against the recorded coverage before it is
+    shared, so every consumer certifies an agreed record. The pin
+    obligation is derived from the real platform, never from the
+    live predicate, so simulation cannot remove it; see
+    ``_simulated_refused_entries`` for the added refused lane.
+    """
+    global _OBSERVED_SCENARIO_CACHE
+    if _OBSERVED_SCENARIO_CACHE is None:
+        repo_root = Path(__file__).parents[1]
+        counts, labels, root, ran, refused = _run_observed_scenarios(
+            repo_root, refused_lane=not _HOST_SUPPORTS_EXTERNAL_BUILDS
+        )
+        _OBSERVED_SCENARIO_CACHE = (counts, labels, root, ran, refused)
+    if pin:
+        _, labels, _, ran, refused = _OBSERVED_SCENARIO_CACHE
+        _pin_native_labels_against_golden(labels, ran=ran, refused=refused)
+    return _OBSERVED_SCENARIO_CACHE
+
+
+def _simulated_refused_entries() -> _ObservedRecord | None:
+    """Run the simulated refused lane when requested, once per process.
+
+    Returns None unless ``CSK_SIMULATE_NO_EXTERNAL_BUILDS=1`` on a
+    capable host: simulation ADDS the refused-lane run beside the
+    native capable run (which stays pinned). On an incapable host
+    the native record is already the refused lane, so there is
+    nothing to add.
+    """
+    global _SIMULATED_REFUSED_CACHE, _SIMULATED_REFUSED_COMPUTED
+    if not _SIMULATED_REFUSED_COMPUTED:
+        _SIMULATED_REFUSED_COMPUTED = True
+        if (
+            os.environ.get(SIMULATE_NO_EXTERNAL_BUILDS_ENV) == "1"
+            and _HOST_SUPPORTS_EXTERNAL_BUILDS
+        ):
+            repo_root = Path(__file__).parents[1]
+            _SIMULATED_REFUSED_CACHE = _run_observed_scenarios(
+                repo_root, refused_lane=True
+            )
+    return _SIMULATED_REFUSED_CACHE
+
+
+def _review_probe_test_only_caller(*args: Any, **kwargs: Any) -> Any:
+    """A test-only caller of the dead entry, never called by the product.
+
+    Exists so the laundering-shape CLASS test plants a REAL caller
+    (this function forwards to the dead entry and would work if
+    called) and the observed gate still rejects it: defined and even
+    callable is not executed.
+    """
+
+    from csk.sources.boundaries import check_selected_package
+
+    return check_selected_package(*args, **kwargs)
+
+
+def _review_probe_outer_with_uncalled_nested(*args: Any, **kwargs: Any) -> Any:
+    """An outer function whose nested dead-entry call never runs.
+
+    The nested body calls the dead entry, exactly the shape that
+    laundered the static gate; the outer itself is never executed by
+    the traced scenarios, so neither is the body.
+    """
+
+    def never_called_review_probe(*nested_args: Any, **nested_kwargs: Any) -> Any:
+        from csk.sources.boundaries import check_selected_package
+
+        return check_selected_package(*nested_args, **nested_kwargs)
+
+    raise AssertionError(
+        "the uncalled-nested probe must never run; "
+        f"its nested body is reachable only through it ({len(args)} args)"
+    )
+
+
+def _review_probe_reference_holder() -> str:
+    """A function referencing the dead entry as data, never calling it.
+
+    The reference (``str`` of the function object) is the second
+    shape that laundered the static gate; the holder is never
+    executed by the traced scenarios.
+    """
+
+    from csk.sources.boundaries import check_selected_package
+
+    return str(check_selected_package)
 
 def _load_pin(path: Path = PIN_PATH) -> dict[str, Any]:
     """Load the committed draft-sources suite pin, or fail closed."""
@@ -583,7 +1959,17 @@ def test_draft_sources_semantic_case(case: dict[str, Any]) -> None:
     driver = SEMANTIC_DRIVERS.get(case_id)
     if driver is None:
         pytest.skip(f"not yet implemented: {CASE_OWNERS[case_id]}")
-    driver(case)
+    with _observe_production_entries() as observed:
+        driver(case)
+    if not observed:
+        pytest.fail(
+            f"hollow driver for {case_id} (owner {CASE_OWNERS[case_id]}): the "
+            "driver returned without calling any production entry point, so "
+            "it reproduces the expected label without executing production "
+            "code; drive resolve, install, refresh or launch against a "
+            "fixture built from the case input"
+        )
+    CASE_CALL_SITES[case_id] = sorted(set(observed))
 
 
 def test_draft_sources_registered_driver_dispatch_through_the_semantic_entry() -> None:
@@ -601,12 +1987,20 @@ def test_draft_sources_registered_driver_dispatch_through_the_semantic_entry() -
     # The suite is fully driven, so the probe driver temporarily
     # replaces the registered one instead of filling an undriven id.
     # (Pop-then-restore keeps the registry identical in every state.)
+    # The probe touches one cheap production entry so the hollow-driver
+    # gate lets it through; a probe that touches nothing is exactly what
+    # test_draft_sources_hollow_driver_is_caught_by_name covers. The
+    # recorded call sites are preserved the same way: the probe run
+    # would otherwise overwrite the real driver's sites for this id in
+    # the report printed at the end of the module.
     case = SEMANTIC_CASES[0]
     real = SEMANTIC_DRIVERS.pop(case["id"], None)
+    real_sites = CASE_CALL_SITES.pop(case["id"], None)
     try:
         received: list[dict[str, Any]] = []
 
         def _record(driven: dict[str, Any]) -> None:
+            repository_policy.parse_policy({"schema_version": 1, "repositories": {}})
             received.append(driven)
 
         register_semantic_driver(case["id"], _record)
@@ -629,6 +2023,9 @@ def test_draft_sources_registered_driver_dispatch_through_the_semantic_entry() -
     finally:
         if real is not None:
             SEMANTIC_DRIVERS[case["id"]] = real
+        CASE_CALL_SITES.pop(case["id"], None)
+        if real_sites is not None:
+            CASE_CALL_SITES[case["id"]] = real_sites
 
 
 def _drive_unknown_alias(case: dict[str, Any]) -> None:
@@ -898,20 +2295,26 @@ def _write_selection_skill(directory: Path, name: str) -> None:
 
 
 def _drive_selector_escape(case: dict[str, Any]) -> None:
-    """Drive ``selector-escape`` through the production directory resolver.
+    """Drive ``selector-escape`` through the production individual resolver.
 
-    Registered by TASK-260916-2wjh3m (selection): the selector directory is a
-    portable path whose leading component is a symlink to a directory outside
-    the source root. The escape target exists, yet resolution must fail with
-    ``source_selection_invalid`` before any member read.
+    Registered by TASK-260916-2wjh3m (selection), re-pointed by
+    TASK-260916-2je9f6: the selector directory is a portable path
+    whose leading component is a symlink to a directory outside the
+    source root. The escape target exists, yet resolution must fail
+    with ``source_selection_invalid`` before any member read. The
+    previous ``selection.resolve_selector_directory`` has zero
+    production callers; ``resolve_individual`` is the live
+    single-directory path (reached from ``expand_selectors``), and the
+    escape fails in its preflight, before the member name is checked.
     """
 
     if not _selection_fs.supports_descriptor_traversal():
-        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+        pytest.skip(_descriptor_traversal_unavailable_reason())
 
     import tempfile
 
     from csk.sources import selection as selection_module
+    from csk.sources import skillfile_v2 as skillfile_module
 
     directory = case["input"]["directory"]
     physical = case["input"]["physical"]
@@ -927,7 +2330,12 @@ def _drive_selector_escape(case: dict[str, Any]) -> None:
         target = tmp / physical.split("/")[0]
         link.symlink_to(target, target_is_directory=True)
         with pytest.raises(source_errors.SourceError) as excinfo:
-            selection_module.resolve_selector_directory(root, directory)
+            selection_module.resolve_individual(
+                root,
+                skillfile_module.IndividualSelector(
+                    name="review", from_alias="local", directory=directory
+                ),
+            )
         assert excinfo.value.code == case["expected"]
 
 
@@ -939,7 +2347,7 @@ def _drive_missing_excluded_literal(case: dict[str, Any]) -> None:
     """
 
     if not _selection_fs.supports_descriptor_traversal():
-        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+        pytest.skip(_descriptor_traversal_unavailable_reason())
 
     import tempfile
 
@@ -975,7 +2383,7 @@ def _drive_bad_wildcard_member(case: dict[str, Any]) -> None:
     """
 
     if not _selection_fs.supports_descriptor_traversal():
-        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+        pytest.skip(_descriptor_traversal_unavailable_reason())
 
     import tempfile
 
@@ -1013,7 +2421,7 @@ def _drive_duplicate_name(case: dict[str, Any]) -> None:
     """
 
     if not _selection_fs.supports_descriptor_traversal():
-        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+        pytest.skip(_descriptor_traversal_unavailable_reason())
 
     import tempfile
 
@@ -1285,6 +2693,12 @@ def _drive_transport_case(case: dict[str, Any]) -> None:
     calls: list[str] = []
 
     if case_id == "fallback-policy-unreadable":
+        # Re-pointed by TASK-260916-2je9f6: ``transport.acquire`` has
+        # zero production callers. The live seam for an unreadable
+        # policy file is ``repository_policy.load_policy`` (reached
+        # from production via ``transport.resolve_ref`` and
+        # ``config``), which fails ``repository_policy_invalid``
+        # before any network I/O.
         with tempfile.TemporaryDirectory(prefix="csk-policy-case-") as raw_root:
             path = Path(raw_root) / "source-policy.json"
             path.write_bytes(b"{}")
@@ -1295,10 +2709,6 @@ def _drive_transport_case(case: dict[str, Any]) -> None:
                 socket_attempts += 1
                 raise AssertionError("unreadable policy reached network")
 
-            def unexpected_attempt(**kwargs: Any) -> git_admission.Snapshot:
-                calls.append("attempt")
-                return _transport_snapshot()
-
             with (
                 patch.object(socket, "socket", side_effect=fail_socket),
                 patch.object(
@@ -1306,16 +2716,10 @@ def _drive_transport_case(case: dict[str, Any]) -> None:
                     "read_bytes",
                     side_effect=PermissionError("policy unreadable"),
                 ),
-                pytest.raises(source_transport.TransportError) as excinfo,
+                pytest.raises(repository_policy.RepositoryPolicyError) as excinfo,
             ):
-                source_transport.acquire(
-                    "example.org/kit",
-                    _TRANSPORT_LOCK,
-                    policy_path=path,
-                    attempt=unexpected_attempt,
-                )
+                repository_policy.load_policy(path)
             assert excinfo.value.code == repository_policy.CODE_POLICY_INVALID
-            assert calls == []
             assert socket_attempts == 0
         return
 
@@ -1334,14 +2738,20 @@ def _drive_transport_case(case: dict[str, Any]) -> None:
             )
             with patch.dict(os.environ, {"HOME": os.fspath(home)}, clear=False):
                 if case_id == "v2-user-ssh-alias-ignored":
-                    with pytest.raises(source_transport.TransportError) as excinfo:
-                        source_transport.acquire(
-                            case_input["repository"],
-                            _TRANSPORT_LOCK,
-                            attempt=lambda **kwargs: _transport_snapshot(),
+                    # Re-pointed by TASK-260916-2je9f6:
+                    # ``transport.acquire`` has zero production callers.
+                    # ``transport.plan_attempts`` is the live planning
+                    # seam (called from production by the installer and
+                    # the CLI); with no policy entry and no declared
+                    # URL it fails ``repository_endpoint_unavailable``
+                    # without consulting the forged user config.
+                    with pytest.raises(
+                        repository_policy.RepositoryPolicyError
+                    ) as excinfo:
+                        source_transport.plan_attempts(
+                            case_input["repository"], None, None
                         )
                     assert excinfo.value.code == repository_policy.CODE_ENDPOINT_UNAVAILABLE
-                    assert calls == []
                 else:
                     declared = case_input["declaration"]
                     declared_identity = repository_policy.canonical_endpoint_identity(
@@ -1362,11 +2772,17 @@ def _drive_transport_case(case: dict[str, Any]) -> None:
                     with patch.object(
                         git_admission.subprocess, "run", new=record_fetch
                     ):
-                        result = source_transport.acquire(
-                            declared_identity,
+                        # Re-pointed by TASK-260916-2je9f6:
+                        # ``transport.acquire`` has zero production
+                        # callers; plan then acquire through the two
+                        # live seams production uses.
+                        plan = source_transport.plan_attempts(
+                            declared_identity, declared, None
+                        )
+                        result = source_transport.acquire_plan(
+                            plan,
                             git_admission.LockedCommit("sha1", commit),
                             tool,
-                            declaration=declared,
                         )
                     assert result.snapshot.commit == commit
                     assert result.attempt_count == 1
@@ -1563,72 +2979,109 @@ def _boundary_fixture(tmp: Path, case_input: dict[str, Any]) -> tuple[Path, Path
     return (project, home)
 
 
-def _drive_broad_root(case: dict[str, Any]) -> None:
-    """Drive ``broad-root`` through the production package check.
+def _live_boundary_answer(project: Path, home: Path, directory: str) -> str | None:
+    """Run the production managed-output predicate over a real session.
 
-    Registered by TASK-260916-100uew (boundaries): a broad alias path
-    with a safe selected subdirectory is allowed.
+    Opens a descriptor-confined ``SelectionSession`` the way production
+    selection does (``PRUNED_CHILD_NAMES``, the fixture home, the
+    package path preflighted), descends to the package, and returns
+    what ``csk.sources.selection.managed_output_boundary`` (which
+    delegates to ``SelectionSession.managed_boundary``) answers:
+    ``None`` for allow, a reason for ``source_output_overlap`` (the
+    mapping production applies at ``selection.py`` resolve/expand
+    time). Re-pointed by TASK-260916-2je9f6: the previous
+    ``boundaries.check_selected_package`` path has zero production
+    callers.
+    """
+
+    from csk.sources import _selection_fs as selection_fs_module
+    from csk.sources import selection as selection_module
+
+    components = () if directory == "." else tuple(directory.split("/"))
+    with selection_fs_module.SelectionSession.open(
+        project,
+        home,
+        managed_names=selection_module.PRUNED_CHILD_NAMES,
+        preflight=selection_fs_module.PreflightRequest(
+            paths=(
+                selection_fs_module.PreflightPath(
+                    components,
+                    code=source_errors.CODE_SELECTION_INVALID,
+                    context=f"Selector directory {directory!r} cannot be resolved",
+                ),
+            )
+        ),
+    ) as session:
+        if directory == ".":
+            node = session.root
+        else:
+            node = session.descend(
+                session.root,
+                list(components),
+                code=source_errors.CODE_SELECTION_INVALID,
+                missing_code=source_errors.CODE_MEMBER_MISSING,
+                context=f"Selector directory {directory!r} cannot be resolved",
+            ).directory
+        return selection_module.managed_output_boundary(node, session=session)
+
+
+def _drive_broad_root(case: dict[str, Any]) -> None:
+    """Drive ``broad-root`` through the production boundary predicate.
+
+    Registered by TASK-260916-100uew (boundaries), re-pointed by
+    TASK-260916-2je9f6: a broad alias path with a safe selected
+    subdirectory is allowed by ``managed_output_boundary``.
     """
 
     import tempfile
 
-    from csk.sources import boundaries as boundaries_module
-    from csk.sources import repository_policy as policy_module
-
+    if not _selection_fs.supports_descriptor_traversal():
+        pytest.skip(_descriptor_traversal_unavailable_reason())
     case_input = case["input"]
     with tempfile.TemporaryDirectory(prefix="csk-broad-root-") as raw:
         project, home = _boundary_fixture(Path(raw), case_input)
         (project / "agents" / "skills" / "review").mkdir(parents=True, exist_ok=True)
-        record = boundaries_module.freeze_boundaries(project, home)
-        policy = policy_module.RepositoryPolicy(
-            schema_version=1, repositories={}, root_inputs={}
-        )
-        resolved = boundaries_module.check_selected_package(
-            record, project, case_input["directory"], alias="local", policy=policy
-        )
+        reason = _live_boundary_answer(project, home, case_input["directory"])
         assert case["expected"] == "allow"
-        assert resolved.is_dir()
+        assert reason is None
 
 
 def _drive_managed_source(case: dict[str, Any]) -> None:
-    """Drive ``managed-source`` through the production package check.
+    """Drive ``managed-source`` through the production boundary predicate.
 
-    Registered by TASK-260916-100uew (boundaries): a selected package
-    inside a managed output fails ``source_output_overlap``.
+    Registered by TASK-260916-100uew (boundaries), re-pointed by
+    TASK-260916-2je9f6: a selected package inside a managed output is
+    refused by ``managed_output_boundary`` with ``source_output_overlap``.
     """
 
     import tempfile
 
-    from csk.sources import boundaries as boundaries_module
-    from csk.sources import repository_policy as policy_module
-
+    if not _selection_fs.supports_descriptor_traversal():
+        pytest.skip(_descriptor_traversal_unavailable_reason())
     case_input = case["input"]
     with tempfile.TemporaryDirectory(prefix="csk-managed-source-") as raw:
         project, home = _boundary_fixture(Path(raw), case_input)
-        record = boundaries_module.freeze_boundaries(project, home)
-        policy = policy_module.RepositoryPolicy(
-            schema_version=1, repositories={}, root_inputs={}
+        reason = _live_boundary_answer(project, home, case_input["directory"])
+        assert case["expected"] == source_errors.CODE_OUTPUT_OVERLAP
+        assert reason is not None, (
+            f"{case_input['directory']!r} was allowed by the production predicate"
         )
-        with pytest.raises(source_errors.SourceError) as excinfo:
-            boundaries_module.check_selected_package(
-                record, project, case_input["directory"], alias="local", policy=policy
-            )
-        assert excinfo.value.code == case["expected"]
+        assert ".agents" in reason, reason
 
 
 def _drive_symlink_managed(case: dict[str, Any]) -> None:
-    """Drive ``symlink-managed`` through the production package check.
+    """Drive ``symlink-managed`` through the production boundary predicate.
 
-    Registered by TASK-260916-100uew (boundaries): the selected
-    directory resolves through a link into a managed output, so it
-    fails ``source_output_overlap``.
+    Registered by TASK-260916-100uew (boundaries), re-pointed by
+    TASK-260916-2je9f6: the selected directory resolves through a link
+    into a managed output, so ``managed_output_boundary`` refuses it
+    with ``source_output_overlap``.
     """
 
     import tempfile
 
-    from csk.sources import boundaries as boundaries_module
-    from csk.sources import repository_policy as policy_module
-
+    if not _selection_fs.supports_descriptor_traversal():
+        pytest.skip(_descriptor_traversal_unavailable_reason())
     case_input = case["input"]
     with tempfile.TemporaryDirectory(prefix="csk-symlink-managed-") as raw:
         project, home = _boundary_fixture(Path(raw), case_input)
@@ -1642,32 +3095,29 @@ def _drive_symlink_managed(case: dict[str, Any]) -> None:
             raise AssertionError(f"fixture collision at {first!r}")
         managed_parent = managed.parent
         link.symlink_to(managed_parent, target_is_directory=True)
-        record = boundaries_module.freeze_boundaries(project, home)
-        policy = policy_module.RepositoryPolicy(
-            schema_version=1, repositories={}, root_inputs={}
+        reason = _live_boundary_answer(project, home, directory)
+        assert case["expected"] == source_errors.CODE_OUTPUT_OVERLAP
+        assert reason is not None, (
+            f"{directory!r} was allowed by the production predicate"
         )
-        with pytest.raises(source_errors.SourceError) as excinfo:
-            boundaries_module.check_selected_package(
-                record, project, directory, alias="local", policy=policy
-            )
-        assert excinfo.value.code == case["expected"]
+        assert ".agents" in reason, reason
 
 
 def _drive_case_alias(case: dict[str, Any]) -> None:
-    """Drive ``case-alias`` through the production package check.
+    """Drive ``case-alias`` through the production boundary predicate.
 
-    Registered by TASK-260916-100uew (boundaries): on a
-    case-insensitive filesystem the case-variant spelling names the
-    managed output and fails ``source_output_overlap``. On a
-    case-sensitive host the refusal is inapplicable and the driver
-    skips with the declared platform bound.
+    Registered by TASK-260916-100uew (boundaries), re-pointed by
+    TASK-260916-2je9f6: on a case-insensitive filesystem the
+    case-variant spelling names the managed output and
+    ``managed_output_boundary`` refuses it with
+    ``source_output_overlap``. On a case-sensitive host the refusal is
+    inapplicable and the driver skips with the declared platform bound.
     """
 
     import tempfile
 
-    from csk.sources import boundaries as boundaries_module
-    from csk.sources import repository_policy as policy_module
-
+    if not _selection_fs.supports_descriptor_traversal():
+        pytest.skip(_descriptor_traversal_unavailable_reason())
     case_input = case["input"]
     with tempfile.TemporaryDirectory(prefix="csk-case-alias-") as raw:
         tmp = Path(raw)
@@ -1676,24 +3126,17 @@ def _drive_case_alias(case: dict[str, Any]) -> None:
         conflates = (tmp / "csk-driver-probe").exists()
         probe.unlink()
         if not conflates:
-            pytest.skip(
-                "case-alias needs a case-insensitive filesystem (declared platform bound)"
-            )
+            pytest.skip(_case_alias_unavailable_reason())
         project, home = _boundary_fixture(tmp, case_input)
         physical = str(case_input["physical"])
         relative = physical.split("/", 1)[1]
         (project / relative).mkdir(parents=True, exist_ok=True)
-        first = relative.split("/", 1)[0]
-        record = boundaries_module.freeze_boundaries(project, home)
-        policy = policy_module.RepositoryPolicy(
-            schema_version=1, repositories={}, root_inputs={}
+        reason = _live_boundary_answer(project, home, relative)
+        assert case["expected"] == source_errors.CODE_OUTPUT_OVERLAP
+        assert reason is not None, (
+            f"{relative!r} was allowed by the production predicate"
         )
-        with pytest.raises(source_errors.SourceError) as excinfo:
-            boundaries_module.check_selected_package(
-                record, project, relative, alias="local", policy=policy
-            )
-        assert excinfo.value.code == case["expected"]
-        assert first.lower() in excinfo.value.detail.lower()
+        assert ".agents" in reason, reason
 
 
 def _drive_write_boundary_retarget(case: dict[str, Any]) -> None:
@@ -1724,32 +3167,38 @@ def _drive_write_boundary_retarget(case: dict[str, Any]) -> None:
 
 
 def _drive_root_no_inputs(case: dict[str, Any]) -> None:
-    """Drive ``root-no-inputs`` through the production package check.
+    """Drive ``root-no-inputs`` through the live selection entry point.
 
-    Registered by TASK-260916-100uew (boundaries): a root selection
-    without ``root_inputs`` fails ``source_output_overlap`` because the
-    manager cannot prove separation.
+    Registered by TASK-260916-100uew (boundaries), re-pointed by
+    BUG-260922-1o40hs: the previous ``boundaries.check_selected_package``
+    path has zero production callers, so the driver now resolves the
+    root through ``selection.resolve_individual`` with no allowlist. A
+    root selection without ``root_inputs`` fails
+    ``source_output_overlap`` because the manager cannot prove
+    separation. The refusal precedes member validation, so the fixture
+    carries no SKILL.md.
     """
 
     import tempfile
 
-    from csk.sources import boundaries as boundaries_module
-    from csk.sources import repository_policy as policy_module
+    from csk.sources import selection as selection_module
+    from csk.sources import skillfile_v2 as skillfile_module
 
+    if not _selection_fs.supports_descriptor_traversal():
+        pytest.skip(_descriptor_traversal_unavailable_reason())
     case_input = case["input"]
     assert case_input["root_inputs"] is None
+    assert case_input["directory"] == "."
+    assert case["expected"] == source_errors.CODE_OUTPUT_OVERLAP
     with tempfile.TemporaryDirectory(prefix="csk-root-no-inputs-") as raw:
         project = Path(raw) / "project"
-        home = Path(raw) / "home"
         (project / "agents" / "skills" / "review").mkdir(parents=True)
-        home.mkdir(parents=True)
-        record = boundaries_module.freeze_boundaries(project, home)
-        policy = policy_module.RepositoryPolicy(
-            schema_version=1, repositories={}, root_inputs={}
-        )
         with pytest.raises(source_errors.SourceError) as excinfo:
-            boundaries_module.check_selected_package(
-                record, project, case_input["directory"], alias="local", policy=policy
+            selection_module.resolve_individual(
+                project,
+                skillfile_module.IndividualSelector(
+                    name="review", from_alias="local", directory="."
+                ),
             )
         assert excinfo.value.code == case["expected"]
 
@@ -1779,7 +3228,7 @@ def _drive_local_git_dirty(case: dict[str, Any]) -> None:
     """
 
     if not _selection_fs.supports_descriptor_traversal():
-        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+        pytest.skip(_descriptor_traversal_unavailable_reason())
 
     import subprocess
     import tempfile
@@ -1837,7 +3286,7 @@ def _drive_capture_mutation(case: dict[str, Any]) -> None:
     """
 
     if not _selection_fs.supports_descriptor_traversal():
-        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+        pytest.skip(_descriptor_traversal_unavailable_reason())
 
     import tempfile
 
@@ -1896,7 +3345,7 @@ def _drive_frozen_copy_mutation(case: dict[str, Any]) -> None:
     """
 
     if not _selection_fs.supports_descriptor_traversal():
-        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+        pytest.skip(_descriptor_traversal_unavailable_reason())
 
     import tempfile
 
@@ -3340,7 +4789,14 @@ def test_draft_sources_build_receipt_v3_schema_case_through_production_reader(
 
 
 def _drive_missing_audit_report(case: dict[str, Any]) -> None:
-    """Drive ``missing-audit-report``: an unreadable report rejects."""
+    """Drive ``missing-audit-report``: an unreadable report rejects.
+
+    Re-pointed by TASK-260916-2je9f6: ``validate_source_audit`` has
+    zero production callers. ``validate_stored_report`` is the live
+    core it wraps (reached from production via
+    ``source_audit_plan_hook``) and raises the same
+    ``source_audit_report_unreadable`` for the denied read.
+    """
 
     from csk.audit import pipeline as audit_pipeline_module
     from csk.audit.model import Decision as audit_decision_module
@@ -3379,7 +4835,7 @@ def _drive_missing_audit_report(case: dict[str, Any]) -> None:
             decision=audit_decision_module.ALLOW,
             ran_at="2026-09-10T00:00:00Z",
         )
-        record = source_audit_module.record_source_audit(
+        source_audit_module.record_source_audit(
             report,
             csk_home=csk_home,
             package=package,
@@ -3398,12 +4854,11 @@ def _drive_missing_audit_report(case: dict[str, Any]) -> None:
 
         with patch.object(Path, "read_bytes", _refuse):
             with pytest.raises(source_audit_module.SourceAuditError) as refused:
-                source_audit_module.validate_source_audit(
-                    record,
+                source_audit_module.validate_stored_report(
+                    package=package,
+                    content_sha256=content,
                     csk_home=csk_home,
                     policy=policy,
-                    expected_package=package,
-                    expected_content_sha256=content,
                 )
         assert refused.value.code == source_audit_module.CODE_REPORT_UNREADABLE
         assert _marker_v5_tree_hash(csk_home) == before
@@ -3532,7 +4987,7 @@ def _drive_frozen_membership(case: dict[str, Any]) -> None:
     assert case["input"]["operation"] == "launch"
     assert case["expected"] == "use-locked-review-only"
     if not _selection_fs.supports_descriptor_traversal():
-        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+        pytest.skip(_descriptor_traversal_unavailable_reason())
     with tempfile.TemporaryDirectory(prefix="csk-frozen-membership-") as raw:
         root = Path(raw)
         cfg, project, source, _home, _skills = _closure_refresh_fixture(root)
@@ -3615,7 +5070,7 @@ def _drive_runtime_only_refresh(case: dict[str, Any]) -> None:
     assert case["input"]["script_after"] == "C"
     assert case["expected"] == "new-package-runtime-and-cache-identity"
     if not _selection_fs.supports_descriptor_traversal():
-        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+        pytest.skip(_descriptor_traversal_unavailable_reason())
     with tempfile.TemporaryDirectory(prefix="csk-runtime-only-refresh-") as raw:
         root = Path(raw)
         cfg, project, source, csk_home, _skills = _closure_refresh_fixture(root)
@@ -3776,7 +5231,7 @@ def _drive_build_only_refresh(case: dict[str, Any]) -> None:
     assert case["input"]["build_after"] == "C"
     assert case["expected"] == "new-package-and-cache-identity"
     if not _selection_fs.supports_descriptor_traversal():
-        pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
+        pytest.skip(_descriptor_traversal_unavailable_reason())
     with tempfile.TemporaryDirectory(prefix="csk-build-only-refresh-") as raw:
         root = Path(raw)
         base, project, source, _home, _skills = _closure_refresh_fixture(root)
@@ -3851,3 +5306,915 @@ def _drive_build_only_refresh(case: dict[str, Any]) -> None:
 
 
 register_semantic_driver("build-only-refresh", _drive_build_only_refresh)
+
+
+# Corpus-closure instruments registered by TASK-260916-2je9f6.
+#
+# The hollow-driver gate lives in the semantic dispatch above: a driver
+# that returns without calling any production entry point fails naming
+# its case and owner. The tests below prove the gate fires (a
+# deliberately hollow driver and an error-constructing driver each fail
+# under every registered case id), prove the observer is not blind (a
+# genuine entry call is recorded), prove the table's membership is
+# derived (every entry resolves to a production call site), prove a
+# setup-phase skip records as skipped (hook unit plus an end-to-end
+# probe), and report passed/skipped/failed/total per category into the
+# junit artifact. The category report must stay the last test in this
+# file so the collector has seen every other test of the module.
+
+
+def _deliberately_hollow_driver(case: dict[str, Any]) -> None:
+    """Reproduce the expected label without touching production code.
+
+    Positive control for the hollow-driver gate: it returns normally, so
+    a label-only green would count it, while never reaching a production
+    entry point.
+    """
+
+    assert isinstance(case["expected"], str)
+
+
+def _error_constructing_hollow_driver(case: dict[str, Any]) -> None:
+    """Construct the expected error without touching production code.
+
+    Second positive control for the hollow-driver gate: it builds the
+    expected ``SourceError`` itself and asserts its code, so a
+    label-only green would count it, while never reaching a production
+    entry point. Error and data classes are fixture plumbing, not
+    entries; a table widened with ``SourceError`` lets this driver
+    through, which is exactly the M3 mutant this family kills.
+    """
+
+    constructed = source_errors.SourceError(
+        case["expected"], "constructed by the probe, never raised by production"
+    )
+    assert constructed.code == case["expected"]
+
+
+def test_draft_sources_hollow_driver_is_caught_by_name() -> None:
+    """A hollow driver fails the semantic entry under every case id.
+
+    For each registered case the real driver is temporarily replaced by
+    each hollow probe in turn (pop-then-restore keeps the registry
+    identical in every state) and the actual semantic entry must fail
+    naming that case. Covering every id kills the narrowing mutant that
+    admits a hollow driver for exactly one case; the error-constructing
+    probe kills the table-widening mutant that admits ``SourceError``
+    as an entry.
+    """
+    for case in SEMANTIC_CASES:
+        real = SEMANTIC_DRIVERS.pop(case["id"])
+        try:
+            for probe in (
+                _deliberately_hollow_driver,
+                _error_constructing_hollow_driver,
+            ):
+                register_semantic_driver(case["id"], probe)
+                try:
+                    with pytest.raises(
+                        pytest.fail.Exception,
+                        match=f"hollow driver for {case['id']}",
+                    ):
+                        test_draft_sources_semantic_case(case)
+                finally:
+                    del SEMANTIC_DRIVERS[case["id"]]
+        finally:
+            SEMANTIC_DRIVERS[case["id"]] = real
+
+
+def test_draft_sources_entry_observation_sees_a_real_production_call() -> None:
+    """The observer records a genuine production entry call.
+
+    Guards the hollow-driver gate against blindness: if the observer
+    missed real calls, every driven case would fail as hollow.
+    """
+    observed = _observe_production_entries()
+    with observed as sites:
+        repository_policy.parse_policy({"schema_version": 1, "repositories": {}})
+    assert "csk.sources.repository_policy:parse_policy" in sites
+
+
+def test_draft_sources_accounting_flags_a_dropped_outcome() -> None:
+    """The accounting helper fails closed on a collector gap.
+
+    A collector that silently dropped one test would print category
+    counts that do not add up to the run; the helper must name the
+    dropped test instead. Dropping exactly one kills the narrowing
+    mutant that tolerates a single missing outcome.
+    """
+    collected = [
+        "tests/test_draft_sources_conformance.py::test_draft_sources_schema_case[one]",
+        "tests/test_draft_sources_conformance.py::test_draft_sources_category_counts_recorded_in_junit",
+    ]
+    with pytest.raises(AssertionError, match="outcome collector missed 1"):
+        _check_outcome_accounting(collected, {}, collected[1])
+
+
+def _report_table_observation(
+    tag: str,
+    table: tuple[tuple[str, str], ...],
+    code_counts: Mapping[int, _ObservedCodeCount],
+    code_labels: Mapping[int, _ObservedCodeLabels],
+    root: tuple[str, str],
+) -> None:
+    """Print the per-entry execution report for one lane record."""
+    for module_name, attribute in table:
+        code = _entry_code_object(module_name, attribute)
+        count_record = code_counts.get(id(code)) if code is not None else None
+        count = (
+            count_record[1]
+            if count_record is not None and count_record[0] is code
+            else 0
+        )
+        if count:
+            assert code is not None
+            labels_record = code_labels.get(id(code))
+            assert labels_record is not None and labels_record[0] is code
+            scenarios = ",".join(sorted(labels_record[1]))
+            print(
+                f"draft-sources table {module_name}:{attribute} <- observed "
+                f"x{count} in [{scenarios}] from {root[0]}:{root[1]} [{tag}]"
+            )
+        else:
+            print(
+                f"draft-sources table {module_name}:{attribute} <- UNOBSERVED "
+                f"[{tag}]"
+            )
+
+
+def test_draft_sources_production_table_entries_have_production_callers() -> None:
+    """Every tabled entry executed during the traced CLI scenarios.
+
+    The allowlist is the hollow gate's whole definition of a
+    production entry point, so its membership is observed, not
+    typed: each entry must have executed while the product's own
+    install, upgrade, status and check paths ran under the call
+    tracer (see ``_observed_scenario_entries``). A tabled entry
+    with no execution fails here naming every unobserved entry,
+    instead of quietly vouching for drivers that execute
+    production-uncalled code. Where the product refuses a scenario
+    by design, entries covered only by refused scenarios are
+    excluded by recorded coverage (see ``_check_table_observed``),
+    and every other entry must still have executed. With
+    ``CSK_SIMULATE_NO_EXTERNAL_BUILDS=1`` on a capable host the
+    added refused record is certified as well, while the native
+    capable record stays pinned — simulation adds evidence without
+    removing any. Planting one dead entry kills this test (M4); a
+    mutant that exempts one planted entry from the check dies in
+    the laundering-shape test (M-new); a production mutant that
+    removes a live call dies here behaviorally, when its scenario
+    fails (M5).
+    """
+    observed, labels, root, _, refused = _observed_scenario_entries()
+    _report_table_observation(
+        "native", _PRODUCTION_ENTRY_POINTS, observed, labels, root
+    )
+    _check_table_observed(_PRODUCTION_ENTRY_POINTS, observed, refused)
+    simulated = _simulated_refused_entries()
+    if simulated is not None:
+        sim_observed, sim_labels, sim_root, _, sim_refused = simulated
+        _report_table_observation(
+            "simulated-refused",
+            _PRODUCTION_ENTRY_POINTS,
+            sim_observed,
+            sim_labels,
+            sim_root,
+        )
+        _check_table_observed(_PRODUCTION_ENTRY_POINTS, sim_observed, sim_refused)
+
+
+_LAUNDERING_SHAPES = (
+    "dead",
+    "direct-test-only",
+    "forwarder",
+    "uncalled-nested",
+    "reference-as-data",
+)
+
+
+@contextlib.contextmanager
+def _plant_laundering_shape(
+    tmp_path: Path, shape: str
+) -> Iterator[tuple[str, str]]:
+    """Materialize one laundering shape; yield the planted table entry.
+
+    Every shape plants a REAL, importable, callable function the
+    traced scenarios never execute: ``dead`` is the production dead
+    entry itself; ``direct-test-only`` forwards to it from a
+    test-only caller; ``forwarder`` forwards from its own module on
+    ``sys.path`` (removed afterwards); ``uncalled-nested`` hides the
+    call in a nested body; ``reference-as-data`` holds the function
+    object without calling it. Each shape exhibits the trigger that
+    laundered one round of the static gate; the observed gate must
+    reject every one of them as never executed.
+    """
+    if shape == "dead":
+        yield ("csk.sources.boundaries", "check_selected_package")
+        return
+    if shape == "direct-test-only":
+        yield (__name__, "_review_probe_test_only_caller")
+        return
+    if shape == "forwarder":
+        (tmp_path / "review_only_forwarder.py").write_text(
+            "from csk.sources.boundaries import check_selected_package\n"
+            "def test_only_forwarder(*args, **kwargs):\n"
+            "    return check_selected_package(*args, **kwargs)\n",
+            encoding="utf-8",
+        )
+        importlib.invalidate_caches()
+        sys.path.insert(0, os.fspath(tmp_path))
+        try:
+            module = importlib.import_module("review_only_forwarder")
+            assert callable(module.test_only_forwarder)
+            yield ("review_only_forwarder", "test_only_forwarder")
+        finally:
+            sys.path.remove(os.fspath(tmp_path))
+            sys.modules.pop("review_only_forwarder", None)
+        return
+    if shape == "uncalled-nested":
+        yield (__name__, "_review_probe_outer_with_uncalled_nested")
+        return
+    if shape == "reference-as-data":
+        yield (__name__, "_review_probe_reference_holder")
+        return
+    raise AssertionError(f"unknown laundering shape: {shape!r}")
+
+
+def _assert_table_rejected_as_never_executed(
+    table: tuple[tuple[str, str], ...],
+    observed: Mapping[int, _ObservedCodeCount],
+    refused: Collection[str],
+    site: str,
+) -> None:
+    """Require rejection from the never-executed branch, naming ``site``.
+
+    Matching the entry name alone cannot tell the unresolvable
+    rejection from the never-executed one, so a control proving
+    "rejected as unexecuted" must pin the branch (F-3 /
+    laundering-control-wrong-branch). The unresolvable rejection is
+    pinned from the other side by
+    ``test_draft_sources_unresolvable_entry_rejected_as_unresolvable``.
+    """
+    with pytest.raises(AssertionError) as excinfo:
+        _check_table_observed(table, observed, refused)
+    message = str(excinfo.value)
+    assert "never executed" in message, (
+        f"expected the never-executed rejection for {site}, got: {message}"
+    )
+    assert site in message, (
+        f"expected the rejection to name {site}, got: {message}"
+    )
+    assert "naming no production callable" not in message, (
+        f"rejection for {site} came from the unresolvable branch: {message}"
+    )
+
+
+@pytest.mark.parametrize("shape", _LAUNDERING_SHAPES)
+def test_draft_sources_test_only_shapes_cannot_launder_a_dead_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    """No laundering shape certifies an unexecuted table entry (the CLASS test).
+
+    For each shape — a dead production entry, a real test-only
+    caller, a real forwarder in its own module, a real outer
+    function with an uncalled nested dead-entry call, a real
+    function holding the dead entry as data — the planted entry is
+    importable and callable yet never executed by the traced
+    scenarios, so the membership check must reject it from the
+    never-executed branch, by name. The planted entry's
+    resolvability is asserted first: without it the control could
+    silently degrade into asserting the unresolvable branch (F-3 /
+    laundering-control-wrong-branch). Under observation every shape
+    collapses to the same fact (never executed, never certified);
+    that is the design working, not a weaker test. A mutant that
+    exempts one planted entry dies on that entry's param (M-new).
+    The planted entry has no recorded coverage, so it is required —
+    never excluded — on every lane, refused ones included; with
+    ``CSK_SIMULATE_NO_EXTERNAL_BUILDS=1`` on a capable host the
+    added refused record is checked as well.
+    """
+    observed, _, _, _, refused = _observed_scenario_entries()
+    records = [(observed, refused)]
+    simulated = _simulated_refused_entries()
+    if simulated is not None:
+        records.append((simulated[0], simulated[4]))
+    module = sys.modules[__name__]
+    with _plant_laundering_shape(tmp_path, shape) as planted:
+        site = f"{planted[0]}:{planted[1]}"
+        assert _entry_code_object(*planted) is not None, (
+            f"laundering probe {site} names no resolvable callable; "
+            "the control must reject it as never executed, not as "
+            "unresolvable"
+        )
+        monkeypatch.setattr(
+            module,
+            "_PRODUCTION_ENTRY_POINTS",
+            _PRODUCTION_ENTRY_POINTS + (planted,),
+        )
+        for rec_observed, rec_refused in records:
+            _assert_table_rejected_as_never_executed(
+                _PRODUCTION_ENTRY_POINTS, rec_observed, rec_refused, site
+            )
+
+
+def test_draft_sources_unresolvable_entry_rejected_as_unresolvable() -> None:
+    """An unresolvable entry fires the unresolvable branch, never the other one.
+
+    F-3 / laundering-control-wrong-branch, pinned from the other
+    side: a tabled entry naming no production callable must be
+    rejected as unresolvable, so a removed callable can never
+    satisfy the never-executed branch the laundering CLASS test
+    requires. A mutant that drops the resolvability assert lets the
+    entry fall through to the never-executed branch and dies here
+    (M-f3-narrow).
+    """
+    observed, _, _, _, refused = _observed_scenario_entries()
+    table = _PRODUCTION_ENTRY_POINTS + (
+        ("csk.sources.boundaries", "no_such_entry_probe"),
+    )
+    with pytest.raises(AssertionError) as excinfo:
+        _check_table_observed(table, observed, refused)
+    message = str(excinfo.value)
+    assert "naming no production callable" in message, (
+        f"expected the unresolvable rejection, got: {message}"
+    )
+    assert "no_such_entry_probe" in message, (
+        f"expected the rejection to name the probe, got: {message}"
+    )
+    assert "never executed" not in message, (
+        f"unresolvable entry was rejected as never executed: {message}"
+    )
+
+
+_COLLISION_SHAPES = (
+    "nested-function",
+    "method",
+    "nested-in-method",
+    "cross-file-byte-identical-clone",
+)
+
+_COLLISION_SOURCES: dict[str, str] = {
+    "nested-function": (
+        'def target():\n'
+        '    raise AssertionError("module-level target must never run")\n'
+        "\n"
+        "\n"
+        "def outer():\n"
+        "    def target():\n"
+        '        return "nested"\n'
+        "    return target()\n"
+    ),
+    "method": (
+        'def target():\n'
+        '    raise AssertionError("module-level target must never run")\n'
+        "\n"
+        "\n"
+        "class Holder:\n"
+        "    def target(self):\n"
+        '        return "method"\n'
+    ),
+    "nested-in-method": (
+        'def target():\n'
+        '    raise AssertionError("module-level target must never run")\n'
+        "\n"
+        "\n"
+        "class Holder:\n"
+        "    def run(self):\n"
+        "        def target():\n"
+        '            return "nested-in-method"\n'
+        "        return target()\n"
+    ),
+    "cross-file-byte-identical-clone": (
+        "def target(value):\n"
+        "    return value + 1\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", _COLLISION_SHAPES)
+def test_draft_sources_same_name_code_cannot_certify_an_unexecuted_entry(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    shape: str,
+) -> None:
+    """Executing a same-named code object certifies nothing (F-2 CLASS test).
+
+    For each collision shape — a nested function, a method, a
+    function nested in a method, or a byte-identical clone loaded
+    from another file — the colliding code executes while the
+    tabled module-level ``target`` does not. The clone parameter
+    proves the code objects are distinct but value-equal, the case
+    a ``dict[CodeType, ...]`` misses. The membership check must
+    reject the entry from the never-executed branch. The recorder
+    is asserted non-blind (a silent tracer would pass vacuously).
+    A narrowing mutant that restores value-keyed records dies on
+    the cross-file clone parameter specifically (M-f2-narrow).
+    """
+    module_name = f"collision_probe_{shape.replace('-', '_')}"
+    if shape == "cross-file-byte-identical-clone":
+        source_root = tmp_path / "src"
+        package = source_root / module_name
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        source = _COLLISION_SOURCES[shape]
+        (package / "dead.py").write_text(source, encoding="utf-8")
+        (package / "live.py").write_text(source, encoding="utf-8")
+        dead_module_name = f"{module_name}.dead"
+        live_module_name = f"{module_name}.live"
+        entry = (dead_module_name, "target")
+    else:
+        source_root = tmp_path
+        (source_root / f"{module_name}.py").write_text(
+            _COLLISION_SOURCES[shape], encoding="utf-8"
+        )
+        dead_module_name = module_name
+        live_module_name = module_name
+        entry = (module_name, "target")
+    importlib.invalidate_caches()
+    sys.path.insert(0, os.fspath(source_root))
+    try:
+        module = importlib.import_module(dead_module_name)
+        live_module = importlib.import_module(live_module_name)
+        assert _entry_code_object(*entry) is not None, (
+            f"collision probe {entry[0]}:{entry[1]} is unresolvable; "
+            "the control must reject it as never executed, not as "
+            "unresolvable"
+        )
+        recorder = _ProductionCallRecorder(source_root)
+        if shape == "cross-file-byte-identical-clone":
+            dead_code = module.target.__code__
+            live_code = live_module.target.__code__
+            assert dead_code is not live_code
+            assert dead_code == live_code, (
+                "the clone control must reproduce CodeType value equality"
+            )
+            assert recorder.run("collision", live_module.target, 41) == 42
+            live_entry = (live_module_name, "target")
+            assert _project_table_labels(
+                (entry, live_entry), recorder.labels
+            ) == {live_entry: {"collision"}}
+        elif shape == "nested-function":
+            assert recorder.run("collision", module.outer) == "nested"
+        elif shape == "method":
+            assert recorder.run("collision", module.Holder().target) == "method"
+        elif shape == "nested-in-method":
+            assert recorder.run("collision", module.Holder().run) == (
+                "nested-in-method"
+            )
+        else:
+            raise AssertionError(f"unknown collision shape: {shape!r}")
+        assert recorder.counts, (
+            "the tracer recorded no calls: the namesake ran (its "
+            "return value proves it), so an empty record means a "
+            "blind tracer, not a rejected entry"
+        )
+        _assert_table_rejected_as_never_executed(
+            (entry,), recorder.counts, (), f"{entry[0]}:{entry[1]}"
+        )
+        if shape == "cross-file-byte-identical-clone":
+            live_entry = (live_module_name, "target")
+            _report_table_observation(
+                "clone-probe",
+                (entry, live_entry),
+                recorder.counts,
+                recorder.labels,
+                (module_name, "target"),
+            )
+            report = capsys.readouterr().out
+            assert f"{entry[0]}:{entry[1]} <- UNOBSERVED" in report
+            assert f"{live_entry[0]}:{live_entry[1]} <- observed" in report
+    finally:
+        sys.path.remove(os.fspath(source_root))
+        for imported in (dead_module_name, live_module_name, module_name):
+            sys.modules.pop(imported, None)
+
+
+def test_draft_sources_observed_labels_agree_with_live_record() -> None:
+    """The recorded coverage matches the live traced record, exactly.
+
+    On a capable host the live entry set, label sets and scenario
+    universe must equal the recorded ones (entry sets alone are not
+    enough; see the drift test below), which is what keeps the
+    exclusion derivation honest: the refused lane trusts this record,
+    and this test re-proves it on every capable run. With
+    ``CSK_REGENERATE_OBSERVED_LABELS=1`` the test writes the record
+    from the live trace instead (capable host, single worker, then
+    rerun without the variable to verify); on a host without support
+    it skips with the declared platform reason, since a partial
+    record cannot re-approve the whole. Simulation never skips it:
+    the simulated lane is added beside the pinned native run, and
+    the skip is derived from the real platform, not the predicate.
+    """
+    if os.environ.get(REGENERATE_OBSERVED_LABELS_ENV) == "1":
+        if not _selection_fs.supports_descriptor_traversal():
+            pytest.fail(
+                "cannot regenerate observed labels without "
+                "descriptor-relative traversal"
+            )
+        if not _HOST_SUPPORTS_EXTERNAL_BUILDS:
+            pytest.fail(
+                "cannot regenerate observed labels on a host without "
+                "external-build support; rerun on a capable host"
+            )
+        _, code_labels, _, ran, refused = _observed_scenario_entries(pin=False)
+        _write_observed_labels(
+            OBSERVED_LABELS_PATH,
+            _PRODUCTION_ENTRY_POINTS,
+            _project_table_labels(_PRODUCTION_ENTRY_POINTS, code_labels),
+            set(ran) | set(refused),
+        )
+        print(
+            "draft-sources observed labels regenerated at "
+            f"{OBSERVED_LABELS_PATH}; rerun without "
+            f"{REGENERATE_OBSERVED_LABELS_ENV} to verify"
+        )
+        return
+    if not _HOST_SUPPORTS_EXTERNAL_BUILDS:
+        pytest.skip(_external_builds_unavailable_reason())
+    _observed_scenario_entries()
+    print("draft-sources observed labels agree with the live record")
+
+
+def test_draft_sources_simulation_cannot_disarm_the_capable_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Blinding the predicate never removes the capable-lane pin (F-1 test).
+
+    With ``CI=true`` and ``CSK_SIMULATE_NO_EXTERNAL_BUILDS=1`` set
+    and the support predicate forced false — the old fixture's
+    blinding mechanism, now inert — a wrong golden must still fail
+    the capable-lane pin against the native record. The pin
+    obligation is derived from the real platform
+    (``_HOST_SUPPORTS_EXTERNAL_BUILDS``), never from the live
+    predicate. Skips on a host without support, with the declared
+    platform reason: there is no capable pin to disarm. A mutant
+    that re-adds the live predicate to the pin condition admits
+    exactly the blinded state and dies here (M-f1-narrow).
+    """
+    if not _HOST_SUPPORTS_EXTERNAL_BUILDS:
+        pytest.skip(_external_builds_unavailable_reason())
+    _, live_labels, _, ran, refused = _observed_scenario_entries()
+    golden_entries, golden_scenarios = _load_observed_labels()
+    candidates = [
+        site for site, labels in golden_entries.items() if len(labels) > 1
+    ]
+    assert candidates, (
+        "the recorded coverage names no multi-scenario entry; the "
+        "wrong-golden probe needs one"
+    )
+    victim = candidates[0]
+    wrong = {
+        "entries": {
+            site: (["external-build"] if site == victim else list(labels))
+            for site, labels in golden_entries.items()
+        },
+        "scenarios": list(golden_scenarios),
+    }
+    wrong_path = tmp_path / "wrong_observed_labels.json"
+    wrong_path.write_text(json.dumps(wrong), encoding="utf-8")
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setenv(SIMULATE_NO_EXTERNAL_BUILDS_ENV, "1")
+    monkeypatch.setattr(installer, "supports_external_builds", lambda: False)
+    monkeypatch.setattr(
+        sys.modules[__name__], "OBSERVED_LABELS_PATH", wrong_path
+    )
+    with pytest.raises(AssertionError) as excinfo:
+        _pin_native_labels_against_golden(live_labels, ran=ran, refused=refused)
+    assert victim in str(excinfo.value), (
+        f"expected the pin to name the narrowed entry {victim}, got: "
+        f"{excinfo.value}"
+    )
+
+
+def test_draft_sources_regenerate_environment_does_not_disarm_capable_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the golden-writing test may bypass the capable pin.
+
+    A filtered run can set the regeneration variable without running
+    the writer. Even then, every other capable-host test must keep its
+    pin. This narrows the wrong golden to one label for a multi-label
+    entry, sets the ambient variable, and requires the pin to reject
+    that exact entry. A mutant that consults the variable in
+    ``_capable_pin_required`` dies here (M-f1-regen-narrow).
+    """
+    if not _HOST_SUPPORTS_EXTERNAL_BUILDS:
+        pytest.skip(_external_builds_unavailable_reason())
+    monkeypatch.setenv(REGENERATE_OBSERVED_LABELS_ENV, "1")
+    _, live_labels, _, ran, refused = _observed_scenario_entries()
+    golden_entries, golden_scenarios = _load_observed_labels()
+    candidates = [
+        (site, labels)
+        for site, labels in golden_entries.items()
+        if len(labels) > 1
+    ]
+    assert candidates, (
+        "the recorded coverage names no multi-scenario entry; the "
+        "wrong-golden probe needs one"
+    )
+    victim, labels = candidates[0]
+    wrong = {
+        "entries": {
+            site: (list(labels[:1]) if site == victim else list(site_labels))
+            for site, site_labels in golden_entries.items()
+        },
+        "scenarios": list(golden_scenarios),
+    }
+    wrong_path = tmp_path / "wrong_observed_labels.json"
+    wrong_path.write_text(json.dumps(wrong), encoding="utf-8")
+    monkeypatch.setattr(
+        sys.modules[__name__], "OBSERVED_LABELS_PATH", wrong_path
+    )
+    with pytest.raises(AssertionError) as excinfo:
+        _pin_native_labels_against_golden(live_labels, ran=ran, refused=refused)
+    assert victim in str(excinfo.value), (
+        f"expected the pin to name the narrowed entry {victim}, got: "
+        f"{excinfo.value}"
+    )
+
+
+def test_draft_sources_label_agreement_rejects_label_drift() -> None:
+    """The agreement compares label sets, not just entry sets.
+
+    Drops every label but one from a multi-scenario entry and
+    requires the agreement to fail naming it: a mutant that compares
+    entry sets only (or tolerates one dropped label) admits the
+    drifted record and dies here. Pure — no scenarios run — so it
+    holds on every lane, refused ones included.
+    """
+    golden_entries, golden_scenarios = _load_observed_labels()
+    candidates = [
+        (module_name, attribute)
+        for module_name, attribute in _PRODUCTION_ENTRY_POINTS
+        if len(golden_entries[f"{module_name}:{attribute}"]) > 1
+    ]
+    assert candidates, (
+        "the recorded coverage names no multi-scenario entry; the "
+        "drift probe needs one"
+    )
+    victim = candidates[0]
+    live = {
+        (module_name, attribute): set(
+            golden_entries[f"{module_name}:{attribute}"]
+        )
+        for module_name, attribute in _PRODUCTION_ENTRY_POINTS
+    }
+    assert len(live[victim]) > 1
+    live[victim] = {sorted(live[victim])[0]}
+    with pytest.raises(AssertionError) as excinfo:
+        _assert_labels_agree(
+            _PRODUCTION_ENTRY_POINTS,
+            live,
+            golden_entries,
+            ran=set(golden_scenarios),
+            refused=set(),
+            golden_scenarios=golden_scenarios,
+        )
+    assert f"{victim[0]}:{victim[1]}" in str(excinfo.value)
+
+
+def test_draft_sources_platform_bound_skip_reasons_name_platform() -> None:
+    """Every declared platform skip names its runtime and required capability."""
+    descriptor_reason = _descriptor_traversal_unavailable_reason()
+    assert f"sys.platform={sys.platform}" in descriptor_reason
+    assert "O_DIRECTORY" in descriptor_reason and "dir_fd" in descriptor_reason
+    case_reason = _case_alias_unavailable_reason()
+    assert f"sys.platform={sys.platform}" in case_reason
+    assert "case-alias" in case_reason and "case-insensitive filesystem" in case_reason
+
+
+def test_draft_sources_external_build_support_agrees_with_product(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The support predicate and the product's refusal agree both ways.
+
+    The native record always matches the real platform, and the
+    natural predicate value must match the cached native record
+    (supported ran, or refused); forcing the predicate false on an
+    identical fresh fixture must produce the structured refusal
+    (exit 1, class, product text) — the same forcing the refused
+    lane applies, scoped to its own run. Simulation adds a refused
+    record beside the native one; this agreement still compares the
+    native record. A product change that refuses where the predicate
+    admits (or admits where it refuses) fails here rather than
+    certifying the wrong lane.
+    """
+    if not _selection_fs.supports_descriptor_traversal():
+        pytest.skip(_descriptor_traversal_unavailable_reason())
+    natural = installer.supports_external_builds()
+    _, _, _, ran, refused = _observed_scenario_entries()
+    assert ("external-build" in ran) == natural, (
+        f"predicate says supported={natural} but the cached record ran "
+        f"{sorted(ran)} / refused {sorted(refused)}"
+    )
+    assert ("external-build" in refused) == (not natural), (
+        f"predicate says supported={natural} but the cached record ran "
+        f"{sorted(ran)} / refused {sorted(refused)}"
+    )
+    monkeypatch.setattr(installer, "supports_external_builds", lambda: False)
+    repo_root = Path(__file__).parents[1]
+    _, _, main = _derive_console_root(repo_root)
+    recorder = _ProductionCallRecorder(repo_root / "src")
+    _observed_scenario_external_build_refused(tmp_path / "probe", recorder, main)
+
+
+def test_draft_sources_console_root_matches_the_installed_entry_point(
+    tmp_path: Path,
+) -> None:
+    """The traced root is the manifest's console-script target.
+
+    Positive control: on the real tree the derivation returns the
+    installed entry callable, and on fixture manifests the outcome
+    follows the content — a missing manifest, a manifest without a
+    ``csk`` script, a target naming no importable module, and a
+    target naming no callable all fail loudly — so the gate cannot
+    trace a stale or hardcoded entry while the manifest says
+    otherwise.
+    """
+    repo_root = Path(__file__).parents[1]
+    module_name, attr, main = _derive_console_root(repo_root)
+    assert callable(main)
+    assert getattr(importlib.import_module(module_name), attr) is main
+    with pytest.raises(AssertionError, match="console-script manifest is missing"):
+        _derive_console_root(tmp_path / "absent")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = \"fixture\"\n", encoding="utf-8"
+    )
+    with pytest.raises(AssertionError, match="names no csk entry point"):
+        _derive_console_root(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = \"fixture\"\n[project.scripts]\n"
+        'csk = "csk.nonexistent:main"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ImportError):
+        _derive_console_root(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = \"fixture\"\n[project.scripts]\n"
+        'csk = "csk.cli:nonexistent_entry"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(AssertionError, match="names no callable"):
+        _derive_console_root(tmp_path)
+
+
+def test_draft_sources_setup_phase_skip_is_recorded_as_skipped() -> None:
+    """The accounting hook records a setup-phase skip as skipped.
+
+    Drives the production call site (``pytest_runtest_logreport`` in
+    ``tests/conftest.py``) with a real setup-phase skip report and
+    asserts the outcome records as ``skipped``. A skip marker or a
+    fixture-level skip never reaches the call phase, so without the
+    setup branch the category counts would report the test as a
+    dropped outcome instead of a skip. The node id is synthetic: the
+    completeness check only requires collected tests, so the extra
+    recording cannot disturb the real tallies.
+    """
+    from _pytest.reports import TestReport
+
+    from conftest import pytest_runtest_logreport
+
+    nodeid = (
+        "tests/test_draft_sources_conformance.py"
+        "::test_draft_sources_hook_unit_probe"
+    )
+    _HOOK_OUTCOMES.pop(nodeid, None)
+    report = TestReport(
+        nodeid=nodeid,
+        location=("tests/test_draft_sources_conformance.py", 0, "hook unit probe"),
+        keywords={},
+        outcome="skipped",
+        longrepr=(str(Path("tests/test_draft_sources_conformance.py")), 0, "unit probe"),
+        when="setup",
+    )
+    pytest_runtest_logreport(report)
+    assert _HOOK_OUTCOMES.get(nodeid) == "skipped", (
+        f"setup-phase skip for {nodeid} recorded as "
+        f"{_HOOK_OUTCOMES.get(nodeid)!r}, not skipped"
+    )
+
+
+@pytest.mark.skip(
+    reason="accounting probe: a setup-phase skip must appear in the junit counts"
+)
+def test_draft_sources_setup_phase_skip_probe() -> None:
+    """Prove a setup-phase skip reaches the category counts.
+
+    The skip marker raises in the setup phase, so the body never runs
+    (it fails if it does). The category-counts test below asserts this
+    node id recorded as skipped: end-to-end proof that a driver that
+    skips in setup appears in the counts rather than tripping the
+    dropped-outcome guard.
+    """
+    pytest.fail("setup-skip probe body must not run")
+
+
+def _assert_all_categories_collected(
+    tallies: Mapping[str, Mapping[str, int]],
+) -> None:
+    """Fail when a report category collected no tests.
+
+    The junit artifact carries per-category passed/skipped/failed/total
+    for every bucket in ``_REPORT_CATEGORIES``; a bucket with zero
+    collected tests means a whole parametrization (or the harness
+    itself) went missing, and recording zeros for it would certify an
+    artifact that silently omits a category. Every full-module run with
+    the suite root set collects all four buckets (the corpus
+    inventories pin 115/3/94; the harness bucket holds this module's
+    own tests), so an empty bucket is either a collection regression
+    or a partial (``-k``) run, and both must fail loudly here rather
+    than print partial counts. A bucket absent from the mapping fails
+    with ``KeyError`` naming it; an empty bucket with ``AssertionError``.
+    """
+    for category in _REPORT_CATEGORIES:
+        tally = tallies[category]
+        assert tally["total"] > 0, (
+            f"report category {category!r} collected no tests: "
+            "the junit per-category counts require a full-module run "
+            "(no -k filter); an empty bucket is a collection regression"
+        )
+
+
+def _full_category_tallies() -> dict[str, dict[str, int]]:
+    """Return tallies with every report bucket non-empty."""
+    return {
+        bucket: {"passed": 1, "skipped": 0, "failed": 0, "total": 1}
+        for bucket in _REPORT_CATEGORIES
+    }
+
+
+@pytest.mark.parametrize("category", _REPORT_CATEGORIES)
+def test_draft_sources_category_presence_assertion_fails_on_a_missing_category(
+    category: str,
+) -> None:
+    """An empty report bucket fails the presence assertion naming it.
+
+    CLASS test over the four report buckets: each param empties exactly
+    one bucket (the silently-missing-category shape the junit counts
+    must refuse) and the helper must raise naming that bucket. A mutant
+    that admits exactly one empty bucket dies on that bucket's param
+    (M8); the other params still pass under it.
+    """
+    tallies = _full_category_tallies()
+    tallies[category] = {"passed": 0, "skipped": 0, "failed": 0, "total": 0}
+    with pytest.raises(
+        AssertionError, match=f"category '{category}' collected no tests"
+    ):
+        _assert_all_categories_collected(tallies)
+
+
+def test_draft_sources_category_presence_assertion_passes_when_every_category_is_collected() -> None:
+    """The presence assertion accepts fully collected tallies.
+
+    Positive control for the missing-category gate: all four buckets
+    non-empty must not raise, so the gate cannot refuse a healthy
+    full-module run.
+    """
+    _assert_all_categories_collected(_full_category_tallies())
+
+
+def test_draft_sources_category_counts_recorded_in_junit(
+    request: pytest.FixtureRequest, record_property: Callable[[str, object], None]
+) -> None:
+    """Report passed/skipped/failed/total per category into junit.
+
+    Must stay the last test in this file: it checks the autouse
+    collector saw every other collected test of this module exactly once
+    (which requires module-coherent scheduling, one worker for the whole
+    module, as in CI and with --dist=loadfile), fails when any of the
+    four categories collected no tests, and records the tallies
+    as junit properties on this test case, so the junit artifact carries
+    the per-category counts for the schema, snapshot, semantic and
+    harness buckets.
+    """
+    collected = [
+        item.nodeid
+        for item in request.session.items
+        if item.nodeid.split("::")[0].endswith("test_draft_sources_conformance.py")
+    ]
+    probe = (
+        "tests/test_draft_sources_conformance.py"
+        "::test_draft_sources_setup_phase_skip_probe"
+    )
+    assert probe in collected, "setup-skip probe was not collected"
+    assert _HOOK_OUTCOMES.get(probe) == "skipped", (
+        f"setup-phase skip probe recorded as {_HOOK_OUTCOMES.get(probe)!r}, "
+        "not skipped; a driver that skips in setup must appear in the counts"
+    )
+    tallies = _check_outcome_accounting(
+        collected, _HOOK_OUTCOMES, request.node.nodeid
+    )
+    _assert_all_categories_collected(tallies)
+    for category in _REPORT_CATEGORIES:
+        tally = tallies[category]
+        record_property(f"draft_sources_{category}_passed", str(tally["passed"]))
+        record_property(f"draft_sources_{category}_skipped", str(tally["skipped"]))
+        record_property(f"draft_sources_{category}_failed", str(tally["failed"]))
+        record_property(f"draft_sources_{category}_total", str(tally["total"]))
+        print(
+            f"draft-sources {category}: "
+            f"{tally['passed']}/{tally['skipped']}/{tally['failed']}/"
+            f"{tally['total']} passed/skipped/failed/total"
+        )
+    for case_id in sorted(CASE_CALL_SITES):
+        print(f"draft-sources call sites for {case_id}: {', '.join(CASE_CALL_SITES[case_id])}")

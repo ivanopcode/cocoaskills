@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import stat
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,7 +10,11 @@ from typing import Any
 from . import protocol_json
 from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_locale, is_valid_portable_path
 from .sources import skillfile_v2
-from .sources.errors import CODE_NAME_CONFLICT, SourceError
+from .sources.errors import (
+    CODE_NAME_CONFLICT,
+    DRAFT_SKILLFILE_SOURCES_LABEL,
+    SourceError,
+)
 
 
 SCHEMA_VERSION = 1
@@ -18,8 +23,10 @@ MANIFEST_NAME = "Skillfile.json"
 
 # Schema 2 without the opt-in keeps the existing unsupported-schema text and
 # appends exactly this one hint line naming the config flag and env var.
+# The draft label comes from the one shared constant; the rendered bytes
+# stay identical (pinned by tests/test_skillfile_v2.py EXPECTED_HINT).
 SCHEMA_2_OPT_IN_HINT = (
-    "hint: schema_version 2 is draft skillfile-sources-v1 (opt-in); "
+    f"hint: schema_version 2 is {DRAFT_SKILLFILE_SOURCES_LABEL}; "
     "set experimental.skillfile_sources in the global config "
     "or CSK_EXPERIMENTAL_SKILLFILE_SOURCES=1"
 )
@@ -62,25 +69,65 @@ def manifest_path(project_root: Path) -> Path:
     return project_root / MANIFEST_NAME
 
 
-def ensure_empty_manifest(project_root: Path) -> Path:
-    if not project_root.exists() or not project_root.is_dir():
+def _require_project_dir(project_root: Path) -> None:
+    """Refuse unless ``project_root`` is a usable project directory.
+
+    Only a missing path (or one blocked by a non-directory) reports
+    "does not exist". Any other I/O failure refuses with the errno, so
+    an unreadable project is never mistaken for a missing one.
+    """
+
+    try:
+        mode = project_root.stat().st_mode
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        raise ManifestError(f"project path does not exist: {project_root}") from exc
+    except OSError as exc:
+        raise ManifestError(f"Cannot access project path {project_root}: {exc}") from exc
+    if not stat.S_ISDIR(mode):
         raise ManifestError(f"project path does not exist: {project_root}")
+
+
+def _skillfile_present(path: Path) -> bool:
+    """Return whether a Skillfile entry exists at ``path``.
+
+    Only a missing entry reports absence. Any other I/O failure
+    refuses, so an unreadable Skillfile is never mistaken for a
+    missing one and silently recreated.
+    """
+
+    try:
+        path.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError as exc:
+        raise ManifestError(f"Cannot read Skillfile at {path}: {exc}") from exc
+    return True
+
+
+def _write_skillfile_text(path: Path, text: str) -> None:
+    try:
+        path.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        raise ManifestError(f"Cannot write Skillfile at {path}: {exc}") from exc
+
+
+def ensure_empty_manifest(project_root: Path) -> Path:
+    _require_project_dir(project_root)
     path = manifest_path(project_root)
-    if not path.exists():
-        path.write_text(
-            json.dumps({"schema_version": SCHEMA_VERSION, "agents": [], "skills": []}, indent=2)
-            + "\n",
-            encoding="utf-8",
+    if not _skillfile_present(path):
+        _write_skillfile_text(
+            path,
+            json.dumps({"schema_version": SCHEMA_VERSION, "agents": [], "skills": []}, indent=2) + "\n",
         )
     return path
 
 
 def ensure_project_manifest(project_root: Path, *, alias: str, agents: list[str]) -> Path:
-    if not project_root.exists() or not project_root.is_dir():
-        raise ManifestError(f"project path does not exist: {project_root}")
+    _require_project_dir(project_root)
     path = manifest_path(project_root)
-    if not path.exists():
-        path.write_text(
+    if not _skillfile_present(path):
+        _write_skillfile_text(
+            path,
             json.dumps(
                 {
                     "schema_version": SCHEMA_VERSION,
@@ -91,7 +138,6 @@ def ensure_project_manifest(project_root: Path, *, alias: str, agents: list[str]
                 indent=2,
             )
             + "\n",
-            encoding="utf-8",
         )
     return path
 
@@ -144,10 +190,14 @@ def remove_skill_decl(project_root: Path, name: str) -> Path:
 
 
 def _read_payload(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        raise ManifestError(f"Skillfile.json not found at {path}; run 'csk init' first")
     try:
-        data = protocol_json.loads(path.read_bytes())
+        raw = path.read_bytes()
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        raise ManifestError(f"Skillfile.json not found at {path}; run 'csk init' first") from exc
+    except OSError as exc:
+        raise ManifestError(f"Cannot read Skillfile at {path}: {exc}") from exc
+    try:
+        data = protocol_json.loads(raw)
     except protocol_json.ProtocolJSONError as exc:
         raise ManifestError(f"Malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
@@ -156,7 +206,7 @@ def _read_payload(path: Path) -> dict[str, Any]:
 
 
 def _write_payload(path: Path, data: dict[str, Any]) -> None:
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    _write_skillfile_text(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
 def load_manifest(
@@ -165,11 +215,22 @@ def load_manifest(
     allow_schema_2: bool | None = None,
     scope: skillfile_v2.SkillfileScope = "project",
 ) -> ProjectManifest | None:
+    """Load the project manifest, distinguishing absence from failure.
+
+    Only a missing Skillfile reports ``None``. Any other I/O failure
+    refuses, so an unreadable Skillfile is never mistaken for a
+    missing one.
+    """
+
     path = manifest_path(project_root)
-    if not path.exists():
-        return None
     try:
-        data = protocol_json.loads(path.read_bytes())
+        raw = path.read_bytes()
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError as exc:
+        raise ManifestError(f"Cannot read Skillfile at {path}: {exc}") from exc
+    try:
+        data = protocol_json.loads(raw)
     except protocol_json.ProtocolJSONError as exc:
         raise ManifestError(f"Malformed JSON in {path}: {exc}") from exc
     return parse_manifest(data, path, allow_schema_2=allow_schema_2, scope=scope)

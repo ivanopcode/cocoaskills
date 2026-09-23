@@ -2565,12 +2565,16 @@ def test_trust_reader_seam_failure_refuses_structured(
 ) -> None:
     """A trust-reader I/O failure is a typed refusal on both validators.
 
-    The class test for the rev3 finding (stat seam escaped raw): fault
-    injection at the real call site (``Path.exists`` / ``Path.read_text``
-    inside ``audit.trust.load_trust_record``), one reached-flag per seam,
-    over the OSError family. Injected members prove the converter: if the
-    seam raises, the refusal is structured and names the trust path. The
-    real paths (EACCES at stat, EISDIR at read) are proved mock-free
+    The class test for the rev3 finding (stat seam escaped raw), rewritten
+    for the TASK-260921-qe62bu survivor: ``load_trust_record`` attempts the
+    read directly and maps only ``FileNotFoundError`` to absence, so there
+    is no existence probe to fault. The ``read`` param keeps the original
+    promise — fault injection at ``Path.read_text`` refuses structured,
+    naming the trust path. The ``stat`` param pins the survivor's side of
+    the decision: a faulted ``Path.exists`` is never consulted (no probe,
+    no TOCTOU, nothing for ``exists()`` to swallow into a silent absence),
+    so validation still succeeds and the reached-flag stays empty. The
+    real paths (EACCES at open, EISDIR at read) are proved mock-free
     below; the same fixture validates unfaulted as the positive control.
     Production call sites: ``source_audit.validate_stored_report`` and
     ``source_audit.validate_source_audit`` via ``_load_trust_record``.
@@ -2620,12 +2624,19 @@ def test_trust_reader_seam_failure_refuses_structured(
             return original_read_text(self, *args, **kwargs)
 
         ctx = patch.object(Path, "read_text", faulted_read_text)
-    with ctx:
-        with pytest.raises(SourceAuditError) as excinfo:
+    if seam == "stat":
+        # Survivor contract (TASK-260921-qe62bu): no existence probe, so a
+        # faulted Path.exists is never consulted and validation succeeds.
+        with ctx:
             validate()
-    assert excinfo.value.code == source_audit.CODE_TRUST_UNREADABLE
-    assert str(target) in excinfo.value.detail
-    assert reached == [target]
+        assert reached == []
+    else:
+        with ctx:
+            with pytest.raises(SourceAuditError) as excinfo:
+                validate()
+        assert excinfo.value.code == source_audit.CODE_TRUST_UNREADABLE
+        assert str(target) in excinfo.value.detail
+        assert reached == [target]
     # Positive control: the same fixture validates unfaulted.
     validate()
 
@@ -2639,9 +2650,12 @@ def test_trust_reader_seam_failure_refuses_through_plan_hook(
 
     Same seam family as above, driven through the production entry point
     ``builds.planner.plan_builds(audit=source_audit.source_audit_plan_hook)``:
-    the refusal carries the trust code and the events list holds exactly
-    ``["audit"]`` — no cache read, no toolchain. The unfaulted control
-    runs the same plan through ``plan_builds`` with fresh instruments.
+    the ``read`` param refuses with the trust code and the events list holds
+    exactly ``["audit"]`` — no cache read, no toolchain. The ``stat`` param
+    pins the TASK-260921-qe62bu survivor (no existence probe): a faulted
+    ``Path.exists`` is never consulted, so the plan succeeds with the
+    reached-flag empty and audit first. The unfaulted control runs the same
+    plan through ``plan_builds`` with fresh instruments.
     """
     root, content, snapshot = _real_tree_identities(tmp_path)
     manager_home = tmp_path / "manager"
@@ -2702,13 +2716,21 @@ def test_trust_reader_seam_failure_refuses_through_plan_hook(
 
         ctx = patch.object(Path, "read_text", faulted_read_text)
     events: list[str] = []
-    with ctx:
-        with pytest.raises(SourceAuditError) as excinfo:
+    if seam == "stat":
+        # Survivor contract (TASK-260921-qe62bu): no existence probe, so a
+        # faulted Path.exists is never consulted and the plan succeeds.
+        with ctx:
             plan(events)
-    assert excinfo.value.code == source_audit.CODE_TRUST_UNREADABLE
-    assert str(target) in excinfo.value.detail
-    assert reached == [target]
-    assert events == ["audit"]
+        assert reached == []
+        assert events[0] == "audit"
+    else:
+        with ctx:
+            with pytest.raises(SourceAuditError) as excinfo:
+                plan(events)
+        assert excinfo.value.code == source_audit.CODE_TRUST_UNREADABLE
+        assert str(target) in excinfo.value.detail
+        assert reached == [target]
+        assert events == ["audit"]
     # Positive control: the same plan succeeds unfaulted, audit first.
     control_events: list[str] = []
     plan(control_events)
