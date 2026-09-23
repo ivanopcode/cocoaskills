@@ -27,6 +27,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -1088,6 +1089,8 @@ def _align_sweep_sites(
         return list(range(1, len(actual) + 1))
 
     assert actual, f"{label}: Windows baseline touched nothing; sweep is vacuous"
+    if label in ("init target", "project resolve"):
+        raise AssertionError(f"PROBE {label} {sys.version_info[:3]}: actual={actual}")
     aligned_ordinals: list[int] = []
     cursor = 0
     for observed in actual:
@@ -2439,6 +2442,7 @@ def test_glob_resolving_to_marker_fault_is_observable(monkeypatch, tmp_path):
         if os.name != "nt" and sys.version_info[:2] in blind:
             assert touches == [], f"{target}: unexpectedly visible on {sys.version_info[:2]}"
             continue
+        print(f"PROBE glob {sys.version_info[:3]} {target}: {touches}")
         knob = len(touches)
         assert knob >= 1, f"{target}: glob touched nothing"
         for k in range(1, knob + 1):
