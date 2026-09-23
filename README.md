@@ -194,6 +194,8 @@ csk config build-https add gitlab.example.com/portals/infra --token git-credenti
 
 При работе со схемой 2 команда `csk install` выполняет начальную установку или устанавливает по файлу `Skillfile.lock.json`, команда `csk upgrade` явно обновляет лок, а `csk status` показывает актуальность манифеста и лока без записи. Сетевые источники подчиняются файлу `source-policy.json`, который находится в `~/.cocoaskills/source-policy.json` (путь переопределяется через `CSK_SOURCE_POLICY`). Подробное описание работы со схемой 2 приведено в [`docs/skillfile-sources.md`](docs/skillfile-sources.md).
 
+Коммитьте `Skillfile.lock.json` в репозиторий проекта вместе со `Skillfile.json`, как `package-lock.json`. Лок фиксирует разрешённые источники и их содержимое, поэтому `csk install` на другой машине ставит тот же набор или отвергает дрейф. Приватные привязки машины в лок не попадают, коммитить их не нужно.
+
 Без включения опции работает релизная схема 1:
 
 ```json
