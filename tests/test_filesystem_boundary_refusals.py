@@ -28,15 +28,18 @@ import errno
 import json
 import os
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from conftest import make_config, make_project, make_skill_repo, write_skillfile
+import fs_boundary_support
 from fs_boundary_support import (
     Touch,
     broad_fault,
     count_touches,
     enumerate_cli_leaves,
     enumerate_public_api,
+    is_runtime_path_fast_path,
 )
 
 from csk import cli, hybrid, manifest
@@ -1059,6 +1062,107 @@ def _sweep_sites(touches: list[Touch]) -> list[tuple[str, str, str]]:
     return [(str(touch), touch.module, touch.func) for touch in touches]
 
 
+def _align_sweep_sites(
+    touches: list[Touch],
+    expected: list[tuple[str, str, str]],
+    label: str,
+    *,
+    allow_platform_variance: bool,
+) -> list[int]:
+    """Map measured touches to known outcomes without inventing a Win sequence.
+
+    POSIX requires the complete measured sequence, which keeps its touch count
+    from silently dropping. Windows uses the current unfaulted run as the
+    sequence: each observed touch must map in order to a measured call site,
+    while platform-native fast paths may stand in for that site's POSIX call.
+    The returned 1-based ordinals select the already-defined outcome for each
+    corresponding call site. An empty Windows baseline is always an error.
+    """
+    actual = _sweep_sites(touches)
+    if not allow_platform_variance:
+        assert len(actual) == len(expected), f"{label}: touch sequence changed: {actual}"
+        for index, (observed, pinned) in enumerate(zip(actual, expected, strict=True)):
+            assert observed == pinned, (
+                f"{label}: touch sequence changed at {index + 1}: {observed}"
+            )
+        return list(range(1, len(actual) + 1))
+
+    assert actual, f"{label}: Windows baseline touched nothing; sweep is vacuous"
+    aligned_ordinals: list[int] = []
+    cursor = 0
+    for observed in actual:
+        observed_call, observed_module, observed_func = observed
+        matches: list[int] = []
+        for index in range(cursor, len(expected)):
+            pinned_call, pinned_module, pinned_func = expected[index]
+            same_site = (observed_module, observed_func) == (pinned_module, pinned_func)
+            platform_fast_path = is_runtime_path_fast_path(observed_call)
+            if same_site and (observed_call == pinned_call or platform_fast_path):
+                matches.append(index)
+        assert matches, (
+            f"{label}: platform baseline touch has no measured call-site outcome: "
+            f"{observed}; remaining measured sites={expected[cursor:]}"
+        )
+        selected = matches[0]
+        aligned_ordinals.append(selected + 1)
+        cursor = selected + 1
+    return aligned_ordinals
+
+
+def _assert_sweep_sites(
+    touches: list[Touch], expected: list[tuple[str, str, str]], label: str
+) -> list[int]:
+    """Keep POSIX pins; derive Windows ordinals from the unfaulted baseline.
+
+    A Windows touch dropped from the product also disappears from that
+    baseline, so only the fixed POSIX sequences catch a removed refusal
+    seam; the Windows measurement guards touches the current product makes.
+    """
+    return _align_sweep_sites(
+        touches,
+        expected,
+        label,
+        allow_platform_variance=os.name == "nt",
+    )
+
+
+def test_platform_sweep_touch_model_aligns_measured_ordinals(monkeypatch):
+    """A shorter platform baseline keeps the matching call site's outcome."""
+    expected = [
+        ("os.lstat", "csk.cli", "_cmd_init"),
+        ("os.stat", "csk.cli", "_cmd_init"),
+        ("os.stat", "csk.manifest", "_require_project_dir"),
+    ]
+    observed = [
+        Touch("os.stat", module="csk.cli", func="_cmd_init"),
+        Touch("os.stat", module="csk.manifest", func="_require_project_dir"),
+    ]
+
+    assert _align_sweep_sites(
+        observed, expected, "synthetic Windows baseline", allow_platform_variance=True
+    ) == [2, 3]
+
+    monkeypatch.setattr(
+        fs_boundary_support,
+        "RUNTIME_PATH_FAST_PATH_NAMES",
+        fs_boundary_support.RUNTIME_PATH_FAST_PATH_NAMES | {"nt._getfinalpathname"},
+    )
+    resolver_touch = Touch(
+        "nt._getfinalpathname", module="csk.cli", func="_cmd_init"
+    )
+    assert _align_sweep_sites(
+        [resolver_touch],
+        expected,
+        "synthetic Windows resolver",
+        allow_platform_variance=True,
+    ) == [1]
+
+    with pytest.raises(AssertionError, match="touched nothing"):
+        _align_sweep_sites(
+            [], expected, "synthetic Windows zero-touch", allow_platform_variance=True
+        )
+
+
 def _check_cli_outcome(
     capsys: pytest.CaptureFixture[str],
     *,
@@ -1118,12 +1222,14 @@ def _sweep_cli(
     ``setup(tag)`` builds a fresh fixture in a tag-disjoint directory
     and returns (marker, argv): sequential blocks share one monkeypatch,
     so overlapping markers would let stale wrappers fire.
-    ``sites`` pins the dry-run touch sequence (call, module, func) per
-    ordinal, which also pins K. ``expect[k]`` is the (kind, payload)
-    for ordinal k at every errno (see :func:`_check_cli_outcome`);
-    ``overrides[(k, err)]`` replaces it for one errno-sensitive
-    combination. ``dry``/``kp1`` are (exit code, stdout substring,
-    stderr substring) for the unfaulted run and the K+1 silent run.
+    ``sites`` pins the measured POSIX sequence. On Windows the unfaulted run
+    supplies the live sequence, which is aligned to those measured call-site
+    outcomes; no Windows sequence is typed into the test. Each observed
+    ordinal is faulted once for every errno. ``expect[k]`` is the (kind,
+    payload) for the matching measured call site (see
+    :func:`_check_cli_outcome`); ``overrides[(k, err)]`` replaces it for one
+    errno-sensitive combination. ``dry``/``kp1`` are (exit code, stdout
+    substring, stderr substring) for the unfaulted run and the K+1 silent run.
     """
     overrides = overrides or {}
     probe, argv = setup("dry")
@@ -1135,15 +1241,15 @@ def _sweep_cli(
         assert dry[1] in captured.out, f"{label} dry run stdout: {captured.out!r}"
     if dry[2]:
         assert dry[2] in captured.err, f"{label} dry run stderr: {captured.err!r}"
-    assert _sweep_sites(touches) == sites, (
-        f"{label}: touch sequence changed: {[t.site for t in touches]}"
-    )
+    expected_ordinals = _assert_sweep_sites(touches, sites, label)
     knob = len(touches)
     assert knob >= 1, f"{label}: dry run touched nothing; sweep is vacuous"
 
-    for k in range(1, knob + 1):
+    for k, expected_ordinal in enumerate(expected_ordinals, start=1):
         for err in _SWEEP_ERRNOS:
-            kind, payload = overrides.get((k, err), expect[k])
+            kind, payload = overrides.get(
+                (expected_ordinal, err), expect[expected_ordinal]
+            )
             marker, argv_k = setup(f"k{k}-e{err}")
             with broad_fault(monkeypatch, target=marker, err=err, nth=k) as firings:
                 _check_cli_outcome(
@@ -1186,9 +1292,7 @@ def _sweep_api(
     marker0, thunk0 = setup("dry")
     with count_touches(monkeypatch, target=marker0) as touches:
         thunk0()
-    assert _sweep_sites(touches) == sites, (
-        f"{label}: touch sequence changed: {[t.site for t in touches]}"
-    )
+    _assert_sweep_sites(touches, sites, label)
     knob = len(touches)
     assert knob >= 1, f"{label}: dry run touched nothing; sweep is vacuous"
 
@@ -1501,8 +1605,9 @@ def test_sweep_init_target_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
     ``gitignore_gate.append_entries`` (unguarded ``exists`` + write) and
     escape raw: declared, out of contract per AC (a). The ``resolve()``
     call shape differs by interpreter (lstat+stat on 3.11/3.12, one
-    lstat on 3.13/3.14), so the pinned sequence is version-branched;
-    both branches are measured, not assumed.
+    lstat on 3.13/3.14). POSIX keeps those measured sequences pinned;
+    Windows derives its sequence from the unfaulted run and maps each
+    observed ordinal to its matching call-site outcome.
     """
     import sys
 
@@ -1751,8 +1856,10 @@ def test_sweep_project_resolve_each_ordinal_refuses(monkeypatch, tmp_path, capsy
     ``strict=False`` (exit 0), while on 3.11 ELOOP raises ``RuntimeError``
     ("Symlink loop") which escapes raw at ordinal 3: declared, out of
     contract per AC (a). The ``resolve()`` call shape differs by
-    interpreter (lstat+stat on 3.11/3.12, one lstat on 3.13/3.14), so
-    the pinned sequence is version-branched; both branches are measured.
+    interpreter (lstat+stat on 3.11/3.12, one lstat on 3.13/3.14). POSIX
+    keeps those measured sequences pinned; Windows derives its sequence
+    from the unfaulted run and maps each observed ordinal to its matching
+    call-site outcome.
     """
     import sys
 
@@ -1991,6 +2098,8 @@ def test_sweep_audit_trust_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         setup=setup,
         sites=[
             ("io.open", "csk.audit.trust", "load_trust_record"),
+            ("os.stat", "csk.audit.trust", "_confirm_missing_trust_path"),
+            ("os.stat", "csk.audit.trust", "_confirm_missing_trust_path"),
             ("io.open", "csk.audit.trust", "load_cached_verdict"),
             ("os.mkdir", "csk.audit.trust", "store_verdict"),
             ("io.open", "csk.audit.trust", "store_verdict"),
@@ -1998,8 +2107,10 @@ def test_sweep_audit_trust_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         expect={
             1: ("refuse", audit_trust.CODE_TRUST_UNREADABLE),
             2: ("refuse", audit_trust.CODE_TRUST_UNREADABLE),
-            3: ("refuse", audit_trust.CODE_TRUST_UNWRITABLE),
-            4: ("refuse", audit_trust.CODE_TRUST_UNWRITABLE),
+            3: ("refuse", audit_trust.CODE_TRUST_UNREADABLE),
+            4: ("refuse", audit_trust.CODE_TRUST_UNREADABLE),
+            5: ("refuse", audit_trust.CODE_TRUST_UNWRITABLE),
+            6: ("refuse", audit_trust.CODE_TRUST_UNWRITABLE),
         },
         dry=(cli.EXIT_OK, "allow", ""),
         kp1=(cli.EXIT_OK, "allow", ""),
@@ -2195,6 +2306,53 @@ def test_sweep_reaches_guarded_first_unguarded_second_synthetic(monkeypatch, tmp
     assert firings == []
 
 
+def test_runtime_nt_path_fast_path_is_counted_and_faulted(monkeypatch, tmp_path):
+    """The sweeps discover live NT path probes rather than pinning their names."""
+
+    marker = tmp_path / "marker"
+    marker.mkdir()
+    fake_nt = ModuleType("nt")
+    fake_nt._path_probe = lambda path: os.path.exists(path)
+    fake_nt._getfinalpathname = lambda path: os.fspath(path)
+    fake_nt._path_unavailable = None
+    discovered = fs_boundary_support._discover_path_fast_path_targets(
+        [("nt", fake_nt)]
+    )
+    assert {name for _label, _module, name in discovered} == {
+        "_path_probe",
+        "_getfinalpathname",
+    }
+    monkeypatch.setattr(
+        fs_boundary_support,
+        "_runtime_path_fast_path_targets",
+        lambda: discovered,
+    )
+
+    with count_touches(monkeypatch, target=marker) as touches:
+        assert fake_nt._path_probe(marker)
+    assert [str(touch) for touch in touches] == ["nt._path_probe"]
+
+    with broad_fault(monkeypatch, target=marker, err=errno.EACCES) as firings:
+        with pytest.raises(OSError):
+            fake_nt._path_probe(marker)
+    assert firings == [("nt._path_probe", errno.EACCES)]
+
+
+def test_touch_matcher_normalizes_parent_components(tmp_path):
+    """The matcher keeps normpath coverage without entering patched os.path."""
+
+    target = os.path.normpath(os.fspath(tmp_path))
+    candidate = tmp_path / "nested" / ".." / "child"
+    assert fs_boundary_support._arg_touches(candidate, target)
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason=(
+        "Windows Path.exists uses nt._path_exists, so patching os.stat does not "
+        "exercise this POSIX-only premise."
+    ),
+)
 def test_predicates_swallow_os_fault_on_314_and_raise_below_swallow(
     monkeypatch, tmp_path
 ):
@@ -2245,12 +2403,18 @@ def test_glob_resolving_to_marker_fault_is_observable(monkeypatch, tmp_path):
     a sweep firing there sees a wrong outcome for an unguarded seam (raw
     escape or missing refusal), which is the desired verdict. Where the
     glob never calls the marker it is instrument-blind, pinned per
-    shape below as the version bound rather than skipped: ``dir.glob``
-    is blind on 3.13 only (``glob._Globber.scandir`` captures
-    ``os.scandir`` at import time, before the patch);
-    ``parent.glob(name)`` is blind on 3.12 (no ``_PreciseSelector``:
-    the match is pure string comparison over the parent's entries) and
-    3.13.
+    shape below as the version bound rather than skipped. On 3.13 the
+    class-bound ``scandir`` and literal-name probes are now discovered by
+    identity and wrapped. ``parent.glob(name)`` remains blind on 3.12 (no
+    ``_PreciseSelector``: the match is pure string comparison over the
+    parent's entries).
+
+    On Windows, glob/pathlib may retain a builtin path probe on a class at
+    import time. The injector finds those class attributes by probe identity
+    and wraps them. The Windows touch baseline is measured from current
+    product behavior: if a refusal touch disappears from the product, it
+    disappears from that baseline too and only the fixed POSIX pins catch
+    that regression.
     """
     import sys
 
@@ -2265,14 +2429,14 @@ def test_glob_resolving_to_marker_fault_is_observable(monkeypatch, tmp_path):
     second.mkdir(parents=True)
     (second / "child.txt").write_text("x", encoding="utf-8")
     shapes = [
-        (first, lambda: list(first.glob("*")), {(3, 13)}),
-        (second / "child.txt", lambda: list(second.glob("child.txt")), {(3, 12), (3, 13)}),
+        (first, lambda: list(first.glob("*")), set()),
+        (second / "child.txt", lambda: list(second.glob("child.txt")), {(3, 12)}),
     ]
     for target, run, blind in shapes:
         with count_touches(monkeypatch, target=target) as touches:
             unfaulted = run()
         assert unfaulted != [], f"{target}: sane fixture"
-        if sys.version_info[:2] in blind:
+        if os.name != "nt" and sys.version_info[:2] in blind:
             assert touches == [], f"{target}: unexpectedly visible on {sys.version_info[:2]}"
             continue
         knob = len(touches)
@@ -2290,6 +2454,32 @@ def test_glob_resolving_to_marker_fault_is_observable(monkeypatch, tmp_path):
         ) as firings:
             assert run() == unfaulted
         assert firings == [], f"{target}: K+1 fired"
+
+
+def test_globber_class_probe_alias_is_discovered_and_observed(monkeypatch, tmp_path):
+    """An import-time globber alias is wrapped by identity and invoked."""
+    target = tmp_path / "literal-child.txt"
+    target.write_text("x", encoding="utf-8")
+    bindings = [
+        binding
+        for binding in fs_boundary_support.GLOB_PROBE_BINDINGS
+        if callable(getattr(binding[1], "select_exists", None))
+    ]
+
+    if bindings:
+        label, cls, _attribute, _descriptor, _probe, _probe_label = bindings[0]
+        with count_touches(monkeypatch, target=target) as touches:
+            assert list(target.parent.glob(target.name)) == [target]
+        observed = {str(touch) for touch in touches}
+        assert label in observed, (
+            "Path.glob bypassed the identity-discovered class probe: "
+            f"binding={label!r}, touches={sorted(observed)!r}"
+        )
+    else:
+        # Older supported interpreters have no class attribute that aliases a
+        # discovered OS probe; the public glob behavior remains covered by the
+        # end-to-end sweep above.
+        assert fs_boundary_support.GLOB_PROBE_BINDINGS == ()
 
 
 def test_glob_matching_unmarked_only_touches_nothing(monkeypatch, tmp_path):

@@ -427,9 +427,15 @@ def expected_path_hash(project_path: Path) -> str:
 
 
 def tokenize_output(data: bytes, *, root: str, version: str) -> bytes:
-    """Replace the fixture root and version stamp with placeholders."""
+    """Replace native, slash, and JSON-escaped fixture roots and the version."""
     tokenized = data
-    for root_form in {root, Path(root).as_posix()}:
+    root_forms = {
+        root,
+        root.replace("\\", "/"),
+        json.dumps(root)[1:-1],
+        json.dumps(root.replace("\\", "/"))[1:-1],
+    }
+    for root_form in sorted(root_forms, key=len, reverse=True):
         tokenized = tokenized.replace(
             root_form.encode("utf-8"), GOLDEN_ROOT_TOKEN.encode("utf-8")
         )

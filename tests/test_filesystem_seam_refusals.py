@@ -24,6 +24,7 @@ or the linkage test instead of going unguarded.
 from __future__ import annotations
 
 import errno
+import io
 import json
 import os
 from dataclasses import replace
@@ -129,6 +130,7 @@ def test_enumeration_pins_known_seams():
 
     groups = {(seam.module, seam.func, seam.op) for seam in enumerate_all_seams()}
     assert ("csk.audit.trust", "load_trust_record", "read_text") in groups
+    assert ("csk.audit.trust", "_confirm_missing_trust_path", "stat") in groups
     assert ("csk.audit.trust", "store_verdict", "mkdir") in groups
     assert ("csk.audit.trust", "store_verdict", "write_text") in groups
     assert ("csk.audit.trust", "pin_content_hash", "write_text") in groups
@@ -138,7 +140,7 @@ def test_enumeration_pins_known_seams():
     assert ("csk.cli", "_draft_sources_decision", "os.stat") in groups
     assert ("csk.cli", "_cmd_audit_publish", "read_bytes") in groups
     assert ("csk.cli", "_nearest_parent_manifest", "stat") in groups
-    assert len(groups) == 20, sorted(groups)
+    assert len(groups) == 21, sorted(groups)
 
 
 def test_checker_flags_synthetic_unguarded_seam():
@@ -346,6 +348,96 @@ def test_trust_record_file_as_parent_refuses(tmp_path):
         audit_trust.load_trust_record(csk_home, _TRUST_HASH)
     assert excinfo.value.code == audit_trust.CODE_TRUST_UNREADABLE
     assert str(path) in excinfo.value.detail
+
+
+def test_trust_record_windows_path_not_found_file_as_parent_refuses(
+    monkeypatch, tmp_path
+):
+    """Windows ERROR_PATH_NOT_FOUND at open cannot turn a file parent into no pin."""
+
+    csk_home = tmp_path / "home"
+    path = audit_trust.trust_path(csk_home, _TRUST_HASH)
+    path.parent.parent.mkdir(parents=True)
+    path.parent.write_text("not a directory", encoding="utf-8")
+
+    real_open = io.open
+    opened: list[Path] = []
+
+    def windows_path_not_found(file, *args, **kwargs):
+        if os.fspath(file) == os.fspath(path):
+            opened.append(path)
+            error = FileNotFoundError(
+                errno.ENOENT, "Windows ERROR_PATH_NOT_FOUND", os.fspath(path)
+            )
+            error.winerror = 3
+            raise error
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(io, "open", windows_path_not_found)
+    with pytest.raises(audit_trust.TrustRecordError) as excinfo:
+        audit_trust.load_trust_record(csk_home, _TRUST_HASH)
+
+    assert opened == [path]
+    assert excinfo.value.code == audit_trust.CODE_TRUST_UNREADABLE
+    assert str(path.parent) in excinfo.value.detail
+
+
+def test_trust_record_parent_recheck_os_error_refuses(monkeypatch, tmp_path):
+    """A failed parent re-check after an absent read is still a refusal."""
+
+    csk_home = tmp_path / "home"
+    csk_home.mkdir()
+    path = audit_trust.trust_path(csk_home, _TRUST_HASH)
+    real_open = io.open
+    real_stat = Path.stat
+    opened: list[Path] = []
+
+    def windows_path_not_found(file, *args, **kwargs):
+        if os.fspath(file) == os.fspath(path):
+            opened.append(path)
+            error = FileNotFoundError(
+                errno.ENOENT, "Windows ERROR_PATH_NOT_FOUND", os.fspath(path)
+            )
+            error.winerror = 3
+            raise error
+        return real_open(file, *args, **kwargs)
+
+    def denied_parent_stat(self, *args, **kwargs):
+        if self == path.parent:
+            raise PermissionError(errno.EACCES, "re-check denied", os.fspath(self))
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(io, "open", windows_path_not_found)
+    monkeypatch.setattr(Path, "stat", denied_parent_stat)
+    with pytest.raises(audit_trust.TrustRecordError) as excinfo:
+        audit_trust.load_trust_record(csk_home, _TRUST_HASH)
+
+    assert opened == [path]
+    assert excinfo.value.code == audit_trust.CODE_TRUST_UNREADABLE
+    assert "re-check denied" in excinfo.value.detail
+
+
+@pytest.mark.parametrize("err", ERRNO_CASES)
+def test_trust_record_missing_parent_recheck_fault_refuses(monkeypatch, tmp_path, err):
+    """The new parent-stat seam refuses all filesystem faults."""
+
+    csk_home = tmp_path / "home"
+    csk_home.mkdir()
+    path = audit_trust.trust_path(csk_home, _TRUST_HASH)
+    with (
+        fault_at(
+            monkeypatch,
+            module="csk.audit.trust",
+            func="_confirm_missing_trust_path",
+            op="stat",
+            target=path.parent,
+            err=err,
+        ) as firings,
+        pytest.raises(audit_trust.TrustRecordError) as excinfo,
+    ):
+        audit_trust.load_trust_record(csk_home, _TRUST_HASH)
+    assert firings == [err]
+    assert excinfo.value.code == audit_trust.CODE_TRUST_UNREADABLE
 
 
 @pytest.mark.parametrize("err", ERRNO_CASES)

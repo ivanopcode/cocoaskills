@@ -19,7 +19,7 @@ from __future__ import annotations
 import random
 import re
 import types
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import quote
 
@@ -458,7 +458,9 @@ def _rendered_form(secret: str) -> str:
     return repr(secret)[1:-1]
 
 
-def _generated_corpus(rng: random.Random, home: Path) -> dict[str, str]:
+def _generated_corpus(
+    rng: random.Random, home: Path | PureWindowsPath
+) -> dict[str, str]:
     password = _generated_secret(rng, 24)
     token = _generated_secret(rng, 32)
     key_material = (
@@ -497,7 +499,14 @@ def test_transport_drops_broker_detail_from_display() -> None:
     )
 
 
-def test_sanitize_generated_corpus_absent_from_echo_sites(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "home_root",
+    [None, r"C:\Users\runner\workspace"],
+    ids=["host-path", "windows-path"],
+)
+def test_sanitize_generated_corpus_absent_from_echo_sites(
+    tmp_path: Path, home_root: str | None
+) -> None:
     """Secrets placed at every hypothetical echo site vanish; subjects stay readable.
 
     This pins the sanitizer as a second line of defence: the echo
@@ -515,7 +524,8 @@ def test_sanitize_generated_corpus_absent_from_echo_sites(tmp_path: Path) -> Non
     """
 
     rng = random.Random(0x1A2B3C)
-    corpus = _generated_corpus(rng, tmp_path)
+    home = tmp_path if home_root is None else PureWindowsPath(home_root)
+    corpus = _generated_corpus(rng, home)
     cases: list[tuple[str, str, str]] = [
         (
             "password",
@@ -549,7 +559,7 @@ def test_sanitize_generated_corpus_absent_from_echo_sites(tmp_path: Path) -> Non
         ),
     ]
     for name, secret, detail in cases:
-        rendered = _rendered_form(secret)
+        rendered = secret if name == "home_path" else _rendered_form(secret)
         assert rendered in detail, (name, "vacuous case: secret never occurs")
         redacted = source_errors.sanitize_detail(detail)
         assert rendered not in redacted, (name, detail, redacted)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,7 @@ def load_trust_record(csk_home: Path, content_sha256: str) -> TrustRecord:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
+        _confirm_missing_trust_path(path)
         return TrustRecord()
     except OSError as exc:
         raise TrustRecordError(CODE_TRUST_UNREADABLE, f"{path}: {exc}") from exc
@@ -116,6 +118,41 @@ def load_trust_record(csk_home: Path, content_sha256: str) -> TrustRecord:
         pinned_by=payload.get("pinned_by") if isinstance(payload.get("pinned_by"), str) else None,
         reason=payload.get("reason") if isinstance(payload.get("reason"), str) else None,
     )
+
+
+def _confirm_missing_trust_path(path: Path) -> None:
+    """Refuse an absent read when a non-directory blocks the trust path.
+
+    Windows can report ``ERROR_PATH_NOT_FOUND`` as ``FileNotFoundError``
+    when a file occupies a directory component. Walk upward to the nearest
+    existing parent before treating the record as absent. Missing components
+    alone do not prove absence; the first existing component must be a
+    directory, and any other inspection failure refuses.
+    """
+
+    parent = path.parent
+    while True:
+        try:
+            mode = parent.stat().st_mode
+        except FileNotFoundError:
+            if parent.parent == parent:
+                raise TrustRecordError(
+                    CODE_TRUST_UNREADABLE,
+                    f"cannot establish whether trust record is absent: {path}",
+                )
+            parent = parent.parent
+            continue
+        except OSError as exc:
+            raise TrustRecordError(
+                CODE_TRUST_UNREADABLE,
+                f"cannot inspect trust path parent {parent} for {path}: {exc}",
+            ) from exc
+        if not stat.S_ISDIR(mode):
+            raise TrustRecordError(
+                CODE_TRUST_UNREADABLE,
+                f"trust path parent {parent} is not a directory: {path}",
+            )
+        return
 
 
 def pin_content_hash(

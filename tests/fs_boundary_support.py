@@ -20,6 +20,12 @@ truncated. The breadth drivers themselves remain first-touch samples
 (four errnos at the first touch); only the sweep drivers sweep, and the
 linkage test fails a breadth pair without its sweep.
 
+On Windows, a sweep's unfaulted run is also its measured touch baseline.
+If the product drops a refusal touch, that touch disappears from the
+Windows baseline too; fixed POSIX sequence pins are the evidence that
+catches a removed touch. Windows sweeps still fail when a currently
+observable touch is not counted or faulted.
+
 Below-swallow injection: on Python 3.14 ``Path.exists/is_dir/is_file/is_mount``
 (and the ``os.path`` predicates) swallow every OSError from the underlying
 ``os.stat`` and return False, so an os-layer fault never reaches the boundary.
@@ -120,13 +126,16 @@ from __future__ import annotations
 import argparse
 import builtins
 import contextlib
+import glob
+import importlib
 import inspect
 import io
 import os
+import pathlib
 import traceback
 import types
 from collections.abc import Iterator
-from pathlib import Path
+from pathlib import Path, PurePath
 
 import pytest
 
@@ -179,6 +188,131 @@ OS_PATH_PREDICATE_NAMES: tuple[str, ...] = (
     "ismount",
     "isjunction",
 )
+
+
+def _discover_path_fast_path_targets(
+    modules: list[tuple[str, types.ModuleType]],
+) -> tuple[tuple[str, types.ModuleType, str], ...]:
+    """Discover callable path probes from the supplied live platform modules."""
+    targets: list[tuple[str, types.ModuleType, str]] = []
+    for module_label, module in modules:
+        for name in dir(module):
+            # pathlib's Windows resolver is the one filesystem entry point
+            # whose name is not in the _path_* family. The predicate set is
+            # otherwise discovered from the module at runtime, never pinned.
+            is_windows_resolver = module_label == "nt" and name == "_getfinalpathname"
+            if not name.startswith("_path_") and not is_windows_resolver:
+                continue
+            try:
+                value = getattr(module, name)
+            except AttributeError:
+                continue
+            if callable(value):
+                targets.append((module_label, module, name))
+    return tuple(targets)
+
+
+def _runtime_path_fast_path_targets() -> tuple[tuple[str, types.ModuleType, str], ...]:
+    """Discover filesystem path fast paths exposed by this Windows runtime.
+
+    Windows pathlib routes predicates through callable ``nt._path_*`` names
+    and resolution through ``nt._getfinalpathname``. Both fault injectors
+    discover those names from the live modules, so their touch sequence is
+    measured on the running platform rather than copied from POSIX.
+    """
+    if os.name != "nt":
+        return ()
+
+    modules: list[tuple[str, types.ModuleType]] = []
+    try:
+        nt_module = importlib.import_module("nt")
+    except ImportError:
+        pass
+    else:
+        modules.append(("nt", nt_module))
+    modules.append(("os.path", os.path))
+    return _discover_path_fast_path_targets(modules)
+
+
+RUNTIME_PATH_FAST_PATH_NAMES: frozenset[str] = frozenset(
+    f"{module_label}.{name}"
+    for module_label, _module, name in _runtime_path_fast_path_targets()
+)
+
+
+def _path_probe_values() -> tuple[tuple[str, object], ...]:
+    """Capture live OS probe functions before the test injectors patch them."""
+    values: dict[int, tuple[str, object]] = {}
+    for module_label, module in (("os", os), ("os.path", os.path)):
+        for name in dir(module):
+            try:
+                value = getattr(module, name)
+            except AttributeError:
+                continue
+            if callable(value):
+                values.setdefault(id(value), (f"{module_label}.{name}", value))
+    for module_label, module, name in _runtime_path_fast_path_targets():
+        value = getattr(module, name)
+        values.setdefault(id(value), (f"{module_label}.{name}", value))
+    return tuple(values.values())
+
+
+_PATH_PROBE_VALUES = _path_probe_values()
+_PATH_PROBE_LABELS = {id(value): label for label, value in _PATH_PROBE_VALUES}
+
+
+def _discover_glob_probe_bindings() -> tuple[
+    tuple[str, type, str, object, object, str], ...
+]:
+    """Find glob/pathlib class attributes that alias a discovered OS probe.
+
+    Descriptor names and values come from the loaded standard-library
+    modules. Matching uses object identity so an import-time builtin binding
+    on Windows is found without a platform-specific attribute list.
+    """
+    bindings: list[tuple[str, type, str, object, object, str]] = []
+    for module_label, module in (("glob", glob), ("pathlib", pathlib)):
+        for class_name, cls in vars(module).items():
+            if not inspect.isclass(cls) or cls.__module__ != module.__name__:
+                continue
+            for attribute, descriptor in vars(cls).items():
+                value = (
+                    descriptor.__func__
+                    if isinstance(descriptor, (staticmethod, classmethod))
+                    else descriptor
+                )
+                probe_label = _PATH_PROBE_LABELS.get(id(value))
+                if probe_label is None:
+                    continue
+                bindings.append(
+                    (
+                        f"{module_label}.{class_name}.{attribute}",
+                        cls,
+                        attribute,
+                        descriptor,
+                        value,
+                        probe_label,
+                    )
+                )
+    return tuple(bindings)
+
+
+GLOB_PROBE_BINDINGS = _discover_glob_probe_bindings()
+
+
+def _preserve_descriptor(descriptor: object, wrapper: object) -> object:
+    """Keep static/class method binding while replacing its function."""
+    if isinstance(descriptor, staticmethod):
+        return staticmethod(wrapper)  # type: ignore[arg-type]
+    if isinstance(descriptor, classmethod):
+        return classmethod(wrapper)  # type: ignore[arg-type]
+    return wrapper
+
+
+def is_runtime_path_fast_path(name: str) -> bool:
+    """Whether ``name`` is one of this runtime's discovered path fast paths."""
+
+    return name in RUNTIME_PATH_FAST_PATH_NAMES
 
 #: Modules whose seams the boundary family owns (the same set as the seam
 #: family's ``IN_SCOPE_MODULES``, restated so this module stays importable
@@ -292,10 +426,34 @@ def _arg_touches(value: object, norm_target: str) -> bool:
     if not isinstance(raw, str):
         return False
     try:
-        norm = os.path.normpath(raw)
+        candidate_anchor, candidate_parts = _normalized_path_parts(raw)
+        marker_anchor, marker_parts = _normalized_path_parts(norm_target)
     except (TypeError, ValueError):
         return False
-    return norm == norm_target or norm.startswith(norm_target + os.sep)
+    if not marker_parts:
+        return candidate_anchor == marker_anchor and not candidate_parts
+    return (
+        candidate_anchor == marker_anchor
+        and candidate_parts[: len(marker_parts)] == marker_parts
+    )
+
+
+def _normalized_path_parts(value: str) -> tuple[str, tuple[str, ...]]:
+    """Normalize path components without calling patchable ``os.path`` code."""
+
+    path = PurePath(value)
+    components: list[str] = []
+    for part in path.parts:
+        if part == path.anchor:
+            continue
+        if part == "..":
+            if components and components[-1] != "..":
+                components.pop()
+            elif not path.root:
+                components.append(part)
+            continue
+        components.append(part)
+    return path.anchor, tuple(components)
 
 
 def _call_touches(args: tuple[object, ...], kwargs: dict[str, object], norm_target: str) -> bool:
@@ -369,6 +527,54 @@ def broad_fault(
             return func(*args, **kwargs)
 
         monkeypatch.setattr(os, name, _wrapper)
+
+    for module_label, module, name in _runtime_path_fast_path_targets():
+        original = getattr(module, name)
+
+        def _fast_path_wrapper(
+            *args: object,
+            __original: object = original,
+            __label: str = f"{module_label}.{name}",
+            **kwargs: object,
+        ) -> object:
+            if not state["suspended"] and _call_touches(args, kwargs, norm_target):
+                if _should_fire(__label):
+                    _fire()
+                state["suspended"] = True
+                try:
+                    func = __original
+                    assert callable(func)
+                    return func(*args, **kwargs)
+                finally:
+                    state["suspended"] = False
+            func = __original
+            assert callable(func)
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(module, name, _fast_path_wrapper)
+
+    for label, cls, attribute, descriptor, original, _probe_label in GLOB_PROBE_BINDINGS:
+        def _glob_probe_wrapper(
+            *args: object,
+            __original: object = original,
+            __label: str = label,
+            **kwargs: object,
+        ) -> object:
+            if not state["suspended"] and _call_touches(args, kwargs, norm_target):
+                if _should_fire(__label):
+                    _fire()
+                state["suspended"] = True
+                try:
+                    return __original(*args, **kwargs)  # type: ignore[operator]
+                finally:
+                    state["suspended"] = False
+            return __original(*args, **kwargs)  # type: ignore[operator]
+
+        monkeypatch.setattr(
+            cls,
+            attribute,
+            _preserve_descriptor(descriptor, _glob_probe_wrapper),
+        )
 
     original_io_open = io.open
     original_builtin_open = builtins.open
@@ -502,6 +708,52 @@ def count_touches(
             return func(*args, **kwargs)
 
         monkeypatch.setattr(os, name, _wrapper)
+
+    for module_label, module, name in _runtime_path_fast_path_targets():
+        original = getattr(module, name)
+
+        def _fast_path_wrapper(
+            *args: object,
+            __original: object = original,
+            __label: str = f"{module_label}.{name}",
+            **kwargs: object,
+        ) -> object:
+            if not state["suspended"] and _call_touches(args, kwargs, norm_target):
+                _record(__label)
+                state["suspended"] = True
+                try:
+                    func = __original
+                    assert callable(func)
+                    return func(*args, **kwargs)
+                finally:
+                    state["suspended"] = False
+            func = __original
+            assert callable(func)
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(module, name, _fast_path_wrapper)
+
+    for label, cls, attribute, descriptor, original, _probe_label in GLOB_PROBE_BINDINGS:
+        def _glob_probe_wrapper(
+            *args: object,
+            __original: object = original,
+            __label: str = label,
+            **kwargs: object,
+        ) -> object:
+            if not state["suspended"] and _call_touches(args, kwargs, norm_target):
+                _record(__label)
+                state["suspended"] = True
+                try:
+                    return __original(*args, **kwargs)  # type: ignore[operator]
+                finally:
+                    state["suspended"] = False
+            return __original(*args, **kwargs)  # type: ignore[operator]
+
+        monkeypatch.setattr(
+            cls,
+            attribute,
+            _preserve_descriptor(descriptor, _glob_probe_wrapper),
+        )
 
     original_io_open = io.open
     original_builtin_open = builtins.open
