@@ -189,6 +189,14 @@ OS_PATH_PREDICATE_NAMES: tuple[str, ...] = (
     "isjunction",
 )
 
+# Pure string helpers that happen to use CPython's private ``_path_*``
+# naming convention. They never touch the filesystem, so an OSError injected
+# into them would be an impossible fault. Unknown future ``_path_*`` names
+# remain discoverable by default.
+_LEXICAL_PATH_HELPER_NAMES: frozenset[str] = frozenset(
+    {"_path_normpath", "_path_splitroot", "_path_splitroot_ex"}
+)
+
 
 def _discover_path_fast_path_targets(
     modules: list[tuple[str, types.ModuleType]],
@@ -197,11 +205,7 @@ def _discover_path_fast_path_targets(
     targets: list[tuple[str, types.ModuleType, str]] = []
     for module_label, module in modules:
         for name in dir(module):
-            # pathlib's Windows resolver is the one filesystem entry point
-            # whose name is not in the _path_* family. The predicate set is
-            # otherwise discovered from the module at runtime, never pinned.
-            is_windows_resolver = module_label == "nt" and name == "_getfinalpathname"
-            if not name.startswith("_path_") and not is_windows_resolver:
+            if not name.startswith("_path_") or name in _LEXICAL_PATH_HELPER_NAMES:
                 continue
             try:
                 value = getattr(module, name)
@@ -215,10 +219,12 @@ def _discover_path_fast_path_targets(
 def _runtime_path_fast_path_targets() -> tuple[tuple[str, types.ModuleType, str], ...]:
     """Discover filesystem path fast paths exposed by this Windows runtime.
 
-    Windows pathlib routes predicates through callable ``nt._path_*`` names
-    and resolution through ``nt._getfinalpathname``. Both fault injectors
-    discover those names from the live modules, so their touch sequence is
-    measured on the running platform rather than copied from POSIX.
+    Windows pathlib routes predicates through callable ``nt._path_*`` names.
+    Its ``Path.resolve()`` path is instrument-blind: ``ntpath`` retains its
+    own ``_getfinalpathname`` binding, so wrapping ``nt._getfinalpathname``
+    intercepts nothing. Resolution names are therefore not discovered; live
+    predicate names are discovered so their touch sequence is measured on
+    the running platform rather than copied from POSIX.
     """
     if os.name != "nt":
         return ()

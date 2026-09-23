@@ -1145,10 +1145,10 @@ def test_platform_sweep_touch_model_aligns_measured_ordinals(monkeypatch):
     monkeypatch.setattr(
         fs_boundary_support,
         "RUNTIME_PATH_FAST_PATH_NAMES",
-        fs_boundary_support.RUNTIME_PATH_FAST_PATH_NAMES | {"nt._getfinalpathname"},
+        fs_boundary_support.RUNTIME_PATH_FAST_PATH_NAMES | {"nt._path_exists"},
     )
     resolver_touch = Touch(
-        "nt._getfinalpathname", module="csk.cli", func="_cmd_init"
+        "nt._path_exists", module="csk.cli", func="_cmd_init"
     )
     assert _align_sweep_sites(
         [resolver_touch],
@@ -1596,16 +1596,17 @@ def test_sweep_bootstrap_create_each_ordinal_refuses(monkeypatch, tmp_path, caps
 def test_sweep_init_target_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
     """The init target marker: resolve, guard stat, manifest chain, gitignore.
 
-    Ordinals 1-2 on 3.11 (ordinal 1 on 3.14) are ``Path.resolve()``
-    internals at ``_cmd_init`` swallowing the fault (``strict=False``);
-    on 3.11 ordinal 2 with ELOOP is the errno-sensitive exception
-    (``realpath`` raises ``RuntimeError`` for a loop, which the guard
-    maps to a refusal). The guard stat and the manifest chain refuse.
-    The trailing ordinals land in non-named
-    ``gitignore_gate.append_entries`` (unguarded ``exists`` + write) and
-    escape raw: declared, out of contract per AC (a). The ``resolve()``
-    call shape differs by interpreter (lstat+stat on 3.11/3.12, one
-    lstat on 3.13/3.14). POSIX keeps those measured sequences pinned;
+    Windows ``Path.resolve()`` is instrument-blind: ``ntpath`` keeps its own
+    ``_getfinalpathname`` binding, and the discovered ``nt`` wrapper never
+    intercepts it. Fixed POSIX pins retain the measured resolve ordinals;
+    Windows maps only touches visible to the injector. On POSIX 3.11/3.12,
+    ordinal 2 with ELOOP is the errno-sensitive exception (``realpath``
+    raises ``RuntimeError`` for a loop, which the guard maps to a refusal).
+    The guard stat and the manifest chain refuse. The trailing ordinals
+    land in non-named ``gitignore_gate.append_entries`` (unguarded
+    ``exists`` + write) and escape raw: declared, out of contract per AC
+    (a). The ``resolve()`` call shape differs by interpreter (lstat+stat
+    on 3.11/3.12, one lstat on 3.13/3.14). POSIX keeps those sequences pinned;
     Windows derives its sequence from the unfaulted run and maps each
     observed ordinal to its matching call-site outcome.
     """
@@ -1850,12 +1851,15 @@ def test_sweep_status_all_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
 def test_sweep_project_resolve_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
     """The project-resolve marker: guard stat refuses, hash probe declared.
 
-    Ordinal 1 is the guarded ``root.stat``. The trailing ordinals are
-    ``Path.resolve()`` internals inside non-named
-    ``project_resolver.stable_path_hash``: other errnos are swallowed by
-    ``strict=False`` (exit 0), while on 3.11 ELOOP raises ``RuntimeError``
-    ("Symlink loop") which escapes raw at ordinal 3: declared, out of
-    contract per AC (a). The ``resolve()`` call shape differs by
+    Windows ``Path.resolve()`` is instrument-blind: ``ntpath`` keeps its own
+    ``_getfinalpathname`` binding, and the discovered ``nt`` wrapper never
+    intercepts it. Fixed POSIX pins retain the measured resolve ordinals;
+    Windows maps only touches visible to the injector. Ordinal 1 is the
+    guarded ``root.stat``. On POSIX, trailing resolve touches inside
+    non-named ``project_resolver.stable_path_hash`` return exit 0 for other
+    errnos, while on 3.11 ELOOP raises ``RuntimeError`` ("Symlink loop")
+    which escapes raw at ordinal 3: declared, out of contract per AC (a).
+    The ``resolve()`` call shape differs by
     interpreter (lstat+stat on 3.11/3.12, one lstat on 3.13/3.14). POSIX
     keeps those measured sequences pinned; Windows derives its sequence
     from the unfaulted run and maps each observed ordinal to its matching
@@ -2306,22 +2310,35 @@ def test_sweep_reaches_guarded_first_unguarded_second_synthetic(monkeypatch, tmp
     assert firings == []
 
 
-def test_runtime_nt_path_fast_path_is_counted_and_faulted(monkeypatch, tmp_path):
-    """The sweeps discover live NT path probes rather than pinning their names."""
+def test_runtime_nt_path_predicate_is_counted_and_faulted(monkeypatch, tmp_path):
+    """Discovery keeps filesystem predicates and excludes blind helper names."""
 
     marker = tmp_path / "marker"
     marker.mkdir()
     fake_nt = ModuleType("nt")
-    fake_nt._path_probe = lambda path: os.path.exists(path)
+    fake_nt._path_exists = lambda path: os.path.exists(path)
+    fake_nt._path_normpath = lambda path: os.fspath(path)
+    fake_nt._path_splitroot = lambda path: ("", os.fspath(path))
+    fake_nt._path_splitroot_ex = lambda path: ("", "", os.fspath(path))
     fake_nt._getfinalpathname = lambda path: os.fspath(path)
-    fake_nt._path_unavailable = None
+    fake_nt._path_x = None
     discovered = fs_boundary_support._discover_path_fast_path_targets(
         [("nt", fake_nt)]
     )
-    assert {name for _label, _module, name in discovered} == {
-        "_path_probe",
-        "_getfinalpathname",
+    assert {name for _label, _module, name in discovered} == {"_path_exists"}
+
+    # Unknown future private probes stay discoverable by default.
+    fake_nt._path_future_probe = lambda path: os.path.exists(path)
+    future_discovered = fs_boundary_support._discover_path_fast_path_targets(
+        [("nt", fake_nt)]
+    )
+    assert {name for _label, _module, name in future_discovered} == {
+        "_path_exists",
+        "_path_future_probe",
     }
+    discovered = tuple(
+        target for target in future_discovered if target[2] == "_path_exists"
+    )
     monkeypatch.setattr(
         fs_boundary_support,
         "_runtime_path_fast_path_targets",
@@ -2329,13 +2346,13 @@ def test_runtime_nt_path_fast_path_is_counted_and_faulted(monkeypatch, tmp_path)
     )
 
     with count_touches(monkeypatch, target=marker) as touches:
-        assert fake_nt._path_probe(marker)
-    assert [str(touch) for touch in touches] == ["nt._path_probe"]
+        assert fake_nt._path_exists(marker)
+    assert [str(touch) for touch in touches] == ["nt._path_exists"]
 
     with broad_fault(monkeypatch, target=marker, err=errno.EACCES) as firings:
         with pytest.raises(OSError):
-            fake_nt._path_probe(marker)
-    assert firings == [("nt._path_probe", errno.EACCES)]
+            fake_nt._path_exists(marker)
+    assert firings == [("nt._path_exists", errno.EACCES)]
 
 
 def test_touch_matcher_normalizes_parent_components(tmp_path):
@@ -2407,7 +2424,8 @@ def test_glob_resolving_to_marker_fault_is_observable(monkeypatch, tmp_path):
     class-bound ``scandir`` and literal-name probes are now discovered by
     identity and wrapped. ``parent.glob(name)`` remains blind on 3.12 (no
     ``_PreciseSelector``: the match is pure string comparison over the
-    parent's entries).
+    parent's entries), on every OS. That bound is a positive ``touches == []``
+    assertion, not a platform skip.
 
     On Windows, glob/pathlib may retain a builtin path probe on a class at
     import time. The injector finds those class attributes by probe identity
@@ -2436,8 +2454,10 @@ def test_glob_resolving_to_marker_fault_is_observable(monkeypatch, tmp_path):
         with count_touches(monkeypatch, target=target) as touches:
             unfaulted = run()
         assert unfaulted != [], f"{target}: sane fixture"
-        if os.name != "nt" and sys.version_info[:2] in blind:
-            assert touches == [], f"{target}: unexpectedly visible on {sys.version_info[:2]}"
+        if sys.version_info[:2] in blind:
+            assert touches == [], (
+                f"{target}: unexpectedly visible on {sys.version_info[:2]}"
+            )
             continue
         knob = len(touches)
         assert knob >= 1, f"{target}: glob touched nothing"
