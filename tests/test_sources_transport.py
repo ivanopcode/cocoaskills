@@ -3438,6 +3438,80 @@ def _ssh_environment_without_agent() -> dict[str, str]:
     return environment
 
 
+def _live_sshd_byte_test_client_argv(real_ssh: str, port: int) -> list[str]:
+    """Build the complete OpenSSH argv used by the live byte test."""
+
+    return [
+        real_ssh,
+        "-F",
+        "/dev/null",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "IdentityFile=none",
+        "-o",
+        "IdentityAgent=none",
+        "-o",
+        "PreferredAuthentications=publickey",
+        "-o",
+        "PasswordAuthentication=no",
+        "-o",
+        "KbdInteractiveAuthentication=no",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "ConnectionAttempts=1",
+        "-p",
+        str(port),
+        "testuser@127.0.0.1",
+        "git-upload-pack '/kit.git'",
+    ]
+
+
+def _ssh_identity_files_for_client_argv(client_argv: list[str]) -> list[str]:
+    """Read the effective identity list for the exact argv used by the test."""
+
+    completed = subprocess.run(
+        [client_argv[0], "-G", *client_argv[1:]],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+        env=_ssh_environment_without_agent(),
+    )
+    assert completed.returncode == 0, completed.stderr
+    return [
+        line.removeprefix("identityfile ")
+        for line in completed.stdout.splitlines()
+        if line.startswith("identityfile ")
+    ]
+
+
+@_posix_ssh_only
+def test_live_ssh_options_disable_default_identity_files() -> None:
+    """The byte-test argv removes OpenSSH's implicit per-user key list."""
+
+    real_ssh = shutil.which("ssh")
+    assert real_ssh is not None
+
+    defaults = _ssh_identity_files_for_client_argv(
+        [real_ssh, "-F", "/dev/null", "testuser@127.0.0.1"]
+    )
+    client_argv = _live_sshd_byte_test_client_argv(real_ssh, 22)
+    isolated = _ssh_identity_files_for_client_argv(client_argv)
+
+    assert defaults
+    assert all(path.startswith("~/.ssh/") for path in defaults)
+    assert isolated == ["none"]
+    assert not any(path.startswith("~/.ssh/") for path in isolated)
+
+
 @_posix_ssh_only
 @_requires_sshd
 @pytest.mark.parametrize(
@@ -3473,7 +3547,10 @@ def _ssh_environment_without_agent() -> dict[str, str]:
     ],
 )
 def test_live_sshd_rejection_bytes_match_stand_in_frames(
-    methods: str, server_options: list[str], tmp_path: Path
+    methods: str,
+    server_options: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The stand-in rejection bytes are exactly what real ssh prints.
 
@@ -3482,50 +3559,48 @@ def test_live_sshd_rejection_bytes_match_stand_in_frames(
     multi-method server prints the server's method list verbatim:
     client-side PreferredAuthentications does not change the display.
     The client offers no identity at all — IdentitiesOnly with no -i,
-    IdentityAgent=none, and no agent handle in the environment — so the
-    verdict cannot depend on how many keys the operator's agent holds.
+    IdentityFile=none, IdentityAgent=none, and no agent handle in the
+    environment — so the verdict cannot depend on operator-owned agent keys
+    or default identity files.
     """
 
     sshd = _start_live_sshd(tmp_path / "sshd", server_options)
     try:
         real_ssh = shutil.which("ssh")
         assert real_ssh is not None
+        client_argv = _live_sshd_byte_test_client_argv(real_ssh, sshd.port)
+
+        original_popen = subprocess.Popen
+        launched_byte_client_argv: list[list[str]] = []
+
+        def capture_ssh_client_launch(*args: object, **kwargs: object) -> object:
+            if args and isinstance(args[0], (list, tuple)):
+                process_argv = args[0]
+                observed_argv = [os.fspath(value) for value in process_argv]
+                if (
+                    observed_argv
+                    and observed_argv[0] == real_ssh
+                    and "-G" not in observed_argv
+                ):
+                    launched_byte_client_argv.append(observed_argv)
+            return original_popen(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(subprocess, "Popen", capture_ssh_client_launch)
         completed = subprocess.run(
-            [
-                real_ssh,
-                "-F",
-                "/dev/null",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "IdentitiesOnly=yes",
-                "-o",
-                "IdentityAgent=none",
-                "-o",
-                "PreferredAuthentications=publickey",
-                "-o",
-                "PasswordAuthentication=no",
-                "-o",
-                "KbdInteractiveAuthentication=no",
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "ConnectTimeout=10",
-                "-o",
-                "ConnectionAttempts=1",
-                "-p",
-                str(sshd.port),
-                "testuser@127.0.0.1",
-                "git-upload-pack '/kit.git'",
-            ],
+            client_argv,
             capture_output=True,
             text=True,
             timeout=30,
             check=False,
             env=_ssh_environment_without_agent(),
         )
+
+        assert len(launched_byte_client_argv) == 1
+        identity_files = _ssh_identity_files_for_client_argv(
+            launched_byte_client_argv[0]
+        )
+        assert identity_files == ["none"]
+        assert not any(path.startswith("~/.ssh/") for path in identity_files)
         assert completed.returncode == 255
         terminal = [
             line
