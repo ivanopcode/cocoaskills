@@ -1,7 +1,7 @@
 """Byte-identical released v1 CLI behaviour without the opt-in.
 
 The committed files in ``tests/fixtures/cli-golden-v1/`` preserve the original
-capture from released commit ``23a70734a38a65ad1c236a4315a0e2603b1f90b6``.
+capture from released commit ``ac840828d947d0559b9dd18dcc783bc422a4b341``.
 The active gate renders that released source and the candidate under the same
 Python interpreter because argparse help wrapping changed after Python 3.12.
 Both runs use the terminal width from ``base_run_env`` and capture through
@@ -42,7 +42,7 @@ from cli_golden_v1_support import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GOLDEN_DIR = Path(__file__).parent / "fixtures" / "cli-golden-v1"
-EXPECTED_GOLDEN_COMMIT = "23a70734a38a65ad1c236a4315a0e2603b1f90b6"
+EXPECTED_GOLDEN_COMMIT = "ac840828d947d0559b9dd18dcc783bc422a4b341"
 
 
 def _normalize(data: bytes, *, separator: str = os.sep) -> bytes:
@@ -146,7 +146,7 @@ def test_golden_fixture_inventory_is_complete() -> None:
     for slug in slugs:
         for suffix in (".stdout", ".stderr", ".exit"):
             assert (GOLDEN_DIR / f"{slug}{suffix}").exists(), slug
-    assert EXPECTED_GOLDEN_COMMIT == "23a70734a38a65ad1c236a4315a0e2603b1f90b6"
+    assert EXPECTED_GOLDEN_COMMIT == "ac840828d947d0559b9dd18dcc783bc422a4b341"
 
 
 def test_base_run_env_pins_terminal_width(tmp_path: Path) -> None:
