@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-24
+
 ### Добавлено
 
 - Черновая поддержка источников Skillfile schema 2 (`draft skillfile-sources-v1 (opt-in)`): команды `csk install`, `csk upgrade` и `csk status` работают с локом `Skillfile.lock.json`, новая команда `csk check` проверяет schema-2 Skillfile без установки, сбои выводятся как тринадцать стабильных классов с причиной и строкой `remediation:` без секретов. Включается флагом `experimental.skillfile_sources` или переменной `CSK_EXPERIMENTAL_SKILLFILE_SOURCES=1`; без включения поведение релизной версии 1 сохраняется побитово. Поддержка не проходит релизную квалификацию, соответствие спецификации не заявляется.
@@ -712,7 +714,8 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.15.0...main
+[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.16.0...main
+[0.16.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/ivanopcode/cocoaskills/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.13.0...v0.14.0
