@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Добавлено
 
 - Черновая поддержка источников Skillfile schema 2 (`draft skillfile-sources-v1 (opt-in)`): команды `csk install`, `csk upgrade` и `csk status` работают с локом `Skillfile.lock.json`, новая команда `csk check` проверяет schema-2 Skillfile без установки, сбои выводятся как тринадцать стабильных классов с причиной и строкой `remediation:` без секретов. Включается флагом `experimental.skillfile_sources` или переменной `CSK_EXPERIMENTAL_SKILLFILE_SOURCES=1`; без включения поведение релизной версии 1 сохраняется побитово. Поддержка не проходит релизную квалификацию, соответствие спецификации не заявляется.
+- Машинная транспортная политика `source-policy.json` (`CSK_SOURCE_POLICY`) рядом с глобальной конфигурацией для контроля сетевых репозиториев, портов и зеркал (`mirror_of`).
+- Маркер установки install marker schema 5 (`.agents/skills/*/.csk-install.json`) с фиксацией типа пакета `package`, привязкой лока `lock_sha256` вместо наследуемой идентичности источникового репозитория, снимками `source-v1` и атомарной публикацией.
+- Квитанции сборок build receipts schema 3 (`csk-receipt.ccj.json` в кэше сборок `<csk-home>/builds/` `go-v1-receipt-v3` `/`) с оборачиванием входов `package` (с идентичностью пакета в `identity`) и `build` и параметров происхождения для проверки актуальности.
+- Поддержка спецификации Curator Protocol v1.0.0-rc.10.
 
 ## [0.15.0] - 2026-08-25
 

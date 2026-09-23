@@ -168,7 +168,33 @@ csk config build-https add gitlab.example.com/portals/infra --token git-credenti
 
 Проектный режим фиксирует скиллы в файле `Skillfile.json` в корне репозитория. Разработчики коммитят этот файл в систему контроля версий. Вызов `csk install` на любой машине разворачивает одинаковый набор скиллов для всех участников команды.
 
-Файл `Skillfile.json` с проектным скиллом выглядит следующим образом:
+Файл `Skillfile.json` поддерживается в двух вариантах схемы.
+
+Черновой вариант схемы 2 (`draft skillfile-sources-v1 (opt-in)`) объявляет карту источников `sources` и вытягивает скиллы через селекторы. Поддержка выключена по умолчанию. Чтобы включить схему 2, укажите `"experimental": {"skillfile_sources": true}` в глобальном файле `~/.cocoaskills/config.json` или установите переменную окружения `CSK_EXPERIMENTAL_SKILLFILE_SOURCES=1`.
+
+Пример `Skillfile.json` схемы 2:
+
+```json
+{
+  "schema_version": 2,
+  "project": { "alias": "demo-ios" },
+  "agents": ["claude_code", "codex_cli", "cursor"],
+  "sources": {
+    "local": { "path": "." }
+  },
+  "skills": [
+    {
+      "name": "skill-tracker",
+      "from": "local",
+      "directory": "skills/skill-tracker"
+    }
+  ]
+}
+```
+
+При работе со схемой 2 команда `csk install` выполняет начальную установку или устанавливает по файлу `Skillfile.lock.json`, команда `csk upgrade` явно обновляет лок, а `csk status` показывает актуальность манифеста и лока без записи. Сетевые источники подчиняются файлу `source-policy.json`, который находится в `~/.cocoaskills/source-policy.json` (путь переопределяется через `CSK_SOURCE_POLICY`). Подробное описание работы со схемой 2 приведено в [`docs/skillfile-sources.md`](docs/skillfile-sources.md).
+
+Без включения опции работает релизная схема 1:
 
 ```json
 {
@@ -325,7 +351,7 @@ CocoaSkills реализует черновую версию источнико�
 - [`docs/cli.md`](docs/cli.md): справочник команд `csk`, флагов и кодов завершения.
 - [`docs/reference.md`](docs/reference.md): справочник по матрице установки, зависимостям скиллов, манифестам и аудиту безопасности.
 - [`docs/external-build-repositories.md`](docs/external-build-repositories.md): устройство внешних репозиториев сборки, брокеров кредов SSH/HTTPS и моделей доступа.
-- [`docs/skillfile-sources.md`](docs/skillfile-sources.md): черновые источники Skillfile schema 2, машинная транспортная политика и семантика лока (на английском).
+- [`docs/skillfile-sources.md`](docs/skillfile-sources.md): черновые источники Skillfile schema 2, машинная транспортная политика и семантика лока.
 - [`docs/v0.16-design.md`](docs/v0.16-design.md): RFC 0009, проектное решение по черновым источникам schema 2 (на английском).
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): описание внутренней архитектуры, схемы работы конвейера установки, формата хранилищ и модели безопасности.
 - [`SECURITY.md`](SECURITY.md): политика безопасности, границы изоляции и рекомендации по настройке.

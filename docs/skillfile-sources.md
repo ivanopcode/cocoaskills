@@ -1,22 +1,10 @@
-# Skillfile schema 2 sources
+# Источники Skillfile schema 2
 
-CocoaSkills implements draft Skillfile schema 2 sources against
-curator-spec `8ba9c235ec5be00d52378479516c82386fd0c178`
-(`protocol/skillfile-sources.md` revision 1,
-`protocol/repository-transport.md` revisions 1 and 2). Support is
-`draft skillfile-sources-v1 (opt-in)`: it is off unless explicitly
-enabled, every user-facing surface labels it, and no release
-qualification or conformance claim is made. Passing the draft schema
-vectors is not evidence of a local installation or native containment;
-the [draft vectors](https://github.com/relux-works/curator-spec/tree/8ba9c235ec5be00d52378479516c82386fd0c178/conformance/draft-sources-v1)
-distinguish structural checks from filesystem, resolver and execution
-requirements.
+CocoaSkills реализует черновую версию источников Skillfile schema 2 по спецификации curator-spec `8ba9c235ec5be00d52378479516c82386fd0c178` (`protocol/skillfile-sources.md` ревизия 1, `protocol/repository-transport.md` ревизии 1 и 2). Поддержка имеет статус `draft skillfile-sources-v1 (opt-in)`. Она выключена по умолчанию, все пользовательские интерфейсы содержат эту метку, и проект не заявляет релизную квалификацию или соответствие спецификации. Успешное прохождение векторов черновой схемы не гарантирует локальную установку или нативную изоляцию. [Черновые векторы](https://github.com/relux-works/curator-spec/tree/8ba9c235ec5be00d52378479516c82386fd0c178/conformance/draft-sources-v1) отделяют структурные проверки от требований к файловой системе, резолверу и исполнению.
 
-## Opt-in
+## Включение
 
-Schema 2 is accepted only when the global config declares
-`"experimental": {"skillfile_sources": true}` or the environment sets
-`CSK_EXPERIMENTAL_SKILLFILE_SOURCES=1`. The config form looks like this:
+Схема 2 принимается только при наличии объявления `"experimental": {"skillfile_sources": true}` в глобальной конфигурации или при установке переменной окружения `CSK_EXPERIMENTAL_SKILLFILE_SOURCES=1`. Пример конфигурации:
 
 ```json
 {
@@ -27,22 +15,11 @@ Schema 2 is accepted only when the global config declares
 }
 ```
 
-Without the opt-in a schema-2 Skillfile fails with the existing
-unsupported-schema error text plus exactly one hint line naming the
-opt-in. Released schema 1 behaviour, error text included, stays
-byte-identical.
+Без явного включения опции Skillfile схемы 2 завершается ошибкой неподдерживаемой схемы с добавлением ровно одной строки подсказки с именем опции. Поведение релизной схемы 1, включая текст ошибок, остаётся побитово идентичным.
 
-## Sources and selectors
+## Источники и селекторы
 
-A schema-2 Skillfile keeps `schema_version`, `project`, `agents` and
-`locale`, and adds an optional `sources` map from aliases to
-acquisitions. Each alias declares exactly one of `path`, `git` or
-`repository`. A `path` source names a literal native directory, absolute
-or relative to the project. A `git` source names an endpoint URL plus
-exactly one of `tag`, `branch` or `revision`. A `repository` source
-names an already-canonical `host/path` identity plus one ref. Branch
-refs are admitted only in the root project Skillfile; a transitive
-Skillfile must not declare host paths or branches.
+Skillfile схемы 2 сохраняет поля `schema_version`, `project`, `agents` и `locale`. Файл добавляет необязательную карту `sources` из алиасов в объекты приобретения. Каждый алиас объявляет ровно одно из полей: `path`, `git` или `repository`. Источник `path` указывает точный локальный каталог, абсолютный или относительный к проекту. Источник `git` указывает URL точки входа и ровно одно из полей: `tag`, `branch` или `revision`. Источник `repository` указывает уже каноническую идентичность `host/path` и одну ссылку ref. Ссылки на ветки допускаются только в корневом `Skillfile.json` проекта. Транзитивный Skillfile не должен объявлять пути к хостам или ветки. Пример формата:
 
 ```json
 {
@@ -60,50 +37,23 @@ Skillfile must not declare host paths or branches.
 }
 ```
 
-The `git` grammar is the closed core 6.3 endpoint spelling: `https://`,
-`ssh://` or scp form. A `https://` declaration carries no userinfo,
-password or port; `ssh://` and scp spellings may carry a username but
-no password or port. Anything else fails `source_selection_invalid`
-before any filesystem or network work.
+Грамматика `git` использует закрытый формат точек входа ядра 6.3: `https://`, `ssh://` или форма scp. Объявление `https://` не содержит userinfo, пароль или порт. Формы `ssh://` и scp могут содержать имя пользователя, но не пароль или порт. Любая другая запись вызывает отказ `source_selection_invalid` до обращения к файловой системе или сети.
 
-The `team` and `kit` declarations above are valid, and `csk check`
-plans them against the policy. Network acquisition is not implemented
-in this draft: `csk install` and `csk upgrade` refuse `git` and
-`repository` sources with `source_selection_invalid` and install path
-sources only. The refusal reason names that bound.
+Объявления `team` и `kit` в примере корректны, и команда `csk check` планирует их по политике. Сетевое получение не реализовано в этой черновой версии. Команды `csk install` и `csk upgrade` отклоняют источники `git` и `repository` с кодом `source_selection_invalid` и устанавливают только источники `path`. Причина отказа указывает это ограничение.
 
-## Mixed sources
+## Смешанные источники
 
-The `skills` list mixes three disjoint element forms: legacy
-`{name, source, tag|branch|revision}` entries, individual selectors
-`{name, from, directory}` and collection selectors
-`{from, directory, include, exclude?}`. A selector that mixes legacy
-fields with `from` is refused. Names share one namespace: a duplicate
-name fails `source_name_conflict` whether the two entries are both
-legacy, both selectors, or one of each.
+Список `skills` объединяет три взаимоисключающие формы элементов: унаследованные записи `{name, source, tag|branch|revision}`, одиночные селекторы `{name, from, directory}` и селекторы коллекций `{from, directory, include, exclude?}`. Селектор, сочетающий унаследованные поля с `from`, отклоняется. Имена используют единое пространство имён. Дублирование имени вызывает отказ `source_name_conflict` вне зависимости от того, являются ли два элемента унаследованными, селекторами или их комбинацией.
 
-## Collections
+## Коллекции
 
-A collection selector enumerates skill directories below one source
-directory. `include` lists literal member names, `*`, or both;
-`exclude` removes names from the set. Every listed literal must exist
-and be a directory; a missing literal fails `source_member_missing`
-and a non-directory fails `source_member_invalid`. An empty expansion
-is refused. Membership is frozen at install time: a lock records the
-admitted members, and a later filesystem change is drift, not a silent
-re-expansion.
+Селектор коллекции перечисляет каталоги скиллов внутри одного каталога источника. Поле `include` содержит точные имена участников, `*` или оба варианта. Поле `exclude` удаляет имена из набора. Каждый указанный литерал должен существовать и быть каталогом. Отсутствующий литерал вызывает отказ `source_member_missing`, а элемент, не являющийся каталогом, вызывает `source_member_invalid`. Пустое раскрытие отклоняется. Состав участников фиксируется во время установки. Лок записывает принятых участников. Последующие изменения файловой системы являются дрейфом, а не неявным повторным раскрытием.
 
-## Machine transport policy
+## Машинная транспортная политика
 
-Network acquisition is governed by a machine-owned
-`source-policy.json` beside the global config (`~/.cocoaskills/`
-by default, `CSK_SOURCE_POLICY` overrides the path). The policy is
-validated in full before any network I/O. An invalid or unreadable
-policy fails `repository_policy_invalid` and is never treated as
-absent; an absent policy simply leaves identity-only sources without
-endpoints.
+Сетевое получение управляется машинным файлом `source-policy.json` рядом с глобальной конфигурацией (по умолчанию `~/.cocoaskills/`, путь переопределяется переменной `CSK_SOURCE_POLICY`). Политика проверяется полностью до выполнения любого сетевого ввода-вывода. Некорректная или нечитаемая политика вызывает отказ `repository_policy_invalid` и никогда не считается отсутствующей. Отсутствующая политика оставляет источники только с идентичностью без точек входа.
 
-Schema 1 maps exact canonical repository identities to endpoint lists:
+Схема 1 сопоставляет точные канонические идентичности репозиториев со списками точек входа:
 
 ```json
 {
@@ -119,69 +69,27 @@ Schema 1 maps exact canonical repository identities to endpoint lists:
 }
 ```
 
-Schema 2 adds three mechanisms. Explicit ports select non-default
-connection ports (`https://git.example.com:8443/team/kit.git`).
-Mirrors serve a repository from another host when the endpoint
-declares `mirror_of` naming the entry key exactly; a resolved host
-that differs from the key host without `mirror_of` fails
-`repository_mirror_undeclared`. Aliases give one connection hostname
-a reusable name: an endpoint may reference an `aliases` entry instead
-of embedding the host, and an unknown reference fails
-`repository_alias_unknown`. A schema-2 reader accepts schema 1 with
-revision-1 endpoint semantics; a revision-1 reader rejects schema 2.
+Схема 2 добавляет три механизма. Явные порты выбирают нестандартные порты подключения (`https://git.example.com:8443/team/kit.git`). Зеркала обслуживают репозиторий с другого хоста при указании `mirror_of` с точным совпадением ключа записи. Расхождение хоста без `mirror_of` вызывает отказ `repository_mirror_undeclared`. Алиасы дают имени хоста подключения повторно используемое имя. Точка входа может ссылаться на запись `aliases` вместо встраивания хоста. Неизвестная ссылка вызывает отказ `repository_alias_unknown`. Читатель схемы 2 принимает схему 1 с семантикой точек входа ревизии 1. Читатель ревизии 1 отклоняет схему 2.
 
-## Root inputs
+## Входные пути для корня
 
-`root_inputs` maps a source alias to the allowlist of portable
-root-relative paths that the `"."` selector directory may admit for
-that alias. Selecting the source root without a `root_inputs` entry
-for the alias is refused, so a Skillfile cannot silently widen one
-member selector into the whole source tree. Entries must be
-non-empty, duplicate-free and pairwise non-overlapping.
+Карта `root_inputs` связывает алиас источника с разрешённым списком переносимых относительных путей для селектора корня `"."`. Выбор корня источника без записи `root_inputs` для этого алиаса отклоняется. Это предотвращает неявное расширение селектора на всё дерево источника. Записи должны быть непустыми, уникальными и попарно непересекающимися.
 
-## Lock semantics and refresh
+## Лок и обновление
 
-The first `csk install` resolves every path selector, captures immutable
-snapshots under the `source-v1` namespace in the csk home, and writes
-`Skillfile.lock.json` beside the Skillfile (skillfile-lock schema 1).
-Machine-private bindings live under the csk home, never in the lock.
-A locked install consumes the locked snapshots and refuses drift
-instead of re-resolving. `csk upgrade` is the explicit refresh: the
-only operation that replaces locked refs, admitted bytes or
-membership, and it replaces lock and markers atomically only after
-every gate succeeds. Install and upgrade refuse `git` and `repository`
-sources in this draft; network acquisition is not implemented.
-`csk status` reports read-only currentness against the lock and
-writes nothing. `csk check` validates a schema-2 Skillfile
-structurally, plans every network source against the policy without
-network I/O, and verifies lock consistency. A `valid` verdict on a
-Skillfile with network sources states that the declarations and
-plans are sound. It does not state that install accepts them. Launch
-reads installed state only and never rescans live source inputs.
+Первый вызов `csk install` разрешает каждый селектор путей, фиксирует неизменяемые снимки в пространстве имён `source-v1` в домашнем каталоге csk и записывает `Skillfile.lock.json` рядом со Skillfile (схема skillfile-lock 1). Приватные привязки машины хранятся в домашнем каталоге csk и не попадают в лок. Установка по локу использует зафиксированные снимки и отклоняет дрейф вместо повторного разрешения.
 
-One interop rule is recorded, not decided here: the lock's Git
-directory agreement for legacy configured entries is strict on write
-and tolerant on read, per the note in
-[UNRESOLVED_QUESTIONS.md](../UNRESOLVED_QUESTIONS.md).
+Команда `csk upgrade` выполняет явное обновление. Это единственная операция, заменяющая зафиксированные ссылки, принятые байты или состав участников. Обновление заменяет лок и маркеры атомарно только после успешного прохождения всех проверок. Команды `csk install` и `csk upgrade` отклоняют источники `git` и `repository` в этой черновой версии, так как сетевое получение не реализовано.
 
-## Diagnostics
+Команда `csk status` выводит актуальность в режиме чтения относительно лока и ничего не записывает. Команда `csk check` проверяет структуру Skillfile схемы 2, планирует сетевые источники по политике без сетевых обращений и сверяет лок. Вердикт `valid` для Skillfile с сетевыми источниками подтверждает корректность объявлений и планов. Вердикт не означает, что установка их примет. Запуск читает только установленное состояние и не сканирует заново живые входы.
 
-Every failure surfaces as one stable class with the selector or
-member, the reason, and exactly one `remediation:` line. Nine classes
-come from skillfile-sources section 5 (`source_alias_unknown`,
-`source_selection_invalid`, `source_member_missing`,
-`source_member_invalid`, `source_name_conflict`,
-`source_output_overlap`, `source_snapshot_changed`,
-`source_snapshot_unavailable`, `source_lock_stale`) and four from
-repository-transport (`repository_policy_invalid`,
-`repository_endpoint_unavailable`, `repository_mirror_undeclared`,
-`repository_alias_unknown`). Rendered text never carries secrets:
-a refusal names the source alias, the field and the shape of the
-violation but never echoes the declaration itself, and an endpoint
-subject renders from its parsed scheme, host and path. Absolute
-paths redact to `<path>` and any credential-shaped residue redacts
-to `***` as a second line of defence, while selectors, member names
-and relative paths stay readable. A typical refusal looks like this:
+Одно правило совместимости зафиксировано в [UNRESOLVED_QUESTIONS.md](../UNRESOLVED_QUESTIONS.md) (а не решено здесь): согласие каталогов Git для унаследованных настроенных записей в локе является строгим при записи и мягким при чтении.
+
+## Диагностика
+
+Каждый сбой выводится как один стабильный класс с селектором или участником, причиной и ровно одной строкой `remediation:`. Девять классов определены в разделе 5 спецификации skillfile-sources (`source_alias_unknown`, `source_selection_invalid`, `source_member_missing`, `source_member_invalid`, `source_name_conflict`, `source_output_overlap`, `source_snapshot_changed`, `source_snapshot_unavailable`, `source_lock_stale`). Четыре класса определены в repository-transport (`repository_policy_invalid`, `repository_endpoint_unavailable`, `repository_mirror_undeclared`, `repository_alias_unknown`).
+
+Выводимый текст не содержит секретов. Отказ называет алиас источника, поле и форму нарушения, но не повторяет само объявление. Точки входа выводятся по разобранным схеме, хосту и пути. Абсолютные пути заменяются на `<path>`, а остатки секретов заменяются на `***` в качестве второго рубежа защиты. Селекторы, имена участников и относительные пути остаются читаемыми. Типичный отказ выглядит следующим образом:
 
 ```text
 source_snapshot_changed: Skill 'review' changed since the lock was written; run an explicit refresh
@@ -189,127 +97,29 @@ remediation: run csk upgrade to refresh the lock, or restore the locked bytes
 draft skillfile-sources-v1 (opt-in)
 ```
 
-## Bounds
+## Ограничения
 
-Draft source selection is POSIX-only. It descends with
-descriptor-relative opens and refuses with
-`source_selection_invalid` on runtimes without that mechanism rather
-than falling back to a path-based walk. Schema-2 installs publish
-context only: a member that exports commands or declares skill
-requirements is refused, and the global scope stays on schema 1.
-Network acquisition is not implemented in this draft: `git` and
-`repository` sources validate and plan, but install and upgrade
-refuse them. These bounds, like the feature itself, carry no release
-qualification and no conformance claim. The design record is
-[RFC 0009](v0.16-design.md); the Russian command reference is
-[docs/cli.md](cli.md).
+Черновая выборка источников работает только на POSIX. Утилита выполняет обход с открытием относительно дескрипторов и отклоняет выполнение с кодом `source_selection_invalid` на операционных системах без этого механизма вместо перехода к обходу по путям. Установки схемы 2 публикуют только контекст. Участник, экспортирующий команды или объявляющий требования к скиллам, отклоняется, а глобальная область остаётся на схеме 1. Сетевое получение не реализовано в этой черновой версии: источники `git` и `repository` проходят проверку и планирование, но отклоняются при установке и обновлении.
 
-## Conformance coverage
+Эти ограничения, как и сама функциональность, не несут релизной квалификации и заявления о соответствии. Запись решения приведена в [RFC 0009](v0.16-design.md). Справочник команд на русском языке находится в [docs/cli.md](cli.md).
 
-The executable harness `tests/test_draft_sources_conformance.py` drives
-the draft corpus at curator-spec
-`8ba9c235ec5be00d52378479516c82386fd0c178` (the revision pinned in
-`.github/ci/draft-sources-suite.json`): 115 schema cases, 94 semantic
-cases and 3 snapshot vectors, plus harness self-tests. Every semantic
-case has a registered driver that runs against a fixture built from the
-case input; the dispatch observes each run and fails a driver that
-returns without calling any tabled production entry point. That check
-is exactly "at least one tabled in-process entry was called": it sees
-in-process calls only, it is defined by the table (real but untabled
-production code counts as untouched), and it is provenance-blind (one
-tabled call on any argument satisfies it). Table membership is itself
-observed, not inferred: the gate runs the product's own install,
-upgrade, status and check paths on hermetic fixtures under a call
-tracer (`sys.settrace`, starting at the console-script entry point
-resolved from `pyproject.toml`), and every tabled entry must have
-executed. The recorder keys records by `id(code)` and retains each
-code object in its record for the run; membership and label projection
-also confirm object identity with `is`. A same-named nested function,
-method, or byte-identical clone loaded from another file therefore
-cannot stand in for the entry, even when Python considers the two code
-objects equal by value. An uncalled function is never observed, so no
-source shape — a test-only caller, a forwarder, a nested body or
-method, a reference passed as data, called or not — can certify an
-entry. Coverage from the
-ordinary suite was measured and rejected as the signal: the dead
-`check_selected_package` entry is executed by direct unit tests, so
-suite coverage would certify the exact hole the gate exists to
-close. The junit artifact records passed/skipped/failed/total per
-category (schema, snapshot, semantic, harness) for every run.
+## Покрытие соответствия спецификации
 
-The corpus was run on this macOS host with Python 3.12 on 2026-09-23.
-The native run and the added simulated external-build-refusal run both
-exited 0 (`305 passed, 1 skipped`); the single skip is the harness
-setup-phase accounting probe. Their junit properties report:
+Исполняемый тестовый набор `tests/test_draft_sources_conformance.py` прогоняет черновые тесты curator-spec `8ba9c235ec5be00d52378479516c82386fd0c178` (версия зафиксирована в `.github/ci/draft-sources-suite.json`): 115 тестов схемы, 94 семантических теста, 3 вектора снимков и самотесты. Каждый семантический тест использует зарегистрированный драйвер для выполнения на фикстуре из входа теста; диспетчер отслеживает каждый прогон и отклоняет драйвер, возвращающий управление без вызова ни одной табличной точки входа продукта. Проверка означает вызов хотя бы одной табличной точки входа внутри процесса: диспетчер видит только вызовы внутри процесса, набор точек определяется таблицей (реальный код вне таблицы считается незатронутым), и она не зависит от происхождения вызова (один вызов табличной точки с любым аргументом удовлетворяет ему).
 
-| Local macOS run | Schema | Snapshot | Semantic | Harness |
+Набор табличных точек входа отслеживается, а не выводится гипотетически: шлюз выполняет пути `install`, `upgrade`, `status` и `check` самого продукта на изолированных фикстурах под трассировщиком вызовов (`sys.settrace`, начиная с точки входа console-script из `pyproject.toml`), и каждая табличная точка входа должна быть выполнена. Регистратор индексирует записи по `id(code)` и сохраняет каждый объект кода в своей записи на время прогона; принадлежность к таблице и проекция меток также подтверждают идентичность объектов с помощью `is`. Вложенная функция с тем же именем, метод или побайтово идентичный клон из другого файла не могут заменить точку входа, даже если Python считает два объекта кода равными по значению. Невызванная функция не наблюдается трассировщиком, поэтому ни одна форма кода (вызов только из тестов, перенаправитель, вложенное тело или метод, ссылка как данные, вызванная или нет) не может подтвердить точку входа. Покрытие из обычного тестового набора было измерено и отклонено в качестве сигнала: неиспользуемая точка входа `check_selected_package` исполняется прямыми модульными тестами, поэтому покрытие тестового набора подтвердило бы именно ту дыру, для закрытия которой существует шлюз. Артефакт junit сохраняет количество пройденных, пропущенных, сбойных и общих тестов по категориям (schema, snapshot, semantic, harness) для каждого прогона.
+
+Тестовый корпус выполнен на хосте macOS с Python 3.12 на дату 2026-09-23. Нативный прогон и прогон с имитацией отказа внешних сборок завершились с кодом 0 (`305 passed, 1 skipped`). Единственный пропущенный тест проверяет учёт пропусков фазы настройки. Отчёт junit содержит следующие показатели:
+
+| Локальный прогон на macOS | Schema | Snapshot | Semantic | Harness |
 | --- | ---: | ---: | ---: | ---: |
-| Native product lane | 115/0/0/115 | 3/0/0/3 | 94/0/0/94 | 92/1/0/93 |
+| Нативная линия продукта | 115/0/0/115 | 3/0/0/3 | 94/0/0/94 | 92/1/0/93 |
 | `CI=true`, `CSK_SIMULATE_NO_EXTERNAL_BUILDS=1` | 115/0/0/115 | 3/0/0/3 | 94/0/0/94 | 92/1/0/93 |
 
-Each cell is passed/skipped/failed/total. The second run adds the refused
-external-build scenario beside the native run; it does not stand in for a
-Linux host. On ubuntu-latest the expected semantic count is 93/1/0/94,
-with `case-alias` skipped because that control needs a case-insensitive
-filesystem and Ubuntu runners use a case-sensitive one. Ubuntu results
-have not been observed in this local run. The `fast_draft_sources`
-pull-request lanes and the `merge_draft_sources` main lanes run on
-ubuntu-latest and macos-latest; their verification is the orchestrator
-post-landing step. windows-latest is a declared unsupported lane: draft schema-2
-source selection descends with descriptor-relative opens
-(`O_DIRECTORY` plus `dir_fd` for `os.open`/`os.stat`/`os.readlink`),
-which Windows runtimes do not provide, so traversal drivers (and the
-observed-membership gate, which needs the same mechanism) skip
-there by platform bound rather than running. Windows is not a draft
-conformance CI lane for this task.
+Каждая ячейка содержит значение пройденных, пропущенных, сбойных и общих тестов. Второй прогон добавляет сценарий отказа внешних сборок рядом с нативным прогоном; он не заменяет хост Linux. На платформе ubuntu-latest ожидаемый результат семантических тестов составляет 93/1/0/94 с пропуском `case-alias`, поскольку этот контроль требует файловой системы, нечувствительной к регистру, а раннеры Ubuntu используют чувствительную к регистру. Результаты для Ubuntu не измерялись в данном локальном прогоне. Линии pull-request `fast_draft_sources` и основные линии `merge_draft_sources` выполняются на ubuntu-latest и macos-latest; их проверка является шагом оркестратора после слияния. Платформа windows-latest объявлена неподдерживаемой линией: выборка источников схемы 2 выполняет обход с открытием относительно дескрипторов (`O_DIRECTORY` плюс `dir_fd` для `os.open`/`os.stat`/`os.readlink`), отсутствующими в средах выполнения Windows, поэтому драйверы обхода (и шлюз наблюдаемых точек входа, которому требуется тот же механизм) пропускают выполнение там по платформенному ограничению, а не исполняются. Windows не является тестовой линией CI для этой задачи.
 
-On ubuntu-latest the product itself refuses the external-build
-scenario (`go-repository-v1` runs on macOS and Windows only; Linux
-qualification is deferred), so the observed-membership gate
-certifies the refused lane instead of failing it: the scenario
-asserts the structured refusal (exit 1, `source_member_invalid`,
-the product's own refusal text), and the entries covered only by
-that scenario are excluded by recorded coverage in
-`tests/draft_sources_observed_labels.json` — a machine-written
-record of the scenarios' own execution (today three entries:
-`build_repository_pipeline.run_pipeline`,
-`builds.currentness.compare_external_build_evidence`,
-`sources.transport.acquire_plan`), re-approved against the live
-trace on every capable run, never a hand-maintained list. Every
-other tabled entry must still have executed there, and the
-laundering-shape controls still reject there. The refused lane is
-simulated locally by adding that lane's run beside the native one
-(`CSK_SIMULATE_NO_EXTERNAL_BUILDS=1` forces the same support
-predicate the product calls, scoped to the added run): the
-capable-lane pin still runs on a capable host — the pin obligation
-is derived from the real platform, so simulation can add evidence
-but never remove it — and the junit categories read identically to
-the native lane (115 schema, 3 snapshot, 94 semantic, 92/1/0/93
-harness; the single harness skip is the setup-phase accounting
-probe). Verification of the
-`fast_draft_sources` pull-request and main lanes on
-ubuntu-latest and macos-latest is the orchestrator post-landing
-step. The semantic corpus has zero skips on the measured macOS host
-and zero `not yet implemented` skips on either local run. The
-`case-alias` skip is declared for case-sensitive platforms; the
-setup-phase accounting probe is a harness-only skip used to verify
-that junit counts include setup-phase skips.
+На платформе ubuntu-latest сам продукт отклоняет сценарий внешней сборки (`go-repository-v1` работает только на macOS и Windows; квалификация Linux отложена), поэтому шлюз наблюдаемых точек входа подтверждает отклонённую линию вместо её сбоя: сценарий утверждает структурированный отказ (код выхода 1, `source_member_invalid`, собственный текст отказа продукта), а точки входа, покрытые только этим сценарием, исключены записанным покрытием в `tests/draft_sources_observed_labels.json` (машинной записью собственного исполнения сценариев (сегодня три записи: `build_repository_pipeline.run_pipeline`, `builds.currentness.compare_external_build_evidence`, `sources.transport.acquire_plan`), которая повторно утверждается по живому трассировочному следствию при каждом прогоне с поддержкой сборок, а не ведётся вручную). Все остальные табличные точки входа всё ещё должны быть исполнены там, и средства контроля форм отмывания всё ещё отклоняют там. Отклонённая линия имитируется локально путём добавления прогона этой линии рядом с нативным (`CSK_SIMULATE_NO_EXTERNAL_BUILDS=1` принудительно задействует тот же предикат поддержки, который вызывает продукт, в области действия добавленного прогона): закрепление линии выполнения всё ещё выполняется на хосте с поддержкой сборок (обязательство закрепления выводится из реальной платформы, поэтому имитация может добавлять доказательства, но никогда не может удалять их), а категории junit читаются идентично нативной линии (115 schema, 3 snapshot, 94 semantic, 92/1/0/93 harness; единственный пропуск harness является зондом учёта фазы настройки). Проверка линий pull-request `fast_draft_sources` и основных линий `merge_draft_sources` на ubuntu-latest и macos-latest является шагом оркестратора после слияния. Семантический корпус имеет ноль пропусков на измеряемом хосте macOS и ноль пропусков `not yet implemented` на каждом из локальных прогонов. Пропуск `case-alias` объявлен для платформ, чувствительных к регистру; зонд учёта фазы настройки является пропуском только тестового оснащения, используемым для проверки того, что подсчёты junit включают пропуски фазы настройки.
 
-`root-no-inputs` is driven through the live selection entry point
-(`selection.resolve_individual`) and answers as the corpus expects: a
-root selection without `root_inputs` refuses with
-`source_output_overlap`, because `policy.root_inputs` is enforced on
-the live path (BUG-260922-1o40hs, with the manifest-spelling closure in
-BUG-260922-1383no). Earlier revisions of this corpus recorded that case
-as a divergence while the enforcement was missing; it is not one any
-longer. One table entry left the allowlist in this round:
-`install_marker.validate_attestation_evidence` is never executed by
-production (its one production caller returns before reaching it,
-and its other caller has no production callers), so the corpus no
-longer vouches for it; its drivers still touch observed marker
-entries.
+`root-no-inputs` исполняется через живую точку входа выбора (`selection.resolve_individual`) и отвечает так, как ожидает корпус: выбор корня без `root_inputs` отклоняется с `source_output_overlap`, поскольку `policy.root_inputs` применяется на живом пути (BUG-260922-1o40hs с замыканием написания манифеста в BUG-260922-1383no). Более ранние редакции этого корпуса фиксировали этот случай как расхождение, пока соблюдение отсутствовало; теперь это не так. Одна табличная запись покинула список разрешённых в этом раунде: `install_marker.validate_attestation_evidence` никогда не вызывается продуктовым кодом (единственная функция продуктового кода, которая её вызывает, возвращает управление до обращения к ней, а у второй вызывающей функции нет продуктовых вызовов), поэтому корпус больше не ручается за неё; её драйверы всё ещё затрагивают наблюдаемые записи маркеров.
 
-This statement reports what the lanes observe. It makes no release
-qualification and no conformance claim: this is draft support for a
-draft specification, and passing the draft corpus does not qualify any
-release.
+Данное заявление фиксирует результаты проверок. Документ не заявляет релизную квалификацию или соответствие спецификации: поддержка является черновой для черновой спецификации, и прохождение тестового корпуса не является квалификацией релиза.
