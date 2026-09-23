@@ -82,6 +82,30 @@ def test_native_discovery_agents_add_no_extra_gitignore_entries():
     assert adapters.required_gitignore_entries(["opencode", "windsurf"]) == [".agents/"]
 
 
+def test_refresh_refuses_foreign_ledger_bytes(tmp_path):
+    """Direct refresh refuses a foreign ledger instead of overwriting it.
+
+    The direct-write path shares ``_read_managed`` with the
+    transaction planner, so it inherits the same adoption rule
+    (BUG-260918-wvfoqa): user bytes at the ledger path refuse with
+    the path and the shape.
+    """
+
+    project = tmp_path / "project"
+    canonical = project / ".agents" / "skills" / "skill-a"
+    canonical.mkdir(parents=True)
+    (canonical / "SKILL.md").write_text("managed", encoding="utf-8")
+    rules = project / ".claude" / "skills"
+    rules.mkdir(parents=True)
+    ledger = rules / ".csk-managed.json"
+    ledger.write_text("MY PRECIOUS USER JSON\n", encoding="utf-8")
+
+    with pytest.raises(adapters.AdapterError, match=r"not a csk ledger \(not JSON\)"):
+        adapters.refresh_adapters(project, ["claude_code"], ["skill-a"], "copy")
+
+    assert ledger.read_text(encoding="utf-8") == "MY PRECIOUS USER JSON\n"
+
+
 def test_global_install_mirrors_to_home_agents_skills_for_native_agents(tmp_path):
     csk_home = tmp_path / ".cocoaskills"
     canonical = csk_home / "global" / "skills" / "skill-a"

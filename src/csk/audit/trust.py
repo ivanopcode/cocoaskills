@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from .model import CapabilityViolation, Decision, Finding, Location, Severity, S
 
 SCHEMA_VERSION = 1
 CODE_TRUST_UNREADABLE = "audit_trust_unreadable"
+CODE_TRUST_UNWRITABLE = "audit_trust_unwritable"
 PROMPT_VERSION = 1
 # Bump RULESET_VERSION whenever detector semantics or severity classification
 # changes. Cache hits intentionally skip canary and detector execution.
@@ -25,9 +27,10 @@ class TrustRecordError(ValueError):
     ``audit/runner.py``, with no boundary of its own) reaches ``cli.main``'s
     existing ``ValueError`` catch as a structured refusal — the same
     convention ``SourceAuditError(ValueError)`` already uses. No
-    intermediate ``except ValueError`` sits between the reader and
-    ``cli.main`` on either path: ``gate_plans`` converts the type
-    explicitly, and the source-audit wrapper catches it first.
+    intermediate ``except ValueError`` sits between the readers and
+    ``cli.main`` on that path; ``gate_plans`` converts the type
+    explicitly for the install hook, and the source-audit wrapper
+    catches it first on its path.
     """
 
     def __init__(self, code: str, detail: str) -> None:
@@ -44,12 +47,24 @@ def load_cached_verdict(
     prompt_version: int = PROMPT_VERSION,
     ruleset_version: int = RULESET_VERSION,
 ) -> Verdict | None:
+    """Load one cached verdict, distinguishing absence from failure.
+
+    Only a missing file is a cache miss. Any other I/O failure raises:
+    the store the audit reads is the store the audit trusts, and a
+    verdict the reader cannot see must refuse rather than recompute
+    silently past a sick directory. Malformed bytes stay a miss.
+    """
+
     path = verdict_path(csk_home, content_sha256, backend, model, prompt_version, ruleset_version)
-    if not path.exists():
-        return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise TrustRecordError(CODE_TRUST_UNREADABLE, f"{path}: {exc}") from exc
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(payload, dict):
         return None
     try:
         return _verdict_from_payload(payload)
@@ -66,24 +81,30 @@ def store_verdict(csk_home: Path, verdict: Verdict) -> Path:
         verdict.prompt_version,
         verdict.ruleset_version,
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(_verdict_to_payload(verdict), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(_verdict_to_payload(verdict), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise TrustRecordError(CODE_TRUST_UNWRITABLE, f"{path}: {exc}") from exc
     return path
 
 
 def load_trust_record(csk_home: Path, content_sha256: str) -> TrustRecord:
     """Load the pin record for one content hash.
 
-    Absent means "no pin". Unreadable raises: the existence probe and the
-    read share one boundary, so an I/O failure at either seam is a typed
-    refusal naming the trust path, never a silent absence. A present but
-    malformed record still means "no pin" (garbage never counts as a pin).
+    Absent means "no pin". Unreadable raises: the read is attempted
+    directly and only ``FileNotFoundError`` maps to absence, so an I/O
+    failure at the stat or the read is a typed refusal naming the trust
+    path, never a silent absence. A present but malformed record still
+    means "no pin" (garbage never counts as a pin).
     """
+
     path = trust_path(csk_home, content_sha256)
     try:
-        if not path.exists():
-            return TrustRecord()
         payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        _confirm_missing_trust_path(path)
+        return TrustRecord()
     except OSError as exc:
         raise TrustRecordError(CODE_TRUST_UNREADABLE, f"{path}: {exc}") from exc
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -99,6 +120,41 @@ def load_trust_record(csk_home: Path, content_sha256: str) -> TrustRecord:
     )
 
 
+def _confirm_missing_trust_path(path: Path) -> None:
+    """Refuse an absent read when a non-directory blocks the trust path.
+
+    Windows can report ``ERROR_PATH_NOT_FOUND`` as ``FileNotFoundError``
+    when a file occupies a directory component. Walk upward to the nearest
+    existing parent before treating the record as absent. Missing components
+    alone do not prove absence; the first existing component must be a
+    directory, and any other inspection failure refuses.
+    """
+
+    parent = path.parent
+    while True:
+        try:
+            mode = parent.stat().st_mode
+        except FileNotFoundError:
+            if parent.parent == parent:
+                raise TrustRecordError(
+                    CODE_TRUST_UNREADABLE,
+                    f"cannot establish whether trust record is absent: {path}",
+                )
+            parent = parent.parent
+            continue
+        except OSError as exc:
+            raise TrustRecordError(
+                CODE_TRUST_UNREADABLE,
+                f"cannot inspect trust path parent {parent} for {path}: {exc}",
+            ) from exc
+        if not stat.S_ISDIR(mode):
+            raise TrustRecordError(
+                CODE_TRUST_UNREADABLE,
+                f"trust path parent {parent} is not a directory: {path}",
+            )
+        return
+
+
 def pin_content_hash(
     csk_home: Path,
     content_sha256: str,
@@ -111,15 +167,18 @@ def pin_content_hash(
     if not reason:
         raise ValueError("audit trust pin requires a non-empty reason")
     path = trust_path(csk_home, content_sha256)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "schema_version": SCHEMA_VERSION,
-        "content_sha256": content_sha256.lower(),
-        "pinned": True,
-        "pinned_by": pinned_by,
-        "reason": reason,
-    }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": SCHEMA_VERSION,
+            "content_sha256": content_sha256.lower(),
+            "pinned": True,
+            "pinned_by": pinned_by,
+            "reason": reason,
+        }
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise TrustRecordError(CODE_TRUST_UNWRITABLE, f"{path}: {exc}") from exc
     return path
 
 

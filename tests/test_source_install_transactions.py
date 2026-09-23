@@ -672,6 +672,96 @@ def test_legacy_schema_1_project_installs_unchanged_with_opt_in(
     )
 
 
+def test_legacy_schema1_foreign_ledger_refuses(
+    tmp_path: Path, csk_home: Path
+) -> None:
+    """The schema-1 lane refuses a foreign ledger with path and shape.
+
+    The legacy twin of ``test_adapter_ledger_foreign_regular_file_refuses``:
+    the same shared-planner decision, driven through
+    ``installer.install`` on a schema-1 project. The v1 boundary
+    carries the refusal text unsanitized, so the absolute path is
+    asserted verbatim here. Needs no POSIX guard: with no skills the
+    install never reaches selection.
+    """
+
+    skills_root = tmp_path / "skills"
+    project = make_project(tmp_path)
+    write_skillfile(
+        project, {"schema_version": 1, "agents": ["codex_cli"], "skills": []}
+    )
+    commit_all(project, "v1 foreign ledger")
+    cfg = _v2_config(csk_home, skills_root, project)
+    ledger = project / ".codex" / "skills" / ".csk-managed.json"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("MY PRECIOUS USER JSON\n", encoding="utf-8")
+
+    result = _install(cfg)
+
+    assert result.status == "failed", result.messages
+    assert result.errors, "failed install must carry a diagnostic"
+    assert str(ledger) in result.errors[0], result.errors
+    assert "(not JSON)" in result.errors[0], result.errors
+    assert ledger.read_text(encoding="utf-8") == "MY PRECIOUS USER JSON\n"
+    _assert_no_journal(csk_home)
+    # Positive control: removing the obstacle installs clean.
+    ledger.unlink()
+    assert _install_ok(cfg)
+
+
+def test_legacy_schema1_stale_valid_ledger_is_adopted(
+    tmp_path: Path, csk_home: Path
+) -> None:
+    """The schema-1 lane adopts a strictly valid pre-existing ledger.
+
+    The legacy twin of ``test_adapter_ledger_stale_valid_ledger_is_adopted``:
+    a stale-but-valid ledger updates in place without friction.
+    """
+
+    skills_root = tmp_path / "skills"
+    project = make_project(tmp_path)
+    write_skillfile(
+        project, {"schema_version": 1, "agents": ["codex_cli"], "skills": []}
+    )
+    commit_all(project, "v1 stale ledger")
+    cfg = _v2_config(csk_home, skills_root, project)
+    ledger = project / ".codex" / "skills" / ".csk-managed.json"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text(
+        json.dumps({"entries": ["stale"], "schema_version": 1})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    _install_ok(cfg)
+
+    data = json.loads(ledger.read_text(encoding="utf-8"))
+    assert data == {"entries": [], "schema_version": 1}
+
+
+def test_legacy_schema1_reinstall_over_csk_written_is_frictionless(
+    tmp_path: Path, csk_home: Path
+) -> None:
+    """The schema-1 lane re-installs over its own ledger without friction."""
+
+    skills_root = tmp_path / "skills"
+    project = make_project(tmp_path)
+    write_skillfile(
+        project, {"schema_version": 1, "agents": ["codex_cli"], "skills": []}
+    )
+    commit_all(project, "v1 reinstall")
+    cfg = _v2_config(csk_home, skills_root, project)
+
+    _install_ok(cfg)
+    ledger = project / ".codex" / "skills" / ".csk-managed.json"
+    assert ledger.is_file()
+    stamped = ledger.read_bytes()
+
+    _install_ok(cfg)
+
+    assert ledger.read_bytes() == stamped
+
+
 # ---------------------------------------------------------------------------
 # Fault matrix: an injected fault at every stage boundary
 # ---------------------------------------------------------------------------
@@ -2093,8 +2183,9 @@ def test_adapter_ledger_nonregular_shapes_refuse(
 
     Class over the live shapes the shared planner would silently
     replace: a directory holding a user file and a symlink to an
-    outside file. The schema-2 translation refuses before any write;
-    the shared planner and the legacy lane are deliberately untouched.
+    outside file. The shared planner refuses before any write, on
+    the schema-1 and schema-2 lanes alike (BUG-260918-wvfoqa moved
+    the decision there from the schema-2 translation).
     """
 
     import shutil
@@ -2137,6 +2228,164 @@ def test_adapter_ledger_nonregular_shapes_refuse(
         ledger.unlink()
     assert _install_ok(cfg)
     assert _collect(cfg).clean
+
+
+def test_adapter_ledger_foreign_regular_file_refuses(
+    tmp_path: Path, csk_home: Path
+) -> None:
+    """A regular file with user bytes at the ledger path refuses (BUG-260918-wvfoqa).
+
+    The STORY-260916-3uifk2 exact-head reviewer's R2 reproduction,
+    committed: ``MY PRECIOUS USER JSON`` was silently replaced and
+    the install reported ok. The shared planner now refuses with the
+    path (rendered as ``<path>`` by the shared diagnostic renderer)
+    and the observed shape; the schema-1 twin is
+    ``test_legacy_schema1_foreign_ledger_refuses`` and the verbatim
+    path is pinned at the planner seam by
+    ``test_adapter_ledger_refusal_names_path_and_shape``.
+    """
+
+    project, cfg, members = _basic_fixture(tmp_path, csk_home)
+    names = [name for name, _ in members]
+    ledger = project / ".codex" / "skills" / ".csk-managed.json"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("MY PRECIOUS USER JSON\n", encoding="utf-8")
+    before = _published_digests(project, csk_home, names)
+    sources_before = _source_snapshots(project, members, csk_home)
+
+    result = _install_failed(cfg, "source_output_overlap")
+
+    assert "<path>" in result.errors[0], result.errors
+    assert "(not JSON)" in result.errors[0], result.errors
+    assert ledger.read_text(encoding="utf-8") == "MY PRECIOUS USER JSON\n"
+    _assert_no_journal(csk_home)
+    live = _published_digests(project, csk_home, names)
+    assert _published_without_store(live) == _published_without_store(before)
+    assert _source_snapshots(project, members, csk_home) == sources_before
+    assert not (project / publish.SKILLFILE_LOCK_NAME).exists()
+    # Positive control: removing the obstacle installs clean.
+    ledger.unlink()
+    assert _install_ok(cfg)
+    assert _collect(cfg).clean
+
+
+@pytest.mark.parametrize(
+    ("payload", "shape"),
+    [
+        (b"MY PRECIOUS USER JSON\n", "not JSON"),
+        (b"\x00\x01\x02binary", "not JSON"),
+        (b'"just a string"', "unexpected document shape"),
+        (b"[1, 2]", "unexpected document shape"),
+        # The loose shape that must never count as recognition: an
+        # entries key alone is not a csk ledger.
+        (b'{"entries": ["review"]}', "unexpected document shape"),
+        (
+            b'{"entries": ["review"], "schema_version": 1, "extra": 1}',
+            "unexpected document shape",
+        ),
+        (
+            b'{"entries": ["review"], "schema_version": 2}',
+            "unsupported schema_version 2",
+        ),
+        (
+            b'{"entries": ["review"], "schema_version": "1"}',
+            "unsupported schema_version of type str",
+        ),
+        (
+            b'{"entries": ["review"], "schema_version": true}',
+            "unsupported schema_version of type bool",
+        ),
+        (
+            b'{"entries": "review", "schema_version": 1}',
+            "invalid entries",
+        ),
+        (
+            b'{"entries": ["review", "review"], "schema_version": 1}',
+            "invalid entries",
+        ),
+        (
+            b'{"entries": ["not an identifier!"], "schema_version": 1}',
+            "invalid entries",
+        ),
+    ],
+)
+def test_adapter_ledger_foreign_document_shapes_refuse(
+    tmp_path: Path, csk_home: Path, payload: bytes, shape: str
+) -> None:
+    """Every foreign ledger document refuses with its shape (BUG-260918-wvfoqa).
+
+    Class over the regular-file shapes the shared planner must not
+    adopt: unparseable bytes, JSON that is not the ledger document,
+    wrong schema versions (including string and bool spellings of 1),
+    and entry lists csk never writes. Each refuses with the observed
+    shape and leaves the bytes intact.
+    """
+
+    project, cfg, _members = _basic_fixture(tmp_path, csk_home)
+    ledger = project / ".codex" / "skills" / ".csk-managed.json"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_bytes(payload)
+
+    result = _install_failed(cfg, "source_output_overlap")
+
+    assert f"({shape})" in result.errors[0], result.errors
+    assert ledger.read_bytes() == payload
+    assert not (project / publish.SKILLFILE_LOCK_NAME).exists()
+
+
+def test_adapter_ledger_stale_valid_ledger_is_adopted(
+    tmp_path: Path, csk_home: Path
+) -> None:
+    """A strictly valid pre-existing ledger is adopted, not refused.
+
+    The other direction of the BUG-260918-wvfoqa decision: bytes csk
+    recognises as its own ledger update in place without friction. A
+    stale-but-valid ledger installs clean through a real transaction
+    and comes out current.
+    """
+
+    project, cfg, members = _basic_fixture(tmp_path, csk_home)
+    names = [name for name, _ in members]
+    ledger = project / ".codex" / "skills" / ".csk-managed.json"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text(
+        json.dumps({"entries": [], "schema_version": 1}, indent=2, sort_keys=True)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    _install_ok(cfg)
+
+    data = json.loads(ledger.read_text(encoding="utf-8"))
+    assert data == {"entries": sorted(names), "schema_version": 1}
+    assert _collect(cfg).clean
+
+
+def test_adapter_ledger_recommit_over_csk_written_is_frictionless(
+    tmp_path: Path, csk_home: Path
+) -> None:
+    """A forced re-commit over a csk-written ledger is not a refusal.
+
+    The no-op reinstall never reaches the planner, so this mutates a
+    source and refreshes: the second transaction plans over the
+    csk-written ledger and must adopt it, leaving the ledger valid
+    and the installation current.
+    """
+
+    project, cfg, _members = _basic_fixture(tmp_path, csk_home)
+    _install_ok(cfg)
+    ledger = project / ".codex" / "skills" / ".csk-managed.json"
+    assert ledger.is_file()
+
+    script = project / "agents" / "skills" / "review" / "scripts" / "tool.sh"
+    script.write_text("#!/bin/sh\necho MUTATED\n", encoding="utf-8")
+    refreshed = _install_ok(cfg, fetch=True)
+
+    assert any("lock replaced" in message for message in refreshed.messages)
+    data = json.loads(ledger.read_text(encoding="utf-8"))
+    assert data == {"entries": ["review"], "schema_version": 1}
+    assert _collect(cfg).clean
+    _assert_no_journal(csk_home)
 
 
 @pytest.mark.parametrize(

@@ -1,0 +1,17 @@
+project_alias: demo
+checkout_alias: demo
+path: {{GOLDEN_ROOT}}/project
+skillfile: {{GOLDEN_ROOT}}/project/Skillfile.json
+branch: main
+task_id: 
+path_hash: {{PATH_HASH}}
+install_paths:
+  skills: {{GOLDEN_ROOT}}/project/.agents/skills
+  bin: {{GOLDEN_ROOT}}/project/.agents/bin
+  claude_code: {{GOLDEN_ROOT}}/project/.claude/skills
+  codex_cli: {{GOLDEN_ROOT}}/project/.codex/skills
+  cursor: {{GOLDEN_ROOT}}/project/.cursor/rules
+  gemini: {{GOLDEN_ROOT}}/project/.gemini/skills
+  opencode: {{GOLDEN_ROOT}}/project/.agents/skills (native discovery)
+  windsurf: {{GOLDEN_ROOT}}/project/.agents/skills (native discovery)
+agents: 

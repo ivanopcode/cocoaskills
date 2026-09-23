@@ -1,0 +1,157 @@
+{
+  "entries": {
+    "csk.build_repository_pipeline:run_pipeline": [
+      "external-build"
+    ],
+    "csk.builds.currentness:compare_external_build_evidence": [
+      "external-build"
+    ],
+    "csk.builds.metadata:parse_receipt_v3": [
+      "external-build",
+      "local-build"
+    ],
+    "csk.builds.metadata:read_receipt_v3": [
+      "external-build",
+      "local-build"
+    ],
+    "csk.builds.metadata:source_aware_cache_key": [
+      "external-build",
+      "local-build"
+    ],
+    "csk.dev_substitutions:check_source_substitution_admission": [
+      "substitution"
+    ],
+    "csk.install_marker:check_local_registry_requirement": [
+      "external-build",
+      "local",
+      "local-build",
+      "substitution"
+    ],
+    "csk.install_marker:compare_marker_plan": [
+      "external-build",
+      "local",
+      "local-build"
+    ],
+    "csk.install_marker:evaluate_marker_status": [
+      "external-build",
+      "local",
+      "local-build"
+    ],
+    "csk.install_marker:evaluate_schema2_status": [
+      "external-build",
+      "local",
+      "local-build"
+    ],
+    "csk.install_marker:read_install_marker": [
+      "external-build",
+      "local",
+      "local-build",
+      "substitution"
+    ],
+    "csk.installer:install": [
+      "external-build",
+      "local",
+      "local-build",
+      "substitution"
+    ],
+    "csk.manifest:parse_manifest": [
+      "external-build",
+      "local",
+      "local-build",
+      "plan",
+      "substitution"
+    ],
+    "csk.sources.boundaries:freeze_boundaries": [
+      "external-build",
+      "local",
+      "local-build",
+      "substitution"
+    ],
+    "csk.sources.boundaries:recheck_publication_destination": [
+      "external-build",
+      "local",
+      "local-build",
+      "substitution"
+    ],
+    "csk.sources.lock:read_lock": [
+      "external-build",
+      "local",
+      "local-build"
+    ],
+    "csk.sources.repository_policy:load_policy": [
+      "external-build",
+      "local",
+      "plan"
+    ],
+    "csk.sources.repository_policy:parse_policy": [
+      "plan"
+    ],
+    "csk.sources.repository_policy:select_endpoints": [
+      "plan"
+    ],
+    "csk.sources.selection:expand_collection": [
+      "local",
+      "substitution"
+    ],
+    "csk.sources.selection:expand_selectors": [
+      "external-build",
+      "local",
+      "local-build",
+      "substitution"
+    ],
+    "csk.sources.selection:managed_output_boundary": [
+      "external-build",
+      "local",
+      "local-build",
+      "substitution"
+    ],
+    "csk.sources.selection:resolve_individual": [
+      "external-build",
+      "local",
+      "local-build"
+    ],
+    "csk.sources.snapshot:capture_package_snapshot": [
+      "external-build",
+      "local",
+      "local-build",
+      "substitution"
+    ],
+    "csk.sources.snapshot:revalidate_capture": [
+      "external-build",
+      "local",
+      "local-build",
+      "substitution"
+    ],
+    "csk.sources.snapshot:verify_frozen_copy": [
+      "external-build",
+      "local",
+      "local-build",
+      "substitution"
+    ],
+    "csk.sources.source_audit:record_source_audit": [
+      "local-build"
+    ],
+    "csk.sources.source_audit:validate_stored_report": [
+      "local-build"
+    ],
+    "csk.sources.transport:acquire_plan": [
+      "external-build"
+    ],
+    "csk.sources.transport:plan_attempts": [
+      "external-build",
+      "plan"
+    ],
+    "csk.status:collect_status": [
+      "external-build",
+      "local",
+      "local-build"
+    ]
+  },
+  "scenarios": [
+    "external-build",
+    "local",
+    "local-build",
+    "plan",
+    "substitution"
+  ]
+}

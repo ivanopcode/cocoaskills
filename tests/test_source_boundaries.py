@@ -1105,6 +1105,33 @@ def test_allowlisted_input_destination_colliding_with_unmanaged_adapter_file_ref
         )
 
 
+def test_adapter_ledger_refusal_names_path_and_shape(
+    project_tree: tuple[Path, Path],
+) -> None:
+    """The ledger refusal names the absolute path and the shape (BUG-260918-wvfoqa).
+
+    Pinned at the planner seam shared by both lanes: the schema-2
+    boundary redacts absolute paths to ``<path>``, so the verbatim
+    path is asserted here rather than end to end.
+    """
+
+    project, home = project_tree
+    _root_package(project)
+    ledger = project / ".claude" / "skills" / ".csk-managed.json"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("MY PRECIOUS USER JSON\n", encoding="utf-8")
+    canonical = project / "agents" / "skills"
+    with pytest.raises(adapters.AdapterError) as caught:
+        adapters.plan_project_adapter_targets(
+            project,
+            ["claude_code"],
+            [adapters.AdapterGroup(canonical_root=canonical, skill_names=("review",))],
+        )
+    assert str(ledger) in str(caught.value)
+    assert "(not JSON)" in str(caught.value)
+    assert ledger.read_text(encoding="utf-8") == "MY PRECIOUS USER JSON\n"
+
+
 @pytest.mark.parametrize("platform_name", [None, "windows"], ids=["ambient", "windows"])
 def test_allowlisted_input_destination_colliding_with_unmanaged_bin_refuses(
     project_tree: tuple[Path, Path], tmp_path: Path, platform_name: str | None

@@ -16,7 +16,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from . import (
     adapters,
@@ -63,6 +63,8 @@ from .builds import source as build_source
 from .builds import toolchain as build_toolchain
 from .config import GlobalConfig, ProjectConfig, skillfile_sources_enabled
 from .skillspec import CommandSpec
+from .sources import diagnostics as source_diagnostics
+from .sources import errors as source_errors
 from .sources import modes as source_modes
 from .sources import publish as source_publish
 from .sources import repository_policy
@@ -523,19 +525,38 @@ def _install_schema2_once(
                 interactive=options.interactive and not options.dry_run,
             )
         result.messages.extend(outcome.messages)
+        result.messages.append(source_errors.DRAFT_SKILLFILE_SOURCES_LABEL)
         return result
     except build_planner.BuildPlanningError as exc:
         if exc.code == "concurrent_state_change":
             raise
         result.status = "failed"
-        result.errors.append(failure_text(exc))
+        result.errors.append(_schema2_failure_text(exc))
         return result
     except locking.LockError:
         raise
     except Exception as exc:
         result.status = "failed"
-        result.errors.append(failure_text(exc))
+        result.errors.append(_schema2_failure_text(exc))
         return result
+
+
+def _schema2_failure_text(exc: BaseException) -> str:
+    """Render a schema-2 install failure, sanitized with one remediation.
+
+    Stable draft-sources diagnostics render through the shared
+    renderer; anything else keeps the existing boundary rendering.
+    Only the schema-2 lane calls this; the v1 lane is untouched.
+    """
+
+    rendered = source_diagnostics.format_exception(exc)
+    if rendered is not None:
+        return rendered
+    if isinstance(exc, source_transport.TransportError):
+        rendered = source_diagnostics.format_transport_exception(exc)
+        if rendered is not None:
+            return rendered
+    return failure_text(exc)
 
 
 def _generation_after_gate_writes(
@@ -577,9 +598,17 @@ def _install_project_once(
 ) -> ProjectResult:
     result = ProjectResult(alias=project.alias, path=project.path, status="ok")
     try:
-        project_manifest = manifest.load_manifest(
-            project.path, allow_schema_2=skillfile_sources_enabled(config)
-        )
+        try:
+            project_manifest = manifest.load_manifest(
+                project.path, allow_schema_2=skillfile_sources_enabled(config)
+            )
+        except source_errors.SourceError as exc:
+            # Only the schema-2 parser raises SourceError, so this is a
+            # draft diagnostic by construction; v1 loads raise
+            # ManifestError and keep the boundary rendering below.
+            result.status = "failed"
+            result.errors.append(_schema2_failure_text(exc))
+            return result
         if project_manifest is None:
             result.status = "skipped"
             result.messages.append(f"{project.alias}: Skillfile.json not found; skipped")
@@ -1811,6 +1840,29 @@ def _resolve_build_https_credentials(
     return selection
 
 
+#: Refusal text when external builds are attempted on an unqualified platform.
+EXTERNAL_BUILDS_UNSUPPORTED_MESSAGE: Final = (
+    "go-repository-v1 is supported only on macOS and Windows; "
+    "Linux qualification is deferred"
+)
+
+
+def supports_external_builds() -> bool:
+    """Return whether this platform publishes go-repository-v1 builds.
+
+    This predicate is the product's own admission rule for external
+    builds, and the only place that names the qualified platforms:
+    ``_publish_external_builds`` refuses through it, and the
+    draft-sources observed-membership gate asks it (never a retyped
+    platform check) which scenario shape to certify. Behaviour and
+    predicate are pinned together by
+    ``test_draft_sources_external_build_support_agrees_with_product``:
+    forcing the predicate either way must move the product the same
+    way, so the two cannot drift apart silently.
+    """
+    return sys.platform in {"darwin", "win32"}
+
+
 def _publish_external_builds(
     config: GlobalConfig,
     *,
@@ -1842,11 +1894,8 @@ def _publish_external_builds(
     ]
     if not selected:
         return {}, []
-    if sys.platform not in {"darwin", "win32"}:
-        raise InstallError(
-            "go-repository-v1 is supported only on macOS and Windows; "
-            "Linux qualification is deferred"
-        )
+    if not supports_external_builds():
+        raise InstallError(EXTERNAL_BUILDS_UNSUPPORTED_MESSAGE)
 
     def is_network_build(item: tuple[closure.ClosureNode, str]) -> bool:
         node, name = item

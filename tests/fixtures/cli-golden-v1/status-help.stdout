@@ -1,0 +1,23 @@
+usage: csk status [-h] [--all] [--check] [--attest] [--json] [target]
+
+positional arguments:
+  target      project alias, '.', or project path
+
+options:
+  -h, --help  show this help message and exit
+  --all       show all registered projects
+  --check     exit non-zero unless every skill is up-to-date
+  --attest    re-check installed skills against trusted audit registries
+  --json      print machine-readable JSON instead of the table
+
+Labels:
+  up-to-date, missing, update-available, content-drift, error
+
+Files read:
+  ~/.cocoaskills/config.json, Skillfile.json, .agents/skills/*/.csk-install.json
+
+Examples:
+  csk status
+  csk status --all
+  csk status demo-app-ios
+  csk status .

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -422,27 +423,98 @@ def _remove_path(path: Path) -> None:
 
 
 def _read_managed(adapter_root: Path) -> set[str]:
+    """Return the ledger's managed entries, refusing bytes csk did not write.
+
+    Adoption rule (explicit, shared by the schema-1 and schema-2
+    lanes): an absent ledger path is created; a live ledger is adopted
+    only when its full bytes strictly validate as the document csk
+    writes -- a protocol-JSON object with exactly the keys
+    ``schema_version`` and ``entries``, an integer ``schema_version``
+    equal to the value csk writes, and ``entries`` a duplicate-free
+    list of valid identifiers. Every other live shape -- a link, a
+    non-regular file, unreadable bytes, unparseable bytes, or a
+    document failing any of those checks -- refuses with the path and
+    the observed shape instead of being overwritten. A failed or
+    partial read is never treated as absence.
+
+    Residual bound: a foreign file whose bytes happen to form a
+    strictly valid ledger is indistinguishable from a csk-written one
+    by any content rule and is adopted; refusing it would refuse
+    genuine reinstalls. Anything less exact than the full document --
+    "parses as JSON", "has an entries key" -- never counts as
+    recognition.
+    """
+
     path = adapter_root / MANAGED_FILE
-    if not path.exists():
-        return set()
     try:
-        data = protocol_json.loads(path.read_bytes())
-    except (OSError, protocol_json.ProtocolJSONError):
+        info = path.lstat()
+    except FileNotFoundError:
         return set()
-    if (
-        not isinstance(data, dict)
-        or set(data) != {"schema_version", "entries"}
-        or data.get("schema_version") != SCHEMA_VERSION
-    ):
-        return set()
+    except OSError as exc:
+        raise AdapterError(
+            f"Adapter ledger {path} cannot be inspected: {exc}"
+        ) from exc
+    if stat.S_ISLNK(info.st_mode):
+        raise AdapterError(
+            f"Adapter ledger {path} is a link; "
+            "newly introduced links are never followed"
+        )
+    if not stat.S_ISREG(info.st_mode):
+        raise AdapterError(
+            f"Adapter ledger {path} is not a regular file and is never overwritten"
+        )
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise AdapterError(
+            f"Adapter ledger {path} cannot be inspected: {exc}"
+        ) from exc
+    entries = _parse_ledger_entries(raw)
+    if entries is None:
+        raise AdapterError(
+            f"Adapter ledger {path} is not a csk ledger "
+            f"({_foreign_ledger_shape(raw)}) and is never overwritten"
+        )
+    return entries
+
+
+def _parse_ledger_entries(raw: bytes) -> set[str] | None:
+    """Strictly validate ledger bytes; None when csk did not write them."""
+
+    try:
+        data = protocol_json.loads(raw)
+    except protocol_json.ProtocolJSONError:
+        return None
+    if not isinstance(data, dict) or set(data) != {"schema_version", "entries"}:
+        return None
+    version = data.get("schema_version")
+    if type(version) is not int or version != SCHEMA_VERSION:
+        return None
     entries = data["entries"]
     if (
         not isinstance(entries, list)
         or any(not isinstance(entry, str) or not is_valid_identifier(entry) for entry in entries)
         or len(entries) != len(set(entries))
     ):
-        return set()
+        return None
     return set(entries)
+
+
+def _foreign_ledger_shape(raw: bytes) -> str:
+    """Classify unrecognised ledger bytes for the refusal diagnostic."""
+
+    try:
+        data = protocol_json.loads(raw)
+    except protocol_json.ProtocolJSONError:
+        return "not JSON"
+    if not isinstance(data, dict) or set(data) != {"schema_version", "entries"}:
+        return "unexpected document shape"
+    version = data.get("schema_version")
+    if type(version) is not int or version != SCHEMA_VERSION:
+        if type(version) is int:
+            return f"unsupported schema_version {version}"
+        return f"unsupported schema_version of type {type(version).__name__}"
+    return "invalid entries"
 
 
 def _write_managed(adapter_root: Path, entries: set[str]) -> None:

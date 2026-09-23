@@ -1,0 +1,4 @@
+csk init: WARNING - target is not inside a git repository
+  Skillfile.json and .gitignore have been written.
+  The .gitignore block has no effect until this directory becomes a git repository.
+  Run 'git init' here if you intend to track it.

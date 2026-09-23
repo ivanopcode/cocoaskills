@@ -1,0 +1,61 @@
+# CocoaSkill shell hook
+
+function Get-CskGlobalEnvFile {
+  $cfg = if ($env:CSK_CONFIG) { $env:CSK_CONFIG } else { Join-Path $HOME ".cocoaskills/config.json" }
+  $homeDir = Split-Path -Parent $cfg
+  $candidate = Join-Path $homeDir "global/env.ps1"
+  if (Test-Path $candidate) { return $candidate }
+  return $null
+}
+
+function Invoke-CskGlobalEnv {
+  $globalEnv = Get-CskGlobalEnvFile
+  if ($globalEnv -and $env:CSK_ACTIVE_GLOBAL_ENV -ne $globalEnv) {
+    . $globalEnv
+    $env:CSK_ACTIVE_GLOBAL_ENV = $globalEnv
+  }
+}
+
+function Invoke-CskAutoEnv {
+  Invoke-CskGlobalEnv
+  if ($env:CSK_AUTO_ENV -eq "0") {
+    if ($env:CSK_ACTIVE_ENV) {
+      $env:PATH = $env:CSK_OLD_PATH
+      Remove-Item Env:\CSK_ACTIVE_ENV -ErrorAction SilentlyContinue
+      Remove-Item Env:\CSK_OLD_PATH -ErrorAction SilentlyContinue
+    }
+    return
+  }
+  $dir = Get-Location
+  $envFile = $null
+  while ($dir) {
+    $candidate = Join-Path $dir ".agents/env.ps1"
+    if (Test-Path $candidate) { $envFile = $candidate; break }
+    $parent = Split-Path -Parent $dir
+    if ($parent -eq $dir) { break }
+    $dir = $parent
+  }
+  if ($env:CSK_ACTIVE_ENV -and $env:CSK_ACTIVE_ENV -ne $envFile) {
+    $env:PATH = $env:CSK_OLD_PATH
+    Remove-Item Env:\CSK_ACTIVE_ENV -ErrorAction SilentlyContinue
+    Remove-Item Env:\CSK_OLD_PATH -ErrorAction SilentlyContinue
+  }
+  if ($envFile -and $env:CSK_ACTIVE_ENV -ne $envFile) {
+    $env:CSK_OLD_PATH = $env:PATH
+    . $envFile
+    $env:CSK_ACTIVE_ENV = $envFile
+  }
+}
+if (-not $global:CskPromptWrapped) {
+  $global:CskOriginalPrompt = (Get-Item Function:prompt -ErrorAction SilentlyContinue).ScriptBlock
+  function global:prompt {
+    Invoke-CskAutoEnv
+    if ($global:CskOriginalPrompt) {
+      return & $global:CskOriginalPrompt
+    }
+    return "PS $($executionContext.SessionState.Path.CurrentLocation)> "
+  }
+  $global:CskPromptWrapped = $true
+}
+Invoke-CskAutoEnv
+

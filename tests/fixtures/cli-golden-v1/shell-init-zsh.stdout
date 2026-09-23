@@ -1,0 +1,95 @@
+# CocoaSkill shell hook
+
+_csk_global_env_file() {
+  local cfg="${CSK_CONFIG:-$HOME/.cocoaskills/config.json}"
+  local home_dir
+  case "$cfg" in
+    [A-Za-z]:\\*|[A-Za-z]:/*) cfg="${cfg//\\//}" ;;
+  esac
+  home_dir="${cfg%/*}"
+  if [ "$home_dir" = "$cfg" ]; then
+    home_dir="."
+  elif [ -z "$home_dir" ]; then
+    home_dir="/"
+  fi
+  if [ -f "$home_dir/global/env.sh" ]; then
+    printf '%s/global/env.sh\n' "$home_dir"
+  fi
+}
+
+_csk_source_global_env() {
+  local global_env
+  global_env="$(_csk_global_env_file 2>/dev/null || true)"
+  if [ -n "$global_env" ] && [ "$CSK_ACTIVE_GLOBAL_ENV" != "$global_env" ]; then
+    . "$global_env"
+    CSK_ACTIVE_GLOBAL_ENV="$global_env"
+    export CSK_ACTIVE_GLOBAL_ENV
+  fi
+}
+
+_csk_find_env() {
+  local dir="${PWD:-}"
+  case "$dir" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  while :; do
+    if [ -f "$dir/.agents/env.sh" ]; then
+      printf '%s/.agents/env.sh\n' "$dir"
+      return 0
+    fi
+    if [ "$dir" = "/" ]; then
+      break
+    fi
+    dir="${dir%/*}"
+    if [ -z "$dir" ]; then
+      dir="/"
+    fi
+  done
+  return 1
+}
+
+_csk_auto_env() {
+  local env_file
+  _csk_source_global_env
+  if [ "${CSK_AUTO_ENV:-1}" = "0" ]; then
+    if [ -n "$CSK_ACTIVE_ENV" ]; then
+      PATH="$CSK_OLD_PATH"
+      export PATH
+      unset CSK_ACTIVE_ENV
+      unset CSK_OLD_PATH
+    fi
+    return 0
+  fi
+  env_file="$(_csk_find_env 2>/dev/null || true)"
+  if [ -n "$CSK_ACTIVE_ENV" ] && [ "$CSK_ACTIVE_ENV" != "$env_file" ]; then
+    PATH="$CSK_OLD_PATH"
+    export PATH
+    unset CSK_ACTIVE_ENV
+    unset CSK_OLD_PATH
+  fi
+  if [ -n "$env_file" ] && [ "$CSK_ACTIVE_ENV" != "$env_file" ]; then
+    CSK_OLD_PATH="$PATH"
+    export CSK_OLD_PATH
+    # Mark the environment active before sourcing it. zsh runs chpwd hooks for
+    # a cd inside env.sh command substitutions, so setting this afterwards can
+    # recursively source the same file.
+    CSK_ACTIVE_ENV="$env_file"
+    export CSK_ACTIVE_ENV
+    . "$env_file"
+  fi
+}
+
+case "$SHELL" in
+  *zsh*)
+    autoload -Uz add-zsh-hook 2>/dev/null || true
+    add-zsh-hook -d chpwd _csk_auto_env 2>/dev/null || true
+    add-zsh-hook chpwd _csk_auto_env 2>/dev/null || true
+    ;;
+esac
+case ";${PROMPT_COMMAND:-};" in
+  *";_csk_auto_env;"*) ;;
+  *) PROMPT_COMMAND="_csk_auto_env${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+esac
+_csk_auto_env
+

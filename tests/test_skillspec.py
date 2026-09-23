@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -957,3 +958,132 @@ def test_schema_v6_candidate_manifest_cases(tmp_path):
                 with pytest.raises(skillspec.SkillSpecError):
                     skillspec.load_skill_spec(snapshot)
     assert case_count == 48
+
+
+# --- Required-input derivation lives in the manifest model ------------------
+
+
+def test_skillspec_path_tables_are_exact() -> None:
+    assert skillspec.SKILLSPEC_PATH_MEMBERS == (
+        "commands",
+        "runtime_roots",
+        "build_roots",
+    )
+    assert skillspec.COMMANDSPEC_PATH_MEMBERS == (
+        "unix_path",
+        "win_path",
+        "source_dir",
+        "modules",
+    )
+
+
+def test_skillspec_path_classification_covers_every_record_member() -> None:
+    """Growth test: the derivation derives from the records' own members.
+
+    A member added to SkillSpec or CommandSpec without a derivation update
+    fails here: the path tables pin record-minus-exclusions, and the
+    exclusion sets pin the members that never name a source-relative input.
+    The only members the derivation never reads are the pinned exclusions.
+    """
+
+    spec_members = {field.name for field in dataclasses.fields(skillspec.SkillSpec)}
+    assert set(skillspec.SKILLSPEC_PATH_MEMBERS) | set(
+        skillspec._SKILLSPEC_NONPATH_MEMBERS
+    ) == spec_members
+    assert set(skillspec.SKILLSPEC_PATH_MEMBERS).isdisjoint(
+        skillspec._SKILLSPEC_NONPATH_MEMBERS
+    )
+    command_members = {
+        field.name for field in dataclasses.fields(skillspec.CommandSpec)
+    }
+    assert set(skillspec.COMMANDSPEC_PATH_MEMBERS) | set(
+        skillspec._COMMANDSPEC_NONPATH_MEMBERS
+    ) == command_members
+    assert set(skillspec.COMMANDSPEC_PATH_MEMBERS).isdisjoint(
+        skillspec._COMMANDSPEC_NONPATH_MEMBERS
+    )
+
+
+def test_skillspec_growth_check_catches_new_path_field() -> None:
+    """Proof the growth test is not vacuous: an uncovered field fails it.
+
+    Simulates the manifest model gaining a field that names a path
+    (``context_roots``) without updating the derivation: the coverage
+    assertion the growth test runs fails, because the new member sits in
+    neither the path table nor the pinned exclusion set.
+    """
+
+    @dataclasses.dataclass(frozen=True)
+    class _GrownSkillSpec:
+        commands: dict[str, str] = dataclasses.field(default_factory=dict)
+        source_file: str | None = None
+        schema_version: int = 1
+        runtime_roots: tuple[str, ...] = ()
+        capabilities: str = "none"
+        dependencies: dict[str, str] = dataclasses.field(default_factory=dict)
+        requirements: dict[str, str] = dataclasses.field(default_factory=dict)
+        mcp_servers: dict[str, str] = dataclasses.field(default_factory=dict)
+        build_roots: tuple[str, ...] = ()
+        build_repositories: dict[str, str] = dataclasses.field(default_factory=dict)
+        context_roots: tuple[str, ...] = ()
+
+    grown_members = {field.name for field in dataclasses.fields(_GrownSkillSpec)}
+    uncovered = (
+        grown_members
+        - set(skillspec.SKILLSPEC_PATH_MEMBERS)
+        - set(skillspec._SKILLSPEC_NONPATH_MEMBERS)
+    )
+    assert uncovered == {"context_roots"}
+    with pytest.raises(AssertionError):
+        assert set(skillspec.SKILLSPEC_PATH_MEMBERS) | set(
+            skillspec._SKILLSPEC_NONPATH_MEMBERS
+        ) == grown_members
+
+
+def test_declared_required_inputs_collects_every_path_member() -> None:
+    spec = skillspec.SkillSpec(
+        commands={
+            "run": skillspec.CommandSpec(
+                name="run",
+                type="script",
+                unix_path="scripts/run.sh",
+                win_path="scripts/run.cmd",
+            ),
+            "tool": skillspec.CommandSpec(
+                name="tool",
+                type="build",
+                driver="go-v1",
+                source_dir="build/cmd",
+                modules=("ext/mod",),
+            ),
+            "sys": skillspec.CommandSpec(
+                name="sys", type="system", command="external-tool"
+            ),
+        },
+        source_file="agent-skill.json",
+        schema_version=8,
+        runtime_roots=("scripts",),
+        build_roots=("build",),
+    )
+    assert skillspec.declared_required_inputs(spec) == (
+        "scripts/run.sh",
+        "scripts/run.cmd",
+        "build/cmd",
+        "ext/mod",
+        "scripts",
+        "build",
+    )
+
+
+def test_declared_required_inputs_ignores_nonpath_members() -> None:
+    """System identifiers, refs and grants are not source-relative inputs."""
+
+    spec = skillspec.SkillSpec(
+        commands={
+            "sys": skillspec.CommandSpec(
+                name="sys", type="system", command="external-tool"
+            ),
+        },
+        source_file="agent-skill.json",
+    )
+    assert skillspec.declared_required_inputs(spec) == ()

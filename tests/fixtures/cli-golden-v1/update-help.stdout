@@ -1,0 +1,16 @@
+usage: csk update [-h]
+
+options:
+  -h, --help  show this help message and exit
+
+Purpose:
+  Runs git fetch --all --tags --prune for every git repo under skills_root.
+
+Side effects:
+  Mutates local skill repositories only. Projects are not modified.
+
+Exit codes:
+  0 all repos fetched, 1 one or more fetches failed, 2 config error, 3 lock contention.
+
+Example:
+  csk update
