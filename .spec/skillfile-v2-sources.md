@@ -990,11 +990,14 @@ never from the operating system's name.
   (old keys minus new keys), never a sweep over the live home, so
   cleanup works with the member directory deleted on disk and never
   touches another installation; status plans no runtime removals at
-  all and never reports a foreign entry as drift. Adapter ledger
-  live paths that are neither absent nor regular files refuse in the
-  schema-2 translation (the shared planner is untouched), and every
-  filesystem error at the live-digest seams maps to
-  `source_output_overlap` instead of escaping raw.
+  all and never reports a foreign entry as drift. The shared
+  adapters planner refuses any live adapter ledger bytes csk did not
+  write (BUG-260918-wvfoqa): a ledger is adopted only when its full
+  bytes strictly validate as the csk ledger document, otherwise the
+  install refuses naming the path and the observed shape, on the
+  schema-1 and schema-2 lanes alike; every filesystem error at the
+  live-digest seams maps to `source_output_overlap` instead of
+  escaping raw.
 - `tests/test_source_install_transactions.py` (85 tests) covers the
   end-to-end install/status cycle, a fault at every pinned stage
   boundary (selection, capture, re-enumeration, snapshot-store,
@@ -1018,9 +1021,15 @@ never from the operating system's name.
   before publication; NFC/NFD destination collisions are
   unrepresentable (ASCII-only identifier grammar); runtime removal is
   the installing project's own lock diff and unreferenced runtime
-  entries remain gc's domain; a garbage regular file at the ledger
-  path is still replaced (inherited shared-planner shape, refused
-  only when non-regular); pending-with-backup crash windows keep the
+  entries remain gc's domain; a foreign file at the ledger path
+  refuses in the shared planner on both lanes (BUG-260918-wvfoqa --
+  adopted only when its full bytes strictly validate as the csk
+  ledger document: protocol-JSON object with exactly the
+  schema_version/entries keys, integer schema_version 1, and a
+  duplicate-free identifier entry list; residual: a foreign file
+  that happens to form a strictly valid ledger is adopted, since
+  refusing it would refuse genuine reinstalls); pending-with-backup
+  crash windows keep the
   direct live check because pending hook semantics cannot recognize
   backed-up absence. The draft harness stays 251 passed / 22 skipped
   (no owned cases, no sideways movement).
@@ -1380,3 +1389,183 @@ record; the record path refuses it via the evidence digest).
   regenerated plus M-F1 (digest-match heal admission),
   M-F2b (cross-kind admission), MR1 (frozen lock target),
   MR3/MR3b (collapse checks) — all killed, zero survivors.
+
+## Leaf progress: TASK-260916-1lv2ky source workflow and diagnostics (uncommitted in story worktree)
+
+- One label constant (`csk.sources.errors.DRAFT_SKILLFILE_SOURCES_LABEL`)
+  printed verbatim by `--version` (opt-in), `install`/`upgrade` schema-2
+  messages, `status` text and JSON, every rendered diagnostic, the
+  draft-gated help paragraphs and all documents. The manifest opt-in
+  hint composes the same constant with identical bytes.
+- Diagnostics: `REMEDIATION_BY_CODE` in the new leaf-owned
+  `csk.sources.diagnostics` module covers the thirteen stable
+  classes; completeness derives from every `CODE_*` constant in
+  `errors` and `repository_policy` (13 table keys + 3 explicit
+  non-protocol extras), so a fourteenth class fails the test. The
+  table lives outside `errors` because the sibling selection
+  import-closure tests pin the exact module set reachable from the
+  selection entry points, and `errors` must keep zero
+  intra-package imports. `format_diagnostic` renders `code:
+  reason` / `remediation: ...` / label; `sanitize_detail` (which
+  stays in `errors`: stdlib-only) redacts URL userinfo (bare tokens
+  included) and POSIX/drive/UNC absolute paths while preserving
+  selectors, member names, relative paths and canonical identities.
+  Transport exhaustion renders attempt classifications plus the
+  involved listed URL; broker detail never echoes (F7 pinned at the
+  display).
+- Subcommand wiring reuses accepted entries only: `install`/`upgrade`
+  via `installer.install` (fetch False/True) into
+  `publish.install_schema2`; `status` via `status.collect_status`
+  into `publish.evaluate_schema2_installation`;
+  `check` = `manifest.load_manifest` (structure),
+  `config.load_source_policy` (policy, only when a schema-2 project
+  is present), `transport.plan_attempts` per network source (pure
+  planning), `publish.read_schema2_lock` + `lock.validate_lock`.
+  Rendering routes through `diagnostics.format_exception`,
+  `diagnostics.format_transport_exception` and
+  `installer._schema2_failure_text`;
+  the shared v1 lanes keep `failure_text` untouched. Launch publishes
+  no launchers for context-only installs and the shims import closure
+  holds no resolution module.
+- Deviation from epic decision 5 recorded: acceptance criterion (a)
+  requires top-level `csk check`, so the leaf adds one conditional
+  subcommand that registers only with the opt-in; without it the
+  parser, help texts and the `invalid choice` error equal the
+  release. `check` exits 0 valid / 1 invalid / 2 config-or-usage;
+  structural failures exit 1 via install/check and 2 via status (the
+  accepted leaves' split, documented in help and the operator guide).
+- Byte-identity evidence: 55-command golden matrix (stdout, stderr,
+  exit code) captured from clean `origin/main` at
+  `23a70734a38a65ad1c236a4315a0e2603b1f90b6` under PYTHONHASHSEED
+  0/1/42 and asserted after the change; schema failures precede
+  policy reads, planning, traversal and sockets (audit-hook
+  counters). Docs: new `docs/skillfile-sources.md` operator guide
+  (English), RFC 0009 in `docs/v0.16-design.md` indexed in
+  ARCHITECTURE.md, Russian updates to README, `docs/cli.md`,
+  `docs/reference.md` and one Unreleased CHANGELOG entry, each
+  stating no release qualification and no conformance claim.
+- Revision 2 (review rework, same worktree): the sanitizer redacts
+  userinfo structurally (whatever sits between `://` and the last
+  `@` of the URL token, quoted spans included) plus query-string
+  credential parameters; the corpus test proves non-vacuity per case
+  (secret present with the sanitizer off, absent with it on). The
+  second opt-in gate is gone: parse-time shape delegates to
+  `config.skillfile_sources_enabled` and fails open on load errors
+  (absent config only is v1), so dispatch reports the real config
+  error. Status ERROR rows route through `format_diagnostic`;
+  member details stay sanitized prose. `check` catches `OSError`
+  from the Skillfile read (exit 1, subject named). Network
+  acquisition is stated as unimplemented in the guide, the RFC
+  bounds, README, `docs/cli.md` and `docs/reference.md`, and the
+  `check` summary marks network sources planned, not acquired.
+- Revision 3 (review rework, same worktree): the raw-declaration echo
+  is gone at the source. `skillfile_v2._git_error` takes the alias,
+  not the value, and refuses as `Source 'alias' field 'git'
+  <shape>`; the empty-path site drops its echo too. Transport
+  exhaustion renders the first endpoint from the production endpoint
+  parser (scheme, host, port, path; userinfo dropped by
+  construction, unparseable URLs yield no subject). The sanitizer
+  stays as a second line of defence with its contract pinned
+  (including the two revision-2 surviving mutants, now killed). The
+  opt-in decision is one three-state function in `cli.py`
+  (`_draft_sources_decision`: enabled/disabled/unknown); display
+  surfaces render v1 under unknown while `check` stays parseable so
+  dispatch names the unloadable config. Top `--help` under unknown
+  lists the neutral `check` row (stated bound); `check --help`
+  renders for the explicitly named verb. The revision-2
+  `test_cli_malformed_config_keeps_draft_shape` is deleted (it
+  asserted the class in the wrong direction); the secret class is a
+  parametrised test over the full hostile alphabet through all five
+  diagnostic surfaces plus a sanitizer-disabled structural control.
+- Revision 4 (orchestrator intervention: the half-state is removed,
+  same worktree): under unknown the parser is the released v1 parser.
+  `_draft_check_available` is deleted; `check` registers only when the
+  draft is enabled, so no `check` row, label or draft paragraph can
+  render from an unloadable config on any surface, and `check`
+  attempts refuse with the v1 usage error. Where a command runs,
+  dispatch still refuses naming the config. The revision-3 neutral-row
+  test is deleted (it pinned the withdrawn concession); unknown-state
+  coverage is one parametrised test over (surface x config state) with
+  the surfaces walked from the live enabled parser (46 surfaces) over
+  the twelve unloadable states, each cell byte-compared against the
+  absent-config rendering, plus a dispatch-side refusal test. The
+  reviewer's 18-state probe re-run against origin/main `2675276`
+  shows 166 of 180 cells byte-identical with the 14 diffs exactly the
+  intended draft surfaces in the two opted-in states.
+- Revision 5 (review rework, same worktree): the parse-time decision
+  read is silent and singular. `config.load_config` takes
+  `quiet=True` for the decision (`_apply_system_config` keeps the
+  merge, drops the locked-key warning), so the warning stays exactly
+  where v1 emits it, once at dispatch, never on help, version or
+  `config show`. `main` evaluates the decision once and passes it to
+  `build_parser(draft=...)`, so `--version` loads once. Coverage is a
+  class over loadable non-opted-in states (present, opt-in false,
+  system config with and without conflict for every member of
+  `LOCKABLE_KEYS` by derivation, symlinked config): display surfaces
+  byte-compared against the absent-config rendering, the decision
+  asserted byte-silent in every state, runnable verbs asserted to
+  warn exactly once. A 51-surface subprocess probe against
+  origin/main `2675276` under the locked-conflict state is 51/51
+  byte-identical (exit codes included); the same probe against a
+  loud-decision copy is 0/51. Stated bounds: a FIFO config blocks at
+  parse time (AC cannot classify it); the Windows
+  directory/file-as-parent refusal lane differs from POSIX
+  (`PermissionError` / exit 2) and is pinned per platform.
+
+- Corpus closure (TASK-260916-2je9f6, same worktree): the semantic
+  dispatch wraps every driver run in a production-entry observer (32
+  tabled entries plus the four snapshot-store consumer openers); a
+  driver that returns without touching any entry fails as hollow,
+  naming its case and owner. A deliberately hollow driver is caught
+  under all 94 case ids, and the junit artifact carries
+  passed/skipped/failed/total per category (schema, snapshot,
+  semantic, harness) via a `pytest_runtest_logreport` hook scoped to
+  the conformance module. Outcome recording by fixture try/except
+  around yield is wrong (outcomes never propagate through the yield;
+  proven by a forced-skip probe) and must not come back. The recorded
+  coverage statement lives in `docs/skillfile-sources.md`
+  ("Conformance coverage"); windows-latest is a declared unsupported
+  lane for the draft suite.
+- Corpus closure revision 2 (same task): the observer table's
+  membership is derived, not typed. Every entry must resolve to at
+  least one syntactic call site in `src/csk`
+  (`test_draft_sources_production_table_entries_have_production_callers`);
+  four entries with zero callers left the table
+  (`boundaries.check_selected_package`,
+  `selection.resolve_selector_directory`,
+  `source_audit.validate_source_audit`, `transport.acquire`) and ten
+  cases were re-pointed at the live implementations
+  (`selection.managed_output_boundary`,
+  `selection.resolve_individual`,
+  `source_audit.validate_stored_report`,
+  `repository_policy.load_policy`, `transport.plan_attempts` plus
+  `transport.acquire_plan`). `root-no-inputs` diverges: the live
+  predicate allows the root while the corpus expects
+  `source_output_overlap`, because no live path reads
+  `policy.root_inputs` (finding against TASK-260916-100uew; the
+  driver asserts the live class and pins the corpus side). The hook
+  records `skipped` in any phase (a setup-phase skip is the canonical
+  marker shape); the hollow family additionally catches an
+  error-constructing probe. The observer's guarantee is exactly "at
+  least one tabled in-process entry was called" with the
+  in-process/table-defined/provenance-blind bounds stated in the
+  harness docstring and the docs.
+- Corpus closure revision 3 (same task): membership is transitive
+  reachability, not one syntactic hop. Every entry must sit on a
+  call-graph path from a derived production root: the console-script
+  entry point (`pyproject.toml` `[project.scripts]`), the `__main__`
+  delegation, and the top-level package API (`__init__` `__all__`
+  resolved to its defining function); all three are parsed from
+  artifacts, never typed. Per-module `__all__` lists are excluded as
+  roots because `boundaries` exports the caller-less
+  `check_selected_package`. Nested-function calls attribute to the
+  outermost function and callback references in argument position
+  (`partial` registration) are edges; cycles terminate on a visited
+  set. The transitive check flagged a fifth dead entry in the wild:
+  `repository_policy.canonical_endpoint_identity`, whose only
+  production caller is the caller-less compat wrapper
+  `canonical_repository_identity` (finding against TASK-260916-1iyslr);
+  its one driver already touches live planning seams, so no re-point
+  was needed. A six-shape CLASS test (dead, direct test-only, one-hop
+  and two-hop forwarders, disconnected cycle, self-recursion) pins the
+  reviewer's forwarder bypass plus its family.

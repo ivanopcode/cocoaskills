@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Добавлено
+
+- Черновая поддержка источников Skillfile schema 2 (`draft skillfile-sources-v1 (opt-in)`): команды `csk install`, `csk upgrade` и `csk status` работают с локом `Skillfile.lock.json`, новая команда `csk check` проверяет schema-2 Skillfile без установки, сбои выводятся как тринадцать стабильных классов с причиной и строкой `remediation:` без секретов. Включается флагом `experimental.skillfile_sources` или переменной `CSK_EXPERIMENTAL_SKILLFILE_SOURCES=1`; без включения поведение релизной версии 1 сохраняется побитово. Поддержка не проходит релизную квалификацию, соответствие спецификации не заявляется.
+
 ## [0.15.0] - 2026-08-25
 
 ### Добавлено

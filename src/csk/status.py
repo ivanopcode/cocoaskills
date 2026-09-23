@@ -29,6 +29,8 @@ from .builds import planner as build_planner
 from .builds import source as build_source
 from .builds import toolchain as build_toolchain
 from .config import GlobalConfig, ProjectConfig, skillfile_sources_enabled
+from .sources import diagnostics as source_diagnostics
+from .sources import errors as source_errors
 from .sources import publish as source_publish
 
 
@@ -54,6 +56,7 @@ class ProjectStatus:
     errors: tuple[str, ...] = ()
     capability_evidence: Mapping[str, object] | None = None
     capability_evidence_error: str | None = None
+    draft_sources: bool = False
 
     @property
     def clean(self) -> bool:
@@ -124,6 +127,22 @@ def collect_global_status(config: GlobalConfig) -> ProjectStatus:
     return _attach_capability_evidence([status])[0]
 
 
+def _schema2_status_error_row(item: str) -> str:
+    """Render one evaluated status error for the operator.
+
+    Items carrying a stable table code (the ``code: detail`` shape of
+    a source or policy diagnostic) render through the one renderer,
+    exactly like check and install, so every class reaches the
+    operator with its remediation line on every surface. Anything else
+    is sanitized prose without a remediation claim.
+    """
+
+    code, separator, reason = item.partition(": ")
+    if separator and code in source_diagnostics.REMEDIATION_BY_CODE:
+        return source_diagnostics.format_diagnostic(code, reason)
+    return source_errors.sanitize_detail(item)
+
+
 def _collect_schema2_project_status(
     config: GlobalConfig,
     project: ProjectConfig,
@@ -159,7 +178,7 @@ def _collect_schema2_project_status(
             installed_commit=verdict.marker_snapshot,
             resolved_commit=verdict.locked_snapshot,
             label=verdict.label,
-            detail=verdict.detail,
+            detail=source_errors.sanitize_detail(verdict.detail),
         )
         for verdict in evaluated.members
     ]
@@ -170,7 +189,8 @@ def _collect_schema2_project_status(
         skills,
         substitution_lines,
         (),
-        evaluated.errors,
+        tuple(_schema2_status_error_row(item) for item in evaluated.errors),
+        draft_sources=True,
     )
 
 
@@ -1209,7 +1229,7 @@ def global_status_to_payload(project: ProjectStatus) -> dict[str, Any]:
 
 
 def _project_to_payload(project: ProjectStatus) -> dict[str, Any]:
-    return {
+    payload = {
         "alias": project.alias,
         "builds": [build.to_json() for build in project.builds],
         "capability_evidence": (
@@ -1236,6 +1256,9 @@ def _project_to_payload(project: ProjectStatus) -> dict[str, Any]:
             for skill in project.skills
         ],
     }
+    if project.draft_sources:
+        payload["draft_sources"] = source_errors.DRAFT_SKILLFILE_SOURCES_LABEL
+    return payload
 
 
 def render_status(config: GlobalConfig, *, alias: str | None = None) -> str:
@@ -1304,6 +1327,8 @@ def _render_project_status(
         )
     for error in project.errors:
         lines.append(f"  ERROR {error}")
+    if project.draft_sources:
+        lines.append(f"  {source_errors.DRAFT_SKILLFILE_SOURCES_LABEL}")
     return "\n".join(lines)
 
 

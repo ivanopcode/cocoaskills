@@ -29,6 +29,7 @@ from __future__ import annotations
 import errno
 import os
 import stat
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
@@ -65,6 +66,7 @@ __all__ = [
     "managed_output_table",
     "prune_discovery_candidates",
     "recheck_publication_destination",
+    "root_inputs_gate",
     "validate_root_inputs",
 ]
 
@@ -1520,6 +1522,30 @@ def _require_covered_inputs(
             raise SourceError(
                 CODE_MEMBER_MISSING, f"{required_context} is not covered by the allowlist"
             )
+
+
+def root_inputs_gate(
+    policy: RepositoryPolicy, home: Path
+) -> Callable[[Path, str, tuple[str, ...]], tuple[str, ...]]:
+    """Adapt :func:`validate_root_inputs` for the live selection path.
+
+    The selection modules cannot import this module (their import closure
+    is pinned), so live callers receive validation as a callable instead
+    of a second implementation. The returned gate freezes a fresh record
+    for the given source root, validates the alias allowlist with the
+    required inputs, and returns the admitted entry paths the caller
+    restricts its read to. Every refusal carries the validator's own
+    code unchanged.
+    """
+
+    def gate(
+        source_root: Path, alias: str, required_inputs: tuple[str, ...] = ()
+    ) -> tuple[str, ...]:
+        record = freeze_boundaries(source_root, home)
+        admitted = validate_root_inputs(record, source_root, alias, policy, required_inputs)
+        return tuple(item.path for item in admitted)
+
+    return gate
 
 
 def recheck_publication_destination(

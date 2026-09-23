@@ -1,0 +1,4 @@
+Config: {{GOLDEN_ROOT}}/home/config.json
+Skills root: {{GOLDEN_ROOT}}/skills
+Project demo: {{GOLDEN_ROOT}}/project
+  demo-skill (tag v1.0.0)

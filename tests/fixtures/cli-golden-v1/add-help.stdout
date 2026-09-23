@@ -1,0 +1,16 @@
+usage: csk add [-h] [--git GIT] [--source SOURCE]
+               (--tag TAG | --branch BRANCH | --revision REVISION)
+               [--project PROJECT]
+               name
+
+positional arguments:
+  name
+
+options:
+  -h, --help           show this help message and exit
+  --git GIT            git clone URL
+  --source SOURCE      local source directory under skills_root
+  --tag TAG
+  --branch BRANCH
+  --revision REVISION
+  --project PROJECT    project alias, '.', or path (default: current project)

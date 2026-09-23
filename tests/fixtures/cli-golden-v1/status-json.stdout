@@ -1,0 +1,24 @@
+[
+  {
+    "alias": "demo",
+    "builds": [],
+    "capability_evidence": null,
+    "capability_evidence_error": null,
+    "clean": false,
+    "errors": [],
+    "path": "{{GOLDEN_ROOT}}/project",
+    "skillfile_present": true,
+    "skills": [
+      {
+        "detail": null,
+        "installed_commit": null,
+        "label": "missing",
+        "name": "demo-skill",
+        "ref": "v1.0.0",
+        "ref_kind": "tag",
+        "resolved_commit": "b94019be1effc2d56f57387f3b6522211a9a5780"
+      }
+    ],
+    "substitutions": []
+  }
+]

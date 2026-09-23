@@ -1,0 +1,11 @@
+usage: csk hybrid [-h] {add,remove,list,status} ...
+
+positional arguments:
+  {add,remove,list,status}
+    add                 add or replace a hybrid skill declaration
+    remove              remove a hybrid skill declaration
+    list                list hybrid skill declarations
+    status              show hybrid declarations and installed store state
+
+options:
+  -h, --help            show this help message and exit

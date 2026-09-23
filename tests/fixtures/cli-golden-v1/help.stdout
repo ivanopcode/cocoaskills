@@ -1,0 +1,56 @@
+usage: csk [-h] [--version]
+           {bootstrap,init,skill,install,update,upgrade,global,audit,status,gc,add,remove,hybrid,list,project,config,shell-init}
+           ...
+
+CocoaSkill local skill manager
+
+positional arguments:
+  {bootstrap,init,skill,install,update,upgrade,global,audit,status,gc,add,remove,hybrid,list,project,config,shell-init}
+    bootstrap           Create global config (interactive, or scripted with
+                        flags).
+    init                Create project Skillfile.json and CocoaSkill gitignore
+                        block.
+    skill               Inspect and validate skill repositories.
+    install             Apply Skillfile.json using local refs. Missing git URL
+                        sources are cloned.
+    update              Fetch all local skill repositories under skills_root.
+    upgrade             Fetch the selected project dependency closure, then
+                        install.
+    global              Manage user-wide global skills.
+    audit               Run deterministic static security audit for declared
+                        skills.
+    status              Show manifest vs installed state.
+    gc                  Remove unreferenced runtime, snapshot, and protected
+                        build-cache entries plus dead consumer registry
+                        entries.
+    add                 Add or replace a skill declaration in the project
+                        Skillfile.
+    remove              Remove a skill declaration from the project Skillfile.
+    hybrid              Manage machine-level hybrid skills activated for
+                        selected projects.
+    list                List configured projects and declared skills.
+    project             Manage configured projects.
+    config              Inspect csk config.
+    shell-init          Print or install shell hook code for PATH activation.
+
+options:
+  -h, --help            show this help message and exit
+  --version             print csk version and exit
+
+Local documentation index:
+  csk bootstrap          create ~/.cocoaskills/config.json
+  csk init [path]        create project Skillfile.json and gitignore block
+  csk install [target]   apply Skillfile.json; clone missing URL sources
+  csk update             fetch local skill repositories
+  csk upgrade [target]   fetch the target dependency closure, then install
+  csk status [target]    show manifest vs installed state
+  csk global <command>   manage user-wide global skills
+  csk audit [target]     run deterministic security audit
+  csk skill check <dir>  validate one skill directory
+  csk list               list configured projects and skills
+  csk project add        add a configured project
+  csk project resolve    show current checkout resolution
+  csk config show        show config path and content
+  csk shell-init         print or install shell hook code
+
+Run 'csk <command> --help' for command-specific documentation.

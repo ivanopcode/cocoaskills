@@ -541,8 +541,19 @@ def resolve_schema2_members(
         source_roots, git_resolutions = resolve_schema2_source_roots(
             project_path, manifest_value, mode=mode
         )
+    # Root-input enforcement is a local-path rule: a materialized Git root
+    # is a complete tree and needs no admitted subset, so only path aliases
+    # are in scope (path roots already refused above; this preserves the
+    # Git-root lane through expansion).
+    path_aliases = frozenset(
+        alias
+        for alias, acquisition in manifest_value.sources.items()
+        if isinstance(acquisition, skillfile_v2.PathSource)
+    )
     try:
-        selected = expand_selectors(selectors, source_roots)
+        selected = expand_selectors(
+            selectors, source_roots, root_inputs_aliases=path_aliases
+        )
     except SourceError:
         raise
     except _FS_ERRORS as exc:
@@ -1704,37 +1715,6 @@ def runtime_hex_pairs(pairs: set[tuple[str, str]]) -> set[tuple[str, str]]:
     }
 
 
-def _refuse_unless_absent_or_regular(path: Path, *, subject: str) -> None:
-    """Refuse an adapter ledger live path that is not absent or regular.
-
-    The shared adapters planner emits the ledger unconditionally and
-    its reader maps every foreign shape to "no ledger", so without
-    this check a directory (or link) at the ledger path would be moved
-    aside and replaced, deleting user bytes. The schema-2 translation
-    refuses those shapes here; the shared planner and the legacy lane
-    are deliberately untouched.
-    """
-
-    try:
-        info = path.lstat()
-    except FileNotFoundError:
-        return
-    except _FS_ERRORS as exc:
-        raise SourceError(
-            CODE_OUTPUT_OVERLAP, f"{subject} cannot be inspected: {exc}"
-        ) from exc
-    if stat.S_ISLNK(info.st_mode):
-        raise SourceError(
-            CODE_OUTPUT_OVERLAP,
-            f"{subject} is a link; newly introduced links are never followed",
-        )
-    if not stat.S_ISREG(info.st_mode):
-        raise SourceError(
-            CODE_OUTPUT_OVERLAP,
-            f"{subject} is not a regular file and is never overwritten",
-        )
-
-
 def plan_schema2_targets(
     *,
     mode: modes.ResolvingSources | modes.FrozenSources,
@@ -2032,12 +2012,10 @@ def plan_schema2_targets(
         )
     except adapters.AdapterError as exc:
         raise SourceError(CODE_OUTPUT_OVERLAP, str(exc)) from exc
+    # Ledger adoption is decided inside the shared planner: it refuses
+    # any live ledger bytes csk did not write before a target is
+    # emitted, identically for the schema-1 and schema-2 lanes.
     for target in adapter_targets:
-        if target.desired_kind == "ledger":
-            _refuse_unless_absent_or_regular(
-                target.live_path,
-                subject=f"Adapter ledger {target.live_path}",
-            )
         specs.append(
             TargetSpec(
                 target_class=target.target_class,

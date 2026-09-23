@@ -1,0 +1,11 @@
+Config path: {{GOLDEN_ROOT}}/home/config.json
+{
+  "schema_version": 1,
+  "skills_root": "{{GOLDEN_ROOT}}/skills",
+  "default_agents": [],
+  "projects": {
+    "demo": {
+      "path": "{{GOLDEN_ROOT}}/project"
+    }
+  }
+}

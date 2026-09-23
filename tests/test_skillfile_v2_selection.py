@@ -21,7 +21,9 @@ import yaml
 
 from csk import skillspec
 from csk.sources import _selection_fs
+from csk.sources import boundaries
 from csk.sources import errors as source_errors
+from csk.sources import repository_policy
 from csk.sources import selection
 from csk.sources.selection import (
     SelectedSkill,
@@ -98,9 +100,19 @@ def test_selector_dot_selects_source_root(tmp_path: Path) -> None:
     _write_skill(tmp_path / "src", "review")
     resolved = resolve_selector_directory(tmp_path / "src", ".")
     assert resolved == (tmp_path / "src").resolve()
+    # A root package requires the operator allowlist on the live path
+    # (BUG-260922-1o40hs): without it the selection below refuses
+    # ``source_output_overlap`` instead of succeeding.
+    policy = repository_policy.RepositoryPolicy(
+        schema_version=1, repositories={}, root_inputs={"local": ("SKILL.md",)}
+    )
+    home = tmp_path / "home"
+    home.mkdir()
     individual = resolve_individual(
         tmp_path / "src",
         IndividualSelector(name="review", from_alias="local", directory="."),
+        policy=policy,
+        root_inputs_gate=boundaries.root_inputs_gate(policy, home),
     )
     assert isinstance(individual, SelectedSkill)
     assert (individual.name, individual.directory) == ("review", ".")

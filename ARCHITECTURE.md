@@ -477,6 +477,7 @@ compilation, and materialization:
 | [docs/v0.8-design.md](docs/v0.8-design.md) | RFC 0006: audit LLM backends. |
 | [docs/v0.9-design.md](docs/v0.9-design.md) | RFC 0007: skill dependencies, activation modes, dev substitutions, source allowlist. |
 | [docs/v0.11-design.md](docs/v0.11-design.md) | RFC 0008: audit registry, chain of trust, federation, enforced system config. |
+| [docs/v0.16-design.md](docs/v0.16-design.md) | RFC 0009: Skillfile schema 2 sources, draft opt-in CLI workflow and diagnostics. |
 
 ## Testing
 

@@ -1,0 +1,10 @@
+usage: csk project [-h] {add,resolve} ...
+
+positional arguments:
+  {add,resolve}
+    add          Add project to global config and create Skillfile.json if
+                 missing.
+    resolve      Resolve a project alias/path without installing.
+
+options:
+  -h, --help     show this help message and exit

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import stat
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from dataclasses import fields as dataclass_fields
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Final
 
 from . import protocol_json
 from .audit.capabilities import CapabilityManifest, CapabilityParseError, parse_capabilities
@@ -25,6 +27,28 @@ SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6, 7, 8}
 CANONICAL_MANIFEST = "agent-skill.json"
 LEGACY_MANIFEST = "csk-skill.json"
 RUNTIME_FALLBACK = "agents/runtime.json"
+# Grammar labels for the two manifest grammars: the validated schema grammar
+# (``schema_version`` plus the closed command schemata) and the unversioned
+# runtime fallback grammar (``commands`` mapping names to script paths).
+MANIFEST_GRAMMAR_SCHEMA: Final = "schema"
+MANIFEST_GRAMMAR_RUNTIME: Final = "runtime"
+# The registry carries what each spelling IS, not just its name: grammar per
+# spelling, in resolution order. The snapshot loader, the diagnostics
+# selector, and the root-input probe in sources.selection all iterate the
+# derived order below, and the loader and the gate both call
+# select_effective_manifest for the effective manifest plus its grammar, so
+# no caller reimplements precedence or grammar dispatch. A spelling absent
+# from this map (a monkeypatched growth entry, or a future version's new
+# spelling before its grammar is registered) infers its grammar from content
+# inside the one shared function, never per caller.
+MANIFEST_GRAMMAR: Final[dict[str, str]] = {
+    CANONICAL_MANIFEST: MANIFEST_GRAMMAR_SCHEMA,
+    LEGACY_MANIFEST: MANIFEST_GRAMMAR_SCHEMA,
+    RUNTIME_FALLBACK: MANIFEST_GRAMMAR_RUNTIME,
+}
+# The manifest spellings load_skill_spec resolves, in resolution order,
+# derived from the registry above.
+MANIFEST_PROBE_ORDER: Final[tuple[str, ...]] = tuple(MANIFEST_GRAMMAR)
 UPGRADE_HINT = (
     "Upgrade with: pipx upgrade cocoaskills, brew upgrade cocoaskills, "
     "or mise upgrade pipx:cocoaskills."
@@ -145,34 +169,262 @@ class SkillSpec:
     build_repositories: dict[str, BuildRepository] = field(default_factory=dict)
 
 
+# Members of SkillSpec that never name a source-relative input: the schema
+# version integer; the manifest filename metadata (the effective manifest is
+# required via the descriptor probe in selection, not via this property);
+# capabilities (host capability grants, not source inputs); dependencies,
+# requirements, MCP servers and build repositories (identifiers, URLs and
+# refs, never source-relative paths). Every other record member can name a
+# source-relative input. The growth test pins this exclusion set, so a new
+# record member is a required input by construction unless it is consciously
+# added here with a justification.
+_SKILLSPEC_NONPATH_MEMBERS: Final[frozenset[str]] = frozenset(
+    {
+        "source_file",
+        "schema_version",
+        "capabilities",
+        "dependencies",
+        "requirements",
+        "mcp_servers",
+        "build_repositories",
+    }
+)
+
+# Members of CommandSpec that never name a source-relative input: the command
+# name, type, system command identifier, hint, manifest filename metadata,
+# build driver, repository/target identifiers, and the schema-8 execution
+# policy pair. Every other record member can name a source-relative input.
+_COMMANDSPEC_NONPATH_MEMBERS: Final[frozenset[str]] = frozenset(
+    {
+        "name",
+        "type",
+        "command",
+        "hint",
+        "source",
+        "driver",
+        "repository",
+        "target",
+        "execution_policy",
+        "interpreter",
+    }
+)
+
+# The one member tables driving required-input derivation, in record order:
+# every SkillSpec/CommandSpec member except the exclusions above. The tables
+# derive from the records' own fields, so a new record member extends the
+# derivation by construction, and the growth test fails unless the member is
+# either handled below or consciously excluded above.
+SKILLSPEC_PATH_MEMBERS: Final[tuple[str, ...]] = tuple(
+    member.name
+    for member in dataclass_fields(SkillSpec)
+    if member.name not in _SKILLSPEC_NONPATH_MEMBERS
+)
+COMMANDSPEC_PATH_MEMBERS: Final[tuple[str, ...]] = tuple(
+    member.name
+    for member in dataclass_fields(CommandSpec)
+    if member.name not in _COMMANDSPEC_NONPATH_MEMBERS
+)
+
+
+def _command_declared_paths(command: CommandSpec) -> tuple[str, ...]:
+    """Return every source-relative path one command declares, in field order."""
+
+    paths: list[str] = []
+    for member in COMMANDSPEC_PATH_MEMBERS:
+        value = getattr(command, member)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            paths.append(value)
+        elif isinstance(value, tuple):
+            paths.extend(value)
+        else:  # pragma: no cover - fail closed on an unhandled member shape
+            raise AssertionError(f"unhandled CommandSpec path member: {member!r}")
+    return tuple(paths)
+
+
+def declared_required_inputs(spec: SkillSpec) -> tuple[str, ...]:
+    """Return every source-relative path the manifest declares, deduped.
+
+    Runtime roots, build roots, and every command path (script ``unix_path``
+    / ``win_path`` on every schema including schema 1, build ``source_dir``
+    and schema-8 ``modules``), in record order with commands in ascending
+    name order. The caller prepends the effective manifest filename(s) and
+    the gate adds ``SKILL.md``; coverage (the required path at-or-below an
+    admitted entry) is decided by the shared boundary validator, never here.
+    """
+
+    paths: list[str] = []
+    for member in SKILLSPEC_PATH_MEMBERS:
+        if member == "runtime_roots":
+            paths.extend(spec.runtime_roots)
+        elif member == "build_roots":
+            paths.extend(spec.build_roots)
+        elif member == "commands":
+            for name in sorted(spec.commands):
+                paths.extend(_command_declared_paths(spec.commands[name]))
+        else:  # pragma: no cover - fail closed on an unhandled member
+            raise AssertionError(f"unhandled SkillSpec path member: {member!r}")
+    return tuple(dict.fromkeys(paths))
+
+
+def infer_manifest_grammar(raw: bytes) -> str:
+    """Infer the grammar for a spelling unknown to this version.
+
+    The one inference implementation: ``schema_version`` present means the
+    schema grammar, otherwise the runtime grammar. Malformed JSON infers
+    schema, so a corrupt unknown manifest takes schema precedence and
+    refuses loudly instead of being silently outranked by a valid runtime
+    spelling.
+    """
+
+    try:
+        data = protocol_json.loads(raw)
+    except protocol_json.ProtocolJSONError:
+        return MANIFEST_GRAMMAR_SCHEMA
+    if isinstance(data, dict) and "schema_version" in data:
+        return MANIFEST_GRAMMAR_SCHEMA
+    return MANIFEST_GRAMMAR_RUNTIME
+
+
+def manifest_grammar(name: str, raw: bytes) -> str:
+    """Return the grammar for one spelling: registry entry, else inferred."""
+
+    known = MANIFEST_GRAMMAR.get(name)
+    if known is not None:
+        return known
+    return infer_manifest_grammar(raw)
+
+
+@dataclass(frozen=True)
+class EffectiveManifestDecision:
+    """The one effective-manifest decision, shared by loader and gate."""
+
+    name: str
+    grammar: str
+    schema_names: tuple[str, ...]
+    runtime_names: tuple[str, ...]
+
+
+def select_effective_manifest(
+    present_names: Sequence[str],
+    read_bytes: Callable[[str], bytes],
+) -> EffectiveManifestDecision | None:
+    """Decide the effective manifest and its grammar: the one selection rule.
+
+    Both :func:`load_skill_spec` and the root-input gate in
+    ``sources.selection`` call this; no caller reimplements precedence or
+    grammar dispatch. ``present_names`` is in registry order. Known
+    spellings use the registry without reading (so a runtime fallback that
+    is a directory or unreadable is still ignored when a schema manifest
+    is present, exactly as before); unknown spellings are read once via
+    ``read_bytes`` and inferred by :func:`infer_manifest_grammar`.
+    Schema-grammar manifests win over runtime regardless of registry
+    position (the historical precedence); within a grammar, registry
+    order wins.
+    """
+
+    classified: list[tuple[str, str]] = []
+    for name in present_names:
+        known = MANIFEST_GRAMMAR.get(name)
+        if known is not None:
+            classified.append((name, known))
+        else:
+            classified.append((name, infer_manifest_grammar(read_bytes(name))))
+    schema_names = tuple(name for name, grammar in classified if grammar == MANIFEST_GRAMMAR_SCHEMA)
+    runtime_names = tuple(name for name, grammar in classified if grammar == MANIFEST_GRAMMAR_RUNTIME)
+    if schema_names:
+        return EffectiveManifestDecision(
+            name=schema_names[0],
+            grammar=MANIFEST_GRAMMAR_SCHEMA,
+            schema_names=schema_names,
+            runtime_names=runtime_names,
+        )
+    if runtime_names:
+        return EffectiveManifestDecision(
+            name=runtime_names[0],
+            grammar=MANIFEST_GRAMMAR_RUNTIME,
+            schema_names=schema_names,
+            runtime_names=runtime_names,
+        )
+    return None
+
+
 def load_skill_spec(snapshot: Path) -> SkillSpec:
-    canonical_path = snapshot / CANONICAL_MANIFEST
-    legacy_path = snapshot / LEGACY_MANIFEST
-    if canonical_path.exists() and legacy_path.exists():
-        canonical, canonical_data = _load_skill_manifest(canonical_path)
-        _, legacy_data = _load_skill_manifest(legacy_path)
-        if not _json_values_equal(canonical_data, legacy_data):
-            raise SkillSpecError(
-                f"conflicting_skill_manifests: {CANONICAL_MANIFEST} and "
-                f"{LEGACY_MANIFEST} contain different JSON values"
-            )
-        return canonical
-    if canonical_path.exists():
-        return _load_skill_manifest(canonical_path)[0]
-    if legacy_path.exists():
-        return _load_skill_manifest(legacy_path)[0]
-    runtime_path = snapshot / Path(RUNTIME_FALLBACK)
-    if runtime_path.exists():
-        return _load_runtime_fallback(runtime_path)
-    return SkillSpec(commands={}, source_file=None)
+    """Load the effective skill manifest from a snapshot directory.
+
+    The registry controls loading: the effective manifest and its grammar
+    come from :func:`select_effective_manifest`, the same decision the
+    root-input gate uses, so the loader and the gate cannot disagree about
+    which manifest is effective or which grammar parses it. The
+    canonical/legacy conflict check is preserved without a private copy
+    of the order: among all schema-grammar manifests present, differing
+    JSON values refuse. A spelling unknown to this version infers its
+    grammar from content inside the shared selector, so a newly
+    registered spelling is honoured, not silently ignored.
+    """
+
+    present = [name for name in MANIFEST_PROBE_ORDER if (snapshot / Path(name)).exists()]
+    if not present:
+        return SkillSpec(commands={}, source_file=None)
+    cache: dict[str, bytes] = {}
+
+    def _read(name: str) -> bytes:
+        if name not in cache:
+            cache[name] = (snapshot / Path(name)).read_bytes()
+        return cache[name]
+
+    decision = select_effective_manifest(present, _read)
+    assert decision is not None
+    if decision.schema_names:
+        specs: list[SkillSpec] = []
+        datas: list[dict[str, Any]] = []
+        for name in decision.schema_names:
+            path = snapshot / Path(name)
+            if name == CANONICAL_MANIFEST or name == LEGACY_MANIFEST:
+                spec, data = _load_skill_manifest(path)
+            else:
+                raw = _read(name)
+                try:
+                    data = protocol_json.loads(raw)
+                except protocol_json.ProtocolJSONError as exc:
+                    raise SkillSpecError(f"Malformed JSON in {path}: {exc}") from exc
+                if not isinstance(data, dict):
+                    raise SkillSpecError(f"{path} must contain a JSON object")
+                spec = _parse_validated_manifest(data, snapshot, name)
+            specs.append(spec)
+            datas.append(data)
+        for other in datas[1:]:
+            if not _json_values_equal(datas[0], other):
+                if set(decision.schema_names) == {CANONICAL_MANIFEST, LEGACY_MANIFEST} and len(
+                    decision.schema_names
+                ) == 2:
+                    raise SkillSpecError(
+                        f"conflicting_skill_manifests: {CANONICAL_MANIFEST} and "
+                        f"{LEGACY_MANIFEST} contain different JSON values"
+                    )
+                joined = ", ".join(decision.schema_names)
+                raise SkillSpecError(
+                    f"conflicting_skill_manifests: {joined} contain different JSON values"
+                )
+        return specs[0]
+    name = decision.name
+    path = snapshot / Path(name)
+    return parse_runtime_fallback_bytes(_read(name), name, label=path)
 
 
 def manifest_source_path(snapshot: Path) -> str:
-    """Return the protocol path selected for diagnostics without parsing it."""
-    for name in (CANONICAL_MANIFEST, LEGACY_MANIFEST, RUNTIME_FALLBACK):
-        if (snapshot / Path(name)).exists():
-            return name
-    return ""
+    """Return the shared effective-manifest decision's path for diagnostics."""
+
+    present = tuple(
+        name for name in MANIFEST_PROBE_ORDER if (snapshot / Path(name)).exists()
+    )
+    if not present:
+        return ""
+    decision = select_effective_manifest(
+        present, lambda name: (snapshot / Path(name)).read_bytes()
+    )
+    return decision.name if decision is not None else ""
 
 
 def _json_values_equal(left: Any, right: Any) -> bool:
@@ -192,7 +444,33 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
         raise SkillSpecError(f"Malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise SkillSpecError(f"{path} must contain a JSON object")
-    source_file = path.name
+    return _parse_validated_manifest(data, path.parent, path.name), data
+
+
+def parse_manifest_bytes(raw: bytes, snapshot: Path, source_file: str) -> SkillSpec:
+    """Parse and fully validate one manifest document against a snapshot.
+
+    The one manifest implementation, shared by the snapshot loader and the
+    root-input gate: the gate validates the descriptor-read bytes against
+    the source root to derive the required inputs, and the snapshot loader
+    validates the admitted bytes the same way. A malformed document or a
+    manifest invalid against the given snapshot raises ``SkillSpecError``;
+    the gate treats that as no derived inputs here and lets the snapshot
+    validation refuse precisely later.
+    """
+
+    try:
+        data = protocol_json.loads(raw)
+    except protocol_json.ProtocolJSONError as exc:
+        raise SkillSpecError(f"Malformed JSON in {source_file}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SkillSpecError(f"{source_file} must contain a JSON object")
+    return _parse_validated_manifest(data, snapshot, source_file)
+
+
+def _parse_validated_manifest(
+    data: dict[str, Any], snapshot: Path, source_file: str
+) -> SkillSpec:
     schema = data.get("schema_version")
     if not isinstance(schema, int) or isinstance(schema, bool):
         raise SkillSpecError(f"{source_file} field 'schema_version' must be an integer")
@@ -225,7 +503,7 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
         raise SkillSpecError(str(exc)) from exc
     runtime_roots_raw = data["runtime_roots"] if schema >= 2 and "runtime_roots" in data else []
     runtime_roots = (
-        _parse_runtime_roots(runtime_roots_raw, snapshot=path.parent, source_file=source_file)
+        _parse_runtime_roots(runtime_roots_raw, snapshot=snapshot, source_file=source_file)
         if schema >= 2
         else ()
     )
@@ -233,7 +511,7 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
     build_roots = (
         _parse_build_roots(
             build_roots_raw,
-            snapshot=path.parent,
+            snapshot=snapshot,
             runtime_roots=runtime_roots,
             source_file=source_file,
         )
@@ -279,7 +557,7 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
                     strict_posix=schema >= 2,
                 )
                 if schema >= 2:
-                    _validate_v2_script_path(path.parent, unix_path, runtime_roots, field=f"commands.{name}.unix_path")
+                    _validate_v2_script_path(snapshot, unix_path, runtime_roots, field=f"commands.{name}.unix_path")
             if win_path is not None:
                 win_path = _validate_relative_path(
                     win_path,
@@ -287,7 +565,7 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
                     strict_posix=schema >= 2,
                 )
                 if schema >= 2:
-                    _validate_v2_script_path(path.parent, win_path, runtime_roots, field=f"commands.{name}.win_path")
+                    _validate_v2_script_path(snapshot, win_path, runtime_roots, field=f"commands.{name}.win_path")
             commands[name] = CommandSpec(
                 name=name,
                 type="script",
@@ -367,7 +645,7 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
         else:
             raise SkillSpecError(f"Command {name!r} has unsupported type {command_type!r}")
     if schema >= 6:
-        _validate_build_layout(path.parent, build_roots, runtime_roots, commands, schema=schema)
+        _validate_build_layout(snapshot, build_roots, runtime_roots, commands, schema=schema)
     if schema >= 7:
         _validate_repository_commands(build_repositories, commands)
     dependencies, requirements, mcp_servers = _parse_dependencies(
@@ -384,7 +662,7 @@ def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
         requirements=requirements,
         mcp_servers=mcp_servers,
         build_repositories=build_repositories,
-    ), data
+    )
 
 
 def _parse_build_repositories(raw: Any, *, schema: int) -> dict[str, BuildRepository]:
@@ -446,14 +724,38 @@ def _validate_repository_commands(
             )
 
 
-def _load_runtime_fallback(path: Path) -> SkillSpec:
+def parse_runtime_fallback_bytes(
+    raw: bytes,
+    source_file: str = RUNTIME_FALLBACK,
+    *,
+    label: str | Path | None = None,
+) -> SkillSpec:
+    """Parse one runtime-fallback document from bytes.
+
+    The one runtime-grammar implementation, shared by the snapshot
+    loader and the root-input gate: the gate derives the fallback's
+    declared command paths from the descriptor-read bytes, and the
+    snapshot loader validates the admitted bytes the same way. A
+    malformed document raises ``SkillSpecError``; the gate treats that
+    as no derived inputs here and lets the snapshot validation refuse
+    precisely later.
+
+    ``source_file`` is the source identity stored on the spec (the
+    manifest spelling); ``label`` is the diagnostic label shown in the
+    malformed-JSON message. The loader passes the full snapshot path
+    as the label, preserving the historical message bytes; callers
+    that swallow the error (the gate) leave the label defaulting to
+    the spelling.
+    """
+
+    display = str(label) if label is not None else source_file
     try:
-        data = protocol_json.loads(path.read_bytes())
+        data = protocol_json.loads(raw)
     except protocol_json.ProtocolJSONError as exc:
-        raise SkillSpecError(f"Malformed JSON in {path}: {exc}") from exc
+        raise SkillSpecError(f"Malformed JSON in {display}: {exc}") from exc
     commands_raw = data.get("commands", {}) if isinstance(data, dict) else {}
     if not isinstance(commands_raw, dict):
-        raise SkillSpecError(f"{RUNTIME_FALLBACK} field 'commands' must be an object")
+        raise SkillSpecError(f"{source_file} field 'commands' must be an object")
     commands: dict[str, CommandSpec] = {}
     for name, rel_path in commands_raw.items():
         if not isinstance(name, str) or not name:
@@ -468,9 +770,13 @@ def _load_runtime_fallback(path: Path) -> SkillSpec:
             type="script",
             unix_path=rel_path,
             win_path=rel_path if rel_path.endswith(".cmd") else None,
-            source=RUNTIME_FALLBACK,
+            source=source_file,
         )
-    return SkillSpec(commands=commands, source_file=RUNTIME_FALLBACK)
+    return SkillSpec(commands=commands, source_file=source_file)
+
+
+def _load_runtime_fallback(path: Path) -> SkillSpec:
+    return parse_runtime_fallback_bytes(path.read_bytes(), RUNTIME_FALLBACK, label=path)
 
 
 def _parse_dependencies(

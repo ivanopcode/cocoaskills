@@ -1,0 +1,23 @@
+usage: csk shell-init [-h] [--no-global] [--install]
+                      [{auto,zsh,bash,powershell}]
+
+positional arguments:
+  {auto,zsh,bash,powershell}
+                        shell syntax to generate; auto detects zsh/bash from
+                        SHELL and PowerShell on Windows
+
+options:
+  -h, --help            show this help message and exit
+  --no-global           do not activate global CocoaSkills bin
+  --install             atomically cache the hook under the CocoaSkills home
+                        and print the profile source command
+
+Purpose:
+  Prints shell code that activates nearest .agents/env.sh or .agents/env.ps1.
+
+Shell profiles are optional: agent skills resolve project and global shims directly.
+
+Examples:
+  csk shell-init --install
+  csk shell-init zsh --install
+  csk shell-init powershell --install

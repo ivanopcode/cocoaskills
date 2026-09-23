@@ -1,0 +1,34 @@
+usage: csk audit [-h] [--all] [--global] [--json] [--allow CONTENT_SHA256]
+                 [--reason REASON] [--publish RECORD] [--registry REGISTRY]
+                 [--token TOKEN]
+                 [target]
+
+positional arguments:
+  target                project alias, '.', or project path
+
+options:
+  -h, --help            show this help message and exit
+  --all                 audit all registered projects and global skills
+  --global              audit global skills
+  --json                print machine-readable JSON
+  --allow CONTENT_SHA256
+                        pin a legacy content hash to satisfy strict schema
+                        v1/v2 capability declaration checks
+  --reason REASON       required reason for --allow
+  --publish RECORD      submit a signed audit record (JSON file) to a registry
+  --registry REGISTRY   registry base URL for --publish
+  --token TOKEN         auditor token for --publish (or set
+                        CSK_REGISTRY_TOKEN)
+
+Scope:
+  By default audits the current project. Use a target, --all, or --global for other scopes.
+  --all audits registered projects and global skills.
+
+Side effects:
+  Read-only. Missing git URL sources may be cloned into temporary directories only.
+
+Examples:
+  csk audit
+  csk audit . --json
+  csk audit --all
+  csk audit --global

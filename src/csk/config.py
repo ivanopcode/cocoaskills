@@ -230,7 +230,7 @@ def system_config_path() -> Path | None:
     return None
 
 
-def load_config(path: Path | None = None) -> GlobalConfig:
+def load_config(path: Path | None = None, *, quiet: bool = False) -> GlobalConfig:
     resolved = path or config_path()
     try:
         user_data = protocol_json.loads(resolved.read_bytes())
@@ -252,19 +252,26 @@ def load_config(path: Path | None = None) -> GlobalConfig:
         if system_data is not None:
             if not isinstance(system_data, dict):
                 raise ConfigError(f"System config {system_path} must be a JSON object")
-            user_data = _apply_system_config(system_data, user_data, system_path)
+            user_data = _apply_system_config(
+                system_data, user_data, system_path, quiet=quiet
+            )
 
     return parse_config(user_data, resolved)
 
 
 def _apply_system_config(
-    system_data: dict[str, Any], user_data: dict[str, Any], system_path: Path
+    system_data: dict[str, Any],
+    user_data: dict[str, Any],
+    system_path: Path,
+    *,
+    quiet: bool = False,
 ) -> dict[str, Any]:
     """Overlay the system config, enforcing its locked keys over the user config.
 
     A key listed under 'locked' takes its value from the system config, and a
     user override of that key is ignored with a warning. Other system keys act
-    as defaults the user config may override.
+    as defaults the user config may override. ``quiet`` suppresses the warning
+    for the parse-time draft decision read; dispatch keeps the loud load.
     """
     schema = system_data.get("schema_version")
     if not isinstance(schema, int) or isinstance(schema, bool) or schema != SCHEMA_VERSION:
@@ -288,11 +295,12 @@ def _apply_system_config(
             continue
         if key in locked:
             if key in user_data and user_data[key] != value:
-                print(
-                    f"warning: config key {key!r} is locked by {system_path}; "
-                    "the user override is ignored",
-                    file=sys.stderr,
-                )
+                if not quiet:
+                    print(
+                        f"warning: config key {key!r} is locked by {system_path}; "
+                        "the user override is ignored",
+                        file=sys.stderr,
+                    )
             merged[key] = value
         else:
             merged.setdefault(key, value)
