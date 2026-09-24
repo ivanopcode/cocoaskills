@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import random
-import re
 import shutil
 import subprocess
 import sys
@@ -14,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from conftest import make_project, make_skill_repo, run, write_skillfile
+
 from csk import cli, config, installer, shims, status
 from csk.sources import _selection_fs
 from csk.sources import diagnostics as source_diagnostics
@@ -738,6 +738,7 @@ def test_cli_lock_contention_returns_lock_exit(tmp_path, csk_home, skills_root):
         capture_output=True,
         env=env,
         timeout=5,
+        check=False,
     )
 
     assert proc.returncode == cli.EXIT_LOCK
@@ -893,6 +894,119 @@ def test_cli_bootstrap_non_interactive(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("CSK_CONFIG", str(tmp_path / "cfg2" / "config.json"))
     assert cli.main(["bootstrap", "--non-interactive"]) == 2
     assert "skills_root" in capsys.readouterr().err
+
+
+def test_cli_bootstrap_without_tty_requires_non_interactive(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    config_path = tmp_path / "config.json"
+    env = os.environ.copy()
+    env["CSK_CONFIG"] = str(config_path)
+    source_path = str(repo_root / "src")
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (source_path, env.get("PYTHONPATH")) if part
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "csk", "bootstrap"],
+        cwd=repo_root,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == cli.EXIT_CONFIG, result.stderr
+    assert result.stderr.startswith("error:")
+    assert "--non-interactive" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not config_path.exists()
+
+
+def test_cli_bootstrap_if_missing_existing_config_without_tty(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+    env = os.environ.copy()
+    env["CSK_CONFIG"] = str(config_path)
+    source_path = str(repo_root / "src")
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (source_path, env.get("PYTHONPATH")) if part
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "csk", "bootstrap", "--if-missing"],
+        cwd=repo_root,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == cli.EXIT_OK, result.stderr
+    assert result.stdout.startswith("Kept existing config:")
+    assert result.stderr == ""
+
+
+@pytest.mark.skipif(os.name != "posix", reason="closing fd 0 before exec is POSIX-only")
+def test_cli_bootstrap_with_closed_stdin_requires_non_interactive(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    config_path = tmp_path / "config.json"
+    env = os.environ.copy()
+    env["CSK_CONFIG"] = str(config_path)
+    source_path = str(repo_root / "src")
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (source_path, env.get("PYTHONPATH")) if part
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "csk", "bootstrap"],
+        cwd=repo_root,
+        env=env,
+        preexec_fn=lambda: os.close(0),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == cli.EXIT_CONFIG, result.stderr
+    assert result.stderr.startswith("error:")
+    assert "--non-interactive" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not config_path.exists()
+
+
+def test_cli_bootstrap_still_prompts_when_stdin_is_tty(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.json"
+    skills_root = tmp_path / "skills"
+    monkeypatch.setenv("CSK_CONFIG", str(config_path))
+
+    class TTYInput:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(cli.sys, "stdin", TTYInput())
+    answers = iter([str(skills_root), "ru", "codex_cli", "n"])
+    prompts = []
+
+    def answer(prompt=""):
+        prompts.append(prompt)
+        return next(answers)
+
+    monkeypatch.setattr("builtins.input", answer)
+
+    assert cli.main(["bootstrap"]) == cli.EXIT_OK
+    assert prompts == [
+        "skills_root: ",
+        "preferred_locale [none]: ",
+        "default_agents comma-separated [codex_cli]: ",
+        "Configure SSH credentials for private build repositories now? [y/N] ",
+    ]
+    loaded = config.load_config(config_path)
+    assert loaded.skills_root == skills_root
+    assert loaded.preferred_locale == "ru"
+    assert loaded.default_agents == ["codex_cli"]
 
 
 def test_cli_bootstrap_if_missing_keeps_existing_config(monkeypatch, tmp_path, capsys):
@@ -2798,7 +2912,7 @@ def test_cli_schema2_install_uses_skillfile_locale_for_status(
 
 def test_cli_status_check_exit_codes_schema2(monkeypatch, tmp_path, csk_home, skills_root, capsys):
     _require_posix_traversal()
-    project, skill_dir = _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
+    _project, skill_dir = _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
     assert cli.main(["install", "app"]) == 0
     capsys.readouterr()
 
@@ -3265,6 +3379,7 @@ def test_cli_launch_layer_imports_no_source_resolution():
         capture_output=True,
         text=True,
         env={**os.environ, "PYTHONPATH": str(srcdir)},
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     closure = set(json.loads(proc.stdout))

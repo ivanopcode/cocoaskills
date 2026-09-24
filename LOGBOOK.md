@@ -38,6 +38,67 @@ The large CLI module was subdivided at individual test IDs after bounded runs
 showed a whole-file invocation would exceed the shell-call budget. These
 interrupted/invalid runs are recorded in the task evidence log and are not
 counted as green results.
+## 2026-09-24 - BUG-260924-3efl4p rework 1: bootstrap prompt gate
+
+ROOT CAUSE: the TTY refusal ran before the existing-config `--if-missing`
+early return, and `sys.stdin.isatty()` raised `AttributeError` when fd 0 was
+closed and Python set `sys.stdin` to `None`.
+FIX: `_cmd_bootstrap` returns `Kept existing config` before checking the prompt
+gate. The gate then treats missing stdin or a non-TTY stream as non-interactive
+and returns `EXIT_CONFIG` with `--non-interactive` before the first possible
+`input()` call. Interactive and explicit non-interactive paths remain covered.
+PRODUCTION PATH: `main()` -> `_dispatch(args)` -> `_cmd_bootstrap(args)`.
+
+REGRESSION EVIDENCE: the two new CLI subprocess tests failed before the fix:
+`test_cli_bootstrap_if_missing_existing_config_without_tty` observed rc 2
+instead of 0; `test_cli_bootstrap_with_closed_stdin_requires_non_interactive`
+observed a raw `AttributeError` traceback. The final bootstrap group passed 28
+tests (exit 0), including the existing `/dev/null` and interactive-TTY cases.
+
+MUTANTS (each was temporary, then restored byte-for-byte from the saved source):
+
+| Mutant | Narrowed/broken gate | Named test killed | Pytest exit |
+| --- | --- | --- | ---: |
+| M1 | Move the TTY guard before the `--if-missing` early return | `test_cli_bootstrap_if_missing_existing_config_without_tty` | 1 |
+| M2 | Drop the `sys.stdin is None` guard | `test_cli_bootstrap_with_closed_stdin_requires_non_interactive` | 1 |
+| M3 | Narrow refusal to `sys.stdin is None`, admitting `/dev/null` | `test_cli_bootstrap_without_tty_requires_non_interactive` | 1 |
+
+M1 failed because the child returned 2; M2 failed with `AttributeError`; M3
+failed with `EOFError`. No mutant survived. The final source matched the saved
+candidate after each restoration (`cmp` exit 0).
+
+COVERAGE: 3 of 3 acceptance-criteria clauses are driven through
+`_dispatch()` -> `_cmd_bootstrap()`. The two rework findings are covered and
+attacked (2 of 2). `test_cli_bootstrap_still_prompts_when_stdin_is_tty` covers
+the positive interactive path; a refusal mutant does not apply to that path.
+The active rework brief supplied no surface table; this is recorded as a brief
+gap. Out-of-contract rows: none.
+
+FULL SUITE: final collection contained 11,179 unique node IDs. Final evidence
+is 10,869 passed, 310 skipped, 0 failed. The suite ran in 15 green shards plus
+8 bounded retry shards for the 700 IDs from shard 14; every counted command
+exited 0 and used an external `/Users/iv/.cache/BUG-260924-3efl4p/rev2/`
+`--basetemp`. One 700-node shard-14 attempt exceeded the 10-minute command
+budget and was interrupted (exit 2; 671 passed, 7 skipped, 22 unobserved); it
+was excluded and all 700 IDs were rerun in eight groups of at most 60 IDs per
+source file. See `.temp/BUG-260924-3efl4p/logs/full-suite-summary.json` and the
+numbered logs beside it. An initial `pytest`-script collection exited 2 with
+`ModuleNotFoundError: tests`; collection and execution used the repository CI
+entry point `uv run --extra dev python -m pytest` and succeeded.
+
+OTHER VALIDATION: Ruff 0.16.8 (`ruff check` on both changed Python files),
+strict mypy (93 source files), `uv build`, `twine check`, and `git diff --check`
+all exited 0. The first Ruff pass exited 1 and exposed six lint issues; the
+follow-up pass is green. The first `pytest -k bootstrap` result was not counted
+because its session handle was not captured; the exact group was rerun with an
+observed exit 0. A bare `python` command was unavailable (exit 127); project
+Python ran via `uv run`.
+
+SCOPE: `src/csk/cli.py` and `tests/test_cli.py` contain implementation and
+entry-point tests. `CHANGELOG.md` records the user-visible behavior and this
+`LOGBOOK.md` records findings and validation. Test-file formatting, explicit
+`check=False`, and an unused binding rename were kept to satisfy Ruff without
+changing test behavior. Candidate remains uncommitted in the Story worktree.
 
 ## 2026-09-23 - BUG-260922-1ulkcl rev2 revalidation after Story reparent
 

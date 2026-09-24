@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Исправлено
 
 - `csk install` для schema 2 использует `Skillfile.locale` наравне с `csk status`; скилл без файлов локализации больше не получает ложный `marker-mismatch` после чистой установки.
+- `csk bootstrap` без интерактивного stdin и без `--non-interactive` возвращает структурированную ошибку; закрытый stdin не даёт traceback, а `--if-missing` с существующим config сохраняет прежний config.
 
 ## [0.16.0] - 2026-09-24
 

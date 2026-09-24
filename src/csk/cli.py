@@ -44,8 +44,7 @@ from .sources import diagnostics as source_diagnostics
 from .sources import errors as source_errors
 from .sources import lock as source_lock
 from .sources import publish as source_publish
-from .sources import repository_policy
-from .sources import skillfile_v2
+from .sources import repository_policy, skillfile_v2
 from .sources import transport as source_transport
 
 EXIT_OK = 0
@@ -1090,8 +1089,8 @@ def _cmd_hybrid(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
 
 
 def _cmd_bootstrap(args: argparse.Namespace) -> int:
-    path = config.config_path()
     non_interactive = getattr(args, "non_interactive", False)
+    path = config.config_path()
     try:
         path.stat()
     except FileNotFoundError:
@@ -1101,10 +1100,18 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
         return EXIT_CONFIG
     else:
         config_present = True
+    if config_present and getattr(args, "if_missing", False):
+        print(f"Kept existing config: {path}")
+        return EXIT_OK
+    if not non_interactive and (sys.stdin is None or not sys.stdin.isatty()):
+        print(
+            "error: csk bootstrap requires an interactive terminal; "
+            "pass --non-interactive with the required options",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG
+
     if config_present:
-        if getattr(args, "if_missing", False):
-            print(f"Kept existing config: {path}")
-            return EXIT_OK
         if non_interactive:
             if not getattr(args, "force", False):
                 print(f"error: config exists at {path}; pass --force to overwrite", file=sys.stderr)
