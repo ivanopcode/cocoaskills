@@ -843,7 +843,7 @@ def _add_audit(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
 
 def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "bootstrap":
-        return _cmd_bootstrap(args)
+        return _cmd_bootstrap_refusing_eof(args)
     if args.command == "init":
         return _cmd_init(args)
     if args.command == "config" and args.config_command == "show":
@@ -1088,16 +1088,18 @@ def _cmd_hybrid(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _cmd_bootstrap(args: argparse.Namespace) -> int:
+def _cmd_bootstrap_refusing_eof(args: argparse.Namespace) -> int:
     """Run bootstrap; an interactive prompt that hits end of input refuses cleanly.
 
     ``sys.stdin.isatty()`` is not a reliable interactivity check on every
     platform: on Windows the ``NUL`` device reports as a character device, so a
     redirected stdin passes the TTY gate and the first ``input()`` raises
-    ``EOFError``. Treat that exactly like the missing-terminal refusal.
+    ``EOFError``. Treat that exactly like the missing-terminal refusal. The
+    command body stays in ``_cmd_bootstrap`` so its filesystem call sites keep
+    their pinned function.
     """
     try:
-        return _cmd_bootstrap_interactive(args)
+        return _cmd_bootstrap(args)
     except EOFError:
         print(
             "error: csk bootstrap requires an interactive terminal; "
@@ -1107,7 +1109,7 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
         return EXIT_CONFIG
 
 
-def _cmd_bootstrap_interactive(args: argparse.Namespace) -> int:
+def _cmd_bootstrap(args: argparse.Namespace) -> int:
     non_interactive = getattr(args, "non_interactive", False)
     path = config.config_path()
     try:
