@@ -1089,6 +1089,25 @@ def _cmd_hybrid(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
 
 
 def _cmd_bootstrap(args: argparse.Namespace) -> int:
+    """Run bootstrap; an interactive prompt that hits end of input refuses cleanly.
+
+    ``sys.stdin.isatty()`` is not a reliable interactivity check on every
+    platform: on Windows the ``NUL`` device reports as a character device, so a
+    redirected stdin passes the TTY gate and the first ``input()`` raises
+    ``EOFError``. Treat that exactly like the missing-terminal refusal.
+    """
+    try:
+        return _cmd_bootstrap_interactive(args)
+    except EOFError:
+        print(
+            "error: csk bootstrap requires an interactive terminal; "
+            "pass --non-interactive with the required options",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG
+
+
+def _cmd_bootstrap_interactive(args: argparse.Namespace) -> int:
     non_interactive = getattr(args, "non_interactive", False)
     path = config.config_path()
     try:

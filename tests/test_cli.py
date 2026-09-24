@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import io
 import os
 import random
 import shutil
@@ -920,6 +921,30 @@ def test_cli_bootstrap_without_tty_requires_non_interactive(tmp_path):
     assert result.stderr.startswith("error:")
     assert "--non-interactive" in result.stderr
     assert "Traceback" not in result.stderr
+    assert not config_path.exists()
+
+
+def test_cli_bootstrap_eof_on_tty_like_stdin_is_structured(monkeypatch, tmp_path, capsys):
+    """A stdin that claims to be a TTY but is at end of input refuses cleanly.
+
+    On Windows ``subprocess.DEVNULL`` is the ``NUL`` character device, so
+    ``sys.stdin.isatty()`` is true and the TTY gate passes; the first prompt
+    then reads end of input. Reproduce that shape on every platform.
+    """
+
+    class _TtyAtEof(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    config_path = tmp_path / "config.json"
+    monkeypatch.setenv("CSK_CONFIG", str(config_path))
+    monkeypatch.setattr(sys, "stdin", _TtyAtEof(""))
+
+    assert cli.main(["bootstrap"]) == cli.EXIT_CONFIG
+    err = capsys.readouterr().err
+    assert err.startswith("error:")
+    assert "--non-interactive" in err
+    assert "Traceback" not in err
     assert not config_path.exists()
 
 
