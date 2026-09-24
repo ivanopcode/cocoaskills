@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Исправлено
+
+- `csk install` для schema 2 использует `Skillfile.locale` наравне с `csk status`; скилл без файлов локализации больше не получает ложный `marker-mismatch` после чистой установки.
+
 ## [0.16.0] - 2026-09-24
 
 ### Добавлено

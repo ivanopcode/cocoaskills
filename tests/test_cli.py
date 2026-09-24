@@ -2756,6 +2756,46 @@ def test_cli_status_schema2_labels_text_and_json(monkeypatch, tmp_path, csk_home
     assert payload[0]["draft_sources"] == _DRAFT_LABEL
 
 
+def test_cli_schema2_install_uses_skillfile_locale_for_status(
+    monkeypatch, tmp_path, csk_home, skills_root, capsys
+):
+    """Install and read-only status agree on Skillfile.locale without locale files."""
+
+    _require_posix_traversal()
+    project, skill_dir = _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
+    assert not (skill_dir / "locales").exists()
+    assert not (skill_dir / ".skill_triggers").exists()
+    skillfile_path = project / "Skillfile.json"
+    skillfile = json.loads(skillfile_path.read_text(encoding="utf-8"))
+    skillfile["locale"] = "ru"
+    write_skillfile(project, skillfile)
+
+    assert cli.main(["install", "app"]) == 0
+    capsys.readouterr()
+
+    assert cli.main(["status", "app"]) == 0
+    status_output = capsys.readouterr().out
+    assert "up-to-date" in status_output, status_output
+    assert "marker-mismatch" not in status_output, status_output
+
+    check_result = cli.main(["status", "app", "--check"])
+    check_output = capsys.readouterr().out
+    assert check_result == 0, check_output
+    assert "up-to-date" in check_output, check_output
+
+    marker_path = project / ".agents" / "skills" / "review" / ".csk-install.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert marker["locale"] == "ru"
+    marker["locale"] = None
+    marker_path.write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    mismatch_result = cli.main(["status", "app", "--check"])
+    mismatch_output = capsys.readouterr().out
+    assert mismatch_result == 1, mismatch_output
+    assert "marker-mismatch" in mismatch_output, mismatch_output
+    assert "locale" in mismatch_output, mismatch_output
+
+
 def test_cli_status_check_exit_codes_schema2(monkeypatch, tmp_path, csk_home, skills_root, capsys):
     _require_posix_traversal()
     project, skill_dir = _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)

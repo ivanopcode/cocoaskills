@@ -514,7 +514,7 @@ def _install_schema2_once(
                 project_path=project.path,
                 alias=project.alias,
                 agents=project_manifest.agents or project.agents or config.default_agents,
-                locale_value=config.preferred_locale,
+                locale_value=project_manifest.locale or config.preferred_locale,
                 adapter_mode=config.adapter_mode,
                 dry_run=options.dry_run,
                 config=config,

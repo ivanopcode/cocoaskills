@@ -1,5 +1,44 @@
 # Logbook
 
+## 2026-09-24 - BUG-260924-3txaoi: schema-2 install ignored Skillfile.locale
+
+ROOT CAUSE: The schema-2 install branch passed only `config.preferred_locale` to
+`install_schema2`, while status used the parsed `Skillfile.locale` with the same
+config fallback. A project selecting `ru` with no locale catalog therefore
+installed a marker with `locale: null`; read-only status correctly expected
+`locale: ru` under the schema-2 preservation contract. Install now passes
+`project_manifest.locale or config.preferred_locale`. Schema-1 install code is
+untouched.
+
+REGRESSION: `test_cli_schema2_install_uses_skillfile_locale_for_status` drives
+install and status through `csk.cli.main` for a local path source with no
+locale files. It failed before the fix with `marker-mismatch (... locale)` and
+passes after; it also proves `status --check` returns 1 after a deliberate
+marker-locale mismatch. Plain `status` remains informational as in schema 1;
+the existing nonzero contract is `status --check`.
+
+VERIFICATION: The CI fast ordinary selection was collected as 11,238 node IDs
+against the released Curator v1 corpus pin
+`0ed5c691e9208eea52f21db2fc05e226ce3516fd` (manifest SHA-256
+`803918bf8672f76cf990985e51db213b826674cd5bb54fbf47731b8404b44403`) and
+rerun in file-intact shards with `-n 4 --dist=loadfile`: 11,104 passed, 134
+skipped, 0 failed; every successful shard exited 0. The locale regression and
+69 v1 CLI golden tests passed after restoring the candidate. Strict mypy passed
+for 93 source files; `python -m build` and `twine check` passed. Logs and the
+coverage note are attached to BUG-260924-3txaoi. A selection audit confirmed
+that the 13 green shards cover all 11,238 collected node IDs exactly once.
+
+RUN DIAGNOSTICS: The first full ordinary attempt used the working corpus instead
+of the pinned release corpus and `/tmp`, where an unrelated `Skillfile.json`
+altered ancestor detection (exit 1); the next exact-corpus A-C shard was
+interrupted after errno 28 during temporary-file creation (exit 2). A node-level
+partition split the filesystem-seam linkage drivers and correctly failed its
+cross-driver assertion (exit 1), so the accepted rerun kept test files intact.
+The large CLI module was subdivided at individual test IDs after bounded runs
+showed a whole-file invocation would exceed the shell-call budget. These
+interrupted/invalid runs are recorded in the task evidence log and are not
+counted as green results.
+
 ## 2026-09-23 - BUG-260922-1ulkcl rev2 revalidation after Story reparent
 
 Revalidated the inherited H-1 candidate on the Story checkpoint at `f1941128`; no source or test edits were made in this run. The reader classifies only `open()` for retry/absence; injected `PermissionError` and `FileNotFoundError` at both `read()` and `close()` refuse as read failures. M1-M7 were killed again, and M8 (wide try restored) failed all four named post-open cases. Store suite: 129 passed, exit 0; ordinary CI suite: 9,098 passed / 132 skipped, exit 0; mypy: 92 files, exit 0; `uv build`: exit 0. All pytest basetemp/cache paths were under `/tmp`; hosted Windows CI remains the orchestrator's post-landing step. Fresh task-scoped evidence and the coverage map are attached to BUG-260922-1ulkcl. Candidate remains uncommitted.
