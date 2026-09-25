@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-25
+
 ### Изменено
 
 - Schema 2 стала основным форматом проектного Skillfile. Команды `csk check`, `csk install`, `csk upgrade` и `csk status` принимают её по умолчанию.
@@ -727,7 +729,8 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.16.0...main
+[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.17.0...main
+[0.17.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/ivanopcode/cocoaskills/compare/v0.14.0...v0.14.1
