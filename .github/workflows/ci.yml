@@ -412,7 +412,7 @@ jobs:
 
       - name: Run draft sources conformance
         env:
-          CSK_DRAFT_SOURCES_SUITE_ROOT: ${{ github.workspace }}/protocol-spec-draft/conformance/draft-sources-v1
+          CSK_DRAFT_SOURCES_SUITE_ROOT: ${{ github.workspace }}/protocol-spec-draft/conformance/skillfile-sources-v1
         run: >-
           python -m pytest -q tests/test_draft_sources_conformance.py
           --junitxml=draft-sources-results.xml
@@ -934,7 +934,7 @@ jobs:
 
       - name: Run draft sources conformance
         env:
-          CSK_DRAFT_SOURCES_SUITE_ROOT: ${{ github.workspace }}/protocol-spec-draft/conformance/draft-sources-v1
+          CSK_DRAFT_SOURCES_SUITE_ROOT: ${{ github.workspace }}/protocol-spec-draft/conformance/skillfile-sources-v1
         run: >-
           python -m pytest -q tests/test_draft_sources_conformance.py
           --junitxml=draft-sources-results.xml

@@ -521,6 +521,19 @@ def test_marker_v5_keeps_external_cross_field_rules() -> None:
         _external_record(object_format="sha1", commit="a" * 64)
 
 
+def test_marker_v5_external_declared_tag_requires_valid_git_ref_name() -> None:
+    """A present receipt tag must satisfy the shared Git ref-name grammar."""
+
+    assert _external_record(declared_tag="release.candidate").declared_tag == (
+        "release.candidate"
+    )
+    with pytest.raises(install_marker.InstallMarkerError) as refused:
+        _external_record(declared_tag="release..candidate")
+
+    assert refused.value.code == "install_marker_invalid"
+    assert "valid Git ref name" in refused.value.detail
+
+
 def test_marker_v5_reader_accepts_a_build_source_without_recorded_builds() -> None:
     """The pinned corpus carries build_source with empty builds (valid.json).
 
@@ -1679,7 +1692,9 @@ def test_schema2_status_current_when_marker_and_evidence_agree(
     marker_path = _write_marker(
         tmp_path, install_marker.InstallMarkerV5(**_base_marker()).to_json()
     )
-    evidence_path = _write_evidence(tmp_path, _evidence_payload())
+    evidence_path = _write_evidence(
+        tmp_path, _evidence_payload(context_sha256=CONTENT)
+    )
 
     verdict = install_marker.evaluate_schema2_status(
         marker_path,
@@ -1691,6 +1706,46 @@ def test_schema2_status_current_when_marker_and_evidence_agree(
 
     assert verdict.current is True
     assert verdict.exit_code == 0
+
+
+def test_schema2_status_binds_evidence_to_raw_package_tree_hash(
+    tmp_path: Path,
+) -> None:
+    """A lock-projected context hash cannot replace the raw package-tree hash."""
+
+    plan = _base_plan(context_sha256=CONTEXT_OTHER, content_sha256=CONTENT)
+    marker_path = _write_marker(
+        tmp_path, install_marker.InstallMarkerV5(**_base_marker()).to_json()
+    )
+    evidence_path = _write_evidence(
+        tmp_path, _evidence_payload(context_sha256=CONTENT)
+    )
+
+    accepted = install_marker.evaluate_schema2_status(
+        marker_path,
+        plan,
+        evidence_path=evidence_path,
+        evidence_fresh=True,
+        evidence_revoked=False,
+    )
+
+    assert accepted.current is True
+    assert accepted.exit_code == 0
+
+    evidence_path.write_bytes(
+        json.dumps(_evidence_payload(context_sha256=CONTEXT_OTHER)).encode("utf-8")
+    )
+    refused = install_marker.evaluate_schema2_status(
+        marker_path,
+        plan,
+        evidence_path=evidence_path,
+        evidence_fresh=True,
+        evidence_revoked=False,
+    )
+
+    assert refused.current is False
+    assert refused.exit_code == 1
+    assert "evidence context hash differs" in refused.detail
 
 
 def test_schema2_status_unattested_plans_need_no_evidence(tmp_path: Path) -> None:
@@ -1790,7 +1845,9 @@ def test_schema2_status_configured_git_uses_the_explicit_repository(
     plan = _base_plan(package=_configured(), attestation=_attestation())
     marker = install_marker.InstallMarkerV5(**_base_marker(package=_configured()))
     marker_path = _write_marker(tmp_path, marker.to_json())
-    evidence_path = _write_evidence(tmp_path, _evidence_payload())
+    evidence_path = _write_evidence(
+        tmp_path, _evidence_payload(context_sha256=CONTENT)
+    )
 
     verdict = install_marker.evaluate_schema2_status(
         marker_path,

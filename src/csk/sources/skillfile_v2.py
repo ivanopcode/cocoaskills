@@ -4,7 +4,7 @@ This module implements protocol skillfile-sources section 1 and
 repository-transport section 1 for Skillfile schema 2: the optional ``sources``
 map of aliases to acquisition objects and the three disjoint ``skills``
 element forms. Validation is hand-written and mirrors
-``schemas/draft-sources-v1/skillfile-v2.schema.json``; production code never
+``schemas/skillfile-sources-v1/skillfile-v2.schema.json``; production code never
 depends on ``jsonschema``.
 
 Only structural parsing and validation live here. Collection expansion

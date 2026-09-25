@@ -528,7 +528,16 @@ def _validate_receipted_build(
             "unsubstituted external source must equal declared state",
         )
     if record.declared_tag is not None:
-        _require_non_empty_string(record.declared_tag, "external build declared_tag")
+        if marker_version >= INSTALL_MARKER_V5_SCHEMA_VERSION:
+            from .sources.skillfile_v2 import is_valid_git_ref_name
+
+            if not is_valid_git_ref_name(record.declared_tag):
+                raise InstallMarkerError(
+                    "install_marker_invalid",
+                    "external build declared_tag must be a valid Git ref name",
+                )
+        else:
+            _require_non_empty_string(record.declared_tag, "external build declared_tag")
 
 
 def _receipted_build_to_json(
@@ -1283,7 +1292,9 @@ class MarkerPlan:
 
     The effective plan itself is owned by resolve-source-closure; this frozen
     view holds the expected value of every record member status compares,
-    plus the context hash the registry-evidence check binds. ``attestation``
+    plus the raw package-tree hash the registry-evidence check binds.
+    ``context_sha256`` remains in the plan for compatibility with callers,
+    while registry evidence binds to ``content_sha256``. ``attestation``
     is present exactly when the plan selects existing registry evidence, and
     equals its registry, status and key id, including key absence. Both
     ``attestation`` and ``substituted`` are forbidden for ``local-snapshot``
@@ -1516,11 +1527,11 @@ def marker_plan_is_current(marker: InstallMarkerV5, plan: MarkerPlan) -> bool:
 class RegistryEvidence:
     """One required registry attestation record, as persisted evidence.
 
-    The record binds the exact skill name, canonical repository, commit and
-    context hash the registry rules established, plus the optional signing key
-    id. Freshness, revocation and signature trust are verdicts of the assurance
-    layer, passed explicitly to the validator: this summary never authorizes
-    anything on its own.
+    The record binds the exact skill name, canonical repository, commit and raw
+    package-tree content hash, serialized as ``context_sha256`` for marker-v5
+    compatibility, plus the optional signing key id. Freshness, revocation and
+    signature trust are verdicts of the assurance layer, passed explicitly to
+    the validator: this summary never authorizes anything on its own.
     """
 
     name: str
@@ -1578,7 +1589,9 @@ class AttestationExpectation:
     For ``network-git`` plans the repository is derived from the package; for
     legacy ``configured-git`` plans it is the canonical repository the
     registry rules established, which the caller supplies because a configured
-    source path alone is not a registry identity.
+    source path alone is not a registry identity. Its ``context_sha256`` value
+    is the raw package-tree content hash represented by the historical wire
+    field name.
     """
 
     name: str
@@ -1951,7 +1964,7 @@ def evaluate_schema2_status(
         name=plan.name,
         repository=repository,
         commit=plan.package.commit,
-        context_sha256=plan.context_sha256,
+        context_sha256=plan.content_sha256,
         key_id=plan.attestation.key_id,
     )
     try:

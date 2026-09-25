@@ -28,6 +28,8 @@ from csk.config import GlobalConfig
 from csk.sources import lock as lock_module
 from csk.sources import modes, publish, selection
 from csk.sources import transport as source_transport
+_PRODUCTION_RESOLVE_REF = source_transport.resolve_ref
+_PRODUCTION_ACQUIRE_NETWORK = source_transport.acquire
 from csk.sources.errors import (
     CODE_LOCK_STALE,
     CODE_MEMBER_INVALID,
@@ -474,6 +476,20 @@ def _register_cli_v2_project(
     monkeypatch.delenv("CSK_SOURCE_POLICY", raising=False)
 
 
+def _configure_named_https_provider(
+    home: Path, identity: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Give a named HTTPS endpoint a harmless task-local test credential."""
+
+    config_path = home / "config.json"
+    document = json.loads(config_path.read_text(encoding="utf-8"))
+    document["build_https"] = {
+        identity: {"token_env": "CSK_TEST_SOURCE_ENDPOINT_TOKEN"}
+    }
+    config_path.write_text(json.dumps(document), encoding="utf-8")
+    monkeypatch.setenv("CSK_TEST_SOURCE_ENDPOINT_TOKEN", "synthetic-test-token")
+
+
 def _fresh_cli_home(tmp_path: Path) -> Path:
     home = tmp_path / "fresh-csk-home"
     locking.provision_new_manager_home(home)
@@ -616,6 +632,8 @@ def _committed_cli_git_project(
     monkeypatch: pytest.MonkeyPatch,
     *,
     source_kind: str = "git",
+    url: str = "https://example.test/kit.git",
+    identity: str = "example.test/kit",
 ) -> tuple[Path, Path, str, str, _FakeTransport, bytes]:
     """Create a committed locked Git project and prime the hermetic transport."""
 
@@ -627,9 +645,8 @@ def _committed_cli_git_project(
     )
     commit_one = commit_all(kit, "first package version")
     run(["git", "tag", "v1", commit_one], kit)
-    url = "https://example.test/kit.git"
     fake = _FakeTransport()
-    fake.add(url, kit, "example.test/kit")
+    fake.add(url, kit, identity)
 
     project = make_project(tmp_path)
     if source_kind == "repository":
@@ -688,6 +705,215 @@ def test_cli_committed_git_lock_fetches_locked_commit_after_tag_moves(
     ).read_text(encoding="utf-8") == "one"
     assert (project / publish.SKILLFILE_LOCK_NAME).read_bytes() == lock_before
     assert _read_lock(project).members[0].package.commit.hex == commit_one  # type: ignore[union-attr]
+
+
+def test_cli_committed_git_lock_replays_through_listed_mirror_after_tag_moves(
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A moved tag's locked commit is fetched through the current listed mirror."""
+
+    _require_selection()
+    repository = "example.test/kit"
+    declared_url = "https://example.test/kit.git"
+    mirror_url = "https://mirror.example.net/kit.git"
+    project, kit, commit_one, _url, fake, lock_before = _committed_cli_git_project(
+        tmp_path, skills_root, csk_home, monkeypatch
+    )
+    (kit / "skills" / "nested" / "references" / "version.txt").write_text(
+        "two", encoding="utf-8"
+    )
+    commit_two = commit_all(kit, "second package version")
+    run(["git", "tag", "--force", "v1", commit_two], kit)
+    _prepare_admittable_repo(kit)
+    fake.resolve_calls.clear()
+    fake.acquire_calls.clear()
+    fake.by_url.pop(declared_url)
+    fake.by_identity.pop(repository)
+    fake.add(mirror_url, kit)
+
+    policy_path = tmp_path / "source-policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "repositories": {
+                    repository: {
+                        "endpoints": [
+                            {
+                                "url": mirror_url,
+                                "authentication": "team-https",
+                                "mirror_of": repository,
+                            }
+                        ],
+                        "fallback": "none",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_SOURCE_POLICY", os.fspath(policy_path))
+
+    def acquire_through_policy(
+        identity: Any, lock: Any, tool: Any = None, **kwargs: Any
+    ) -> source_transport.AcquisitionResult:
+        def attempt(**attempt_kwargs: Any) -> git_admission.Snapshot:
+            endpoint = attempt_kwargs["endpoint"]
+            assert endpoint.url == mirror_url
+            assert endpoint.identity == repository
+            return fake.acquire_network(
+                endpoint.identity,
+                attempt_kwargs["lock"],
+                attempt_kwargs["tool"],
+                declared_url=endpoint.url,
+            ).snapshot
+
+        return _PRODUCTION_ACQUIRE_NETWORK(
+            identity, lock, tool, attempt=attempt, **kwargs
+        )
+
+    monkeypatch.setattr(source_transport, "acquire_network", acquire_through_policy)
+    fresh_home = _fresh_cli_home(tmp_path)
+    _register_cli_v2_project(monkeypatch, fresh_home, skills_root, project)
+    _configure_named_https_provider(fresh_home, repository, monkeypatch)
+    monkeypatch.setenv("CSK_SOURCE_POLICY", os.fspath(policy_path))
+    shutil.rmtree(project / ".agents" / "skills" / "nested")
+
+    assert cli.main(["install", "app"]) == 0
+    assert "nested installed" in capsys.readouterr().out
+    assert fake.resolve_calls == []
+    assert fake.acquire_calls == [(repository, commit_one)]
+    assert (
+        project / ".agents" / "skills" / "nested" / "references" / "version.txt"
+    ).read_text(encoding="utf-8") == "one"
+    assert (project / publish.SKILLFILE_LOCK_NAME).read_bytes() == lock_before
+    assert _read_lock(project).members[0].package.commit.hex == commit_one  # type: ignore[union-attr]
+
+
+def test_v2_refresh_current_endpoint_existing_checkout_uses_alias_and_replaces_lock(
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Upgrade resolves and acquires through the current aliased endpoint."""
+
+    _require_selection()
+    repository = "example.org/kit"
+    declared_url = "https://example.org/kit.git"
+    selected_remote = "https://current-mirror.example.net:8443/kit.git"
+    project, kit, commit_one, _url, fake, lock_before = _committed_cli_git_project(
+        tmp_path,
+        skills_root,
+        csk_home,
+        monkeypatch,
+        url=declared_url,
+        identity=repository,
+    )
+    (kit / "skills" / "nested" / "references" / "version.txt").write_text(
+        "two", encoding="utf-8"
+    )
+    commit_two = commit_all(kit, "second package version")
+    run(["git", "tag", "--force", "v1", commit_two], kit)
+    _prepare_admittable_repo(kit)
+
+    policy_path = tmp_path / "source-policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "aliases": {
+                    "current": {
+                        "host": "current-mirror.example.net",
+                        "port": 8443,
+                        "authentication": "team-https",
+                    }
+                },
+                "repositories": {
+                    repository: {
+                        "endpoints": [
+                            {
+                                "url": declared_url,
+                                "authentication": "team-https",
+                                "alias": "current",
+                                "mirror_of": repository,
+                            }
+                        ],
+                        "fallback": "none",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_SOURCE_POLICY", os.fspath(policy_path))
+    _configure_named_https_provider(csk_home, repository, monkeypatch)
+    selected_connections: list[str] = []
+
+    def resolve_through_policy(
+        identity: Any,
+        ref_kind: str,
+        ref_value: str,
+        tool: Any = None,
+        **kwargs: Any,
+    ) -> source_transport.ResolutionResult:
+        def attempt(**attempt_kwargs: Any) -> Any:
+            endpoint = attempt_kwargs["endpoint"]
+            connection = source_transport._connection_target(endpoint)
+            selected_connections.append(connection.remote_url)
+            assert connection.remote_url == selected_remote
+            return fake.resolve_ref(
+                endpoint.identity,
+                attempt_kwargs["ref_kind"],
+                attempt_kwargs["ref_value"],
+                attempt_kwargs["tool"],
+                declared_url=declared_url,
+            ).lock
+
+        return _PRODUCTION_RESOLVE_REF(
+            identity, ref_kind, ref_value, tool, attempt=attempt, **kwargs
+        )
+
+    def acquire_through_policy(
+        identity: Any, lock: Any, tool: Any = None, **kwargs: Any
+    ) -> source_transport.AcquisitionResult:
+        def attempt(**attempt_kwargs: Any) -> git_admission.Snapshot:
+            endpoint = attempt_kwargs["endpoint"]
+            connection = source_transport._connection_target(endpoint)
+            selected_connections.append(connection.remote_url)
+            assert connection.remote_url == selected_remote
+            return fake.acquire_network(
+                endpoint.identity,
+                attempt_kwargs["lock"],
+                attempt_kwargs["tool"],
+                declared_url=declared_url,
+            ).snapshot
+
+        return _PRODUCTION_ACQUIRE_NETWORK(
+            identity, lock, tool, attempt=attempt, **kwargs
+        )
+
+    monkeypatch.setattr(source_transport, "resolve_ref", resolve_through_policy)
+    monkeypatch.setattr(source_transport, "acquire_network", acquire_through_policy)
+    fake.resolve_calls.clear()
+    fake.acquire_calls.clear()
+
+    assert cli.main(["upgrade", "app"]) == 0
+    output = capsys.readouterr().out
+    assert "lock replaced" in output
+    assert selected_connections == [selected_remote, selected_remote]
+    assert (project / publish.SKILLFILE_LOCK_NAME).read_bytes() != lock_before
+    assert _read_lock(project).members[0].package.commit.hex == commit_two  # type: ignore[union-attr]
+    assert (
+        project / ".agents" / "skills" / "nested" / "references" / "version.txt"
+    ).read_text(encoding="utf-8") == "two"
+    assert fake.resolve_calls == [(repository, "tag", "v1")]
+    assert fake.acquire_calls == [(repository, commit_two)]
 
 
 def test_cli_committed_git_lock_rejects_wrong_content_for_locked_identity(

@@ -1566,26 +1566,34 @@ def test_shared_deadline_reaches_real_lane(
         assert elapsed >= budget - 1.0
 
 
-def test_alias_connection_target_preserves_ssh_path_and_selected_port() -> None:
-    plan = _v2_plan(
+def test_alias_connection_target_requires_ssh_uri_for_selected_port() -> None:
+    aliases = {
+        "corp-mirror": {
+            "host": "mirror.corp.example",
+            "port": 2222,
+            "authentication": "team-ssh",
+        }
+    }
+    scp_with_port = {
+        "url": "git@example.org:kit.git",
+        "authentication": "team-ssh",
+        "alias": "corp-mirror",
+        "mirror_of": IDENTITY,
+    }
+    with pytest.raises(repository_policy.RepositoryPolicyError) as refused:
+        _v2_plan([scp_with_port], aliases=aliases)
+    assert refused.value.code == repository_policy.CODE_POLICY_INVALID
+
+    uri = _v2_plan(
         [
             {
-                "url": "git@example.org:kit.git",
-                "authentication": "team-ssh",
-                "alias": "corp-mirror",
-                "mirror_of": IDENTITY,
+                **scp_with_port,
+                "url": "ssh://git@example.org/kit.git",
             }
         ],
-        aliases={
-            "corp-mirror": {
-                "host": "mirror.corp.example",
-                "port": 2222,
-                "authentication": "team-ssh",
-            }
-        },
+        aliases=aliases,
     )
-
-    connection = transport._connection_target(plan.endpoints[0])
+    connection = transport._connection_target(uri.endpoints[0])
 
     assert connection.remote_url == "ssh://git@mirror.corp.example:2222/kit.git"
     assert connection.ssh_host == "git@mirror.corp.example"

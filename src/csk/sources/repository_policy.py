@@ -647,6 +647,15 @@ def resolve_endpoint(
                 raise _invalid(
                     f"mirror URL {endpoint.url!r} must not be combined with alias {endpoint.alias!r}"
                 )
+            if (
+                parsed.transport == SSH
+                and not endpoint.url.startswith("ssh://")
+                and selected_alias.port is not None
+            ):
+                raise _invalid(
+                    "SCP endpoint spelling cannot carry an alias-selected SSH port; "
+                    "use an ssh:// endpoint"
+                )
             if parsed.port is not None and selected_alias.port is not None:
                 raise _invalid("URL port and alias port must not both be present")
             if selected_alias.authentication != endpoint.authentication:

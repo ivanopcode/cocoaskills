@@ -624,6 +624,32 @@ def test_v2_structural_refusals_are_typed_before_selection(
     assert excinfo.value.code == code
 
 
+def test_scp_endpoint_refuses_alias_selected_ssh_port() -> None:
+    """SCP spelling has no port slot, so alias ports require an SSH URI."""
+
+    document = _document(
+        [
+            _endpoint(
+                "git@example.org:kit.git",
+                authentication="team-ssh",
+                alias="ssh-mirror",
+                mirror_of=REPOSITORY,
+            )
+        ],
+        aliases={
+            "ssh-mirror": {
+                "host": "mirror.example.net",
+                "port": 2222,
+                "authentication": "team-ssh",
+            }
+        },
+    )
+    with pytest.raises(policy.RepositoryPolicyError) as refused:
+        policy.parse_policy(document)
+    assert refused.value.code == policy.CODE_POLICY_INVALID
+    assert "use an ssh:// endpoint" in refused.value.detail
+
+
 def test_declared_mirror_may_be_first_and_uses_normal_fallback_order() -> None:
     mirror = _endpoint(
         "https://mirror.example.net/kit.git", mirror_of=REPOSITORY, authentication="mirror"

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://relux-works.github.io/curator-spec/schemas/draft-sources-v1/local-snapshot-v1.schema.json",
+  "$id": "https://relux-works.github.io/curator-spec/schemas/skillfile-sources-v1/local-snapshot-v1.schema.json",
   "type": "object",
   "$defs": {
     "portablePath": {

@@ -646,12 +646,12 @@ def test_committed_fixture_locks_validate_against_pinned_json_schema() -> None:
         pytest.skip("CSK_DRAFT_SOURCES_SUITE_ROOT is not set")
     suite_root = Path(suite_text)
     repository_root = suite_root.parent.parent
-    schema_path = repository_root / "schemas" / "draft-sources-v1" / "skillfile-lock-v1.schema.json"
+    schema_path = repository_root / "schemas" / "skillfile-sources-v1" / "skillfile-lock-v1.schema.json"
     if not schema_path.is_file():
         pytest.skip(f"pinned skillfile-lock schema is not available at {schema_path}")
     schema = json.loads(schema_path.read_bytes())
     resources: list[tuple[str, Resource[Any]]] = []
-    for directory in (repository_root / "schemas" / "v1", repository_root / "schemas" / "draft-sources-v1"):
+    for directory in (repository_root / "schemas" / "v1", repository_root / "schemas" / "skillfile-sources-v1"):
         for path in directory.glob("*.json"):
             document = json.loads(path.read_bytes())
             resources.append((document["$id"], Resource.from_contents(document)))

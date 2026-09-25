@@ -9,8 +9,8 @@ application to legacy configured Git entries diverges:
 2. “For legacy entries the directory is `.` relative to that entry's selected repository.”
 
 The pinned corpus fixture
-`conformance/draft-sources-v1/schema-cases/skillfile-lock-v1/valid-configured-git.json`
-(curator-spec `8ba9c235ec5be00d52378479516c82386fd0c178`) takes the loose side:
+`conformance/skillfile-sources-v1/schema-cases/skillfile-lock-v1/valid-configured-git.json`
+(curator-spec `574636785c9da22757095ca279e8a9da801156ec`) takes the loose side:
 its configured-Git package has `directory: "."` while the member records
 `agents/skills/review`, and the case is schema-valid. The committed mirror
 `tests/fixtures/skillfile-v2/hand-authored/Skillfile.lock.json` represents the

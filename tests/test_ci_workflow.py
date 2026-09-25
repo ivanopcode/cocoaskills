@@ -842,7 +842,7 @@ def test_draft_sources_lanes_run_the_harness_against_the_pinned_suite() -> None:
         assert "path: protocol-spec-draft" in job
         assert (
             "CSK_DRAFT_SOURCES_SUITE_ROOT: ${{ github.workspace }}"
-            "/protocol-spec-draft/conformance/draft-sources-v1" in job
+            "/protocol-spec-draft/conformance/skillfile-sources-v1" in job
         )
         assert "python -m pytest -q tests/test_draft_sources_conformance.py" in job
         assert "--junitxml=draft-sources-results.xml" in job
@@ -954,14 +954,14 @@ def test_the_draft_sources_suite_pin_is_one_immutable_identity() -> None:
     pin = json.loads((CI_CONFIG / "draft-sources-suite.json").read_text(encoding="utf-8"))
     assert set(pin) == {"repository", "revision", "suite_root", "files"}
     assert pin["repository"] == "relux-works/curator-spec"
-    assert pin["revision"] == "8ba9c235ec5be00d52378479516c82386fd0c178"
-    assert pin["suite_root"] == "conformance/draft-sources-v1"
+    assert pin["revision"] == "574636785c9da22757095ca279e8a9da801156ec"
+    assert pin["suite_root"] == "conformance/skillfile-sources-v1"
     assert pin["files"] == {
         "index.json": (
-            "sha256:c1c2e60a595107a79aaefdbd7822d95279cc792cc8cdc969ded36522663e246f"
+            "sha256:654707af529bffc5104e92e98d4ab6fb910163b187861152bfd7fa769d852575"
         ),
         "semantic-cases.json": (
-            "sha256:552c1eed16d2d6bb37b0a5726b9420d20e4dc1d5e97e34cfa4ee6182bcb90ce0"
+            "sha256:12ae1318a25a96a21333bccb65b07fcd70b8bb1bf165bbd4b006f092806488c8"
         ),
         "snapshot-cases.json": (
             "sha256:1922256efe21f934b667ec913f34a2af3b16004ecb00c63ee8712eacaf347999"

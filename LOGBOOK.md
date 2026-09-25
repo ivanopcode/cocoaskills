@@ -1,5 +1,32 @@
 # Logbook
 
+## 2026-09-25 - TASK-260925-38kn57: accepted skillfile-sources corpus pin
+
+The source conformance pin and CI checkout paths now target curator-spec
+`574636785c9da22757095ca279e8a9da801156ec` at
+`conformance/skillfile-sources-v1`. The active Skillfile v2 design note and
+vendored local-snapshot schema ID were updated to match. CI job IDs remain
+`fast_draft_sources` and `merge_draft_sources`.
+
+Running the accepted vectors exposed three #90 behavior clarifications:
+registry evidence's legacy `context_sha256` wire member binds to the raw
+package-tree hash, even when the lock-projected plan context differs; SCP
+endpoint spelling has no SSH port slot, so an alias-selected SSH port requires
+an `ssh://` URI; and a present marker-v5 external `declared_tag` must satisfy
+Git's ref-name grammar. These are enforced at schema-2 status evidence
+evaluation, repository-policy resolution, and marker-v5 receipt validation,
+respectively. Regression tests drive those production paths, and a narrowing
+mutant for each was killed by its named test.
+
+VERIFICATION: Accepted corpus conformance passed with 328 passed and only the
+intentional setup-phase skip-accounting probe skipped; no accepted vector was
+skipped. All 104 configured `test_*.py` modules passed in bounded batches,
+totalling 11,168 passed, 260 declared environment/platform skips, and zero
+failures. Strict mypy, compileall, package build, v1 CLI byte-golden checks,
+and `git diff --check` passed. Exact batch commands, exit codes, skip bounds,
+mutant failures, and the acceptance coverage ratio are in
+`TASK-260925-38kn57_results.md`; the candidate remains uncommitted for review.
+
 ## 2026-09-24 - BUG-260924-3txaoi: schema-2 install ignored Skillfile.locale
 
 ROOT CAUSE: The schema-2 install branch passed only `config.preferred_locale` to

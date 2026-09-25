@@ -1,8 +1,8 @@
 # Skillfile v2 sources in csk (draft skillfile-sources-v1, opt-in)
 
 Design note for EPIC-260916-34u83e. The epic implements opt-in,
-draft-labelled Skillfile schema 2 sources in cocoaskills per curator-spec
-`8ba9c235ec5be00d52378479516c82386fd0c178` (skillfile-sources-v1 rev 1,
+Skillfile schema 2 sources in cocoaskills per curator-spec
+`574636785c9da22757095ca279e8a9da801156ec` (skillfile-sources-v1 rev 1,
 repository-transport-v1/v2). Frozen v1 wire schemas, release artifacts,
 `RELEASED_SUITE_PIN` and `.github/ci/candidate-suite.json` stay byte-unchanged.
 
@@ -67,17 +67,17 @@ surface so the v1 paths stay byte-identical.
 
 ## Suite pin
 
-The draft conformance corpus is pinned in
+The skillfile-sources conformance corpus is pinned in
 `.github/ci/draft-sources-suite.json` and consumed by
 `tests/test_draft_sources_conformance.py` via `CSK_DRAFT_SOURCES_SUITE_ROOT`:
 
 - repository: `relux-works/curator-spec`
-- revision: `8ba9c235ec5be00d52378479516c82386fd0c178`
-- suite root: `conformance/draft-sources-v1`
-- `index.json`: `sha256:c1c2e60a595107a79aaefdbd7822d95279cc792cc8cdc969ded36522663e246f`
-  (115 schema cases over 8 draft schemas, both polarities each)
-- `semantic-cases.json`: `sha256:552c1eed16d2d6bb37b0a5726b9420d20e4dc1d5e97e34cfa4ee6182bcb90ce0`
-  (94 semantic cases, all owned via the harness mapping)
+- revision: `574636785c9da22757095ca279e8a9da801156ec`
+- suite root: `conformance/skillfile-sources-v1`
+- `index.json`: `sha256:654707af529bffc5104e92e98d4ab6fb910163b187861152bfd7fa769d852575`
+  (121 schema cases, both polarities where applicable)
+- `semantic-cases.json`: `sha256:12ae1318a25a96a21333bccb65b07fcd70b8bb1bf165bbd4b006f092806488c8`
+  (105 semantic cases, all owned via the harness mapping)
 - `snapshot-cases.json`: `sha256:1922256efe21f934b667ec913f34a2af3b16004ecb00c63ee8712eacaf347999`
   (3 snapshot vectors)
 

@@ -1,19 +1,19 @@
-"""Executable draft-sources-v1 conformance harness (draft, opt-in).
+"""Executable skillfile-sources-v1 conformance harness (accepted corpus, opt-in).
 
-This module stands up the conformance consumer for the unreleased
-skillfile-sources-v1 corpus before any source feature lands, so every later
+This module stands up the conformance consumer for the accepted
+skillfile-sources-v1 corpus, so every later
 leaf adds real semantic-case drivers to a harness that already reports
 honestly. It reads the suite from ``CSK_DRAFT_SOURCES_SUITE_ROOT`` (a checkout
 of ``relux-works/curator-spec`` at the revision pinned in
 ``.github/ci/draft-sources-suite.json``, pointing at
-``conformance/draft-sources-v1``) and:
+``conformance/skillfile-sources-v1``) and:
 
 * authenticates ``index.json``, ``semantic-cases.json`` and
   ``snapshot-cases.json`` against the committed pin digests, failing closed on
   a mismatch or a missing file;
 * validates every indexed schema case with ``jsonschema`` Draft 2020-12 over a
   ``referencing`` registry built from ``schemas/v1`` and
-  ``schemas/draft-sources-v1``, asserting each expected ``valid`` flag;
+  ``schemas/skillfile-sources-v1``, asserting each expected ``valid`` flag;
 * recomputes every snapshot vector's entry hashes, path order and
   ``sha256:CCJ-1`` snapshot digest via ``csk.protocol_json.canonical_bytes``;
 * enumerates every semantic case as a parametrized test through the
@@ -120,15 +120,13 @@ PIN_PATH = Path(__file__).parents[1] / ".github" / "ci" / "draft-sources-suite.j
 EXPECTED_SUITE_FILES = ("index.json", "semantic-cases.json", "snapshot-cases.json")
 DRAFT_2020_12_SCHEMA_ID = "https://json-schema.org/draft/2020-12/schema"
 
-# The corpus at the pinned revision carries 115 schema cases. The task text
-# names 102, which predates corpus growth the same way the epic goal text
-# names 73 semantic cases while the pinned suite carries 94: the operative
-# requirement is "every index.json schema case", so the harness asserts the
-# measured inventory, not the stale count.
-EXPECTED_SCHEMA_CASE_COUNT = 115
+# The accepted corpus at the pinned revision carries 121 schema cases. The
+# operative requirement is "every index.json schema case", so the harness
+# asserts the measured inventory.
+EXPECTED_SCHEMA_CASE_COUNT = 121
 EXPECTED_SCHEMA_CASE_COUNTS = {
     "build-receipt-v3.schema.json": 4,
-    "install-marker-v5.schema.json": 38,
+    "install-marker-v5.schema.json": 44,
     "local-snapshot-v1.schema.json": 3,
     "skillfile-lock-v1.schema.json": 7,
     "skillfile-v2.schema.json": 41,
@@ -139,7 +137,7 @@ EXPECTED_SCHEMA_CASE_COUNTS = {
 EXPECTED_DRAFT_SCHEMA_NAMES = frozenset(
     {*EXPECTED_SCHEMA_CASE_COUNTS, "source-types-v1.schema.json"}
 )
-EXPECTED_SEMANTIC_CASE_COUNT = 94
+EXPECTED_SEMANTIC_CASE_COUNT = 105
 EXPECTED_SNAPSHOT_VECTOR_COUNT = 3
 
 # Owning task per semantic case id. Ownership follows the primary gate under
@@ -170,9 +168,6 @@ CASE_OWNERS: dict[str, str] = {
     "capture-mutation": "TASK-260916-sbzutf",
     "frozen-copy-mutation": "TASK-260916-sbzutf",
     "local-git-dirty": "TASK-260916-sbzutf",
-    # TASK-260917-34g2lq snapshot-store leaf: moved out of sbzutf by the
-    # recorded leaf split (sbzutf keeps capture and revalidation only).
-    "missing-snapshot": "TASK-260917-34g2lq",
     # TASK-260916-11yseo bind-source-audit-to-existing-assurance-gates.
     "missing-audit-report": "TASK-260916-11yseo",
     "strict-network-attestation-local": "TASK-260916-11yseo",
@@ -255,6 +250,19 @@ CASE_OWNERS: dict[str, str] = {
     "v2-external-build-mirror-admitted": "TASK-260916-341a6q",
     "v2-external-build-port-refused": "TASK-260916-341a6q",
     "v2-external-build-alias-refused": "TASK-260916-341a6q",
+    # TASK-260925-38kn57 pins and drives the newly accepted corpus vectors.
+    "attestation-evidence-revoked-identity-commit-advisory": "TASK-260925-38kn57",
+    "git-missing-snapshot-fetches-locked-commit": "TASK-260925-38kn57",
+    "git-moved-tag-replays-locked-commit": "TASK-260925-38kn57",
+    "git-moved-tag-replays-locked-commit-through-mirror": "TASK-260925-38kn57",
+    "global-schema2-without-profile-lock-refused": "TASK-260925-38kn57",
+    "missing-snapshot-unreachable-source": "TASK-260925-38kn57",
+    "path-missing-snapshot-drifted-bytes": "TASK-260925-38kn57",
+    "path-missing-snapshot-identical-bytes": "TASK-260925-38kn57",
+    "project-schema2-without-profile-lock-accepted": "TASK-260925-38kn57",
+    "v2-refresh-current-endpoint-existing-checkout": "TASK-260925-38kn57",
+    "v2-scp-alias-port-refused": "TASK-260925-38kn57",
+    "v2-ssh-uri-alias-port": "TASK-260925-38kn57",
 }
 assert len(CASE_OWNERS) == EXPECTED_SEMANTIC_CASE_COUNT
 
@@ -1651,10 +1659,10 @@ def _load_schemas(repository_root: Path) -> tuple[dict[str, Any], Registry]:
     the draft schemas the index addresses by file name.
     """
     schemas_v1 = repository_root / "schemas" / "v1"
-    schemas_draft = repository_root / "schemas" / "draft-sources-v1"
+    schemas_draft = repository_root / "schemas" / "skillfile-sources-v1"
     assert schemas_v1.is_dir(), f"draft sources checkout has no schemas/v1: {repository_root}"
     assert schemas_draft.is_dir(), (
-        f"draft sources checkout has no schemas/draft-sources-v1: {repository_root}"
+        f"skillfile-sources checkout has no schemas/skillfile-sources-v1: {repository_root}"
     )
     resources: list[tuple[str, Any]] = []
     schemas: dict[str, Any] = {}
@@ -1794,8 +1802,13 @@ def test_draft_sources_missing_suite_file_fails_authentication(tmp_path: Path) -
 def test_draft_sources_schema_inventory_is_exhaustive() -> None:
     assert len(SCHEMA_CASES) == EXPECTED_SCHEMA_CASE_COUNT
     for entry in SCHEMA_CASES:
-        assert set(entry) == {"schema", "instance", "valid"}, entry
+        assert set(entry) in (
+            {"schema", "instance", "valid"},
+            {"schema", "instance", "valid", "comment"},
+        ), entry
         assert isinstance(entry["valid"], bool), entry
+        if "comment" in entry:
+            assert isinstance(entry["comment"], str), entry
     assert len({entry["instance"] for entry in SCHEMA_CASES}) == len(SCHEMA_CASES)
     counts = {
         schema: sum(entry["schema"] == schema for entry in SCHEMA_CASES)
@@ -1808,6 +1821,11 @@ def test_draft_sources_schema_inventory_is_exhaustive() -> None:
     }
     assert set(coverage) == set(DRAFT_SCHEMAS) - {"source-types-v1.schema.json"}
     assert all(values == {True, False} for values in coverage.values())
+
+
+# Semantic drivers that call another repository test use the capture fixture
+# owned by their corpus node so nested CLI assertions inspect real output.
+_CURRENT_SEMANTIC_CAPTURE: pytest.CaptureFixture[str] | None = None
 
 
 @pytest.mark.parametrize(
@@ -1953,14 +1971,22 @@ def test_draft_sources_driver_registration_rejects_duplicate() -> None:
     SEMANTIC_CASES,
     ids=[case["id"] for case in SEMANTIC_CASES],
 )
-def test_draft_sources_semantic_case(case: dict[str, Any]) -> None:
+def test_draft_sources_semantic_case(
+    case: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
     case_id = case["id"]
     assert case_id in CASE_OWNERS, f"draft semantic case without an owning task: {case_id}"
     driver = SEMANTIC_DRIVERS.get(case_id)
     if driver is None:
         pytest.skip(f"not yet implemented: {CASE_OWNERS[case_id]}")
-    with _observe_production_entries() as observed:
-        driver(case)
+    global _CURRENT_SEMANTIC_CAPTURE
+    previous_capture = _CURRENT_SEMANTIC_CAPTURE
+    _CURRENT_SEMANTIC_CAPTURE = capsys
+    try:
+        with _observe_production_entries() as observed:
+            driver(case)
+    finally:
+        _CURRENT_SEMANTIC_CAPTURE = previous_capture
     if not observed:
         pytest.fail(
             f"hollow driver for {case_id} (owner {CASE_OWNERS[case_id]}): the "
@@ -1972,7 +1998,9 @@ def test_draft_sources_semantic_case(case: dict[str, Any]) -> None:
     CASE_CALL_SITES[case_id] = sorted(set(observed))
 
 
-def test_draft_sources_registered_driver_dispatch_through_the_semantic_entry() -> None:
+def test_draft_sources_registered_driver_dispatch_through_the_semantic_entry(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """A registered driver receives its exact case via the semantic entry.
 
     Regression for the dispatch gap: the parametrized semantic test ends in
@@ -2005,7 +2033,7 @@ def test_draft_sources_registered_driver_dispatch_through_the_semantic_entry() -
 
         register_semantic_driver(case["id"], _record)
         try:
-            test_draft_sources_semantic_case(case)
+            test_draft_sources_semantic_case(case, capsys)
         finally:
             del SEMANTIC_DRIVERS[case["id"]]
         assert received == [case]
@@ -2017,7 +2045,7 @@ def test_draft_sources_registered_driver_dispatch_through_the_semantic_entry() -
         register_semantic_driver(case["id"], _boom)
         try:
             with pytest.raises(AssertionError, match="driver failure propagates"):
-                test_draft_sources_semantic_case(case)
+                test_draft_sources_semantic_case(case, capsys)
         finally:
             del SEMANTIC_DRIVERS[case["id"]]
     finally:
@@ -2153,6 +2181,20 @@ def _policy_case_document(case: dict[str, Any]) -> dict[str, Any]:
             },
             "aliases": case_input["aliases"],
         }
+    if case_id in {"v2-ssh-uri-alias-port", "v2-scp-alias-port-refused"}:
+        endpoint_value = endpoint(
+            case_input["endpoint"],
+            case_input.get("endpoint_authentication", "team-ssh"),
+            alias=case_input["alias"],
+            mirror_of=case_input["mirror_of"],
+        )
+        return {
+            "schema_version": 2,
+            "repositories": {
+                repository: {"endpoints": [endpoint_value], "fallback": "none"}
+            },
+            "aliases": case_input["aliases"],
+        }
     if case_id == "v2-undeclared-mirror":
         endpoint_value = endpoint(case_input["endpoint"])
         return {
@@ -2181,6 +2223,7 @@ def _policy_case_document(case: dict[str, Any]) -> dict[str, Any]:
         "v2-double-port",
         "v2-spurious-mirror-of",
         "v2-mirror-of-mismatch",
+        "v2-scp-alias-port-refused",
     }:
         endpoint_value = endpoint(
             case_input["endpoint"],
@@ -2224,6 +2267,7 @@ def _drive_repository_policy_case_impl(case: dict[str, Any]) -> None:
         "v2-declared-mirror",
         "v2-mirror-first",
         "v2-alias-resolution",
+        "v2-ssh-uri-alias-port",
     }:
         parsed = repository_policy.parse_policy(document)
         plan = repository_policy.select_endpoints(parsed, case_input["repository"])
@@ -2236,9 +2280,18 @@ def _drive_repository_policy_case_impl(case: dict[str, Any]) -> None:
         elif case_id == "v2-mirror-first":
             assert plan.endpoints[0].host == "mirror.example.net"
             assert plan.next_endpoint(case_input["first_failure"]) == plan.endpoints[1]
-        else:
+        elif case_id == "v2-alias-resolution":
             assert plan.endpoints[0].host == "mirror.corp.example"
             assert plan.endpoints[0].port == 8443
+        else:
+            alias = case_input["aliases"][case_input["alias"]]
+            assert plan.endpoints[0].host == alias["host"]
+            assert plan.endpoints[0].port == alias["port"]
+            assert plan.max_attempts == 1
+            connection = source_transport._connection_target(plan.endpoints[0])
+            assert connection.remote_url == (
+                f"ssh://git@{alias['host']}:{alias['port']}/kit.git"
+            )
         return
 
     with pytest.raises(repository_policy.RepositoryPolicyError) as excinfo:
@@ -2270,6 +2323,7 @@ for _case_id in (
     "v2-declared-mirror",
     "v2-mirror-first",
     "v2-alias-resolution",
+    "v2-ssh-uri-alias-port",
     "v2-reader-accepts-v1-policy",
     "v2-undeclared-mirror",
     "v2-pin-port-mismatch",
@@ -2281,6 +2335,7 @@ for _case_id in (
     "v2-double-port",
     "v2-spurious-mirror-of",
     "v2-mirror-of-mismatch",
+    "v2-scp-alias-port-refused",
     "v2-v1-reader-rejects-v2-policy",
 ):
     register_semantic_driver(_case_id, _drive_repository_policy_case)
@@ -3380,52 +3435,174 @@ register_semantic_driver("capture-mutation", _drive_capture_mutation)
 register_semantic_driver("frozen-copy-mutation", _drive_frozen_copy_mutation)
 
 
-# Semantic drivers registered by TASK-260917-34g2lq (snapshot store).
-#
-# Each driver builds a real temporary-filesystem fixture from the case
-# input, calls a ``csk.sources`` production entry point, and asserts the
-# exact expected outcome. Imports stay function-local so this block
-# appends without touching the shared import header.
+# Corpus replay vectors are driven through the existing CLI/install regressions.
+# The called tests exercise ``csk install`` -> ``installer.install`` and assert
+# lock bytes, installed content and transport/ref-resolution behavior. Their
+# pytest capture fixture is supplied by the semantic corpus node.
+def _invoke_source_closure_test(function_name: str) -> None:
+    capture = _CURRENT_SEMANTIC_CAPTURE
+    assert capture is not None, "semantic corpus capture fixture is unavailable"
+    test_directory = Path(__file__).parent
+    inserted_test_path = os.fspath(test_directory) not in sys.path
+    if inserted_test_path:
+        sys.path.insert(0, os.fspath(test_directory))
+    try:
+        closure_tests = importlib.import_module("test_source_closure_refresh")
+    finally:
+        if inserted_test_path:
+            sys.path.remove(os.fspath(test_directory))
+    task_temp = Path(__file__).parents[1] / ".temp" / "TASK-260925-38kn57" / "case-runs"
+    task_temp.mkdir(parents=True, exist_ok=True)
+    from csk import locking as locking_module
+
+    with tempfile.TemporaryDirectory(
+        prefix="semantic-", dir=os.fspath(task_temp)
+    ) as raw:
+        root = Path(raw)
+        skills_root = root / "skills"
+        skills_root.mkdir()
+        csk_home = root / ".cocoaskills"
+        locking_module.provision_new_manager_home(csk_home)
+        monkeypatch = pytest.MonkeyPatch()
+        try:
+            getattr(closure_tests, function_name)(
+                root, skills_root, csk_home, monkeypatch, capture
+            )
+        finally:
+            monkeypatch.undo()
 
 
-def _drive_missing_snapshot(case: dict[str, Any]) -> None:
-    """Drive ``missing-snapshot`` through every consumer reader.
-
-    Registered by TASK-260917-34g2lq (store): the lock names a snapshot,
-    the store holds nothing, and live bytes sit in the authored tree.
-    Every consumer (audit, build, projection, install) fails
-    ``source_snapshot_unavailable`` and nothing recreates the snapshot
-    from the live bytes. No capture runs here, so the driver is
-    host-independent.
-    """
-
-    import tempfile
-
-    from csk.sources import consumers as consumers_module
-
-    assert case["input"]["locked"]
-    assert case["input"]["snapshot_store"] == "absent"
-    live_text = case["input"]["live"]
-    with tempfile.TemporaryDirectory(prefix="csk-missing-snapshot-") as raw:
-        home = Path(raw) / "home"
-        live = Path(raw) / "live" / "pkg"
-        live.mkdir(parents=True)
-        (live / "SKILL.md").write_text(live_text, encoding="utf-8")
-        assert {opener.__name__ for opener in consumers_module.ALL_CONSUMERS} == {
-            "open_for_audit",
-            "open_for_build",
-            "open_for_projection",
-            "open_for_install",
-        }
-        for opener in consumers_module.ALL_CONSUMERS:
-            with pytest.raises(source_errors.SourceError) as excinfo:
-                opener(home, "review", "local:packages/review")
-            assert excinfo.value.code == case["expected"]
-        assert not (home / "source-v1").exists()
-        assert (live / "SKILL.md").read_text(encoding="utf-8") == live_text
+def _drive_git_replay_vector(case: dict[str, Any]) -> None:
+    case_id = case["id"]
+    if case_id == "git-missing-snapshot-fetches-locked-commit":
+        assert case["expected"] == "fetch-locked-commit;install;lock-byte-identical"
+        test_name = "test_cli_committed_git_lock_fetches_locked_commit_after_tag_moves"
+    elif case_id == "git-moved-tag-replays-locked-commit":
+        assert "no-tag-resolution" in case["expected"]
+        test_name = "test_cli_committed_git_lock_fetches_locked_commit_after_tag_moves"
+    elif case_id == "git-moved-tag-replays-locked-commit-through-mirror":
+        assert "from-listed-mirror" in case["expected"]
+        test_name = "test_cli_committed_git_lock_replays_through_listed_mirror_after_tag_moves"
+    elif case_id == "missing-snapshot-unreachable-source":
+        assert case["expected"] == "source_snapshot_unavailable"
+        test_name = "test_cli_committed_git_lock_unreachable_remote_is_unavailable"
+    elif case_id == "path-missing-snapshot-drifted-bytes":
+        assert case["expected"] == "source_snapshot_changed"
+        test_name = "test_cli_committed_path_lock_drift_refuses_changed_without_storing_bytes"
+    elif case_id == "path-missing-snapshot-identical-bytes":
+        assert case["expected"] == "install;lock-byte-identical"
+        test_name = "test_cli_committed_path_lock_installs_from_empty_home_and_status_is_current"
+    else:
+        raise AssertionError(f"no replay driver for {case_id!r}")
+    _invoke_source_closure_test(test_name)
 
 
-register_semantic_driver("missing-snapshot", _drive_missing_snapshot)
+for _case_id in (
+    "git-missing-snapshot-fetches-locked-commit",
+    "git-moved-tag-replays-locked-commit",
+    "git-moved-tag-replays-locked-commit-through-mirror",
+    "missing-snapshot-unreachable-source",
+    "path-missing-snapshot-drifted-bytes",
+    "path-missing-snapshot-identical-bytes",
+):
+    register_semantic_driver(_case_id, _drive_git_replay_vector)
+
+
+def _drive_global_schema2_refusal(case: dict[str, Any]) -> None:
+    """Drive the global-scope refusal through the real global-install CLI."""
+
+    assert case["input"]["scope"] == "machine-global"
+    assert case["input"]["stored_scope_schema_version"] == 1
+    assert case["expected"] == "upgrade-error;machine-global-scope-remains-schema-1"
+    capture = _CURRENT_SEMANTIC_CAPTURE
+    assert capture is not None, "semantic corpus capture fixture is unavailable"
+    test_directory = Path(__file__).parent
+    inserted_test_path = os.fspath(test_directory) not in sys.path
+    if inserted_test_path:
+        sys.path.insert(0, os.fspath(test_directory))
+    try:
+        global_tests = importlib.import_module("test_global_install")
+    finally:
+        if inserted_test_path:
+            sys.path.remove(os.fspath(test_directory))
+    task_temp = Path(__file__).parents[1] / ".temp" / "TASK-260925-38kn57" / "case-runs"
+    task_temp.mkdir(parents=True, exist_ok=True)
+    from csk import locking as locking_module
+
+    with tempfile.TemporaryDirectory(
+        prefix="global-scope-", dir=os.fspath(task_temp)
+    ) as raw:
+        root = Path(raw)
+        skills_root = root / "skills"
+        skills_root.mkdir()
+        csk_home = root / ".cocoaskills"
+        locking_module.provision_new_manager_home(csk_home)
+        monkeypatch = pytest.MonkeyPatch()
+        try:
+            global_tests.test_global_install_keeps_schema_1_scope_and_plain_refusal(
+                monkeypatch, root, skills_root, csk_home, capture
+            )
+        finally:
+            monkeypatch.undo()
+
+
+register_semantic_driver(
+    "global-schema2-without-profile-lock-refused", _drive_global_schema2_refusal
+)
+
+
+def _drive_project_schema2_acceptance(case: dict[str, Any]) -> None:
+    """Drive project schema-2 acceptance through the production parser."""
+
+    from csk import manifest as manifest_module
+
+    capabilities = case["input"]["manager_capabilities"]
+    assert capabilities == {"profile_locks": False, "skillfile_sources_v1": True}
+    assert case["input"]["scope"] == "project"
+    assert case["input"]["stored_scope_schema_version"] == 1
+    assert case["expected"] == "accept-schema-2"
+    parsed = manifest_module.parse_manifest(
+        {"schema_version": case["input"]["skillfile_schema_version"], "sources": {}, "skills": []},
+        Path("Skillfile.json"),
+        scope="project",
+    )
+    assert parsed.schema_version == 2
+
+
+register_semantic_driver(
+    "project-schema2-without-profile-lock-accepted", _drive_project_schema2_acceptance
+)
+
+
+def _drive_current_refresh_endpoint(case: dict[str, Any]) -> None:
+    """Drive the accepted current-endpoint case through CLI upgrade."""
+
+    case_input = case["input"]
+    assert case_input["operation"] == "explicit-refresh"
+    assert case_input["existing_checkout"] is True
+    assert case_input["transport_revision"] == 2
+    assert case_input["repository"] == "example.org/kit"
+    assert case_input["stored_origin"] == "https://old-mirror.example.net/kit.git"
+    assert case_input["current_endpoint"] == "https://example.org/kit.git"
+    assert case_input["current_alias"] == {
+        "host": "current-mirror.example.net",
+        "port": 8443,
+        "authentication": "team-https",
+    }
+    assert case_input["current_mirror_of"] == case_input["repository"]
+    assert case["expected"] == (
+        "fetch-current-resolved-endpoint-current-mirror.example.net:8443;"
+        "never-fetch-stored-origin;verify-locked-content;"
+        "replace-lock-atomically-on-success"
+    )
+    _invoke_source_closure_test(
+        "test_v2_refresh_current_endpoint_existing_checkout_uses_alias_and_replaces_lock"
+    )
+
+
+register_semantic_driver(
+    "v2-refresh-current-endpoint-existing-checkout", _drive_current_refresh_endpoint
+)
 
 
 # Semantic drivers registered by TASK-260916-15nf0l (install marker v5).
@@ -3708,6 +3885,14 @@ def _drive_attestation_evidence(case: dict[str, Any]) -> None:
         "wrong-context": {"context_sha256": _MARKER_V5_CONTEXT_OTHER},
         "wrong-key": {"key_id": _MARKER_V5_KEY_OTHER},
     }
+    if case["id"] == "attestation-evidence-revoked-identity-commit-advisory":
+        assert case["input"]["revocation_match"] == (
+            "canonical-repository-and-commit-only;name-and-content-hash-differ"
+        )
+        mutations["revoked"] = {
+            "name": "different-skill-name",
+            "context_sha256": _MARKER_V5_CONTEXT_OTHER,
+        }
     with tempfile.TemporaryDirectory(prefix="csk-attestation-evidence-") as raw:
         root = Path(raw)
         csk_home = root / "csk-home"
@@ -3798,6 +3983,7 @@ for _evidence_case_id in (
     "attestation-evidence-malformed",
     "attestation-evidence-stale",
     "attestation-evidence-revoked",
+    "attestation-evidence-revoked-identity-commit-advisory",
     "attestation-evidence-wrong-name",
     "attestation-evidence-wrong-repository",
     "attestation-evidence-wrong-commit",
@@ -3817,7 +4003,7 @@ def _drive_attested_network_current(case: dict[str, Any]) -> None:
     assert case["input"]["package"] == "network-git"
     assert (
         case["input"]["signed_record"]
-        == "valid-fresh-exact-name-repository-commit-context"
+        == "valid-fresh-exact-name-repository-commit-raw-package-tree-hash"
     )
     assert case["input"]["marker_attestation"] == "matches-registry-status-key"
     assert case["input"]["operation"] == "status"
@@ -3831,7 +4017,9 @@ def _drive_attested_network_current(case: dict[str, Any]) -> None:
         )
         evidence_path = root / "evidence.json"
         evidence_path.write_bytes(
-            json.dumps(_marker_v5_evidence_payload()).encode("utf-8")
+            json.dumps(
+                _marker_v5_evidence_payload(context_sha256=_MARKER_V5_CONTENT)
+            ).encode("utf-8")
         )
         verdict = install_marker.evaluate_schema2_status(
             marker_path,
@@ -5351,7 +5539,9 @@ def _error_constructing_hollow_driver(case: dict[str, Any]) -> None:
     assert constructed.code == case["expected"]
 
 
-def test_draft_sources_hollow_driver_is_caught_by_name() -> None:
+def test_draft_sources_hollow_driver_is_caught_by_name(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """A hollow driver fails the semantic entry under every case id.
 
     For each registered case the real driver is temporarily replaced by
@@ -5375,7 +5565,7 @@ def test_draft_sources_hollow_driver_is_caught_by_name() -> None:
                         pytest.fail.Exception,
                         match=f"hollow driver for {case['id']}",
                     ):
-                        test_draft_sources_semantic_case(case)
+                        test_draft_sources_semantic_case(case, capsys)
                 finally:
                     del SEMANTIC_DRIVERS[case["id"]]
         finally:
