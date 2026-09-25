@@ -2756,6 +2756,7 @@ def test_cli_schema2_outputs_do_not_print_draft_label(
 def test_cli_legacy_schema2_switches_are_noops(
     monkeypatch, tmp_path, csk_home, skills_root, capsys
 ):
+    _require_posix_traversal()
     project = make_project(tmp_path)
     write_skillfile(
         project,
