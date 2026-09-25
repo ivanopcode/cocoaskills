@@ -95,7 +95,7 @@ def _verdict(content_sha256: str) -> Verdict:
 # Entry-point enumeration pins.
 # ---------------------------------------------------------------------------
 
-EXPECTED_CLI_DRAFT_TRUE: set[tuple[str, ...]] = {
+EXPECTED_CLI_DEFAULT: set[tuple[str, ...]] = {
     ("add",),
     ("audit",),
     ("bootstrap",),
@@ -134,7 +134,7 @@ EXPECTED_CLI_DRAFT_TRUE: set[tuple[str, ...]] = {
     ("upgrade",),
 }
 
-EXPECTED_CLI_DRAFT_FALSE: set[tuple[str, ...]] = EXPECTED_CLI_DRAFT_TRUE - {("check",)}
+EXPECTED_CLI_WITH_LEGACY_SWITCH: set[tuple[str, ...]] = EXPECTED_CLI_DEFAULT
 
 #: CLI leaves with a broad-fault boundary driver in this module. Each
 #: reaches a fixed seam in a named module.
@@ -152,12 +152,11 @@ COVERED_CLI_LEAVES: set[tuple[str, ...]] = {
     ("status",),
 }
 
-#: CLI leaves without a boundary driver, each with its reason. Every one
-#: still reaches the draft-decision seam at startup (covered by the seam
-#: suite's os.stat driver); the rest of its filesystem paths lie in
-#: non-named modules, out of contract per AC (a) "in the named modules".
+#: CLI leaves without a boundary driver, each with its reason. Their
+#: remaining filesystem paths lie in non-named modules, out of contract
+#: per AC (a) "in the named modules".
 OUT_OF_SCOPE_CLI: dict[tuple[str, ...], str] = {
-    ("check",): "draft schema-2 surface; manifest read covered via list/status",
+    ("check",): "read-only schema-2 validation; manifest boundary driver is out of scope here",
     ("config", "build-https", "add"): "config load/save paths in non-named config.py",
     ("config", "build-https", "list"): "config load path in non-named config.py",
     ("config", "build-https", "login"): "config + keyring paths in non-named modules",
@@ -234,9 +233,9 @@ PURE_API: dict[str, str] = {
 
 
 def test_entry_pins_cli_leaves():
-    assert enumerate_cli_leaves(draft=True) == EXPECTED_CLI_DRAFT_TRUE
-    assert enumerate_cli_leaves(draft=False) == EXPECTED_CLI_DRAFT_FALSE
-    assert set(OUT_OF_SCOPE_CLI) | COVERED_CLI_LEAVES == EXPECTED_CLI_DRAFT_TRUE
+    assert enumerate_cli_leaves(draft=False) == EXPECTED_CLI_DEFAULT
+    assert enumerate_cli_leaves(draft=True) == EXPECTED_CLI_WITH_LEGACY_SWITCH
+    assert set(OUT_OF_SCOPE_CLI) | COVERED_CLI_LEAVES == EXPECTED_CLI_DEFAULT
     assert set(OUT_OF_SCOPE_CLI) & COVERED_CLI_LEAVES == set()
 
 
@@ -295,8 +294,6 @@ CLI_FAULT_DRIVERS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("list",): (
         "test_boundary_list_refuses",
         "test_boundary_list_paths_refuses",
-        "test_sweep_draft_decision_stat_reached",
-        "test_sweep_draft_decision_unmocked_each_ordinal_refuses",
         "test_sweep_list_each_ordinal_refuses",
         "test_sweep_list_paths_each_ordinal_refuses",
     ),
@@ -459,11 +456,6 @@ SWEEP_PAIRS: dict[str, tuple[object, str]] = {
     "test_sweep_project_add_each_ordinal_refuses": (("project", "add"), "fresh dir"),
     "test_sweep_project_resolve_each_ordinal_refuses": (("project", "resolve"), "project dir"),
     "test_sweep_remove_each_ordinal_refuses": (("remove",), "Skillfile"),
-    "test_sweep_draft_decision_stat_reached": (("list",), "cfg file (broken load_config)"),
-    "test_sweep_draft_decision_unmocked_each_ordinal_refuses": (
-        ("list",),
-        "cfg file (malformed, unmocked load)",
-    ),
     "test_sweep_parent_manifest_stat_reached": (("init",), "parent Skillfile"),
     "test_sweep_trust_record_each_ordinal_refuses": ("trust.load_trust_record", "trust file"),
     "test_sweep_cached_verdict_each_ordinal_refuses": ("trust.load_cached_verdict", "verdict file"),
@@ -524,7 +516,7 @@ def test_every_enumerated_leaf_handled():
     handled = COVERED_CLI_LEAVES | set(OUT_OF_SCOPE_CLI)
     assert handled == derived_true
     assert set(CLI_HANDLER_MAP) == set(OUT_OF_SCOPE_CLI)
-    assert handled - {("check",)} == derived_false
+    assert handled == derived_false
 
 
 def _leaf_branch_calls(leaf: tuple[str, ...]) -> set[str]:
@@ -1454,71 +1446,6 @@ def test_sweep_add_decl_each_ordinal_refuses(monkeypatch, tmp_path):
     )
 
 
-def test_sweep_draft_decision_stat_reached(monkeypatch, tmp_path, capsys):
-    """The draft-decision stat fires when load_config is broken (cli.py:146)."""
-    monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
-
-    def broken_load_config(*args, **kwargs):
-        raise csk_config.ConfigError("broken")
-
-    monkeypatch.setattr(csk_config, "load_config", broken_load_config)
-
-    def setup(tag: str):
-        cfg_path = tmp_path / f"dd{tag}" / "config.json"
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
-        return cfg_path, ["list"]
-
-    _sweep_cli(
-        monkeypatch, capsys,
-        label="draft decision",
-        setup=setup,
-        sites=[("os.stat", "csk.cli", "_draft_sources_decision")],
-        expect={1: ("refuse", "broken")},
-        dry=(cli.EXIT_CONFIG, "", "broken"),
-        kp1=(cli.EXIT_CONFIG, "", "broken"),
-    )
-
-
-def test_sweep_draft_decision_unmocked_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
-    """The draft decision with a really malformed config (no load mock).
-
-    K=3: the draft load read (non-named), the draft stat (named), and
-    the dispatch load read (non-named). Ordinals 1-2 refuse via the
-    dispatch ``ConfigError`` ("Malformed JSON"); ordinal 3 escapes raw
-    from ``config.load_config`` (the ``config.py:236`` bound): declared.
-    The mocked sweep above isolates the stat; this one pins the real
-    triple so the pair is not mock-only.
-    """
-    monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
-    monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
-
-    def setup(tag: str):
-        cfg_path = tmp_path / f"du{tag}" / "config.json"
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text("{malformed json", encoding="utf-8")
-        monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
-        return cfg_path, ["list"]
-
-    _sweep_cli(
-        monkeypatch, capsys,
-        label="draft decision unmocked",
-        setup=setup,
-        sites=[
-            ("io.open", "csk.config", "load_config"),
-            ("os.stat", "csk.cli", "_draft_sources_decision"),
-            ("io.open", "csk.config", "load_config"),
-        ],
-        expect={
-            1: ("refuse", "Malformed JSON"),
-            2: ("refuse", "Malformed JSON"),
-            3: ("raw-oserror", ""),
-        },
-        dry=(cli.EXIT_CONFIG, "", "Malformed JSON"),
-        kp1=(cli.EXIT_CONFIG, "", "Malformed JSON"),
-    )
-
-
 def test_sweep_parent_manifest_stat_reached(monkeypatch, tmp_path, capsys):
     """The parent-manifest probe fires when the marker is above the target."""
     monkeypatch.setenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, "1")
@@ -1553,13 +1480,11 @@ def test_sweep_parent_manifest_stat_reached(monkeypatch, tmp_path, capsys):
 
 
 def test_sweep_bootstrap_create_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
-    """The bootstrap create path: draft load, draft stat, guard stat, save.
+    """The bootstrap create path: guard stat then save.
 
-    K=4. Ordinals 1-2 degrade to exit 0 by design (a fault in the draft
-    read/stat maps the decision to "unknown" and the create proceeds);
-    ordinal 3 is the guarded stat refusing; ordinal 4 lands in non-named
-    ``config._write_json_atomic`` (``os.replace``) and escapes raw, which
-    is the declared out-of-contract bound, not a refusal.
+    K=2. The guarded stat refuses; the trailing non-named
+    ``config._write_json_atomic`` (``os.replace``) escapes raw, which is
+    the declared out-of-contract bound, not a refusal.
     """
     monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
@@ -1577,16 +1502,12 @@ def test_sweep_bootstrap_create_each_ordinal_refuses(monkeypatch, tmp_path, caps
         label="bootstrap create path",
         setup=setup,
         sites=[
-            ("io.open", "csk.config", "load_config"),
-            ("os.stat", "csk.cli", "_draft_sources_decision"),
             ("os.stat", "csk.cli", "_cmd_bootstrap"),
             ("os.replace", "csk.config", "_write_json_atomic"),
         ],
         expect={
-            1: ("ok", "Wrote"),
-            2: ("ok", "Wrote"),
-            3: ("refuse", "cannot inspect config"),
-            4: ("raw-oserror", ""),
+            1: ("refuse", "cannot inspect config"),
+            2: ("raw-oserror", ""),
         },
         dry=(cli.EXIT_OK, "Wrote", ""),
         kp1=(cli.EXIT_OK, "Wrote", ""),
@@ -1676,7 +1597,7 @@ def test_sweep_init_target_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
 
 
 def test_sweep_config_show_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
-    """The config-show marker: draft load (declared) then the guarded read."""
+    """The config-show marker reaches its guarded read once."""
     monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
 
@@ -1694,14 +1615,8 @@ def test_sweep_config_show_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         monkeypatch, capsys,
         label="config show",
         setup=setup,
-        sites=[
-            ("io.open", "csk.config", "load_config"),
-            ("io.open", "csk.cli", "_cmd_config_show"),
-        ],
-        expect={
-            1: ("ok", "Config path:"),
-            2: ("refuse", "cannot read config"),
-        },
+        sites=[("io.open", "csk.cli", "_cmd_config_show")],
+        expect={1: ("refuse", "cannot read config")},
         dry=(cli.EXIT_OK, "Config path:", ""),
         kp1=(cli.EXIT_OK, "Config path:", ""),
     )

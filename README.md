@@ -170,7 +170,7 @@ csk config build-https add gitlab.example.com/portals/infra --token git-credenti
 
 Файл `Skillfile.json` поддерживается в двух вариантах схемы.
 
-Черновой вариант схемы 2 (`draft skillfile-sources-v1 (opt-in)`) объявляет карту источников `sources` и вытягивает скиллы через селекторы. Поддержка выключена по умолчанию. Чтобы включить схему 2, укажите `"experimental": {"skillfile_sources": true}` в глобальном файле `~/.cocoaskills/config.json` или установите переменную окружения `CSK_EXPERIMENTAL_SKILLFILE_SOURCES=1`.
+Схема 2 является основным форматом проектного Skillfile. Она объявляет источники и выбирает скиллы через селекторы. Команды `csk check`, `csk install`, `csk upgrade` и `csk status` поддерживают её по умолчанию.
 
 Пример `Skillfile.json` схемы 2:
 
@@ -192,11 +192,11 @@ csk config build-https add gitlab.example.com/portals/infra --token git-credenti
 }
 ```
 
-При работе со схемой 2 команда `csk install` выполняет начальную установку или устанавливает по файлу `Skillfile.lock.json`, команда `csk upgrade` явно обновляет лок, а `csk status` показывает актуальность манифеста и лока без записи. Сетевые источники подчиняются файлу `source-policy.json`, который находится в `~/.cocoaskills/source-policy.json` (путь переопределяется через `CSK_SOURCE_POLICY`). Подробное описание работы со схемой 2 приведено в [`docs/skillfile-sources.md`](docs/skillfile-sources.md).
+При работе со схемой 2 команда `csk install` выполняет начальную установку или устанавливает по файлу `Skillfile.lock.json`, команда `csk upgrade` явно обновляет лок, а `csk status` показывает актуальность манифеста и лока без записи. Команда `csk check` проверяет Skillfile без установки. Сетевые источники подчиняются файлу `source-policy.json`, который находится в `~/.cocoaskills/source-policy.json` (путь переопределяется через `CSK_SOURCE_POLICY`). Подробное описание работы со схемой 2 приведено в [`docs/skillfile-sources.md`](docs/skillfile-sources.md).
 
 Коммитьте `Skillfile.lock.json` вместе со `Skillfile.json`. На новой машине `csk install` восстанавливает отсутствующий снимок. Для `path` команда читает текущие байты. Для `git` и `repository` она получает точный commit из лока. Установка продолжится при совпадении идентичности и `content_sha256`. Расхождение вызывает `source_snapshot_changed`. Недоступный источник вызывает `source_snapshot_unavailable` и указывается в сообщении. Восстановление не меняет лок и не разрешает теги или ветки. `csk upgrade` явно обновляет лок по текущим источникам.
 
-Без включения опции работает релизная схема 1:
+Схема 1 остаётся поддерживаемым legacy-форматом. Она напрямую объявляет список скиллов в секции `skills`:
 
 ```json
 {
@@ -253,7 +253,7 @@ csk init [path]                     # Инициализирует Skillfile.jso
 csk add <name>                      # Добавляет или обновляет объявление скилла в Skillfile.json
 csk remove <name>                   # Удаляет объявление скилла из Skillfile.json
 csk status [target]                 # Показывает статус установленных скиллов и манифеста
-csk check [target]                  # Проверяет schema-2 Skillfile без установки (черновик, только opt-in)
+csk check [target]                  # Проверяет Skillfile без установки
 csk list                            # Выводит список зарегистрированных проектов и скиллов
 csk project add <alias> <path>      # Регистрирует путь проекта в глобальной конфигурации
 csk project resolve [target]        # Показывает резолюцию манифеста и целевых путей
@@ -316,13 +316,13 @@ csk shell-init                      # Генерирует или устанав
 
 Полное описание команд, флагов, позиционных аргументов и примеров использования находится в файле [`docs/cli.md`](docs/cli.md).
 
-## Черновые источники Skillfile schema 2
+## Источники Skillfile schema 2
 
-CocoaSkills реализует черновую версию источников Skillfile schema 2 по спецификации curator-spec. Поддержка выключена по умолчанию и помечена как `draft skillfile-sources-v1 (opt-in)`. Она не проходит релизную квалификацию, и проект не заявляет соответствие спецификации.
+Схема 2 является основным форматом проектного Skillfile и поддерживается командами `csk check`, `csk install`, `csk upgrade` и `csk status` без дополнительной настройки. Схема 1 остаётся поддерживаемым legacy-форматом.
 
-Чтобы включить поддержку, объявите `"experimental": {"skillfile_sources": true}` в `~/.cocoaskills/config.json` или задайте переменную окружения `CSK_EXPERIMENTAL_SKILLFILE_SOURCES=1`. Без включения схема 2 завершается прежней ошибкой неподдерживаемой схемы и одной строкой подсказки.
+Настройка `experimental.skillfile_sources` и переменная `CSK_EXPERIMENTAL_SKILLFILE_SOURCES` сохраняют совместимость со старыми конфигурациями и не влияют на выбор схемы.
 
-Команды переиспользуют существующий интерфейс: `csk install` выполняет начальную установку или установку по локу, `csk upgrade` явно обновляет лок, `csk status` показывает актуальность без записи, а `csk check` проверяет schema-2 Skillfile без установки. Команда `csk check` существует только при включённой поддержке. Команды `csk install` и `csk upgrade` читают источники `path` с диска, а источники `git` и `repository` получают через ограниченный транспорт по машинной политике `source-policy.json`. Руководство для авторов и операторов находится в [`docs/skillfile-sources.md`](docs/skillfile-sources.md), проектное решение зафиксировано в [RFC 0009](docs/v0.16-design.md).
+Команды переиспользуют общий интерфейс: `csk install` выполняет начальную установку или установку по локу, `csk upgrade` явно обновляет лок, `csk status` показывает актуальность без записи, а `csk check` проверяет Skillfile без установки. Команды установки читают источники `path` с диска, а источники `git` и `repository` получают через ограниченный транспорт по машинной политике `source-policy.json`. Руководство для авторов и операторов находится в [`docs/skillfile-sources.md`](docs/skillfile-sources.md). Историческое решение зафиксировано в [RFC 0009](docs/v0.16-design.md).
 
 ## Development tools
 
@@ -353,8 +353,8 @@ CocoaSkills реализует черновую версию источнико�
 - [`docs/cli.md`](docs/cli.md): справочник команд `csk`, флагов и кодов завершения.
 - [`docs/reference.md`](docs/reference.md): справочник по матрице установки, зависимостям скиллов, манифестам и аудиту безопасности.
 - [`docs/external-build-repositories.md`](docs/external-build-repositories.md): устройство внешних репозиториев сборки, брокеров кредов SSH/HTTPS и моделей доступа.
-- [`docs/skillfile-sources.md`](docs/skillfile-sources.md): черновые источники Skillfile schema 2, машинная транспортная политика и семантика лока.
-- [`docs/v0.16-design.md`](docs/v0.16-design.md): RFC 0009, проектное решение по черновым источникам schema 2 (на английском).
+- [`docs/skillfile-sources.md`](docs/skillfile-sources.md): источники Skillfile schema 2, машинная транспортная политика и семантика лока.
+- [`docs/v0.16-design.md`](docs/v0.16-design.md): RFC 0009, запись проектного решения о формате источников schema 2 (на английском).
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): описание внутренней архитектуры, схемы работы конвейера установки, формата хранилищ и модели безопасности.
 - [`SECURITY.md`](SECURITY.md): политика безопасности, границы изоляции и рекомендации по настройке.
 - [`docs/skill-authoring.md`](docs/skill-authoring.md): руководство по структурированию пакетов скиллов, объявлению команд и настройке манифеста `agent-skill.json`.

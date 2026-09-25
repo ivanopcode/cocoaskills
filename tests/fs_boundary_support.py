@@ -2,9 +2,9 @@
 
 The invariant is "No raw OSError escapes a public entry point", tested
 without knowing which calls a module makes. Entry points are derived from
-the CLI command table (argparse choices at runtime) and the modules'
-exported API (inspect), so a command or public function added later fails
-the pin test. Faults are injected broadly at the os/io layer (every os
+the CLI command table plus explicit routes reached through ``cli.main``
+and the modules' exported API (inspect), so a command or public function
+added later fails the pin test. Faults are injected broadly at the os/io layer (every os
 function derived via dir(os), plus io.open/builtins.open) when any path
 argument touches the marker, rather than at named call sites.
 
@@ -37,24 +37,21 @@ suspension accounting, so their ordinals align.
 
 Coverage statement (measured on 3.11/3.12/3.13/3.14; BUG-260921-hv5upg rev 2).
 
-27 of 27 (entry point, marker, fixture) pairs swept, 0 unswept: the 23
-breadth pairs below each have a same-marker sweep, plus 4 branch/marker
-extras (bootstrap ``--if-missing``, draft mocked, draft unmocked, parent
-probe). Per pair: K, then per ordinal ``call@module`` with R = structured
-refusal, C = contained non-refusal (guard degrades by design), D =
-declared non-named outcome. A declared ordinal pins its outcome; it is
-not skipped.
+25 of 25 (entry point, marker, fixture) pairs swept, 0 unswept: the 23
+breadth pairs below each have a same-marker sweep, plus 2 branch/marker
+extras (bootstrap ``--if-missing`` and parent probe). Per pair: K, then
+per ordinal ``call@module`` with R = structured refusal, C = contained
+non-refusal (guard degrades by design), D = declared non-named outcome.
+A declared ordinal pins its outcome; it is not skipped.
 
-* bootstrap create (K=4): open@config load C(exit 0, draft unknown),
-  stat@cli draft C(exit 0), stat@cli bootstrap R, replace@config save
-  D(raw OSError).
+* bootstrap create (K=2): stat@cli bootstrap R,
+  replace@config save D(raw OSError).
 * bootstrap --if-missing (K=1): stat@cli bootstrap R.
 * init target (K=8 on 3.11/3.12, K=7 on 3.13/3.14): resolve
   internals@cli C(exit 0; on 3.11/3.12 ordinal 2 with ELOOP refuses),
   guard stat@cli R, require/present/write@manifest RRR,
   exists+write@gitignore_gate D(raw OSError x2).
-* config show (K=2): open@config load C(exit 0, draft unknown),
-  read@cli R.
+* config show (K=1): read@cli R.
 * hybrid status (K=1): read@cli C([unreadable marker], exit 0).
 * list (K=1), status --all (K=1): read@manifest R.
 * list --paths (K=2): stat@cli suffix C("(unreadable)", exit 0),
@@ -71,14 +68,11 @@ not skipped.
 * audit allow (K=2): mkdir/write@trust RR(unwritable).
 * trust record, cached verdict, load_manifest (K=1 each): read R.
 * store, pin (K=3 each): mkdir/mkdir/write@trust RRR(unwritable).
-* draft mocked (K=1): stat@cli draft R. draft unmocked (K=3):
-  read@config load R(via dispatch ConfigError), stat@cli draft R,
-  read@config load D(raw OSError: the config.py:236 bound, pinned live).
 * parent probe (K=1): stat@cli parent-probe R.
 
 Ordinal relativity (review N3): an ordinal counts touching calls from
-entry start in the fixture's path, including draft/config/resolver
-touches; every sweep pins the per-ordinal (call, module, func) sequence,
+entry start in the fixture's path, including config/resolver touches;
+every sweep pins the per-ordinal (call, module, func) sequence,
 so a fixture change that shifts ordinals fails the pin instead of
 silently reassigning expectations. Two pairs have version-split
 sequences (``resolve()`` is lstat+stat on 3.11/3.12, one lstat on
@@ -392,7 +386,7 @@ def _innermost_csk_frame() -> tuple[str, str, int]:
 
 
 def enumerate_cli_leaves(*, draft: bool) -> set[tuple[str, ...]]:
-    """Derive every CLI leaf command from the built parser's choices."""
+    """Derive parser leaves and explicit production entry-point routes."""
     parser = cli.build_parser(draft=draft)
     leaves: set[tuple[str, ...]] = set()
 
@@ -407,6 +401,11 @@ def enumerate_cli_leaves(*, draft: bool) -> set[tuple[str, ...]]:
             leaves.add(prefix)
 
     walk(parser, ())
+    check_help = io.StringIO()
+    with contextlib.redirect_stdout(check_help), contextlib.redirect_stderr(io.StringIO()):
+        check_status = cli.main(["check", "--help"])
+    if check_status == 0 and check_help.getvalue().startswith("usage: csk check"):
+        leaves.add(("check",))
     return leaves
 
 

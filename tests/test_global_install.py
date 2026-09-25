@@ -181,6 +181,29 @@ def test_global_add_remove_and_list(monkeypatch, tmp_path, skills_root, csk_home
     assert "Global skill not declared: skill-a" in err
 
 
+def test_global_install_keeps_schema_1_scope_and_plain_refusal(
+    monkeypatch, tmp_path, skills_root, csk_home, capsys
+):
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project)
+    _save_config(monkeypatch, cfg)
+    _write_global_skillfile(
+        csk_home,
+        {
+            "schema_version": 2,
+            "sources": {"local": {"path": "."}},
+            "skills": [],
+        },
+    )
+
+    assert cli.main(["global", "install"]) == cli.EXIT_PARTIAL_FAIL
+    err = capsys.readouterr().err
+    assert "Global Skillfile schema_version 2 is unsupported" in err
+    assert "global installs require schema_version 1" in err
+    assert "draft" not in err.lower()
+    assert "opt-in" not in err.lower()
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX global shims use symlinks")
 def test_global_install_writes_context_adapters_and_runtime_shims(monkeypatch, tmp_path, skills_root, csk_home):
     project = make_project(tmp_path)

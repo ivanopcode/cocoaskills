@@ -45,12 +45,12 @@ def _code_constants(module: types.ModuleType) -> set[str]:
     }
 
 
-def test_label_constant_pins_exact_wording() -> None:
-    assert source_errors.DRAFT_SKILLFILE_SOURCES_LABEL == EXACT_LABEL
+def test_removed_label_constant_is_absent() -> None:
+    assert not hasattr(source_errors, "DRAFT_SKILLFILE_SOURCES_LABEL")
 
 
-def test_label_is_one_constant_not_repeated_per_site() -> None:
-    """The literal appears exactly once in the leaf's production files."""
+def test_removed_label_is_absent_from_production_sources() -> None:
+    """The removed status label no longer appears in production sources."""
 
     repo = Path(__file__).resolve().parent.parent / "src" / "csk"
     owned = [
@@ -67,15 +67,14 @@ def test_label_is_one_constant_not_repeated_per_site() -> None:
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if quoted.search(line):
                 hits.append(f"{path.parent.name}/{path.name}:{lineno}")
-    assert len(hits) == 1 and hits[0].startswith("sources/errors.py:"), hits
+    assert hits == []
 
 
-def test_manifest_hint_composes_the_shared_label() -> None:
-    assert manifest_module.SCHEMA_2_OPT_IN_HINT == (
-        f"hint: schema_version 2 is {source_errors.DRAFT_SKILLFILE_SOURCES_LABEL}; "
-        "set experimental.skillfile_sources in the global config "
-        "or CSK_EXPERIMENTAL_SKILLFILE_SOURCES=1"
+def test_schema2_manifest_needs_no_legacy_opt_in_hint() -> None:
+    parsed = manifest_module.parse_manifest(
+        {"schema_version": 2, "sources": {}, "skills": []}, Path("Skillfile.json")
     )
+    assert parsed.schema_version == 2
 
 
 def test_remediation_table_completeness_derived_from_error_modules() -> None:
@@ -117,7 +116,7 @@ def test_stable_codes_follow_protocol_order() -> None:
 
 @pytest.mark.parametrize("code", source_diagnostics.STABLE_DIAGNOSTIC_CODES)
 def test_format_diagnostic_shape_for_every_class(code: str) -> None:
-    """code line, exactly one remediation line, the draft label line."""
+    """A source diagnostic contains a reason and one remediation line."""
 
     remediation = source_diagnostics.REMEDIATION_BY_CODE[code]
     assert "\n" not in remediation
@@ -125,18 +124,18 @@ def test_format_diagnostic_shape_for_every_class(code: str) -> None:
         code, "subject fixture-member failed for a stated reason"
     )
     lines = rendered.splitlines()
-    assert len(lines) == 3, rendered
+    assert len(lines) == 2, rendered
     assert lines[0].startswith(f"{code}: "), rendered
     assert "fixture-member" in lines[0], rendered
     assert "stated reason" in lines[0], rendered
     remediation_lines = [line for line in lines if line.startswith("remediation: ")]
     assert len(remediation_lines) == 1, rendered
     assert remediation_lines[0] == f"remediation: {remediation}", rendered
-    assert lines[2] == EXACT_LABEL, rendered
+    assert EXACT_LABEL not in rendered
 
 
 def test_format_diagnostic_unknown_code_is_structured() -> None:
-    with pytest.raises(ValueError, match="unknown draft-sources diagnostic code"):
+    with pytest.raises(ValueError, match="unknown schema-2 source diagnostic code"):
         source_diagnostics.format_diagnostic("source_nope", "reason")
 
 
@@ -149,7 +148,8 @@ def test_format_exception_renders_source_and_policy_errors() -> None:
     assert rendered is not None
     assert rendered.splitlines()[0].startswith("source_name_conflict: ")
     assert len([line for line in rendered.splitlines() if line.startswith("remediation: ")]) == 1
-    assert rendered.splitlines()[2] == EXACT_LABEL
+    assert len(rendered.splitlines()) == 2
+    assert EXACT_LABEL not in rendered
 
     rendered = source_diagnostics.format_exception(
         repository_policy.RepositoryPolicyError(
@@ -216,7 +216,8 @@ def test_transport_exhaustion_renders_classifications_and_table_remediation() ->
             repository_policy.CODE_ENDPOINT_UNAVAILABLE
         ]
     )
-    assert lines[2] == EXACT_LABEL, rendered
+    assert len(lines) == 2, rendered
+    assert EXACT_LABEL not in rendered
 
 
 def test_transport_reason_renders_endpoint_structurally() -> None:

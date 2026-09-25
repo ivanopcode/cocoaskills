@@ -69,9 +69,8 @@ MANAGER_KEYS = frozenset(
     }
 )
 
-# Opt-in for draft skillfile-sources-v1 (Skillfile schema 2). The feature is
-# enabled when the global config declares
-# `"experimental": {"skillfile_sources": true}` or when this variable is "1".
+# Legacy schema-2 opt-in key and environment variable. Both remain accepted
+# for existing configurations, but neither controls schema support.
 SKILLFILE_SOURCES_ENV_VAR = "CSK_EXPERIMENTAL_SKILLFILE_SOURCES"
 SOURCE_POLICY_ENV_VAR = "CSK_SOURCE_POLICY"
 SOURCE_POLICY_FILENAME = "source-policy.json"
@@ -129,7 +128,7 @@ class AuditConfig:
 
 @dataclass(frozen=True)
 class ExperimentalConfig:
-    """Unreleased opt-in features. Absent keys default to disabled."""
+    """Legacy feature switches retained so existing config files still parse."""
 
     skillfile_sources: bool = False
 
@@ -159,8 +158,7 @@ class GlobalConfig:
     # canonical identity prefixes mapped to a token *source* (never a secret).
     # The run-wide CSK_BUILD_HTTPS_TOKEN environment value keeps precedence.
     build_https: tuple[build_https_module.BuildHTTPSRule, ...] = ()
-    # Draft opt-in features. The environment variable keeps precedence: it
-    # enables the feature even when the config key is absent.
+    # Legacy feature switches. They are parsed for configuration compatibility.
     experimental: ExperimentalConfig = field(default_factory=ExperimentalConfig)
 
     def trusted_registries(self) -> tuple[RegistryConfig, ...]:
@@ -209,7 +207,7 @@ def load_source_policy(
 
     The import is intentionally local because ``repository_policy`` uses this
     locator as its default path.  ``Any`` keeps config.py independent from the
-    draft source module's type surface while callers receive its validated
+    source module's type surface while callers receive its validated
     ``RepositoryPolicy`` or ``None`` for an absent file.
     """
 
@@ -270,8 +268,8 @@ def _apply_system_config(
 
     A key listed under 'locked' takes its value from the system config, and a
     user override of that key is ignored with a warning. Other system keys act
-    as defaults the user config may override. ``quiet`` suppresses the warning
-    for the parse-time draft decision read; dispatch keeps the loud load.
+    as defaults the user config may override. ``quiet`` suppresses that
+    warning for callers that need a silent config read.
     """
     schema = system_data.get("schema_version")
     if not isinstance(schema, int) or isinstance(schema, bool) or schema != SCHEMA_VERSION:
@@ -483,14 +481,14 @@ def save_config(config: GlobalConfig) -> None:
 
 
 def skillfile_sources_enabled(config: GlobalConfig | None = None) -> bool:
-    """Return whether draft skillfile-sources-v1 (schema 2) is opted in.
+    """Return whether Skillfile schema 2 is supported.
 
-    The environment variable enables the feature on its own, winning over an
-    absent config key; otherwise the parsed global config flag decides.
+    The old config key and environment variable are accepted as no-ops. Keep
+    this helper for callers that used the previous API; schema 2 is supported
+    regardless of either value.
     """
-    if os.environ.get(SKILLFILE_SOURCES_ENV_VAR) == "1":
-        return True
-    return config is not None and config.experimental.skillfile_sources
+    del config
+    return True
 
 
 def _parse_experimental_config(raw: Any) -> ExperimentalConfig:

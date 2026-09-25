@@ -3,13 +3,11 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
-import os
 import stat
 import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal
 
 from . import (
     __version__,
@@ -67,16 +65,20 @@ def main(argv: list[str] | None = None) -> int:
             pass
         else:
             return go_v1.run_worker(_launch_context=launch_context)
-    draft = _draft_parser_shape()
-    parser = build_parser(draft=draft)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    is_check = bool(arguments and arguments[0] == "check")
+    parser = _build_check_parser() if is_check else build_parser()
+    if is_check:
+        arguments = arguments[1:]
     try:
-        args = parser.parse_args(argv)
+        args = parser.parse_args(arguments)
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else EXIT_CONFIG
+    if is_check:
+        args.command = "check"
+        args.version = False
     if args.version:
         print(f"csk {__version__}")
-        if draft:
-            print(source_errors.DRAFT_SKILLFILE_SOURCES_LABEL)
         return EXIT_OK
     if not args.command:
         parser.print_help()
@@ -113,67 +115,15 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_LOCK
 
 
-def _draft_sources_decision() -> Literal["enabled", "disabled", "unknown"]:
-    """Return the one three-state draft opt-in decision.
-
-    ``"enabled"``: the environment opts in, or a successfully loaded
-    config declares the opt-in. ``"disabled"``: no environment opt-in
-    and the config is absent or loaded without the opt-in.
-    ``"unknown"``: the config is present but cannot be read or parsed.
-
-    Unknown is neither enabled nor disabled. The parser shape
-    (:func:`_draft_parser_shape`) treats it as disabled, so under an
-    unloadable config the parser is the released v1 parser on every
-    surface: no ``check`` verb, no draft label, no draft paragraphs.
-    A machine whose config cannot be read has not been shown to have
-    opted in. Where a command actually runs, dispatch loads the config
-    again and refuses with the real error naming the config.
-
-    The decision read is silent: it loads with ``quiet=True`` so the
-    system-config locked-key warning stays exactly where v1 emits it,
-    once at dispatch, never at parse time. It reads the same full
-    loader (no second looser reader), so ``optin-true-plus-error``
-    still classifies unknown.
-    """
-
-    if os.environ.get(config.SKILLFILE_SOURCES_ENV_VAR) == "1":
-        return "enabled"
-    try:
-        loaded = config.load_config(quiet=True)
-    except config.ConfigError:
-        try:
-            os.stat(config.config_path())
-        except OSError as stat_error:
-            if isinstance(stat_error, FileNotFoundError):
-                return "disabled"
-        return "unknown"
-    except Exception:  # noqa: BLE001 - dispatch reports the real load failure
-        return "unknown"
-    return "enabled" if loaded.experimental.skillfile_sources else "disabled"
-
-
-def _draft_parser_shape() -> bool:
-    """Return whether the parser shows draft schema-2 surfaces.
-
-    Display shape only: true exactly when the one decision in
-    :func:`_draft_sources_decision` is ``"enabled"``. An unloadable
-    config renders the v1 shape, byte-identical; dispatch still
-    reports the real load failure for every verb.
-    """
-
-    return _draft_sources_decision() == "enabled"
-
-
 def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
-    """Build the CLI parser, draft surfaces included only when ``draft``.
+    """Build the root CLI parser.
 
-    ``main`` evaluates the one decision once and passes it in, so one
-    invocation performs one decision read. Direct callers that omit
-    ``draft`` evaluate it on the spot.
+    ``draft`` is a compatibility parameter from the former opt-in parser and
+    is ignored. The schema-2 ``check`` command uses its own parser so the root
+    help output stays byte-identical to the released schema-1 CLI.
     """
 
-    if draft is None:
-        draft = _draft_parser_shape()
+    del draft
     epilog = (
         "Local documentation index:\n"
         "  csk bootstrap          create ~/.cocoaskills/config.json\n"
@@ -192,12 +142,6 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
         "  csk shell-init         print or install shell hook code\n\n"
         "Run 'csk <command> --help' for command-specific documentation."
     )
-    if draft:
-        epilog += (
-            "\n\nDraft schema-2 sources "
-            f"({source_errors.DRAFT_SKILLFILE_SOURCES_LABEL}):\n"
-            "  csk check [target]     validate a schema-2 Skillfile without installing"
-        )
     parser = argparse.ArgumentParser(
         prog="csk",
         description="CocoaSkill local skill manager",
@@ -214,7 +158,6 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
         sub,
         "install",
         "Apply Skillfile.json using local refs. Missing git URL sources are cloned.",
-        draft=draft,
     )
     sub.add_parser(
         "update",
@@ -231,10 +174,7 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
         sub,
         "upgrade",
         "Fetch the selected project dependency closure, then install.",
-        draft=draft,
     )
-    if draft:
-        _add_check(sub)
     _add_global(sub)
     _add_audit(sub)
     status_epilog = (
@@ -242,14 +182,6 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
         "Files read:\n  ~/.cocoaskills/config.json, Skillfile.json, .agents/skills/*/.csk-install.json\n\n"
         "Examples:\n  csk status\n  csk status --all\n  csk status demo-app-ios\n  csk status ."
     )
-    if draft:
-        status_epilog += (
-            "\n\nSchema 2 sources "
-            f"({source_errors.DRAFT_SKILLFILE_SOURCES_LABEL}):\n"
-            "  Read-only currentness against Skillfile.lock.json; exit non-zero\n"
-            "  with --check unless every member is up-to-date. Launch reads\n"
-            "  installed state only and never rescans live source inputs."
-        )
     status_parser = sub.add_parser(
         "status",
         help="Show manifest vs installed state.",
@@ -582,8 +514,6 @@ def _add_install(
     sub: argparse._SubParsersAction[argparse.ArgumentParser],
     name: str,
     description: str,
-    *,
-    draft: bool = False,
 ) -> None:
     epilog = (
         "Files read:\n"
@@ -602,24 +532,6 @@ def _add_install(
         f"  csk {name} /path/to/project\n"
         f"  csk {name} --fix-gitignore\n"
     )
-    if draft:
-        if name == "install":
-            workflow = (
-                "  Initial resolve+install with no lock, locked install with one."
-            )
-        else:
-            workflow = (
-                "  Explicit refresh: the only operation that replaces locked refs,\n"
-                "  admitted bytes or membership."
-            )
-        epilog += (
-            "\nSchema 2 sources "
-            f"({source_errors.DRAFT_SKILLFILE_SOURCES_LABEL}):\n"
-            f"{workflow}\n"
-            "  Network sources (git, repository) are refused;\n"
-            "  this draft acquires path sources only.\n"
-            "  Validate first with 'csk check'."
-        )
     parser = sub.add_parser(
         name,
         help=description,
@@ -643,12 +555,9 @@ def _add_install(
     _add_build_ssh_arguments(parser)
 
 
-def _add_check(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    # Registered only when the draft is enabled, so the description
-    # and epilog below always carry the draft label legitimately.
-    parser = sub.add_parser(
-        "check",
-        help="Validate a schema-2 Skillfile without installing.",
+def _build_check_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="csk check",
         description="Validate a schema-2 Skillfile without installing.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -668,14 +577,12 @@ def _add_check(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
             "  csk check\n"
             "  csk check --all\n"
             "  csk check demo-app-ios\n"
-            "  csk check .\n"
-            "\n"
-            f"Support is {source_errors.DRAFT_SKILLFILE_SOURCES_LABEL}: no release\n"
-            "qualification and no conformance claim is made."
+            "  csk check ."
         ),
     )
     parser.add_argument("target", nargs="?", help="project alias, '.', or project path")
     parser.add_argument("--all", action="store_true", help="check all registered projects")
+    return parser
 
 
 def _add_global_only_argument(parser: argparse.ArgumentParser) -> None:
@@ -1441,30 +1348,19 @@ def _cmd_skill_check(args: argparse.Namespace) -> int:
 
 
 def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
-    """Validate Skillfiles without installing (draft, opt-in only).
-
-    The subcommand parses only when the draft is enabled, so reaching
-    here implies the opt-in held at parse time. Every failure below is
-    a validation verdict (exit 1); configuration and usage failures
-    propagate to the shared handler (exit 2), exactly like the other
-    commands.
-    """
+    """Validate Skillfiles without installing."""
 
     cfg, alias = _cfg_and_alias_for_target(cfg, args)
     projects = _select_check_projects(cfg, alias)
-    print(source_errors.DRAFT_SKILLFILE_SOURCES_LABEL)
     # Pass 1 validates structure only: a malformed Skillfile refuses
     # before the machine policy is even read, let alone planned.
     loaded_manifests: list[
         tuple[config.ProjectConfig, manifest.ProjectManifest | None]
     ] = []
     failed = False
-    allow_schema_2 = config.skillfile_sources_enabled(cfg)
     for project in projects:
         try:
-            loaded = manifest.load_manifest(
-                project.path, allow_schema_2=allow_schema_2
-            )
+            loaded = manifest.load_manifest(project.path)
         except (
             source_errors.SourceError,
             manifest.ManifestError,
@@ -1498,7 +1394,7 @@ def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
         if item.schema_version != manifest.SCHEMA_VERSION_2:
             print(
                 f"{project.alias}: schema_version 1 valid "
-                f"({len(item.skills)} skills, no draft sources)"
+                f"({len(item.skills)} skills)"
             )
             continue
         try:
@@ -1516,7 +1412,7 @@ def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
 def _print_check_failure(exc: Exception) -> None:
     rendered = source_diagnostics.format_exception(exc)
     if rendered is None:
-        rendered = f"error: {exc}\n{source_errors.DRAFT_SKILLFILE_SOURCES_LABEL}"
+        rendered = f"error: {exc}"
     print(rendered, file=sys.stderr)
 
 
@@ -1750,9 +1646,7 @@ def _render_list(cfg: config.GlobalConfig, *, show_paths: bool = False) -> str:
             )
         else:
             lines.append(f"Project {alias}: {project.path}")
-        project_manifest = manifest.load_manifest(
-            project.path, allow_schema_2=config.skillfile_sources_enabled(cfg)
-        )
+        project_manifest = manifest.load_manifest(project.path)
         if project_manifest is None:
             lines.append("  Skillfile.json missing")
             continue
@@ -1793,15 +1687,12 @@ def _cfg_and_alias_for_target(
         resolved = project_resolver.resolve(
             path_target,
             worktree_alias_pattern=cfg.worktree_alias_pattern,
-            allow_schema_2=config.skillfile_sources_enabled(cfg),
         )
     except project_resolver.ProjectResolutionError as exc:
         if target is not None:
             raise
         raise project_resolver.ProjectResolutionError(_missing_current_project_message(args.command, path_target, cfg)) from exc
-    project_manifest = manifest.load_manifest(
-        resolved.root, allow_schema_2=config.skillfile_sources_enabled(cfg)
-    )
+    project_manifest = manifest.load_manifest(resolved.root)
     agents = project_manifest.agents if project_manifest and project_manifest.agents else cfg.default_agents
     updated = config.add_project(
         cfg,
@@ -1821,7 +1712,6 @@ def _resolve_project_root(cfg: config.GlobalConfig, target: str | None) -> Path:
     resolved = project_resolver.resolve(
         start,
         worktree_alias_pattern=cfg.worktree_alias_pattern,
-        allow_schema_2=config.skillfile_sources_enabled(cfg),
     )
     return resolved.root
 
@@ -1898,12 +1788,9 @@ def _render_project_resolution(cfg: config.GlobalConfig, args: argparse.Namespac
     resolved = project_resolver.resolve(
         path_target or Path.cwd(),
         worktree_alias_pattern=cfg.worktree_alias_pattern,
-        allow_schema_2=config.skillfile_sources_enabled(cfg),
     )
     agents: list[str] = []
-    project_manifest = manifest.load_manifest(
-        resolved.root, allow_schema_2=config.skillfile_sources_enabled(cfg)
-    )
+    project_manifest = manifest.load_manifest(resolved.root)
     if project_manifest:
         agents = project_manifest.agents
     lines = [

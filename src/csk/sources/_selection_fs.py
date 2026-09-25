@@ -74,7 +74,7 @@ _DIR_FD_ORIGINALS: Final = {
 # predicate requires, with no per-test rewording.
 NO_DESCRIPTOR_TRAVERSAL_REASON: Final = (
     "descriptor-relative traversal is unavailable (requires O_DIRECTORY "
-    "plus dir_fd support for os.open/os.stat/os.readlink); draft schema-2 "
+    "plus dir_fd support for os.open/os.stat/os.readlink); schema-2 "
     "source selection is POSIX-only"
 )
 
@@ -760,7 +760,7 @@ class SelectionSession:
                 CODE_SELECTION_INVALID,
                 f"Source root {source_root} cannot be selected: "
                 f"descriptor-relative traversal is unavailable ({unavailable}); "
-                "draft skillfile-sources-v1 source selection is POSIX-only",
+                "Skillfile schema-2 source selection is POSIX-only",
             )
         preflight_state = _prepare_preflight(
             source_root,

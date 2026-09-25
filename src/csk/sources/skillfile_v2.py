@@ -1,4 +1,4 @@
-"""Skillfile schema 2 source model and structural parser (draft, opt-in).
+"""Skillfile schema 2 source model and structural parser.
 
 This module implements protocol skillfile-sources section 1 and
 repository-transport section 1 for Skillfile schema 2: the optional ``sources``

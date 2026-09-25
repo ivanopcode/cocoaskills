@@ -28,7 +28,7 @@ from .builds import metadata as build_metadata
 from .builds import planner as build_planner
 from .builds import source as build_source
 from .builds import toolchain as build_toolchain
-from .config import GlobalConfig, ProjectConfig, skillfile_sources_enabled
+from .config import GlobalConfig, ProjectConfig
 from .sources import diagnostics as source_diagnostics
 from .sources import errors as source_errors
 from .sources import publish as source_publish
@@ -56,7 +56,6 @@ class ProjectStatus:
     errors: tuple[str, ...] = ()
     capability_evidence: Mapping[str, object] | None = None
     capability_evidence_error: str | None = None
-    draft_sources: bool = False
 
     @property
     def clean(self) -> bool:
@@ -91,9 +90,7 @@ def collect_status(
 def collect_global_status(config: GlobalConfig) -> ProjectStatus:
     csk_home = config.path.parent
     root = csk_home / "global"
-    global_manifest = manifest.load_manifest(
-        root, allow_schema_2=skillfile_sources_enabled(config)
-    )
+    global_manifest = manifest.load_manifest(root)
     if global_manifest is None:
         return ProjectStatus("global", root, False, [])
     if global_manifest.schema_version == 2:
@@ -105,8 +102,8 @@ def collect_global_status(config: GlobalConfig) -> ProjectStatus:
             (),
             (),
             (
-                "schema-2 global installs are not supported by atomic source "
-                "install; global scope stays on schema 1",
+                "Global Skillfile schema_version 2 is unsupported; "
+                "global installs require schema_version 1",
             ),
         )
     status = _collect_scope(
@@ -190,7 +187,6 @@ def _collect_schema2_project_status(
         substitution_lines,
         (),
         tuple(_schema2_status_error_row(item) for item in evaluated.errors),
-        draft_sources=True,
     )
 
 
@@ -208,9 +204,7 @@ def _collect_project_status(
         substitutions = {}
         substitution_lines = (f"error: {exc}",)
 
-    project_manifest = manifest.load_manifest(
-        project.path, allow_schema_2=skillfile_sources_enabled(config)
-    )
+    project_manifest = manifest.load_manifest(project.path)
     if project_manifest is None:
         return ProjectStatus(
             project.alias,
@@ -1256,8 +1250,6 @@ def _project_to_payload(project: ProjectStatus) -> dict[str, Any]:
             for skill in project.skills
         ],
     }
-    if project.draft_sources:
-        payload["draft_sources"] = source_errors.DRAFT_SKILLFILE_SOURCES_LABEL
     return payload
 
 
@@ -1327,8 +1319,6 @@ def _render_project_status(
         )
     for error in project.errors:
         lines.append(f"  ERROR {error}")
-    if project.draft_sources:
-        lines.append(f"  {source_errors.DRAFT_SKILLFILE_SOURCES_LABEL}")
     return "\n".join(lines)
 
 

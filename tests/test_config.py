@@ -435,11 +435,11 @@ def test_config_absent_experimental_key_stays_absent_on_save(tmp_path):
 @pytest.mark.parametrize(
     ("env", "flag", "expected"),
     [
-        (None, None, False),
-        ("0", None, False),
-        ("yes", None, False),
+        (None, None, True),
+        ("0", None, True),
+        ("yes", None, True),
         ("1", None, True),
-        (None, False, False),
+        (None, False, True),
         (None, True, True),
         ("1", False, True),
         ("0", True, True),
@@ -459,7 +459,7 @@ def test_skillfile_sources_enabled_matrix(monkeypatch, tmp_path, env, flag, expe
     assert config.skillfile_sources_enabled(cfg) is expected
 
 
-def test_skillfile_sources_env_wins_over_absent_config_key(monkeypatch, tmp_path):
+def test_skillfile_sources_legacy_env_is_ignored(monkeypatch, tmp_path):
     monkeypatch.setenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", "1")
     cfg = config.parse_config(_minimal_config_data(tmp_path), tmp_path / "config.json")
     assert cfg.experimental.skillfile_sources is False

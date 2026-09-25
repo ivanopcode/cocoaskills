@@ -1,4 +1,4 @@
-"""Stable error codes for draft skillfile-sources-v1 (opt-in).
+"""Stable error codes for Skillfile schema 2 source handling.
 
 Skillfile schema 2 sources report the nine stable error classes required by
 protocol skillfile-sources section 5, plus the four repository classes from
@@ -51,9 +51,6 @@ SOURCE_DIAGNOSTICS: Final[frozenset[str]] = frozenset(
         CODE_PATH_EQUIVALENCE_INVALID,
     }
 )
-
-#: The one draft label every user-facing schema-2 surface prints verbatim.
-DRAFT_SKILLFILE_SOURCES_LABEL: Final = "draft skillfile-sources-v1 (opt-in)"
 
 # URL credentials are redacted structurally, never by character class: a
 # credential is whatever sits between ``://`` and the last ``@`` of the

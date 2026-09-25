@@ -137,10 +137,9 @@ def test_enumeration_pins_known_seams():
     assert ("csk.manifest", "load_manifest", "read_bytes") in groups
     assert ("csk.manifest", "_require_project_dir", "stat") in groups
     assert ("csk.manifest", "_write_skillfile_text", "write_text") in groups
-    assert ("csk.cli", "_draft_sources_decision", "os.stat") in groups
     assert ("csk.cli", "_cmd_audit_publish", "read_bytes") in groups
     assert ("csk.cli", "_nearest_parent_manifest", "stat") in groups
-    assert len(groups) == 21, sorted(groups)
+    assert len(groups) == 20, sorted(groups)
 
 
 def test_checker_flags_synthetic_unguarded_seam():
@@ -675,38 +674,6 @@ def test_ensure_project_manifest_caller_proof(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 # CLI drivers.
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("err", ERRNO_CASES)
-def test_draft_decision_stat_refuses_unknown(monkeypatch, tmp_path, err):
-    """An uninspectable config is unknown, never a guessed opt-out."""
-
-    monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
-    monkeypatch.setenv("CSK_CONFIG", str(tmp_path / "config.json"))
-
-    def broken_load_config(*args, **kwargs):
-        raise csk_config.ConfigError("broken")
-
-    monkeypatch.setattr(csk_config, "load_config", broken_load_config)
-    target = csk_config.config_path()
-    assert not target.exists()
-    with fault_at(
-        monkeypatch, module="csk.cli", func="_draft_sources_decision", op="os.stat",
-        target=target, err=err,
-    ) as firings:
-        assert cli._draft_sources_decision() == "unknown"
-    assert firings == [err]
-
-
-def test_draft_decision_missing_config_is_disabled(monkeypatch, tmp_path):
-    monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
-    monkeypatch.setenv("CSK_CONFIG", str(tmp_path / "config.json"))
-
-    def broken_load_config(*args, **kwargs):
-        raise csk_config.ConfigError("broken")
-
-    monkeypatch.setattr(csk_config, "load_config", broken_load_config)
-    assert cli._draft_sources_decision() == "disabled"
 
 
 def _hybrid_status_setup(tmp_path, skills_root, csk_home, monkeypatch):

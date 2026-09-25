@@ -1,8 +1,8 @@
-"""Skillfile schema 2 source parsing (draft skillfile-sources-v1, opt-in).
+"""Skillfile schema 2 source parsing.
 
 Every test drives the production entry point
 :csk.manifest.parse_manifest: (or :csk.config.skillfile_sources_enabled: for
-the opt-in matrix). The ``corpus_*`` cases mirror
+legacy switch compatibility). The ``corpus_*`` cases mirror
 ``schema-cases/skillfile-v2/`` one by one, and
 :test_skillfile_v2_conformance_corpus_matches_index: replays the authoritative
 files when ``CSK_DRAFT_SOURCES_SUITE_ROOT`` is set.
@@ -24,13 +24,6 @@ from csk import config as config_module
 from csk import manifest, protocol_json
 from csk.sources import errors as source_errors
 from csk.sources import skillfile_v2
-
-EXPECTED_HINT = (
-    "hint: schema_version 2 is draft skillfile-sources-v1 (opt-in); "
-    "set experimental.skillfile_sources in the global config "
-    "or CSK_EXPERIMENTAL_SKILLFILE_SOURCES=1"
-)
-
 
 def _base_doc() -> dict[str, Any]:
     """Mirror corpus ``valid-mixed.json``; negatives mutate one field."""
@@ -60,39 +53,34 @@ def _mutated(mutate: Any) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Opt-in gate (AC a)
+# Default schema support and legacy switch compatibility
 # ---------------------------------------------------------------------------
 
 
-def test_schema_2_refused_without_opt_in_with_exact_hint(tmp_path, monkeypatch):
+def test_schema_2_accepted_without_legacy_opt_in(tmp_path, monkeypatch):
     monkeypatch.delenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", raising=False)
-    with pytest.raises(manifest.ManifestError) as excinfo:
-        manifest.parse_manifest(_base_doc(), tmp_path / "Skillfile.json")
-    assert str(excinfo.value) == (
-        "Unsupported Skillfile schema_version 2; this Skillfile requires a newer csk"
-        f"\n{EXPECTED_HINT}"
+    parsed = manifest.parse_manifest(_base_doc(), tmp_path / "Skillfile.json")
+    assert parsed.schema_version == 2
+    assert parsed.manifest_sha256 is not None
+
+
+def test_schema_2_empty_skills_accepted_without_legacy_opt_in(tmp_path):
+    parsed = manifest.parse_manifest(
+        {"schema_version": 2, "skills": []}, tmp_path / "Skillfile.json", allow_schema_2=False
     )
-    assert str(excinfo.value).count("\n") == 1
+    assert parsed.schema_version == 2
+    assert parsed.skills == []
 
 
-def test_schema_2_empty_skills_refused_without_opt_in(tmp_path):
-    with pytest.raises(manifest.ManifestError) as excinfo:
-        manifest.parse_manifest(
-            {"schema_version": 2, "skills": []}, tmp_path / "Skillfile.json", allow_schema_2=False
-        )
-    assert str(excinfo.value).count("\n") == 1
-
-
-def test_schema_2_refused_with_explicit_opt_out(tmp_path, monkeypatch):
+def test_schema_2_legacy_opt_out_is_ignored(tmp_path, monkeypatch):
     monkeypatch.setenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", "1")
-    with pytest.raises(manifest.ManifestError) as excinfo:
-        manifest.parse_manifest(
-            _base_doc(), tmp_path / "Skillfile.json", allow_schema_2=False
-        )
-    assert str(excinfo.value).endswith(EXPECTED_HINT)
+    parsed = manifest.parse_manifest(
+        _base_doc(), tmp_path / "Skillfile.json", allow_schema_2=False
+    )
+    assert parsed.schema_version == 2
 
 
-def test_schema_2_parses_with_explicit_opt_in(tmp_path):
+def test_schema_2_parses_with_legacy_config_flag(tmp_path):
     parsed = manifest.parse_manifest(
         _base_doc(), tmp_path / "Skillfile.json", allow_schema_2=True
     )
@@ -102,13 +90,13 @@ def test_schema_2_parses_with_explicit_opt_in(tmp_path):
     assert [decl.name for decl in parsed.skills] == ["legacy"]
 
 
-def test_schema_2_parses_with_env_opt_in(tmp_path, monkeypatch):
+def test_schema_2_parses_with_legacy_environment_switch(tmp_path, monkeypatch):
     monkeypatch.setenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", "1")
     parsed = manifest.parse_manifest(_base_doc(), tmp_path / "Skillfile.json")
     assert parsed.schema_version == 2
 
 
-def test_schema_2_parses_with_config_flag_opt_in(tmp_path, monkeypatch):
+def test_schema_2_parses_with_legacy_config_switch(tmp_path, monkeypatch):
     monkeypatch.delenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", raising=False)
     cfg = config_module.parse_config(
         {
@@ -128,7 +116,7 @@ def test_schema_2_parses_with_config_flag_opt_in(tmp_path, monkeypatch):
     assert parsed.schema_version == 2
 
 
-def test_schema_1_ignores_opt_in_flag(tmp_path):
+def test_schema_1_ignores_legacy_switch(tmp_path):
     parsed = manifest.parse_manifest(
         {"schema_version": 1, "skills": [{"name": "a", "tag": "v1"}]},
         tmp_path / "Skillfile.json",
@@ -161,7 +149,7 @@ def test_other_schema_versions_keep_single_line_error(tmp_path):
 
 
 def test_load_manifest_parses_schema_2_through_file(tmp_path, monkeypatch):
-    monkeypatch.setenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", "1")
+    monkeypatch.delenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", raising=False)
     (tmp_path / "Skillfile.json").write_text(json.dumps(_base_doc()), encoding="utf-8")
     parsed = manifest.load_manifest(tmp_path)
     assert parsed is not None and parsed.schema_version == 2

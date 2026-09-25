@@ -10,8 +10,8 @@ the selection import-closure tests pin the exact module set reachable
 from the selection entry points.
 
 :func:`format_diagnostic` turns one (code, reason) pair into the
-user-visible three-line shape ``code: reason`` / ``remediation: ...`` /
-the draft label. Reasons pass through
+user-visible two-line shape ``code: reason`` / ``remediation: ...``.
+Reasons pass through
 :func:`csk.sources.errors.sanitize_detail`, so a rendered diagnostic
 names its subject but never a secret.
 """
@@ -95,16 +95,15 @@ REMEDIATION_BY_CODE: Final[dict[str, str]] = {
 
 
 def format_diagnostic(code: str, reason: str) -> str:
-    """Render one stable class as the user-visible three-line diagnostic."""
+    """Render one stable class as a reason and remediation line."""
 
     try:
         remediation = REMEDIATION_BY_CODE[code]
     except KeyError as exc:
-        raise ValueError(f"unknown draft-sources diagnostic code: {code}") from exc
+        raise ValueError(f"unknown schema-2 source diagnostic code: {code}") from exc
     return (
         f"{code}: {source_errors.sanitize_detail(reason)}\n"
-        f"remediation: {remediation}\n"
-        f"{source_errors.DRAFT_SKILLFILE_SOURCES_LABEL}"
+        f"remediation: {remediation}"
     )
 
 

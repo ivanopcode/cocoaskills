@@ -8,7 +8,6 @@ import random
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -1167,18 +1166,18 @@ def test_unknown_agent_names_warn(monkeypatch, tmp_path, csk_home, skills_root, 
     assert "codex_cli" in err  # known list mentioned
 
 
-# --- Draft skillfile-sources-v1 CLI surface (TASK-260916-1lv2ky) ---
+# --- Skillfile schema 2 CLI surface (TASK-260916-1lv2ky) ---
 #
 # Conventions used below: ``check``/``install``/``upgrade``/``status`` are
 # driven through the production entry point ``csk.cli.main`` on fixtures;
-# every rendered diagnostic is asserted as user-visible text (code line,
-# exactly one ``remediation:`` line, the draft label) with the test's
+# every rendered diagnostic is asserted as user-visible text (code line and
+# exactly one ``remediation:`` line) with the test's
 # secrets absent. Install-path tests need descriptor-relative traversal
 # and skip with the repository's named POSIX reason elsewhere, exactly
 # like the sibling schema-2 suites; ``check``-path tests run everywhere
 # because validation is pure after the declared inputs are read.
 
-_DRAFT_LABEL = source_errors.DRAFT_SKILLFILE_SOURCES_LABEL
+_DRAFT_LABEL = "draft skillfile-sources-v1 (opt-in)"
 
 
 def _require_posix_traversal():
@@ -1187,21 +1186,18 @@ def _require_posix_traversal():
 
 
 def _register_draft_project(
-    monkeypatch, csk_home, skills_root, project, alias="app", *, experimental=True
+    monkeypatch, csk_home, skills_root, project, alias="app", *, experimental=None
 ):
+    payload = {
+        "schema_version": 1,
+        "skills_root": str(skills_root),
+        "default_agents": ["codex_cli"],
+        "projects": {alias: {"path": str(project)}},
+    }
+    if experimental is not None:
+        payload["experimental"] = {"skillfile_sources": experimental}
     cfg_path = csk_home / "config.json"
-    cfg_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "skills_root": str(skills_root),
-                "default_agents": ["codex_cli"],
-                "experimental": {"skillfile_sources": experimental},
-                "projects": {alias: {"path": str(project)}},
-            }
-        ),
-        encoding="utf-8",
-    )
+    cfg_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
     monkeypatch.delenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", raising=False)
     monkeypatch.delenv("CSK_SOURCE_POLICY", raising=False)
@@ -1234,31 +1230,32 @@ def _enable_env_opt_in(monkeypatch):
     monkeypatch.setenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", "1")
 
 
-def test_cli_check_absent_without_opt_in(monkeypatch, tmp_path, csk_home, skills_root, capsys):
-    """Without the opt-in ``check`` rejects exactly like on origin/main."""
+def test_cli_check_accepts_schema1_without_legacy_setting(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    """The always-available check command accepts a legacy project Skillfile."""
 
     project = make_project(tmp_path)
     write_skillfile(project, {"schema_version": 1, "skills": []})
     _register_project(monkeypatch, csk_home, skills_root, project)
     monkeypatch.delenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", raising=False)
 
-    assert cli.main(["check", "app"]) == 2
+    assert cli.main(["check", "app"]) == 0
     captured = capsys.readouterr()
-    assert "invalid choice: 'check'" in captured.err
+    assert "schema_version 1 valid (0 skills)" in captured.out
+    assert captured.err == ""
     assert cli.main(["--help"]) == 0
     assert "csk check" not in capsys.readouterr().out
 
 
-def test_cli_check_help_absent_without_opt_in(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+def test_cli_check_help_without_legacy_setting(monkeypatch, tmp_path, csk_home, skills_root, capsys):
     project = make_project(tmp_path)
     _register_project(monkeypatch, csk_home, skills_root, project)
     monkeypatch.delenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", raising=False)
 
-    assert cli.main(["check", "--help"]) == 2
-    assert "invalid choice" in capsys.readouterr().err
+    assert cli.main(["check", "--help"]) == 0
+    assert "usage: csk check" in capsys.readouterr().out
 
 
-def test_cli_version_without_opt_in_has_no_label(monkeypatch, capsys):
+def test_cli_version_omits_removed_label_without_legacy_env(monkeypatch, capsys):
     monkeypatch.delenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", raising=False)
     assert cli.main(["--version"]) == 0
     out = capsys.readouterr().out
@@ -1266,61 +1263,61 @@ def test_cli_version_without_opt_in_has_no_label(monkeypatch, capsys):
     assert _DRAFT_LABEL not in out
 
 
-def test_cli_version_labels_draft_with_env_opt_in(monkeypatch, capsys):
+def test_cli_version_omits_removed_label_with_legacy_env(monkeypatch, capsys):
     _enable_env_opt_in(monkeypatch)
     assert cli.main(["--version"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 2
-    assert lines[1] == _DRAFT_LABEL
+    assert len(lines) == 1
+    assert _DRAFT_LABEL not in lines[0]
 
 
-def test_cli_draft_help_paragraphs_with_opt_in(monkeypatch, capsys):
+def test_cli_help_omits_removed_label_with_legacy_env(monkeypatch, capsys):
     _enable_env_opt_in(monkeypatch)
     assert cli.main(["--help"]) == 0
     top = capsys.readouterr().out
-    assert "csk check [target]" in top
-    assert _DRAFT_LABEL in top
+    assert _DRAFT_LABEL not in top
     assert cli.main(["install", "--help"]) == 0
     install_help = capsys.readouterr().out
-    assert _DRAFT_LABEL in install_help
-    assert "locked install" in install_help
+    assert _DRAFT_LABEL not in install_help
     assert cli.main(["upgrade", "--help"]) == 0
     upgrade_help = capsys.readouterr().out
-    assert _DRAFT_LABEL in upgrade_help
-    assert "Explicit refresh" in upgrade_help
+    assert _DRAFT_LABEL not in upgrade_help
     assert cli.main(["status", "--help"]) == 0
     status_help = capsys.readouterr().out
-    assert _DRAFT_LABEL in status_help
-    assert "Read-only currentness" in status_help
+    assert _DRAFT_LABEL not in status_help
     assert cli.main(["check", "--help"]) == 0
     check_help = capsys.readouterr().out
-    assert _DRAFT_LABEL in check_help
-    assert "no release" in check_help
+    assert _DRAFT_LABEL not in check_help
+    assert "Validate a schema-2 Skillfile" in check_help
 
 
-def test_cli_draft_help_absent_without_opt_in(monkeypatch, capsys):
+def test_cli_help_and_check_omit_removed_label_without_legacy_env(monkeypatch, capsys):
     monkeypatch.delenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", raising=False)
     for argv in (["--help"], ["install", "--help"], ["upgrade", "--help"], ["status", "--help"]):
         assert cli.main(argv) == 0
         assert _DRAFT_LABEL not in capsys.readouterr().out
+    assert cli.main(["check", "--help"]) == 0
+    assert "usage: csk check" in capsys.readouterr().out
 
 
-def test_cli_env_opt_in_rejects_non_one_values(monkeypatch, tmp_path, csk_home, skills_root, capsys):
-    """Only the exact value ``1`` opts in; neighbours stay on v1 behaviour."""
+def test_cli_legacy_env_values_do_not_gate_schema_support(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    """Legacy environment values do not change schema support."""
 
     project = make_project(tmp_path)
     write_skillfile(project, {"schema_version": 1, "skills": []})
     _register_project(monkeypatch, csk_home, skills_root, project)
     for value in ("2", "true", "yes", ""):
         monkeypatch.setenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", value)
-        assert cli.main(["check", "app"]) == 2, value
-        assert "invalid choice" in capsys.readouterr().err, value
+        assert cli.main(["check", "app"]) == 0, value
+        captured = capsys.readouterr()
+        assert "schema_version 1 valid" in captured.out, value
+        assert captured.err == "", value
         assert cli.main(["--version"]) == 0
         assert _DRAFT_LABEL not in capsys.readouterr().out, value
 
 
-def test_cli_check_via_config_file_opt_in(monkeypatch, tmp_path, csk_home, skills_root, capsys):
-    """The config-file opt-in admits schema 2 with no env var set."""
+def test_cli_legacy_config_key_does_not_gate_schema2(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+    """The legacy config key remains accepted but does not gate schema 2."""
 
     project = make_project(tmp_path)
     write_skillfile(
@@ -1335,7 +1332,7 @@ def test_cli_check_via_config_file_opt_in(monkeypatch, tmp_path, csk_home, skill
 
     assert cli.main(["check", "app"]) == 0
     out = capsys.readouterr().out
-    assert _DRAFT_LABEL in out
+    assert _DRAFT_LABEL not in out
     assert "schema_version 2 valid" in out
 
 
@@ -1367,45 +1364,13 @@ def _walk_help_argvs(parser):
 
 
 def _parser_surface_matrix():
-    """Derive the (surface) axis of the unknown-config matrix from the parser.
+    """Derive root help surfaces from the root parser alone."""
 
-    Builds the production parser twice: once with the opt-in enabled
-    (the full verb set, draft verbs included) and once as v1 (opt-in
-    off, config forced to a known-missing path so no ambient config
-    can leak into collection). Help surfaces come from the enabled
-    walk; bare attempts cover exactly the draft-only verbs (enabled
-    minus v1), which argparse must reject before dispatch under both
-    unknown and absent configs, so attempting them is side-effect free.
-    """
-
-    var = config.SKILLFILE_SOURCES_ENV_VAR
-    saved_opt_in = os.environ.get(var)
-    saved_config = os.environ.get("CSK_CONFIG")
-    missing = str(Path(tempfile.gettempdir()) / "csk-no-such-config-dir" / "config.json")
-    try:
-        os.environ[var] = "1"
-        os.environ.pop("CSK_CONFIG", None)
-        enabled = cli.build_parser()
-        os.environ.pop(var, None)
-        os.environ["CSK_CONFIG"] = missing
-        v1 = cli.build_parser()
-    finally:
-        if saved_opt_in is None:
-            os.environ.pop(var, None)
-        else:
-            os.environ[var] = saved_opt_in
-        if saved_config is None:
-            os.environ.pop("CSK_CONFIG", None)
-        else:
-            os.environ["CSK_CONFIG"] = saved_config
-    enabled_help = _walk_help_argvs(enabled)
-    v1_help = set(_walk_help_argvs(v1))
-    draft_only = sorted({argv[:-1] for argv in enabled_help if argv not in v1_help})
-    surfaces = [("--version",), ("--help",), *enabled_help, *draft_only]
-    return tuple(surfaces), tuple(draft_only)
+    parser = cli.build_parser()
+    return (("--version",), ("--help",), *_walk_help_argvs(parser))
 
 
-_UNKNOWN_DISPLAY_SURFACES, _DRAFT_ONLY_VERBS = _parser_surface_matrix()
+_UNKNOWN_DISPLAY_SURFACES = _parser_surface_matrix()
 
 
 _UNKNOWN_STATE_PARAMS = [
@@ -1488,25 +1453,10 @@ def _break_registered_config(monkeypatch, tmp_path, project, kind, cfg_path):
     _UNKNOWN_DISPLAY_SURFACES,
     ids=[" ".join(item) for item in _UNKNOWN_DISPLAY_SURFACES],
 )
-def test_cli_unknown_config_parser_is_v1_shape(
+def test_cli_root_parser_display_is_config_independent(
     monkeypatch, tmp_path, csk_home, skills_root, capsys, kind, argv
 ):
-    """Three-state decision, row 3: an unloadable config renders the v1 parser.
-
-    One parametrised test over (surface x config state). The surfaces
-    are enumerated from the live parser, not hand-listed: every help
-    surface the opt-in-enabled parser exposes plus a bare attempt per
-    draft-only verb (see ``_parser_surface_matrix``). Each cell asserts
-    the unknown-state rendering is byte-identical to the absent-config
-    rendering in the same process, exit code included, with no draft
-    label on either side. A verb added later enters the matrix by
-    construction; no single case can be hand-directed.
-
-    Revision 4 replaces the revision-3 half-state (``check`` parseable
-    under unknown with a neutral list row): under unknown the parser is
-    the released v1 parser, so ``check`` attempts refuse with the v1
-    usage error exactly like the absent-config reference.
-    """
+    """Every root help surface stays independent of config readability."""
 
     project = make_project(tmp_path)
     write_skillfile(project, {"schema_version": 1, "skills": []})
@@ -1526,17 +1476,9 @@ def test_cli_unknown_config_parser_is_v1_shape(
     assert (broken_code, broken.out, broken.err) == (v1_code, v1.out, v1.err), (kind, argv)
 
 
-def test_cli_derived_surface_enumeration_covers_every_verb(monkeypatch):
-    """The unknown-state matrix enumerates from the parser, not from a list.
+def test_cli_root_help_surface_enumeration_covers_every_root_verb():
+    """Root parser help covers every registered root command."""
 
-    Guards the derivation itself: every help surface of the live
-    enabled parser must be in the matrix, the draft-only verb must
-    contribute its help and its bare attempt, and the matrix must stay
-    non-vacuous. Concrete members pin the walk across nesting depths
-    so a broken walk fails here instead of passing an empty matrix.
-    """
-
-    _enable_env_opt_in(monkeypatch)
     walked = {("--version",), ("--help",), *_walk_help_argvs(cli.build_parser())}
     matrix = set(_UNKNOWN_DISPLAY_SURFACES)
     assert walked <= matrix
@@ -1544,31 +1486,20 @@ def test_cli_derived_surface_enumeration_covers_every_verb(monkeypatch):
         ("--version",),
         ("--help",),
         ("install", "--help"),
-        ("check", "--help"),
-        ("check",),
         ("skill", "check", "--help"),
         ("global", "add", "--help"),
         ("config", "build-https", "login", "--help"),
     ):
         assert pinned in matrix, pinned
-    assert _DRAFT_ONLY_VERBS, "the matrix must attempt every draft-only verb"
+    assert ("check", "--help") not in matrix
     assert len(matrix) > 20, "a broken walk must not pass an empty matrix"
 
 
 @pytest.mark.parametrize("kind", _UNKNOWN_STATE_PARAMS)
-def test_cli_unknown_config_run_refuses_naming_config(
+def test_cli_commands_parse_before_reporting_unloadable_config(
     monkeypatch, tmp_path, csk_home, skills_root, capsys, kind
 ):
-    """Row 3, dispatch side: where a command runs, the refusal names the config.
-
-    Display surfaces render v1 (the matrix above); a runnable verb loads
-    the config again and refuses with the real error. Parse-shape and
-    read failures name the config with the reason; the
-    directory/unreadable/ENOTDIR shapes take the trunk raw-OSError lane,
-    identical on origin/main because the refusal happens in shared code
-    before any draft lane is reached. The draft verb itself is not
-    parseable, so its attempt refuses with the v1 usage error.
-    """
+    """Root commands and standalone check report real config read failures."""
 
     project = make_project(tmp_path)
     write_skillfile(project, {"schema_version": 1, "skills": []})
@@ -1604,18 +1535,23 @@ def test_cli_unknown_config_run_refuses_naming_config(
         assert "config" in err.lower(), (kind, err)
         assert "invalid choice" not in err, (kind, err)
 
+    monkeypatch.setenv("CSK_CONFIG", str(tmp_path / "missing-check-config.json"))
     assert cli.main(["check", "app"]) == 2, kind
-    assert "invalid choice: 'check'" in capsys.readouterr().err, kind
+    check_error = capsys.readouterr().err
+    assert "config" in check_error.lower(), (kind, check_error)
+    assert "invalid choice" not in check_error, (kind, check_error)
 
 
-def test_cli_absent_config_keeps_v1_shape(monkeypatch, tmp_path, capsys):
-    """A missing config file renders the v1 parser shape."""
+def test_cli_check_exists_without_config_and_root_help_stays_stable(monkeypatch, tmp_path, capsys):
+    """Check is available without config while root help stays v1-compatible."""
 
     monkeypatch.setenv("CSK_CONFIG", str(tmp_path / "missing-config.json"))
     monkeypatch.delenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", raising=False)
 
     assert cli.main(["check", "app"]) == 2
-    assert "invalid choice: 'check'" in capsys.readouterr().err
+    check_error = capsys.readouterr().err
+    assert "config" in check_error.lower()
+    assert "invalid choice" not in check_error
     assert cli.main(["--help"]) == 0
     assert "csk check" not in capsys.readouterr().out
     assert cli.main(["--version"]) == 0
@@ -1753,21 +1689,11 @@ def test_cli_loadable_matrix_covers_every_lockable_key():
 def test_cli_loadable_config_display_is_v1_bytes(
     monkeypatch, tmp_path, csk_home, skills_root, capsys, kind, argv
 ):
-    """Loadable non-opted-in states render display surfaces byte-identical to absent.
-
-    Revision 5 closes the parse-time warning leak: the decision read is
-    silent, so every help surface and ``--version`` under a loadable
-    config without the opt-in (including a system config that locks an
-    overridden key) emits exactly the bytes the absent-config reference
-    emits, exit code included. Runnable verbs are excluded here: they
-    legitimately differ (a loadable config runs, an absent one refuses)
-    and are covered by the exactly-once warning test instead.
-    """
+    """Root display surfaces do not depend on loaded config state."""
 
     project = make_project(tmp_path)
     write_skillfile(project, {"schema_version": 1, "skills": []})
     _setup_loadable_config(monkeypatch, tmp_path, csk_home, skills_root, project, kind)
-    assert cli._draft_sources_decision() == "disabled", kind
     capsys.readouterr()
 
     loaded_code = cli.main(list(argv))
@@ -1780,34 +1706,6 @@ def test_cli_loadable_config_display_is_v1_bytes(
     v1 = capsys.readouterr()
 
     assert (loaded_code, loaded.out, loaded.err) == (v1_code, v1.out, v1.err), (kind, argv)
-
-
-@pytest.mark.parametrize("kind", [*_UNKNOWN_STATE_PARAMS, *_LOADABLE_STATE_PARAMS])
-def test_cli_decision_produces_no_bytes_in_any_state(
-    monkeypatch, tmp_path, csk_home, skills_root, capsys, kind
-):
-    """The parse-time decision is observationally silent in every config state.
-
-    Revision 5 property: evaluating the opt-in at parse time produces
-    no bytes on stdout or stderr, so the only observable difference
-    between the candidate and origin/main without the opt-in is none.
-    Covers the twelve unloadable states and every loadable
-    non-opted-in state, including each locked-key conflict.
-    """
-
-    project = make_project(tmp_path)
-    write_skillfile(project, {"schema_version": 1, "skills": []})
-    if kind in _LOADABLE_KINDS:
-        _setup_loadable_config(monkeypatch, tmp_path, csk_home, skills_root, project, kind)
-        assert cli._draft_sources_decision() == "disabled", kind
-    else:
-        cfg_path = _register_draft_project(monkeypatch, csk_home, skills_root, project)
-        monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
-        _break_registered_config(monkeypatch, tmp_path, project, kind, cfg_path)
-        assert cli._draft_sources_decision() in ("unknown", "disabled"), kind
-    captured = capsys.readouterr()
-    assert captured.out == "", (kind, captured.out)
-    assert captured.err == "", (kind, captured.err)
 
 
 @pytest.mark.parametrize("key", sorted(config.LOCKABLE_KEYS))
@@ -1829,7 +1727,6 @@ def test_cli_locked_conflict_warning_exactly_once_on_runnable(
     _setup_loadable_config(
         monkeypatch, tmp_path, csk_home, skills_root, project, f"system-locked-conflict-{key}"
     )
-    assert cli._draft_sources_decision() == "disabled", key
     capsys.readouterr()
 
     for argv in (["status", "app"], ["list"]):
@@ -1847,48 +1744,10 @@ def test_cli_locked_conflict_warning_exactly_once_on_runnable(
         assert captured.err == "", (key, argv, captured.err)
 
 
-def test_cli_decision_evaluated_once_per_invocation(
+def test_cli_help_skips_config_and_dispatch_warns_once(
     monkeypatch, tmp_path, csk_home, skills_root, capsys
 ):
-    """One invocation performs one decision read (revision 5).
-
-    ``main`` evaluates the decision once and shares it between the
-    parser build and the ``--version`` label, so ``--version`` cannot
-    load twice. Dispatch loads the config again for use; that second
-    load is the trunk load and is counted separately below.
-    """
-
-    project = make_project(tmp_path)
-    write_skillfile(project, {"schema_version": 1, "skills": []})
-    _setup_loadable_config(
-        monkeypatch, tmp_path, csk_home, skills_root, project, "present-no-experimental"
-    )
-
-    calls = []
-    original = cli._draft_sources_decision
-
-    def counting():
-        calls.append(1)
-        return original()
-
-    monkeypatch.setattr(cli, "_draft_sources_decision", counting)
-    for argv in (["--version"], ["--help"], ["status", "app"], ["list"], ["config", "show"]):
-        del calls[:]
-        cli.main(argv)
-        capsys.readouterr()
-        assert len(calls) == 1, (argv, len(calls))
-
-
-def test_cli_decision_read_is_quiet_dispatch_is_loud(
-    monkeypatch, tmp_path, csk_home, skills_root, capsys
-):
-    """The decision read is silent; the dispatch load warns (revision 5).
-
-    Call sites: ``cli._draft_sources_decision`` loads with
-    ``quiet=True``; ``cli._dispatch`` loads loud. ``--version`` and
-    ``--help`` perform one quiet load and no loud load; a runnable
-    verb performs one of each, and the warning appears exactly once.
-    """
+    """Help and version skip config loading; runnable commands load once."""
 
     project = make_project(tmp_path)
     write_skillfile(project, {"schema_version": 1, "skills": []})
@@ -1912,19 +1771,19 @@ def test_cli_decision_read_is_quiet_dispatch_is_loud(
 
     cli.main(["--version"])
     captured = capsys.readouterr()
-    assert seen == [True], seen
+    assert seen == [], seen
     assert captured.err == ""
 
     del seen[:]
     cli.main(["--help"])
     captured = capsys.readouterr()
-    assert seen == [True], seen
+    assert seen == [], seen
     assert captured.err == ""
 
     del seen[:]
     assert cli.main(["status", "app"]) == 0
     captured = capsys.readouterr()
-    assert seen == [True, False], seen
+    assert seen == [False], seen
     assert captured.err.count("is locked by") == 1, captured.err
 
 
@@ -1936,8 +1795,7 @@ def test_cli_check_v1_project_valid(monkeypatch, tmp_path, csk_home, skills_root
 
     assert cli.main(["check", "app"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0] == _DRAFT_LABEL
-    assert "schema_version 1 valid (0 skills, no draft sources)" in lines[1]
+    assert lines == ["app: schema_version 1 valid (0 skills)"]
 
 
 def test_cli_check_schema2_valid_reports_summary(monkeypatch, tmp_path, csk_home, skills_root, capsys):
@@ -1965,7 +1823,7 @@ def test_cli_check_missing_skillfile_is_invalid(monkeypatch, tmp_path, csk_home,
 
     assert cli.main(["check", "app"]) == 1
     out = capsys.readouterr().out
-    assert _DRAFT_LABEL in out
+    assert _DRAFT_LABEL not in out
     assert "Skillfile.json missing" in out
 
 
@@ -1995,7 +1853,7 @@ def test_cli_check_unreadable_skillfile_is_structured_refusal(
     captured = capsys.readouterr()
     assert captured.err.startswith("error: "), captured.err
     assert "Skillfile.json" in captured.err, captured.err
-    assert _DRAFT_LABEL in captured.err, captured.err
+    assert _DRAFT_LABEL not in captured.err, captured.err
 
 
 def test_cli_check_directory_skillfile_is_structured_refusal(
@@ -2021,7 +1879,7 @@ def test_cli_check_directory_skillfile_is_structured_refusal(
     captured = capsys.readouterr()
     assert captured.err.startswith("error: "), captured.err
     assert "Skillfile.json" in captured.err, captured.err
-    assert _DRAFT_LABEL in captured.err, captured.err
+    assert _DRAFT_LABEL not in captured.err, captured.err
 
 
 def test_cli_check_unknown_alias_is_usage_error(monkeypatch, tmp_path, csk_home, skills_root, capsys):
@@ -2066,12 +1924,12 @@ def test_cli_check_all_covers_mixed_projects(monkeypatch, tmp_path, csk_home, sk
     assert "two: schema_version 2 valid" in out
 
 
-def _assert_diagnostic(err, *, code, subject, reason, label=_DRAFT_LABEL):
+def _assert_diagnostic(err, *, code, subject, reason):
     assert f"{code}:" in err, err
     assert subject in err, err
     assert reason in err, err
     assert len(_remediation_lines(err)) == 1, err
-    assert label in err, err
+    assert _DRAFT_LABEL not in err, err
 
 
 def test_cli_diagnostic_source_alias_unknown(monkeypatch, tmp_path, csk_home, skills_root, capsys):
@@ -2375,7 +2233,7 @@ def test_cli_secret_class_never_renders_on_any_surface(
     assert "source_selection_invalid:" in captured.err, (member_id, surface, combined)
     assert "'evil'" in captured.err, (member_id, surface, combined)
     assert len(_remediation_lines(captured.err)) == 1, (member_id, surface, combined)
-    assert _DRAFT_LABEL in captured.err, (member_id, surface, combined)
+    assert _DRAFT_LABEL not in captured.err, (member_id, surface, combined)
     assert secret not in combined, (member_id, surface, combined)
     assert repr(secret)[1:-1] not in combined, (member_id, surface, combined)
     assert url not in combined, (member_id, surface, combined)
@@ -2843,17 +2701,114 @@ def _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root):
         },
     )
     _register_draft_project(monkeypatch, csk_home, skills_root, project)
-    _enable_env_opt_in(monkeypatch)
     return project, skill_dir
 
 
-def test_cli_install_schema2_success_labels(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+def test_cli_schema2_commands_work_without_legacy_opt_in(
+    monkeypatch, tmp_path, csk_home, skills_root, capsys
+):
+    _require_posix_traversal()
+    _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
+    cfg = json.loads((csk_home / "config.json").read_text(encoding="utf-8"))
+    assert "experimental" not in cfg
+    assert "CSK_EXPERIMENTAL_SKILLFILE_SOURCES" not in os.environ
+
+    assert cli.main(["check", "app"]) == 0
+    assert "schema_version 2 valid" in capsys.readouterr().out
+    assert cli.main(["install", "app"]) == 0
+    assert "lock created" in capsys.readouterr().out
+    assert cli.main(["upgrade", "app"]) == 0
+    assert "review up-to-date" in capsys.readouterr().out
+    assert cli.main(["status", "app"]) == 0
+    assert "source_lock_stale" not in capsys.readouterr().out
+
+
+def test_cli_install_schema2_default_on_without_legacy_setting(
+    monkeypatch, tmp_path, csk_home, skills_root, capsys
+):
+    _require_posix_traversal()
+    _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
+    assert "CSK_EXPERIMENTAL_SKILLFILE_SOURCES" not in os.environ
+    cfg = json.loads((csk_home / "config.json").read_text(encoding="utf-8"))
+    assert "experimental" not in cfg
+
+    assert cli.main(["install", "app"]) == 0
+    assert "lock created" in capsys.readouterr().out
+
+
+def test_cli_schema2_outputs_do_not_print_draft_label(
+    monkeypatch, tmp_path, csk_home, skills_root, capsys
+):
+    _require_posix_traversal()
+    _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
+    for argv in (
+        ["check", "app"],
+        ["install", "app"],
+        ["upgrade", "app"],
+        ["status", "app"],
+        ["status", "app", "--json"],
+    ):
+        assert cli.main(argv) == 0, argv
+        captured = capsys.readouterr()
+        assert _DRAFT_LABEL not in captured.out + captured.err, (argv, captured)
+
+
+def test_cli_legacy_schema2_switches_are_noops(
+    monkeypatch, tmp_path, csk_home, skills_root, capsys
+):
+    project = make_project(tmp_path)
+    write_skillfile(
+        project,
+        {
+            "schema_version": 2,
+            "sources": {"local": {"path": "."}},
+            "skills": [{"name": "review", "from": "local", "directory": "agents/skills/review"}],
+        },
+    )
+    _write_draft_skill(project / "agents" / "skills" / "review", "review")
+    cfg_path = _register_draft_project(monkeypatch, csk_home, skills_root, project)
+    monkeypatch.delenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", raising=False)
+    commands = (
+        ("check", "app"),
+        ("install", "app"),
+        ("upgrade", "app"),
+        ("status", "app"),
+    )
+
+    # Create the lock before pinning output so install is stable in each mode.
+    assert cli.main(["install", "app"]) == 0
+    capsys.readouterr()
+    expected: dict[tuple[str, ...], tuple[str, str]] = {}
+    for argv in commands:
+        assert cli.main(list(argv)) == 0, argv
+        captured = capsys.readouterr()
+        assert _DRAFT_LABEL not in captured.out + captured.err, (argv, captured)
+        expected[argv] = (captured.out, captured.err)
+
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg["experimental"] = {"skillfile_sources": True}
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+    for argv in commands:
+        assert cli.main(list(argv)) == 0, argv
+        configured = capsys.readouterr()
+        assert (configured.out, configured.err) == expected[argv]
+
+    del cfg["experimental"]
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+    monkeypatch.setenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", "1")
+    for argv in commands:
+        assert cli.main(list(argv)) == 0, argv
+        environment = capsys.readouterr()
+        assert (environment.out, environment.err) == expected[argv]
+
+
+def test_cli_install_schema2_success_omits_draft_label(monkeypatch, tmp_path, csk_home, skills_root, capsys):
     _require_posix_traversal()
     _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
 
     assert cli.main(["install", "app"]) == 0
     out = capsys.readouterr().out
-    assert _DRAFT_LABEL in out
+    assert _DRAFT_LABEL not in out
     assert "lock created" in out
 
 
@@ -2879,20 +2834,23 @@ def test_cli_upgrade_refreshes_stale_lock(monkeypatch, tmp_path, csk_home, skill
     assert cli.main(["upgrade", "app"]) == 0
     out = capsys.readouterr().out
     assert "lock replaced" in out
-    assert _DRAFT_LABEL in out
+    assert _DRAFT_LABEL not in out
 
 
-def test_cli_status_schema2_labels_text_and_json(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+def test_cli_status_schema2_text_and_json_omit_draft_label(monkeypatch, tmp_path, csk_home, skills_root, capsys):
     _require_posix_traversal()
     _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
     assert cli.main(["install", "app"]) == 0
     capsys.readouterr()
 
     assert cli.main(["status", "app"]) == 0
-    assert _DRAFT_LABEL in capsys.readouterr().out
+    text = capsys.readouterr().out
+    assert _DRAFT_LABEL not in text
     assert cli.main(["status", "app", "--json"]) == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload[0]["draft_sources"] == _DRAFT_LABEL
+    json_text = capsys.readouterr().out
+    assert _DRAFT_LABEL not in json_text
+    payload = json.loads(json_text)
+    assert "draft_sources" not in payload[0]
 
 
 def test_cli_schema2_install_uses_skillfile_locale_for_status(
@@ -3005,7 +2963,7 @@ def test_cli_status_lock_stale_renders_remediation_text_and_json(
     assert row.startswith("source_lock_stale: "), row
     assert row.count("remediation: ") == 1, row
     assert "remediation: run csk upgrade to refresh the lock" in row, row
-    assert _DRAFT_LABEL in row, row
+    assert _DRAFT_LABEL not in row, row
 
 
 @pytest.mark.parametrize("code", source_diagnostics.STABLE_DIAGNOSTIC_CODES)
@@ -3060,14 +3018,14 @@ def test_cli_status_error_row_renders_every_table_code(
         assert "fixture-member" in row, row
         assert "stated reason" in row, row
         assert row.count("remediation: ") == 1, row
-        assert _DRAFT_LABEL in row, row
+        assert _DRAFT_LABEL not in row, row
     else:
         out = capsys.readouterr().out
         assert f"ERROR {code}:" in out, out
         assert "fixture-member" in out, out
         assert "stated reason" in out, out
         assert len(_remediation_lines(out)) == 1, out
-        assert _DRAFT_LABEL in out, out
+        assert _DRAFT_LABEL not in out, out
 
 
 def test_cli_status_member_detail_sanitizes_paths(
@@ -3239,7 +3197,7 @@ def test_cli_status_transport_exhaustion_renders_attempts(
     assert "attempt 1=connection-refused" in err, err
     assert "https://example.org/kit.git" in err, err
     assert len(_remediation_lines(err)) == 1, err
-    assert _DRAFT_LABEL in err, err
+    assert _DRAFT_LABEL not in err, err
     assert real_evaluate is not None
 
 
@@ -3269,7 +3227,7 @@ def test_cli_install_transport_exhaustion_renders_attempts(
     assert "attempt 0=timeout" in err, err
     assert "https://example.org/kit.git" in err, err
     assert len(_remediation_lines(err)) == 1, err
-    assert _DRAFT_LABEL in err, err
+    assert _DRAFT_LABEL not in err, err
 
 
 def _audit_events_during(func):

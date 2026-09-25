@@ -100,6 +100,84 @@ entry-point tests. `CHANGELOG.md` records the user-visible behavior and this
 `check=False`, and an unused binding rename were kept to satisfy Ruff without
 changing test behavior. Candidate remains uncommitted in the Story worktree.
 
+## 2026-09-24 - TASK-260924-35io4a: schema 2 is the default project format
+
+Schema 2 now loads without the legacy config or environment opt-in across
+`csk check`, `install`, `upgrade`, and `status`. The former switches remain
+accepted as no-ops, and the draft output label is removed. Schema 1 golden
+output stays covered by its 69-test suite; global Skillfiles still refuse
+schema 2, and the conformance pin remains on the draft vectors.
+
+Named narrowing mutants were killed for the install opt-in gate
+(`test_cli_install_schema2_default_on_without_legacy_setting`), the removed
+label (`test_cli_schema2_outputs_do_not_print_draft_label`), and the global
+schema-1 boundary (`test_global_install_keeps_schema_1_scope_and_plain_refusal`).
+An initial install mutant probe was discarded because it referenced the
+environment variable on `GlobalConfig`; the corrected gate mutant was the one
+used for evidence. The full ordinary suite passed 11,046 tests and skipped 128;
+the draft vector suite passed 305 and skipped 1. Strict mypy, package build,
+twine check, and `git diff --check` all exited 0. Candidate remains uncommitted
+in the Story worktree for review.
+
+### Continuation after main sync, 2026-09-25
+
+The carried 26-file candidate was revalidated on base `de875025`. The ordinary
+CI collection contained 10,968 node IDs. Fifty-five bounded pytest processes
+covered all IDs with 10,808 passed and 160 skipped, exit 0 for each process.
+Two oversized node lists reached the per-command time boundary and were
+interrupted with exit 130; every ID from both lists passed in smaller reruns.
+An earlier shard using `/tmp` was contaminated by the existing host file
+`/private/tmp/Skillfile.json` and exited 1. The affected test passed with an
+isolated external basetemp, and all later shards used isolated cache basetemps.
+
+Focused schema-2 regression and v1 golden checks passed (418 passed, 1
+skipped; 69 passed). The pinned draft sources suite passed (305 passed, 1
+skipped). Mypy passed across 93 source files, the sdist and wheel built, and
+Twine metadata checks passed. All these commands exited 0. The ordinary tests
+ran under the available Python 3.12.13 environment; CI's Python 3.14 matrix
+and its separate protocol and Go E2E jobs were not reproduced locally.
+Candidate remains uncommitted in the Story worktree for review.
+
+### Final revalidation after lint cleanup, 2026-09-25
+
+After removing two imports made unused by the change, a fresh collect and full
+ordinary rerun covered all 10,968 collected IDs in 60 bounded pytest
+processes. The result was 10,808 passed, 160 skipped, and 0 failed; every
+process used `-n 4 --dist=loadfile` and exited 0. Basetemp and pytest cache
+directories were outside the repository. The pinned draft suite passed 305
+with 1 skip. Mypy passed all 93 source files; the source distribution and wheel
+built, and Twine checked both successfully. The isolated Ruff scan over changed
+Python files found only two HEAD-baseline findings: F841 in
+`src/csk/status.py` and F401 in `tests/test_source_diagnostics.py` (exit 1).
+The same scan with only those two path-specific baseline findings excluded
+exited 0.
+
+The CI fast protocol sentinels passed 10/10, the pinned draft sources suite
+passed 305 with 1 skip, and the macOS Go E2E smoke passed 1/1 using Go
+1.25.5. The Go smoke ran in a task-scoped non-editable venv built from the
+candidate wheel because the project `.venv` is editable and cannot satisfy
+the test's installed-package identity check. The current host provides Python
+3.12.13; the PR CI Python 3.14 matrix was not reproduced locally.
+
+The separate full released protocol merge suite collected 1,053 IDs. Its first
+four 211-ID chunks passed. The 209-ID remainder contains long lifecycle
+observation cases and exceeded the 10-minute command boundary; a run was
+interrupted after 72 passes (pytest exit 2), then smaller reruns passed the
+first 60 and interrupted the next 20-ID chunk after 16 passes (pytest exit 2).
+The full merge-only protocol suite is therefore not claimed green. The
+task-specific PR fast protocol sentinels and draft-vector suite are green.
+
+Narrowing mutants were killed by named tests for the project-install opt-in
+gate (`test_cli_install_schema2_default_on_without_legacy_setting`), the
+removed output label (`test_cli_schema2_outputs_do_not_print_draft_label`),
+and global schema-1 scope (`test_global_install_keeps_schema_1_scope_and_plain_refusal`).
+The label source-text check was also attacked with a mutant that kept the
+searched token in production source while printing the label; both
+`test_removed_label_is_absent_from_production_sources` and the runtime label
+test ran and failed under that mutant (pytest exit 1). The source file was
+restored byte-for-byte, and the focused regression set then passed 7 tests.
+Candidate remains uncommitted in the Story worktree for review.
+
 ## 2026-09-23 - BUG-260922-1ulkcl rev2 revalidation after Story reparent
 
 Revalidated the inherited H-1 candidate on the Story checkpoint at `f1941128`; no source or test edits were made in this run. The reader classifies only `open()` for retry/absence; injected `PermissionError` and `FileNotFoundError` at both `read()` and `close()` refuse as read failures. M1-M7 were killed again, and M8 (wide try restored) failed all four named post-open cases. Store suite: 129 passed, exit 0; ordinary CI suite: 9,098 passed / 132 skipped, exit 0; mypy: 92 files, exit 0; `uv build`: exit 0. All pytest basetemp/cache paths were under `/tmp`; hosted Windows CI remains the orchestrator's post-landing step. Fresh task-scoped evidence and the coverage map are attached to BUG-260922-1ulkcl. Candidate remains uncommitted.

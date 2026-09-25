@@ -1,4 +1,4 @@
-"""Deterministic skill-collection expansion (draft skillfile-sources-v1, opt-in).
+"""Deterministic skill-collection expansion for Skillfile schema 2.
 
 This module implements protocol skillfile-sources section 1 selection against
 a resolved source root: a local directory for ``path`` sources, or the

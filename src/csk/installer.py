@@ -61,7 +61,7 @@ from .builds import metadata as build_metadata
 from .builds import planner as build_planner
 from .builds import source as build_source
 from .builds import toolchain as build_toolchain
-from .config import GlobalConfig, ProjectConfig, skillfile_sources_enabled
+from .config import GlobalConfig, ProjectConfig
 from .skillspec import CommandSpec
 from .sources import diagnostics as source_diagnostics
 from .sources import errors as source_errors
@@ -362,7 +362,7 @@ def _install_schema2_once(
     operator_ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
     operator_https_token: OperatorHTTPSToken | None = None,
 ) -> ProjectResult:
-    """Install one schema-2 (draft skillfile-sources-v1) project.
+    """Install one schema-2 project.
 
     The schema-2 lane refuses source development substitutions (new
     ``from`` selectors never gain them) and hybrid declarations, then
@@ -525,7 +525,6 @@ def _install_schema2_once(
                 interactive=options.interactive and not options.dry_run,
             )
         result.messages.extend(outcome.messages)
-        result.messages.append(source_errors.DRAFT_SKILLFILE_SOURCES_LABEL)
         return result
     except build_planner.BuildPlanningError as exc:
         if exc.code == "concurrent_state_change":
@@ -544,7 +543,7 @@ def _install_schema2_once(
 def _schema2_failure_text(exc: BaseException) -> str:
     """Render a schema-2 install failure, sanitized with one remediation.
 
-    Stable draft-sources diagnostics render through the shared
+    Stable schema-2 source diagnostics render through the shared
     renderer; anything else keeps the existing boundary rendering.
     Only the schema-2 lane calls this; the v1 lane is untouched.
     """
@@ -599,12 +598,10 @@ def _install_project_once(
     result = ProjectResult(alias=project.alias, path=project.path, status="ok")
     try:
         try:
-            project_manifest = manifest.load_manifest(
-                project.path, allow_schema_2=skillfile_sources_enabled(config)
-            )
+            project_manifest = manifest.load_manifest(project.path)
         except source_errors.SourceError as exc:
             # Only the schema-2 parser raises SourceError, so this is a
-            # draft diagnostic by construction; v1 loads raise
+            # source diagnostic by construction; v1 loads raise
             # ManifestError and keep the boundary rendering below.
             result.status = "failed"
             result.errors.append(_schema2_failure_text(exc))

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Изменено
 
+- Schema 2 стала основным форматом проектного Skillfile. Команды `csk check`, `csk install`, `csk upgrade` и `csk status` принимают её по умолчанию.
+- Schema 1 сохраняет прежнее поведение и остаётся поддерживаемым legacy-форматом.
+- Старые настройки `experimental.skillfile_sources` и `CSK_EXPERIMENTAL_SKILLFILE_SOURCES` принимаются как no-op. Метка удалена из вывода.
+- Глобальная область остаётся на schema 1. Conformance pin сохраняет draft vectors до выхода следующей редакции спецификации.
 - `csk install` восстанавливает отсутствующий снимок по неизменённому `Skillfile.lock.json`: для `path` читает текущие байты, для `git` и `repository` получает точный commit из лока. При расхождении команда сообщает `source_snapshot_changed`, при недоступном источнике сообщает `source_snapshot_unavailable`; лок не меняется.
 
 ### Исправлено

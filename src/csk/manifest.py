@@ -12,7 +12,6 @@ from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_locale, 
 from .sources import skillfile_v2
 from .sources.errors import (
     CODE_NAME_CONFLICT,
-    DRAFT_SKILLFILE_SOURCES_LABEL,
     SourceError,
 )
 
@@ -20,17 +19,6 @@ from .sources.errors import (
 SCHEMA_VERSION = 1
 SCHEMA_VERSION_2 = 2
 MANIFEST_NAME = "Skillfile.json"
-
-# Schema 2 without the opt-in keeps the existing unsupported-schema text and
-# appends exactly this one hint line naming the config flag and env var.
-# The draft label comes from the one shared constant; the rendered bytes
-# stay identical (pinned by tests/test_skillfile_v2.py EXPECTED_HINT).
-SCHEMA_2_OPT_IN_HINT = (
-    f"hint: schema_version 2 is {DRAFT_SKILLFILE_SOURCES_LABEL}; "
-    "set experimental.skillfile_sources in the global config "
-    "or CSK_EXPERIMENTAL_SKILLFILE_SOURCES=1"
-)
-
 
 class ManifestError(Exception):
     pass
@@ -57,8 +45,8 @@ class ProjectManifest:
     agents: list[str] = field(default_factory=list)
     locale: str | None = None
     skills: list[SkillDecl] = field(default_factory=list)
-    # Schema 2 (draft skillfile-sources-v1, opt-in) additions. Schema 1
-    # manifests keep schema_version 1 with empty sources/selectors and no hash.
+    # Schema 2 additions. Schema 1 manifests keep schema_version 1 with empty
+    # sources/selectors and no hash.
     schema_version: int = SCHEMA_VERSION
     sources: dict[str, skillfile_v2.SourceAcquisition] = field(default_factory=dict)
     selectors: list[skillfile_v2.SkillSelector] = field(default_factory=list)
@@ -249,15 +237,8 @@ def parse_manifest(
         raise ManifestError(f"{path} must contain a JSON object")
     schema = data.get("schema_version")
     if isinstance(schema, int) and not isinstance(schema, bool) and schema == SCHEMA_VERSION_2:
-        if allow_schema_2 is None:
-            from .config import skillfile_sources_enabled
-
-            allow_schema_2 = skillfile_sources_enabled()
-        if not allow_schema_2:
-            raise ManifestError(
-                f"Unsupported Skillfile schema_version {schema}; this Skillfile requires a newer csk"
-                f"\n{SCHEMA_2_OPT_IN_HINT}"
-            )
+        # ``allow_schema_2`` remains in the signature for source compatibility.
+        # Schema 2 is now supported independently of legacy opt-in settings.
         return _parse_v2(
             data, path, skill_extension_fields=skill_extension_fields, scope=resolved_scope
         )

@@ -311,8 +311,8 @@ def load_manifest(csk_home: Path) -> manifest.ProjectManifest:
         raise GlobalInstallError(f"Global Skillfile not found: {path}\n  Run 'csk global init' first.")
     if loaded.schema_version == 2:
         raise GlobalInstallError(
-            "schema-2 global installs are not supported by atomic source "
-            "install; global scope stays on schema 1"
+            "Global Skillfile schema_version 2 is unsupported; "
+            "global installs require schema_version 1"
         )
     return loaded
 

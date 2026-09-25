@@ -1,4 +1,4 @@
-"""Resolving and frozen source modes as capability types (draft, opt-in).
+"""Resolving and frozen source modes for Skillfile schema 2.
 
 Resolving mode (``csk install`` without a lock, ``csk upgrade``) may
 enumerate members, resolve refs, capture snapshots, write the source-v1
