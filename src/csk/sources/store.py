@@ -22,9 +22,10 @@ of them.
 Reads are lock-free and create nothing: :func:`lookup_snapshot` verifies the
 record, rehashes every tree file, rebuilds the inventory through the
 production inventory function and compares the digest. Any failure to serve
-the exact locked bytes -- absent record, tampered bytes, unreadable file --
-fails ``source_snapshot_unavailable`` and never recreates the snapshot from
-live bytes; lookup takes no source path, so recreation is not expressible.
+the exact locked bytes fails ``source_snapshot_unavailable``.
+:func:`lookup_snapshot_if_present` returns ``None`` only when the package
+entry itself is absent. It does not recover data; the locked installer owns
+the bounded recovery and lock comparison.
 
 Writes take the manager-home lock (``csk.locking.ManagerHomeLock``, the same
 lock the installer uses) and publish by stage-then-rename: bytes land in a
@@ -370,12 +371,31 @@ def lookup_snapshot(home: Path, skill: str, package: str) -> StoredSnapshot:
     """Serve one locked snapshot's frozen bytes, verified, or refuse.
 
     A missing or unverifiable locked snapshot fails
-    ``source_snapshot_unavailable`` and never recreates the snapshot: this
-    function takes no source path, performs no capture, and creates
-    nothing -- not even the home directory. Only a non-string key raises
-    ``TypeError``; every other failure to serve the exact locked bytes is
-    the structured refusal.
+    ``source_snapshot_unavailable``. This function takes no source path,
+    performs no capture, and creates nothing, not even the home directory.
+    Only a non-string key raises ``TypeError``; every other failure to serve
+    the exact locked bytes is the structured refusal.
     """
+    stored = _lookup_snapshot(home, skill, package, allow_missing=False)
+    assert stored is not None
+    return stored
+
+
+def lookup_snapshot_if_present(
+    home: Path, skill: str, package: str
+) -> StoredSnapshot | None:
+    """Serve a verified snapshot or return ``None`` for an absent entry.
+
+    Only absence of the package entry is returned as ``None``. A present
+    but unreadable, malformed or incomplete entry remains unavailable.
+    """
+
+    return _lookup_snapshot(home, skill, package, allow_missing=True)
+
+
+def _lookup_snapshot(
+    home: Path, skill: str, package: str, *, allow_missing: bool
+) -> StoredSnapshot | None:
     if type(skill) is not str:
         raise TypeError("snapshot skill name must be a string")
     if type(package) is not str:
@@ -391,6 +411,16 @@ def lookup_snapshot(home: Path, skill: str, package: str) -> StoredSnapshot:
         ) from exc
     entry = store_root(home) / SNAPSHOTS_DIRNAME / skill_hex / package_hex
     subject = f"snapshot for skill {skill!r} package {package!r}"
+    if allow_missing:
+        try:
+            entry.lstat()
+        except FileNotFoundError:
+            return None
+        except _FS_ERRORS as exc:
+            raise SourceError(
+                CODE_SNAPSHOT_UNAVAILABLE,
+                f"{subject} is unavailable: the stored entry cannot be inspected: {exc}",
+            ) from exc
     try:
         record = _read_record(entry, skill, package)
         tree = _trees_dir(entry) / record.snapshot[len("sha256:") :]
@@ -495,6 +525,45 @@ def stage_snapshot(
     Staging the same bytes twice is idempotent; staging different bytes
     for one key atomically supersedes the old record.
     """
+    return _stage_snapshot(
+        home, skill, package, captured, replace_existing=True
+    )
+
+
+def stage_snapshot_if_missing(
+    home: Path,
+    skill: str,
+    package: str,
+    captured: CapturedPackage,
+    *,
+    home_lock: ManagerHomeLock | None = None,
+) -> StoredSnapshot:
+    """Stage captured bytes only while the exact store entry is absent.
+
+    The absence check and stage share the manager-home lock. If a valid
+    entry appeared meanwhile, it is served and never replaced. A present
+    but invalid entry fails closed.
+    """
+
+    return _stage_snapshot(
+        home,
+        skill,
+        package,
+        captured,
+        replace_existing=False,
+        home_lock=home_lock,
+    )
+
+
+def _stage_snapshot(
+    home: Path,
+    skill: str,
+    package: str,
+    captured: CapturedPackage,
+    *,
+    replace_existing: bool,
+    home_lock: ManagerHomeLock | None = None,
+) -> StoredSnapshot:
     entry = entry_dir(home, skill, package)
     frozen = captured.frozen_files()
     digest = verify_frozen_copy(
@@ -505,9 +574,18 @@ def stage_snapshot(
     # Well-shaped by construction past verification: the recomputed digest
     # always matches the pattern, and a mismatch already refused above.
     digest_hex = _digest_component(digest)
+    def stage_locked() -> StoredSnapshot:
+        if not replace_existing:
+            existing = lookup_snapshot_if_present(home, skill, package)
+            if existing is not None:
+                return existing
+        return _stage_locked(home, entry, skill, package, frozen, digest, digest_hex)
+
     try:
-        with ManagerHomeLock(home):
-            return _stage_locked(home, entry, skill, package, frozen, digest, digest_hex)
+        if home_lock is None:
+            with ManagerHomeLock(home):
+                return stage_locked()
+        return stage_locked()
     except SourceError:
         raise
     except LockError as exc:
@@ -714,6 +792,8 @@ __all__ = [
     "StoredSnapshot",
     "entry_dir",
     "lookup_snapshot",
+    "lookup_snapshot_if_present",
     "stage_snapshot",
+    "stage_snapshot_if_missing",
     "store_root",
 ]

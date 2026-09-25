@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Изменено
+
+- `csk install` восстанавливает отсутствующий снимок по неизменённому `Skillfile.lock.json`: для `path` читает текущие байты, для `git` и `repository` получает точный commit из лока. При расхождении команда сообщает `source_snapshot_changed`, при недоступном источнике сообщает `source_snapshot_unavailable`; лок не меняется.
+
 ### Исправлено
 
 - `csk install` для schema 2 использует `Skillfile.locale` наравне с `csk status`; скилл без файлов локализации больше не получает ложный `marker-mismatch` после чистой установки.

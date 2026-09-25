@@ -76,7 +76,7 @@ REMEDIATION_BY_CODE: Final[dict[str, str]] = {
         "run csk upgrade to refresh the lock, or restore the locked bytes"
     ),
     source_errors.CODE_SNAPSHOT_UNAVAILABLE: (
-        "restore the snapshot from its source and rerun csk install"
+        "restore the source named above and rerun csk install"
     ),
     source_errors.CODE_LOCK_STALE: "run csk upgrade to refresh the lock",
     repository_policy.CODE_POLICY_INVALID: (

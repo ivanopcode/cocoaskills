@@ -1,38 +1,19 @@
 """Resolving and frozen source modes as capability types (draft, opt-in).
 
-There are exactly two modes, and the code must not be able to confuse
-them. Resolving mode (``csk install`` with no lock, ``csk upgrade``) may
+Resolving mode (``csk install`` without a lock, ``csk upgrade``) may
 enumerate members, resolve refs, capture snapshots, write the source-v1
-store and write a lock. Frozen mode (``csk install`` with a lock, launch,
-status) reads the lock and the store, and is forbidden four operations:
-enumerate a collection, advance a ref, write the store, write a lock.
+store and write a lock. Frozen install mode reads the lock and store. If a
+locked snapshot is absent, it may capture a ``path`` member or acquire the
+exact locked Git commit, then stage the bytes only after lock comparison.
+Frozen mode never enumerates members, resolves a tag or branch, or writes
+a lock. Status and launch remain read-only consumers.
 
-Frozen mode does capture, but only on one source arm, and it never
-stages. :func:`csk.sources.publish._capture_locked_member` dispatches on
-the locked package identity, and the two arms differ:
+The recovery capability is smaller than resolving mode.
+``LockedGitRecovery`` carries bounded transport inputs and memoizes exact
+commit acquisitions. It has no ref resolver, selector surface or workspace.
+``LocalSnapshot`` recovery uses the confined selection reader.
 
-* ``LocalSnapshot``: the store is read first, and then the live bytes
-  are re-captured exactly once for that member. That capture is
-  load-bearing rather than an exception to the rule: re-reading the live
-  bytes is how ``source_snapshot_changed`` is produced at all, so a
-  local lane unable to capture would be a lane unable to detect drift.
-  The capture is for comparison only and is never staged.
-* ``NetworkGit``: served from the source-v1 store alone, through
-  :func:`csk.sources.publish._serve_locked_git_member`. A Git member has
-  no live bytes to compare against — the store entry addressed by
-  ``(skill name, SHA-256(CCJ-1(package)))`` *is* the locked snapshot, and
-  a missing or mismatching entry is unavailable — so nothing is captured
-  and the network is not touched. Drift detection is not weaker here; it
-  is answered by the identity instead of by a re-read.
-
-Both arms are measured, not assumed. Counting
-:func:`csk.sources.snapshot.capture_package_snapshot` and
-:func:`csk.sources.store.stage_snapshot` across one locked install per
-arm gives frozen ``capture=1 stage=0`` local and ``capture=0 stage=0``
-Git, each against resolving ``1/1``.
-
-The four forbidden operations are not refused by the same mechanism, and
-the difference is what a new call site has to know:
+These boundaries use different enforcement mechanisms:
 
 * Advance a ref: refused by type. :func:`resolve_git_alias`,
   :func:`acquire_git_alias` and :func:`acquire_git_commit` take a
@@ -45,17 +26,19 @@ the difference is what a new call site has to know:
   :func:`csk.sources.publish.collection_membership` takes no mode and is
   confined instead: only the resolving lane records a membership to
   compare against, and the frozen lane passes ``None``.
-* Write the store: refused by call-graph confinement, not by type.
+* Store recovery: the locked lane stages only after lock comparison, while
+  holding the manager-home lock. It stores only a missing entry and refuses
+  to replace an entry that appeared during recovery.
+* General store writes: resolving mode may replace entries. The locked
+  lane has one confined recovery stage after lock comparison.
   :func:`csk.sources.snapshot.capture_package_snapshot` and
   :func:`csk.sources.store.stage_snapshot` take a plain
   :class:`~pathlib.Path` and would run under either mode.
   :func:`csk.sources.publish.stage_schema2_store` is unreachable because
   its only caller is
-  :func:`csk.sources.publish._install_schema2_resolving`, and the healing
-  write sits in
-  :func:`csk.sources.publish._serve_resolving_publication_files`, which
-  the shared pipeline reaches only from the ``else`` branch of its mode
-  check.
+  :func:`csk.sources.publish._install_schema2_resolving`. Missing frozen
+  entries use :func:`csk.sources.publish._stage_recovered_locked_snapshots`
+  after :func:`csk.sources.publish._require_frozen_lock_unchanged`.
 * Write a lock: refused by an explicit runtime mode branch. Both
   :func:`csk.sources.publish.plan_schema2_targets` and
   :func:`csk.sources.publish.stage_schema2_desired` take the union type
@@ -63,16 +46,11 @@ the difference is what a new call site has to know:
   ``isinstance(mode, ResolvingSources)``. Frozen mode still rebuilds the
   lock in memory for the determinism comparison; it never stages it.
 
-The modes are two disjoint types, not a boolean a later call site can
-forget. :class:`ResolvingSources` carries the transport grant (the Git
-tool factory, the policy path, the acquisition workspace and the
-operation-scoped resolution memo); :class:`FrozenSources` carries only
-the home directory and the validated lock. :func:`select` is the single
-mode-decision point; everything downstream dispatches on the type. Where
-an operation is refused by type, the capability is simply not in scope
-and a frozen call site cannot spell it. Where it is refused by
-confinement or by a mode branch, the guarantee lives in the call graph
-above it, and a new call site can break it without a type error.
+The modes use disjoint capability types. :class:`ResolvingSources` carries
+the Git tool factory, policy path, acquisition workspace and resolution
+memo. :class:`FrozenSources` carries the validated lock and a narrow exact
+commit recovery grant. :func:`select` is the single mode-decision point;
+everything downstream dispatches on the returned type.
 """
 
 from __future__ import annotations
@@ -142,23 +120,34 @@ class ResolvingSources:
 
 
 @dataclass(frozen=True)
-class FrozenSources:
-    """The frozen-mode capability: the home directory and the lock.
+class LockedGitRecovery:
+    """Acquire one exact locked commit without resolving refs.
 
-    Deliberately disconnected from everything resolving mode holds: no
-    tool provider, no policy path, no workspace, no memo. A frozen call
-    site therefore cannot advance a ref or enumerate a collection: those
-    operations are typed against :class:`ResolvingSources` and this type
-    offers them nothing. It does capture on one arm — once per locked
-    ``LocalSnapshot`` member, for drift detection — while locked
-    ``NetworkGit`` members are served from the store and capture
-    nothing. The store write and the lock write are held off by
-    call-graph confinement and an explicit mode branch rather than by
-    this type. See the module docstring for which is which.
+    This capability carries only the bounded transport inputs needed
+    to recover a missing locked snapshot. It has no ref resolver,
+    workspace, alias memo or selector surface.
+    """
+
+    tool_for_endpoint: source_transport.ToolProvider | None
+    policy_path: Path | None
+    acquisitions: dict[tuple[str, str, str], git_admission.Snapshot] = field(
+        default_factory=dict
+    )
+
+
+@dataclass(frozen=True)
+class FrozenSources:
+    """The frozen-mode capability: the home directory, lock and recovery grant.
+
+    The grant can fetch an exact locked commit when its snapshot is
+    absent. It cannot resolve a tag or branch, enumerate selectors,
+    or write a lock. Local path snapshots use the confined selection
+    reader when their store entry is absent.
     """
 
     home: Path
     lock: SkillfileLock
+    git_recovery: LockedGitRecovery | None = None
 
 
 def select(
@@ -177,7 +166,14 @@ def select(
     resolve. Everything downstream dispatches on the returned type.
     """
     if old_lock is not None and not fetch:
-        return FrozenSources(home=home, lock=old_lock)
+        return FrozenSources(
+            home=home,
+            lock=old_lock,
+            git_recovery=LockedGitRecovery(
+                tool_for_endpoint=tool_for_endpoint,
+                policy_path=policy_path,
+            ),
+        )
     return ResolvingSources(
         home=home,
         workspace=workspace,
@@ -332,6 +328,50 @@ def acquire_git_commit(
             f"not the resolved {commit}",
         )
     mode.acquisitions[(identity, commit)] = result.snapshot
+    return result.snapshot
+
+
+def acquire_locked_git_commit(
+    recovery: LockedGitRecovery,
+    *,
+    identity: str,
+    commit: LockedCommit,
+    declared_url: str | None,
+    label: str,
+) -> git_admission.Snapshot:
+    """Acquire the exact commit named by a lock through bounded transport.
+
+    This path never resolves the declaration's tag or branch. The
+    operator-selected endpoint policy, credentials and transport bounds
+    are the same as resolving-mode acquisition.
+    """
+
+    key = (identity, commit.object_format, commit.hex)
+    cached = recovery.acquisitions.get(key)
+    if cached is not None:
+        return cached
+    try:
+        result = source_transport.acquire_network(
+            identity,
+            commit,
+            None,
+            declaration=declared_url,
+            declared_url=declared_url,
+            policy_path=recovery.policy_path,
+            tool_for_endpoint=recovery.tool_for_endpoint,
+        )
+    except source_transport.TransportError as exc:
+        raise _transport_failure(label, exc) from exc
+    if (
+        result.snapshot.commit != commit.hex
+        or result.snapshot.object_format != commit.object_format
+    ):
+        raise SourceError(
+            CODE_MEMBER_INVALID,
+            f"{label} acquisition served {result.snapshot.object_format}:"
+            f"{result.snapshot.commit}, not {commit.object_format}:{commit.hex}",
+        )
+    recovery.acquisitions[key] = result.snapshot
     return result.snapshot
 
 

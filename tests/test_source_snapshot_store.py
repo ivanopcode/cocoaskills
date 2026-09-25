@@ -4,8 +4,9 @@ Covers TASK-260917-34g2lq: the ``source-v1`` namespace under the csk home
 (proven disjoint from the legacy ``cache/<source>/<commit>`` layout, with no
 ``commit`` field anywhere near a snapshot digest), lookup by (skill name,
 package identity) that refuses a missing locked snapshot with
-``source_snapshot_unavailable`` and never recreates it, the refusal as a
-class test over every consumer (audit, build, projection, install),
+``source_snapshot_unavailable`` and never recreates it, an opt-in install
+absence probe for the publisher's locked recovery path, the refusal as a
+class test over default consumer reads (audit, build, projection, install),
 transactional staging with before/after tree hashes around every injected
 fault, and host-specific bounds probed at runtime.
 
@@ -395,6 +396,35 @@ def test_stage_is_idempotent_for_identical_bytes(tmp_path: Path) -> None:
     assert _store_tree_hash(store_module.store_root(home)) == before
     served = store_module.lookup_snapshot(home, SKILL, PACKAGE)
     assert served.snapshot == captured.inventory["snapshot"]
+
+
+def test_lookup_if_present_returns_none_only_for_absent_entry(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    assert store_module.lookup_snapshot_if_present(home, SKILL, PACKAGE) is None
+    assert not home.exists()
+
+    captured = _capture(tmp_path, {"SKILL.md": (b"stored", False)})
+    store_module.stage_snapshot(home, SKILL, PACKAGE, captured)
+    record = store_module.entry_dir(home, SKILL, PACKAGE) / store_module.RECORD_FILENAME
+    record.write_bytes(b"not json")
+    _raises(
+        source_errors.CODE_SNAPSHOT_UNAVAILABLE,
+        lambda: store_module.lookup_snapshot_if_present(home, SKILL, PACKAGE),
+    )
+
+
+def test_stage_if_missing_preserves_a_snapshot_that_appeared(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    old = _capture(tmp_path, {"SKILL.md": (b"stored", False)})
+    new = _capture(tmp_path, {"SKILL.md": (b"recovered", False)})
+    store_module.stage_snapshot(home, SKILL, PACKAGE, old)
+    before = _store_tree_hash(store_module.store_root(home))
+
+    served = store_module.stage_snapshot_if_missing(home, SKILL, PACKAGE, new)
+
+    assert served.snapshot == old.inventory["snapshot"]
+    assert served.files["SKILL.md"].data == b"stored"
+    assert _store_tree_hash(store_module.store_root(home)) == before
 
 
 def test_stage_supersedes_for_same_key(tmp_path: Path) -> None:

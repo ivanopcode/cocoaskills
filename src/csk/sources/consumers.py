@@ -1,12 +1,11 @@
 """Consumer readers for the source-v1 snapshot store.
 
-Audit, build, projection and install each get one named entry point. Every
-entry point serves the frozen bytes through :func:`store.lookup_snapshot`
-and nothing else: no consumer takes a source path, opens a file, or falls
-back to live bytes, so a consumer that reads the live authored directory is
-not expressible here. A missing locked snapshot fails
-``source_snapshot_unavailable`` from every entry point alike; later stories
-call these readers and never the store directly.
+Audit, build, projection and install each get one named entry point. The
+default entry points serve only verified frozen bytes through
+:func:`store.lookup_snapshot`. Install has one explicit recovery seam:
+``allow_missing=True`` distinguishes an absent entry from an unreadable or
+invalid one, so the publisher can capture the locked source and compare it
+before staging. Other consumers never receive that live-source capability.
 
 Like the store, this module is deliberately NOT re-exported from
 ``csk.sources.__init__`` (see ``csk.sources.store``).
@@ -15,10 +14,10 @@ Like the store, this module is deliberately NOT re-exported from
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal, overload
 
 from .errors import SourceError
-from .store import StoredSnapshot, lookup_snapshot
+from .store import StoredSnapshot, lookup_snapshot, lookup_snapshot_if_present
 
 _CONSUMER_AUDIT: Final = "audit"
 _CONSUMER_BUILD: Final = "build"
@@ -48,9 +47,37 @@ def open_for_projection(home: Path, skill: str, package: str) -> StoredSnapshot:
     return _open(_CONSUMER_PROJECTION, home, skill, package)
 
 
-def open_for_install(home: Path, skill: str, package: str) -> StoredSnapshot:
-    """Serve the frozen copy to the install consumer, or refuse."""
-    return _open(_CONSUMER_INSTALL, home, skill, package)
+@overload
+def open_for_install(
+    home: Path, skill: str, package: str, *, allow_missing: Literal[True]
+) -> StoredSnapshot | None: ...
+
+
+@overload
+def open_for_install(
+    home: Path, skill: str, package: str, *, allow_missing: Literal[False] = False
+) -> StoredSnapshot: ...
+
+
+def open_for_install(
+    home: Path,
+    skill: str,
+    package: str,
+    *,
+    allow_missing: bool = False,
+) -> StoredSnapshot | None:
+    """Serve frozen bytes, optionally distinguishing an absent entry.
+
+    ``allow_missing`` returns ``None`` only when the exact package entry
+    is absent. A present entry that cannot be verified still refuses.
+    """
+
+    if not allow_missing:
+        return _open(_CONSUMER_INSTALL, home, skill, package)
+    try:
+        return lookup_snapshot_if_present(home, skill, package)
+    except SourceError as exc:
+        raise SourceError(exc.code, f"{_CONSUMER_INSTALL}: {exc.detail}") from exc
 
 
 ALL_CONSUMERS: Final = (

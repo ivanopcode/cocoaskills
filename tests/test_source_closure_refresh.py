@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from csk import closure, config, git_admission, installer, manifest, status
+from csk import cli, closure, config, git_admission, installer, locking, manifest, status
 from csk.config import GlobalConfig
 from csk.sources import lock as lock_module
 from csk.sources import modes, publish, selection
@@ -447,16 +447,356 @@ def _write_local_project(
     return project, source
 
 
-def test_frozen_mode_holds_no_resolving_capabilities(tmp_path: Path) -> None:
-    """AC(a): frozen mode is a type without the resolving grant.
+def _register_cli_v2_project(
+    monkeypatch: pytest.MonkeyPatch,
+    home: Path,
+    skills_root: Path,
+    project: Path,
+) -> None:
+    """Configure the production CLI against one isolated csk home."""
 
-    The grant is absent twice: the frozen mode value carries no
-    resolving field, and neither the publisher entry point nor the
-    frozen lane takes the fetch flag, the tool provider, the policy
-    path or a workspace as a parameter — so the frozen lane cannot
-    name them. Production call sites: ``csk.sources.modes``
-    (``select``, ``FrozenSources``, ``ResolvingSources``) and
-    ``publish.install_schema2`` / ``publish._install_schema2_frozen``.
+    home.mkdir(parents=True, exist_ok=True)
+    config_path = home / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": os.fspath(skills_root),
+                "default_agents": ["codex_cli"],
+                "experimental": {"skillfile_sources": True},
+                "projects": {"app": {"path": os.fspath(project)}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_CONFIG", os.fspath(config_path))
+    monkeypatch.setenv("CSK_EXPERIMENTAL_SKILLFILE_SOURCES", "1")
+    monkeypatch.delenv("CSK_SOURCE_POLICY", raising=False)
+
+
+def _fresh_cli_home(tmp_path: Path) -> Path:
+    home = tmp_path / "fresh-csk-home"
+    locking.provision_new_manager_home(home)
+    return home
+
+
+def _commit_project_lock(project: Path) -> bytes:
+    """Commit and return the generated lock as the other machine receives it."""
+
+    lock_path = project / publish.SKILLFILE_LOCK_NAME
+    assert lock_path.is_file()
+    commit_all(project, "commit Skillfile lock")
+    return lock_path.read_bytes()
+
+
+def test_cli_committed_path_lock_installs_from_empty_home_and_status_is_current(
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """CLI re-materializes matching path bytes from a committed lock.
+
+    Production call sites: ``csk install`` -> ``publish._capture_locked_member``
+    and ``csk status`` -> ``publish.evaluate_schema2_installation``.
+    """
+
+    _require_selection()
+    project = make_project(tmp_path)
+    source = tmp_path / "src" / "pkgs"
+    _write_skill(source / "nested", "nested")
+    _write_skillfile_v2(
+        project,
+        {"local": {"path": "../src/pkgs"}},
+        [{"name": "nested", "from": "local", "directory": "nested"}],
+    )
+    _register_cli_v2_project(monkeypatch, csk_home, skills_root, project)
+    assert cli.main(["install", "app"]) == 0
+    capsys.readouterr()
+    lock_before = _commit_project_lock(project)
+
+    fresh_home = _fresh_cli_home(tmp_path)
+    _register_cli_v2_project(monkeypatch, fresh_home, skills_root, project)
+    shutil.rmtree(project / ".agents" / "skills" / "nested")
+    assert not (fresh_home / "source-v1").exists()
+
+    assert cli.main(["install", "app"]) == 0
+    install_output = capsys.readouterr().out
+    assert "nested installed" in install_output
+    assert (project / ".agents" / "skills" / "nested" / "SKILL.md").is_file()
+    assert (project / publish.SKILLFILE_LOCK_NAME).read_bytes() == lock_before
+
+    assert cli.main(["status", "app", "--json"]) == 0
+    status_rows = json.loads(capsys.readouterr().out)
+    assert status_rows[0]["clean"] is True
+    assert status_rows[0]["skills"][0]["label"] == "up-to-date"
+
+
+def test_cli_committed_path_lock_drift_refuses_changed_without_storing_bytes(
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """CLI rejects path bytes that differ from a committed lock."""
+
+    _require_selection()
+    project = make_project(tmp_path)
+    source = tmp_path / "src" / "pkgs"
+    _write_skill(source / "nested", "nested")
+    _write_skillfile_v2(
+        project,
+        {"local": {"path": "../src/pkgs"}},
+        [{"name": "nested", "from": "local", "directory": "nested"}],
+    )
+    _register_cli_v2_project(monkeypatch, csk_home, skills_root, project)
+    assert cli.main(["install", "app"]) == 0
+    capsys.readouterr()
+    lock_before = _commit_project_lock(project)
+    installed_before = _tree_hash(project / ".agents")
+
+    fresh_home = _fresh_cli_home(tmp_path)
+    _register_cli_v2_project(monkeypatch, fresh_home, skills_root, project)
+    (source / "nested" / "SKILL.md").write_text(
+        "---\nname: nested\ndescription: changed\n---\n\n# changed\n",
+        encoding="utf-8",
+    )
+
+    assert cli.main(["install", "app"]) == 1
+    error = capsys.readouterr().err
+    assert "source_snapshot_changed:" in error
+    assert "csk upgrade" in error
+    assert (project / publish.SKILLFILE_LOCK_NAME).read_bytes() == lock_before
+    assert _tree_hash(project / ".agents") == installed_before
+    assert not (fresh_home / "source-v1").exists()
+
+
+def test_cli_committed_path_lock_missing_source_is_unavailable(
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A missing path source remains unavailable and names its selector."""
+
+    _require_selection()
+    project = make_project(tmp_path)
+    source = tmp_path / "src" / "pkgs"
+    _write_skill(source / "nested", "nested")
+    _write_skillfile_v2(
+        project,
+        {"local": {"path": "../src/pkgs"}},
+        [{"name": "nested", "from": "local", "directory": "nested"}],
+    )
+    _register_cli_v2_project(monkeypatch, csk_home, skills_root, project)
+    assert cli.main(["install", "app"]) == 0
+    capsys.readouterr()
+    lock_before = _commit_project_lock(project)
+
+    fresh_home = _fresh_cli_home(tmp_path)
+    _register_cli_v2_project(monkeypatch, fresh_home, skills_root, project)
+    shutil.rmtree(source)
+
+    assert cli.main(["install", "app"]) == 1
+    error = capsys.readouterr().err
+    assert "source_snapshot_unavailable:" in error
+    assert "local" in error and "nested" in error
+    assert "source" in error
+    assert (project / publish.SKILLFILE_LOCK_NAME).read_bytes() == lock_before
+    assert not (fresh_home / "source-v1").exists()
+
+
+def _committed_cli_git_project(
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    source_kind: str = "git",
+) -> tuple[Path, Path, str, str, _FakeTransport, bytes]:
+    """Create a committed locked Git project and prime the hermetic transport."""
+
+    kit = init_git_repo(tmp_path / "kit")
+    _write_skill(
+        kit / "skills" / "nested",
+        "nested",
+        extra_files={"references/version.txt": "one"},
+    )
+    commit_one = commit_all(kit, "first package version")
+    run(["git", "tag", "v1", commit_one], kit)
+    url = "https://example.test/kit.git"
+    fake = _FakeTransport()
+    fake.add(url, kit, "example.test/kit")
+
+    project = make_project(tmp_path)
+    if source_kind == "repository":
+        _write_skillfile_v2(
+            project,
+            {"upstream": {"repository": "example.test/kit", "revision": commit_one}},
+            [{"name": "nested", "from": "upstream", "directory": "skills/nested"}],
+        )
+    else:
+        _git_skillfile(
+            project,
+            url,
+            {"tag": "v1"},
+            [{"name": "nested", "from": "upstream", "directory": "skills/nested"}],
+        )
+    _register_cli_v2_project(monkeypatch, csk_home, skills_root, project)
+    _install_fake_transport(monkeypatch, fake)
+    assert cli.main(["install", "app"]) == 0
+    lock_before = _commit_project_lock(project)
+    return project, kit, commit_one, url, fake, lock_before
+
+
+def test_cli_committed_git_lock_fetches_locked_commit_after_tag_moves(
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Locked install fetches the commit and never resolves the moved tag."""
+
+    _require_selection()
+    project, kit, commit_one, _url, fake, lock_before = _committed_cli_git_project(
+        tmp_path, skills_root, csk_home, monkeypatch
+    )
+    (kit / "skills" / "nested" / "references" / "version.txt").write_text(
+        "two", encoding="utf-8"
+    )
+    commit_two = commit_all(kit, "second package version")
+    run(["git", "tag", "--force", "v1", commit_two], kit)
+    _prepare_admittable_repo(kit)
+    fake.resolve_calls.clear()
+    fake.acquire_calls.clear()
+
+    fresh_home = _fresh_cli_home(tmp_path)
+    _register_cli_v2_project(monkeypatch, fresh_home, skills_root, project)
+    shutil.rmtree(project / ".agents" / "skills" / "nested")
+
+    assert cli.main(["install", "app"]) == 0
+    install_output = capsys.readouterr().out
+    assert "nested installed" in install_output
+    assert fake.resolve_calls == []
+    assert fake.acquire_calls == [("example.test/kit", commit_one)]
+    assert (
+        project / ".agents" / "skills" / "nested" / "references" / "version.txt"
+    ).read_text(encoding="utf-8") == "one"
+    assert (project / publish.SKILLFILE_LOCK_NAME).read_bytes() == lock_before
+    assert _read_lock(project).members[0].package.commit.hex == commit_one  # type: ignore[union-attr]
+
+
+def test_cli_committed_git_lock_rejects_wrong_content_for_locked_identity(
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A matching Git commit label cannot attest different content bytes."""
+
+    _require_selection()
+    project, kit, commit_one, _url, fake, lock_before = _committed_cli_git_project(
+        tmp_path, skills_root, csk_home, monkeypatch
+    )
+    (kit / "skills" / "nested" / "references" / "version.txt").write_text(
+        "two", encoding="utf-8"
+    )
+    commit_two = commit_all(kit, "second package version")
+    _prepare_admittable_repo(kit)
+    fake.acquire_calls.clear()
+    requested: list[str] = []
+    real_acquire = fake.acquire_network
+
+    def wrong_content_with_locked_label(
+        identity: Any, lock: Any, tool: Any = None, **kwargs: Any
+    ) -> source_transport.AcquisitionResult:
+        requested.append(lock.hex)
+        wrong_lock = replace(lock, hex=commit_two)
+        result = real_acquire(identity, wrong_lock, tool, **kwargs)
+        return replace(result, snapshot=replace(result.snapshot, commit=lock.hex))
+
+    monkeypatch.setattr(source_transport, "acquire_network", wrong_content_with_locked_label)
+    fresh_home = _fresh_cli_home(tmp_path)
+    _register_cli_v2_project(monkeypatch, fresh_home, skills_root, project)
+    shutil.rmtree(project / ".agents" / "skills" / "nested")
+
+    assert cli.main(["install", "app"]) == 1
+    error = capsys.readouterr().err
+    assert "source_snapshot_changed:" in error
+    assert "csk upgrade" in error
+    assert requested == [commit_one]
+    assert fake.acquire_calls == [("example.test/kit", commit_two)]
+    assert (project / publish.SKILLFILE_LOCK_NAME).read_bytes() == lock_before
+    assert not (fresh_home / "source-v1").exists()
+
+
+def test_cli_committed_repository_lock_fetches_locked_revision(
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The repository declaration uses the same exact-commit recovery."""
+
+    _require_selection()
+    project, _kit, commit_one, _url, fake, lock_before = _committed_cli_git_project(
+        tmp_path, skills_root, csk_home, monkeypatch, source_kind="repository"
+    )
+    fake.acquire_calls.clear()
+    fresh_home = _fresh_cli_home(tmp_path)
+    _register_cli_v2_project(monkeypatch, fresh_home, skills_root, project)
+    shutil.rmtree(project / ".agents" / "skills" / "nested")
+
+    assert cli.main(["install", "app"]) == 0
+    assert "nested installed" in capsys.readouterr().out
+    assert fake.acquire_calls == [("example.test/kit", commit_one)]
+    assert (project / publish.SKILLFILE_LOCK_NAME).read_bytes() == lock_before
+
+
+def test_cli_committed_git_lock_unreachable_remote_is_unavailable(
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A locked fetch failure stays unavailable and reports its source."""
+
+    _require_selection()
+    project, _kit, commit_one, _url, fake, lock_before = _committed_cli_git_project(
+        tmp_path, skills_root, csk_home, monkeypatch
+    )
+    fake.acquire_calls.clear()
+    fresh_home = _fresh_cli_home(tmp_path)
+    _register_cli_v2_project(monkeypatch, fresh_home, skills_root, project)
+
+    def unreachable(*args: Any, **kwargs: Any) -> source_transport.AcquisitionResult:
+        fake.acquire_calls.append((str(args[0]), args[1].hex))
+        raise source_transport.TransportResolutionError(())
+
+    monkeypatch.setattr(source_transport, "acquire_network", unreachable)
+    assert cli.main(["install", "app"]) == 1
+    error = capsys.readouterr().err
+    assert "source_snapshot_unavailable:" in error
+    assert "example.test/kit" in error
+    assert "remediation:" in error and "source" in error
+    assert fake.acquire_calls == [("example.test/kit", commit_one)]
+    assert (project / publish.SKILLFILE_LOCK_NAME).read_bytes() == lock_before
+    assert not (fresh_home / "source-v1").exists()
+
+
+def test_frozen_mode_holds_no_resolving_capabilities(tmp_path: Path) -> None:
+    """Frozen mode gets only exact-commit recovery, never ref resolution.
+
+    Production call sites: ``modes.select`` and
+    ``modes.acquire_locked_git_commit``; ref resolution stays typed to
+    ``ResolvingSources``.
     """
     import inspect
 
@@ -464,15 +804,18 @@ def test_frozen_mode_holds_no_resolving_capabilities(tmp_path: Path) -> None:
 
     lock = SkillfileLock(manifest_sha256="sha256:" + "0" * 64, members=())
     frozen = modes.FrozenSources(home=tmp_path, lock=lock)
-    assert set(frozen.__dataclass_fields__) == {"home", "lock"}
+    assert set(frozen.__dataclass_fields__) == {"home", "lock", "git_recovery"}
+    recovery = modes.LockedGitRecovery(tool_for_endpoint=None, policy_path=None)
     for resolving_only in (
-        "tool_for_endpoint",
-        "policy_path",
         "workspace",
         "alias_commits",
-        "acquisitions",
     ):
         assert not hasattr(frozen, resolving_only), resolving_only
+        assert not hasattr(recovery, resolving_only), resolving_only
+    assert not hasattr(frozen, "tool_for_endpoint")
+    assert not hasattr(recovery, "resolve_ref")
+    assert not hasattr(recovery, "alias_commits")
+    assert hasattr(recovery, "acquisitions")
     grant = {"fetch", "tool_for_endpoint", "policy_path", "workspace"}
     entry_params = set(inspect.signature(publish.install_schema2).parameters)
     assert "mode" in entry_params
@@ -486,6 +829,13 @@ def test_frozen_mode_holds_no_resolving_capabilities(tmp_path: Path) -> None:
         inspect.signature(publish._install_schema2_resolving).parameters
     )
     assert grant & resolving_params == set()
+    assert inspect.signature(modes.resolve_git_alias).parameters["mode"].annotation in {
+        "ResolvingSources",
+        modes.ResolvingSources,
+    }
+    assert inspect.signature(modes.acquire_locked_git_commit).parameters[
+        "recovery"
+    ].annotation in {"LockedGitRecovery", modes.LockedGitRecovery}
 
     selected = modes.select(
         home=tmp_path,
@@ -729,10 +1079,10 @@ def test_stale_lock_refuses_without_reresolve(
     assert _installed_state_hash(project, csk_home, ["review"]) == before
 
 
-def test_unavailable_snapshot_refuses_without_recreate(
+def test_missing_path_and_store_refuse_unavailable_without_recreate(
     tmp_path: Path, skills_root: Path, csk_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC: missing snapshot is source_snapshot_unavailable, never recreated.
+    """AC: a missing source and snapshot remain unavailable.
 
     Both the live bytes and the store entry are gone, so nothing could
     serve; the install refuses and recreates nothing.
@@ -803,24 +1153,18 @@ def test_live_drift_refuses_changed_without_touching_store(
         pytest.param("missing", id="live-missing"),
     ],
 )
-def test_missing_store_entry_refuses_unavailable_never_heals(
+def test_missing_store_entry_recovers_only_matching_path_bytes(
     tmp_path: Path,
     skills_root: Path,
     csk_home: Path,
     monkeypatch: pytest.MonkeyPatch,
     live: str,
 ) -> None:
-    """AC: a missing store entry refuses unavailable whatever live bytes are.
+    """A missing store entry heals only from matching path bytes.
 
-    The store is consulted before any live read: with the entry
-    absent, live bytes that match the lock, live bytes that drifted,
-    and missing live bytes all refuse
-    ``source_snapshot_unavailable`` — never success-by-heal, never a
-    re-resolve into ``source_snapshot_changed`` — with the store
-    still absent and the lock and installed state byte-identical.
-    Live capture is deliberately not patched: the drifted param
-    proves the ordering, because a live-first implementation would
-    answer ``source_snapshot_changed`` for it.
+    Matching bytes restore the store after the lock check. Drifted or
+    missing source bytes refuse with their distinct changed/unavailable
+    class, leave the store absent, and preserve installed state.
     Production call site: ``installer.install`` (fetch=False).
     """
     project, source = _write_local_project(tmp_path, [("review", "review")])
@@ -845,28 +1189,39 @@ def test_missing_store_entry_refuses_unavailable_never_heals(
         shutil.rmtree(source / "review")
 
     def _boom(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("unavailable snapshot must not re-resolve")
+        raise AssertionError("locked install must not resolve or enumerate")
 
     monkeypatch.setattr(source_transport, "resolve_ref", _boom)
     monkeypatch.setattr(source_transport, "acquire_network", _boom)
     monkeypatch.setattr(publish, "expand_selectors", _boom)
-    errors = _install_failed(cfg)
-    _assert_head_code(errors, CODE_SNAPSHOT_UNAVAILABLE)
-    assert CODE_SNAPSHOT_CHANGED not in errors[0]
-    assert CODE_LOCK_STALE not in errors[0]
-    assert not store_entry.exists()
-    assert _installed_state_hash(project, csk_home, ["review"]) == before
+    lock_before = (project / publish.SKILLFILE_LOCK_NAME).read_bytes()
+    if live == "unchanged":
+        _install_ok(cfg)
+        assert store_entry.exists()
+        assert (project / publish.SKILLFILE_LOCK_NAME).read_bytes() == lock_before
+    else:
+        errors = _install_failed(cfg)
+        expected = (
+            CODE_SNAPSHOT_CHANGED
+            if live == "drifted"
+            else CODE_SNAPSHOT_UNAVAILABLE
+        )
+        _assert_head_code(errors, expected)
+        assert CODE_LOCK_STALE not in errors[0]
+        assert not store_entry.exists()
+        assert (project / publish.SKILLFILE_LOCK_NAME).read_bytes() == lock_before
+        assert _installed_state_hash(project, csk_home, ["review"]) == before
 
 
-def test_missing_snapshot_corpus_case_refuses_unavailable_via_install(
+def test_missing_snapshot_corpus_case_reports_live_drift_via_install(
     tmp_path: Path, skills_root: Path, csk_home: Path
 ) -> None:
     """Corpus ``missing-snapshot`` through the production install entry point.
 
     The corpus input is locked A, ``snapshot_store: absent``, live B;
-    the expected outcome is ``source_snapshot_unavailable``. The
-    store leaf's driver covers the four consumer readers; this test
-    covers the install operation, which must answer the same class.
+    install captures B, compares its identity with A, and reports
+    ``source_snapshot_changed``. The store leaf's driver separately
+    preserves the consumer readers' unavailable behavior.
     Production call site: ``installer.install`` (fetch=False).
     """
     project, source = _write_local_project(tmp_path, [("review", "review")])
@@ -885,8 +1240,7 @@ def test_missing_snapshot_corpus_case_refuses_unavailable_via_install(
         "---\nname: review\ndescription: B\n---\n\n# review B\n", encoding="utf-8"
     )
     errors = _install_failed(cfg)
-    _assert_head_code(errors, CODE_SNAPSHOT_UNAVAILABLE)
-    assert CODE_SNAPSHOT_CHANGED not in errors[0]
+    _assert_head_code(errors, CODE_SNAPSHOT_CHANGED)
     assert not store_entry.exists()
 
 

@@ -37,7 +37,10 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 from .. import adapters, build_repository_pipeline, closure, git_admission, git_ops, hashing
 from .. import identifiers, install_marker, locale, locking, manifest, shims
 from ..source_identity import canonical_source_identity
-from ..build_repository import GO_REPOSITORY_V1_DRIVER
+from ..build_repository import (
+    GO_REPOSITORY_V1_DRIVER,
+    LockedCommit as BuildLockedCommit,
+)
 from .. import protocol_json, skillspec, whitelist
 from ..builds import cache as build_cache
 from ..builds import currentness as build_currentness
@@ -200,8 +203,8 @@ class ResolvedMember:
     zero-based dense, which a selector index cannot satisfy when one
     collection selects several members. Transitive closure members
     carry no selector, so ``from_alias``, ``selection_ordinal`` and
-    ``source_root`` are all ``None`` for them: no binding is written,
-    the lock selection is null, and frozen serving is store-only.
+    ``source_root`` are all ``None`` for them: no binding is written and
+    the lock selection is null.
     """
 
     name: str
@@ -226,6 +229,7 @@ class CapturedMember:
     captured: snapshot.CapturedPackage | None
     package: PackageIdentity
     package_key: str
+    store_missing: bool = False
 
 
 @dataclass(frozen=True)
@@ -3104,24 +3108,81 @@ def _serve_locked_git_member(
     package: NetworkGit,
     *,
     home: Path,
-) -> tuple[None, store.StoredSnapshot]:
-    """Serve one locked Git member from the source-v1 store alone.
+    recovery: modes.LockedGitRecovery | None = None,
+    declared_url: str | None = None,
+) -> tuple[snapshot.CapturedPackage | None, store.StoredSnapshot | None]:
+    """Serve a locked Git member or capture its exact commit on a store miss.
 
-    Git members have no live bytes to verify against: the store entry
-    addressed by ``(skill name, SHA-256(CCJ-1(package)))`` is the locked
-    snapshot, and a missing or mismatching entry is unavailable. Live
-    bytes are never captured and the network is never touched.
+    A present entry always wins and is never replaced. A missing entry
+    may be recovered only with the locked-commit grant. The grant fetches
+    ``package.commit`` directly and captures ``package.directory`` through
+    the confined snapshot selection.
     """
 
     key = package_identity_sha256(package)
+    stored: store.StoredSnapshot | None
     try:
-        stored = consumers.open_for_install(home, member.name, key)
+        if recovery is None:
+            stored = consumers.open_for_install(home, member.name, key)
+        else:
+            stored = consumers.open_for_install(
+                home, member.name, key, allow_missing=True
+            )
     except SourceError as exc:
         raise SourceError(
             CODE_SNAPSHOT_UNAVAILABLE,
-            f"Skill {member.name!r} locked snapshot is unavailable: {exc}",
+            f"Skill {member.name!r} snapshot for Git source "
+            f"{package.repository!r} is unavailable: {exc}",
         ) from exc
-    return None, stored
+    if stored is not None:
+        return None, stored
+    if recovery is None:
+        raise SourceError(
+            CODE_SNAPSHOT_UNAVAILABLE,
+            f"Skill {member.name!r} locked snapshot for Git source "
+            f"{package.repository!r} is unavailable: no locked snapshot is stored",
+        )
+
+    label = f"Git source {package.repository!r}"
+    if member.from_alias is not None:
+        label += f" (alias {member.from_alias!r})"
+    try:
+        acquired = modes.acquire_locked_git_commit(
+            recovery,
+            identity=package.repository,
+            commit=BuildLockedCommit(
+                package.commit.object_format, package.commit.hex
+            ),
+            declared_url=declared_url,
+            label=label,
+        )
+        with tempfile.TemporaryDirectory(prefix=".csk-locked-source-") as raw_tmp:
+            repository_root = Path(raw_tmp) / "repository"
+            acquired.materialize(repository_root)
+            captured = snapshot.capture_package_snapshot(
+                repository_root, package.directory, home=home
+            )
+    except SourceError as exc:
+        if exc.code == source_transport.CODE_POLICY_INVALID:
+            raise
+        raise SourceError(
+            CODE_SNAPSHOT_UNAVAILABLE,
+            f"Skill {member.name!r} locked commit {package.commit.hex} from "
+            f"{label} is unavailable: {exc}",
+        ) from exc
+    except git_admission.GitAdmissionError as exc:
+        raise SourceError(
+            CODE_SNAPSHOT_UNAVAILABLE,
+            f"Skill {member.name!r} locked commit {package.commit.hex} from "
+            f"{label} is unavailable: {exc}",
+        ) from exc
+    except _FS_ERRORS as exc:
+        raise SourceError(
+            CODE_SNAPSHOT_UNAVAILABLE,
+            f"Skill {member.name!r} locked commit {package.commit.hex} from "
+            f"{label} is unavailable: {exc}",
+        ) from exc
+    return captured, None
 
 
 def _capture_locked_member(
@@ -3129,24 +3190,26 @@ def _capture_locked_member(
     package: PackageIdentity,
     *,
     home: Path,
-) -> tuple[snapshot.CapturedPackage | None, store.StoredSnapshot]:
+    recovery: modes.LockedGitRecovery | None = None,
+    declared_url: str | None = None,
+) -> tuple[snapshot.CapturedPackage | None, store.StoredSnapshot | None]:
     """Serve one locked member's frozen bytes, revalidating live drift.
 
-    The store is consulted FIRST: a missing entry, or an entry whose
-    snapshot differs from the lock, is ``source_snapshot_unavailable``
-    whatever the live bytes are — before any live read and without
-    writing anything. Live bytes are then re-captured for drift
-    detection only: drifted bytes refuse ``source_snapshot_changed``
-    with the store untouched, uncapturable bytes fall back to the
-    verified store copy, and matching bytes serve the frozen copy.
-    Live bytes are never staged: this function never writes to the
-    store, so frozen mode cannot recreate a snapshot from current
-    bytes. Git members serve from the store alone and never capture
-    live bytes.
+    The store is consulted FIRST. Present entries keep the existing
+    drift checks and are never replaced. On an absent entry, install
+    mode captures a path member or fetches the exact locked Git commit;
+    it compares the lock before staging the recovered bytes. Read
+    failures and present-but-invalid entries remain unavailable.
     """
 
     if isinstance(package, NetworkGit):
-        return _serve_locked_git_member(member, package, home=home)
+        return _serve_locked_git_member(
+            member,
+            package,
+            home=home,
+            recovery=recovery,
+            declared_url=declared_url,
+        )
     if not isinstance(package, LocalSnapshot):
         raise SourceError(
             CODE_SELECTION_INVALID,
@@ -3159,13 +3222,53 @@ def _capture_locked_member(
             f"Skill {member.name!r} lock member has no source root to verify",
         )
     key = package_identity_sha256(package)
+    stored: store.StoredSnapshot | None
     try:
-        stored = consumers.open_for_install(home, member.name, key)
+        if recovery is None:
+            stored = consumers.open_for_install(home, member.name, key)
+        else:
+            stored = consumers.open_for_install(
+                home, member.name, key, allow_missing=True
+            )
     except SourceError as exc:
         raise SourceError(
             CODE_SNAPSHOT_UNAVAILABLE,
             f"Skill {member.name!r} locked snapshot is unavailable: {exc}",
         ) from exc
+    if stored is None:
+        source_label = (
+            f"path source {member.from_alias!r}"
+            if member.from_alias is not None
+            else f"path directory {member.directory!r}"
+        )
+        if member.source_root is None:
+            raise SourceError(
+                CODE_SNAPSHOT_UNAVAILABLE,
+                f"Skill {member.name!r} from {source_label} has no source path",
+            )
+        try:
+            captured = snapshot.capture_package_snapshot(
+                member.source_root, member.directory, home=home
+            )
+        except SourceError as exc:
+            raise SourceError(
+                CODE_SNAPSHOT_UNAVAILABLE,
+                f"Skill {member.name!r} source path {source_label} directory "
+                f"{member.directory!r} is unavailable: {exc}",
+            ) from exc
+        except _FS_ERRORS as exc:
+            raise SourceError(
+                CODE_SNAPSHOT_UNAVAILABLE,
+                f"Skill {member.name!r} source path {source_label} directory "
+                f"{member.directory!r} is unavailable: {exc}",
+            ) from exc
+        if captured.inventory["snapshot"] != package.snapshot:
+            raise SourceError(
+                CODE_SNAPSHOT_CHANGED,
+                f"Skill {member.name!r} from {source_label} changed since the lock; "
+                "run csk upgrade",
+            )
+        return captured, None
     if stored.snapshot != package.snapshot:
         raise SourceError(
             CODE_SNAPSHOT_UNAVAILABLE,
@@ -3438,7 +3541,10 @@ def resolve_source_closure(
 
 
 def _require_frozen_lock_unchanged(
-    old_lock: SkillfileLock, rebuilt: SkillfileLock
+    old_lock: SkillfileLock,
+    rebuilt: SkillfileLock,
+    *,
+    recovered_names: frozenset[str] = frozenset(),
 ) -> None:
     """Determinism guard: a frozen rebuild must describe the same closure.
 
@@ -3457,6 +3563,20 @@ def _require_frozen_lock_unchanged(
     old_members = sort_lock_members_by_utf8(old_lock.members)
     new_members = sort_lock_members_by_utf8(rebuilt.members)
     if old_members != new_members:
+        rebuilt_by_name = {member.name: member for member in new_members}
+        for old_member in old_members:
+            rebuilt_member = rebuilt_by_name.get(old_member.name)
+            if (
+                old_member.name in recovered_names
+                and rebuilt_member is not None
+                and old_member.package == rebuilt_member.package
+                and old_member.content_sha256 != rebuilt_member.content_sha256
+            ):
+                raise SourceError(
+                    CODE_SNAPSHOT_CHANGED,
+                    f"Skill {old_member.name!r} content from the recovered "
+                    "locked source differs from the lock; run csk upgrade",
+                )
         raise SourceError(
             CODE_MEMBER_INVALID,
             "Frozen install rebuilt a different lock closure; refusing",
@@ -3510,16 +3630,23 @@ def _read_planning_inputs(
 def _serve_frozen_publication_files(
     captured_members: dict[str, CapturedMember], *, home: Path
 ) -> dict[str, Mapping[str, snapshot.FrozenFile]]:
-    """Serve frozen publication bytes from the store alone, without healing.
+    """Prepare frozen publication bytes, including verified store misses.
 
-    The store is the frozen record: a missing entry, or an entry that
-    no longer matches the lock, is ``source_snapshot_unavailable``.
-    A member's live capture is never staged here — this function has
-    no path to ``store.stage_snapshot``.
+    Existing snapshots are re-read and verified from the store. A
+    recovered missing entry uses its confined capture temporarily;
+    the caller stages that capture only after rebuilt lock equality.
     """
 
     frozen_files: dict[str, Mapping[str, snapshot.FrozenFile]] = {}
     for name, captured_member in captured_members.items():
+        if captured_member.store_missing:
+            if captured_member.captured is None:
+                raise SourceError(
+                    CODE_SNAPSHOT_UNAVAILABLE,
+                    f"Skill {name!r} has no captured bytes for its missing snapshot",
+                )
+            frozen_files[name] = captured_member.captured.frozen_files()
+            continue
         try:
             served = consumers.open_for_install(
                 home, name, captured_member.package_key
@@ -3539,6 +3666,45 @@ def _serve_frozen_publication_files(
             )
         frozen_files[name] = served.files
     return frozen_files
+
+
+def _stage_recovered_locked_snapshots(
+    captured_members: dict[str, CapturedMember],
+    *,
+    home: Path,
+    home_lock: locking.ManagerHomeLock,
+) -> None:
+    """Store missing locked snapshots after the rebuilt lock matches.
+
+    The caller holds the manager-home lock. The store checks absence again
+    under that same lock and refuses to replace an entry that appeared
+    after capture.
+    """
+
+    for name, captured_member in captured_members.items():
+        if not captured_member.store_missing:
+            continue
+        captured = captured_member.captured
+        if captured is None:
+            raise SourceError(
+                CODE_SNAPSHOT_UNAVAILABLE,
+                f"Skill {name!r} has no captured bytes for its missing snapshot",
+            )
+        try:
+            served = store.stage_snapshot_if_missing(
+                home,
+                name,
+                captured_member.package_key,
+                captured,
+                home_lock=home_lock,
+            )
+        except SourceError:
+            raise
+        if served.snapshot != captured.inventory["snapshot"]:
+            raise SourceError(
+                CODE_SNAPSHOT_UNAVAILABLE,
+                f"Skill {name!r} locked snapshot appeared with different stored bytes",
+            )
 
 
 def _serve_resolving_publication_files(
@@ -3687,12 +3853,11 @@ def _install_schema2_frozen(
 ) -> Schema2InstallResult:
     """Run one locked install: frozen bytes in, published outputs out.
 
-    This lane receives the home directory and the lock and nothing
-    else: no fetch flag, no tool provider, no policy path, no
-    workspace, no selection surface. It derives members from the lock,
-    serves frozen bytes from the store (revalidating live drift
-    without trusting it), and publishes through the shared pipeline,
-    which plans no lock target for a frozen mode.
+    This lane receives the home directory, lock and narrow recovery
+    grant. It derives members from the lock and never expands selectors
+    or resolves refs. A missing store entry is captured from the path or
+    exact locked Git commit, then compared before recovery is staged.
+    The shared pipeline plans no lock target for frozen mode.
     """
 
     fresh, manifest_sha, selectors, git_aliases = _read_planning_inputs(project_path)
@@ -3712,14 +3877,32 @@ def _install_schema2_frozen(
     pred_files: dict[str, Mapping[str, snapshot.FrozenFile]] = {}
     for member in members:
         package = lock_packages[member.name]
-        raw, served = _capture_locked_member(member, package, home=home)
+        acquisition = fresh.sources.get(member.from_alias or "")
+        declared_url = (
+            acquisition.git
+            if isinstance(acquisition, skillfile_v2.GitSource)
+            else None
+        )
+        raw, served = _capture_locked_member(
+            member,
+            package,
+            home=home,
+            recovery=mode.git_recovery,
+            declared_url=declared_url,
+        )
         captured_members[member.name] = CapturedMember(
             member=member,
             captured=raw,
             package=package,
             package_key=package_identity_sha256(package),
+            store_missing=served is None,
         )
-        if raw is not None:
+        if served is None:
+            if raw is None:
+                raise SourceError(
+                    CODE_SNAPSHOT_UNAVAILABLE,
+                    f"Skill {member.name!r} has no recovered locked snapshot",
+                )
             pred_files[member.name] = raw.frozen_files()
         else:
             pred_files[member.name] = served.files
@@ -4161,10 +4344,9 @@ def _plan_and_publish_schema2(
                 )
             admitted = collect_admitted_identities(members, git_aliases)
 
-            # Publication consumes the frozen store copy, rehashed here
-            # under the lock. Only the resolving lane heals a superseded
-            # record from verified captured bytes; the frozen lane serves
-            # the store alone and refuses a missing or superseded entry.
+            # Publication consumes verified stored bytes, or the captured
+            # candidate for a missing frozen entry. Recovered candidates
+            # remain unstaged until the rebuilt lock matches below.
             if isinstance(mode, modes.FrozenSources):
                 frozen_files = _serve_frozen_publication_files(
                     captured_members, home=home
@@ -4206,10 +4388,24 @@ def _plan_and_publish_schema2(
                 git_aliases=git_aliases,
             )
             if isinstance(mode, modes.FrozenSources):
-                # The planner excluded the lock target structurally, so
-                # there is nothing to filter here; the rebuilt lock must
-                # still describe the same closure (determinism guard).
-                _require_frozen_lock_unchanged(mode.lock, staged.new_lock)
+                # The planner excluded the lock target structurally. The
+                # rebuilt lock must still describe the same closure before
+                # a missing snapshot is stored.
+                recovered_names = frozenset(
+                    name
+                    for name, captured_member in captured_members.items()
+                    if captured_member.store_missing
+                )
+                _require_frozen_lock_unchanged(
+                    mode.lock,
+                    staged.new_lock,
+                    recovered_names=recovered_names,
+                )
+                _stage_recovered_locked_snapshots(
+                    captured_members,
+                    home=home,
+                    home_lock=home_lock,
+                )
             created_parents = ensure_live_parents(planned, staged=staged.desired)
             # The record freezes after our own parents exist, so the
             # frozen managed bindings already include them; anything
@@ -6000,8 +6196,13 @@ def _evaluate_live_outputs(
             )
             if raw is not None:
                 pred_files[member.name] = raw.frozen_files()
-            else:
+            elif served is not None:
                 pred_files[member.name] = served.files
+            else:
+                raise SourceError(
+                    CODE_SNAPSHOT_UNAVAILABLE,
+                    f"Skill {member.name!r} has no served locked snapshot",
+                )
         specs_map: dict[str, skillspec.SkillSpec] = {}
         for name in sorted(pred_files):
             frozen_dir = staging_root / "status-spec" / name
