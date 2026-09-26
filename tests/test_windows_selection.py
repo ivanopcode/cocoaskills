@@ -234,12 +234,12 @@ def test_windows_enumeration_matcher_resolves_insensitive_case_variant(
 def test_windows_open_descriptor_routes_normalized_long_names_and_refuses_short_alias(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Selector opens use the normalized name; short aliases refuse in the seam."""
+    """Production opens use on-disk names and reject short aliases."""
 
     opened: list[tuple[str, bool | None, bool]] = []
     closed: list[int] = []
     normalized = {101: "Review", 102: "LongFolderName"}
-    next_handle = iter((101, 201, 102))
+    next_handle = iter((101, 201, 102, 202))
 
     def fake_open_relative(
         _parent: int,
@@ -280,17 +280,79 @@ def test_windows_open_descriptor_routes_normalized_long_names_and_refuses_short_
             "rEvIeW", _selection_fs._WINDOWS_FILE_FLAG, dir_fd=77
         )
         assert opened_file == 201
-        assert opened == [("rEvIeW", None, True), ("Review", False, True)]
-        assert closed == [101]
         _selection_fs._close_quietly(opened_file)
 
-        with pytest.raises(FileNotFoundError, match="normalized on-disk name"):
-            _selection_fs._open_descriptor(
-                "LONGFO~1", _selection_fs._WINDOWS_FILE_FLAG, dir_fd=77
-            )
+        short_alias_handle: int | None = None
+        try:
+            with pytest.raises(FileNotFoundError, match="normalized on-disk name"):
+                short_alias_handle = _selection_fs._open_descriptor(
+                    "LONGFO~1", _selection_fs._WINDOWS_FILE_FLAG, dir_fd=77
+                )
+        finally:
+            if short_alias_handle is not None:
+                _selection_fs._close_quietly(short_alias_handle)
 
-    assert opened[-1] == ("LONGFO~1", None, True)
+    assert opened == [
+        ("rEvIeW", None, True),
+        ("Review", False, True),
+        ("LONGFO~1", None, True),
+    ]
     assert closed == [101, 201, 102]
+
+
+def test_windows_component_refuses_when_normalized_name_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unavailable on-disk spelling fails closed and closes the probe handle."""
+
+    opened: list[str] = []
+    closed: list[int] = []
+    next_handle = iter((301, 302))
+
+    def fake_open_relative(
+        _parent: int,
+        name: str,
+        *,
+        directory: bool | None,
+        nofollow: bool,
+        case_sensitive: bool,
+        allow_reparse: bool = False,
+        allow_parent: bool = False,
+    ) -> int:
+        opened.append(name)
+        return next(next_handle)
+
+    def no_normalized_name(_handle: int) -> str:
+        raise OSError(errno.ENOTSUP, "GetFinalPathNameByHandleW name unavailable")
+
+    monkeypatch.setattr(_selection_fs, "_WINDOWS_SELECTION", True)
+    monkeypatch.setattr(winfs, "directory_case_sensitive", lambda _parent: False)
+    monkeypatch.setattr(winfs, "open_relative", fake_open_relative)
+    monkeypatch.setattr(winfs, "normalized_component_name", no_normalized_name)
+    monkeypatch.setattr(
+        winfs,
+        "names_equivalent",
+        lambda *_args, **_kwargs: pytest.fail("unavailable name was guessed"),
+    )
+    monkeypatch.setattr(winfs, "close_handle", closed.append)
+    monkeypatch.setattr(
+        winfs,
+        "_directory_names",
+        lambda _handle: pytest.fail("component resolution enumerated its parent"),
+    )
+
+    admitted_handle: int | None = None
+    try:
+        with pytest.raises(OSError, match="GetFinalPathNameByHandleW name unavailable"):
+            admitted_handle = _selection_fs._open_descriptor(
+                "requested", _selection_fs._WINDOWS_FILE_FLAG, dir_fd=79
+            )
+    finally:
+        if admitted_handle is not None:
+            _selection_fs._close_quietly(admitted_handle)
+
+    assert opened == ["requested"]
+    assert closed == [301]
 
 
 def _reparse_buffer(
