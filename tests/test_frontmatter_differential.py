@@ -2504,7 +2504,10 @@ def test_differential_gate_level(doc_id: str, tmp_path: Path) -> None:
     root = tmp_path / "src"
     package = root / "pkg"
     package.mkdir(parents=True)
-    (package / "SKILL.md").write_text(doc.skill_text, encoding="utf-8")
+    # The corpus encodes line endings explicitly; text-mode newline
+    # translation would change CRLF vectors on Windows before selection sees
+    # their bytes.
+    (package / "SKILL.md").write_bytes(doc.skill_text.encode("utf-8"))
     if gate_expects_raise(doc):
         with pytest.raises(source_errors.SourceError) as excinfo:
             selection.read_skill_md_name(package, "'probe'", resolved_root=root.resolve())
@@ -2607,7 +2610,9 @@ def test_differential_entry_points(tmp_path: Path, entry: str, doc_id: str) -> N
     root = tmp_path / "source"
     package = root / "pkg"
     package.mkdir(parents=True)
-    (package / "SKILL.md").write_text(doc.skill_text, encoding="utf-8")
+    # Preserve the corpus bytes so CRLF vectors reach the production reader
+    # unchanged on Windows.
+    (package / "SKILL.md").write_bytes(doc.skill_text.encode("utf-8"))
     if gate_expects_raise(doc):
         with pytest.raises(source_errors.SourceError) as excinfo:
             if entry == "collection":

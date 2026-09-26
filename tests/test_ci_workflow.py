@@ -827,10 +827,15 @@ def test_draft_sources_lanes_run_the_harness_against_the_pinned_suite() -> None:
     merge = _job(workflow, "merge_draft_sources")
     assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in merge
 
+    assert "os: [ubuntu-latest, macos-latest, windows-latest]" in fast
+    assert "os: [ubuntu-latest, macos-latest]" in merge
+    assert "timeout-minutes: 45" in fast
+    assert "timeout-minutes: 20" in merge
+    assert 'python-version: ["3.14"]' in fast
+    assert 'python-version: "3.11"' in fast
+    assert 'python-version: ${{ matrix.python-version }}' in fast
+    assert 'python-version: "3.14"' in merge
     for job in (fast, merge):
-        assert "os: [ubuntu-latest, macos-latest]" in job
-        assert 'python-version: "3.14"' in job
-        assert "timeout-minutes: 20" in job
         # The draft suite enters only through its own pin file, never through
         # the released pin, so the lane cannot impersonate qualified evidence.
         assert "RELEASED_SUITE_PIN" not in job
@@ -848,6 +853,28 @@ def test_draft_sources_lanes_run_the_harness_against_the_pinned_suite() -> None:
         assert "--junitxml=draft-sources-results.xml" in job
         assert job.count("draft-sources-results.xml") == 2
         assert "if-no-files-found: error" in job
+
+    assert "Run Windows schema-2 CLI selection tests" in fast
+    assert "Run Windows schema-2 selector and snapshot tests" in fast
+    assert "Run Windows schema-2 snapshot store and audit tests" in fast
+    assert "Run Windows schema-2 runtime and install transaction tests" in fast
+    assert "Run Windows schema-2 boundary tests" in fast
+    assert "Run Windows CI workflow tests" in fast
+    for suite in (
+        "tests/test_cli.py",
+        "tests/test_skillfile_v2_selection.py",
+        "tests/test_package_snapshot.py",
+        "tests/test_source_snapshot_store.py",
+        "tests/test_source_audit.py",
+        "tests/test_source_runtime.py",
+        "tests/test_source_install_transactions.py",
+        "tests/test_selection_boundary_property.py",
+        "tests/test_posix_selection_bound.py",
+        "tests/test_windows_selection.py",
+        "tests/test_ci_workflow.py",
+    ):
+        assert suite in fast
+    assert "windows-selection-*-results.xml" in fast
 
 
 _DRAFT_SOURCES_PYTEST_TARGET = "tests/test_draft_sources_conformance.py"
@@ -899,6 +926,124 @@ def _draft_sources_pytest_tokens(job_id: str) -> list[str]:
             break
     assert command_lines, f"empty draft conformance run block in {job_id}"
     return shlex.split(" ".join(command_lines))
+
+
+_WINDOWS_SELECTION_TARGET_GROUPS = {
+    "Run Windows schema-2 CLI selection tests": ("tests/test_cli.py",),
+    "Run Windows schema-2 selector and snapshot tests": (
+        "tests/test_skillfile_v2_selection.py",
+        "tests/test_package_snapshot.py",
+    ),
+    "Run Windows schema-2 snapshot store and audit tests": (
+        "tests/test_source_snapshot_store.py",
+        "tests/test_source_audit.py",
+    ),
+    "Run Windows schema-2 runtime and install transaction tests": (
+        "tests/test_source_runtime.py",
+        "tests/test_source_install_transactions.py",
+    ),
+    "Run Windows schema-2 boundary tests": (
+        "tests/test_selection_boundary_property.py",
+        "tests/test_posix_selection_bound.py",
+        "tests/test_windows_selection.py",
+    ),
+    "Run Windows CI workflow tests": ("tests/test_ci_workflow.py",),
+}
+_WINDOWS_SELECTION_TARGETS = tuple(
+    target
+    for targets in _WINDOWS_SELECTION_TARGET_GROUPS.values()
+    for target in targets
+)
+
+
+def test_windows_selection_lane_runs_every_affected_suite_unfiltered() -> None:
+    """Separate Windows commands cover every suite with no pytest filters."""
+    workflow = yaml.safe_load(_workflow())
+    job = workflow["jobs"]["fast_draft_sources"]
+    steps = {step.get("name"): step for step in job["steps"]}
+    selection_steps = {
+        name: step
+        for name, step in steps.items()
+        if name in _WINDOWS_SELECTION_TARGET_GROUPS
+    }
+    assert set(selection_steps) == set(_WINDOWS_SELECTION_TARGET_GROUPS)
+    prepare_temp = steps["Prepare Windows selection test temp root"]
+    assert prepare_temp["if"] == "runner.os == 'Windows'"
+    assert prepare_temp["shell"] == "bash"
+    assert prepare_temp["run"] == 'mkdir -p "$RUNNER_TEMP/win-selection"'
+    ordered_names = [step.get("name") for step in job["steps"]]
+    assert ordered_names.index("Prepare Windows selection test temp root") < ordered_names.index(
+        "Run Windows schema-2 CLI selection tests"
+    )
+
+    snapshot_step = selection_steps["Run Windows schema-2 selector and snapshot tests"]
+    assert snapshot_step["env"]["CSK_DRAFT_SOURCES_SUITE_ROOT"] == (
+        "${{ github.workspace }}/protocol-spec-draft/conformance/skillfile-sources-v1"
+    )
+    audit_step = selection_steps["Run Windows schema-2 snapshot store and audit tests"]
+    assert audit_step["env"]["CSK_DRAFT_SOURCES_SUITE_ROOT"] == (
+        "${{ github.workspace }}/protocol-spec-draft/conformance/skillfile-sources-v1"
+    )
+
+    all_targets: list[str] = []
+    for name, expected_targets in _WINDOWS_SELECTION_TARGET_GROUPS.items():
+        step = selection_steps[name]
+        assert step["if"] == "runner.os == 'Windows'"
+        assert step["shell"] == "bash"
+        tokens = shlex.split(step["run"])
+        assert tokens[:3] == ["python", "-m", "pytest"]
+        rest = tokens[3:]
+        for token in rest:
+            assert not re.match(r"^-(?!-)[A-Za-z]*[kKmM]", token), token
+            for flag in _DRAFT_SOURCES_FORBIDDEN_LONG_FLAGS:
+                assert not (token == flag or token.startswith(flag + "=")), token
+            assert "::" not in token, token
+            assert not token.startswith("@"), token
+
+        positionals = [token for token in rest if not token.startswith("-")]
+        assert tuple(positionals) == expected_targets
+        all_targets.extend(positionals)
+        basetemp = [token for token in rest if token.startswith("--basetemp=")]
+        junit = [token for token in rest if token.startswith("--junitxml=")]
+        assert len(basetemp) == 1 and "$RUNNER_TEMP/win-selection/" in basetemp[0]
+        assert len(junit) == 1
+        options = {"-q", basetemp[0], junit[0]}
+        assert {token for token in rest if token.startswith("-")} == options
+
+    assert tuple(all_targets) == _WINDOWS_SELECTION_TARGETS
+    assert len(set(all_targets)) == len(_WINDOWS_SELECTION_TARGETS)
+    assert "PYTEST_ADDOPTS" not in job
+    upload = steps["Upload Windows selection evidence"]
+    assert upload["with"]["path"] == "windows-selection-*-results.xml"
+
+
+def test_windows_r1_probe_runs_guard_and_legacy_listing_mutant() -> None:
+    workflow = yaml.safe_load(_workflow())
+    steps = {
+        step.get("name"): step
+        for step in workflow["jobs"]["fast_draft_sources"]["steps"]
+    }
+    mutant = steps["Run Windows R1 guard against legacy listing resolver"]
+    assert mutant["id"] == "r1_legacy_mutant"
+    assert mutant["if"] == "runner.os == 'Windows'"
+    assert mutant["continue-on-error"] is True
+    assert mutant["env"]["CSK_WINDOWS_R1_LEGACY_RESOLVER"] == "1"
+    mutant_tokens = shlex.split(mutant["run"])
+    assert mutant_tokens[:4] == [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+    ]
+    assert "tests/test_selection_boundary_property.py" in mutant_tokens
+    assert "-k" in mutant_tokens
+    assert "test_r1_setup_does_not_list_outside" in mutant_tokens
+    assert "--junitxml=windows-selection-r1-mutant-results.xml" in mutant_tokens
+
+    verify = steps["Verify Windows R1 legacy resolver mutant was rejected"]
+    assert verify["if"] == "runner.os == 'Windows' && always()"
+    assert "R1_MUTANT_OUTCOME" in verify["env"]
+    assert "outside_scans" in verify["run"]
 
 
 def test_draft_sources_lanes_run_the_full_harness_without_selection_filters() -> None:

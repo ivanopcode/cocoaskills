@@ -2495,7 +2495,13 @@ def test_runtime_only_edit_changes_store_key(
     _write_skill(
         source / "review",
         "review",
-        commands={"run": {"type": "script", "unix_path": "scripts/run"}},
+        commands={
+            "run": {
+                "type": "script",
+                "unix_path": "scripts/run",
+                "win_path": "scripts/run",
+            }
+        },
         runtime_roots=("scripts",),
         extra_files={"scripts/run": "#!/bin/sh\necho v1\n"},
     )

@@ -49,7 +49,6 @@ from __future__ import annotations
 
 import errno
 import hashlib
-import os
 import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -64,6 +63,7 @@ from ._selection_fs import (
     PreflightRequest,
     SelectionSession,
     _close_quietly,
+    _fstat,
     _file_flags,
     _identity_from_stat,
     _open_descriptor,
@@ -187,8 +187,13 @@ def _probe_vote(probe: ConflationProbe, variant: str) -> bool | None:
         return None
     try:
         try:
-            value = os.fstat(fd)
-        except _FS_ERRORS:
+            value = _fstat(
+                fd,
+                code=CODE_SELECTION_INVALID,
+                context="Filesystem-equivalence probe",
+                path=variant,
+            )
+        except SourceError:
             return None
         return _identity_from_stat(value) == probe.identity
     finally:

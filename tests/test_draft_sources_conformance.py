@@ -70,10 +70,10 @@ beside the native one — forcing the same predicate the product
 calls, scoped to the added run — while the capable-lane pin still
 runs on a capable host.
 
-The draft lanes run on ubuntu-latest and macos-latest only. windows-latest
-is a declared unsupported lane for the draft suite: draft schema-2 source
-selection is POSIX-only (descriptor-relative traversal), so the traversal
-drivers skip there by platform bound rather than running.
+The fast draft lane runs the pinned suite on ubuntu-latest, macos-latest and
+windows-latest. Schema-2 selection uses descriptor-relative POSIX operations
+or the Windows NT handle backend; traversal drivers skip only when the
+required runtime mechanisms are unavailable.
 """
 
 from __future__ import annotations
@@ -5266,10 +5266,19 @@ def _drive_runtime_only_refresh(case: dict[str, Any]) -> None:
             source / "review",
             "review",
             manifest_extra={
-                "commands": {"run": {"type": "script", "unix_path": "scripts/run"}},
+                "commands": {
+                    "run": {
+                        "type": "script",
+                        "unix_path": "scripts/run",
+                        "win_path": "scripts/run.cmd",
+                    }
+                },
                 "runtime_roots": ["scripts"],
             },
-            extra_files={"scripts/run": "#!/bin/sh\necho B\n"},
+            extra_files={
+                "scripts/run": "#!/bin/sh\necho B\n",
+                "scripts/run.cmd": "@echo off\r\necho B\r\n",
+            },
         )
         _closure_refresh_skillfile(
             project,
@@ -5291,8 +5300,14 @@ def _drive_runtime_only_refresh(case: dict[str, Any]) -> None:
         assert entry_before.is_dir()
         context_before = _closure_refresh_context_bytes(project, "review")
 
-        (source / "review" / "scripts" / "run").write_text(
-            "#!/bin/sh\necho C\n", encoding="utf-8"
+        script = source / "review" / "scripts" / (
+            "run.cmd" if os.name == "nt" else "run"
+        )
+        script.write_text(
+            "@echo off\r\necho C\r\n"
+            if os.name == "nt"
+            else "#!/bin/sh\necho C\n",
+            encoding="utf-8",
         )
         _install(True)
 
@@ -6167,7 +6182,11 @@ def test_draft_sources_platform_bound_skip_reasons_name_platform() -> None:
     """Every declared platform skip names its runtime and required capability."""
     descriptor_reason = _descriptor_traversal_unavailable_reason()
     assert f"sys.platform={sys.platform}" in descriptor_reason
-    assert "O_DIRECTORY" in descriptor_reason and "dir_fd" in descriptor_reason
+    assert "descriptor-relative traversal" in descriptor_reason
+    if os.name == "nt":
+        assert "required Windows NT APIs" in descriptor_reason
+    else:
+        assert "O_DIRECTORY" in descriptor_reason and "dir_fd" in descriptor_reason
     case_reason = _case_alias_unavailable_reason()
     assert f"sys.platform={sys.platform}" in case_reason
     assert "case-alias" in case_reason and "case-insensitive filesystem" in case_reason

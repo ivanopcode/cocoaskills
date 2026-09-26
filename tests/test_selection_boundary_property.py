@@ -78,6 +78,10 @@ _SESSION_SCANDIR_INDEX: int | None = None
 _SESSION_READ_INDEX: int | None = None
 _SESSION_OTHER_INDEX: int | None = None
 _SESSION_FD_OFFSETS: dict[int, tuple[tuple[int, int], int]] = {}
+_WINDOWS_FD_ORACLE_REASON = (
+    "outside-read detector uses POSIX /dev/fd offsets and fcntl(F_GETFL); "
+    "Windows trace provenance runs in test_r1_setup_opens_no_outside_ancestor"
+)
 
 
 def _record_audit_event(event: str, args: tuple[Any, ...]) -> None:
@@ -178,6 +182,36 @@ def _install_session_marker(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     _SESSION_READ_INDEX = None
     global _SESSION_OTHER_INDEX
     _SESSION_OTHER_INDEX = None
+
+    if os.name == "nt":
+        _SESSION_ROOT_INDEX = None
+        _SESSION_ROOT_IDENTITY = None
+        _SESSION_EVENT_INDEX = None
+        _SESSION_AUDIT_INDEX = None
+        _SESSION_SCANDIR_INDEX = None
+        _SESSION_READ_INDEX = 0
+        _SESSION_OTHER_INDEX = 0
+        markers: list[int] = []
+
+        def trace_windows(event: _selection_fs.DescriptorEvent) -> None:
+            global _SESSION_ROOT_INDEX, _SESSION_ROOT_IDENTITY, _SESSION_EVENT_INDEX
+            _DESCRIPTOR_EVENTS.append(event)
+            if event.operation != "phase-b-root" or _SESSION_ROOT_INDEX is not None:
+                return
+            root_open_indices = [
+                index
+                for index, observed in enumerate(_DESCRIPTOR_EVENTS[:-1])
+                if observed.operation == "open" and observed.result_fd == event.result_fd
+            ]
+            assert root_open_indices, "phase-B root has no descriptor-open event"
+            _SESSION_ROOT_INDEX = root_open_indices[-1]
+            _SESSION_EVENT_INDEX = _SESSION_ROOT_INDEX
+            _SESSION_ROOT_IDENTITY = event.result_identity
+            markers.append(_SESSION_ROOT_INDEX)
+
+        monkeypatch.setattr(_selection_fs, "_TRACE_SINK", trace_windows)
+        return markers
+
     original_open = os.open
     original_scandir = os.scandir
     original_listdir = os.listdir
@@ -468,6 +502,86 @@ def _descriptor_is_readable(descriptor: int) -> bool:
     return (flags & os.O_ACCMODE) != os.O_WRONLY
 
 
+def _assert_windows_descriptor_boundary(
+    start: int,
+    *,
+    require_read_seam: bool = False,
+) -> None:
+    """Prove Windows Phase-B opens and reads use their recorded handles.
+
+    This trace check replaces only the outside-read detector that depends on
+    POSIX ``/dev/fd`` offsets and ``fcntl(F_GETFL)``. Windows has no equivalent
+    portable process-wide handle-offset inventory; the backend provenance
+    trace still runs and verifies every source read against a Phase-B open.
+    """
+
+    events = _DESCRIPTOR_EVENTS[start:]
+    root_open_index = next(
+        (
+            index
+            for index, event in enumerate(events)
+            if event.operation == "open" and event.parent_fd is None
+        ),
+        None,
+    )
+    assert root_open_index == 0, "Phase-B trace must begin with the fresh root open"
+    root_identity = events[0].result_identity
+    assert root_identity is not None, "Phase-B root identity was not captured"
+    source_identities = {root_identity}
+    boundary_identities: set[tuple[int, int]] = set()
+    phase_b_handles: set[int] = set()
+    reads: list[_selection_fs.DescriptorEvent] = []
+
+    for event in events:
+        if event.operation == "open":
+            if event.parent_fd is None:
+                assert event.result_identity == root_identity
+                if event.result_fd is not None:
+                    phase_b_handles.add(event.result_fd)
+                continue
+            assert event.parent_identity in source_identities | boundary_identities, (
+                "NT open used a parent handle not observed in Phase B: "
+                f"path={event.path!r}, parent={event.parent_identity!r}"
+            )
+            if event.path == "..":
+                assert event.parent_identity in source_identities | boundary_identities
+                if event.result_identity is not None:
+                    boundary_identities.add(event.result_identity)
+            else:
+                assert isinstance(event.path, str)
+                assert event.path not in ("", ".")
+                assert not os.path.isabs(event.path)
+                assert "/" not in event.path and "\\" not in event.path
+                assert event.parent_identity in source_identities, (
+                    "a boundary-only parent was used for source traversal"
+                )
+                if event.result_identity is not None:
+                    source_identities.add(event.result_identity)
+            if event.result_fd is not None:
+                phase_b_handles.add(event.result_fd)
+        elif event.operation == "scandir":
+            assert event.parent_fd is not None
+            assert event.parent_identity in source_identities
+        elif event.operation in {"stat", "lstat", "readlink"}:
+            assert event.parent_fd is not None
+            assert event.parent_identity in source_identities | boundary_identities
+        elif event.operation == "read":
+            reads.append(event)
+            assert event.parent_fd is not None
+            assert event.parent_identity in source_identities
+            assert event.result_fd in phase_b_handles, (
+                "read seam used a handle without a Phase-B open event: "
+                f"name={event.path!r}, handle={event.result_fd!r}"
+            )
+            assert isinstance(event.path, str)
+            assert event.path not in ("", ".", "..")
+            assert not os.path.isabs(event.path)
+            assert "/" not in event.path and "\\" not in event.path
+
+    if require_read_seam:
+        assert reads, "Phase-B member bytes were not emitted by the production read seam"
+
+
 def _assert_descriptor_boundary(
     root: Path,
     start: int,
@@ -476,6 +590,10 @@ def _assert_descriptor_boundary(
     require_read_seam: bool = False,
 ) -> None:
     """Assert provenance, not just filename shape, for post-root operations."""
+
+    if os.name == "nt":
+        _assert_windows_descriptor_boundary(start, require_read_seam=require_read_seam)
+        return
 
     root_text = os.path.abspath(os.fspath(root))
 
@@ -1234,10 +1352,10 @@ def _require_descriptor_traversal(request: pytest.FixtureRequest) -> None:
 
     Every test in this module except those marked
     ``posix_traversal_independent`` drives the descriptor-confined
-    selection entries (descent, O_NOFOLLOW, link-count policy, boundary
+    selection entries (descent, no-follow open, link-count policy, boundary
     property). On a runtime without descriptor-relative traversal
-    schema-2 selection refuses POSIX-only, so those tests skip with the
-    single named reason instead of failing. Static import-closure probes
+    schema-2 selection refuses when its backend is unavailable, so those
+    tests skip with the single named reason instead of failing. Static import-closure probes
     carry the marker and run everywhere.
     """
 
@@ -1259,7 +1377,7 @@ def test_selection_modules_have_one_filesystem_primitive_seam() -> None:
     """
 
     source_dir = Path(_selection_fs.__file__).parent
-    allowed = {"_selection_fs.py"}
+    allowed = {"_selection_fs.py", "_selection_fs_windows.py"}
     module_calls = {
         "open",
         "read",
@@ -1379,6 +1497,7 @@ def test_runtime_loaded_modules_are_statically_scanned() -> None:
     assert sorted(obs["modules"]) == [
         "csk.sources",
         "csk.sources._selection_fs",
+        "csk.sources._selection_fs_windows",
         "csk.sources.errors",
         "csk.sources.local_snapshot",
         "csk.sources.selection",
@@ -1392,6 +1511,7 @@ def test_runtime_loaded_modules_are_statically_scanned() -> None:
     assert exec_rels == [
         "__init__.py",
         "_selection_fs.py",
+        "_selection_fs_windows.py",
         "errors.py",
         "local_snapshot.py",
         "selection.py",
@@ -1745,6 +1865,7 @@ def test_closure_matches_reviewed_selection_tree() -> None:
     assert closure == {
         "selection.py",
         "_selection_fs.py",
+        "_selection_fs_windows.py",
         "errors.py",
         "skillfile_v2.py",
         "local_snapshot.py",
@@ -2065,18 +2186,52 @@ def test_r1_setup_does_not_list_outside(
     monkeypatch.setenv("CSK_CONFIG", str(home / "config.json"))
     root = tmp_path / "source"
     _write_skill(root / "review", "review")
-    parent_identity = (tmp_path.stat().st_dev, tmp_path.stat().st_ino)
-    original_scandir = os.scandir
     outside_scans: list[object] = []
+    if os.name == "nt":
+        from csk.sources import _selection_fs_windows as winfs
 
-    def traced_scandir(path: object):  # type: ignore[no-untyped-def]
-        if isinstance(path, int):
-            value = os.fstat(path)
-            if (value.st_dev, value.st_ino) == parent_identity:
-                outside_scans.append(path)
-        return original_scandir(path)
+        parent_handle = winfs.open_path(
+            os.fspath(tmp_path), directory=True, nofollow=True
+        )
+        try:
+            parent_identity = winfs.identity_from_handle(parent_handle)
+        finally:
+            winfs.close_handle(parent_handle)
+        original_directory_names = winfs._directory_names
 
-    monkeypatch.setattr(os, "scandir", traced_scandir)
+        def traced_directory_names(handle: int) -> list[str]:
+            if winfs.identity_from_handle(handle) == parent_identity:
+                outside_scans.append(handle)
+            return original_directory_names(handle)
+
+        monkeypatch.setattr(winfs, "_directory_names", traced_directory_names)
+        if os.environ.get("CSK_WINDOWS_R1_LEGACY_RESOLVER") == "1":
+            def legacy_resolver(parent_fd: int, name: str) -> tuple[str, bool]:
+                winfs.validate_component(name)
+                case_sensitive = winfs.directory_case_sensitive(parent_fd)
+                with _selection_fs._scandir(parent_fd) as entries:
+                    actual = winfs.match_enumerated_name(
+                        name,
+                        [candidate.name for candidate in entries],
+                        case_sensitive=case_sensitive,
+                    )
+                return actual, case_sensitive
+
+            monkeypatch.setattr(
+                _selection_fs, "_resolve_windows_component", legacy_resolver
+            )
+    else:
+        parent_identity = (tmp_path.stat().st_dev, tmp_path.stat().st_ino)
+        original_scandir = os.scandir
+
+        def traced_scandir(path: object):  # type: ignore[no-untyped-def]
+            if isinstance(path, int):
+                value = os.fstat(path)
+                if (value.st_dev, value.st_ino) == parent_identity:
+                    outside_scans.append(path)
+            return original_scandir(path)
+
+        monkeypatch.setattr(os, "scandir", traced_scandir)
     _run_entry(root, entry, "review")
     assert not outside_scans
 
@@ -2204,7 +2359,9 @@ def test_replaced_managed_descendant_cannot_escape_frozen_record(
         _write_skill(root / ".agents" / "review")
     else:
         _write_skill(root / "nested" / "managed" / "review")
-        (root / ".agents").symlink_to("nested/managed", target_is_directory=True)
+        (root / ".agents").symlink_to(
+            Path("nested") / "managed", target_is_directory=True
+        )
 
     def run() -> object:
         if entry == "individual":
@@ -2238,7 +2395,10 @@ def test_replaced_managed_descendant_cannot_escape_frozen_record(
     markers = _install_session_marker(monkeypatch)
     with pytest.raises(source_errors.SourceError) as excinfo:
         run()
-    assert changed == [True]
+    assert changed == [True], (
+        "phase-A preflight failed before the managed-link swap: "
+        f"{excinfo.value.detail}"
+    )
     assert markers
     assert "changed after Phase A" in excinfo.value.detail
 
@@ -2488,8 +2648,14 @@ def test_r2_symlinked_managed_root_hard_path_refused(
     expected = (
         source_errors.CODE_OUTPUT_OVERLAP
         if entry != "wildcard"
+        or (os.name == "nt" and managed_target == "nested/review")
         else source_errors.CODE_MEMBER_INVALID
     )
+    # On Windows the held-handle preflight resolves the managed-root alias
+    # to the same physical directory selected by this wildcard and refuses
+    # the managed overlap before member admission. POSIX reaches the
+    # member-link validation first for this shape; both paths retain their
+    # structured fail-closed result.
     assert excinfo.value.code == expected
 
 
@@ -2508,6 +2674,7 @@ def test_r3_native_backslash_target_not_rewritten(
 
 
 @pytest.mark.parametrize("entry", ["individual", "collection"])
+@pytest.mark.skipif(os.name == "nt", reason="POSIX backslash-as-filename link semantics")
 def test_r3_backslash_is_literal_on_posix(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
 ) -> None:
@@ -2557,21 +2724,37 @@ def test_r6_descriptors_released(
         (root / "review").rename(root / "review-real")
         (root / "review").symlink_to(outside, target_is_directory=True)
 
-    original_open = os.open
-    original_close = os.close
     active: set[int] = set()
+    if os.name == "nt":
+        original_open = _selection_fs._open_descriptor
+        original_close = _selection_fs._close_quietly
 
-    def tracked_open(*args: object, **kwargs: object) -> int:
-        descriptor = original_open(*args, **kwargs)
-        active.add(descriptor)
-        return descriptor
+        def tracked_open(*args: object, **kwargs: object) -> int:
+            descriptor = original_open(*args, **kwargs)  # type: ignore[arg-type]
+            active.add(descriptor)
+            return descriptor
 
-    def tracked_close(descriptor: int) -> None:
-        active.discard(descriptor)
-        original_close(descriptor)
+        def tracked_close(descriptor: int) -> None:
+            active.discard(descriptor)
+            original_close(descriptor)
 
-    monkeypatch.setattr(os, "open", tracked_open)
-    monkeypatch.setattr(os, "close", tracked_close)
+        monkeypatch.setattr(_selection_fs, "_open_descriptor", tracked_open)
+        monkeypatch.setattr(_selection_fs, "_close_quietly", tracked_close)
+    else:
+        original_open = os.open
+        original_close = os.close
+
+        def tracked_open(*args: object, **kwargs: object) -> int:
+            descriptor = original_open(*args, **kwargs)
+            active.add(descriptor)
+            return descriptor
+
+        def tracked_close(descriptor: int) -> None:
+            active.discard(descriptor)
+            original_close(descriptor)
+
+        monkeypatch.setattr(os, "open", tracked_open)
+        monkeypatch.setattr(os, "close", tracked_close)
 
     attempts = 8 if outcome == "repeated" else 1
     for _ in range(attempts):
@@ -2618,6 +2801,7 @@ def test_r6_boundary_probe_structured(
 
 
 @pytest.mark.parametrize("entry", ["individual", "collection"])
+@pytest.mark.skipif(os.name == "nt", reason=_WINDOWS_FD_ORACLE_REASON)
 def test_oracle_detects_outside_descriptor_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
 ) -> None:
@@ -2664,6 +2848,7 @@ def test_oracle_detects_outside_descriptor_read(
         "foreign-fd",
     ],
 )
+@pytest.mark.skipif(os.name == "nt", reason=_WINDOWS_FD_ORACLE_REASON)
 def test_oracle_catches_real_outside_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2760,6 +2945,7 @@ def test_oracle_catches_real_outside_read(
         "stream",
     ],
 )
+@pytest.mark.skipif(os.name == "nt", reason=_WINDOWS_FD_ORACLE_REASON)
 def test_oracle_all_read_seams(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2822,6 +3008,7 @@ def test_oracle_all_read_seams(
 
 
 @pytest.mark.parametrize("entry", ["individual", "collection"])
+@pytest.mark.skipif(os.name == "nt", reason=_WINDOWS_FD_ORACLE_REASON)
 def test_oracle_ignores_write_only_harness_offsets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2873,6 +3060,7 @@ def test_oracle_ignores_write_only_harness_offsets(
 
 @pytest.mark.parametrize("entry", ["individual", "collection"])
 @pytest.mark.parametrize("mode", ["rb", "r+b"])
+@pytest.mark.skipif(os.name == "nt", reason=_WINDOWS_FD_ORACLE_REASON)
 def test_oracle_catches_preopened_buffered_stream_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4196,16 +4384,16 @@ def test_home_realpath_failure_is_not_absence(
     with pytest.raises(source_errors.SourceError) as baseline:
         invoke()
     assert baseline.value.code == source_errors.CODE_OUTPUT_OVERLAP
-    original_open = _selection_fs.os.open
+    original_open = _selection_fs._open_descriptor
     hits: list[str] = []
 
-    def denied(path, *args, **kwargs):  # type: ignore[no-untyped-def]
-        if os.fspath(path) == str(home_alias):
+    def denied(path, flags, *, dir_fd=None, **kwargs):  # type: ignore[no-untyped-def]
+        if dir_fd is None and os.fspath(path) == str(home_alias):
             hits.append(str(path))
             raise PermissionError("injected home alias lookup denial")
-        return original_open(path, *args, **kwargs)
+        return original_open(path, flags, dir_fd=dir_fd, **kwargs)
 
-    monkeypatch.setattr(_selection_fs.os, "open", denied)
+    monkeypatch.setattr(_selection_fs, "_open_descriptor", denied)
     try:
         with pytest.raises(source_errors.SourceError) as excinfo:
             invoke()
@@ -4340,16 +4528,16 @@ def test_home_eloop_failure_is_not_absence(
     with pytest.raises(source_errors.SourceError) as baseline:
         invoke()
     assert baseline.value.code == source_errors.CODE_OUTPUT_OVERLAP
-    original_open = _selection_fs.os.open
+    original_open = _selection_fs._open_descriptor
     hits: list[str] = []
 
-    def eloop(path, *args, **kwargs):  # type: ignore[no-untyped-def]
-        if os.fspath(path) == str(home_alias):
+    def eloop(path, flags, *, dir_fd=None, **kwargs):  # type: ignore[no-untyped-def]
+        if dir_fd is None and os.fspath(path) == str(home_alias):
             hits.append(str(path))
             raise OSError(errno.ELOOP, "injected too many levels")
-        return original_open(path, *args, **kwargs)
+        return original_open(path, flags, dir_fd=dir_fd, **kwargs)
 
-    monkeypatch.setattr(_selection_fs.os, "open", eloop)
+    monkeypatch.setattr(_selection_fs, "_open_descriptor", eloop)
     try:
         with pytest.raises(source_errors.SourceError) as excinfo:
             invoke()
@@ -4586,6 +4774,7 @@ def test_source_root_inside_managed_ancestor_refused(
     root_name = managed_name if spelling == "exact" else managed_name.upper()
     managed_root = tmp_path / managed_name
     root = tmp_path / root_name / "workspace"
+    managed_root.mkdir(parents=True, exist_ok=True)
     if spelling == "case-variant" and not _probes_same_file(
         managed_root, tmp_path / root_name
     ):
@@ -4874,6 +5063,7 @@ def test_boundary_decision_table(
 
 
 @pytest.mark.parametrize("entry", ["individual", "collection"])
+@pytest.mark.skipif(os.name == "nt", reason=_WINDOWS_FD_ORACLE_REASON)
 def test_oracle_ignores_harness_held_rdwr_offsets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4944,6 +5134,7 @@ def test_oracle_ignores_harness_held_rdwr_offsets(
         ),
     ],
 )
+@pytest.mark.skipif(os.name == "nt", reason=_WINDOWS_FD_ORACLE_REASON)
 def test_oracle_catches_rdwr_foreign_fd_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4999,6 +5190,7 @@ def test_oracle_catches_rdwr_foreign_fd_read(
 
 
 @pytest.mark.parametrize("entry", ["individual", "collection"])
+@pytest.mark.skipif(os.name == "nt", reason=_WINDOWS_FD_ORACLE_REASON)
 def test_oracle_catches_read_on_reused_harness_number(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -27,7 +27,6 @@ import stat
 import subprocess
 import sys
 import threading
-import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -291,14 +290,14 @@ def test_capture_reads_working_tree_bytes_not_git_head(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     init_git_repo(root)
-    (root / "tracked.txt").write_text("HEAD-bytes\n", encoding="utf-8")
-    (root / "staged.txt").write_text("HEAD-staged\n", encoding="utf-8")
+    (root / "tracked.txt").write_bytes(b"HEAD-bytes\n")
+    (root / "staged.txt").write_bytes(b"HEAD-staged\n")
     commit_all(root, "base")
-    (root / "tracked.txt").write_text("dirty-worktree\n", encoding="utf-8")
-    (root / "staged.txt").write_text("staged-bytes\n", encoding="utf-8")
+    (root / "tracked.txt").write_bytes(b"dirty-worktree\n")
+    (root / "staged.txt").write_bytes(b"staged-bytes\n")
     subprocess.run(["git", "add", "staged.txt"], cwd=root, check=True)
-    (root / "staged.txt").write_text("worktree-beats-index\n", encoding="utf-8")
-    (root / "untracked.txt").write_text("untracked-bytes\n", encoding="utf-8")
+    (root / "staged.txt").write_bytes(b"worktree-beats-index\n")
+    (root / "untracked.txt").write_bytes(b"untracked-bytes\n")
 
     package = snapshot_module.capture_package_snapshot(root, ".", home=home)
 
@@ -592,6 +591,9 @@ def test_admitted_special_files_and_links_refuse_naming_the_path(
 
     import tempfile
 
+    if kind == "unix-socket" and not hasattr(socket, "AF_UNIX"):
+        pytest.skip("Python on this Windows runner has no AF_UNIX socket fixture")
+
     if kind == "unix-socket":
         # pytest's tmp_path already exhausts the AF_UNIX path budget on
         # macOS; the socket fixture lives directly under TMPDIR instead.
@@ -717,6 +719,10 @@ def test_direct_file_read_maps_absence_to_the_missing_code(
     assert "gone.txt" in error.detail
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="this fault fixture spoofs POSIX os.DirEntry.stat; Windows has handle-based race coverage",
+)
 def test_regular_file_admission_uses_the_opened_descriptor(
     tmp_path: Path,
 ) -> None:
@@ -752,6 +758,10 @@ def test_regular_file_admission_uses_the_opened_descriptor(
     assert "victim.txt" in error.detail
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="this fault fixture spoofs POSIX os.DirEntry.stat; Windows has handle-based race coverage",
+)
 def test_directory_identity_skew_between_listing_and_open_refuses(
     tmp_path: Path,
 ) -> None:
@@ -783,6 +793,10 @@ def test_directory_identity_skew_between_listing_and_open_refuses(
     assert "sub" in error.detail
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="this deterministic cross-device fixture spoofs POSIX os.DirEntry.stat",
+)
 def test_cross_device_entry_refuses_with_the_admission_code(
     tmp_path: Path,
 ) -> None:
@@ -819,6 +833,10 @@ def test_cross_device_entry_refuses_with_the_admission_code(
     assert "filesystem boundary" in error.detail
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="this race fixture intercepts POSIX os.open(dir_fd=); Windows link races use NT handles",
+)
 def test_replacement_by_symlink_between_listing_and_open_refuses(
     tmp_path: Path,
 ) -> None:
@@ -918,6 +936,11 @@ def test_hard_links_refuse_stable_and_race(tmp_path: Path, moment: str) -> None:
 
     Production call site: ``snapshot.capture_package``.
     """
+
+    if os.name == "nt" and moment == "race":
+        pytest.skip(
+            "the race injector patches POSIX os.open(dir_fd=); stable Windows hard-link refusal still runs"
+        )
 
     root = tmp_path / "src"
     home = tmp_path / "home"
@@ -1030,6 +1053,11 @@ def test_conformance_vectors_end_to_end_from_disk(
     ``local_snapshot.build_inventory`` (via ``captured_to_inventory``).
     """
 
+    if os.name == "nt":
+        pytest.skip(
+            "the pinned vector includes a POSIX executable bit; Windows snapshot inventory reports false"
+        )
+
     root = tmp_path / "src"
     home = tmp_path / "home"
     home.mkdir()
@@ -1087,6 +1115,11 @@ def test_executable_bit_is_the_real_opened_descriptor_bit(
     Production call site: ``snapshot.capture_package``.
     """
 
+    if os.name == "nt":
+        pytest.skip(
+            "Windows snapshot inventory reports executable=false when the filesystem cannot report it"
+        )
+
     root = tmp_path / "src"
     home = tmp_path / "home"
     home.mkdir()
@@ -1107,6 +1140,8 @@ def test_unreadable_files_refuse_as_structured_inspection_failures(
     Production call site: ``snapshot.capture_package``.
     """
 
+    if os.name == "nt":
+        pytest.skip("chmod mode bits do not enforce Windows file-read ACLs")
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("root reads through permission bits (named platform bound)")
     root = tmp_path / "src"
@@ -1212,8 +1247,12 @@ def test_equivalence_predicate_matches_the_host_filesystem(
         ("caf\u00e9", "cafe\u0301"),
         ("CAFE\u0301", "caf\u00e9"),
         ("alpha", "beta"),
-        ("trailing ", "trailing"),
     ]
+    if os.name != "nt":
+        # Win32 path lookup trims trailing dots and spaces. The NT backend
+        # deliberately validates such components before opening them, so a
+        # Win32 ground-truth lookup would measure a different namespace.
+        pairs.append(("trailing ", "trailing"))
     for first, second in pairs:
         target = ground / first
         target.write_bytes(b"g\n")
@@ -1262,6 +1301,9 @@ def test_probe_failures_leave_the_axis_unknown_and_capture_succeeds(
     Production call site: ``snapshot.capture_package``.
     """
 
+    if os.name == "nt":
+        pytest.skip("this probe fault fixture intercepts POSIX os.open(dir_fd=)")
+
     root = tmp_path / "src"
     home = tmp_path / "home"
     home.mkdir()
@@ -1298,26 +1340,35 @@ def test_probe_votes_match_the_host_ground_truth(tmp_path: Path) -> None:
     names = ["CaseProbe", "MiXeD", "lower", "UPPER"]
     for name in names:
         (probe_dir / name).write_bytes(b"g\n")
-    fd = os.open(probe_dir, os.O_RDONLY)
+    fd = _selection_fs._open_descriptor(
+        probe_dir, _selection_fs._directory_flags(nofollow=False)
+    )
     try:
+        parent_identity = _selection_fs._safe_identity(fd)
+        assert parent_identity is not None
         parent = Directory(
             fd=fd,
-            identity=(os.fstat(fd).st_dev, os.fstat(fd).st_ino),
+            identity=parent_identity,
             name=probe_dir.name,
             display=probe_dir,
             parent=None,
         )
         probes: list[ConflationProbe] = []
         for name in names:
-            value = os.stat(probe_dir / name)
+            value = _selection_fs._stat_child(
+                fd, name, parent_path=probe_dir, follow_symlinks=False
+            )
             probes.append(
                 ConflationProbe(
-                    parent, name, (value.st_dev, value.st_ino), frozenset({"case"})
+                    parent,
+                    name,
+                    _selection_fs._identity_from_stat(value),
+                    frozenset({"case"}),
                 )
             )
         facts = snapshot_module.probe_filesystem_equivalence(tuple(probes))
     finally:
-        os.close(fd)
+        _selection_fs._close_quietly(fd)
 
     assert facts.case_known
     for name in names:
@@ -1351,22 +1402,31 @@ def test_probe_link_variant_votes_distinction(tmp_path: Path) -> None:
         )
     (probe_dir / "other").write_bytes(b"other\n")
     (probe_dir / "a").symlink_to(probe_dir / "other")
-    fd = os.open(probe_dir, os.O_RDONLY)
+    fd = _selection_fs._open_descriptor(
+        probe_dir, _selection_fs._directory_flags(nofollow=False)
+    )
     try:
-        value = os.stat(probe_dir / "A")
+        parent_identity = _selection_fs._safe_identity(fd)
+        assert parent_identity is not None
+        value = _selection_fs._stat_child(
+            fd, "A", parent_path=probe_dir, follow_symlinks=False
+        )
         parent = Directory(
             fd=fd,
-            identity=(os.fstat(fd).st_dev, os.fstat(fd).st_ino),
+            identity=parent_identity,
             name=probe_dir.name,
             display=probe_dir,
             parent=None,
         )
         probe = ConflationProbe(
-            parent, "A", (value.st_dev, value.st_ino), frozenset({"case"})
+            parent,
+            "A",
+            _selection_fs._identity_from_stat(value),
+            frozenset({"case"}),
         )
         facts = snapshot_module.probe_filesystem_equivalence((probe,))
     finally:
-        os.close(fd)
+        _selection_fs._close_quietly(fd)
 
     assert facts.case_known is True
     assert facts.case_conflates is False
@@ -1494,7 +1554,19 @@ def _mutation_identity_changed(
     return (value.st_dev, value.st_ino) != captured.files[components].identity
 
 
-@pytest.mark.parametrize("kind", sorted(_mutations()))
+@pytest.mark.parametrize(
+    "kind",
+    [
+        pytest.param(
+            kind,
+            marks=pytest.mark.skipif(
+                os.name == "nt" and kind in {"chmod-add-exec", "chmod-drop-exec"},
+                reason="Windows snapshot inventory reports executable=false when the filesystem cannot report it",
+            ),
+        )
+        for kind in sorted(_mutations())
+    ],
+)
 def test_revalidation_refuses_every_mutation_class(
     tmp_path: Path, kind: str
 ) -> None:
@@ -1609,6 +1681,9 @@ def test_mid_capture_mutation_is_detected_inside_one_operation(
 
     Production call site: ``snapshot.capture_package``.
     """
+
+    if os.name == "nt":
+        pytest.skip("this in-read mutation injector intercepts POSIX os.read")
 
     root = tmp_path / "src"
     home = tmp_path / "home"
@@ -1894,6 +1969,10 @@ def _window_events(start: int) -> list[tuple[str, tuple[Any, ...]]]:
     return _AUDIT_EVENTS[start:]
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Python audit hooks do not expose the Windows NT handle calls; trace-based provenance runs separately",
+)
 def test_capture_confines_all_filesystem_events_to_the_root(
     tmp_path: Path,
 ) -> None:
@@ -1965,6 +2044,10 @@ def _open_flags_index(calibration: Path) -> int:
     raise AssertionError(f"cannot locate open flags in audit shape: {events!r}")
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="this read-only audit oracle requires POSIX open flags and os.O_ACCMODE",
+)
 def test_capture_performs_no_write_filesystem_event(tmp_path: Path) -> None:
     """Capture opens nothing writable: the S-TXN read-only property.
 
@@ -2006,6 +2089,9 @@ def test_faulted_capture_leaves_the_tree_byte_identical(tmp_path: Path) -> None:
 
     Production call site: ``snapshot.capture_package``.
     """
+
+    if os.name == "nt":
+        pytest.skip("this fault fixture injects at POSIX os.read; Windows uses ReadFile")
 
     root = tmp_path / "src"
     home = tmp_path / "home"
@@ -2067,6 +2153,10 @@ def _expected_fault_code(site: str, fault_id: str) -> str:
 
 @pytest.mark.parametrize("site", ["open", "read", "fstat", "scandir"])
 @pytest.mark.parametrize("fault_id", [fault[0] for fault in _FAULTS])
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="this matrix patches POSIX os.* call sites; Windows NT backend behavior has handle-specific tests",
+)
 def test_injected_filesystem_fault_is_structured(
     tmp_path: Path, site: str, fault_id: str
 ) -> None:
@@ -2105,6 +2195,10 @@ def test_injected_filesystem_fault_is_structured(
     assert error.code == expected
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="this fault fixture injects at POSIX os.scandir; Windows enumeration uses NtQueryDirectoryFile",
+)
 def test_direct_capture_tree_call_structures_non_os_faults(tmp_path: Path) -> None:
     """The walk seam structures faults for callers without the wrapper.
 
@@ -2223,7 +2317,10 @@ def test_nfc_and_nfd_entry_spellings_stay_distinct(tmp_path: Path) -> None:
     (root / nfc).parent.mkdir(parents=True, exist_ok=True)
     (root / nfc).write_bytes(b"nfc\n")
     try:
-        probe = os.open(root / nfd, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        probe = os.open(
+            root / nfd,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0),
+        )
     except FileExistsError:
         pytest.skip(
             "this filesystem conflates NFC/NFD spellings "
@@ -2423,9 +2520,30 @@ def test_empty_package_captures_to_an_empty_inventory(tmp_path: Path) -> None:
         # ``repr`` escapes backslashes and control characters, so those
         # spellings cannot be substrings of the detail; the refusal
         # reason carries those assertions instead.
-        ("a\\b", None),
-        ("nul", "nul"),
-        ("trailing. ", "trailing. "),
+        pytest.param(
+            "a\\b",
+            None,
+            marks=pytest.mark.skipif(
+                os.name == "nt",
+                reason="backslash is a Win32 path separator and cannot be materialized as one filename",
+            ),
+        ),
+        pytest.param(
+            "nul",
+            "nul",
+            marks=pytest.mark.skipif(
+                os.name == "nt",
+                reason="NUL is a reserved Win32 device name, not an ordinary file that can reach inventory",
+            ),
+        ),
+        pytest.param(
+            "trailing. ",
+            "trailing. ",
+            marks=pytest.mark.skipif(
+                os.name == "nt",
+                reason="Win32 path APIs trim trailing dots and spaces before inventory sees the spelling",
+            ),
+        ),
         ("a:b", "a:b"),
         ("a\x01b", None),
     ],
