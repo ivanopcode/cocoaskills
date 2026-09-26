@@ -172,6 +172,8 @@ csk config build-https add gitlab.example.com/portals/infra --token git-credenti
 
 Схема 2 является основным форматом проектного Skillfile. Она объявляет источники и выбирает скиллы через селекторы. Команды `csk check`, `csk install`, `csk upgrade` и `csk status` поддерживают её по умолчанию.
 
+На Windows схема 2 пока не работает: `csk install` и `csk upgrade` отклоняют её с ошибкой `source_selection_invalid`, потому что выборке источников нужен обход относительно открытых каталогов, которого CPython на Windows не даёт. На Windows оставайтесь на схеме 1. Поддержка Windows для схемы 2 в работе.
+
 Пример `Skillfile.json` схемы 2:
 
 ```json
@@ -319,6 +321,8 @@ csk shell-init                      # Генерирует или устанав
 ## Источники Skillfile schema 2
 
 Схема 2 является основным форматом проектного Skillfile и поддерживается командами `csk check`, `csk install`, `csk upgrade` и `csk status` без дополнительной настройки. Схема 1 остаётся поддерживаемым legacy-форматом.
+
+На Windows схема 2 пока не работает: `csk install` и `csk upgrade` отклоняют её с ошибкой `source_selection_invalid`, потому что выборке источников нужен обход относительно открытых каталогов, которого CPython на Windows не даёт. На Windows оставайтесь на схеме 1. Поддержка Windows для схемы 2 в работе.
 
 Настройка `experimental.skillfile_sources` и переменная `CSK_EXPERIMENTAL_SKILLFILE_SOURCES` сохраняют совместимость со старыми конфигурациями и не влияют на выбор схемы.
 
