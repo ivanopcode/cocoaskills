@@ -83,6 +83,30 @@ def _command(name: str) -> planner.BuildCommand:
     )
 
 
+def test_generation_probe_does_not_treat_file_parent_as_absence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Windows-style missing leaf under a regular-file parent is unreadable."""
+
+    parent = tmp_path / "blocked"
+    parent.write_text("file", encoding="utf-8")
+    missing_leaf = parent / "child"
+    original_lstat = Path.lstat
+
+    def windows_missing_leaf(path: Path) -> Any:
+        if path == missing_leaf:
+            raise FileNotFoundError(
+                2, "The system cannot find the file specified", str(path)
+            )
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", windows_missing_leaf)
+    with pytest.raises(planner.BuildPlanningError) as error:
+        planner._generation_digest(missing_leaf)
+
+    assert error.value.code == "generation_unreadable"
+
+
 def test_plan_builds_is_provider_first_command_lexical_and_records_all_outcomes(
     tmp_path: Path,
 ) -> None:

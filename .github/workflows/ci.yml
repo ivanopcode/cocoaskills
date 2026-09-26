@@ -371,11 +371,11 @@ jobs:
     name: Fast draft sources / Python 3.14 on ${{ matrix.os }}
     if: github.event_name == 'pull_request'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -384,6 +384,7 @@ jobs:
 
       - name: Resolve the draft sources suite pin
         id: suite
+        shell: bash
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
@@ -417,11 +418,116 @@ jobs:
           python -m pytest -q tests/test_draft_sources_conformance.py
           --junitxml=draft-sources-results.xml
 
+      - name: Prepare Windows selection test temp root
+        if: runner.os == 'Windows'
+        shell: bash
+        run: mkdir -p "$RUNNER_TEMP/win-selection"
+
+      - name: Run Windows schema-2 CLI selection tests
+        if: runner.os == 'Windows'
+        shell: bash
+        run: >-
+          python -m pytest -q
+          tests/test_cli.py
+          --basetemp="$RUNNER_TEMP/win-selection/cli"
+          --junitxml=windows-selection-cli-results.xml
+
+      - name: Run Windows schema-2 selector and snapshot tests
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          CSK_DRAFT_SOURCES_SUITE_ROOT: ${{ github.workspace }}/protocol-spec-draft/conformance/skillfile-sources-v1
+        run: >-
+          python -m pytest -q
+          tests/test_skillfile_v2_selection.py
+          tests/test_package_snapshot.py
+          --basetemp="$RUNNER_TEMP/win-selection/snapshot"
+          --junitxml=windows-selection-snapshot-results.xml
+
+      - name: Run Windows schema-2 snapshot store and audit tests
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          CSK_DRAFT_SOURCES_SUITE_ROOT: ${{ github.workspace }}/protocol-spec-draft/conformance/skillfile-sources-v1
+        run: >-
+          python -m pytest -q
+          tests/test_source_snapshot_store.py
+          tests/test_source_audit.py
+          --basetemp="$RUNNER_TEMP/win-selection/audit"
+          --junitxml=windows-selection-audit-results.xml
+
+      - name: Run Windows schema-2 runtime and install transaction tests
+        if: runner.os == 'Windows'
+        shell: bash
+        run: >-
+          python -m pytest -q
+          tests/test_source_runtime.py
+          tests/test_source_install_transactions.py
+          --basetemp="$RUNNER_TEMP/win-selection/runtime"
+          --junitxml=windows-selection-runtime-results.xml
+
+      - name: Run Windows schema-2 boundary tests
+        if: runner.os == 'Windows'
+        shell: bash
+        run: >-
+          python -m pytest -q
+          tests/test_selection_boundary_property.py
+          tests/test_posix_selection_bound.py
+          tests/test_windows_selection.py
+          --basetemp="$RUNNER_TEMP/win-selection/boundary"
+          --junitxml=windows-selection-boundary-results.xml
+
+      - name: Run Windows R1 guard against legacy listing resolver
+        id: r1_legacy_mutant
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: bash
+        env:
+          CSK_WINDOWS_R1_LEGACY_RESOLVER: "1"
+        run: >-
+          python -m pytest -q
+          tests/test_selection_boundary_property.py
+          -k test_r1_setup_does_not_list_outside
+          --basetemp="$RUNNER_TEMP/win-selection/r1-mutant"
+          --junitxml=windows-selection-r1-mutant-results.xml
+
+      - name: Verify Windows R1 legacy resolver mutant was rejected
+        if: runner.os == 'Windows' && always()
+        shell: bash
+        env:
+          R1_MUTANT_OUTCOME: ${{ steps.r1_legacy_mutant.outcome }}
+        run: |
+          test "$R1_MUTANT_OUTCOME" = "failure"
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          report = ET.parse("windows-selection-r1-mutant-results.xml")
+          failures = report.findall(".//testcase/failure")
+          assert len(failures) == 2, len(failures)
+          assert all("outside_scans" in (failure.text or "") for failure in failures)
+          PY
+
+      - name: Run Windows CI workflow tests
+        if: runner.os == 'Windows'
+        shell: bash
+        run: >-
+          python -m pytest -q tests/test_ci_workflow.py
+          --basetemp="$RUNNER_TEMP/win-selection/workflow"
+          --junitxml=windows-selection-workflow-results.xml
+
       - name: Upload draft sources evidence
         uses: actions/upload-artifact@v4
         with:
           name: draft-sources-${{ matrix.os }}-py314
           path: draft-sources-results.xml
+          if-no-files-found: error
+
+      - name: Upload Windows selection evidence
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-selection-${{ matrix.os }}-py314
+          path: windows-selection-*-results.xml
           if-no-files-found: error
 
   floor_syntax:

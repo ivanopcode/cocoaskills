@@ -1,9 +1,9 @@
-"""The POSIX-only bound of draft schema-2 source selection.
+"""The descriptor-traversal capability gate for schema-2 selection.
 
 Schema-2 selection descends from an opened source-root descriptor by bare
 component names (``os.open`` with ``O_DIRECTORY`` plus ``dir_fd=`` descent).
 Where the runtime cannot provide that mechanism selection refuses with a
-typed POSIX-only refusal instead of falling back to a path-based walk.
+typed refusal instead of falling back to a path-based walk.
 
 Every test in this module RUNS on every platform: the capability is either
 faked at the runtime inputs (``os.supports_dir_fd``, ``O_DIRECTORY``) or
@@ -61,14 +61,17 @@ def test_predicate_agrees_with_runtime_inputs() -> None:
     """
 
     supported = getattr(os, "supports_dir_fd", None)
-    expected = (
-        hasattr(os, "O_DIRECTORY")
-        and supported is not None
-        and all(
-            getattr(os, name, None) in supported
-            for name in ("open", "stat", "readlink")
+    if os.name == "nt":
+        expected = not _selection_fs._missing_traversal_mechanisms()
+    else:
+        expected = (
+            hasattr(os, "O_DIRECTORY")
+            and supported is not None
+            and all(
+                getattr(os, name, None) in supported
+                for name in ("open", "stat", "readlink")
+            )
         )
-    )
     assert _selection_fs.supports_descriptor_traversal() == expected
 
 
@@ -77,19 +80,23 @@ def test_predicate_windows_shaped_runtime_is_not_capable(
 ) -> None:
     """Empty ``supports_dir_fd`` plus no ``O_DIRECTORY`` refuses (Windows)."""
 
-    _fake_runtime(
-        monkeypatch, supports_dir_fd=frozenset(), has_o_directory=False
-    )
-    assert _selection_fs.supports_descriptor_traversal() is False
-    assert _selection_fs._missing_traversal_mechanisms() == [
-        "O_DIRECTORY",
-        "dir_fd support for os.open",
-        "dir_fd support for os.stat",
-        "dir_fd support for os.readlink",
-    ]
+    _fake_runtime(monkeypatch, supports_dir_fd=frozenset(), has_o_directory=False)
+    if os.name == "nt":
+        assert _selection_fs.supports_descriptor_traversal() == (
+            not _selection_fs._missing_traversal_mechanisms()
+        )
+    else:
+        assert _selection_fs.supports_descriptor_traversal() is False
+        assert _selection_fs._missing_traversal_mechanisms() == [
+            "O_DIRECTORY",
+            "dir_fd support for os.open",
+            "dir_fd support for os.stat",
+            "dir_fd support for os.readlink",
+        ]
 
 
 @pytest.mark.parametrize("with_lstat", [False, True], ids=["py311", "py314"])
+@pytest.mark.skipif(os.name == "nt", reason="POSIX dir_fd backend predicate")
 def test_predicate_posix_shaped_runtime_is_capable(
     monkeypatch: pytest.MonkeyPatch, with_lstat: bool
 ) -> None:
@@ -122,6 +129,7 @@ def test_predicate_posix_shaped_runtime_is_capable(
         "missing-supports_dir_fd",
     ],
 )
+@pytest.mark.skipif(os.name == "nt", reason="POSIX dir_fd backend predicate")
 def test_predicate_missing_single_mechanism_is_not_capable(
     monkeypatch: pytest.MonkeyPatch, missing: str
 ) -> None:
@@ -182,7 +190,10 @@ def _assert_posix_only_refusal(
 
     assert excinfo.value.code == source_errors.CODE_SELECTION_INVALID
     assert "descriptor-relative traversal is unavailable" in excinfo.value.detail
-    assert "POSIX-only" in excinfo.value.detail
+    if os.name == "nt":
+        assert "required Windows NT filesystem APIs" in excinfo.value.detail
+    else:
+        assert "POSIX-only" in excinfo.value.detail
     assert excinfo.value.__cause__ is None
 
 
@@ -192,7 +203,7 @@ def _assert_posix_only_refusal(
 def test_schema2_selection_refuses_without_capability(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
 ) -> None:
-    """Every selection entry refuses POSIX-only through the production path.
+    """Every selection entry refuses through the production path.
 
     The capability is injected as absent on this host; the source root does
     not even exist, which additionally proves the refusal precedes any
@@ -283,7 +294,7 @@ def test_refusal_is_structured_never_rescued(
     """Inputs that would explode in ``os`` calls still get the clean refusal.
 
     A missing root (ENOENT), a file root (ENOTDIR) and an embedded-NUL root
-    (ValueError) each refuse with the POSIX-only ``SourceError`` carrying
+    (ValueError) each refuse with the capability ``SourceError`` carrying
     no chained cause: the refusal is raised, never rescued.
     """
 

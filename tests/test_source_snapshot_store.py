@@ -1373,7 +1373,7 @@ def test_on_disk_mode_is_not_part_of_the_frozen_identity(tmp_path: Path) -> None
 
 
 def test_capture_to_serve_end_to_end(tmp_path: Path) -> None:
-    """Real capture stages and serves through every consumer (POSIX lane)."""
+    """Real capture stages and serves through every consumer backend."""
     if not _selection_fs.supports_descriptor_traversal():
         pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
     from csk.sources import snapshot as snapshot_module

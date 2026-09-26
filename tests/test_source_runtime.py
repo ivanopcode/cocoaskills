@@ -12,10 +12,10 @@ live resolution), S-IDENTITY (store key derivation), S-TXN (bin targets
 in the atomic publication), S-CONFLICT (command collisions),
 S-ERRORS (structured refusals at the new seams).
 
-Schema-2 source selection is POSIX-only (operational note 8): the
-install helpers skip with the shared ``NO_DESCRIPTOR_TRAVERSAL_REASON``
-where traversal is unavailable. Tests that refuse before selection or
-never install keep running everywhere.
+Schema-2 source selection needs descriptor-relative traversal: the install
+helpers skip with the shared ``NO_DESCRIPTOR_TRAVERSAL_REASON`` only where
+neither the POSIX dir-fd nor Windows NT handle backend is available. Tests
+that refuse before selection or never install keep running everywhere.
 """
 
 from __future__ import annotations
@@ -78,10 +78,16 @@ def _skill_files(
     *,
     runtime_roots: bool,
     dependencies: dict[str, Any] | None = None,
-) -> dict[str, str]:
+) -> dict[str, str | bytes]:
     manifest: dict[str, Any] = {
         "schema_version": 2,
-        "commands": {command: {"type": "script", "unix_path": f"scripts/{command}"}},
+        "commands": {
+            command: {
+                "type": "script",
+                "unix_path": f"scripts/{command}",
+                "win_path": f"scripts/{command}",
+            }
+        },
     }
     if runtime_roots:
         manifest["runtime_roots"] = ["scripts"]
@@ -90,7 +96,9 @@ def _skill_files(
     return {
         "SKILL.md": f"---\nname: {name}\ndescription: fixture skill {name}\n---\n\n# {name}\n",
         "agent-skill.json": json.dumps(manifest),
-        f"scripts/{command}": script,
+        # Preserve the authored bytes on Windows too; Path.write_text would
+        # translate LF to CRLF before the package snapshot is taken.
+        f"scripts/{command}": script.encode("utf-8"),
     }
 
 
@@ -129,9 +137,9 @@ def _v2_config(
 def _require_selection() -> None:
     """Skip where schema-2 source selection cannot run (operational note 8).
 
-    Selection needs descriptor-relative traversal (``O_DIRECTORY`` plus
-    ``dir_fd`` support), which is POSIX-only; without it every install
-    through ``install_schema2`` refuses ``source_selection_invalid``.
+    Selection needs descriptor-relative traversal (POSIX ``dir_fd`` support
+    or Windows NT handle APIs); without it every install through
+    ``install_schema2`` refuses ``source_selection_invalid``.
     The guard lives on the install helpers -- the paths that need
     selection -- never at module level, so tests that refuse before
     selection or never install keep running on Windows. The predicate
@@ -231,7 +239,7 @@ def _expected_consumer_target(
     entry = publish.runtime_entry_path(csk_home, "consumer", key)
     if runtime_roots:
         return entry / "scripts" / "consume"
-    return entry / "bin" / "consume"
+    return entry / "bin" / publish.script_bin_filename("consume")
 
 
 def _run_shim(shim: Path) -> str:
@@ -610,7 +618,13 @@ def test_context_projection_eligibility_matrix(
                 {
                     "schema_version": 2,
                     "runtime_roots": ["scripts"],
-                    "commands": {"serve": {"type": "script", "unix_path": "scripts/serve"}},
+                    "commands": {
+                        "serve": {
+                            "type": "script",
+                            "unix_path": "scripts/serve",
+                            "win_path": "scripts/serve",
+                        }
+                    },
                 }
             ),
             "scripts/serve": "#!/bin/sh\necho serve\n",
@@ -636,7 +650,11 @@ def test_context_projection_eligibility_matrix(
                     "runtime_roots": ["scripts"],
                     "build_roots": ["build"],
                     "commands": {
-                        "hello": {"type": "script", "unix_path": "scripts/hello"},
+                        "hello": {
+                            "type": "script",
+                            "unix_path": "scripts/hello",
+                            "win_path": "scripts/hello",
+                        },
                         "greet": {
                             "type": "build",
                             "driver": "go-v1",
@@ -722,7 +740,11 @@ def test_build_root_script_refuses(
                     "capabilities": {},
                     "build_roots": ["build"],
                     "commands": {
-                        "run": {"type": "script", "unix_path": "build/run"},
+                        "run": {
+                            "type": "script",
+                            "unix_path": "build/run",
+                            "win_path": "build/run",
+                        },
                         "gen": {
                             "type": "build",
                             "driver": "go-v1",
