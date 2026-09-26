@@ -368,7 +368,7 @@ jobs:
           if-no-files-found: error
 
   fast_draft_sources:
-    name: Fast draft sources / Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    name: Fast draft sources / Python 3.14 on ${{ matrix.os }}
     if: github.event_name == 'pull_request'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -376,10 +376,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.14"]
-        include:
-          - os: windows-latest
-            python-version: "3.11"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -404,10 +400,10 @@ jobs:
           ref: ${{ steps.suite.outputs.revision }}
           path: protocol-spec-draft
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.14
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.14"
           allow-prereleases: true
 
       - name: Install package

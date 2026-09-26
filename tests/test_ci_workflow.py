@@ -831,11 +831,8 @@ def test_draft_sources_lanes_run_the_harness_against_the_pinned_suite() -> None:
     assert "os: [ubuntu-latest, macos-latest]" in merge
     assert "timeout-minutes: 45" in fast
     assert "timeout-minutes: 20" in merge
-    assert 'python-version: ["3.14"]' in fast
-    assert 'python-version: "3.11"' in fast
-    assert 'python-version: ${{ matrix.python-version }}' in fast
-    assert 'python-version: "3.14"' in merge
     for job in (fast, merge):
+        assert 'python-version: "3.14"' in job
         # The draft suite enters only through its own pin file, never through
         # the released pin, so the lane cannot impersonate qualified evidence.
         assert "RELEASED_SUITE_PIN" not in job
