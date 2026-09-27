@@ -589,7 +589,7 @@ def _generated_url_diagnostic(
         coverage["multi_url_quotes"].add(quote)
     if mode == 2:
         coverage["whole_segment_quotes"].add(quote)
-    if mode == 3 and count > 1 or joiner == "":
+    if count > 1 and (mode == 3 or joiner == ""):
         coverage["joiners"].add("adjacent")
     else:
         coverage["joiners"].add("separated")
