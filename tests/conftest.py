@@ -171,7 +171,7 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
 
 @pytest.fixture
 def required_go_e2e_host(monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
-    """Bind a required native E2E run to its installed manager and Go 1.25."""
+    """Bind a required native E2E run to its installed manager and Go family."""
     manager_value = os.environ.get("CSK_GO_V1_MANAGER_EXECUTABLE")
     go_value = os.environ.get("CSK_GO_V1_GO_EXECUTABLE")
     required = os.environ.get("CSK_E2E_REQUIRED_PLATFORM")
@@ -192,9 +192,14 @@ def required_go_e2e_host(monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
         text=True,
         capture_output=True,
     ).stdout
-    if " go1.25." not in version:
-        pytest.fail(f"Go E2E requires the accepted 1.25 family, got {version.strip()!r}")
+    expected_family = os.environ.get("CSK_E2E_GO_FAMILY", "1.25")
+    version_parts = version.strip().split()
+    reported_version = version_parts[2].removeprefix("go") if len(version_parts) >= 3 else ""
+    reported_family = ".".join(reported_version.split(".")[:2])
+    if reported_family != expected_family:
+        pytest.fail(
+            f"Go E2E requires the {expected_family} family, got {version.strip()!r}"
+        )
     monkeypatch.setattr("sys.argv", [str(manager)])
     monkeypatch.setenv("PATH", os.pathsep.join((str(go.parent), os.environ.get("PATH", ""))))
     return manager, go
-

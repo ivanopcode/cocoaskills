@@ -15,6 +15,7 @@ import pytest
 from conftest import make_project, make_skill_repo, run, write_skillfile
 
 from csk import cli, config, git_admission, installer, locking, shims, status
+from csk.builds import toolchain
 from csk.build_repository import LockedCommit
 from csk.sources import _selection_fs
 from csk.sources import diagnostics as source_diagnostics
@@ -29,6 +30,25 @@ def test_cli_version(capsys):
     out = capsys.readouterr().out
     assert code == 0
     assert out.startswith("csk ")
+
+
+def test_cli_resets_future_go_warning_budget_per_operation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def dispatch(_args: argparse.Namespace) -> int:
+        toolchain._warn_untested_go_family("1.28", Path("/fake/go"))
+        toolchain._warn_untested_go_family("1.28", Path("/fake/go"))
+        return cli.EXIT_OK
+
+    monkeypatch.setattr(cli, "_dispatch", dispatch)
+
+    assert cli.main(["init"]) == cli.EXIT_OK
+    assert cli.main(["init"]) == cli.EXIT_OK
+
+    warning = capsys.readouterr().err
+    assert warning.count("untested_go_family") == 2
+    assert warning.count(os.fspath(Path("/fake/go"))) == 2
 
 
 def test_cli_shell_init_install_writes_atomic_cache(monkeypatch, tmp_path, capsys):
@@ -250,6 +270,116 @@ def test_cli_install_dot_uses_current_checkout_without_saving_config(monkeypatch
     assert loaded.projects == {}
     assert "demo-ios-task-4242-" in out
     assert (project / ".agents" / "skills" / "skill-a" / "SKILL.md").exists()
+
+
+@pytest.mark.parametrize(
+    "policy_source",
+    ["config", "environment"],
+    ids=["config-refuse", "environment-refuse"],
+)
+def test_cli_project_install_refuses_future_go_family_under_operator_policy(
+    monkeypatch,
+    tmp_path,
+    csk_home,
+    skills_root,
+    capsys,
+    policy_source: str,
+):
+    host = toolchain._native_host()
+    go_root = tmp_path / "go1.28"
+    go_bin = go_root / "bin"
+    go_bin.mkdir(parents=True)
+    go_name = "go.exe" if host.windows else "go"
+    if host.windows:
+        header = b"MZ\x90\x00\x03\x00\x00\x00"
+    elif host.goos == "darwin":
+        header = b"\xcf\xfa\xed\xfe\x07\x00\x00\x01"
+    else:
+        header = b"\x7fELF\x02\x01\x01\x00"
+    (go_bin / go_name).write_bytes(header + b"fake-go-1.28")
+    (go_bin / go_name).chmod(0o755)
+    (go_root / "VERSION").write_text("go1.28.0\n", encoding="utf-8")
+
+    probe_calls: list[tuple[str, ...]] = []
+    version = f"go version go1.28.0 {host.goos}/{host.goarch}\n".encode()
+
+    class FakeGoProbe:
+        def run(self, argv, **_kwargs):
+            arguments = argv[1:]
+            probe_calls.append(arguments)
+            if arguments == ("version",):
+                return toolchain.ProbeResult(stdout=version)
+            return toolchain.ProbeResult()
+
+    monkeypatch.setattr(toolchain, "SubprocessProbeRunner", FakeGoProbe)
+    monkeypatch.setenv(
+        "PATH",
+        os.pathsep.join((str(go_bin), os.environ.get("PATH", ""))),
+    )
+
+    make_skill_repo(
+        skills_root,
+        "skill-build",
+        {
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 6,
+                    "build_roots": ["build"],
+                    "commands": {
+                        "tool": {
+                            "type": "build",
+                            "driver": "go-v1",
+                            "source_dir": "build/cmd/tool",
+                        }
+                    },
+                    "capabilities": {},
+                }
+            ),
+            "build/go.mod": "module example.com/tool\n\ngo 1.23\n",
+            "build/cmd/tool/main.go": "package main\n\nfunc main() {}\n",
+        },
+        tag="v1",
+    )
+    project = make_project(tmp_path)
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "skills": [{"name": "skill-build", "tag": "v1"}],
+        },
+    )
+    cfg_path = csk_home / "config.json"
+    configured_policy = "refuse" if policy_source == "config" else "warn"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "projects": {},
+                "builds": {"go_future_families": configured_policy},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+    if policy_source == "environment":
+        monkeypatch.setenv("CSK_GO_FUTURE_FAMILIES", "refuse")
+    else:
+        monkeypatch.delenv("CSK_GO_FUTURE_FAMILIES", raising=False)
+    monkeypatch.chdir(project)
+
+    code = cli.main(["install", "."])
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+
+    assert code == cli.EXIT_PARTIAL_FAIL
+    assert "unsupported_go_family" in output
+    assert "go1.28.0" in output
+    assert str((go_bin / go_name).resolve()) in output
+    assert "untested_go_family" not in output
+    assert ("version",) in probe_calls
+    assert not any(call and call[0] == "env" for call in probe_calls)
+    assert not (project / ".agents").exists()
 
 
 def test_cli_install_tilde_path_uses_checkout_without_saving_config(monkeypatch, tmp_path, csk_home, skills_root, capsys):

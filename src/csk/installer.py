@@ -767,6 +767,9 @@ def _install_project_once(
                     build_providers,
                     manager_home=config.path.parent,
                     operator_search_path=operator_search_path,
+                    go_future_families=config_module.resolve_go_future_families(
+                        config.builds
+                    ),
                     forbidden_roots=(
                         project.path,
                         config.skills_root,
@@ -2032,6 +2035,9 @@ def _publish_external_builds(
                     )
                     if path.exists()
                 ),
+                go_future_families=config_module.resolve_go_future_families(
+                    config.builds
+                ),
             )
         )
     )
@@ -2728,6 +2734,9 @@ def _build_private_misses(
                 private_base=private_base,
                 operator_search_path=operator_search_path,
                 forbidden_roots=forbidden,
+                go_future_families=config_module.resolve_go_future_families(
+                    config.builds
+                ),
             )
         )
     )

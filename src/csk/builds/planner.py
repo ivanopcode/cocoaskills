@@ -320,6 +320,7 @@ def plan_builds(
     *,
     manager_home: Path,
     operator_search_path: toolchain.OperatorSearchPath,
+    go_future_families: str = "warn",
     forbidden_roots: Sequence[Path] = (),
     cache_backend: cache.BuildCacheBackend | None = None,
     establish_toolchain: ToolchainFactory | None = None,
@@ -384,6 +385,7 @@ def plan_builds(
             forbidden_roots=forbidden_roots,
             cache_backend=cache_backend,
             establish_toolchain=establish_toolchain,
+            go_future_families=go_future_families,
             read_only_preflight=read_only_preflight,
         )
         after = _capture_generation(generation_probe)
@@ -406,6 +408,7 @@ def _plan_once(
     forbidden_roots: Sequence[Path],
     cache_backend: cache.BuildCacheBackend | None,
     establish_toolchain: ToolchainFactory | None,
+    go_future_families: str,
     read_only_preflight: bool,
 ) -> tuple[BuildPlan, ...]:
     if not providers:
@@ -438,6 +441,7 @@ def _plan_once(
                 private_base=home,
                 operator_search_path=operator_search_path,
                 forbidden_roots=forbidden,
+                go_future_families=go_future_families,
             )
         )
     plans: list[BuildPlan] = []
@@ -446,6 +450,7 @@ def _plan_once(
             private_base=Path(private),
             operator_search_path=operator_search_path,
             forbidden_roots=forbidden,
+            go_future_families=go_future_families,
         )
         with establish(config) as session:
             for provider in providers:

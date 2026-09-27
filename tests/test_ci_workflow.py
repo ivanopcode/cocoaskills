@@ -424,6 +424,48 @@ def test_main_lane_preserves_full_platform_coverage_and_go_evidence() -> None:
     assert "Upload accepted Go E2E evidence" in go_e2e
 
 
+def test_go_qualification_lanes_pin_each_family_across_all_platforms() -> None:
+    workflow = yaml.safe_load(_workflow())
+    assert isinstance(workflow, dict)
+    jobs = workflow["jobs"]
+    expected_go = [
+        {"version": "1.25.5", "family": "1.25"},
+        {"version": "1.26.8", "family": "1.26"},
+        {"version": "1.27.1", "family": "1.27"},
+    ]
+
+    for job_id in ("fast_go_e2e", "merge_go_e2e"):
+        job = jobs[job_id]
+        assert job["strategy"]["matrix"]["os"] == [
+            "ubuntu-latest",
+            "macos-latest",
+            "windows-latest",
+        ]
+        assert job["strategy"]["matrix"]["go"] == expected_go
+        assert job["env"]["CSK_E2E_GO_FAMILY"] == "${{ matrix.go.family }}"
+        setup = next(step for step in job["steps"] if step.get("uses") == "actions/setup-go@v7")
+        assert setup["with"]["go-version"] == "${{ matrix.go.version }}"
+        assert any(
+            step.get("name") == "Run Go v1 vector suite"
+            and "tests/test_builds_go_v1.py" in step.get("run", "")
+            for step in job["steps"]
+        )
+        if job_id == "fast_go_e2e":
+            assert any(
+                "go-e2e-ubuntu-smoke-nodeids.txt" in step.get("run", "")
+                for step in job["steps"]
+            )
+            assert any(
+                "go-e2e-native-smoke-nodeids.txt" in step.get("run", "")
+                for step in job["steps"]
+            )
+        else:
+            assert any(
+                "tests/test_go_build_e2e.py" in step.get("run", "")
+                for step in job["steps"]
+            )
+
+
 def test_windows_protocol_shards_are_static_bounded_and_fail_closed() -> None:
     protocol = _job(_workflow(), "merge_protocol")
     expected_timeouts = {

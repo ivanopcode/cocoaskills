@@ -34,7 +34,15 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from .. import adapters, build_repository_pipeline, closure, git_admission, git_ops, hashing
+from .. import (
+    adapters,
+    build_repository_pipeline,
+    closure,
+    config as config_module,
+    git_admission,
+    git_ops,
+    hashing,
+)
 from .. import identifiers, install_marker, locale, locking, manifest, shims
 from ..source_identity import canonical_source_identity
 from ..build_repository import (
@@ -4256,6 +4264,9 @@ def _plan_and_publish_schema2(
             providers,
             home=home,
             operator_search_path=operator_search_path,
+            go_future_families=config_module.resolve_go_future_families(
+                config.builds
+            ),
             forbidden_roots=(
                 project_path,
                 config.skills_root,
@@ -4902,6 +4913,7 @@ def plan_schema2_local_builds(
     *,
     home: Path,
     operator_search_path: OperatorSearchPath | None,
+    go_future_families: str,
     forbidden_roots: tuple[Path, ...],
     cache_backend: build_cache.BuildCacheBackend,
     occupied: Mapping[str, str],
@@ -4933,6 +4945,7 @@ def plan_schema2_local_builds(
             providers,
             manager_home=home,
             operator_search_path=operator_search_path,
+            go_future_families=go_future_families,
             forbidden_roots=forbidden_roots,
             cache_backend=cache_backend,
             audit=audit,
@@ -5286,6 +5299,9 @@ def reconstruct_schema2_local_builds(
             providers,
             home=home,
             operator_search_path=build_toolchain.capture_operator_search_path(),
+            go_future_families=config_module.resolve_go_future_families(
+                config.builds
+            ),
             forbidden_roots=(
                 (project_path, config.skills_root, source_root)
                 if source_root is not None

@@ -30,6 +30,10 @@ PATH="$(go env GOROOT)/bin:$PATH" csk install
 
 Переменная `PATH` с приоритетом `GOROOT/bin` позволяет инсталлятору валидировать тулчейн и успешно собрать команду.
 
+## go-v1 unsupported_go_family
+
+Сообщение называет обнаруженную версию, путь к Go, квалифицированные семейства и содержит строку `remediation:`. Укажите Go 1.25–1.27 (или новее) первым в `PATH`, например `go = "1.27"` в проектном `.mise.toml` или установите Go командой `brew install go`. Семейства новее 1.27 принимаются с предупреждением по умолчанию; для строгого отказа задайте `builds.go_future_families: "refuse"` в `~/.cocoaskills/config.json` либо `CSK_GO_FUTURE_FAMILIES=refuse`.
+
 ## build_repository_ssh_credential_missing
 
 Для приватного SSH-репозитория сборки не выбраны креды. При наличии интерактивного TTY csk выводит меню обнаруженных кандидатов; без TTY установка завершается ошибкой `build_repository_ssh_credential_missing`.

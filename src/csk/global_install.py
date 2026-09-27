@@ -13,6 +13,7 @@ from typing import Any
 from . import (
     adapters,
     closure,
+    config as config_module,
     consumers,
     dev_substitutions,
     env_files,
@@ -517,6 +518,9 @@ def _install_once(
                     build_providers,
                     manager_home=csk_home,
                     operator_search_path=operator_search_path,
+                    go_future_families=config_module.resolve_go_future_families(
+                        config.builds
+                    ),
                     forbidden_roots=(
                         global_root(csk_home),
                         config.skills_root,

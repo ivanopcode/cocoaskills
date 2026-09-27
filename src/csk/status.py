@@ -11,6 +11,7 @@ from typing import Any
 from . import (
     closure,
     build_repository_pipeline,
+    config as config_module,
     dev_substitutions,
     git_ops,
     hashing,
@@ -468,6 +469,9 @@ def _collect_resolved_scope(
                 plannable_providers,
                 manager_home=csk_home,
                 operator_search_path=operator_path,
+                go_future_families=config_module.resolve_go_future_families(
+                    config.builds
+                ),
                 forbidden_roots=(
                     path,
                     config.skills_root,

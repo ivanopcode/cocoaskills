@@ -25,3 +25,15 @@ Strict configured-Git agreement remains available as an explicit opt-in
 (`parse_lock(..., strict=True)`) for write-path validation only. A stricter
 peer can consume csk-produced locks; a csk reader can consume this peer's
 legacy lock without rewriting it during a read.
+
+## Go families newer than the newest qualified family
+
+Should curator-spec `protocol/core.md` §4.2.1 permit a manager to accept a Go
+release family newer than its newest qualified family with a warning, while
+retaining the full `go-v1` lockdown, toolchain identity, and per-toolchain
+rebuild rules? The current MUST ties admission to a tested family. `csk`
+proposes changing that rule to MAY for newer families, provided the manager
+keeps every existing probe and identity check and emits a stable warning. The
+manager still refuses families below its supported floor and untested
+families below the newest qualified one. The amendment proposal is filed as
+[curator-spec issue #101](https://github.com/relux-works/curator-spec/issues/101).
