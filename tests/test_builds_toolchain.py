@@ -201,6 +201,15 @@ def _assert_code(expected: str, raised: pytest.ExceptionInfo[toolchain.Toolchain
     assert raised.value.code == expected
 
 
+def _assert_go_path_in_detail(
+    config: toolchain.ToolchainConfig,
+    detail: str,
+) -> None:
+    executable = "go.exe" if os.name == "nt" else "go"
+    expected = (Path(config.operator_search_path.entries[0]) / executable).resolve()
+    assert expected.as_posix() in detail.replace("\\", "/")
+
+
 def test_establish_uses_only_exact_bootstrap_argv_and_clean_environment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -312,6 +321,10 @@ def test_probe_returns_frozen_snapshot_and_removes_private_root(tmp_path: Path):
         snapshot.environment["GOFLAGS"] = "-tags=mutated"  # type: ignore[index]
 
 
+def test_tested_go_families_match_the_qualified_release_set() -> None:
+    assert toolchain.TESTED_GO_FAMILIES == ("1.25", "1.26", "1.27")
+
+
 @pytest.mark.parametrize(
     ("family", "version"),
     [("1.26", "1.26.8"), ("1.27", "1.27.1")],
@@ -319,15 +332,19 @@ def test_probe_returns_frozen_snapshot_and_removes_private_root(tmp_path: Path):
 )
 def test_qualified_new_go_toolchains_are_accepted_under_the_full_lockdown(
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
     family: str,
     version: str,
 ):
     host = toolchain._native_host()
     output = f"go version go{version} {host.goos}/{host.goarch}\n"
     config, runner, _, private_base = _setup(tmp_path, version=output)
+    config = replace(config, go_future_families="refuse")
 
     snapshot = toolchain.probe_toolchain(config)
+    warning = capsys.readouterr().err
 
+    assert "untested_go_family" not in warning
     assert snapshot.toolchain.go_version == output.strip()
     assert snapshot.toolchain.go_version.split()[2].startswith(f"go{family}.")
     assert snapshot.environment["GOTOOLCHAIN"] == "local"
@@ -342,7 +359,10 @@ def test_qualified_new_go_toolchains_are_accepted_under_the_full_lockdown(
     assert not list(private_base.glob(".csk-go-probe-*"))
 
 
-@pytest.mark.parametrize("family,version", [("1.28", "1.28.0"), ("2.0", "2.0.0")])
+@pytest.mark.parametrize(
+    "family,version",
+    [("1.28", "1.28.0"), ("1.100", "1.100.0"), ("2.0", "2.0.0")],
+)
 def test_newer_go_family_is_accepted_once_with_full_lockdown_warning(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -401,7 +421,7 @@ def test_newer_go_family_can_be_refused_by_operator_policy(
 
     _assert_code("unsupported_go_family", raised)
     assert "go1.28.0" in raised.value.detail
-    assert str(config.operator_search_path.entries[0] + "/go") in raised.value.detail
+    _assert_go_path_in_detail(config, raised.value.detail)
     assert ", ".join(toolchain.TESTED_GO_FAMILIES) in raised.value.detail
     assert "remediation:" in raised.value.detail
     newest_tested = max(toolchain.TESTED_GO_FAMILIES, key=toolchain._go_family_key)
@@ -444,7 +464,7 @@ def test_release_family_fails_closed(
     _assert_code(expected_code, raised)
     if expected_code == "unsupported_go_family":
         assert rendered.split()[2] in raised.value.detail
-        assert str(config.operator_search_path.entries[0] + "/go") in raised.value.detail
+        _assert_go_path_in_detail(config, raised.value.detail)
         assert ", ".join(toolchain.TESTED_GO_FAMILIES) in raised.value.detail
         assert "remediation:" in raised.value.detail
     assert not list(private_base.glob(".csk-go-probe-*"))

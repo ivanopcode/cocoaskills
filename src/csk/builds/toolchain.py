@@ -32,7 +32,7 @@ from typing import BinaryIO, Final, Protocol
 
 TOOLCHAIN_ALGORITHM: Final = "curator-go-toolchain-v1"
 GO_RELPATH: Final = "bin/go"
-TESTED_GO_FAMILIES: Final[tuple[str, ...]] = ("1.25",)
+TESTED_GO_FAMILIES: Final[tuple[str, ...]] = ("1.25", "1.26", "1.27")
 _MINIMUM_GO_FAMILY: Final = (1, 23)
 
 GO_ENV_FIELDS: Final[tuple[str, ...]] = (

@@ -48,7 +48,7 @@ def test_cli_resets_future_go_warning_budget_per_operation(
 
     warning = capsys.readouterr().err
     assert warning.count("untested_go_family") == 2
-    assert warning.count("/fake/go") == 2
+    assert warning.count(os.fspath(Path("/fake/go"))) == 2
 
 
 def test_cli_shell_init_install_writes_atomic_cache(monkeypatch, tmp_path, capsys):
