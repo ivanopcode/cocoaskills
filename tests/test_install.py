@@ -246,11 +246,16 @@ def test_install_path_source_from_claude_worktree_succeeds(
                 {
                     "schema_version": 1,
                     "commands": {
-                        "tool": {"type": "script", "unix_path": "scripts/tool"}
+                        "tool": {
+                            "type": "script",
+                            "unix_path": "scripts/tool",
+                            "win_path": "scripts/tool.cmd",
+                        }
                     },
                 }
             ),
             "skills/script-skill/scripts/tool": "#!/bin/sh\nprintf 'tool\\n'\n",
+            "skills/script-skill/scripts/tool.cmd": "@echo off\r\necho tool\r\n",
         },
     )
     write_skillfile(
@@ -304,6 +309,27 @@ def _make_schema2_claude_worktree(tmp_path: Path, *, outer_name: str = "outer") 
     return worktree
 
 
+def _write_gitfile(gitfile: Path, content: bytes) -> None:
+    """Make a Git-created pointer writable before tests replace its bytes."""
+    gitfile.chmod(gitfile.stat().st_mode | stat.S_IWRITE)
+    gitfile.write_bytes(content)
+
+
+def test_install_unchanged_gitfile_from_real_claude_worktree_succeeds(
+    tmp_path, skills_root, csk_home
+):
+    """A real Git pointer works for install without the test rewriting it."""
+    worktree = _make_schema2_claude_worktree(tmp_path)
+    gitfile = worktree / ".git"
+    pointer_before = gitfile.read_bytes()
+
+    result = _run_csk_install_cli(worktree, skills_root, csk_home)
+
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert (worktree / ".claude/skills/seed/.csk-install.json").is_file()
+    assert gitfile.read_bytes() == pointer_before
+
+
 @pytest.mark.parametrize(
     ("variant", "outer_name"),
     [
@@ -329,13 +355,13 @@ def test_real_gitfile_supported_layout(
         if not target.is_absolute():
             target = gitfile.parent / target
         relative_target = os.path.relpath(target, gitfile.parent)
-        gitfile.write_bytes(b"gitdir: " + os.fsencode(relative_target) + b"\n")
+        _write_gitfile(gitfile, b"gitdir: " + os.fsencode(relative_target) + b"\n")
     elif variant == "crlf":
-        gitfile.write_bytes(gitfile.read_bytes().rstrip(b"\r\n") + b"\r\n")
+        _write_gitfile(gitfile, gitfile.read_bytes().rstrip(b"\r\n") + b"\r\n")
     elif variant == "extra-newline":
-        gitfile.write_bytes(gitfile.read_bytes() + b"\n")
+        _write_gitfile(gitfile, gitfile.read_bytes() + b"\n")
     elif variant == "extra-crlf":
-        gitfile.write_bytes(gitfile.read_bytes() + b"\r\n")
+        _write_gitfile(gitfile, gitfile.read_bytes() + b"\r\n")
     elif variant == "unicode-line-separator":
         assert "\u2028" in str(worktree)
         assert os.fsencode("\u2028") in gitfile.read_bytes()
@@ -370,11 +396,11 @@ def test_malformed_worktree_gitfile_refuses(
     target_bytes = os.fsencode(target.resolve(strict=True))
 
     if variant == "missing-prefix":
-        gitfile.write_bytes(target_bytes + b"\n")
+        _write_gitfile(gitfile, target_bytes + b"\n")
     elif variant == "empty-path":
-        gitfile.write_bytes(b"gitdir: \n")
+        _write_gitfile(gitfile, b"gitdir: \n")
     else:
-        gitfile.write_bytes(b"gitdir: " + target_bytes + b"\0ignored\n")
+        _write_gitfile(gitfile, b"gitdir: " + target_bytes + b"\0ignored\n")
 
     with pytest.raises(source_errors.SourceError) as excinfo:
         resolve_individual(
@@ -399,11 +425,16 @@ def test_install_legacy_skillfile_from_claude_worktree_succeeds(
                 {
                     "schema_version": 1,
                     "commands": {
-                        "tool": {"type": "script", "unix_path": "scripts/tool"}
+                        "tool": {
+                            "type": "script",
+                            "unix_path": "scripts/tool",
+                            "win_path": "scripts/tool.cmd",
+                        }
                     },
                 }
             ),
             "scripts/tool": "#!/bin/sh\nprintf 'tool\\n'\n",
+            "scripts/tool.cmd": "@echo off\r\necho tool\r\n",
         },
         tag="v1",
     )
@@ -422,6 +453,8 @@ def test_install_legacy_skillfile_from_claude_worktree_succeeds(
 
     result = _run_csk_install_cli(worktree, skills_root, csk_home)
 
+    # This legacy skill may emit an advisory command-resolution warning on stdout.
+    # Success is established by the exit code and installed marker, not silence.
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
     assert (worktree / ".claude/skills/legacy-skill/.csk-install.json").is_file()
 
