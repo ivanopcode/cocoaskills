@@ -28,7 +28,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Callable, ContextManager, Final, Iterator, cast
 
-from .. import identifiers
+from .. import adapters, identifiers
 from . import _selection_fs_windows
 from .errors import (
     CODE_MEMBER_INVALID,
@@ -857,6 +857,7 @@ class SelectionSession:
         home: Path,
         *,
         managed_names: frozenset[str] = frozenset(),
+        owner_project_root: Path | None = None,
         preflight: PreflightRequest = PreflightRequest(),
     ) -> "SelectionSession":
         """Run Phase A, then start Phase B with a fresh root descriptor."""
@@ -890,6 +891,7 @@ class SelectionSession:
             source_root,
             home,
             managed_names,
+            owner_project_root=owner_project_root,
             preflight=preflight,
         )
         confined_fd: int | None = None
@@ -1933,6 +1935,7 @@ def _prepare_preflight(
     home: Path,
     managed_names: frozenset[str],
     *,
+    owner_project_root: Path | None = None,
     preflight: PreflightRequest,
 ) -> PreflightState:
     """Resolve all outside identity questions before the Phase-B transition.
@@ -1944,9 +1947,24 @@ def _prepare_preflight(
     """
 
     home_directory = _probe_optional_directory(home)
+    owner_project_directory: Directory | None = None
+    owner_managed_output_identities: dict[tuple[int, int], str] = {}
     preflight_fd: int | None = None
     phase_a_state: _PhaseAState | None = None
     try:
+        if owner_project_root is not None:
+            owner_project_directory = _probe_optional_directory(
+                owner_project_root, label="owning project"
+            )
+            if owner_project_directory is None:
+                raise SourceError(
+                    CODE_OUTPUT_OVERLAP,
+                    f"{owner_project_root}: owning project boundary is unavailable",
+                )
+            owner_managed_output_identities = _probe_owner_managed_outputs(
+                owner_project_directory,
+                owner_project_root,
+            )
         preflight_fd = _open_root(source_root, phase="a")
         preflight_stat = _fstat(
             preflight_fd,
@@ -1961,7 +1979,7 @@ def _prepare_preflight(
             )
         root_identity = _identity_from_stat(preflight_stat)
         root_display = Path(os.path.abspath(os.fspath(source_root)))
-        managed_root_identities: dict[tuple[int, int], str] = {}
+        managed_root_identities = dict(owner_managed_output_identities)
         root_inside_managed = _root_managed_ancestor(
             preflight_fd,
             root_identity,
@@ -1969,6 +1987,12 @@ def _prepare_preflight(
             source_root=source_root,
             context=f"Source root {source_root} and managed outputs",
             managed_root_identities=managed_root_identities,
+            owner_project_identity=(
+                None
+                if owner_project_directory is None
+                else owner_project_directory.identity
+            ),
+            owner_managed_output_identities=owner_managed_output_identities,
         )
         home_identity = None if home_directory is None else home_directory.identity
         home_contains_root = False
@@ -2032,6 +2056,8 @@ def _prepare_preflight(
             _close_quietly(preflight_fd)
         if home_directory is not None:
             _close_quietly(home_directory.fd)
+        if owner_project_directory is not None:
+            _close_quietly(owner_project_directory.fd)
 
 
 @dataclass
@@ -2818,6 +2844,238 @@ def _root_has_ancestor(
             _close_quietly(fd)
 
 
+def _probe_owner_managed_outputs(
+    owner_project: Directory,
+    owner_project_root: Path,
+) -> dict[tuple[int, int], str]:
+    """Resolve this project's adapter outputs to physical identities in Phase A."""
+
+    targets = {
+        Path(relative).parts
+        for relative in (
+            *adapters.AGENT_PATHS.values(),
+            adapters.NATIVE_DISCOVERY_HOME_PATH,
+        )
+    }
+    targets.add((".git",))
+    targets.update(
+        components[:length]
+        for components in tuple(targets)
+        for length in range(1, len(components))
+    )
+    identities: dict[tuple[int, int], str] = {}
+    for components in sorted(
+        targets,
+        key=lambda parts: "/".join(parts).encode("utf-8"),
+    ):
+        output_name = "/".join(components)
+        parent_fd = owner_project.fd
+        parent_path = owner_project_root
+        opened: list[int] = []
+        identity: tuple[int, int] | None = None
+        try:
+            for component in components:
+                try:
+                    observed_stat = _stat_child(
+                        parent_fd,
+                        component,
+                        parent_path=parent_path,
+                        follow_symlinks=True,
+                    )
+                except OSError as exc:
+                    if exc.errno == errno.ENOENT:
+                        break
+                    raise SourceError(
+                        CODE_OUTPUT_OVERLAP,
+                        f"{owner_project_root}: managed output {output_name!r} "
+                        f"boundary undetermined: {exc}",
+                    ) from exc
+                except _FS_ERRORS as exc:
+                    raise SourceError(
+                        CODE_OUTPUT_OVERLAP,
+                        f"{owner_project_root}: managed output {output_name!r} "
+                        f"boundary undetermined: {exc}",
+                    ) from exc
+                if not stat.S_ISDIR(observed_stat.st_mode):
+                    break
+                try:
+                    child_fd = _open_descriptor(
+                        component,
+                        _directory_flags(nofollow=False),
+                        dir_fd=parent_fd,
+                    )
+                except _FS_ERRORS as exc:
+                    raise SourceError(
+                        CODE_OUTPUT_OVERLAP,
+                        f"{owner_project_root}: managed output {output_name!r} "
+                        f"boundary undetermined: {exc}",
+                    ) from exc
+                opened.append(child_fd)
+                opened_stat = _fstat(
+                    child_fd,
+                    code=CODE_OUTPUT_OVERLAP,
+                    context=f"Owning project managed output {output_name}",
+                    path=output_name,
+                )
+                opened_identity = _identity_from_stat(opened_stat)
+                if opened_identity != _identity_from_stat(observed_stat):
+                    raise SourceError(
+                        CODE_OUTPUT_OVERLAP,
+                        f"{owner_project_root}: managed output {output_name!r} "
+                        "changed during preflight",
+                    )
+                identity = opened_identity
+                parent_fd = child_fd
+                parent_path = parent_path / component
+            else:
+                if identity is not None:
+                    identities.setdefault(identity, output_name)
+        finally:
+            for fd in opened:
+                _close_quietly(fd)
+    git_metadata_identity = _probe_owner_gitfile_target(
+        owner_project, owner_project_root
+    )
+    if git_metadata_identity is not None:
+        identities.setdefault(git_metadata_identity, ".git")
+    return identities
+
+
+def _probe_owner_gitfile_target(
+    owner_project: Directory,
+    owner_project_root: Path,
+) -> tuple[int, int] | None:
+    """Resolve a worktree .git file's target directory identity in Phase A."""
+
+    try:
+        entry = _stat_child(
+            owner_project.fd,
+            ".git",
+            parent_path=owner_project_root,
+            follow_symlinks=True,
+        )
+    except OSError as exc:
+        if exc.errno == errno.ENOENT:
+            return None
+        raise SourceError(
+            CODE_OUTPUT_OVERLAP,
+            f"{owner_project_root}: Git metadata boundary undetermined: {exc}",
+        ) from exc
+    except _FS_ERRORS as exc:
+        raise SourceError(
+            CODE_OUTPUT_OVERLAP,
+            f"{owner_project_root}: Git metadata boundary undetermined: {exc}",
+        ) from exc
+    if not stat.S_ISREG(entry.st_mode):
+        return None
+
+    fd: int | None = None
+    target_directory: Directory | None = None
+    try:
+        fd = _open_descriptor(
+            ".git",
+            _file_flags(nofollow=False),
+            dir_fd=owner_project.fd,
+        )
+        before = _fstat(
+            fd,
+            code=CODE_OUTPUT_OVERLAP,
+            context=f"Owning project Git metadata {owner_project_root}",
+            path=".git",
+        )
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or _identity_from_stat(before) != _identity_from_stat(entry)
+        ):
+            raise SourceError(
+                CODE_OUTPUT_OVERLAP,
+                f"{owner_project_root}: Git metadata changed during preflight",
+            )
+
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = _read_descriptor(
+                fd, 4096, parent_fd=owner_project.fd, name=".git"
+            )
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > 65536:
+                raise SourceError(
+                    CODE_OUTPUT_OVERLAP,
+                    f"{owner_project_root}: Git metadata pointer is too large",
+                )
+            chunks.append(chunk)
+        after = _fstat(
+            fd,
+            code=CODE_OUTPUT_OVERLAP,
+            context=f"Owning project Git metadata {owner_project_root}",
+            path=".git",
+        )
+        if (
+            _identity_from_stat(before) != _identity_from_stat(after)
+            or before.st_size != after.st_size
+            or getattr(before, "st_mtime_ns", None)
+            != getattr(after, "st_mtime_ns", None)
+            or getattr(before, "st_ctime_ns", None)
+            != getattr(after, "st_ctime_ns", None)
+        ):
+            raise SourceError(
+                CODE_OUTPUT_OVERLAP,
+                f"{owner_project_root}: Git metadata changed during preflight",
+            )
+        pointer = b"".join(chunks).rstrip(b"\n\r")
+        prefix = b"gitdir: "
+        if not pointer.startswith(prefix):
+            raise SourceError(
+                CODE_OUTPUT_OVERLAP,
+                f"{owner_project_root}: Git metadata pointer is malformed",
+            )
+        target_bytes = pointer[len(prefix) :]
+        if not target_bytes:
+            raise SourceError(
+                CODE_OUTPUT_OVERLAP,
+                f"{owner_project_root}: Git metadata pointer has no target",
+            )
+        if b"\0" in target_bytes:
+            raise SourceError(
+                CODE_OUTPUT_OVERLAP,
+                f"{owner_project_root}: Git metadata pointer is malformed",
+            )
+        try:
+            target_text = os.fsdecode(target_bytes)
+        except UnicodeError as exc:
+            raise SourceError(
+                CODE_OUTPUT_OVERLAP,
+                f"{owner_project_root}: Git metadata pointer path cannot be decoded",
+            ) from exc
+        target_path = Path(target_text)
+        if not target_path.is_absolute():
+            target_path = owner_project_root / target_path
+        target_directory = _probe_optional_directory(
+            target_path, label="owning Git metadata"
+        )
+        if target_directory is None:
+            raise SourceError(
+                CODE_OUTPUT_OVERLAP,
+                f"{owner_project_root}: Git metadata target is unavailable",
+            )
+        return target_directory.identity
+    except SourceError:
+        raise
+    except _FS_ERRORS as exc:
+        raise SourceError(
+            CODE_OUTPUT_OVERLAP,
+            f"{owner_project_root}: Git metadata boundary undetermined: {exc}",
+        ) from exc
+    finally:
+        if fd is not None:
+            _close_quietly(fd)
+        if target_directory is not None:
+            _close_quietly(target_directory.fd)
+
+
 def _root_managed_ancestor(
     root_fd: int,
     root_identity: tuple[int, int],
@@ -2826,6 +3084,8 @@ def _root_managed_ancestor(
     source_root: Path,
     context: str,
     managed_root_identities: dict[tuple[int, int], str] | None = None,
+    owner_project_identity: tuple[int, int] | None = None,
+    owner_managed_output_identities: Mapping[tuple[int, int], str] | None = None,
 ) -> str | None:
     """Find a managed ancestor of the source root by filesystem identity.
 
@@ -2837,15 +3097,25 @@ def _root_managed_ancestor(
     component-string comparison.
     """
 
-    if not managed_names:
+    if not managed_names and not owner_managed_output_identities:
         return None
     temporary: list[int] = []
     current_fd = root_fd
     current_identity = root_identity
     current_path = Path(os.path.abspath(os.fspath(source_root)))
     seen: set[tuple[int, int]] = {root_identity}
+    managed_ancestor: str | None = None
     try:
         while True:
+            if owner_managed_output_identities is not None:
+                owned_output = owner_managed_output_identities.get(current_identity)
+                if owned_output is not None:
+                    return owned_output
+            if (
+                owner_project_identity is not None
+                and current_identity == owner_project_identity
+            ):
+                return managed_ancestor
             try:
                 parent_fd, parent_path = _open_parent_directory(
                     current_fd,
@@ -2897,11 +3167,14 @@ def _root_managed_ancestor(
                             managed_name,
                         )
                     if candidate_identity == current_identity:
-                        return managed_name
+                        if managed_ancestor is None:
+                            managed_ancestor = managed_name
+                        if owner_project_identity is None:
+                            return managed_name
 
             parent_identity = _identity_from_stat(parent_stat)
             if parent_identity == current_identity:
-                return None
+                return managed_ancestor if owner_project_identity is None else None
             if parent_identity in seen:
                 raise SourceError(
                     CODE_OUTPUT_OVERLAP,
@@ -2945,8 +3218,10 @@ def _open_parent_directory(current_fd: int, current_path: Path) -> tuple[int, Pa
             raise
 
 
-def _probe_optional_directory(path: Path) -> Directory | None:
-    """Open an optional boundary; only ENOENT means a fresh absent home."""
+def _probe_optional_directory(
+    path: Path, *, label: str = "csk home"
+) -> Directory | None:
+    """Open an optional boundary; only ENOENT means a fresh absent boundary."""
 
     try:
         fd = _open_descriptor(path, _directory_flags(nofollow=False))
@@ -2966,7 +3241,7 @@ def _probe_optional_directory(path: Path) -> Directory | None:
         value = _fstat(
             fd,
             code=CODE_OUTPUT_OVERLAP,
-            context=f"csk home {path}",
+            context=f"{label} {path}",
             path=os.fspath(path),
         )
         if not stat.S_ISDIR(value.st_mode):

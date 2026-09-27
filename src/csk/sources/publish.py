@@ -101,7 +101,6 @@ from .package_identity import (
     package_identity_sha256,
 )
 from .selection import (
-    SelectedSkill,
     destination_key,
     expand_collection,
     expand_selectors,
@@ -556,7 +555,10 @@ def resolve_schema2_members(
     )
     try:
         selected = expand_selectors(
-            selectors, source_roots, root_inputs_aliases=path_aliases
+            selectors,
+            source_roots,
+            root_inputs_aliases=path_aliases,
+            project_root=project_path,
         )
     except SourceError:
         raise
@@ -705,7 +707,10 @@ def locked_schema2_members(
 
 
 def capture_schema2_members(
-    members: tuple[ResolvedMember, ...], *, home: Path
+    members: tuple[ResolvedMember, ...],
+    *,
+    home: Path,
+    project_root: Path | None = None,
 ) -> dict[str, snapshot.CapturedPackage]:
     """Capture every resolved root member as an immutable snapshot.
 
@@ -725,7 +730,10 @@ def capture_schema2_members(
             )
         try:
             package = snapshot.capture_package_snapshot(
-                member.source_root, member.directory, home=home
+                member.source_root,
+                member.directory,
+                home=home,
+                owner_project_root=project_root,
             )
         except SourceError:
             raise
@@ -765,6 +773,8 @@ def collection_membership(
     selectors: list[skillfile_v2.SkillSelector],
     source_roots: dict[str, Path],
     skip_aliases: frozenset[str] = frozenset(),
+    *,
+    project_root: Path,
 ) -> dict[int, tuple[str, ...]]:
     """Expand every collection selector to its ordered member names.
 
@@ -780,7 +790,11 @@ def collection_membership(
         if selector.from_alias in skip_aliases:
             continue
         try:
-            members = expand_collection(source_roots[selector.from_alias], selector)
+            members = expand_collection(
+                source_roots[selector.from_alias],
+                selector,
+                project_root=project_root,
+            )
         except SourceError:
             raise
         except _FS_ERRORS as exc:
@@ -2877,7 +2891,6 @@ def stage_schema2_desired(
     staged_skills.mkdir(parents=True, exist_ok=True)
     member_by_name = {member.name: member for member in members}
     for name in sorted(captured):
-        member = member_by_name[name]
         frozen_dir = staging_root / "frozen" / name
         materialize_frozen(
             frozen_files[name], frozen_dir, subject=f"Skill {name!r}"
@@ -3223,6 +3236,7 @@ def _capture_locked_member(
     package: PackageIdentity,
     *,
     home: Path,
+    project_root: Path | None = None,
     recovery: modes.LockedGitRecovery | None = None,
     declared_url: str | None = None,
 ) -> tuple[snapshot.CapturedPackage | None, store.StoredSnapshot | None]:
@@ -3281,7 +3295,10 @@ def _capture_locked_member(
             )
         try:
             captured = snapshot.capture_package_snapshot(
-                member.source_root, member.directory, home=home
+                member.source_root,
+                member.directory,
+                home=home,
+                owner_project_root=project_root,
             )
         except SourceError as exc:
             raise SourceError(
@@ -3309,7 +3326,10 @@ def _capture_locked_member(
         )
     try:
         captured = snapshot.capture_package_snapshot(
-            member.source_root, member.directory, home=home
+            member.source_root,
+            member.directory,
+            home=home,
+            owner_project_root=project_root,
         )
     except SourceError:
         return None, stored
@@ -3920,6 +3940,7 @@ def _install_schema2_frozen(
             member,
             package,
             home=home,
+            project_root=project_path,
             recovery=mode.git_recovery,
             declared_url=declared_url,
         )
@@ -4009,12 +4030,16 @@ def _install_schema2_resolving(
         git_resolutions=git_resolutions,
     )
     frozen_membership = collection_membership(
-        selectors, source_roots, git_aliases
+        selectors, source_roots, git_aliases, project_root=project_path
     )
-    raw_captures = capture_schema2_members(members, home=home)
+    raw_captures = capture_schema2_members(
+        members, home=home, project_root=project_path
+    )
     require_membership_unchanged(
         frozen_membership,
-        collection_membership(selectors, source_roots, git_aliases),
+        collection_membership(
+            selectors, source_roots, git_aliases, project_root=project_path
+        ),
     )
     closure_nodes = resolve_source_closure(
         config,
@@ -4373,7 +4398,12 @@ def _plan_and_publish_schema2(
             if frozen_membership is not None:
                 require_membership_unchanged(
                     frozen_membership,
-                    collection_membership(selectors, source_roots, git_aliases),
+                    collection_membership(
+                        selectors,
+                        source_roots,
+                        git_aliases,
+                        project_root=project_path,
+                    ),
                 )
             admitted = collect_admitted_identities(members, git_aliases)
 
@@ -5731,7 +5761,10 @@ def _evaluate_locked_member(
     locked_snapshot = lock_member.package.snapshot
     try:
         captured = snapshot.capture_package_snapshot(
-            source_root, lock_member.directory, home=home
+            source_root,
+            lock_member.directory,
+            home=home,
+            owner_project_root=project_path,
         )
     except SourceError as exc:
         return MemberVerdict(
@@ -6220,7 +6253,9 @@ def _evaluate_live_outputs(
         pred_files: dict[str, Mapping[str, snapshot.FrozenFile]] = {}
         for member in members:
             package = packages[member.name]
-            raw, served = _capture_locked_member(member, package, home=home)
+            raw, served = _capture_locked_member(
+                member, package, home=home, project_root=project_path
+            )
             captured_members[member.name] = CapturedMember(
                 member=member,
                 captured=raw,

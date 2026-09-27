@@ -1,5 +1,47 @@
 # Logbook
 
+## 2026-09-27 - BUG-260927-ucxvpy: preserve owned outputs through aliases
+
+The revision-1 owner-root stop fixed nested Claude worktrees but still admitted
+project-owned `.claude` outputs when a symlink moved the source subtree outside
+the owner's physical ancestry. Phase A now resolves every adapter output and
+its managed ancestor under the opened project directory, then carries those
+physical identities into source-root and selected-member boundary checks.
+Both reviewer symlink cases fail on the old behavior and refuse through the
+real CLI after the fix. The alias-identity narrowing mutant was killed while
+the direct managed-source control continued to refuse.
+
+## 2026-09-27 - BUG-260927-ucxvpy: bind Git metadata and collection rechecks to the owner
+
+Revision 2 still admitted a source below an alias to the project's `.git`:
+Phase A recorded adapter targets but omitted the main Git directory and the
+target named by a worktree `.git` file. It also re-expanded collection
+selectors during snapshot and publish checks without the owning project root,
+so `<repo>/.claude/worktrees/<name>` passed individual selection but failed
+collection selection. Phase A now freezes both `.git` forms, and all three
+collection membership walks require the project root and delegate to the same
+owner-aware selection session boundary. Real CLI regressions and a trace seam
+cover both paths; the rev-3 results resource records pre-fix failures, killed
+narrowing mutants, validation commands and bounds.
+
+## 2026-09-27 - BUG-260927-ucxvpy: install from a Claude worktree
+
+ROOT CAUSE: source selection and snapshot capture walked physical ancestors
+past the owning project root. In `<repo>/.claude/worktrees/<name>`, that made
+the outer `.claude` directory look like the project's managed install target
+and rejected a schema-2 `path` source.
+
+FIX: pass the owning project root into selector resolution and package snapshot
+capture, and stop the managed-ancestor check at that root's filesystem
+identity. A source under the project's own `.claude/skills` still refuses.
+
+EVIDENCE: schema-2 install failed before the fix with
+`source_output_overlap` and now installs and reports locked status as current;
+the nested schema-1 legacy install remains successful. The final regression
+fails against the pre-fix behavior, and a narrowing mutant that admits `.claude`
+is killed by the managed-source control. Suite counts and exact command exit
+codes are in `BUG-260927-ucxvpy_results.md`; the candidate remains uncommitted.
+
 ## 2026-09-25 - TASK-260925-38kn57: accepted skillfile-sources corpus pin
 
 The source conformance pin and CI checkout paths now target curator-spec

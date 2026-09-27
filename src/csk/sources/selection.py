@@ -335,12 +335,14 @@ def _selector_components(directory: str, *, context: str) -> list[str]:
 def _open_session(
     source_root: Path,
     *,
+    project_root: Path | None = None,
     preflight: PreflightRequest = PreflightRequest(),
 ) -> SelectionSession:
     return SelectionSession.open(
         source_root,
         _configured_csk_home(),
         managed_names=PRUNED_CHILD_NAMES,
+        owner_project_root=project_root,
         preflight=preflight,
     )
 
@@ -401,7 +403,9 @@ def _validate_selected_member(
     return skill_name, snapshot, requirements
 
 
-def resolve_selector_directory(source_root: Path, directory: str) -> Path:
+def resolve_selector_directory(
+    source_root: Path, directory: str, *, project_root: Path | None = None
+) -> Path:
     """Resolve one selector directory inside the source root.
 
     ``"."`` selects the source root itself. Any other directory must be a
@@ -420,6 +424,7 @@ def resolve_selector_directory(source_root: Path, directory: str) -> Path:
     try:
         session = _open_session(
             source_root,
+            project_root=project_root,
             preflight=PreflightRequest(
                 paths=(
                     PreflightPath(
@@ -479,6 +484,8 @@ def resolve_selector_directory(source_root: Path, directory: str) -> Path:
 def expand_collection(
     source_root: Path,
     selector: CollectionSelector,
+    *,
+    project_root: Path | None = None,
 ) -> list[SelectedSkill]:
     """Expand one collection selector in UTF-8 folder-name byte order.
 
@@ -537,6 +544,7 @@ def expand_collection(
     )
     with _open_session(
         source_root,
+        project_root=project_root,
         preflight=PreflightRequest(
             paths=preflight_paths,
             wildcard_bases=(base_components,) if has_star else (),
@@ -827,6 +835,7 @@ def resolve_individual(
     source_root: Path,
     selector: IndividualSelector,
     *,
+    project_root: Path | None = None,
     policy: RootInputsPolicy | None = None,
     root_inputs_gate: RootInputsGate | None = None,
     root_inputs_aliases: frozenset[str] | None = None,
@@ -863,6 +872,7 @@ def resolve_individual(
     )
     with _open_session(
         source_root,
+        project_root=project_root,
         preflight=PreflightRequest(
             paths=(
                 PreflightPath(
@@ -933,6 +943,7 @@ def expand_selectors(
     policy: RootInputsPolicy | None = None,
     root_inputs_gate: RootInputsGate | None = None,
     root_inputs_aliases: frozenset[str] | None = None,
+    project_root: Path | None = None,
 ) -> list[SelectedSkill]:
     """Expand every selector and validate the whole set before publication.
 
@@ -967,13 +978,16 @@ def expand_selectors(
                 resolve_individual(
                     root,
                     selector,
+                    project_root=project_root,
                     policy=policy,
                     root_inputs_gate=root_inputs_gate,
                     root_inputs_aliases=root_inputs_aliases,
                 )
             )
         else:
-            members.extend(expand_collection(root, selector))
+            members.extend(
+                expand_collection(root, selector, project_root=project_root)
+            )
     _check_installed_name_conflicts(
         [*reserved_names, *(member.name for member in members)],
         context="selection set",
