@@ -954,7 +954,7 @@ def test_the_draft_sources_suite_pin_is_one_immutable_identity() -> None:
     pin = json.loads((CI_CONFIG / "draft-sources-suite.json").read_text(encoding="utf-8"))
     assert set(pin) == {"repository", "revision", "suite_root", "files"}
     assert pin["repository"] == "relux-works/curator-spec"
-    assert pin["revision"] == "574636785c9da22757095ca279e8a9da801156ec"
+    assert pin["revision"] == "23435129ebc4c29e5b7f75ec72a0aa0cd3f16065"
     assert pin["suite_root"] == "conformance/skillfile-sources-v1"
     assert pin["files"] == {
         "index.json": (

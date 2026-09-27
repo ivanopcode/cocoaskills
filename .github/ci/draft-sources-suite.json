@@ -1,6 +1,6 @@
 {
   "repository": "relux-works/curator-spec",
-  "revision": "574636785c9da22757095ca279e8a9da801156ec",
+  "revision": "23435129ebc4c29e5b7f75ec72a0aa0cd3f16065",
   "suite_root": "conformance/skillfile-sources-v1",
   "files": {
     "index.json": "sha256:654707af529bffc5104e92e98d4ab6fb910163b187861152bfd7fa769d852575",

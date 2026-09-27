@@ -72,7 +72,7 @@ The skillfile-sources conformance corpus is pinned in
 `tests/test_draft_sources_conformance.py` via `CSK_DRAFT_SOURCES_SUITE_ROOT`:
 
 - repository: `relux-works/curator-spec`
-- revision: `574636785c9da22757095ca279e8a9da801156ec`
+- revision: `23435129ebc4c29e5b7f75ec72a0aa0cd3f16065` (tag `v1.0.0-rc.13`; the corpus is byte-identical to `5746367`, the curator-spec #96 acceptance commit)
 - suite root: `conformance/skillfile-sources-v1`
 - `index.json`: `sha256:654707af529bffc5104e92e98d4ab6fb910163b187861152bfd7fa769d852575`
   (121 schema cases, both polarities where applicable)
