@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unicodedata
 import urllib.parse
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,7 @@ MANAGER_KEYS = frozenset(
         "audit_registries",
         "build_https",
         "build_ssh",
+        "builds",
         "disable_builtin_registries",
         "experimental",
     }
@@ -75,6 +77,8 @@ SKILLFILE_SOURCES_ENV_VAR = "CSK_EXPERIMENTAL_SKILLFILE_SOURCES"
 SOURCE_POLICY_ENV_VAR = "CSK_SOURCE_POLICY"
 SOURCE_POLICY_FILENAME = "source-policy.json"
 DEFAULT_SOURCE_POLICY_PATH = DEFAULT_CONFIG_PATH.parent / SOURCE_POLICY_FILENAME
+GO_FUTURE_FAMILIES_ENV_VAR = "CSK_GO_FUTURE_FAMILIES"
+GO_FUTURE_FAMILY_MODES = frozenset({"warn", "refuse"})
 
 
 class ConfigError(Exception):
@@ -134,6 +138,13 @@ class ExperimentalConfig:
 
 
 @dataclass(frozen=True)
+class BuildConfig:
+    """Operator policy for manager-controlled build toolchains."""
+
+    go_future_families: str = "warn"
+
+
+@dataclass(frozen=True)
 class GlobalConfig:
     path: Path
     skills_root: Path
@@ -158,6 +169,7 @@ class GlobalConfig:
     # canonical identity prefixes mapped to a token *source* (never a secret).
     # The run-wide CSK_BUILD_HTTPS_TOKEN environment value keeps precedence.
     build_https: tuple[build_https_module.BuildHTTPSRule, ...] = ()
+    builds: BuildConfig = field(default_factory=BuildConfig)
     # Legacy feature switches. They are parsed for configuration compatibility.
     experimental: ExperimentalConfig = field(default_factory=ExperimentalConfig)
 
@@ -354,6 +366,10 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
         raise ConfigError(f"Global config field 'worktree_alias_pattern' is not a valid regex: {exc}") from exc
 
     audit = _parse_audit_config(data.get("audit"))
+    builds = _parse_build_config(data.get("builds"))
+    # Validate the environment override during config loading without copying
+    # it into the file-backed value that save_config persists.
+    resolve_go_future_families(builds)
 
     allowed_sources_raw = data.get("allowed_sources", [])
     if (
@@ -432,6 +448,7 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
         disable_builtin_registries=disable_builtin,
         build_ssh=build_ssh_rules,
         build_https=build_https_rules,
+        builds=builds,
         experimental=experimental,
     )
 
@@ -475,6 +492,10 @@ def save_config(config: GlobalConfig) -> None:
         data["build_ssh"] = build_ssh_module.serialize_rules(config.build_ssh)
     if config.build_https:
         data["build_https"] = build_https_module.serialize_rules(config.build_https)
+    if config.builds.go_future_families != "warn":
+        data["builds"] = {
+            "go_future_families": config.builds.go_future_families,
+        }
     if config.experimental.skillfile_sources:
         data["experimental"] = {"skillfile_sources": True}
     _write_json_atomic(config.path, data)
@@ -501,6 +522,34 @@ def _parse_experimental_config(raw: Any) -> ExperimentalConfig:
     if not isinstance(flag, bool):
         raise ConfigError("Global config field 'experimental.skillfile_sources' must be a boolean")
     return ExperimentalConfig(skillfile_sources=flag)
+
+
+def _parse_build_config(raw: Any) -> BuildConfig:
+    if raw is None:
+        return BuildConfig()
+    if not isinstance(raw, dict):
+        raise ConfigError("Global config field 'builds' must be an object")
+    _reject_unknown_fields(raw, {"go_future_families"}, "builds")
+    value = raw.get("go_future_families", "warn")
+    return BuildConfig(go_future_families=_go_future_families_value(value, "builds.go_future_families"))
+
+
+def resolve_go_future_families(
+    builds: BuildConfig,
+    environment: Mapping[str, str] | None = None,
+) -> str:
+    """Resolve the Go future-family mode, with the operator env override."""
+
+    source = os.environ if environment is None else environment
+    value = source.get(GO_FUTURE_FAMILIES_ENV_VAR, builds.go_future_families)
+    return _go_future_families_value(value, GO_FUTURE_FAMILIES_ENV_VAR)
+
+
+def _go_future_families_value(value: Any, label: str) -> str:
+    if not isinstance(value, str) or value not in GO_FUTURE_FAMILY_MODES:
+        expected = ", ".join(sorted(GO_FUTURE_FAMILY_MODES))
+        raise ConfigError(f"{label} must be one of {expected}")
+    return value
 
 
 def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:

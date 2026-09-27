@@ -33,6 +33,7 @@ from typing import BinaryIO, Final, Protocol
 TOOLCHAIN_ALGORITHM: Final = "curator-go-toolchain-v1"
 GO_RELPATH: Final = "bin/go"
 TESTED_GO_FAMILIES: Final[tuple[str, ...]] = ("1.25",)
+_MINIMUM_GO_FAMILY: Final = (1, 23)
 
 GO_ENV_FIELDS: Final[tuple[str, ...]] = (
     "GOROOT",
@@ -79,8 +80,9 @@ MAX_VERSION_OUTPUT: Final = 4096
 
 _TOOLCHAIN_DOMAIN: Final = TOOLCHAIN_ALGORITHM.encode("ascii") + b"\x00"
 _GO_VERSION_RE: Final = re.compile(
-    r"^go version go(1\.([0-9]+)(?:\.[0-9]+)?"
-    r"(?:rc[0-9]+|beta[0-9]+)?) ([a-z0-9]+)/([a-z0-9]+)$"
+    r"^go version go(?P<version>(?P<major>[0-9]+)\.(?P<minor>[0-9]+)"
+    r"(?:\.[0-9]+)?(?:rc[0-9]+|beta[0-9]+)?) "
+    r"(?P<goos>[a-z0-9]+)/(?P<goarch>[a-z0-9]+)$"
 )
 _MACHO_MAGICS: Final[frozenset[bytes]] = frozenset(
     {
@@ -354,6 +356,34 @@ class ToolchainConfig:
     probe_timeout: float = DEFAULT_PROBE_TIMEOUT
     output_limit: int = DEFAULT_OUTPUT_LIMIT
     fingerprint_timeout: float | None = None
+    go_future_families: str = "warn"
+
+
+_future_go_warning_emitted = False
+_future_go_warning_lock = threading.Lock()
+
+
+def reset_go_future_warning_state() -> None:
+    """Start a new csk CLI operation's one-warning budget."""
+
+    global _future_go_warning_emitted
+    with _future_go_warning_lock:
+        _future_go_warning_emitted = False
+
+
+def _warn_untested_go_family(family: str, go_path: Path) -> None:
+    global _future_go_warning_emitted
+    with _future_go_warning_lock:
+        if _future_go_warning_emitted:
+            return
+        _future_go_warning_emitted = True
+    tested = ", ".join(TESTED_GO_FAMILIES)
+    print(
+        "go-v1 untested_go_family: Go family "
+        f"{family} at {go_path} is newer than tested families "
+        f"({tested}); csk will use the full go-v1 lockdown.",
+        file=sys.stderr,
+    )
 
 
 @dataclass(frozen=True)
@@ -607,14 +637,15 @@ def preflight_toolchain(config: ToolchainConfig) -> None:
             "go_version_failed",
             f"version exited with status {result.returncode}",
         )
-    _version, family, version_goos, version_goarch = _parse_go_version(
+    version, family, version_goos, version_goarch = _parse_go_version(
         result.stdout
     )
-    if family not in TESTED_GO_FAMILIES:
-        raise ToolchainError(
-            "unsupported_go_family",
-            f"Go release family {family} is not allowlisted",
-        )
+    _check_go_family_policy(
+        version,
+        family,
+        selection.executable,
+        config.go_future_families,
+    )
     if version_goos != host.goos or version_goarch != host.goarch:
         raise ToolchainError(
             "target_mismatch",
@@ -680,6 +711,8 @@ def parse_normalized_go_version(value: str) -> tuple[str, str, str, str]:
             "malformed_go_version",
             "go version identity is not normalized",
         )
+    if _go_family_key(parsed[1]) < _MINIMUM_GO_FAMILY:
+        raise ToolchainError("unsupported_go_family", "Go release is older than 1.23")
     return parsed
 
 
@@ -769,11 +802,12 @@ def _establish_toolchain(config: ToolchainConfig, host: _Host) -> ToolchainSessi
         version, family, version_goos, version_goarch = _parse_go_version(
             version_result.stdout
         )
-        if family not in TESTED_GO_FAMILIES:
-            raise ToolchainError(
-                "unsupported_go_family",
-                f"Go release family {family} is not allowlisted",
-            )
+        _check_go_family_policy(
+            version,
+            family,
+            selection.executable,
+            config.go_future_families,
+        )
         environment_result = run_probe(
             ("env", "-json", *GO_ENV_FIELDS),
             "go_env_failed",
@@ -843,16 +877,66 @@ def _parse_go_version(stdout: bytes) -> tuple[str, str, str, str]:
             "malformed_go_version",
             "go version output does not identify a release and target",
         )
-    minor_text = match.group(2)
-    if len(minor_text) > 1 and minor_text.startswith("0"):
+    major_text = match.group("major")
+    minor_text = match.group("minor")
+    if (len(major_text) > 1 and major_text.startswith("0")) or (
+        len(minor_text) > 1 and minor_text.startswith("0")
+    ):
         raise ToolchainError(
             "malformed_go_version",
             "go version release family has a leading zero",
         )
-    minor = int(minor_text)
-    if minor < 23:
-        raise ToolchainError("unsupported_go_family", "Go release is older than 1.23")
-    return normalized, f"1.{minor}", match.group(3), match.group(4)
+    family = f"{int(major_text)}.{int(minor_text)}"
+    return normalized, family, match.group("goos"), match.group("goarch")
+
+
+def _go_family_key(family: str) -> tuple[int, int]:
+    major, minor = family.split(".", 1)
+    return int(major), int(minor)
+
+
+def _unsupported_go_family_detail(
+    version: str,
+    family: str,
+    go_path: Path,
+) -> str:
+    tested = ", ".join(TESTED_GO_FAMILIES)
+    first = min(TESTED_GO_FAMILIES, key=_go_family_key)
+    newest = max(TESTED_GO_FAMILIES, key=_go_family_key)
+    return (
+        f"found version {version} (family {family}) at Go path {go_path}; "
+        f"tested families: {tested}.\n"
+        f"remediation: put Go {first}–{newest} (or newer) first on PATH, e.g. "
+        f'go = "{newest}" in the project .mise.toml or brew install go'
+    )
+
+
+def _check_go_family_policy(
+    version: str,
+    family: str,
+    go_path: Path,
+    future_families: str,
+) -> None:
+    family_key = _go_family_key(family)
+    tested = set(TESTED_GO_FAMILIES)
+    newest_tested = max((_go_family_key(item) for item in tested), default=(0, 0))
+    is_future = family_key > newest_tested
+    if future_families not in {"warn", "refuse"}:
+        raise ToolchainError(
+            "go_future_family_policy_invalid",
+            "Go future-family policy must be warn or refuse",
+        )
+    if (
+        family_key < _MINIMUM_GO_FAMILY
+        or (not is_future and family not in tested)
+        or (is_future and future_families == "refuse")
+    ):
+        raise ToolchainError(
+            "unsupported_go_family",
+            _unsupported_go_family_detail(version, family, go_path),
+        )
+    if is_future:
+        _warn_untested_go_family(family, go_path)
 
 
 class _DuplicateJSONKey(ValueError):

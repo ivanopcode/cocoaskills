@@ -115,6 +115,76 @@ def test_config_requires_projects_field(tmp_path):
         config.parse_config({"schema_version": 1, "skills_root": "x"}, tmp_path / "config.json")
 
 
+def test_go_future_family_policy_parses_round_trips_and_obeys_env_override(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv(config.GO_FUTURE_FAMILIES_ENV_VAR, raising=False)
+    path = tmp_path / "config.json"
+    raw = {
+        "schema_version": 1,
+        "skills_root": "x",
+        "projects": {},
+        "builds": {"go_future_families": "refuse"},
+    }
+
+    parsed = config.parse_config(raw, path)
+
+    assert parsed.builds.go_future_families == "refuse"
+    assert config.resolve_go_future_families(parsed.builds) == "refuse"
+    assert (
+        config.resolve_go_future_families(
+            parsed.builds,
+            {config.GO_FUTURE_FAMILIES_ENV_VAR: "warn"},
+        )
+        == "warn"
+    )
+    config.save_config(parsed)
+    assert json.loads(path.read_text(encoding="utf-8"))["builds"] == {
+        "go_future_families": "refuse"
+    }
+
+
+@pytest.mark.parametrize("value", ["allow", "", None, 1])
+def test_go_future_family_policy_rejects_unknown_values(value, tmp_path, monkeypatch):
+    monkeypatch.delenv(config.GO_FUTURE_FAMILIES_ENV_VAR, raising=False)
+    with pytest.raises(config.ConfigError, match="go_future_families"):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "projects": {},
+                "builds": {"go_future_families": value},
+            },
+            tmp_path / "config.json",
+        )
+
+
+def test_go_future_family_policy_rejects_unknown_env_and_build_keys(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(config.GO_FUTURE_FAMILIES_ENV_VAR, "allow")
+    with pytest.raises(config.ConfigError, match=config.GO_FUTURE_FAMILIES_ENV_VAR):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "projects": {},
+            },
+            tmp_path / "config.json",
+        )
+    monkeypatch.delenv(config.GO_FUTURE_FAMILIES_ENV_VAR)
+    with pytest.raises(config.ConfigError, match="unsupported field"):
+        config.parse_config(
+            {
+                "schema_version": 1,
+                "skills_root": "x",
+                "projects": {},
+                "builds": {"typo": "warn"},
+            },
+            tmp_path / "config.json",
+        )
+
+
 def test_config_rejects_unknown_top_and_project_fields(tmp_path):
     with pytest.raises(config.ConfigError, match="unsupported field"):
         config.parse_config(

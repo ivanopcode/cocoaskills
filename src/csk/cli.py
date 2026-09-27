@@ -65,6 +65,9 @@ def main(argv: list[str] | None = None) -> int:
             pass
         else:
             return go_v1.run_worker(_launch_context=launch_context)
+    from .builds import toolchain as build_toolchain
+
+    build_toolchain.reset_go_future_warning_state()
     arguments = list(sys.argv[1:] if argv is None else argv)
     is_check = bool(arguments and arguments[0] == "check")
     parser = _build_check_parser() if is_check else build_parser()

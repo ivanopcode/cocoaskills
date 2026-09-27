@@ -591,6 +591,25 @@ def test_cache_key_is_sha256_over_the_whole_wrapped_input(digest: str) -> None:
     ).hexdigest()
 
 
+def test_go_toolchain_family_and_patch_change_identity_and_cache_key() -> None:
+    build = _local_build_input()
+    versions = (
+        "go version go1.25.5 darwin/arm64",
+        "go version go1.26.8 darwin/arm64",
+        "go version go1.27.1 darwin/arm64",
+    )
+    identities = [replace(build.toolchain, go_version=version) for version in versions]
+    inputs = [
+        build_metadata.wrap_receipt_v3_input(
+            _package(), replace(build, toolchain=identity)
+        )
+        for identity in identities
+    ]
+
+    assert [item.build.toolchain.go_version for item in inputs] == list(versions)
+    assert len({build_metadata.source_aware_cache_key(item) for item in inputs}) == 3
+
+
 def test_receipt_v3_reader_accepts_valid_and_refuses_invalid() -> None:
     package = {"kind": "local-snapshot", "snapshot": PACKAGE_DIGEST}
     valid = {

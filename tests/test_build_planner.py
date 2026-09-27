@@ -157,6 +157,7 @@ def test_plan_builds_is_provider_first_command_lexical_and_records_all_outcomes(
             providers,
             manager_home=manager_home,
             operator_search_path=toolchain.OperatorSearchPath(("/trusted/bin",)),
+            go_future_families="refuse",
             cache_backend=cache,
             establish_toolchain=establish,
         )
@@ -186,6 +187,7 @@ def test_plan_builds_is_provider_first_command_lexical_and_records_all_outcomes(
         "toolchain-exit",
     ]
     assert len(configs) == 1
+    assert configs[0].go_future_families == "refuse"
     assert not configs[0].private_base.exists()
     assert first_root in configs[0].forbidden_roots
     assert second_root in configs[0].forbidden_roots

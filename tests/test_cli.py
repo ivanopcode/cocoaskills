@@ -15,6 +15,7 @@ import pytest
 from conftest import make_project, make_skill_repo, run, write_skillfile
 
 from csk import cli, config, git_admission, installer, locking, shims, status
+from csk.builds import toolchain
 from csk.build_repository import LockedCommit
 from csk.sources import _selection_fs
 from csk.sources import diagnostics as source_diagnostics
@@ -29,6 +30,25 @@ def test_cli_version(capsys):
     out = capsys.readouterr().out
     assert code == 0
     assert out.startswith("csk ")
+
+
+def test_cli_resets_future_go_warning_budget_per_operation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def dispatch(_args: argparse.Namespace) -> int:
+        toolchain._warn_untested_go_family("1.28", Path("/fake/go"))
+        toolchain._warn_untested_go_family("1.28", Path("/fake/go"))
+        return cli.EXIT_OK
+
+    monkeypatch.setattr(cli, "_dispatch", dispatch)
+
+    assert cli.main(["init"]) == cli.EXIT_OK
+    assert cli.main(["init"]) == cli.EXIT_OK
+
+    warning = capsys.readouterr().err
+    assert warning.count("untested_go_family") == 2
+    assert warning.count("/fake/go") == 2
 
 
 def test_cli_shell_init_install_writes_atomic_cache(monkeypatch, tmp_path, capsys):

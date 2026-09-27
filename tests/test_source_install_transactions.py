@@ -30,6 +30,7 @@ import pytest
 from conftest import commit_all, make_config, make_project, write_files, write_skillfile
 
 from csk import cli, config, install_marker, installer, manifest, status
+from csk.builds import toolchain
 from csk.sources import _selection_fs
 from csk.sources import lock as lock_module
 from csk.sources import publish, skillfile_v2
@@ -59,6 +60,37 @@ def _remove_directory_link(path: Path) -> None:
         path.rmdir()
     else:
         path.unlink()
+
+
+def test_schema2_local_build_planning_forwards_go_future_family_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, Any] = {}
+
+    def capture_plan_builds(providers: Any, **kwargs: Any) -> tuple[Any, ...]:
+        observed.update(kwargs)
+        return ()
+
+    monkeypatch.setattr(
+        publish.build_planner,
+        "detect_command_collisions",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(publish.build_planner, "plan_builds", capture_plan_builds)
+
+    publish.plan_schema2_local_builds(
+        (object(),),  # type: ignore[arg-type]
+        home=tmp_path,
+        operator_search_path=toolchain.OperatorSearchPath(("/trusted/bin",)),
+        go_future_families="refuse",
+        forbidden_roots=(),
+        cache_backend=object(),  # type: ignore[arg-type]
+        occupied={},
+        audit=lambda _: None,
+    )
+
+    assert observed["go_future_families"] == "refuse"
 
 
 def test_ensure_live_parents_cleans_created_dirs_after_later_refusal(
