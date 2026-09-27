@@ -634,6 +634,7 @@ def _committed_cli_git_project(
     source_kind: str = "git",
     url: str = "https://example.test/kit.git",
     identity: str = "example.test/kit",
+    annotated_tag: bool = False,
 ) -> tuple[Path, Path, str, str, _FakeTransport, bytes]:
     """Create a committed locked Git project and prime the hermetic transport."""
 
@@ -644,7 +645,10 @@ def _committed_cli_git_project(
         extra_files={"references/version.txt": "one"},
     )
     commit_one = commit_all(kit, "first package version")
-    run(["git", "tag", "v1", commit_one], kit)
+    if annotated_tag:
+        run(["git", "tag", "-a", "v1", "-m", "release", commit_one], kit)
+    else:
+        run(["git", "tag", "v1", commit_one], kit)
     fake = _FakeTransport()
     fake.add(url, kit, identity)
 
@@ -705,6 +709,152 @@ def test_cli_committed_git_lock_fetches_locked_commit_after_tag_moves(
     ).read_text(encoding="utf-8") == "one"
     assert (project / publish.SKILLFILE_LOCK_NAME).read_bytes() == lock_before
     assert _read_lock(project).members[0].package.commit.hex == commit_one  # type: ignore[union-attr]
+
+
+def test_cli_install_annotated_tag_uses_peeled_commit(
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Production install resolves, locks and acquires an annotated tag commit."""
+
+    _require_selection()
+    from csk.build_repository import parse_repository_source
+
+    url = "https://example.test/annotated-kit.git"
+    work = init_git_repo(tmp_path / "annotated-kit")
+    _write_skill(work / "skills" / "nested", "nested")
+    commit = commit_all(work, "annotated package")
+    run(["git", "tag", "-a", "v1", "-m", "release", commit], work)
+    bare = tmp_path / "annotated-kit.git"
+    run(
+        ["git", "clone", "--quiet", "--bare", "--", os.fspath(work), os.fspath(bare)],
+        tmp_path,
+    )
+    tool = _http_rewriting_tool(tmp_path / "wrapper", bare, url)
+    source = parse_repository_source(url)
+    resolved: list[str] = []
+
+    def resolve_with_real_admission(
+        _identity: Any,
+        ref_kind: str,
+        ref_value: str,
+        _tool: Any = None,
+        **_kwargs: Any,
+    ) -> source_transport.ResolutionResult:
+        lock = git_admission.resolve_network_ref(source, ref_kind, ref_value, tool)
+        resolved.append(lock.hex)
+        return source_transport.ResolutionResult(lock=lock, attempts=())
+
+    def acquire_with_real_admission(
+        _identity: Any,
+        lock: Any,
+        _tool: Any = None,
+        **_kwargs: Any,
+    ) -> source_transport.AcquisitionResult:
+        snapshot = git_admission.acquire_network(source, lock, tool)
+        return source_transport.AcquisitionResult(snapshot=snapshot, attempts=())
+
+    monkeypatch.setattr(
+        source_transport, "resolve_ref", resolve_with_real_admission
+    )
+    monkeypatch.setattr(
+        source_transport, "acquire_network", acquire_with_real_admission
+    )
+
+    project = make_project(tmp_path)
+    _git_skillfile(
+        project,
+        url,
+        {"tag": "v1"},
+        [
+            {
+                "name": "nested",
+                "from": "upstream",
+                "directory": "skills/nested",
+            }
+        ],
+    )
+    _register_cli_v2_project(monkeypatch, csk_home, skills_root, project)
+
+    exit_code = cli.main(["install", "app"])
+    output = capsys.readouterr()
+
+    assert resolved == [commit]
+    assert exit_code == 0, output.err
+    assert "nested installed" in output.out
+    installed_member = _read_lock(project).members[0]
+    assert isinstance(installed_member.package, NetworkGit)
+    assert installed_member.package.commit.hex == commit
+
+
+def test_cli_existing_tag_object_lock_refuses_with_upgrade_remediation(
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A legacy tag-object lock refuses without rewrite and points to csk upgrade."""
+
+    _require_selection()
+    from csk.build_repository import parse_repository_source
+
+    project, kit, commit, url, _fake, _lock_before = _committed_cli_git_project(
+        tmp_path,
+        skills_root,
+        csk_home,
+        monkeypatch,
+        annotated_tag=True,
+    )
+    tag_object = subprocess.run(
+        ["git", "rev-parse", "refs/tags/v1"],
+        cwd=kit,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=20,
+    ).stdout.strip()
+    assert tag_object != commit
+
+    old_lock = _read_lock(project)
+    old_member = old_lock.members[0]
+    assert isinstance(old_member.package, NetworkGit)
+    bad_member = replace(
+        old_member,
+        package=replace(
+            old_member.package,
+            commit=lock_module.LockedCommit("sha1", tag_object),
+        ),
+    )
+    bad_lock = replace(old_lock, members=(bad_member,), lock_sha256=None)
+    legacy_lock_bytes = lock_module.serialize_lock(bad_lock, verify_digest=False)
+    (project / publish.SKILLFILE_LOCK_NAME).write_bytes(legacy_lock_bytes)
+
+    tool = _http_rewriting_tool(tmp_path / "locked-wrapper", kit, url)
+    source = parse_repository_source(url)
+
+    def acquire_locked_object(
+        _identity: Any,
+        lock: Any,
+        _tool: Any = None,
+        **_kwargs: Any,
+    ) -> source_transport.AcquisitionResult:
+        snapshot = git_admission.acquire_network(source, lock, tool)
+        return source_transport.AcquisitionResult(snapshot=snapshot, attempts=())
+
+    monkeypatch.setattr(source_transport, "acquire_network", acquire_locked_object)
+    fresh_home = _fresh_cli_home(tmp_path)
+    _register_cli_v2_project(monkeypatch, fresh_home, skills_root, project)
+    shutil.rmtree(project / ".agents" / "skills" / "nested")
+
+    assert cli.main(["install", "app"]) == 1
+    error = capsys.readouterr().err
+    assert "source_lock_stale:" in error
+    assert "remediation: run csk upgrade to refresh the lock" in error
+    assert (project / publish.SKILLFILE_LOCK_NAME).read_bytes() == legacy_lock_bytes
 
 
 def test_cli_committed_git_lock_replays_through_listed_mirror_after_tag_moves(
@@ -3159,14 +3309,19 @@ def test_parse_ls_remote_fails_closed() -> None:
             git_admission._parse_ls_remote(output, wanted=wanted, ref_kind=ref_kind)
 
 
-def _bare_repo_with_tag(tmp_path: Path) -> tuple[Path, str, str, str]:
+def _bare_repo_with_tag(
+    tmp_path: Path, *, annotated_tag: bool = False
+) -> tuple[Path, str, str, str]:
     """Build a bare repo; returns (bare, tag_commit, branch_commit, branch)."""
 
     work = tmp_path / "work"
     init_git_repo(work)
     write_files(work, {"file.txt": "v1\n"})
     commit_all(work, "c0")
-    run(["git", "tag", "v1"], work)
+    if annotated_tag:
+        run(["git", "tag", "-a", "v1", "-m", "release"], work)
+    else:
+        run(["git", "tag", "v1"], work)
     tag_commit = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=work,
@@ -3254,6 +3409,92 @@ def test_resolve_network_ref_resolves_tag_and_branch(tmp_path: Path) -> None:
     assert resolved_branch.hex == branch_commit
 
 
+def test_resolve_network_ref_annotated_tag_needs_no_caret_on_wire(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolution peels an annotated tag without sending a caret through argv."""
+
+    from csk.build_repository import parse_repository_source
+
+    bare, tag_commit, _, _ = _bare_repo_with_tag(tmp_path, annotated_tag=True)
+    url = "https://example.test/kit.git"
+    tool = _http_rewriting_tool(tmp_path / "wrapper", bare, url)
+    source = parse_repository_source(url)
+    arguments_seen: list[tuple[str, ...]] = []
+    run_ls_remote = git_admission._run_git_ls_remote
+
+    def record_ls_remote_arguments(
+        tool: git_admission.GitTool,
+        paths: Any,
+        environment: Any,
+        arguments: Any,
+        *,
+        limits: git_admission.Limits,
+    ) -> bytes:
+        arguments_seen.append(tuple(arguments))
+        return run_ls_remote(
+            tool, paths, environment, arguments, limits=limits
+        )
+
+    monkeypatch.setattr(
+        git_admission, "_run_git_ls_remote", record_ls_remote_arguments
+    )
+    resolved = git_admission.resolve_network_ref(source, "tag", "v1", tool)
+
+    assert resolved.hex == tag_commit
+    assert len(arguments_seen) == 1
+    assert arguments_seen[0][-1] == "refs/tags/v1"
+    assert all("^" not in argument for argument in arguments_seen[0])
+
+
+def test_resolve_network_ref_refuses_tag_moved_before_fetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tag changing after advertisement cannot mint a lock for another OID."""
+
+    from csk.build_repository import parse_repository_source
+
+    bare, _, branch_commit, _ = _bare_repo_with_tag(
+        tmp_path, annotated_tag=True
+    )
+    url = "https://example.test/kit.git"
+    tool = _http_rewriting_tool(tmp_path / "wrapper", bare, url)
+    source = parse_repository_source(url)
+    run_ls_remote = git_admission._run_git_ls_remote
+
+    def move_tag_after_advertisement(
+        tool: git_admission.GitTool,
+        paths: Any,
+        environment: Any,
+        arguments: Any,
+        *,
+        limits: git_admission.Limits,
+    ) -> bytes:
+        advertised = run_ls_remote(
+            tool, paths, environment, arguments, limits=limits
+        )
+        run(
+            [
+                "git",
+                "--git-dir",
+                os.fspath(bare),
+                "update-ref",
+                "refs/tags/v1",
+                branch_commit,
+            ],
+            tmp_path,
+        )
+        return advertised
+
+    monkeypatch.setattr(
+        git_admission, "_run_git_ls_remote", move_tag_after_advertisement
+    )
+    with pytest.raises(git_admission.GitAdmissionError) as captured:
+        git_admission.resolve_network_ref(source, "tag", "v1", tool)
+
+    assert captured.value.code == git_admission.REF_MOVED
+
+
 def test_resolve_network_ref_missing_and_invalid(tmp_path: Path) -> None:
     """Missing refs are unavailable; revisions and bad names are invalid."""
 
@@ -3274,6 +3515,38 @@ def test_resolve_network_ref_missing_and_invalid(tmp_path: Path) -> None:
     with pytest.raises(git_admission.GitAdmissionError) as bad_name:
         git_admission.resolve_network_ref(source, "branch", "..", tool)
     assert bad_name.value.code == git_admission.IDENTITY_INVALID
+
+
+def test_resolve_network_ref_rejects_stray_advertisement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The production resolver fails closed on an unrequested ls-remote ref."""
+
+    from csk.build_repository import parse_repository_source
+
+    bare, tag_commit, _, _ = _bare_repo_with_tag(tmp_path)
+    url = "https://example.test/kit.git"
+    tool = _http_rewriting_tool(tmp_path / "wrapper", bare, url)
+    source = parse_repository_source(url)
+
+    def advertise_stray_ref(
+        _tool: git_admission.GitTool,
+        _paths: Any,
+        _environment: Any,
+        _arguments: Any,
+        *,
+        limits: git_admission.Limits,
+    ) -> bytes:
+        del limits
+        return (
+            f"{tag_commit}\trefs/tags/v1\n"
+            f"{tag_commit}\trefs/tags/v1.evil\n"
+        ).encode()
+
+    monkeypatch.setattr(git_admission, "_run_git_ls_remote", advertise_stray_ref)
+    with pytest.raises(git_admission.GitAdmissionError) as captured:
+        git_admission.resolve_network_ref(source, "tag", "v1", tool)
+    assert captured.value.code == git_admission.OBJECT_SEMANTICS_INVALID
 
 
 def _resolve_test_plan() -> Any:

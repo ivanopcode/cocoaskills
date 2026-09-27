@@ -32,6 +32,7 @@ IDENTITY_INVALID = "build_repository_identity_invalid"
 SOURCE_UNAVAILABLE = "build_repository_source_unavailable"
 REF_MOVED = "build_repository_ref_moved"
 INCOMPLETE_SOURCE = "build_repository_incomplete_source"
+LOCKED_TAG_OBJECT = "build_repository_locked_tag_object"
 OBJECT_SEMANTICS_INVALID = "build_repository_git_object_semantics_invalid"
 LFS_UNSUPPORTED = "build_repository_git_lfs_unsupported"
 LOCAL_GITFILE_UNSUPPORTED = "build_repository_local_gitfile_unsupported"
@@ -1014,9 +1015,11 @@ def resolve_network_ref(
 
     Runs a single ``ls-remote`` for the exact full ref through the admitted
     endpoint with the same tool probe, credential surface, environment
-    lockdown and protocol pins as lock-based acquisition. The returned
-    commit is unproven until the caller acquires and proves it; the caller
-    records it into the lock as the resolved ref.
+    lockdown and protocol pins as lock-based acquisition. Tag queries fetch
+    the exact advertised ref into a private repository and peel it there, so
+    the resolver does not rely on a ``^{}`` argv pattern surviving wrappers.
+    The returned commit is unproven until the caller acquires and proves it;
+    the caller records it into the lock as the resolved ref.
     """
     deadline = _admission_deadline(limits)
     probe_limits = _remaining_limits(limits, deadline)
@@ -1106,7 +1109,63 @@ def resolve_network_ref(
             limits=_remaining_limits(limits, deadline),
         )
         _remaining_limits(limits, deadline)
-        return _parse_ls_remote(output, wanted=wanted, ref_kind=ref_kind)
+        advertised = _parse_ls_remote(output, wanted=wanted, ref_kind=ref_kind)
+        if ref_kind == "branch":
+            return advertised
+
+        _run_git(
+            tool,
+            paths,
+            environment,
+            f"--git-dir={paths.repository}",
+            "-c",
+            "init.defaultBranch=csk-invalid",
+            "init",
+            "--bare",
+            "--quiet",
+            f"--template={paths.template}",
+            f"--object-format={advertised.object_format}",
+            "--ref-format=files",
+            limits=_remaining_limits(limits, deadline),
+        )
+        _remaining_limits(limits, deadline)
+        destination = "refs/csk/resolution"
+        _run_git(
+            tool,
+            paths,
+            environment,
+            *_strict_fetch_args(
+                paths,
+                tool,
+                source,
+                f"{wanted}:{destination}",
+                https_broker,
+                remote_url=remote_url,
+            ),
+            limits=_remaining_limits(limits, deadline),
+        )
+        _remaining_limits(limits, deadline)
+        _validate_private_repository(paths.repository, advertised.object_format)
+        selected = _read_single_oid(
+            paths.repository.joinpath(*destination.split("/")),
+            advertised.object_format,
+        )
+        if selected != advertised.hex:
+            raise GitAdmissionError(
+                REF_MOVED, "exact tag object changed during ref resolution"
+            )
+        with _ObjectReader(
+            tool,
+            environment,
+            paths,
+            advertised.object_format,
+            _remaining_limits(limits, deadline),
+        ) as reader:
+            commit = _peel_commit(
+                reader, selected, ref_value, limits.max_tag_depth
+            )
+        _remaining_limits(limits, deadline)
+        return LockedCommit(advertised.object_format, commit)
 
 
 def _make_private_paths(root: Path) -> _PrivatePaths:
@@ -2039,6 +2098,13 @@ def _peel_commit(
         obj = reader.read(oid)
         if obj.kind == "commit":
             return oid
+        if obj.kind == "tag" and exact_tag is None and annotated == 0:
+            raise GitAdmissionError(
+                LOCKED_TAG_OBJECT,
+                "locked object is an annotated tag object instead of a commit; "
+                "run csk upgrade to refresh the lock",
+                failure_class="integrity",
+            )
         if obj.kind != "tag" or annotated >= max_depth:
             raise GitAdmissionError(
                 OBJECT_SEMANTICS_INVALID,
