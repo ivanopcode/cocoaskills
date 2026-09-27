@@ -562,10 +562,16 @@ def _generated_url_diagnostic(
         # one later scheme inside the first URL's fragment.
         urls[0] += f"::nested::{urls.pop(1)}"
 
-    reason_keep = sentinel("keep")
     email_keep = sentinel("keep")
-    before = f"reason-{reason_keep} contact ops{email_keep}@example.test"
-    after = f"end-{sentinel('keep')}"
+    prose_words = [sentinel("keep") for _ in range(rng.randint(1, 4))]
+    email_local = rng.choice(("ops", "ci", "review"))
+    email_domain = rng.choice(
+        ("example.test", "example.invalid", "ops.example.test")
+    )
+    before = " ".join(
+        (*prose_words, f"{email_local}{email_keep}@{email_domain}")
+    )
+    after = sentinel("keep")
     joiner = rng.choice(("", ";", " | ", " "))
     group = joiner.join(urls)
     mode = iteration % 5
