@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Исправлено
+
+- Установка по аннотированному Git-тегу теперь фиксирует peeled commit; для лока с OID объекта тега предлагается выполнить `csk upgrade`.
+
 ## [0.18.0] - 2026-09-27
 
 ### Изменено

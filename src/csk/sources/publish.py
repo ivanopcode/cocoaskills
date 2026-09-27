@@ -3198,6 +3198,12 @@ def _serve_locked_git_member(
             f"{label} is unavailable: {exc}",
         ) from exc
     except git_admission.GitAdmissionError as exc:
+        if exc.code == git_admission.LOCKED_TAG_OBJECT:
+            raise SourceError(
+                CODE_LOCK_STALE,
+                f"Skill {member.name!r} lock records an annotated tag object "
+                "instead of a commit",
+            ) from exc
         raise SourceError(
             CODE_SNAPSHOT_UNAVAILABLE,
             f"Skill {member.name!r} locked commit {package.commit.hex} from "
