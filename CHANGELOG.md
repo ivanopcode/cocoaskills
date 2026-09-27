@@ -7,10 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-27
+
 ### Изменено
 
-- Выбор источников Skillfile schema 2 работает в Windows.
-- Набор соответствия для Skillfile schema 2 переведён с черновых векторов на принятый корпус curator-spec `conformance/skillfile-sources-v1` (curator-spec #96).
+- Skillfile schema 2 работает в Windows. `csk install`, `csk upgrade` и восстановление по `Skillfile.lock.json` больше не отклоняют schema 2 с `source_selection_invalid`: выборка источников открывает каждый элемент через `NtCreateFile` относительно удерживаемого каталога. Symlink и junction проверяются как ссылки; остальные reparse-теги, включая заглушки облачных файлов, отклоняются с именем тега.
+- Набор соответствия для Skillfile schema 2 закреплён на принятом корпусе `conformance/skillfile-sources-v1` из curator-spec `v1.0.0-rc.13` вместо черновых векторов.
+- Линия CI `fast_draft_sources` прогоняет корпус соответствия и на windows-latest.
 
 ## [0.17.0] - 2026-09-25
 
@@ -734,7 +737,8 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.17.0...main
+[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.18.0...main
+[0.18.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.14.1...v0.15.0
