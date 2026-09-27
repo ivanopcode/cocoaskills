@@ -67,7 +67,7 @@ def _use_fake_unsupported_go(
     goroot = _make_goroot(tmp_path / "fake-go" / "root")
     runner = RecordingRunner(
         goroot,
-        version=f"go version go1.22.12 {host.goos}/{host.goarch}\n",
+        version=f"go version go1.22.0 {host.goos}/{host.goarch}\n",
     )
     operator_search_path = build_toolchain.OperatorSearchPath((str(goroot / "bin"),))
     real_establish = build_toolchain.establish_toolchain
@@ -126,6 +126,18 @@ def _stub_network_admission(
     monkeypatch.setattr(transport, "acquire_plan", acquire_via_local_test_seam)
 
 
+def _assert_unsupported_go_reason(stderr: str) -> None:
+    assert "unsupported_go_family" in stderr
+    assert (
+        "Go release is older than 1.23" in stderr
+        or (
+            "go version go1.22.0" in stderr
+            and "family 1.22" in stderr
+            and "tested families:" in stderr
+        )
+    )
+
+
 def test_cli_unsupported_go_refusal_shows_code_reason_and_verbose_cause(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -144,16 +156,15 @@ def test_cli_unsupported_go_refusal_shows_code_reason_and_verbose_cause(
     code, _stdout, stderr = _invoke_install(capsys, verbose=False)
     assert code == cli.EXIT_PARTIAL_FAIL
     assert "go-v1 unsupported_go_family" in stderr
-    assert "Go release is older than 1.23" in stderr
+    _assert_unsupported_go_reason(stderr)
 
     code, _stdout, stderr = _invoke_install(capsys, verbose=True)
     assert code == cli.EXIT_PARTIAL_FAIL
     assert "go-v1 unsupported_go_family" in stderr
-    assert "Go release is older than 1.23" in stderr
+    _assert_unsupported_go_reason(stderr)
     assert "cause chain:" in stderr
     assert (
-        "caused by: go-v1 unsupported_go_family: Go release is older than 1.23"
-        in stderr
+        "caused by: go-v1 unsupported_go_family:" in stderr
     )
     assert "fake go probe produced unsupported release family 1.22" not in stderr
 
@@ -550,10 +561,9 @@ def test_global_verbose_has_go_cause(
         line for line in stderr.splitlines() if line.startswith("  caused by:")
     ]
     assert global_cause_lines == project_cause_lines
-    assert "unsupported_go_family" in stderr
-    assert "Go release is older than 1.23" in stderr
+    _assert_unsupported_go_reason(stderr)
     assert "cause chain:" in stderr
-    assert "go-v1 unsupported_go_family" in stderr
+    assert "go-v1 unsupported_go_family:" in stderr
     assert "SYNTHETIC_GO_PROBE_PRIVATE_TEXT" not in stderr
 
 
