@@ -52,18 +52,15 @@ SOURCE_DIAGNOSTICS: Final[frozenset[str]] = frozenset(
     }
 )
 
-# URL credentials are redacted structurally, never by character class: a
-# credential is whatever sits between ``://`` and the last ``@`` of the
-# URL token (a bare user can itself be a token, and passwords may
-# contain ``/``, spaces or ``+``), and query-string credential
-# parameters count too. Tokens inside a quoted span (echo sites embed
-# declarations via ``{value!r}``) run to the closing quote; unquoted
-# tokens stop at whitespace so surrounding prose is never eaten.
-_QUOTED_SPAN_RE: Final = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
-_UNQUOTED_TOKEN_END_RE: Final = re.compile(r"[\s'\"`]")
-_QUERY_CREDENTIAL_RE: Final = re.compile(
-    r"([?&])([^&#\s'\"`;=]+)=([^&#\s'\"`;)]*)"
-)
+# URL redaction follows one bounded grammar: an RFC 3986 scheme starts a token;
+# the token ends at whitespace, or at the matching quote when the scheme is
+# immediately quoted; authority, query and fragment then have separate bounds.
+_URL_SCHEME_RE: Final = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
+_URL_AUTHORITY_END_RE: Final = re.compile(r"[/?#]")
+_URL_TEXT_QUOTES: Final = frozenset("'\"`")
+_SCP_WORD_RE: Final = re.compile(r"\S+")
+_SCP_USERNAME_RE: Final = re.compile(r"[A-Za-z0-9._-]+")
+_SCP_REMOTE_RE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]*:\S+")
 _CREDENTIAL_QUERY_NAMES: Final = frozenset(
     {
         "token",
@@ -79,6 +76,9 @@ _CREDENTIAL_QUERY_NAMES: Final = frozenset(
         "api_key",
         "apikey",
         "key",
+        "sig",
+        "signature",
+        "x-amz-signature",
     }
 )
 _CREDENTIAL_QUERY_SUBSTRINGS: Final = ("token", "secret")
@@ -119,74 +119,153 @@ class SourcePathConflictError(SourceError):
         )
 
 
-def _redact_span_userinfo(span: str) -> str:
-    """Redact userinfo inside one quoted span holding ``://``."""
-
-    parts: list[str] = []
-    cursor = 0
-    while True:
-        scheme = span.find("://", cursor)
-        if scheme == -1:
-            parts.append(span[cursor:])
-            break
-        authority_start = scheme + len("://")
-        following = span.find("://", authority_start)
-        region_end = following if following != -1 else len(span)
-        region = span[authority_start:region_end]
-        marker = region.rfind("@")
-        if marker <= 0:
-            parts.append(span[cursor:region_end])
-        else:
-            parts.append(span[cursor:authority_start])
-            parts.append(_REDACTED_USERINFO)
-            parts.append(region[marker:])
-        cursor = region_end
-    return "".join(parts)
-
-
-def _redact_unquoted_userinfo(text: str) -> str:
-    """Redact userinfo in URL tokens outside quoted spans."""
-
-    parts: list[str] = []
-    cursor = 0
-    while True:
-        scheme = text.find("://", cursor)
-        if scheme == -1:
-            parts.append(text[cursor:])
-            break
-        authority_start = scheme + len("://")
-        token_match = _UNQUOTED_TOKEN_END_RE.search(text, authority_start)
-        token_end = token_match.start() if token_match else len(text)
-        region = text[authority_start:token_end]
-        marker = region.rfind("@")
-        if marker <= 0:
-            parts.append(text[cursor:token_end])
-        else:
-            parts.append(text[cursor:authority_start])
-            parts.append(_REDACTED_USERINFO)
-            parts.append(region[marker:])
-        cursor = token_end
-    return "".join(parts)
-
-
 def _is_credential_query_name(name: str) -> bool:
-    folded = name.lower()
+    folded = name.casefold()
     if folded in _CREDENTIAL_QUERY_NAMES:
         return True
     return any(part in folded for part in _CREDENTIAL_QUERY_SUBSTRINGS)
 
 
-def _redact_query_credentials(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        if _is_credential_query_name(match.group(2)):
-            return f"{match.group(1)}{match.group(2)}={_REDACTED_USERINFO}"
-        return match.group(0)
+def _url_token_end(
+    text: str,
+    scheme_start: int,
+    authority_start: int,
+    next_scheme_start: int | None,
+) -> int:
+    """Return one URL's boundary without consuming a later scheme occurrence."""
 
-    return _QUERY_CREDENTIAL_RE.sub(replace, text)
+    line_end = len(text)
+    for line_break in ("\n", "\r"):
+        position = text.find(line_break, scheme_start)
+        if position != -1:
+            line_end = min(line_end, position)
+
+    token_end = line_end
+    if next_scheme_start is not None:
+        token_end = min(token_end, next_scheme_start)
+    for position in range(scheme_start, token_end):
+        if text[position].isspace():
+            token_end = position
+            break
+
+    quote = text[scheme_start - 1] if scheme_start else ""
+    if quote in _URL_TEXT_QUOTES:
+        quote_end = text.find(quote, scheme_start, token_end)
+        while quote_end != -1:
+            # Apostrophe is an RFC 3986 userinfo sub-delimiter. If another
+            # authority @ follows it, this is credential data, not the quote
+            # which closes the diagnostic's quoted URL.
+            if quote == "'":
+                authority_end_match = _URL_AUTHORITY_END_RE.search(
+                    text, authority_start, token_end
+                )
+                authority_end = (
+                    authority_end_match.start()
+                    if authority_end_match
+                    else token_end
+                )
+                if (
+                    quote_end < authority_end
+                    and "@" in text[quote_end + 1 : authority_end]
+                ):
+                    quote_end = text.find(quote, quote_end + 1, token_end)
+                    continue
+            token_end = quote_end
+            break
+    return token_end
+
+
+def _redact_url_query(token: str, authority_start: int) -> str:
+    question = token.find("?", authority_start)
+    fragment = token.find("#", authority_start)
+    if question == -1 or (fragment != -1 and fragment < question):
+        return token
+    query_end = token.find("#", question + 1)
+    if query_end == -1:
+        query_end = len(token)
+
+    query = token[question + 1 : query_end]
+    pairs: list[str] = []
+    for pair in query.split("&"):
+        name, separator, value = pair.partition("=")
+        if separator and _is_credential_query_name(name):
+            pairs.append(f"{name}={_REDACTED_USERINFO}")
+        else:
+            pairs.append(pair)
+    return token[: question + 1] + "&".join(pairs) + token[query_end:]
+
+
+def _redact_url_token(token: str, authority_start: int) -> str:
+    authority_end_match = _URL_AUTHORITY_END_RE.search(token, authority_start)
+    authority_end = (
+        authority_end_match.start() if authority_end_match else len(token)
+    )
+    authority = token[authority_start:authority_end]
+    marker = authority.rfind("@")
+    if marker >= 0:
+        token = (
+            token[:authority_start]
+            + _REDACTED_USERINFO
+            + authority[marker:]
+            + token[authority_end:]
+        )
+    return _redact_url_query(token, authority_start)
+
+
+def _redact_url_tokens(text: str) -> str:
+    parts: list[str] = []
+    cursor = 0
+    schemes = tuple(_URL_SCHEME_RE.finditer(text))
+    for index, scheme in enumerate(schemes):
+        next_scheme_start = (
+            schemes[index + 1].start() if index + 1 < len(schemes) else None
+        )
+        authority_start = scheme.end() - scheme.start()
+        token_end = _url_token_end(
+            text, scheme.start(), scheme.end(), next_scheme_start
+        )
+        parts.extend(
+            (
+                text[cursor : scheme.start()],
+                _redact_url_token(text[scheme.start() : token_end], authority_start),
+            )
+        )
+        cursor = token_end
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
+def _redact_scp_word(word: str) -> str:
+    """Redact only a whole whitespace-delimited scp-like credential word."""
+
+    if "://" in word:
+        return word
+    marker = word.rfind("@")
+    if marker <= 0:
+        return word
+    userinfo = word[:marker]
+    remote = word[marker + 1 :]
+    username, separator, _password = userinfo.partition(":")
+    if (
+        not separator
+        or _SCP_USERNAME_RE.fullmatch(username) is None
+        or not _SCP_REMOTE_RE.fullmatch(remote)
+    ):
+        return word
+    return f"{_REDACTED_USERINFO}@{remote}"
+
+
+def _redact_scp_credentials(text: str) -> str:
+    return _SCP_WORD_RE.sub(lambda match: _redact_scp_word(match.group(0)), text)
+
+
+def sanitize_credentials(text: str) -> str:
+    """Structurally redact URL userinfo and query-string credentials."""
+    return _redact_scp_credentials(_redact_url_tokens(text))
 
 
 def sanitize_detail(text: str) -> str:
-    """Redact secrets from a diagnostic reason while keeping its subject.
+    """Redact secrets and absolute paths while keeping the diagnostic subject.
 
     URL userinfo, query-string credential parameters and
     absolute-path-shaped tokens (POSIX, drive-letter and UNC) are
@@ -194,14 +273,7 @@ def sanitize_detail(text: str) -> str:
     ``host/path`` identities are preserved byte-exactly.
     """
 
-    segments: list[str] = []
-    cursor = 0
-    for span in _QUOTED_SPAN_RE.finditer(text):
-        segments.append(_redact_unquoted_userinfo(text[cursor : span.start()]))
-        segments.append(_redact_span_userinfo(span.group(0)))
-        cursor = span.end()
-    segments.append(_redact_unquoted_userinfo(text[cursor:]))
-    redacted = _redact_query_credentials("".join(segments))
+    redacted = sanitize_credentials(text)
     redacted = _UNC_PATH_RE.sub(_REDACTED_PATH, redacted)
     redacted = _DRIVE_PATH_RE.sub(_REDACTED_PATH, redacted)
     return _POSIX_ABSPATH_RE.sub(_REDACTED_PATH, redacted)

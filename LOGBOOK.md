@@ -55,6 +55,87 @@ fails against the pre-fix behavior, and a narrowing mutant that admits `.claude`
 is killed by the managed-source control. Suite counts and exact command exit
 codes are in `BUG-260927-ucxvpy_results.md`; the candidate remains uncommitted.
 
+## 2026-09-28 - BUG-260927-1kx6mb: rev-5 independent URL-token scanning
+
+The revision-4 review found that the first quoted URL could consume later
+`scheme://` occurrences, after which the cursor skipped their userinfo; a
+fragment on that first URL also left later credential queries untouched. The
+sanitizer now bounds each token at the next scheme and first whitespace, even
+inside quotes, and processes every occurrence independently while retaining
+the revision-4 authority, query and fragment rules.
+
+`test_sanitize_generated_url_diagnostics_process_every_scheme_independently`
+uses seed `0x5EED260927` for 2,500 diagnostics, with one to four actual URL
+occurrences per case. It checks unique `SECRET_n`/`KEEP_n` sentinels across
+schemes, userinfo delimiters, raw and encoded at-signs, DNS and IPv6 hosts,
+ports, queries, fragments, quotes and adjacency. The named CLI regression
+`test_cli_install_redacts_each_url_in_a_shared_quoted_fragment` exercises the
+project-install refusal path in both modes and all three quote kinds. The
+narrowing mutant that lets a quoted token cover and skip later schemes is
+killed by the generated test (exit 1); candidate tests pass. Exact counts,
+commands, logs, CI evidence and bounds are recorded in
+`BUG-260927-1kx6mb_results.md`.
+
+The first Windows probe was not green: current main already allows Go 1.27, so the older fake version let both Go refusal tests continue to source transport. The next current-main probe used Go 1.22 but failed two assertions because the richer main reason text differed from the Story-base wording; the refusal code was present. The shared fixture now reports Go 1.22.0, and its named tests check the stable refusal code plus the specific reason on both code bases. The two Go refusal tests pass locally on the Story base and current main, and all 56 CLI diagnostics pass on the Story base. Draft PR #95 remains OPEN and mergeable at signed head 1ae7caad6c0807940a3cb455e8e60279d56a3360; it was never marked ready or merged. Windows fast_ordinary completed success on the exact head under CPython 3.14 / windows-latest: https://github.com/ivanopcode/cocoaskills/actions/runs/36354596460 (job https://github.com/ivanopcode/cocoaskills/actions/runs/36354596460/job/108719682075). Earlier failed probes are excluded from the green evidence.
+
+## 2026-09-27 - BUG-260927-1kx6mb: rev-4 URL token grammar
+
+The revision-3 review found two different boundary failures: the query regex
+stopped credential values at selected punctuation, and a quoted fallback
+searched past URL authority to an unrelated email address, erasing a readable
+refusal reason. One explicit URL grammar now bounds quoted/unquoted tokens,
+authority, query pairs and fragments; the quoted fallback is removed. Malformed
+Git source refusals preserve their typed reason without echoing the raw input.
+
+Both named CLI regressions fail before the fix in both modes. The sample
+`ab!c$d` alone already passed on revision 3, so the query class regression also
+covers apostrophe, semicolon and closing parenthesis; all three leaked suffixes
+before the fix. Narrowing mutants for the query value and authority boundary
+fail their named CLI tests. The diagnostic, source, CLI, install, global,
+status, golden and Git/source-boundary suites, strict mypy, package build and
+diff check pass. Exact commands, exit codes, coverage and rework bounds are in
+`BUG-260927-1kx6mb_results.md`.
+
+## 2026-09-27 - BUG-260927-1kx6mb: rev-3 apostrophe userinfo boundary
+
+The rev-2 review found that splitting diagnostics on apostrophes could break a
+credential-bearing URL before its `@`, exposing valid RFC 3986 userinfo through
+install refusal output. URL sanitization now scans each `scheme://` authority
+to its structural boundary and redacts through its last `@`; apostrophes stay
+ordinary userinfo data. A quoted-context fallback retains the prior protection
+for malformed legacy echoes with raw slash or whitespace credentials.
+
+`test_cli_install_refusal_redacts_literal_apostrophe_userinfo_in_both_modes`
+drives the CLI in ordinary, verbose, literal-apostrophe and percent-encoded
+cases while covering the requested userinfo sub-delimiters. Before the fix,
+both literal-apostrophe modes failed (exit 1; encoded controls passed). The
+narrowing mutant that restores apostrophe as an authority terminator is killed
+by the same named test in both modes (exit 1). The final diagnostic, source,
+CLI, status, install, global-install and golden suites pass; strict mypy,
+package build and diff check also pass. Exact commands, exit codes, counts,
+coverage mapping and bounds are recorded in
+`BUG-260927-1kx6mb_results.md`.
+
+## 2026-09-27 - BUG-260927-1kx6mb: verbose install refusal redaction rework
+
+The rev-1 review showed that verbose cause rendering crossed the HTTPS broker
+boundary by printing arbitrary exception text. Its URL redactor also treated a
+larger count of `***` markers as proof of redaction, which fails when userinfo
+already contains that marker; three global install error paths dropped the
+verbose option. The formatter now renders only explicitly registered typed
+fields and suppresses raw or unknown cause text, URL credentials are removed
+structurally, and global install forwards verbose at every failure formatter.
+
+The adversarial broker path/token/subprocess tests, both marker-collision
+modes, project/global cause equality, and an unregistered-cause test all pass.
+Narrowing mutants for each of those boundaries were killed by their named
+tests. The five final pytest batches report 2,999 passing test executions and
+2 skips; this includes a standalone rerun of the 14 diagnostic tests after
+restoring the reviewer's exact test names. Strict mypy, package build and
+`git diff --check` exit 0. Exact commands, exit codes, regression evidence and
+bounds are recorded in `BUG-260927-1kx6mb_results.md`; sanitized green logs are attached as
+`BUG-260927-1kx6mb_evidence-rev2.zip`.
+
 ## 2026-09-25 - TASK-260925-38kn57: accepted skillfile-sources corpus pin
 
 The source conformance pin and CI checkout paths now target curator-spec
