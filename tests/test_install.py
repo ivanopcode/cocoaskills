@@ -160,7 +160,13 @@ def _stub_trusted_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(go_v1, "build", fake_build)
 
 
-def _run_csk_install_cli(project: Path, skills_root: Path, csk_home: Path):
+def _run_csk_install_cli(
+    project: Path,
+    skills_root: Path,
+    csk_home: Path,
+    *,
+    git_environment: dict[str, str] | None = None,
+):
     config_path = csk_home / "config.json"
     config_path.write_text(
         json.dumps(
@@ -185,6 +191,8 @@ def _run_csk_install_cli(project: Path, skills_root: Path, csk_home: Path):
     env["PYTHONPATH"] = os.pathsep.join(
         path for path in (str(source_root), env.get("PYTHONPATH", "")) if path
     )
+    if git_environment is not None:
+        env.update(git_environment)
     return subprocess.run(
         [sys.executable, "-m", "csk", "install", "app"],
         cwd=project,
@@ -309,8 +317,41 @@ def _make_schema2_claude_worktree(tmp_path: Path, *, outer_name: str = "outer") 
     return worktree
 
 
+def _make_schema2_claude_project_with_gitfile_target(
+    tmp_path: Path, *, outer_name: str = "outer"
+) -> tuple[Path, Path]:
+    """Create a nested project and return its Git metadata target directory."""
+    outer = make_project(tmp_path, outer_name)
+    project = outer / ".claude" / "worktrees" / "wt1"
+    project.mkdir(parents=True)
+    write_files(
+        project,
+        {
+            ".gitignore": (
+                ".agents/\n.claude/skills/\n.codex/skills/\n"
+                ".gemini/skills/\n.cursor/rules/\n"
+            ),
+            "source/seed/SKILL.md": (
+                "---\nname: seed\ndescription: Gitfile format probe.\n---\n\n# Seed\n"
+            ),
+        },
+    )
+    write_skillfile(
+        project,
+        {
+            "schema_version": 2,
+            "agents": ["claude_code"],
+            "sources": {"local": {"path": "source"}},
+            "skills": [{"name": "seed", "from": "local", "directory": "seed"}],
+        },
+    )
+    # Use a fresh writable pointer for the parser case. Git subprocesses use the
+    # parent repository explicitly because this fixture isn't a registered worktree.
+    return project, (outer / ".git").resolve(strict=True)
+
+
 def _write_gitfile(gitfile: Path, content: bytes) -> None:
-    """Make a Git-created pointer writable before tests replace its bytes."""
+    """Rewrite the real pointer for POSIX-only malformed-file controls."""
     gitfile.chmod(gitfile.stat().st_mode | stat.S_IWRITE)
     gitfile.write_bytes(content)
 
@@ -344,33 +385,49 @@ def test_install_unchanged_gitfile_from_real_claude_worktree_succeeds(
 def test_real_gitfile_supported_layout(
     tmp_path, skills_root, csk_home, variant: str, outer_name: str
 ):
-    """Git-compatible pointer endings and path bytes preserve real worktree installs."""
-    worktree = _make_schema2_claude_worktree(tmp_path, outer_name=outer_name)
-    gitfile = worktree / ".git"
-
-    if variant == "relative":
-        pointer = gitfile.read_bytes().rstrip(b"\r\n")
-        assert pointer.startswith(b"gitdir: ")
-        target = Path(os.fsdecode(pointer[len(b"gitdir: ") :]))
-        if not target.is_absolute():
-            target = gitfile.parent / target
-        relative_target = os.path.relpath(target, gitfile.parent)
-        _write_gitfile(gitfile, b"gitdir: " + os.fsencode(relative_target) + b"\n")
-    elif variant == "crlf":
-        _write_gitfile(gitfile, gitfile.read_bytes().rstrip(b"\r\n") + b"\r\n")
-    elif variant == "extra-newline":
-        _write_gitfile(gitfile, gitfile.read_bytes() + b"\n")
-    elif variant == "extra-crlf":
-        _write_gitfile(gitfile, gitfile.read_bytes() + b"\r\n")
-    elif variant == "unicode-line-separator":
+    """Git pointer byte layouts install; variants use fresh pointer files."""
+    if variant == "unicode-line-separator":
+        worktree = _make_schema2_claude_worktree(
+            tmp_path, outer_name=outer_name
+        )
+        gitfile = worktree / ".git"
         assert "\u2028" in str(worktree)
-        assert os.fsencode("\u2028") in gitfile.read_bytes()
+        pointer_before = gitfile.read_bytes()
+        assert os.fsencode("\u2028") in pointer_before
+        run(["git", "rev-parse", "--git-dir"], worktree)
+        git_environment = None
+    else:
+        worktree, target = _make_schema2_claude_project_with_gitfile_target(
+            tmp_path, outer_name=outer_name
+        )
+        gitfile = worktree / ".git"
+        target_bytes = os.fsencode(target)
+        if variant == "relative":
+            target_bytes = os.fsencode(os.path.relpath(target, worktree))
+            pointer = b"gitdir: " + target_bytes + b"\n"
+        elif variant == "crlf":
+            pointer = b"gitdir: " + target_bytes + b"\r\n"
+        elif variant == "extra-newline":
+            pointer = b"gitdir: " + target_bytes + b"\n\n"
+        else:
+            pointer = b"gitdir: " + target_bytes + b"\n\r\n"
+        gitfile.write_bytes(pointer)
+        git_environment = {
+            "GIT_DIR": str(target),
+            "GIT_WORK_TREE": str(worktree),
+        }
 
-    run(["git", "rev-parse", "--git-dir"], worktree)
-    result = _run_csk_install_cli(worktree, skills_root, csk_home)
+    result = _run_csk_install_cli(
+        worktree,
+        skills_root,
+        csk_home,
+        git_environment=git_environment,
+    )
 
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
     assert (worktree / ".claude/skills/seed/.csk-install.json").is_file()
+    if variant == "unicode-line-separator":
+        assert gitfile.read_bytes() == pointer_before
 
 
 @pytest.mark.parametrize(
