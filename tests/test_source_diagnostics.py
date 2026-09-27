@@ -507,7 +507,7 @@ def _generated_url_diagnostic(
     coverage["url_counts"].add(str(count))
     urls: list[str] = []
 
-    def credentialed_url(*, nested: bool) -> str:
+    def credentialed_url() -> str:
         scheme = rng.choice(schemes)
         coverage["schemes"].add(scheme)
         username_secret = sentinel("secret")
@@ -553,13 +553,14 @@ def _generated_url_diagnostic(
             f"?{query_key}={query_secret}&next={query_keep}"
             f"#fragment-{fragment_keep}"
         )
-        if nested:
-            nested_url = credentialed_url(nested=False)
-            url += f"::nested::{nested_url}"
         return url
 
     for index in range(count):
-        urls.append(credentialed_url(nested=index == 0))
+        urls.append(credentialed_url())
+    if count > 1:
+        # Keep the corpus at one to four actual URL occurrences while placing
+        # one later scheme inside the first URL's fragment.
+        urls[0] += f"::nested::{urls.pop(1)}"
 
     reason_keep = sentinel("keep")
     email_keep = sentinel("keep")
@@ -595,6 +596,7 @@ def _generated_url_diagnostic(
         coverage["joiners"].add("separated")
 
     message = f"{before} {group} {after}"
+    assert message.count("://") == count
     return message, secrets, keeps, coverage
 
 
