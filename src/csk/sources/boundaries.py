@@ -214,10 +214,21 @@ class BoundaryRecord:
         return result
 
 
-def _identity_to_json(identity: tuple[int, int] | None) -> list[int] | None:
+def _identity_component_to_json(value: int) -> int | str:
+    """Keep ordinary POSIX identities byte-stable and preserve wide IDs."""
+
+    if -(2**63) <= value <= 2**63 - 1:
+        return value
+    return str(value)
+
+
+def _identity_to_json(identity: tuple[int, int] | None) -> list[int | str] | None:
     if identity is None:
         return None
-    return [identity[0], identity[1]]
+    return [
+        _identity_component_to_json(identity[0]),
+        _identity_component_to_json(identity[1]),
+    ]
 
 
 def boundary_record_to_json(record: BoundaryRecord) -> dict[str, Any]:
@@ -225,7 +236,8 @@ def boundary_record_to_json(record: BoundaryRecord) -> dict[str, Any]:
 
     The publication transaction carries the record in each recheck payload
     so crash recovery rechecks with the same frozen answers. The rendering
-    is plain JSON scalars only; identities become two-element integer lists.
+    is plain JSON scalars only; identities stay as integers within signed-64
+    range and use canonical decimal strings for wider Windows IDs.
     """
 
     if not isinstance(record, BoundaryRecord):
@@ -255,13 +267,36 @@ def _identity_from_json(value: object, *, subject: str) -> tuple[int, int] | Non
     if (
         not isinstance(value, list)
         or len(value) != 2
-        or not all(type(item) is int for item in value)
+        or not all(_is_identity_component(item) for item in value)
     ):
-        raise ValueError(f"{subject} must be a pair of integers or null")
-    first = value[0]
-    second = value[1]
-    assert isinstance(first, int) and isinstance(second, int)
-    return (first, second)
+        raise ValueError(
+            f"{subject} must be an integer pair or canonical wide-integer pair"
+        )
+    return (_identity_component_from_json(value[0]), _identity_component_from_json(value[1]))
+
+
+def _is_identity_component(value: object) -> bool:
+    if type(value) is int:
+        return True
+    if (
+        type(value) is not str
+        or not value
+        or len(value) > 39
+        or not value.isascii()
+        or not value.isdecimal()
+        or len(value) > 1
+        and value.startswith("0")
+    ):
+        return False
+    number = int(value)
+    return 2**63 <= number <= 2**128 - 1
+
+
+def _identity_component_from_json(value: object) -> int:
+    if type(value) is int:
+        return value
+    assert isinstance(value, str)
+    return int(value)
 
 
 def _optional_str_from_json(value: object, *, subject: str) -> str | None:
@@ -1834,5 +1869,4 @@ def _resolve_effective_chain(
             )
         current = probe
     return current
-
 

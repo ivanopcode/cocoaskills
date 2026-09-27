@@ -539,6 +539,34 @@ def _visit_generation_path(
     try:
         before = path.lstat()
     except FileNotFoundError:
+        # Windows may report a missing path when an intermediate component
+        # exists but is a regular file. That is an unreadable generation
+        # root, not an absent one. Walk upward so only a genuinely missing
+        # suffix is recorded as absence.
+        ancestor = path.parent
+        while True:
+            try:
+                ancestor_info = ancestor.lstat()
+            except FileNotFoundError:
+                parent = ancestor.parent
+                if parent == ancestor:
+                    break
+                ancestor = parent
+                continue
+            except OSError as exc:
+                raise BuildPlanningError(
+                    "generation_unreadable",
+                    f"cannot inspect shared planning state {ancestor}: {exc}",
+                ) from exc
+            if not stat.S_ISDIR(ancestor_info.st_mode) and not stat.S_ISLNK(
+                ancestor_info.st_mode
+            ):
+                raise BuildPlanningError(
+                    "generation_unreadable",
+                    f"cannot inspect shared planning state {path}: parent "
+                    f"{ancestor} is not a directory",
+                )
+            break
         _generation_record(digest, b"M", relative, ())
         return
     except OSError as exc:

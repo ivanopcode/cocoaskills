@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Изменено
 
+- Выбор источников Skillfile schema 2 работает в Windows.
 - Набор соответствия для Skillfile schema 2 переведён с черновых векторов на принятый корпус curator-spec `conformance/skillfile-sources-v1` (curator-spec #96).
 
 ## [0.17.0] - 2026-09-25

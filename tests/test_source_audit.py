@@ -2371,8 +2371,8 @@ def test_plan_hook_refuses_network_packages(tmp_path: Path) -> None:
 def _real_tree_identities(tmp_path: Path) -> tuple[Path, str, str]:
     """Build one real tree with its real inventory digest and content hash.
 
-    The capture below runs schema-2 source selection, which is
-    POSIX-only (operational note 8): the guard lives here, on the
+    The capture below runs schema-2 source selection through the
+    available descriptor-relative backend: the guard lives here, on the
     one helper that needs selection, so the rest of the module
     keeps running where traversal is unavailable.
     """

@@ -47,6 +47,54 @@ from csk.transactions import (
 pytestmark = pytest.mark.usefixtures("stable_env")
 
 
+def _is_directory_link(path: Path) -> bool:
+    is_junction = getattr(path, "is_junction", None)
+    return path.is_symlink() or (callable(is_junction) and is_junction())
+
+
+def _remove_directory_link(path: Path) -> None:
+    """Remove a directory link using the Windows directory-link API shape."""
+
+    if os.name == "nt":
+        path.rmdir()
+    else:
+        path.unlink()
+
+
+def test_ensure_live_parents_cleans_created_dirs_after_later_refusal(
+    tmp_path: Path,
+) -> None:
+    """A later invalid parent must not leave earlier transaction dirs behind."""
+
+    staged_file = tmp_path / "staged"
+    staged_file.write_text("payload", encoding="utf-8")
+    first = publish.TargetSpec(
+        target_class=publish.CLASS_CONTEXT,
+        identifier="project/first",
+        live_path=tmp_path / "created" / "skills" / "first",
+        kind="entry",
+        staged=staged_file,
+    )
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("blocker", encoding="utf-8")
+    second = publish.TargetSpec(
+        target_class=publish.CLASS_CONTEXT,
+        identifier="project/second",
+        live_path=blocker / "child" / "second",
+        kind="entry",
+        staged=staged_file,
+    )
+    staged = {
+        (first.target_class, first.identifier): staged_file,
+        (second.target_class, second.identifier): staged_file,
+    }
+
+    with pytest.raises(SourceError, match="Publication parent"):
+        publish.ensure_live_parents((first, second), staged=staged)
+
+    assert not (tmp_path / "created").exists()
+
+
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
 # ---------------------------------------------------------------------------
@@ -572,8 +620,14 @@ def test_path_source_install_locks_and_status_end_to_end(
     assert marker.lock_sha256 == lock.lock_sha256
 
     mirror = project / ".codex" / "skills" / "review"
-    assert mirror.is_symlink()
-    assert Path(os.readlink(mirror)).as_posix() == "../../.agents/skills/review"
+    if _is_directory_link(mirror):
+        assert Path(os.readlink(mirror)).as_posix() == "../../.agents/skills/review"
+    else:
+        # On Windows, auto mode falls back to a copy when its directory-link
+        # capability probe cannot remove the probe with the POSIX unlink API.
+        assert os.name == "nt" and mirror.is_dir()
+        canonical = project / ".agents" / "skills" / "review"
+        assert (mirror / "SKILL.md").read_bytes() == (canonical / "SKILL.md").read_bytes()
     assert (project / ".codex" / "skills" / ".csk-managed.json").is_file()
 
     after = _published_digests(project, csk_home, ["review"])
@@ -1275,7 +1329,7 @@ def test_publication_recheck_runs_between_writes(
 
     def retarget(_point: str, _target: JournalTarget | None) -> None:
         dot_codex = project / ".codex"
-        if dot_codex.is_symlink() or not dot_codex.exists():
+        if _is_directory_link(dot_codex) or not dot_codex.exists():
             raise AssertionError(".codex ancestor is missing when retargeting")
         dot_codex.rename(project / ".codex-saved-by-probe")
         dot_codex.symlink_to(outside, target_is_directory=True)
@@ -1302,8 +1356,14 @@ def test_publication_recheck_runs_between_writes(
     assert journal["phase"] == "rolling_back", journal["phase"]
 
     # Restore the probe's own swap; the deferred rollback replays clean.
-    (project / ".codex").unlink()
-    (project / ".codex-saved-by-probe").rename(project / ".codex")
+    swapped_codex = project / ".codex"
+    if _is_directory_link(swapped_codex):
+        _remove_directory_link(swapped_codex)
+    else:
+        assert not swapped_codex.exists(), "rollback left a non-link .codex entry"
+    saved_codex = project / ".codex-saved-by-probe"
+    assert saved_codex.is_dir() and not _is_directory_link(saved_codex)
+    saved_codex.rename(swapped_codex)
     _recover_clean(csk_home)
     live = _published_digests(project, csk_home, names)
     assert _published_without_store(live) == _published_without_store(before)
@@ -1645,6 +1705,8 @@ def test_status_is_read_only_and_nonzero_when_not_current(
     """Status changes nothing and exits nonzero in each non-current case."""
 
     project, cfg, _members = _basic_fixture(tmp_path, csk_home)
+    if case == "mirror-retargeted":
+        cfg = replace(cfg, adapter_mode="symlink")
     _install_ok(cfg)
     from csk import config as config_module
 
@@ -1674,7 +1736,7 @@ def test_status_is_read_only_and_nonzero_when_not_current(
         shutil.rmtree(project / "agents" / "skills" / "review")
     elif case == "mirror-retargeted":
         mirror = project / ".codex" / "skills" / "review"
-        mirror.unlink()
+        _remove_directory_link(mirror)
         mirror.symlink_to(tmp_path / "elsewhere")
     elif case == "runtime-tampered":
         lock = _read_lock(project)
@@ -2672,10 +2734,16 @@ def test_boundary_move_between_writes_reports_overlap(
 
         def restore() -> None:
             victim = swapped[0]
-            assert victim.is_symlink()
             assert list(outside_dir.iterdir()) == []
-            victim.unlink()
-            victim.with_name(victim.name + "-saved").rename(victim)
+            if _is_directory_link(victim):
+                _remove_directory_link(victim)
+            else:
+                assert not victim.exists(), (
+                    f"moved binding is not a directory link: exists={victim.exists()}"
+                )
+            saved = victim.with_name(victim.name + "-saved")
+            assert saved.is_dir() and not _is_directory_link(saved)
+            saved.rename(victim)
 
         point = "target_committed"
         when = lambda target: target is not None and target.target_class == publish.CLASS_BINDINGS  # noqa: E731

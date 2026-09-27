@@ -29,6 +29,7 @@ from types import MappingProxyType
 from typing import Callable, ContextManager, Final, Iterator, cast
 
 from .. import identifiers
+from . import _selection_fs_windows
 from .errors import (
     CODE_MEMBER_INVALID,
     CODE_OUTPUT_OVERLAP,
@@ -73,23 +74,32 @@ _DIR_FD_ORIGINALS: Final = {
 # without the capability. Kept here so the skips name exactly what the
 # predicate requires, with no per-test rewording.
 NO_DESCRIPTOR_TRAVERSAL_REASON: Final = (
-    "descriptor-relative traversal is unavailable (requires O_DIRECTORY "
+    "descriptor-relative traversal is unavailable (required Windows NT APIs are missing)"
+    if os.name == "nt"
+    else "descriptor-relative traversal is unavailable (requires O_DIRECTORY "
     "plus dir_fd support for os.open/os.stat/os.readlink); schema-2 "
     "source selection is POSIX-only"
 )
+
+_WINDOWS_SELECTION: Final = os.name == "nt"
+_WINDOWS_DIRECTORY_FLAG: Final = 1 << 30
+_WINDOWS_FILE_FLAG: Final = 1 << 29
+_WINDOWS_ANY_FLAG: Final = 1 << 28
+_WINDOWS_FOLLOW_FLAG: Final = 1 << 27
+_StatLike = os.stat_result | _selection_fs_windows.WindowsStat
 
 
 def supports_descriptor_traversal() -> bool:
     """Return whether the runtime provides descriptor-relative traversal.
 
-    The decision is made from the runtime alone: ``O_DIRECTORY`` must
-    exist so the source root itself can be opened as a directory, and the
-    gated descent functions (``os.open``/``os.stat``/``os.readlink``) must
-    be listed in ``os.supports_dir_fd``. The operating system's name is
-    never consulted: a POSIX host without these mechanisms refuses exactly
-    like Windows does.
+    The platform selects which backend to inspect, but its name alone never
+    proves capability. Windows requires all NT entry points; the POSIX
+    backend requires ``O_DIRECTORY`` plus ``dir_fd`` support for
+    ``os.open``/``os.stat``/``os.readlink``.
     """
 
+    if _WINDOWS_SELECTION:
+        return not _selection_fs_windows.missing_apis()
     if not hasattr(os, "O_DIRECTORY"):
         return False
     supported = getattr(os, "supports_dir_fd", None)
@@ -105,6 +115,8 @@ def supports_descriptor_traversal() -> bool:
 def _missing_traversal_mechanisms() -> list[str]:
     """Name the descriptor-traversal mechanisms this runtime lacks."""
 
+    if _WINDOWS_SELECTION:
+        return _selection_fs_windows.missing_apis()
     missing: list[str] = []
     if not hasattr(os, "O_DIRECTORY"):
         missing.append("O_DIRECTORY")
@@ -150,14 +162,23 @@ def trace_filesystem(sink: TraceSink) -> Iterator[None]:
         _TRACE_SINK = previous
 
 
-def _identity_from_stat(value: os.stat_result) -> tuple[int, int]:
+def _identity_from_stat(value: _StatLike) -> tuple[int, int]:
     return (value.st_dev, value.st_ino)
+
+
+def _is_hard_link(value: _StatLike) -> bool:
+    """Apply the link-count rule without changing the POSIX backend."""
+
+    link_count = getattr(value, "st_nlink", 1)
+    return link_count != 1 if _WINDOWS_SELECTION else link_count > 1
 
 
 def _safe_identity(fd: int | None) -> tuple[int, int] | None:
     if fd is None:
         return None
     try:
+        if _WINDOWS_SELECTION:
+            return _selection_fs_windows.identity_from_handle(fd)
         return _identity_from_stat(os.fstat(fd))
     except _FS_ERRORS:
         return None
@@ -190,12 +211,54 @@ def _open_descriptor(
     flags: int,
     *,
     dir_fd: int | None = None,
+    allow_reparse: bool = False,
+    allow_parent: bool = False,
+    enumerated_name: bool = False,
 ) -> int:
     """Open one object and record its actual parent descriptor."""
 
     native = os.fspath(path)
     try:
-        if dir_fd is None:
+        if _WINDOWS_SELECTION:
+            directory = bool(flags & _WINDOWS_DIRECTORY_FLAG)
+            if not directory and not flags & (_WINDOWS_FILE_FLAG | _WINDOWS_ANY_FLAG):
+                raise OSError(errno.EINVAL, "Windows descriptor open has no object kind")
+            nofollow = not bool(flags & _WINDOWS_FOLLOW_FLAG)
+            if dir_fd is None:
+                descriptor = _selection_fs_windows.open_path(
+                    native, directory=directory, nofollow=nofollow
+                )
+            else:
+                name = os.fsdecode(native)
+                _selection_fs_windows.validate_component(
+                    name, allow_parent=allow_parent
+                )
+                if allow_parent:
+                    actual_name = name
+                    case_sensitive = False
+                elif enumerated_name:
+                    # NtQueryDirectoryFile supplied this exact on-disk name.
+                    # Request an exact-case lookup where the object manager
+                    # honors it; the name itself is already the enumerated
+                    # spelling, so default case-insensitive policy does not
+                    # require enumerating the parent again.
+                    _selection_fs_windows.validate_component(name)
+                    actual_name = name
+                    case_sensitive = True
+                else:
+                    actual_name, case_sensitive = _resolve_windows_component(
+                        dir_fd, name
+                    )
+                descriptor = _selection_fs_windows.open_relative(
+                    dir_fd,
+                    actual_name,
+                    directory=(True if directory else False if flags & _WINDOWS_FILE_FLAG else None),
+                    nofollow=nofollow,
+                    case_sensitive=case_sensitive,
+                    allow_reparse=allow_reparse,
+                    allow_parent=allow_parent,
+                )
+        elif dir_fd is None:
             descriptor = os.open(native, flags)
         else:
             descriptor = os.open(native, flags, dir_fd=dir_fd)
@@ -222,6 +285,8 @@ def _read_descriptor(
     """
 
     _emit("read", name, parent_fd=parent_fd, result_fd=fd)
+    if _WINDOWS_SELECTION:
+        return _selection_fs_windows.read_handle(fd, size)
     return os.read(fd, size)
 
 
@@ -320,6 +385,25 @@ def _scandir(
         os.fspath(path) if not isinstance(path, int) else path,
         parent_fd=parent_fd,
     )
+    if _WINDOWS_SELECTION:
+        if not isinstance(path, int):
+            raise OSError(errno.ENOTSUP, "Windows selection enumeration requires a held directory handle")
+        return cast(
+            ContextManager[Iterator[os.DirEntry[str]]],
+            _selection_fs_windows.scandir(
+                path,
+                stat_entry=lambda name, follow: cast(
+                    _selection_fs_windows.WindowsStat,
+                    _stat_child(
+                        path,
+                        name,
+                        parent_path=None,
+                        follow_symlinks=follow,
+                        enumerated_name=True,
+                    ),
+                ),
+            ),
+        )
     try:
         return os.scandir(path)
     except (TypeError, NotImplementedError):
@@ -329,6 +413,8 @@ def _scandir(
 
 
 def _directory_flags(*, nofollow: bool = True) -> int:
+    if _WINDOWS_SELECTION:
+        return _WINDOWS_DIRECTORY_FLAG | (0 if nofollow else _WINDOWS_FOLLOW_FLAG)
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     if nofollow:
         flags |= getattr(os, "O_NOFOLLOW", 0)
@@ -336,6 +422,8 @@ def _directory_flags(*, nofollow: bool = True) -> int:
 
 
 def _file_flags(*, nofollow: bool = True) -> int:
+    if _WINDOWS_SELECTION:
+        return _WINDOWS_FILE_FLAG | (0 if nofollow else _WINDOWS_FOLLOW_FLAG)
     # O_NONBLOCK is a no-op for regular files and keeps a listing-to-open
     # race from hanging the walk: without it, an entry replaced by a FIFO
     # between listing and open would block the reader forever instead of
@@ -344,6 +432,33 @@ def _file_flags(*, nofollow: bool = True) -> int:
     if nofollow:
         flags |= getattr(os, "O_NOFOLLOW", 0)
     return flags
+
+
+def _resolve_windows_component(parent_fd: int, name: str) -> tuple[str, bool]:
+    """Resolve a selector through one no-follow open and its normalized name."""
+
+    _selection_fs_windows.validate_component(name)
+    case_sensitive = _selection_fs_windows.directory_case_sensitive(parent_fd)
+    probe = _selection_fs_windows.open_relative(
+        parent_fd,
+        name,
+        directory=None,
+        nofollow=True,
+        case_sensitive=case_sensitive,
+        allow_reparse=True,
+    )
+    try:
+        actual_name = _selection_fs_windows.normalized_component_name(probe)
+        if not _selection_fs_windows.names_equivalent(
+            name, actual_name, case_sensitive=case_sensitive
+        ):
+            raise FileNotFoundError(
+                errno.ENOENT,
+                f"component {name!r} is not its normalized on-disk name",
+            )
+        return actual_name, case_sensitive
+    finally:
+        _selection_fs_windows.close_handle(probe)
 
 
 @dataclass(frozen=True)
@@ -754,13 +869,22 @@ class SelectionSession:
             unavailable = (
                 ", ".join(missing)
                 if missing
-                else "O_DIRECTORY and dir_fd traversal"
+                else (
+                    "required Windows NT filesystem APIs"
+                    if _WINDOWS_SELECTION
+                    else "O_DIRECTORY and dir_fd traversal"
+                )
+            )
+            platform_detail = (
+                "schema-2 source selection requires handle-relative Windows APIs"
+                if _WINDOWS_SELECTION
+                else "Skillfile schema-2 source selection is POSIX-only"
             )
             raise SourceError(
                 CODE_SELECTION_INVALID,
                 f"Source root {source_root} cannot be selected: "
                 f"descriptor-relative traversal is unavailable ({unavailable}); "
-                "Skillfile schema-2 source selection is POSIX-only",
+                f"{platform_detail}",
             )
         preflight_state = _prepare_preflight(
             source_root,
@@ -1100,7 +1224,7 @@ class SelectionSession:
 
     def _require_source_device(
         self,
-        value: os.stat_result,
+        value: _StatLike,
         *,
         code: str,
         context: str,
@@ -1326,7 +1450,7 @@ class SelectionSession:
                             stack.append((child, child_relative))
                             continue
                         if stat.S_ISREG(entry_stat.st_mode):
-                            if getattr(entry_stat, "st_nlink", 1) > 1:
+                            if _is_hard_link(entry_stat):
                                 raise SourceError(
                                     CODE_MEMBER_INVALID,
                                     f"Skill member {label} entry {name!r} is a hard link",
@@ -1409,7 +1533,7 @@ class SelectionSession:
                     current = child
                 continue
             if stat.S_ISREG(child_stat.st_mode):
-                if getattr(child_stat, "st_nlink", 1) > 1:
+                if _is_hard_link(child_stat):
                     raise SourceError(
                         CODE_MEMBER_INVALID,
                         f"{context} entry {shown!r} is a hard link",
@@ -1759,7 +1883,7 @@ class SelectionSession:
                             stack.append((child, child_relative))
                             continue
                         if stat.S_ISREG(entry_stat.st_mode):
-                            if getattr(entry_stat, "st_nlink", 1) > 1:
+                            if _is_hard_link(entry_stat):
                                 raise SourceError(
                                     code,
                                     f"{context}: {shown!r} is a hard link",
@@ -2418,7 +2542,15 @@ def _phase_a_collect_managed_roots(
             ) from exc
 
         try:
-            candidate_stat = os.fstat(child_fd)
+            if _WINDOWS_SELECTION:
+                candidate_stat = _fstat(
+                    child_fd,
+                    code=CODE_OUTPUT_OVERLAP,
+                    context=context,
+                    path=managed_name,
+                )
+            else:
+                candidate_stat = os.fstat(child_fd)
         except _FS_ERRORS as exc:
             raise SourceError(
                 CODE_OUTPUT_OVERLAP,
@@ -2473,15 +2605,6 @@ def _phase_a_absolute_link_plan(
     names are the only thing Phase B replays.
     """
 
-    if os.name != "posix":
-        return AbsoluteLinkPlan(
-            components=None,
-            detail=(
-                f"{link_path}: absolute symlink targets are unsupported by "
-                "the Windows fallback"
-            ),
-        )
-
     target_fd: int | None = None
     temporary: list[int] = []
     try:
@@ -2529,6 +2652,7 @@ def _phase_a_absolute_link_plan(
                 "..",
                 _directory_flags(nofollow=True),
                 dir_fd=current_fd,
+                allow_parent=True,
             )
             temporary.append(parent_fd)
             parent_stat = _fstat(
@@ -2793,7 +2917,7 @@ def _root_managed_ancestor(
 
 
 def _open_parent_directory(current_fd: int, current_path: Path) -> tuple[int, Path]:
-    """Open a physical parent, with the documented Windows fallback."""
+    """Open a physical parent relative to a held directory handle."""
 
     try:
         return (
@@ -2801,10 +2925,13 @@ def _open_parent_directory(current_fd: int, current_path: Path) -> tuple[int, Pa
                 "..",
                 _directory_flags(nofollow=True),
                 dir_fd=current_fd,
+                allow_parent=True,
             ),
             current_path.parent,
         )
     except (TypeError, NotImplementedError):
+        if _WINDOWS_SELECTION:
+            raise
         parent_path = current_path.parent
         try:
             value = os.lstat(parent_path)
@@ -2878,9 +3005,10 @@ def _open_child_directory(
             dir_fd=parent_fd,
         )
     except (TypeError, NotImplementedError):
-        # Windows has no descriptor-relative openat.  The fallback checks the
-        # entry before opening and callers re-stat the result.  Its weaker
-        # no-follow guarantee is documented in the task evidence.
+        if _WINDOWS_SELECTION:
+            raise
+        # Compatibility fallback for POSIX runtimes that reject dir_fd
+        # despite advertising the relevant syscall.
         if parent_path is None:
             raise OSError(errno.ENOTSUP, "descriptor-relative directory open unavailable")
         child = parent_path / name
@@ -2899,6 +3027,8 @@ def _open_child_file(
     try:
         return _open_descriptor(name, _file_flags(nofollow=True), dir_fd=parent_fd)
     except (TypeError, NotImplementedError):
+        if _WINDOWS_SELECTION:
+            raise
         if parent_path is None:
             raise OSError(errno.ENOTSUP, "descriptor-relative file open unavailable")
         child = parent_path / name
@@ -2914,7 +3044,33 @@ def _stat_child(
     *,
     parent_path: Path | None,
     follow_symlinks: bool,
-) -> os.stat_result:
+    enumerated_name: bool = False,
+) -> _StatLike:
+    if _WINDOWS_SELECTION:
+        fd = _open_descriptor(
+            name,
+            _WINDOWS_ANY_FLAG
+            | (0 if not follow_symlinks else _WINDOWS_FOLLOW_FLAG),
+            dir_fd=parent_fd,
+            allow_reparse=not follow_symlinks,
+            enumerated_name=enumerated_name,
+        )
+        try:
+            value = _fstat(
+                fd,
+                code=CODE_SELECTION_INVALID,
+                context="Filesystem entry",
+                path=name,
+            )
+            _emit(
+                "stat" if follow_symlinks else "lstat",
+                name,
+                parent_fd=parent_fd,
+                result_fd=fd,
+            )
+            return value
+        finally:
+            _close_quietly(fd)
     try:
         return os.stat(name, dir_fd=parent_fd, follow_symlinks=follow_symlinks)
     except (TypeError, NotImplementedError):
@@ -2925,7 +3081,7 @@ def _stat_child(
         raise
 
 
-def _is_reparse_point(value: os.stat_result) -> bool:
+def _is_reparse_point(value: _StatLike) -> bool:
     attributes = getattr(value, "st_file_attributes", 0)
     return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
 
@@ -2937,7 +3093,25 @@ def _lstat_at(
     parent_path: Path | None = None,
     code: str,
     context: str,
-) -> os.stat_result:
+) -> _StatLike:
+    if _WINDOWS_SELECTION:
+        try:
+            fd = _open_descriptor(
+                name,
+                _WINDOWS_ANY_FLAG,
+                dir_fd=parent_fd,
+                allow_reparse=True,
+            )
+            try:
+                value = _fstat(fd, code=code, context=context, path=name)
+                _emit("lstat", name, parent_fd=parent_fd, result_fd=fd)
+                return value
+            finally:
+                _close_quietly(fd)
+        except SourceError:
+            raise
+        except _FS_ERRORS as exc:
+            raise SourceError(code, f"{context}: {name!r}: {exc}") from exc
     try:
         return os.lstat(name, dir_fd=parent_fd)
     except (TypeError, NotImplementedError):
@@ -2962,6 +3136,32 @@ def _readlink_at(
     code: str,
     context: str,
 ) -> str:
+    if _WINDOWS_SELECTION:
+        try:
+            fd = _open_descriptor(
+                name,
+                _WINDOWS_ANY_FLAG,
+                dir_fd=parent_fd,
+                allow_reparse=True,
+            )
+            try:
+                entry_stat = _fstat(fd, code=code, context=context, path=name)
+                if not _is_reparse_point(entry_stat):
+                    raise SourceError(
+                        code, f"{context}: {name!r} is not a symbolic link or junction"
+                    )
+                return _selection_fs_windows.readlink_handle(
+                    fd,
+                    int(getattr(entry_stat, "st_reparse_tag", 0)),
+                    containing_directory=parent_fd,
+                )
+            finally:
+                _emit("readlink", name, parent_fd=parent_fd, result_fd=fd)
+                _close_quietly(fd)
+        except SourceError:
+            raise
+        except _FS_ERRORS as exc:
+            raise SourceError(code, f"{context}: {name!r}: {exc}") from exc
     try:
         value = os.readlink(name, dir_fd=parent_fd)
     except (TypeError, NotImplementedError):
@@ -2981,8 +3181,12 @@ def _readlink_at(
     return value
 
 
-def _fstat(fd: int, *, code: str, context: str, path: str) -> os.stat_result:
+def _fstat(fd: int, *, code: str, context: str, path: str) -> _StatLike:
     try:
+        if _WINDOWS_SELECTION:
+            value = _selection_fs_windows.stat_handle(fd)
+            _emit("fstat", path, parent_fd=None, result_fd=fd)
+            return value
         return os.fstat(fd)
     except _FS_ERRORS as exc:
         raise SourceError(code, f"{context}: {path!r}: {exc}") from exc
@@ -2991,7 +3195,12 @@ def _fstat(fd: int, *, code: str, context: str, path: str) -> os.stat_result:
 def _is_absolute_target(target: str) -> bool:
     if os.name == "posix":
         return target.startswith("/")
-    return target.startswith(("/", "\\"))
+    return target.startswith(("/", "\\")) or (
+        len(target) >= 3
+        and target[0].isalpha()
+        and target[1] == ":"
+        and target[2] in ("/", "\\")
+    )
 
 
 def _split_link_target(target: str) -> list[str]:
@@ -2999,7 +3208,7 @@ def _split_link_target(target: str) -> list[str]:
 
     On POSIX a backslash is an ordinary filename character.  Replacing it
     with ``/`` would create a directory that the operating system never
-    resolved and is therefore forbidden.  The Windows fallback accepts its
+    resolved and is therefore forbidden.  The Windows backend accepts its
     native alternate separator.
     """
 
@@ -3020,6 +3229,9 @@ def _display_child(parent: Path, name: str) -> Path:
 
 def _close_quietly(fd: int) -> None:
     try:
+        if _WINDOWS_SELECTION:
+            _selection_fs_windows.close_handle(fd)
+            return
         os.close(fd)
     except _FS_ERRORS:
         pass

@@ -79,7 +79,8 @@ def _require_descriptor_traversal(request: pytest.FixtureRequest) -> None:
     Every test in this module except those marked
     ``posix_traversal_independent`` drives the descriptor-confined
     selection entries. On a runtime without descriptor-relative traversal
-    schema-2 selection refuses POSIX-only, so those tests skip with the
+    schema-2 selection refuses when neither descriptor backend is available,
+    so those tests skip with the
     single named reason instead of failing. Pure frontmatter/parser probes
     and pure argument-validation checks (which raise before the capability
     gate) carry the marker and run everywhere.

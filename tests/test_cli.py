@@ -14,7 +14,8 @@ from pathlib import Path
 import pytest
 from conftest import make_project, make_skill_repo, run, write_skillfile
 
-from csk import cli, config, installer, shims, status
+from csk import cli, config, git_admission, installer, locking, shims, status
+from csk.build_repository import LockedCommit
 from csk.sources import _selection_fs
 from csk.sources import diagnostics as source_diagnostics
 from csk.sources import errors as source_errors
@@ -1173,14 +1174,15 @@ def test_unknown_agent_names_warn(monkeypatch, tmp_path, csk_home, skills_root, 
 # every rendered diagnostic is asserted as user-visible text (code line and
 # exactly one ``remediation:`` line) with the test's
 # secrets absent. Install-path tests need descriptor-relative traversal
-# and skip with the repository's named POSIX reason elsewhere, exactly
+# and skip with the named capability reason only where neither backend is
+# available, exactly
 # like the sibling schema-2 suites; ``check``-path tests run everywhere
 # because validation is pure after the declared inputs are read.
 
 _DRAFT_LABEL = "draft skillfile-sources-v1 (opt-in)"
 
 
-def _require_posix_traversal():
+def _require_selection_traversal():
     if not _selection_fs.supports_descriptor_traversal():
         pytest.skip(_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON)
 
@@ -2297,7 +2299,7 @@ def test_cli_valid_token_shaped_username_never_renders(
 
 
 def test_cli_diagnostic_source_member_missing(monkeypatch, tmp_path, csk_home, skills_root, capsys):
-    _require_posix_traversal()
+    _require_selection_traversal()
     project = make_project(tmp_path)
     _write_draft_skill(project / "agents" / "skills" / "team" / "alpha", "alpha")
     write_skillfile(
@@ -2323,7 +2325,7 @@ def test_cli_diagnostic_source_member_missing(monkeypatch, tmp_path, csk_home, s
 
 
 def test_cli_diagnostic_source_member_invalid(monkeypatch, tmp_path, csk_home, skills_root, capsys):
-    _require_posix_traversal()
+    _require_selection_traversal()
     project = make_project(tmp_path)
     _write_draft_skill(project / "agents" / "skills" / "bad", "bad", bad="noname")
     write_skillfile(
@@ -2426,7 +2428,7 @@ def test_cli_status_structural_error_renders_diagnostic(monkeypatch, tmp_path, c
 
 
 def test_cli_diagnostic_source_output_overlap(monkeypatch, tmp_path, csk_home, skills_root, capsys):
-    _require_posix_traversal()
+    _require_selection_traversal()
     project = make_project(tmp_path)
     _write_draft_skill(project / ".agents" / "evil" / "review", "review")
     write_skillfile(
@@ -2450,7 +2452,7 @@ def test_cli_diagnostic_source_output_overlap(monkeypatch, tmp_path, csk_home, s
 
 
 def test_cli_diagnostic_source_snapshot_changed(monkeypatch, tmp_path, csk_home, skills_root, capsys):
-    _require_posix_traversal()
+    _require_selection_traversal()
     project = make_project(tmp_path)
     _write_draft_skill(project / "agents" / "skills" / "review", "review")
     write_skillfile(
@@ -2479,7 +2481,7 @@ def test_cli_diagnostic_source_snapshot_changed(monkeypatch, tmp_path, csk_home,
 
 
 def test_cli_diagnostic_source_snapshot_unavailable(monkeypatch, tmp_path, csk_home, skills_root, capsys):
-    _require_posix_traversal()
+    _require_selection_traversal()
     project = make_project(tmp_path)
     _write_draft_skill(project / "agents" / "skills" / "review", "review")
     write_skillfile(
@@ -2508,7 +2510,7 @@ def test_cli_diagnostic_source_snapshot_unavailable(monkeypatch, tmp_path, csk_h
 
 
 def test_cli_diagnostic_source_lock_stale(monkeypatch, tmp_path, csk_home, skills_root, capsys):
-    _require_posix_traversal()
+    _require_selection_traversal()
     project = make_project(tmp_path)
     _write_draft_skill(project / "agents" / "skills" / "review", "review")
     _write_draft_skill(project / "agents" / "skills" / "extra", "extra")
@@ -2707,7 +2709,7 @@ def _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root):
 def test_cli_schema2_commands_work_without_legacy_opt_in(
     monkeypatch, tmp_path, csk_home, skills_root, capsys
 ):
-    _require_posix_traversal()
+    _require_selection_traversal()
     _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
     cfg = json.loads((csk_home / "config.json").read_text(encoding="utf-8"))
     assert "experimental" not in cfg
@@ -2726,7 +2728,7 @@ def test_cli_schema2_commands_work_without_legacy_opt_in(
 def test_cli_install_schema2_default_on_without_legacy_setting(
     monkeypatch, tmp_path, csk_home, skills_root, capsys
 ):
-    _require_posix_traversal()
+    _require_selection_traversal()
     _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
     assert "CSK_EXPERIMENTAL_SKILLFILE_SOURCES" not in os.environ
     cfg = json.loads((csk_home / "config.json").read_text(encoding="utf-8"))
@@ -2736,10 +2738,138 @@ def test_cli_install_schema2_default_on_without_legacy_setting(
     assert "lock created" in capsys.readouterr().out
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows schema-2 install and lock replay")
+def test_cli_windows_schema2_install_path_and_local_git_then_replay_fresh_home(
+    monkeypatch, tmp_path, csk_home, skills_root, capsys
+):
+    """Install mixed path/git sources, then replay their lock in a fresh home."""
+
+    _require_selection_traversal()
+    git_executable = shutil.which("git")
+    assert git_executable is not None, "Windows end-to-end requires Git"
+    executable = Path(git_executable).resolve()
+    version = subprocess.run(
+        [executable, "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    ).stdout.strip()
+    version_parts = version.split()[2].split(".")
+    exec_path = Path(
+        subprocess.run(
+            [executable, "--exec-path"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+    ).resolve()
+    tool = git_admission.GitTool(
+        executable=executable,
+        exec_path=exec_path,
+        allowed_versions=(f"git version {version_parts[0]}.{version_parts[1]}.",),
+    )
+
+    local_repo, _commit = make_skill_repo(
+        tmp_path / "local-repositories",
+        "team-kit",
+        files={
+            "SKILL.md": "---\nname: git-skill\ndescription: local Git fixture\n---\n\n# git-skill\n"
+        },
+        tag="v1",
+    )
+    supported_local_git_entries = {
+        "HEAD",
+        "config",
+        "index",
+        "objects",
+        "refs",
+        "packed-refs",
+    }
+    # Git for Windows' template creates extra default administration entries
+    # (empty hooks/info directories and description) that local admission
+    # deliberately rejects. Keep this fixture to the supported local format.
+    git_dir = local_repo / ".git"
+    for entry in git_dir.iterdir():
+        if entry.name in supported_local_git_entries:
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+    git_snapshot = git_admission.admit_local(local_repo, tool)
+    path_root = tmp_path / "path-source"
+    _write_draft_skill(path_root / "path-skill", "path-skill")
+
+    resolved_calls = 0
+    acquired_calls = 0
+
+    def resolve_local_git(*_args, **_kwargs):
+        nonlocal resolved_calls
+        resolved_calls += 1
+        return source_transport.ResolutionResult(
+            lock=LockedCommit(git_snapshot.object_format, git_snapshot.commit),
+            attempts=(),
+        )
+
+    def acquire_local_git(*_args, **_kwargs):
+        nonlocal acquired_calls
+        acquired_calls += 1
+        return source_transport.AcquisitionResult(snapshot=git_snapshot, attempts=())
+
+    monkeypatch.setattr(source_transport, "resolve_ref", resolve_local_git)
+    monkeypatch.setattr(source_transport, "acquire_network", acquire_local_git)
+
+    project = make_project(tmp_path)
+    write_skillfile(
+        project,
+        {
+            "schema_version": 2,
+            "sources": {
+                "path-src": {"path": str(path_root)},
+                "git-src": {
+                    "git": "https://git.example.com/team/kit.git",
+                    "tag": "v1",
+                },
+            },
+            "skills": [
+                {"name": "path-skill", "from": "path-src", "directory": "path-skill"},
+                {"name": "git-skill", "from": "git-src", "directory": "."},
+            ],
+        },
+    )
+    _register_draft_project(monkeypatch, csk_home, skills_root, project)
+
+    assert cli.main(["install", "app"]) == 0
+    first_output = capsys.readouterr()
+    assert "lock created" in first_output.out
+    lock_path = project / "Skillfile.lock.json"
+    first_lock = lock_path.read_bytes()
+    assert resolved_calls == 1
+    assert acquired_calls == 1
+
+    fresh_home = tmp_path / "fresh-csk-home"
+    locking.provision_new_manager_home(fresh_home)
+    fresh_skills_root = tmp_path / "fresh-skills"
+    fresh_skills_root.mkdir()
+    _register_draft_project(
+        monkeypatch, fresh_home, fresh_skills_root, project
+    )
+    assert cli.main(["install", "app"]) == 0
+    replay_output = capsys.readouterr()
+    assert replay_output.err == ""
+    assert lock_path.read_bytes() == first_lock
+    assert resolved_calls == 1, "frozen lock replay must not resolve the tag again"
+    assert acquired_calls == 2, "fresh home recovers the locked Git commit"
+    assert cli.main(["status", "app"]) == 0
+    assert "source_lock_stale" not in capsys.readouterr().out
+
+
 def test_cli_schema2_outputs_do_not_print_draft_label(
     monkeypatch, tmp_path, csk_home, skills_root, capsys
 ):
-    _require_posix_traversal()
+    _require_selection_traversal()
     _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
     for argv in (
         ["check", "app"],
@@ -2756,7 +2886,7 @@ def test_cli_schema2_outputs_do_not_print_draft_label(
 def test_cli_legacy_schema2_switches_are_noops(
     monkeypatch, tmp_path, csk_home, skills_root, capsys
 ):
-    _require_posix_traversal()
+    _require_selection_traversal()
     project = make_project(tmp_path)
     write_skillfile(
         project,
@@ -2804,7 +2934,7 @@ def test_cli_legacy_schema2_switches_are_noops(
 
 
 def test_cli_install_schema2_success_omits_draft_label(monkeypatch, tmp_path, csk_home, skills_root, capsys):
-    _require_posix_traversal()
+    _require_selection_traversal()
     _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
 
     assert cli.main(["install", "app"]) == 0
@@ -2814,7 +2944,7 @@ def test_cli_install_schema2_success_omits_draft_label(monkeypatch, tmp_path, cs
 
 
 def test_cli_upgrade_refreshes_stale_lock(monkeypatch, tmp_path, csk_home, skills_root, capsys):
-    _require_posix_traversal()
+    _require_selection_traversal()
     project, _ = _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
     assert cli.main(["install", "app"]) == 0
     capsys.readouterr()
@@ -2839,7 +2969,7 @@ def test_cli_upgrade_refreshes_stale_lock(monkeypatch, tmp_path, csk_home, skill
 
 
 def test_cli_status_schema2_text_and_json_omit_draft_label(monkeypatch, tmp_path, csk_home, skills_root, capsys):
-    _require_posix_traversal()
+    _require_selection_traversal()
     _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
     assert cli.main(["install", "app"]) == 0
     capsys.readouterr()
@@ -2859,7 +2989,7 @@ def test_cli_schema2_install_uses_skillfile_locale_for_status(
 ):
     """Install and read-only status agree on Skillfile.locale without locale files."""
 
-    _require_posix_traversal()
+    _require_selection_traversal()
     project, skill_dir = _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
     assert not (skill_dir / "locales").exists()
     assert not (skill_dir / ".skill_triggers").exists()
@@ -2895,7 +3025,7 @@ def test_cli_schema2_install_uses_skillfile_locale_for_status(
 
 
 def test_cli_status_check_exit_codes_schema2(monkeypatch, tmp_path, csk_home, skills_root, capsys):
-    _require_posix_traversal()
+    _require_selection_traversal()
     _project, skill_dir = _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
     assert cli.main(["install", "app"]) == 0
     capsys.readouterr()
@@ -2912,7 +3042,7 @@ def test_cli_status_check_exit_codes_schema2(monkeypatch, tmp_path, csk_home, sk
 def test_cli_status_sanitizes_error_details(monkeypatch, tmp_path, csk_home, skills_root, capsys):
     """Absolute paths in status error rows redact to ``<path>``."""
 
-    _require_posix_traversal()
+    _require_selection_traversal()
     project, _ = _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
     assert cli.main(["install", "app"]) == 0
     capsys.readouterr()
@@ -2934,7 +3064,7 @@ def test_cli_status_lock_stale_renders_remediation_text_and_json(
 ):
     """The stale-lock class reaches status with its remediation line."""
 
-    _require_posix_traversal()
+    _require_selection_traversal()
     project, _ = _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
     assert cli.main(["install", "app"]) == 0
     capsys.readouterr()
@@ -3034,7 +3164,7 @@ def test_cli_status_member_detail_sanitizes_paths(
 ):
     """Absolute paths in status member details redact to ``<path>``."""
 
-    _require_posix_traversal()
+    _require_selection_traversal()
     external = tmp_path / "external-source"
     _write_draft_skill(external / "review", "review")
     project = make_project(tmp_path)
@@ -3127,7 +3257,7 @@ def test_cli_network_sources_planned_not_acquired(
 
 
 def test_cli_check_reports_lock_and_policy(monkeypatch, tmp_path, csk_home, skills_root, capsys):
-    _require_posix_traversal()
+    _require_selection_traversal()
     _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
     assert cli.main(["install", "app"]) == 0
     capsys.readouterr()
@@ -3207,7 +3337,7 @@ def test_cli_install_transport_exhaustion_renders_attempts(
 ):
     """Acquire-shape failures render through ``install`` with classifications."""
 
-    _require_posix_traversal()
+    _require_selection_traversal()
     _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
 
     # Positive control: the same fixture installs unfaulted.
@@ -3395,7 +3525,7 @@ def test_cli_launch_schema2_publishes_no_launchers(
 ):
     """Context-only schema-2 installs publish no executable launchers."""
 
-    _require_posix_traversal()
+    _require_selection_traversal()
     project, _ = _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
     assert cli.main(["install", "app"]) == 0
     capsys.readouterr()
@@ -3413,7 +3543,7 @@ def test_cli_launch_installed_state_needs_no_live_inputs(
 ):
     """Installed context survives deletion of every live schema-2 input."""
 
-    _require_posix_traversal()
+    _require_selection_traversal()
     project, _ = _install_draft_review(monkeypatch, tmp_path, csk_home, skills_root)
     assert cli.main(["install", "app"]) == 0
     capsys.readouterr()

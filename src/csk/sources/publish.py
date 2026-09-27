@@ -2070,7 +2070,7 @@ def _freeze_managed_ancestors(
     components: list[str],
     *,
     subject: str,
-) -> list[list[int]] | None:
+) -> list[tuple[int, int]] | None:
     """Freeze the ancestor identities from the root down to a parent chain.
 
     Returns the top-down identities aligned with ``components``, or None
@@ -2089,7 +2089,7 @@ def _freeze_managed_ancestors(
         raise SourceError(
             CODE_OUTPUT_OVERLAP, f"{subject} source root is not a directory"
         )
-    frozen: list[list[int]] = []
+    frozen: list[tuple[int, int]] = []
     current = root_spelling
     for depth, part in enumerate(components):
         probe = current + os.sep + part
@@ -2120,7 +2120,7 @@ def _freeze_managed_ancestors(
             raise SourceError(
                 CODE_OUTPUT_OVERLAP, f"{subject} ancestor {part!r} is not a directory"
             )
-        frozen.append([info.st_dev, info.st_ino])
+        frozen.append((info.st_dev, info.st_ino))
         current = probe
     return frozen
 
@@ -2130,7 +2130,7 @@ def _freeze_home_ancestors(
     components: list[str],
     *,
     subject: str,
-) -> list[list[int]]:
+) -> list[tuple[int, int]]:
     """Freeze the ancestor identities below the csk home.
 
     Home-namespace chains never contain frozen links: any link refuses.
@@ -2138,7 +2138,7 @@ def _freeze_home_ancestors(
     concurrent change and refuses too.
     """
 
-    frozen: list[list[int]] = []
+    frozen: list[tuple[int, int]] = []
     current = home_spelling
     for part in components:
         probe = current + os.sep + part
@@ -2163,7 +2163,7 @@ def _freeze_home_ancestors(
             raise SourceError(
                 CODE_OUTPUT_OVERLAP, f"{subject} ancestor {part!r} is not a directory"
             )
-        frozen.append([info.st_dev, info.st_ino])
+        frozen.append((info.st_dev, info.st_ino))
         current = probe
     return frozen
 
@@ -2231,7 +2231,7 @@ def build_recheck_payloads(
     root_spelling = os.fspath(project_path)
     home_spelling = os.fspath(home)
     record_json = boundaries.boundary_record_to_json(record)
-    admitted_json = [[dev, ino] for dev, ino in sorted(admitted)]
+    admitted_json = _identity_pairs_to_json(sorted(admitted))
     payloads: dict[tuple[str, str], dict[str, Any]] = {}
     for spec in staged_specs:
         key = (spec.target_class, spec.identifier)
@@ -2259,8 +2259,13 @@ def build_recheck_payloads(
             destination = relative.as_posix()
             parent_parts = destination.split("/")[:-1]
             planned_output = "/".join(parent_parts)
-            ancestors = _freeze_managed_ancestors(
+            frozen_ancestors = _freeze_managed_ancestors(
                 record, root_spelling, parent_parts, subject=subject
+            )
+            ancestors = (
+                None
+                if frozen_ancestors is None
+                else _identity_pairs_to_json(frozen_ancestors)
             )
             payloads[key] = {
                 "kind": _RECHECK_MANAGED,
@@ -2288,9 +2293,10 @@ def build_recheck_payloads(
                 CODE_OUTPUT_OVERLAP,
                 f"{subject} does not name a home-namespace entry",
             )
-        ancestors = _freeze_home_ancestors(
+        frozen_ancestors = _freeze_home_ancestors(
             home_spelling, list(home_parts[:-1]), subject=subject
         )
+        ancestors = _identity_pairs_to_json(frozen_ancestors)
         payloads[key] = {
             "kind": _RECHECK_HOME_ENTRY,
             "record": record_json,
@@ -2318,16 +2324,28 @@ def _payload_identities(
         raise ValueError(f"{subject} field {field!r} must be a list")
     identities: list[tuple[int, int]] = []
     for index, item in enumerate(value):
-        if (
-            not isinstance(item, list)
-            or len(item) != 2
-            or not all(type(part) is int for part in item)
-        ):
+        identity = boundaries._identity_from_json(
+            item, subject=f"{subject} field {field!r}[{index}]"
+        )
+        if identity is None:
             raise ValueError(
                 f"{subject} field {field!r}[{index}] must be an integer pair"
             )
-        identities.append((item[0], item[1]))
+        identities.append(identity)
     return identities
+
+
+def _identity_pairs_to_json(
+    identities: list[tuple[int, int]] | tuple[tuple[int, int], ...],
+) -> list[list[int | str]]:
+    """Encode journal identities without narrowing Windows' 128-bit FileIds."""
+
+    encoded: list[list[int | str]] = []
+    for identity in identities:
+        pair = boundaries._identity_to_json(identity)
+        assert pair is not None
+        encoded.append(pair)
+    return encoded
 
 
 def _hook_live_digest(target: JournalTarget, *, subject: str) -> str:
@@ -2692,18 +2710,21 @@ def ensure_live_parents(
         except FileNotFoundError:
             info = None
         except _FS_ERRORS as exc:
+            remove_created_parents(created)
             raise SourceError(
                 CODE_OUTPUT_OVERLAP,
                 f"Publication parent {parent} cannot be inspected: {exc}",
             ) from exc
         if info is not None:
             if stat.S_ISLNK(info.st_mode):
+                remove_created_parents(created)
                 raise SourceError(
                     CODE_OUTPUT_OVERLAP,
                     f"Publication parent {parent} is a link; newly introduced "
                     "links are never followed",
                 )
             if not stat.S_ISDIR(info.st_mode):
+                remove_created_parents(created)
                 raise SourceError(
                     CODE_OUTPUT_OVERLAP,
                     f"Publication parent {parent} is not a directory",
@@ -2719,17 +2740,20 @@ def ensure_live_parents(
                 probe = probe.parent if probe.parent != probe else None
                 continue
             except _FS_ERRORS as exc:
+                remove_created_parents(created)
                 raise SourceError(
                     CODE_OUTPUT_OVERLAP,
                     f"Publication parent {probe} cannot be inspected: {exc}",
                 ) from exc
             if stat.S_ISLNK(probe_info.st_mode):
+                remove_created_parents(created)
                 raise SourceError(
                     CODE_OUTPUT_OVERLAP,
                     f"Publication parent {probe} is a link; newly introduced "
                     "links are never followed",
                 )
             if not stat.S_ISDIR(probe_info.st_mode):
+                remove_created_parents(created)
                 raise SourceError(
                     CODE_OUTPUT_OVERLAP,
                     f"Publication parent {probe} is not a directory",
@@ -2742,17 +2766,20 @@ def ensure_live_parents(
                 try:
                     raced = directory.lstat()
                 except _FS_ERRORS as exc:
+                    remove_created_parents(created)
                     raise SourceError(
                         CODE_OUTPUT_OVERLAP,
                         f"Publication parent {directory} cannot be inspected: {exc}",
                     ) from exc
                 if stat.S_ISLNK(raced.st_mode) or not stat.S_ISDIR(raced.st_mode):
+                    remove_created_parents(created)
                     raise SourceError(
                         CODE_OUTPUT_OVERLAP,
                         f"Publication parent {directory} is not a real directory",
                     )
                 continue
             except _FS_ERRORS as exc:
+                remove_created_parents(created)
                 raise SourceError(
                     CODE_OUTPUT_OVERLAP,
                     f"Publication parent {directory} cannot be created: {exc}",

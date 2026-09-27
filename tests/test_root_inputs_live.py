@@ -292,6 +292,11 @@ def test_live_root_missing_entry_refuses_member_missing(tmp_path: Path) -> None:
 
 
 def test_live_root_unreadable_entry_refuses(tmp_path: Path) -> None:
+    if os.name == "nt":
+        pytest.skip(
+            "this permission-bound test uses POSIX geteuid and mode bits; "
+            "Windows ACLs differ"
+        )
     if os.geteuid() == 0:
         pytest.skip("permission bits do not refuse reads for root")
     project, home = _root_fixture(tmp_path)
