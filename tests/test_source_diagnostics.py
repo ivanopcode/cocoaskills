@@ -25,7 +25,9 @@ from urllib.parse import quote
 
 import pytest
 
+from csk import closure as closure_module
 from csk import manifest as manifest_module
+from csk import source_identity as source_identity_module
 from csk.sources import diagnostics as source_diagnostics
 from csk.sources import errors as source_errors
 from csk.sources import repository_policy
@@ -327,29 +329,31 @@ def test_format_transport_exception_rejects_spoofed_code_origin() -> None:
             ["deploy@corp.example"],
         ),
         (
-            "git declaration 'https://operator:abc/def+ghi=@git.example.com/t/k.git' refused",
+            "git declaration 'https://operator:pass%20word@git.example.com/t/k.git' refused",
             ["https://***@git.example.com/t/k.git"],
-            ["abc/def+ghi=", "operator:abc"],
-        ),
-        (
-            "git declaration 'https://operator:pass word@git.example.com/t/k.git' refused",
-            ["https://***@git.example.com/t/k.git"],
-            ["pass word", "operator:pass"],
-        ),
-        (
-            "git declaration 'https://ghp_abc/Z9x@github.com/o/r.git' refused",
-            ["https://***@github.com/o/r.git"],
-            ["ghp_abc/Z9x"],
+            ["pass%20word", "operator:pass"],
         ),
         (
             "git declaration 'https://git.example.com/t/k.git?private_token=QUERYSECRET123' refused",
             ["https://git.example.com/t/k.git?private_token=***"],
             ["QUERYSECRET123"],
         ),
-        # Narrowing-mutant killers (revision 3): the double-quoted
-        # repr spelling needs the double-quoted span alternative
-        # (mutant RA drops it), and ``x_token`` needs the substring
-        # pass (mutant RB drops it).
+        (
+            "git declaration 'https://git.example.com/t/k.git?SIG=QUERYSECRET123&x=1' refused",
+            ["?SIG=***&x=1"],
+            ["QUERYSECRET123"],
+        ),
+        (
+            "git declaration 'https://git.example.com/t/k.git?signature=QUERYSECRET123' refused",
+            ["?signature=***"],
+            ["QUERYSECRET123"],
+        ),
+        (
+            "git declaration 'https://git.example.com/t/k.git?x-amz-signature=QUERYSECRET123' refused",
+            ["?x-amz-signature=***"],
+            ["QUERYSECRET123"],
+        ),
+        # Quote-aware URL-token and existing substring-key controls.
         (
             'git declaration "https://op:pa\'ss@host.example/t/k.git" refused',
             ["https://***@host.example/t/k.git"],
@@ -359,6 +363,11 @@ def test_format_transport_exception_rejects_spoofed_code_origin() -> None:
             "git declaration 'https://host.example/t/k.git?x_token=SUBSECRET9' refused",
             ["https://host.example/t/k.git?x_token=***"],
             ["SUBSECRET9"],
+        ),
+        (
+            "Clone user:scp-secret@git.example.com:team/repo.git now",
+            ["***@git.example.com:team/repo.git"],
+            ["user:scp-secret@"],
         ),
         (
             "git declaration 'https://op:pa\\\\ss@host.example/t/k.git' refused",
@@ -402,7 +411,44 @@ def test_sanitize_redacts_secrets(raw: str, kept: list[str], dropped: list[str])
     for keep in kept:
         assert keep in redacted, redacted
     for drop in dropped:
-        assert drop not in redacted, redacted
+            assert drop not in redacted, redacted
+
+
+@pytest.mark.parametrize(
+    ("git_url", "reason"),
+    [
+        (
+            "https://operator:abc/def+ghi=@git.example.com/t/k.git",
+            "invalid explicit port in source",
+        ),
+        (
+            "https://operator:pass word@git.example.com/t/k.git",
+            "network source must not contain a password",
+        ),
+        (
+            "https://ghp_abc/Z9x@github.com/o/r.git",
+            "network source has an invalid host",
+        ),
+    ],
+    ids=("slash-delimited-field", "whitespace-field", "path-at-field"),
+)
+def test_malformed_git_field_refusal_keeps_reason_without_echoing_field(
+    git_url: str, reason: str
+) -> None:
+    with pytest.raises(source_errors.SourceError) as raised:
+        closure_module._canonical_requirement_identity(
+            git_url, name="dependency", chain="root"
+        )
+
+    rendered = source_diagnostics.format_exception(raised.value)
+
+    assert rendered is not None
+    assert "malformed Git source" in rendered
+    assert reason in rendered
+    assert git_url not in rendered
+    assert "operator:abc" not in rendered
+    assert "pass word" not in rendered
+    assert "ghp_abc/Z9x" not in rendered
 
 
 @pytest.mark.parametrize(
@@ -419,24 +465,178 @@ def test_sanitize_redacts_secrets(raw: str, kept: list[str], dropped: list[str])
         "Skill 'review' is up-to-date",
         "See https://example.com/docs and contact bob@corp for access",
         "endpoint 'https://example.org/kit.git?next=1&depth=2' exhausted",
+        "fragment https://example.org/kit.git#token=visible",
+        "wrapped (user:pass@host:path) text",
     ],
 )
 def test_sanitize_preserves_subjects_byte_exactly(text: str) -> None:
     assert source_errors.sanitize_detail(text) == text
 
 
-# Secrets are generated over the alphabet the sanitizer's documented
-# contract covers: ``/``, space, ``+``, ``=``, ``:`` and a newline
-# inside single-quoted ``{value!r}`` echoes and denylisted query
-# parameters. Quotes and backslashes stay out of THIS corpus because
-# hostile quoting defeats display-time redaction by construction (a
-# password containing ``'`` flips repr to double quotes; one
-# containing ``://`` splits the userinfo anchor); revision 3 closes
-# those shapes structurally at the echo site, and the full alphabet
-# is proven at the CLI level instead
-# (``test_cli_secret_class_never_renders_on_any_surface``), where no
-# echo exists to redact. This corpus pins the second line of defence,
-# not the gate.
+def _generated_url_diagnostic(
+    rng: random.Random,
+    iteration: int,
+    counters: dict[str, int],
+) -> tuple[str, list[str], list[str], dict[str, set[str]]]:
+    secrets: list[str] = []
+    keeps: list[str] = []
+    coverage: dict[str, set[str]] = {
+        "schemes": set(),
+        "subdelims": set(),
+        "at_forms": set(),
+        "hosts": set(),
+        "url_counts": set(),
+        "joiners": set(),
+        "multi_url_quotes": set(),
+        "whole_segment_quotes": set(),
+        "multi_url_quotes_used": set(),
+        "whole_segment_quotes_used": set(),
+    }
+
+    def sentinel(kind: str) -> str:
+        number = counters[kind]
+        counters[kind] += 1
+        value = f"{kind.upper()}_{number}"
+        (secrets if kind == "secret" else keeps).append(value)
+        return value
+
+    schemes = ("https", "ssh", "git+ssh", "http")
+    quote_kinds = ("'", '"', "`")
+    subdelims = "!$&'()*+,;="
+    count = rng.randint(1, 4)
+    coverage["url_counts"].add(str(count))
+    urls: list[str] = []
+
+    def credentialed_url(*, nested: bool) -> str:
+        scheme = rng.choice(schemes)
+        coverage["schemes"].add(scheme)
+        username_secret = sentinel("secret")
+        password_secret = sentinel("secret")
+        query_secret = sentinel("secret")
+        username_sep = rng.choice(("@", "%40"))
+        coverage["at_forms"].add("raw" if username_sep == "@" else "percent-encoded")
+        username_delim = rng.choice(subdelims)
+        password_delim = rng.choice(subdelims)
+        coverage["subdelims"].update((username_delim, password_delim))
+        username = (
+            f"user{username_delim}{username_secret}"
+            f"{username_sep}{rng.choice(subdelims)}"
+        )
+        password = (
+            f"pass{password_delim}{password_secret}"
+            f"{rng.choice(subdelims)}"
+        )
+        userinfo = f"{username}:{password}@"
+
+        if rng.getrandbits(1):
+            host = f"[2001:db8::{rng.randrange(1, 65536):x}]"
+            coverage["hosts"].add("ipv6")
+        else:
+            host = f"host{rng.randrange(1, 10000)}.example"
+            coverage["hosts"].add("dns")
+        port = rng.randrange(1, 65536)
+        path_keep = sentinel("keep")
+        query_keep = sentinel("keep")
+        fragment_keep = sentinel("keep")
+        query_key = rng.choice(
+            (
+                "token",
+                "private_token",
+                "access_token",
+                "sig",
+                "signature",
+                "client_secret",
+            )
+        )
+        url = (
+            f"{scheme}://{userinfo}{host}:{port}/repo/{path_keep}.git"
+            f"?{query_key}={query_secret}&next={query_keep}"
+            f"#fragment-{fragment_keep}"
+        )
+        if nested:
+            nested_url = credentialed_url(nested=False)
+            url += f"::nested::{nested_url}"
+        return url
+
+    for index in range(count):
+        urls.append(credentialed_url(nested=index == 0))
+
+    reason_keep = sentinel("keep")
+    email_keep = sentinel("keep")
+    before = f"reason-{reason_keep} contact ops{email_keep}@example.test"
+    after = f"end-{sentinel('keep')}"
+    joiner = rng.choice(("", ";", " | ", " "))
+    group = joiner.join(urls)
+    mode = iteration % 5
+    quote = ""
+    if mode == 1:
+        quote = quote_kinds[(iteration // 5) % len(quote_kinds)]
+        group = f"{quote}{group}{quote}"
+    elif mode == 2:
+        quote = quote_kinds[(iteration // 5) % len(quote_kinds)]
+        group = f"{quote}{before} {group} {after}{quote}"
+        before = after = ""
+    elif mode == 3:
+        # Each adjacent pair has no delimiter, exercising the next-scheme
+        # boundary independently of any surrounding whitespace.
+        group = "".join(urls)
+
+    if mode == 1:
+        coverage["multi_url_quotes_used"].add(quote)
+    elif mode == 2:
+        coverage["whole_segment_quotes_used"].add(quote)
+    if count > 1 and mode == 1:
+        coverage["multi_url_quotes"].add(quote)
+    if mode == 2:
+        coverage["whole_segment_quotes"].add(quote)
+    if mode == 3 and count > 1 or joiner == "":
+        coverage["joiners"].add("adjacent")
+    else:
+        coverage["joiners"].add("separated")
+
+    message = f"{before} {group} {after}"
+    return message, secrets, keeps, coverage
+
+
+def test_sanitize_generated_url_diagnostics_process_every_scheme_independently() -> None:
+    seed = 0x5EED260927
+    rng = random.Random(seed)
+    counters = {"secret": 0, "keep": 0}
+    observed: dict[str, set[str]] = {}
+
+    for iteration in range(2500):
+        message, secrets, keeps, coverage = _generated_url_diagnostic(
+            rng, iteration, counters
+        )
+        for key, values in coverage.items():
+            observed.setdefault(key, set()).update(values)
+        redacted = source_errors.sanitize_detail(message)
+
+        for secret in secrets:
+            assert secret not in redacted, (
+                f"seed={seed} iteration={iteration} leaked {secret}"
+            )
+        for keep in keeps:
+            assert keep in redacted, (
+                f"seed={seed} iteration={iteration} lost {keep}"
+            )
+
+    assert observed["schemes"] == {"https", "ssh", "git+ssh", "http"}
+    assert observed["subdelims"] == set("!$&'()*+,;=")
+    assert observed["at_forms"] == {"raw", "percent-encoded"}
+    assert observed["hosts"] == {"dns", "ipv6"}
+    assert observed["url_counts"] == {"1", "2", "3", "4"}
+    assert observed["joiners"] == {"adjacent", "separated"}
+    assert observed["multi_url_quotes"] == {"'", '"', "`"}
+    assert observed["whole_segment_quotes"] == {"'", '"', "`"}
+    assert observed["multi_url_quotes_used"] == {"'", '"', "`"}
+    assert observed["whole_segment_quotes_used"] == {"'", '"', "`"}
+
+
+# The raw secret corpus includes characters that must be encoded before
+# entering URL userinfo. Malformed source fields are handled by their typed
+# parser refusal and never echoed; URL redaction itself follows authority
+# boundaries and does not guess that path text is userinfo.
 _SECRET_ALPHABET = "abcdef0123456789/:+= ABCDEFGHJKLMNPQRSTUVWXYZ\n"
 
 
@@ -469,20 +669,27 @@ def _generated_corpus(
         + _generated_secret(rng, 48)
         + "\n-----END OPENSSH PRIVATE KEY-----"
     )
+    userinfo_safe = "!$&()*+,;=:@"
+    password_field = quote(password, safe=userinfo_safe)
+    token_field = quote(token, safe=userinfo_safe)
+    key_material_field = quote(key_material, safe=userinfo_safe)
     home_path = str(home / ".cocoaskills" / "source-policy.json")
     return {
         "password": password,
         "token": token,
-        "credentialed_url": f"https://operator:{password}@git.corp.example/team/kit.git",
-        "token_url": f"https://{token}@git.corp.example/team/kit.git",
+        "password_field": password_field,
+        "credentialed_url": f"https://operator:{password_field}@git.corp.example/team/kit.git",
+        "token_field": token_field,
+        "token_url": f"https://{token_field}@git.corp.example/team/kit.git",
         "query_token": quote(token, safe=""),
         "query_url": (
             "https://git.corp.example/team/kit.git"
             f"?private_token={quote(token, safe='')}&next=1"
         ),
         "key_password_url": (
-            f"https://operator:{key_material}@git.corp.example/team/kit.git"
+            f"https://operator:{key_material_field}@git.corp.example/team/kit.git"
         ),
+        "key_material_field": key_material_field,
         "key_material": key_material,
         "home_path": home_path,
     }
@@ -530,13 +737,13 @@ def test_sanitize_generated_corpus_absent_from_echo_sites(
     cases: list[tuple[str, str, str]] = [
         (
             "password",
-            corpus["password"],
+            corpus["password_field"],
             f"git declaration {corpus['credentialed_url']!r} "
             "must not contain userinfo, a password, or a port",
         ),
         (
             "token",
-            corpus["token"],
+            corpus["token_field"],
             f"git declaration {corpus['token_url']!r} "
             "must not contain userinfo, a password, or a port",
         ),
@@ -548,7 +755,7 @@ def test_sanitize_generated_corpus_absent_from_echo_sites(
         ),
         (
             "key_material",
-            corpus["key_material"],
+            corpus["key_material_field"],
             f"git declaration {corpus['key_password_url']!r} "
             "must not contain userinfo, a password, or a port",
         ),

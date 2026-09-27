@@ -11,7 +11,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -112,18 +112,153 @@ class ProjectResult:
         return bool(self.errors)
 
 
-def failure_text(exc: BaseException) -> str:
+def failure_text(exc: BaseException, *, verbose: bool = False) -> str:
     """Operator-visible text for a failure recorded at an install boundary.
 
     Install boundaries report failures as strings, and ``str(exc)`` drops the
-    notes an exception carries.  Notes hold the part an operator acts on -- the
-    remedy for a missed toolchain fingerprint deadline, the secondary failure
-    behind a cleanup -- so render them under the message rather than lose them.
-    The first line stays the exception's own message, which for build-driver
-    errors is the cross-implementation protocol string.
+    notes and cause chain an exception carries. Notes hold actionable context;
+    causes can hold the specific refusal hidden by a transport wrapper. Keep
+    the outer stable code, use the deepest coded reason when a wrapper carries
+    only a generic message, and show the rest of the chain only in verbose mode.
     """
 
-    return "\n".join([str(exc), *getattr(exc, "__notes__", ())])
+    chain = list(_failure_cause_chain(exc))
+    message = _failure_message_with_specific_reason(exc, chain)
+    lines = [
+        _sanitize_failure_secrets(message),
+        *(_sanitize_failure_secrets(note) for note in getattr(exc, "__notes__", ())),
+    ]
+    if verbose and chain:
+        lines.extend(_failure_cause_lines(chain, root=exc))
+    return "\n".join(lines)
+
+
+def _failure_cause_lines(
+    chain: list[BaseException], *, root: BaseException | None = None
+) -> list[str]:
+    rendered = [
+        line
+        for cause in chain
+        if (line := _render_failure_cause(cause)) is not None
+    ]
+    if not rendered and root is not None:
+        root_line = _render_failure_cause(root)
+        if root_line is not None:
+            rendered.append(root_line)
+    if not rendered:
+        return []
+    return [
+        "cause chain:",
+        *(f"  caused by: {line}" for line in rendered),
+    ]
+
+
+def _failure_cause_chain(exc: BaseException) -> Iterator[BaseException]:
+    seen = {id(exc)}
+    current = exc
+    while True:
+        cause = current.__cause__
+        if cause is None and not current.__suppress_context__:
+            cause = current.__context__
+        if cause is None or id(cause) in seen:
+            return
+        seen.add(id(cause))
+        yield cause
+        current = cause
+
+
+def _coded_failure_parts(exc: BaseException) -> tuple[str | None, str | None]:
+    if _FAILURE_CAUSE_RENDERERS.get(type(exc)) is not _render_coded_failure_cause:
+        return None, None
+    code = getattr(exc, "code", None)
+    if not isinstance(code, str) or not code:
+        return None, None
+    detail: object
+    if isinstance(exc, source_transport.TransportError):
+        detail = exc.detail
+    elif isinstance(exc, git_admission.GitAdmissionError):
+        message = exc.args[0] if exc.args else ""
+        prefix = f"{code}: "
+        detail = message[len(prefix) :] if message.startswith(prefix) else None
+    else:
+        detail = getattr(exc, "detail", None)
+    if isinstance(detail, str) and detail:
+        return code, detail
+    return code, None
+
+
+def _render_coded_failure_cause(exc: BaseException) -> str | None:
+    code, reason = _coded_failure_parts(exc)
+    if code is None or reason is None:
+        return None
+    namespace = "go-v1 " if type(exc) is build_toolchain.ToolchainError else ""
+    return _sanitize_failure_secrets(f"{namespace}{code}: {reason}")
+
+
+def _omit_failure_cause(_exc: BaseException) -> None:
+    """Explicitly suppress causes without stable, whitelisted fields."""
+
+    return None
+
+
+_FAILURE_CAUSE_RENDERERS: dict[
+    type[BaseException], Callable[[BaseException], str | None]
+] = {
+    build_toolchain.ToolchainError: _render_coded_failure_cause,
+    build_planner.BuildPlanningError: _render_coded_failure_cause,
+    git_admission.GitAdmissionError: _render_coded_failure_cause,
+    source_errors.SourceError: _render_coded_failure_cause,
+    source_errors.SourcePathConflictError: _render_coded_failure_cause,
+    repository_policy.RepositoryPolicyError: _render_coded_failure_cause,
+    source_transport.TransportError: _render_coded_failure_cause,
+    source_transport.TransportFailure: _render_coded_failure_cause,
+    source_transport.TransportResolutionError: _render_coded_failure_cause,
+    build_source.BuildSourceError: _omit_failure_cause,
+    build_source.InvalidSnapshotError: _omit_failure_cause,
+    build_source.SnapshotMutationError: _omit_failure_cause,
+}
+
+
+def _render_failure_cause(exc: BaseException) -> str | None:
+    """Render exact registered exception types only; unknown causes stay hidden."""
+
+    renderer = _FAILURE_CAUSE_RENDERERS.get(type(exc))
+    if renderer is None:
+        return None
+    return renderer(exc)
+
+
+def _failure_message_with_specific_reason(
+    exc: BaseException, chain: list[BaseException]
+) -> str:
+    message = str(exc)
+    code, detail = _coded_failure_parts(exc)
+    if code is None or detail is None:
+        return message
+
+    specific_detail = detail
+    for cause in chain:
+        _cause_code, cause_detail = _coded_failure_parts(cause)
+        if cause_detail:
+            specific_detail = cause_detail
+    if specific_detail == detail:
+        return message
+    if message.startswith(f"{code}: "):
+        return f"{code}: {specific_detail}"
+    if message.endswith(f": {detail}"):
+        return f"{message[: -len(detail)]}{specific_detail}"
+    return f"{code}: {specific_detail}"
+
+
+def _sanitize_failure_secrets(text: str) -> str:
+    """Apply structural credential redaction while preserving normal paths.
+
+    Comparing the result itself avoids inferring redaction from marker counts:
+    userinfo may already contain the marker. Private broker paths are kept out
+    by rendering only registered typed causes, not by string-path heuristics.
+    """
+
+    return source_errors.sanitize_credentials(text)
 
 
 @dataclass(frozen=True)
@@ -310,7 +445,7 @@ def _install_project(
                         path=project.path,
                         status="failed",
                     )
-                    result.errors.append(failure_text(exc))
+                    result.errors.append(failure_text(exc, verbose=options.verbose))
                     return result
                 if attempt + 1 < attempts:
                     continue
@@ -319,7 +454,7 @@ def _install_project(
                     path=project.path,
                     status="failed",
                 )
-                result.errors.append(failure_text(exc))
+                result.errors.append(failure_text(exc, verbose=options.verbose))
                 return result
     raise AssertionError("unreachable project planning retry state")
 
@@ -530,17 +665,17 @@ def _install_schema2_once(
         if exc.code == "concurrent_state_change":
             raise
         result.status = "failed"
-        result.errors.append(_schema2_failure_text(exc))
+        result.errors.append(_schema2_failure_text(exc, verbose=options.verbose))
         return result
     except locking.LockError:
         raise
     except Exception as exc:
         result.status = "failed"
-        result.errors.append(_schema2_failure_text(exc))
+        result.errors.append(_schema2_failure_text(exc, verbose=options.verbose))
         return result
 
 
-def _schema2_failure_text(exc: BaseException) -> str:
+def _schema2_failure_text(exc: BaseException, *, verbose: bool = False) -> str:
     """Render a schema-2 install failure, sanitized with one remediation.
 
     Stable schema-2 source diagnostics render through the shared
@@ -550,12 +685,20 @@ def _schema2_failure_text(exc: BaseException) -> str:
 
     rendered = source_diagnostics.format_exception(exc)
     if rendered is not None:
+        if verbose:
+            chain = list(_failure_cause_chain(exc))
+            if chain:
+                return "\n".join([rendered, *_failure_cause_lines(chain)])
         return rendered
     if isinstance(exc, source_transport.TransportError):
         rendered = source_diagnostics.format_transport_exception(exc)
         if rendered is not None:
+            if verbose:
+                chain = list(_failure_cause_chain(exc))
+                if chain:
+                    return "\n".join([rendered, *_failure_cause_lines(chain)])
             return rendered
-    return failure_text(exc)
+    return failure_text(exc, verbose=verbose)
 
 
 def _generation_after_gate_writes(
@@ -604,7 +747,9 @@ def _install_project_once(
             # source diagnostic by construction; v1 loads raise
             # ManifestError and keep the boundary rendering below.
             result.status = "failed"
-            result.errors.append(_schema2_failure_text(exc))
+            result.errors.append(
+                _schema2_failure_text(exc, verbose=options.verbose)
+            )
             return result
         if project_manifest is None:
             result.status = "skipped"
@@ -893,7 +1038,7 @@ def _install_project_once(
         if exc.code == "concurrent_state_change":
             raise
         result.status = "failed"
-        result.errors.append(failure_text(exc))
+        result.errors.append(failure_text(exc, verbose=options.verbose))
         return result
     except locking.LockError:
         # Lock failures are process-coordination outcomes.  Preserve them for
@@ -902,7 +1047,7 @@ def _install_project_once(
         raise
     except Exception as exc:  # noqa: BLE001 - project boundary reports stable failures
         result.status = "failed"
-        result.errors.append(failure_text(exc))
+        result.errors.append(failure_text(exc, verbose=options.verbose))
         return result
 
 

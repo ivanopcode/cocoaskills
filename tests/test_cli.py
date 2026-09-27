@@ -3320,7 +3320,7 @@ def test_cli_status_member_detail_sanitizes_paths(
     assert str(tmp_path) not in member_lines[0], out
 
 
-def test_cli_network_sources_planned_not_acquired(
+def test_cli_network_sources_planned_not_acquired_reports_specific_refusal(
     monkeypatch, tmp_path, csk_home, skills_root, capsys
 ):
     """Check plans network sources; install and upgrade acquire or refuse closed.
@@ -3378,12 +3378,18 @@ def test_cli_network_sources_planned_not_acquired(
     assert cli.main(["install", "app"]) == 1
     err = capsys.readouterr().err
     assert "build_repository_identity_invalid:" in err, err
-    assert "trusted Git admission failed" in err, err
+    assert (
+        "endpoint authentication provider is not configured for this transport"
+        in err
+    ), err
 
     assert cli.main(["upgrade", "app"]) == 1
     err = capsys.readouterr().err
     assert "build_repository_identity_invalid:" in err, err
-    assert "trusted Git admission failed" in err, err
+    assert (
+        "endpoint authentication provider is not configured for this transport"
+        in err
+    ), err
 
 
 def test_cli_check_reports_lock_and_policy(monkeypatch, tmp_path, csk_home, skills_root, capsys):

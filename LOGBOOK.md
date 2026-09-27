@@ -54,6 +54,63 @@ the nested schema-1 legacy install remains successful. The final regression
 fails against the pre-fix behavior, and a narrowing mutant that admits `.claude`
 is killed by the managed-source control. Suite counts and exact command exit
 codes are in `BUG-260927-ucxvpy_results.md`; the candidate remains uncommitted.
+## 2026-09-27 - BUG-260927-1kx6mb: rev-4 URL token grammar
+
+The revision-3 review found two different boundary failures: the query regex
+stopped credential values at selected punctuation, and a quoted fallback
+searched past URL authority to an unrelated email address, erasing a readable
+refusal reason. One explicit URL grammar now bounds quoted/unquoted tokens,
+authority, query pairs and fragments; the quoted fallback is removed. Malformed
+Git source refusals preserve their typed reason without echoing the raw input.
+
+Both named CLI regressions fail before the fix in both modes. The sample
+`ab!c$d` alone already passed on revision 3, so the query class regression also
+covers apostrophe, semicolon and closing parenthesis; all three leaked suffixes
+before the fix. Narrowing mutants for the query value and authority boundary
+fail their named CLI tests. The diagnostic, source, CLI, install, global,
+status, golden and Git/source-boundary suites, strict mypy, package build and
+diff check pass. Exact commands, exit codes, coverage and rework bounds are in
+`BUG-260927-1kx6mb_results.md`.
+
+## 2026-09-27 - BUG-260927-1kx6mb: rev-3 apostrophe userinfo boundary
+
+The rev-2 review found that splitting diagnostics on apostrophes could break a
+credential-bearing URL before its `@`, exposing valid RFC 3986 userinfo through
+install refusal output. URL sanitization now scans each `scheme://` authority
+to its structural boundary and redacts through its last `@`; apostrophes stay
+ordinary userinfo data. A quoted-context fallback retains the prior protection
+for malformed legacy echoes with raw slash or whitespace credentials.
+
+`test_cli_install_refusal_redacts_literal_apostrophe_userinfo_in_both_modes`
+drives the CLI in ordinary, verbose, literal-apostrophe and percent-encoded
+cases while covering the requested userinfo sub-delimiters. Before the fix,
+both literal-apostrophe modes failed (exit 1; encoded controls passed). The
+narrowing mutant that restores apostrophe as an authority terminator is killed
+by the same named test in both modes (exit 1). The final diagnostic, source,
+CLI, status, install, global-install and golden suites pass; strict mypy,
+package build and diff check also pass. Exact commands, exit codes, counts,
+coverage mapping and bounds are recorded in
+`BUG-260927-1kx6mb_results.md`.
+
+## 2026-09-27 - BUG-260927-1kx6mb: verbose install refusal redaction rework
+
+The rev-1 review showed that verbose cause rendering crossed the HTTPS broker
+boundary by printing arbitrary exception text. Its URL redactor also treated a
+larger count of `***` markers as proof of redaction, which fails when userinfo
+already contains that marker; three global install error paths dropped the
+verbose option. The formatter now renders only explicitly registered typed
+fields and suppresses raw or unknown cause text, URL credentials are removed
+structurally, and global install forwards verbose at every failure formatter.
+
+The adversarial broker path/token/subprocess tests, both marker-collision
+modes, project/global cause equality, and an unregistered-cause test all pass.
+Narrowing mutants for each of those boundaries were killed by their named
+tests. The five final pytest batches report 2,999 passing test executions and
+2 skips; this includes a standalone rerun of the 14 diagnostic tests after
+restoring the reviewer's exact test names. Strict mypy, package build and
+`git diff --check` exit 0. Exact commands, exit codes, regression evidence and
+bounds are recorded in `BUG-260927-1kx6mb_results.md`; sanitized green logs are attached as
+`BUG-260927-1kx6mb_evidence-rev2.zip`.
 
 ## 2026-09-25 - TASK-260925-38kn57: accepted skillfile-sources corpus pin
 

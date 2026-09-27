@@ -39,38 +39,38 @@ def parse_source_identity(url: str) -> str | None:
     try:
         split = urlsplit(value)
     except ValueError as exc:
-        raise SourceIdentityError(f"invalid source URL: {url!r}") from exc
+        raise SourceIdentityError("invalid source URL") from exc
     scheme = split.scheme.lower()
     if scheme in _URL_SCHEMES:
         if not split.netloc:
-            raise SourceIdentityError(f"network source requires a host: {url!r}")
+            raise SourceIdentityError("network source requires a host")
         if split.password is not None:
-            raise SourceIdentityError(f"network source must not contain a password: {url!r}")
+            raise SourceIdentityError("network source must not contain a password")
         try:
             port = split.port
         except ValueError as exc:
-            raise SourceIdentityError(f"invalid explicit port in source: {url!r}") from exc
+            raise SourceIdentityError("invalid explicit port in source") from exc
         if port is not None:
-            raise SourceIdentityError(f"network source must not contain an explicit port: {url!r}")
+            raise SourceIdentityError("network source must not contain an explicit port")
         if split.query:
-            raise SourceIdentityError(f"network source must not contain a query: {url!r}")
+            raise SourceIdentityError("network source must not contain a query")
         if split.fragment:
-            raise SourceIdentityError(f"network source must not contain a fragment: {url!r}")
+            raise SourceIdentityError("network source must not contain a fragment")
         if "%" in value:
-            raise SourceIdentityError(f"network source must not contain percent escapes: {url!r}")
+            raise SourceIdentityError("network source must not contain percent escapes")
         if "\\" in value:
-            raise SourceIdentityError(f"network source must not contain backslashes: {url!r}")
+            raise SourceIdentityError("network source must not contain backslashes")
         host = (split.hostname or "").lower()
         path = split.path
     elif scheme == "file" or value.startswith(("/", "./", "../", "~")):
         return None
     else:
         if "://" in value:
-            raise SourceIdentityError(f"unsupported network source scheme: {url!r}")
+            raise SourceIdentityError("unsupported network source scheme")
         match = _SCP_RE.match(value)
         if match is None:
             if "://" in value or "@" in value or (":" in value and not re.match(r"^[A-Za-z]:[\\/]", value)):
-                raise SourceIdentityError(f"invalid network source: {url!r}")
+                raise SourceIdentityError("invalid network source")
             return None
         host = match.group("host").lower()
         path = match.group("path")
@@ -78,18 +78,18 @@ def parse_source_identity(url: str) -> str | None:
             # Single-letter host is a Windows drive, not a hostname.
             return None
         if any(token in value for token in ("%", "?", "#", "\\")):
-            raise SourceIdentityError(f"invalid SCP source: {url!r}")
+            raise SourceIdentityError("invalid SCP source")
     if _HOST_RE.fullmatch(host) is None:
-        raise SourceIdentityError(f"network source has an invalid host: {url!r}")
+        raise SourceIdentityError("network source has an invalid host")
     path = path.strip("/")
     if path.endswith(".git"):
         path = path[: -len(".git")]
     path = path.rstrip("/")
     if not _valid_repository_path(path):
-        raise SourceIdentityError(f"network source has an invalid repository path: {url!r}")
+        raise SourceIdentityError("network source has an invalid repository path")
     canonical = f"{host}/{path}"
     if len(canonical) > 4096:
-        raise SourceIdentityError(f"canonical network source identity exceeds 4096 characters: {url!r}")
+        raise SourceIdentityError("canonical network source identity exceeds 4096 characters")
     return canonical
 
 

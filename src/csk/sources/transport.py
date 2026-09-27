@@ -413,11 +413,13 @@ def _failure_code(failure_class: str, code: str | None) -> str:
 def _original_failure(
     error: GitAdmissionError, failure_class: str, code: str
 ) -> GitAdmissionError:
-    return GitAdmissionError(
+    failure = GitAdmissionError(
         code,
         "trusted Git admission failed",
         failure_class=failure_class,
     )
+    failure.__cause__ = error
+    return failure
 
 
 def _normalise_failure(error: BaseException) -> TransportFailure:

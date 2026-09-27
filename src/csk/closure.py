@@ -684,7 +684,7 @@ def _canonical_requirement_identity(git_url: str, *, name: str, chain: str) -> s
     except SourceIdentityError as exc:
         raise SourceError(
             CODE_SELECTION_INVALID,
-            f"Requirement {name} (via {chain}) names malformed Git source {git_url!r}: {exc}",
+            f"Requirement {name} (via {chain}) names malformed Git source: {exc}",
         ) from exc
     if identity is None:
         raise SourceError(
