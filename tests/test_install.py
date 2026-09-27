@@ -31,6 +31,9 @@ from csk.builds import planner as build_planner
 from csk.builds import source as build_source
 from csk.builds import toolchain as build_toolchain
 from csk.builds.cache import CacheEntryStatus, CacheInspection
+from csk.sources import errors as source_errors
+from csk.sources.selection import resolve_individual
+from csk.sources.skillfile_v2 import IndividualSelector
 
 
 def _filesystem_state(roots: tuple[Path, ...]) -> dict[str, tuple[object, ...]]:
@@ -157,6 +160,48 @@ def _stub_trusted_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(go_v1, "build", fake_build)
 
 
+def _run_csk_install_cli(
+    project: Path,
+    skills_root: Path,
+    csk_home: Path,
+    *,
+    git_environment: dict[str, str] | None = None,
+):
+    config_path = csk_home / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "preferred_locale": "en",
+                "default_agents": ["claude_code"],
+                "adapter_mode": "copy",
+                "projects": {
+                    "app": {"path": str(project), "agents": ["claude_code"]}
+                },
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    source_root = Path(__file__).resolve().parents[1] / "src"
+    env = os.environ.copy()
+    env["CSK_CONFIG"] = str(config_path)
+    env["PYTHONPATH"] = os.pathsep.join(
+        path for path in (str(source_root), env.get("PYTHONPATH", "")) if path
+    )
+    if git_environment is not None:
+        env.update(git_environment)
+    return subprocess.run(
+        [sys.executable, "-m", "csk", "install", "app"],
+        cwd=project,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="Asserts POSIX symlink shim in .agents/bin")
 def test_install_declared_script_to_runtime_not_skill_context(tmp_path, skills_root, csk_home):
     project = make_project(tmp_path)
@@ -192,6 +237,450 @@ def test_install_declared_script_to_runtime_not_skill_context(tmp_path, skills_r
     assert any("which is not on PATH" in message for message in result.messages)
     assert any("agent skills resolve that directory directly" in message for message in result.messages)
     assert any("shell-init --install" in message for message in result.messages)
+
+
+def test_install_path_source_from_claude_worktree_succeeds(
+    tmp_path, skills_root, csk_home
+):
+    """An ancestor .claude directory does not own the nested worktree."""
+    outer = make_project(tmp_path, "outer")
+    write_files(
+        outer,
+        {
+            "skills/script-skill/SKILL.md": (
+                "---\nname: script-skill\ndescription: Worktree repro.\n---\n\n# Script\n"
+            ),
+            "skills/script-skill/agent-skill.json": json.dumps(
+                {
+                    "schema_version": 1,
+                    "commands": {
+                        "tool": {
+                            "type": "script",
+                            "unix_path": "scripts/tool",
+                            "win_path": "scripts/tool.cmd",
+                        }
+                    },
+                }
+            ),
+            "skills/script-skill/scripts/tool": "#!/bin/sh\nprintf 'tool\\n'\n",
+            "skills/script-skill/scripts/tool.cmd": "@echo off\r\necho tool\r\n",
+        },
+    )
+    write_skillfile(
+        outer,
+        {
+            "schema_version": 2,
+            "agents": ["claude_code"],
+            "sources": {"local": {"path": "."}},
+            "skills": [
+                {
+                    "name": "script-skill",
+                    "from": "local",
+                    "directory": "skills/script-skill",
+                }
+            ],
+        },
+    )
+    commit_all(outer, "path-source worktree fixture")
+    worktree = outer / ".claude" / "worktrees" / "wt1"
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    run(["git", "worktree", "add", "-b", "wt1", str(worktree), "HEAD"], outer)
+
+    result = _run_csk_install_cli(worktree, skills_root, csk_home)
+
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert (worktree / ".claude/skills/script-skill/.csk-install.json").is_file()
+
+
+def _make_schema2_claude_worktree(tmp_path: Path, *, outer_name: str = "outer") -> Path:
+    outer = make_project(tmp_path, outer_name)
+    worktree = outer / ".claude" / "worktrees" / "wt1"
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    run(["git", "worktree", "add", "-b", "wt1", str(worktree), "HEAD"], outer)
+    write_files(
+        worktree,
+        {
+            "source/seed/SKILL.md": (
+                "---\nname: seed\ndescription: Gitfile format probe.\n---\n\n# Seed\n"
+            ),
+        },
+    )
+    write_skillfile(
+        worktree,
+        {
+            "schema_version": 2,
+            "agents": ["claude_code"],
+            "sources": {"local": {"path": "source"}},
+            "skills": [{"name": "seed", "from": "local", "directory": "seed"}],
+        },
+    )
+    return worktree
+
+
+def _make_schema2_claude_project_with_gitfile_target(
+    tmp_path: Path, *, outer_name: str = "outer"
+) -> tuple[Path, Path]:
+    """Create a nested project and return its Git metadata target directory."""
+    outer = make_project(tmp_path, outer_name)
+    project = outer / ".claude" / "worktrees" / "wt1"
+    project.mkdir(parents=True)
+    write_files(
+        project,
+        {
+            ".gitignore": (
+                ".agents/\n.claude/skills/\n.codex/skills/\n"
+                ".gemini/skills/\n.cursor/rules/\n"
+            ),
+            "source/seed/SKILL.md": (
+                "---\nname: seed\ndescription: Gitfile format probe.\n---\n\n# Seed\n"
+            ),
+        },
+    )
+    write_skillfile(
+        project,
+        {
+            "schema_version": 2,
+            "agents": ["claude_code"],
+            "sources": {"local": {"path": "source"}},
+            "skills": [{"name": "seed", "from": "local", "directory": "seed"}],
+        },
+    )
+    # The fixture's fresh .git pointer exercises csk's Gitfile parser. Keep Git
+    # commands pointed at the real parent repository explicitly, because this
+    # synthetic pointer does not register a second Git worktree.
+    return project, (outer / ".git").resolve(strict=True)
+
+
+def _write_gitfile(gitfile: Path, content: bytes) -> None:
+    """Rewrite the real pointer for POSIX-only malformed-file controls."""
+    gitfile.chmod(gitfile.stat().st_mode | stat.S_IWRITE)
+    gitfile.write_bytes(content)
+
+
+def test_install_unchanged_gitfile_from_real_claude_worktree_succeeds(
+    tmp_path, skills_root, csk_home
+):
+    """A real Git pointer works for install without the test rewriting it."""
+    worktree = _make_schema2_claude_worktree(tmp_path)
+    gitfile = worktree / ".git"
+    pointer_before = gitfile.read_bytes()
+
+    result = _run_csk_install_cli(worktree, skills_root, csk_home)
+
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert (worktree / ".claude/skills/seed/.csk-install.json").is_file()
+    assert gitfile.read_bytes() == pointer_before
+
+
+@pytest.mark.parametrize(
+    ("variant", "outer_name"),
+    [
+        ("relative", "outer"),
+        ("crlf", "outer"),
+        ("extra-newline", "outer"),
+        ("extra-crlf", "outer"),
+        ("unicode-line-separator", "outer\u2028dir"),
+    ],
+    ids=["relative", "crlf", "extra-newline", "extra-crlf", "unicode-line-separator"],
+)
+def test_real_gitfile_supported_layout(
+    tmp_path, skills_root, csk_home, variant: str, outer_name: str
+):
+    """Git pointer byte layouts install; mutable variants use fresh pointer files."""
+    if variant == "unicode-line-separator":
+        worktree = _make_schema2_claude_worktree(
+            tmp_path, outer_name=outer_name
+        )
+        gitfile = worktree / ".git"
+        assert "\u2028" in str(worktree)
+        pointer_before = gitfile.read_bytes()
+        assert os.fsencode("\u2028") in pointer_before
+        run(["git", "rev-parse", "--git-dir"], worktree)
+        git_environment = None
+    else:
+        worktree, target = _make_schema2_claude_project_with_gitfile_target(
+            tmp_path, outer_name=outer_name
+        )
+        gitfile = worktree / ".git"
+        target_bytes = os.fsencode(target)
+        if variant == "relative":
+            target_bytes = os.fsencode(os.path.relpath(target, worktree))
+            pointer = b"gitdir: " + target_bytes + b"\n"
+        elif variant == "crlf":
+            pointer = b"gitdir: " + target_bytes + b"\r\n"
+        elif variant == "extra-newline":
+            pointer = b"gitdir: " + target_bytes + b"\n\n"
+        else:
+            pointer = b"gitdir: " + target_bytes + b"\n\r\n"
+        # This pointer is a new writable file; Git's worktree pointer is never changed.
+        gitfile.write_bytes(pointer)
+        git_environment = {
+            "GIT_DIR": str(target),
+            "GIT_WORK_TREE": str(worktree),
+        }
+
+    result = _run_csk_install_cli(
+        worktree,
+        skills_root,
+        csk_home,
+        git_environment=git_environment,
+    )
+
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert (worktree / ".claude/skills/seed/.csk-install.json").is_file()
+    if variant == "unicode-line-separator":
+        assert gitfile.read_bytes() == pointer_before
+
+
+@pytest.mark.parametrize(
+    "variant",
+    ["missing-prefix", "empty-path", "nul"],
+    ids=["missing-prefix", "empty-path", "nul"],
+)
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="malformed gitfile refusal is owned by the POSIX Phase-A parser",
+)
+def test_malformed_worktree_gitfile_refuses(
+    tmp_path, variant: str
+):
+    """Malformed owner metadata stays fail-closed even with a valid target path."""
+    worktree = _make_schema2_claude_worktree(tmp_path)
+    gitfile = worktree / ".git"
+    pointer = gitfile.read_bytes().rstrip(b"\r\n")
+    assert pointer.startswith(b"gitdir: ")
+    target = Path(os.fsdecode(pointer[len(b"gitdir: ") :]))
+    if not target.is_absolute():
+        target = gitfile.parent / target
+    target_bytes = os.fsencode(target.resolve(strict=True))
+
+    if variant == "missing-prefix":
+        _write_gitfile(gitfile, target_bytes + b"\n")
+    elif variant == "empty-path":
+        _write_gitfile(gitfile, b"gitdir: \n")
+    else:
+        _write_gitfile(gitfile, b"gitdir: " + target_bytes + b"\0ignored\n")
+
+    with pytest.raises(source_errors.SourceError) as excinfo:
+        resolve_individual(
+            worktree / "source",
+            IndividualSelector(name="seed", from_alias="local", directory="seed"),
+            project_root=worktree,
+        )
+
+    assert excinfo.value.code == source_errors.CODE_OUTPUT_OVERLAP
+
+
+def test_install_legacy_skillfile_from_claude_worktree_succeeds(
+    tmp_path, skills_root, csk_home
+):
+    outer = make_project(tmp_path, "legacy-outer")
+    make_skill_repo(
+        skills_root,
+        "legacy-skill",
+        {
+            "SKILL.md": "---\nname: legacy-skill\ndescription: Worktree control.\n---\n\n# Legacy\n",
+            "agent-skill.json": json.dumps(
+                {
+                    "schema_version": 1,
+                    "commands": {
+                        "tool": {
+                            "type": "script",
+                            "unix_path": "scripts/tool",
+                            "win_path": "scripts/tool.cmd",
+                        }
+                    },
+                }
+            ),
+            "scripts/tool": "#!/bin/sh\nprintf 'tool\\n'\n",
+            "scripts/tool.cmd": "@echo off\r\necho tool\r\n",
+        },
+        tag="v1",
+    )
+    write_skillfile(
+        outer,
+        {
+            "schema_version": 1,
+            "agents": ["claude_code"],
+            "skills": [{"name": "legacy-skill", "tag": "v1"}],
+        },
+    )
+    commit_all(outer, "legacy worktree fixture")
+    worktree = outer / ".claude" / "worktrees" / "wt1"
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    run(["git", "worktree", "add", "-b", "wt1", str(worktree), "HEAD"], outer)
+
+    result = _run_csk_install_cli(worktree, skills_root, csk_home)
+
+    # This legacy skill may emit an advisory command-resolution warning on stdout.
+    # Success is established by the exit code and installed marker, not silence.
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert (worktree / ".claude/skills/legacy-skill/.csk-install.json").is_file()
+
+
+@pytest.mark.parametrize("alias", [".claude", ".claude/skills"])
+def test_owned_output_symlink_refuses(
+    tmp_path, skills_root, csk_home, alias
+):
+    """A symlink into a project-owned managed output remains refused."""
+    project = make_project(tmp_path)
+    external = tmp_path / "external" / ".claude"
+    write_files(
+        external,
+        {
+            "source/collection/seed/SKILL.md": (
+                "---\nname: seed\ndescription: Boundary probe.\n---\n\n# Seed\n"
+            ),
+        },
+    )
+    link = project / alias
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(external, target_is_directory=True)
+    write_skillfile(
+        project,
+        {
+            "schema_version": 2,
+            "agents": ["codex"],
+            "sources": {"local": {"path": str(link / "source")}},
+            "skills": [
+                {"name": "seed", "from": "local", "directory": "collection/seed"}
+            ],
+        },
+    )
+
+    result = _run_csk_install_cli(project, skills_root, csk_home)
+
+    assert result.returncode != 0, result.stdout
+    assert "source_output_overlap" in result.stderr, result.stderr
+
+
+def test_install_path_source_inside_owned_claude_skills_still_refuses(
+    tmp_path, skills_root, csk_home
+):
+    project = make_project(tmp_path)
+    write_files(
+        project,
+        {
+            ".claude/skills/source/seed/SKILL.md": (
+                "---\nname: seed\ndescription: Managed source control.\n---\n\n# Seed\n"
+            ),
+        },
+    )
+    write_skillfile(
+        project,
+        {
+            "schema_version": 2,
+            "agents": ["claude_code"],
+            "sources": {"local": {"path": ".claude/skills/source"}},
+            "skills": [
+                {"name": "seed", "from": "local", "directory": "seed"}
+            ],
+        },
+    )
+    result = _run_csk_install_cli(project, skills_root, csk_home)
+
+    assert result.returncode != 0
+    assert "source_output_overlap" in result.stderr
+
+
+def test_owned_git_directory_alias_refuses(tmp_path, skills_root, csk_home):
+    """A source below an aliased project .git directory is project-owned."""
+    project = make_project(tmp_path)
+    external_git = tmp_path / "external" / ".git"
+    external_git.parent.mkdir()
+    (project / ".git").rename(external_git)
+    (project / ".git").symlink_to(external_git, target_is_directory=True)
+    write_files(
+        external_git,
+        {
+            "source/collection/seed/SKILL.md": (
+                "---\nname: seed\ndescription: Git metadata boundary.\n---\n\n# Seed\n"
+            ),
+        },
+    )
+    write_skillfile(
+        project,
+        {
+            "schema_version": 2,
+            "agents": ["codex"],
+            "sources": {"local": {"path": str(project / ".git/source")}},
+            "skills": [
+                {"name": "seed", "from": "local", "directory": "collection/seed"}
+            ],
+        },
+    )
+
+    result = _run_csk_install_cli(project, skills_root, csk_home)
+
+    assert result.returncode != 0, result.stdout
+    assert "source_output_overlap" in result.stderr, result.stderr
+
+
+def test_owned_worktree_gitdir_target_alias_refuses(
+    tmp_path, skills_root, csk_home
+):
+    """A worktree .git file owns its resolved gitdir, including aliases."""
+    outer = make_project(tmp_path, "worktree-owner")
+    worktree = outer / ".claude" / "worktrees" / "wt1"
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    run(["git", "worktree", "add", "-b", "wt1", str(worktree), "HEAD"], outer)
+    gitfile = (worktree / ".git").read_text(encoding="utf-8").strip()
+    assert gitfile.startswith("gitdir: ")
+    gitdir = Path(gitfile.removeprefix("gitdir: "))
+    if not gitdir.is_absolute():
+        gitdir = worktree / gitdir
+    gitdir = gitdir.resolve()
+    source = gitdir / "source"
+    write_files(
+        source,
+        {
+            "collection/seed/SKILL.md": (
+                "---\nname: seed\ndescription: Worktree gitdir boundary.\n---\n\n# Seed\n"
+            ),
+        },
+    )
+    source_alias = tmp_path / "external-source"
+    source_alias.symlink_to(source, target_is_directory=True)
+    write_skillfile(
+        worktree,
+        {
+            "schema_version": 2,
+            "agents": ["codex"],
+            "sources": {"local": {"path": str(source_alias)}},
+            "skills": [
+                {"name": "seed", "from": "local", "directory": "collection/seed"}
+            ],
+        },
+    )
+
+    result = _run_csk_install_cli(worktree, skills_root, csk_home)
+
+    assert result.returncode != 0, result.stdout
+    assert "source_output_overlap" in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize("include", ["script-skill", "*"])
+def test_nested_worktree_collection_install(
+    tmp_path, skills_root, csk_home, monkeypatch, include
+):
+    """Collection selectors keep working in a real nested Claude worktree."""
+    original_write = write_skillfile
+
+    def write_collection(project, data):
+        data = dict(data)
+        data["skills"] = [
+            {
+                "from": "local",
+                "directory": "skills",
+                "include": [include],
+            }
+        ]
+        original_write(project, data)
+
+    monkeypatch.setattr(sys.modules[__name__], "write_skillfile", write_collection)
+    test_install_path_source_from_claude_worktree_succeeds(
+        tmp_path, skills_root, csk_home
+    )
 
 
 def test_install_writes_marker_schema_2_bytes_for_a_schema_1_skill(tmp_path, skills_root, csk_home):

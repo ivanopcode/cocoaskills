@@ -1,5 +1,60 @@
 # Logbook
 
+## 2026-09-27 - BUG-260927-ucxvpy: isolate Windows Gitfile failures to fixtures
+
+Revision-5 CI evidence from run 36339889068 showed the Windows failures were
+test-fixture problems. The schema-2 and collection installs used script
+metadata without a Windows command path; the schema-1 legacy fixture had the
+same missing path, alongside an advisory command-resolution warning on stdout.
+The Gitfile PermissionError occurred when the format tests attempted to write
+over Git's real worktree `.git` pointer before calling csk. The tests now add
+Windows script fixtures, make the pointer writable only when a test mutates
+its bytes, and exercise `csk install` against an untouched `git worktree add`
+pointer. No production code change was needed for this rework. Native Windows
+rerun remains pending the required draft CI probe.
+
+## 2026-09-27 - BUG-260927-ucxvpy: preserve owned outputs through aliases
+
+The revision-1 owner-root stop fixed nested Claude worktrees but still admitted
+project-owned `.claude` outputs when a symlink moved the source subtree outside
+the owner's physical ancestry. Phase A now resolves every adapter output and
+its managed ancestor under the opened project directory, then carries those
+physical identities into source-root and selected-member boundary checks.
+Both reviewer symlink cases fail on the old behavior and refuse through the
+real CLI after the fix. The alias-identity narrowing mutant was killed while
+the direct managed-source control continued to refuse.
+
+## 2026-09-27 - BUG-260927-ucxvpy: bind Git metadata and collection rechecks to the owner
+
+Revision 2 still admitted a source below an alias to the project's `.git`:
+Phase A recorded adapter targets but omitted the main Git directory and the
+target named by a worktree `.git` file. It also re-expanded collection
+selectors during snapshot and publish checks without the owning project root,
+so `<repo>/.claude/worktrees/<name>` passed individual selection but failed
+collection selection. Phase A now freezes both `.git` forms, and all three
+collection membership walks require the project root and delegate to the same
+owner-aware selection session boundary. Real CLI regressions and a trace seam
+cover both paths; the rev-3 results resource records pre-fix failures, killed
+narrowing mutants, validation commands and bounds.
+
+## 2026-09-27 - BUG-260927-ucxvpy: install from a Claude worktree
+
+ROOT CAUSE: source selection and snapshot capture walked physical ancestors
+past the owning project root. In `<repo>/.claude/worktrees/<name>`, that made
+the outer `.claude` directory look like the project's managed install target
+and rejected a schema-2 `path` source.
+
+FIX: pass the owning project root into selector resolution and package snapshot
+capture, and stop the managed-ancestor check at that root's filesystem
+identity. A source under the project's own `.claude/skills` still refuses.
+
+EVIDENCE: schema-2 install failed before the fix with
+`source_output_overlap` and now installs and reports locked status as current;
+the nested schema-1 legacy install remains successful. The final regression
+fails against the pre-fix behavior, and a narrowing mutant that admits `.claude`
+is killed by the managed-source control. Suite counts and exact command exit
+codes are in `BUG-260927-ucxvpy_results.md`; the candidate remains uncommitted.
+
 ## 2026-09-25 - TASK-260925-38kn57: accepted skillfile-sources corpus pin
 
 The source conformance pin and CI checkout paths now target curator-spec
@@ -5351,3 +5406,13 @@ context eligibility (references/, data/, ...) stays a stated bound:
 it is not manifest-declared, so the model cannot see it.
 
 Evidence: `BUG-260922-1o40hs_results_rev3.md` (board outcome resource).
+
+## BUG-260927-ucxvpy revision 5 — Windows CI rework checkpoint (2026-09-28)
+
+- Reworked only the Gitfile test fixtures and Windows command metadata. Script skill fixtures now include Windows paths. Four accepted `.git` pointer-format install variants write new `.git` files under a synthetic nested project and direct inherited Git commands to the parent repository; the real Git-created pointer is never opened for writing. The separate `test_install_unchanged_gitfile_from_real_claude_worktree_succeeds` continues to run csk install from a real `git worktree add` checkout and asserts pointer bytes remain unchanged.
+- Diagnosis from Windows run 36339889068: the script and legacy install failures are fixture omissions (`win_path`); the legacy resolver-contract warning is advisory, while the failing condition was exit 1 because the Windows command path was absent. The four PermissionErrors occurred in test `Path.write_bytes` calls on Git-created `.git` pointers before csk ran, so they do not establish a production Windows install defect.
+- Intermediate Windows run 36342990046 passed the unchanged-pointer real-worktree install and the corrected Windows command fixtures, but still had four `PermissionError` failures from the first chmod-then-rewrite approach. The replacement fresh-file fixtures pass locally.
+- Final local affected-suite runs are green: Story worktree 2,312 passed / 19 skipped (log `BUG-260927-ucxvpy_pytest-affected-r5-final-03.log`); draft-probe worktree 2,317 passed / 19 skipped (log `BUG-260927-ucxvpy_probe-affected-r5-01.log`). Probe ruff F check, compileall, wheel/sdist build, and `git diff --check` also exit 0.
+- Draft-only PR #94 at `wip/claude-dir-r5` remains open and draft. Signed commit `7b5fc0d4dd411fc6a0782a98376a9f337dc20927` was pushed. Required Windows run 36345617182 (`Fast ordinary / Python 3.14 on windows-latest`) is still running; do not mark ready or merge.
+- Board refresh remains refused because `task-board worktree status STORY-260927-2ytsox` still says `BUG-260927-ucxvpy rev 4 accepted`, despite the rework brief. No manual Story-base rewrite was made.
+- Final required Windows evidence: run 36345617182 job 108694052539 (`Fast ordinary / Python 3.14 on windows-latest`) completed success; 10,828 passed, 618 skipped in 913.87s. The schema-2 path test, both collection selectors, schema-1 legacy install, real untouched `.git` pointer install, and relative/CRLF/extra-LF/extra-CRLF/U+2028 pointer variants are all recorded `PASSED`. The skip count matches the pre-rework Windows job. Full log is `BUG-260927-ucxvpy_windows-r5-final-01.log`; draft PR #94 stays open, draft, and unmerged.

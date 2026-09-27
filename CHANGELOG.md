@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Исправлено
 
 - Установка по аннотированному Git-тегу теперь фиксирует peeled commit; для лока с OID объекта тега предлагается выполнить `csk upgrade`.
+- Исправлена установка из Claude Code worktree: предок `.claude` не считается install target проекта, collection selectors переобходятся с границей владельца, а алиасы собственных managed targets, включая `.git`, отклоняются.
 
 ## [0.18.0] - 2026-09-27
 

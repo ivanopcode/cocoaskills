@@ -3996,6 +3996,75 @@ def test_managed_boundary_predicate_is_single_source(tmp_path: Path) -> None:
     assert ordinary.name == "ordinary"
 
 
+def test_owner_aware_managed_boundary_is_shared_by_all_walkers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Selection, capture, and publish re-enumeration reach one owner-aware seam."""
+    from csk.sources import publish, snapshot
+
+    project = tmp_path / "outer" / ".claude" / "worktrees" / "wt1"
+    source_root = project / "source"
+    home = tmp_path / "csk-home"
+    home.mkdir()
+    monkeypatch.setenv("CSK_CONFIG", str(home / "config.json"))
+    _write_skill(source_root / "individual", "individual", "Individual skill")
+    _write_skill(source_root / "collection" / "review", "review", "Collection skill")
+
+    calls: list[str] = []
+    original = _selection_fs.SelectionSession.managed_boundary
+
+    def traced(session, directory, managed_names, *, context):
+        calls.append(context)
+        return original(
+            session, directory, managed_names, context=context
+        )
+
+    monkeypatch.setattr(
+        _selection_fs.SelectionSession, "managed_boundary", traced
+    )
+
+    def assert_uses_shared_seam(label: str, action) -> None:
+        before = len(calls)
+        action()
+        assert len(calls) > before, f"{label} bypassed SelectionSession.managed_boundary"
+
+    assert_uses_shared_seam(
+        "individual selection",
+        lambda: selection.resolve_individual(
+            source_root,
+            IndividualSelector(
+                name="individual", from_alias="local", directory="individual"
+            ),
+            project_root=project,
+        ),
+    )
+    assert_uses_shared_seam(
+        "collection selection",
+        lambda: selection.expand_collection(
+            source_root,
+            _collection("collection", ("review",)),
+            project_root=project,
+        ),
+    )
+    assert_uses_shared_seam(
+        "snapshot capture",
+        lambda: snapshot.capture_package_snapshot(
+            source_root,
+            "individual",
+            home=home,
+            owner_project_root=project,
+        ),
+    )
+    assert_uses_shared_seam(
+        "publish collection re-enumeration",
+        lambda: publish.collection_membership(
+            [_collection("collection", ("review",))],
+            {"local": source_root},
+            project_root=project,
+        ),
+    )
+
+
 def test_review_external_skill_md_is_rejected(tmp_path: Path) -> None:
     """Committed reviewer attack (rev1): escaping SKILL.md link refuses."""
 

@@ -473,7 +473,11 @@ def _capture_components(directory: str, *, context: str) -> list[str]:
 
 
 def capture_package_snapshot(
-    source_root: Path, directory: str, *, home: Path
+    source_root: Path,
+    directory: str,
+    *,
+    home: Path,
+    owner_project_root: Path | None = None,
 ) -> CapturedPackage:
     """Capture one package directory as an immutable snapshot.
 
@@ -490,6 +494,7 @@ def capture_package_snapshot(
         source_root,
         home,
         managed_names=PRUNED_CHILD_NAMES,
+        owner_project_root=owner_project_root,
         preflight=PreflightRequest(
             paths=(
                 PreflightPath(
