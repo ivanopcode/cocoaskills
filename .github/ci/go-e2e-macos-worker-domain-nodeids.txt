@@ -1,1 +1,3 @@
 tests/test_go_build_e2e.py::test_real_go_cache_hit_and_relevant_source_mutation
+tests/test_go_build_e2e.py::test_native_bin_shim_uses_resolution_probe[missing-version]
+tests/test_go_build_e2e.py::test_native_bin_shim_uses_resolution_probe[missing-pkg-tool]

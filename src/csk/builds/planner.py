@@ -119,6 +119,7 @@ class BuildPlan:
     input: metadata.AnyBuildInput
     cache_key: str
     inspection: cache.CacheInspection
+    go_executable: Path | None = None
 
     @property
     def command(self) -> str:
@@ -190,6 +191,9 @@ class _ToolchainSession(Protocol):
 
     @property
     def toolchain(self) -> toolchain.ToolchainIdentity: ...
+
+    @property
+    def executable(self) -> Path: ...
 
     def __enter__(self) -> _ToolchainSession: ...
 
@@ -462,6 +466,7 @@ def _plan_once(
                         target=session.target,
                         identity=session.toolchain,
                         backend=backend,
+                        executable=session.executable,
                     )
 
                 plans.extend(
@@ -476,6 +481,7 @@ def _inspect_provider(
     target: toolchain.NativeTarget,
     identity: toolchain.ToolchainIdentity,
     backend: cache.BuildCacheBackend,
+    executable: Path | None = None,
 ) -> tuple[BuildPlan, ...]:
     plans: list[BuildPlan] = []
     for command in sorted(
@@ -506,6 +512,7 @@ def _inspect_provider(
                 input=planned,
                 cache_key=key,
                 inspection=inspection,
+                go_executable=executable,
             )
         )
     return tuple(plans)

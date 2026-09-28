@@ -3,15 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable
 
 import pytest
-
 from candidate_suite_support import load_candidate_suite
 from conftest import (
     commit_all,
@@ -20,9 +20,9 @@ from conftest import (
     make_project,
     write_skillfile,
 )
+
 from csk import config, consumers, global_install, hybrid, installer, transactions
 from csk.builds import go_v1
-
 
 FIXTURE = Path(__file__).parent / "fixtures" / "skill_go_e2e"
 NATIVE = pytest.mark.skipif(
@@ -263,6 +263,146 @@ def _shim_bytes(path: Path) -> bytes:
     return path.read_bytes()
 
 
+def _write_go_version_manager_shim(
+    shim_directory: Path,
+    *,
+    shape: str,
+    goroot: Path,
+    counter: Path,
+) -> Path:
+    shim_directory.mkdir(parents=True)
+    shim = shim_directory / "go"
+    root_literal = shlex.quote(os.fspath(goroot))
+    counter_literal = shlex.quote(os.fspath(counter))
+    prelude = f"printf 'invoked\\n' >> {counter_literal}\n"
+    if shape == "goenv":
+        dispatch = (
+            'if [ "$#" -eq 2 ] && [ "$1" = env ] && [ "$2" = GOROOT ]; then\n'
+            f"  printf '%s\\n' {root_literal}\n"
+            "  exit 0\n"
+            "fi\n"
+        )
+    elif shape == "asdf":
+        dispatch = (
+            'case "${1-}:${2-}" in\n'
+            "  env:GOROOT)\n"
+            f"    printf '%s\\n' {root_literal}\n"
+            "    exit 0\n"
+            "    ;;\n"
+            "esac\n"
+        )
+    elif shape == "mise":
+        dispatch = (
+            'if [ "$1" = env ] && [ "$2" = GOROOT ]; then\n'
+            f"  printf '%s\\n' {root_literal}\n"
+            "  exit 0\n"
+            "fi\n"
+        )
+    else:
+        raise AssertionError(f"unknown fake version-manager shape: {shape}")
+    script = (
+        "#!/bin/sh\n"
+        + prelude
+        + dispatch
+        + f"exec {shlex.quote(os.fspath(goroot / 'bin' / 'go'))} \"$@\"\n"
+    )
+    shim.write_text(script, encoding="utf-8")
+    shim.chmod(0o755)
+    return shim
+
+
+def _compile_native_go_forwarder(
+    shim_directory: Path,
+    *,
+    real_go: Path,
+    call_log: Path,
+    missing_fact: str,
+) -> Path:
+    compiler = next(
+        (
+            (name, shutil.which(name))
+            for name in ("cl", "cc", "clang", "gcc")
+            if shutil.which(name)
+        ),
+        None,
+    )
+    if compiler is None:
+        pytest.skip("no C compiler available (checked cl, cc, clang, gcc)")
+    _compiler_name, compiler_path = compiler
+    assert compiler_path is not None
+
+    tool_root = shim_directory.parent
+    shim_directory.mkdir(parents=True)
+    if missing_fact != "VERSION":
+        (tool_root / "VERSION").write_text("go1.25.5\n", encoding="utf-8")
+    (tool_root / "src" / "runtime").mkdir(parents=True)
+    if missing_fact != "pkg/tool":
+        (tool_root / "pkg" / "tool").mkdir(parents=True)
+
+    executable = shim_directory / ("go.exe" if os.name == "nt" else "go")
+    source = shim_directory / "forwarder.c"
+    real_go_literal = json.dumps(os.fspath(real_go).replace("\\", "/"))
+    log_literal = json.dumps(os.fspath(call_log).replace("\\", "/"))
+    source.write_text(
+        "#include <stdio.h>\n"
+        "#include <string.h>\n"
+        "#ifdef _WIN32\n"
+        "#include <windows.h>\n"
+        f"#define REAL_GO {real_go_literal}\n"
+        f"#define CALL_LOG {log_literal}\n"
+        "int main(int argc, char **argv) {\n"
+        "  FILE *log = fopen(CALL_LOG, \"a\");\n"
+        "  if (!log) return 98;\n"
+        "  for (int i = 1; i < argc; ++i) fprintf(log, \"%s%s\", i == 1 ? \"\" : \" \", argv[i]);\n"
+        "  fputc('\\n', log); fclose(log);\n"
+        "  char command[32768];\n"
+        "  int used = snprintf(command, sizeof(command), \"\\\"%s\\\"\", REAL_GO);\n"
+        "  if (used < 0 || (size_t)used >= sizeof(command)) return 97;\n"
+        "  for (int i = 1; i < argc; ++i) {\n"
+        "    int added = snprintf(command + used, sizeof(command) - (size_t)used, \" \\\"%s\\\"\", argv[i]);\n"
+        "    if (added < 0 || (size_t)added >= sizeof(command) - (size_t)used) return 97;\n"
+        "    used += added;\n"
+        "  }\n"
+        "  STARTUPINFOA startup; PROCESS_INFORMATION child;\n"
+        "  memset(&startup, 0, sizeof(startup)); memset(&child, 0, sizeof(child));\n"
+        "  startup.cb = sizeof(startup); startup.dwFlags = STARTF_USESTDHANDLES;\n"
+        "  startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);\n"
+        "  startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);\n"
+        "  startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);\n"
+        "  if (!CreateProcessA(REAL_GO, command, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &child)) return 127;\n"
+        "  WaitForSingleObject(child.hProcess, INFINITE);\n"
+        "  DWORD code = 127; GetExitCodeProcess(child.hProcess, &code);\n"
+        "  CloseHandle(child.hThread); CloseHandle(child.hProcess); return (int)code;\n"
+        "}\n"
+        "#else\n"
+        "#include <unistd.h>\n"
+        f"#define REAL_GO {real_go_literal}\n"
+        f"#define CALL_LOG {log_literal}\n"
+        "int main(int argc, char **argv) {\n"
+        "  FILE *log = fopen(CALL_LOG, \"a\");\n"
+        "  if (!log) return 98;\n"
+        "  for (int i = 1; i < argc; ++i) fprintf(log, \"%s%s\", i == 1 ? \"\" : \" \", argv[i]);\n"
+        "  fputc('\\n', log); fclose(log);\n"
+        "  execv(REAL_GO, argv); return 127;\n"
+        "}\n"
+        "#endif\n",
+        encoding="utf-8",
+    )
+    if Path(compiler_path).stem.casefold() == "cl":
+        command = [compiler_path, "/nologo", f"/Fe{executable}", os.fspath(source)]
+    else:
+        command = [compiler_path, os.fspath(source), "-o", os.fspath(executable)]
+    subprocess.run(
+        command,
+        cwd=shim_directory,
+        check=True,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+    )
+    return executable
+
+
 def _observe_real_builds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[list[str], Callable[..., go_v1.BuildResult]]:
@@ -297,6 +437,141 @@ def test_go_install_builds_without_network_and_does_not_launch(
     build = _marker_build(csk_home, project, scope, "argv-exit")
     receipt = _receipt(csk_home, build)
     assert receipt["input"]["policy"]["execution_policy"] == "manager-worker-v1"  # type: ignore[index]
+    assert _artifact(csk_home, build).is_file()
+
+
+@pytest.mark.csk_e2e_native
+@NATIVE
+@pytest.mark.skipif(os.name == "nt", reason="the executable shim fixtures use POSIX shell scripts")
+@pytest.mark.parametrize("shape", ["goenv", "asdf", "mise"])
+def test_go_install_builds_through_version_manager_shim_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    required_go_e2e_host: tuple[Path, Path],
+    shape: str,
+) -> None:
+    go_executable = required_go_e2e_host[1]
+    goroot_output = subprocess.run(
+        [go_executable, "env", "GOROOT"],
+        check=True,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+    ).stdout
+    goroot = Path(goroot_output.strip()).resolve(strict=True)
+    shim_directory = tmp_path / f"{shape}-shims"
+    counter = tmp_path / f"{shape}-shim-calls.txt"
+    _write_go_version_manager_shim(
+        shim_directory,
+        shape=shape,
+        goroot=goroot,
+        counter=counter,
+    )
+    monkeypatch.setenv(
+        "PATH",
+        os.pathsep.join((os.fspath(shim_directory), os.environ["PATH"])),
+    )
+    cfg, project, _ = _setup_scope(tmp_path, skills_root, csk_home, "project")
+
+    result = _install(cfg, "project")
+
+    _assert_ok(result)
+    assert counter.read_text(encoding="utf-8") == "invoked\n"
+    build = _marker_build(csk_home, project, "project", "argv-exit")
+    receipt = _receipt(csk_home, build)
+    assert receipt["input"]["toolchain"]["go_version"].startswith("go version go1.25.5")  # type: ignore[index]
+    assert _artifact(csk_home, build).is_file()
+
+
+@pytest.mark.csk_e2e_native
+@NATIVE
+@pytest.mark.skipif(os.name == "nt", reason="the executable shim fixture uses a POSIX shell script")
+def test_go_install_builds_through_bin_directory_shim_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    required_go_e2e_host: tuple[Path, Path],
+) -> None:
+    go_executable = required_go_e2e_host[1]
+    goroot_output = subprocess.run(
+        [go_executable, "env", "GOROOT"],
+        check=True,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+    ).stdout
+    goroot = Path(goroot_output.strip()).resolve(strict=True)
+    shim_directory = tmp_path / "tool" / "bin"
+    counter = tmp_path / "bin-shim-calls.txt"
+    _write_go_version_manager_shim(
+        shim_directory,
+        shape="goenv",
+        goroot=goroot,
+        counter=counter,
+    )
+    monkeypatch.setenv(
+        "PATH",
+        os.pathsep.join((os.fspath(shim_directory), os.environ["PATH"])),
+    )
+    cfg, project, _ = _setup_scope(tmp_path, skills_root, csk_home, "project")
+
+    result = _install(cfg, "project")
+
+    _assert_ok(result)
+    assert counter.read_text(encoding="utf-8") == "invoked\n"
+    build = _marker_build(csk_home, project, "project", "argv-exit")
+    receipt = _receipt(csk_home, build)
+    assert receipt["input"]["toolchain"]["go_version"].startswith("go version go1.25.5")  # type: ignore[index]
+    assert _artifact(csk_home, build).is_file()
+
+
+@pytest.mark.csk_e2e_native
+@pytest.mark.parametrize(
+    "missing_fact",
+    ["VERSION", "pkg/tool"],
+    ids=["missing-version", "missing-pkg-tool"],
+)
+def test_native_bin_shim_uses_resolution_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    required_go_e2e_host: tuple[Path, Path],
+    missing_fact: str,
+) -> None:
+    go_executable = required_go_e2e_host[1]
+    expected_go_version = subprocess.run(
+        [go_executable, "version"],
+        check=True,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+    ).stdout.strip()
+    shim_directory = tmp_path / "tool" / "bin"
+    call_log = tmp_path / "native-shim-calls.txt"
+    shim = _compile_native_go_forwarder(
+        shim_directory,
+        real_go=go_executable,
+        call_log=call_log,
+        missing_fact=missing_fact,
+    )
+    assert shim.is_file()
+    monkeypatch.setenv(
+        "PATH",
+        os.pathsep.join((os.fspath(shim_directory), os.environ["PATH"])),
+    )
+    cfg, project, _ = _setup_scope(tmp_path, skills_root, csk_home, "project")
+
+    result = _install(cfg, "project")
+
+    _assert_ok(result)
+    assert call_log.read_text(encoding="utf-8").splitlines() == ["env GOROOT"]
+    build = _marker_build(csk_home, project, "project", "argv-exit")
+    receipt = _receipt(csk_home, build)
+    assert receipt["input"]["toolchain"]["go_version"] == expected_go_version  # type: ignore[index]
     assert _artifact(csk_home, build).is_file()
 
 
