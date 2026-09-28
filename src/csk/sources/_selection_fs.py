@@ -300,15 +300,35 @@ def read_regular_path(path: Path, *, code: str, label: str, what: str) -> bytes:
     callers from acquiring a second filesystem capability in ``selection``.
     """
 
-    try:
-        entry = os.lstat(path)
-    except FileNotFoundError as exc:
-        raise SourceError(code, f"Skill member {label} has no {what}") from exc
-    except _FS_ERRORS as exc:
-        raise SourceError(
-            code,
-            f"Skill member {label} file {what!r} cannot be inspected: {exc}",
-        ) from exc
+    if _WINDOWS_SELECTION:
+        try:
+            entry_fd = _open_descriptor(path, _file_flags(nofollow=True))
+        except FileNotFoundError as exc:
+            raise SourceError(code, f"Skill member {label} has no {what}") from exc
+        except _FS_ERRORS as exc:
+            raise SourceError(
+                code,
+                f"Skill member {label} file {what!r} cannot be inspected: {exc}",
+            ) from exc
+        try:
+            entry = _fstat(
+                entry_fd,
+                code=code,
+                context=f"Skill member {label}",
+                path=what,
+            )
+        finally:
+            _close_quietly(entry_fd)
+    else:
+        try:
+            entry = os.lstat(path)
+        except FileNotFoundError as exc:
+            raise SourceError(code, f"Skill member {label} has no {what}") from exc
+        except _FS_ERRORS as exc:
+            raise SourceError(
+                code,
+                f"Skill member {label} file {what!r} cannot be inspected: {exc}",
+            ) from exc
     if not stat.S_ISREG(entry.st_mode) or stat.S_ISLNK(entry.st_mode):
         raise SourceError(
             code,
