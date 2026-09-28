@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Исправлено
 
 - Исправлен conformance harness для будущих семейств Go: вектор отказа запускается в строгом режиме, а тест и запись отклонения фиксируют сохранение режима `warn` по умолчанию согласно curator-spec issue #101.
+- Go shim на PATH разрешается через bootstrap probe; ссылочный каталог `bin` отклоняется, а shim-скрипт внутри `bin` обрабатывается как shim.
 
 ## [0.18.1] - 2026-09-28
 
