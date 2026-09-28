@@ -205,6 +205,57 @@ def test_windows_skill_frontmatter_read_uses_handle_identity_on_python_311(
     ]
 
 
+def test_windows_skill_frontmatter_read_refuses_non_regular_inspected_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Entry inspection rejects directories before a content open."""
+
+    directory_stat = winfs.WindowsStat(
+        st_mode=stat.S_IFDIR | 0o777,
+        st_ino=0x0123456789ABCDEF0011223344556677,
+        st_dev=0x123456789ABCDEF0,
+        st_nlink=1,
+        st_uid=0,
+        st_gid=0,
+        st_size=0,
+        st_atime=0,
+        st_mtime=0,
+        st_ctime=0,
+        st_file_attributes=0,
+        st_reparse_tag=0,
+    )
+    opened: list[tuple[Path, int]] = []
+    closed: list[int] = []
+
+    def open_file(path: Path, flags: int, **_kwargs: object) -> int:
+        opened.append((path, flags))
+        return 41
+
+    monkeypatch.setattr(_selection_fs, "_WINDOWS_SELECTION", True)
+    monkeypatch.setattr(_selection_fs, "_open_descriptor", open_file)
+    monkeypatch.setattr(
+        _selection_fs, "_fstat", lambda *_args, **_kwargs: directory_stat
+    )
+    monkeypatch.setattr(_selection_fs, "_close_quietly", closed.append)
+
+    with pytest.raises(
+        source_errors.SourceError, match="is not a regular file"
+    ):
+        selection.read_skill_md_name(
+            Path("C:/source/review"),
+            "'review'",
+            resolved_root=Path("C:/source"),
+        )
+
+    assert opened == [
+        (
+            Path("C:/source/review/SKILL.md"),
+            _selection_fs._WINDOWS_FILE_FLAG,
+        )
+    ]
+    assert closed == [41]
+
+
 def test_windows_skill_frontmatter_read_refuses_regular_file_swap_after_entry_inspection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

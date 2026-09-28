@@ -329,11 +329,11 @@ def read_regular_path(path: Path, *, code: str, label: str, what: str) -> bytes:
                 code,
                 f"Skill member {label} file {what!r} cannot be inspected: {exc}",
             ) from exc
-        if not stat.S_ISREG(entry.st_mode) or stat.S_ISLNK(entry.st_mode):
-            raise SourceError(
-                code,
-                f"Skill member {label} file {what!r} is not a regular file",
-            )
+    if not stat.S_ISREG(entry.st_mode) or stat.S_ISLNK(entry.st_mode):
+        raise SourceError(
+            code,
+            f"Skill member {label} file {what!r} is not a regular file",
+        )
     try:
         fd = _open_descriptor(path, _file_flags(nofollow=True))
     except _FS_ERRORS as exc:
