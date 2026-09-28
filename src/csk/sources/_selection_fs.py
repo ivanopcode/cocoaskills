@@ -300,22 +300,31 @@ def read_regular_path(path: Path, *, code: str, label: str, what: str) -> bytes:
     callers from acquiring a second filesystem capability in ``selection``.
     """
 
-    try:
-        entry = os.lstat(path)
-    except FileNotFoundError as exc:
-        raise SourceError(code, f"Skill member {label} has no {what}") from exc
-    except _FS_ERRORS as exc:
-        raise SourceError(
-            code,
-            f"Skill member {label} file {what!r} cannot be inspected: {exc}",
-        ) from exc
-    if not stat.S_ISREG(entry.st_mode) or stat.S_ISLNK(entry.st_mode):
-        raise SourceError(
-            code,
-            f"Skill member {label} file {what!r} is not a regular file",
-        )
+    entry: _StatLike | None = None
+    if not _WINDOWS_SELECTION:
+        try:
+            entry = os.lstat(path)
+        except FileNotFoundError as exc:
+            raise SourceError(code, f"Skill member {label} has no {what}") from exc
+        except _FS_ERRORS as exc:
+            raise SourceError(
+                code,
+                f"Skill member {label} file {what!r} cannot be inspected: {exc}",
+            ) from exc
+        if not stat.S_ISREG(entry.st_mode) or stat.S_ISLNK(entry.st_mode):
+            raise SourceError(
+                code,
+                f"Skill member {label} file {what!r} is not a regular file",
+            )
     try:
         fd = _open_descriptor(path, _file_flags(nofollow=True))
+    except FileNotFoundError as exc:
+        if _WINDOWS_SELECTION:
+            raise SourceError(code, f"Skill member {label} has no {what}") from exc
+        raise SourceError(
+            code,
+            f"Skill member {label} file {what!r} cannot be read: {exc}",
+        ) from exc
     except _FS_ERRORS as exc:
         raise SourceError(
             code,
@@ -331,7 +340,10 @@ def read_regular_path(path: Path, *, code: str, label: str, what: str) -> bytes:
         if (
             not stat.S_ISREG(value.st_mode)
             or getattr(value, "st_nlink", 1) != 1
-            or _identity_from_stat(value) != _identity_from_stat(entry)
+            or (
+                entry is not None
+                and _identity_from_stat(value) != _identity_from_stat(entry)
+            )
         ):
             raise SourceError(
                 code,

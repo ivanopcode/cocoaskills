@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Исправлено
+
+- Выборка файлов schema 2 в Windows на Python 3.11 использует идентичность того же NT-дескриптора, из которого читает содержимое.
+
 ## [0.18.1] - 2026-09-28
 
 ### Изменено
