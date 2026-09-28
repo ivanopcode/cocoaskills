@@ -6,7 +6,7 @@
   "audited_files_sha256": {
     "tests/test_protocol_conformance.py": "06d5fa20a02ac40e075d367d056961abbef6d38b4088b368180c715046fab435",
     "tests/protocol_conformance_adapters.py": "bb968b68c2d37f02516c9e2b71f7be0891462b9fde9ed90649527c2ea73adc9a",
-    "tests/protocol_lifecycle_observations.py": "21e08f59921f199362c4ad13cf03ce6f97c7383a98489aebe142e1dd098bf3bd",
+    "tests/protocol_lifecycle_observations.py": "834dd2c10188b9b515b4fa6c59f8b8a896ab8801cde3807db5959076177c8378",
     "tests/conftest.py": "48dc8e8816b0922c7581aa31988aada450736693f4a367039ed60469c653ceee"
   },
   "audit_revisions": [
@@ -81,6 +81,15 @@
       "change": "made only the unsupported-go-future-family vector inject strict refusal policy before probing, so its released-corpus expected refusal is tested without changing csk default behavior.",
       "isolation_neutral": true,
       "rationale": "Existing rejection nodes keep their process, filesystem, environment, atomic-cluster, and shard footprints; only the future-family probe policy changes from inherited default warn to explicit strict refusal."
+    },
+    {
+      "task_id": "TASK-260928-32eqca",
+      "file": "tests/protocol_lifecycle_observations.py",
+      "previous_sha256": "21e08f59921f199362c4ad13cf03ce6f97c7383a98489aebe142e1dd098bf3bd",
+      "sha256": "834dd2c10188b9b515b4fa6c59f8b8a896ab8801cde3807db5959076177c8378",
+      "change": "Forward the selected Go executable through existing lifecycle observation wrappers and BuildPlan fixtures so protocol observations follow the planner\u2019s resolved launcher.",
+      "isolation_neutral": true,
+      "rationale": "No protocol test was added, removed, renamed, or reparameterized. The change only carries the selected executable value through existing planner observation seams; it does not alter environment, cwd, temp-root, subprocess, lock, cache, or shared-state behavior. Collection IDs, node footprints, atomic clusters, and shard assignments are unchanged."
     }
   ],
   "method": {

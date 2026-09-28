@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -263,6 +264,54 @@ def _shim_bytes(path: Path) -> bytes:
     return path.read_bytes()
 
 
+def _write_go_version_manager_shim(
+    shim_directory: Path,
+    *,
+    shape: str,
+    goroot: Path,
+    counter: Path,
+) -> Path:
+    shim_directory.mkdir(parents=True)
+    shim = shim_directory / "go"
+    root_literal = shlex.quote(os.fspath(goroot))
+    counter_literal = shlex.quote(os.fspath(counter))
+    prelude = f"printf 'invoked\\n' >> {counter_literal}\n"
+    if shape == "goenv":
+        dispatch = (
+            'if [ "$#" -eq 2 ] && [ "$1" = env ] && [ "$2" = GOROOT ]; then\n'
+            f"  printf '%s\\n' {root_literal}\n"
+            "  exit 0\n"
+            "fi\n"
+        )
+    elif shape == "asdf":
+        dispatch = (
+            'case "${1-}:${2-}" in\n'
+            "  env:GOROOT)\n"
+            f"    printf '%s\\n' {root_literal}\n"
+            "    exit 0\n"
+            "    ;;\n"
+            "esac\n"
+        )
+    elif shape == "mise":
+        dispatch = (
+            'if [ "$1" = env ] && [ "$2" = GOROOT ]; then\n'
+            f"  printf '%s\\n' {root_literal}\n"
+            "  exit 0\n"
+            "fi\n"
+        )
+    else:
+        raise AssertionError(f"unknown fake version-manager shape: {shape}")
+    script = (
+        "#!/bin/sh\n"
+        + prelude
+        + dispatch
+        + f"exec {shlex.quote(os.fspath(goroot / 'bin' / 'go'))} \"$@\"\n"
+    )
+    shim.write_text(script, encoding="utf-8")
+    shim.chmod(0o755)
+    return shim
+
+
 def _observe_real_builds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[list[str], Callable[..., go_v1.BuildResult]]:
@@ -297,6 +346,51 @@ def test_go_install_builds_without_network_and_does_not_launch(
     build = _marker_build(csk_home, project, scope, "argv-exit")
     receipt = _receipt(csk_home, build)
     assert receipt["input"]["policy"]["execution_policy"] == "manager-worker-v1"  # type: ignore[index]
+    assert _artifact(csk_home, build).is_file()
+
+
+@pytest.mark.csk_e2e_native
+@NATIVE
+@pytest.mark.skipif(os.name == "nt", reason="the executable shim fixtures use POSIX shell scripts")
+@pytest.mark.parametrize("shape", ["goenv", "asdf", "mise"])
+def test_go_install_builds_through_version_manager_shim_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    required_go_e2e_host: tuple[Path, Path],
+    shape: str,
+) -> None:
+    go_executable = required_go_e2e_host[1]
+    goroot_output = subprocess.run(
+        [go_executable, "env", "GOROOT"],
+        check=True,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+    ).stdout
+    goroot = Path(goroot_output.strip()).resolve(strict=True)
+    shim_directory = tmp_path / f"{shape}-shims"
+    counter = tmp_path / f"{shape}-shim-calls.txt"
+    _write_go_version_manager_shim(
+        shim_directory,
+        shape=shape,
+        goroot=goroot,
+        counter=counter,
+    )
+    monkeypatch.setenv(
+        "PATH",
+        os.pathsep.join((os.fspath(shim_directory), os.environ["PATH"])),
+    )
+    cfg, project, _ = _setup_scope(tmp_path, skills_root, csk_home, "project")
+
+    result = _install(cfg, "project")
+
+    _assert_ok(result)
+    assert counter.read_text(encoding="utf-8") == "invoked\n"
+    build = _marker_build(csk_home, project, "project", "argv-exit")
+    receipt = _receipt(csk_home, build)
+    assert receipt["input"]["toolchain"]["go_version"].startswith("go version go1.25.5")  # type: ignore[index]
     assert _artifact(csk_home, build).is_file()
 
 

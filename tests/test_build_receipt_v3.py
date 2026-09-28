@@ -1564,6 +1564,7 @@ class _RecordingToolchainSession:
         self.target = NativeTarget(
             goos="darwin", goarch="arm64", tuning={"GOARM64": "v8.0"}
         )
+        self.executable = Path("/fixture/goroot/bin/go")
         self.toolchain = ToolchainIdentity(
             algorithm=TOOLCHAIN_ALGORITHM,
             content_sha256="sha256:" + "c" * 64,

@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Исправлено
 
+- Shim Go из goenv, asdf и mise теперь разрешается до fingerprint по `GOROOT` через один приватный bootstrap probe.
 - Установка по аннотированному Git-тегу теперь фиксирует peeled commit; для лока с OID объекта тега предлагается выполнить `csk upgrade`.
 - Исправлена установка из Claude Code worktree: предок `.claude` не считается install target проекта, collection selectors переобходятся с границей владельца, а алиасы собственных managed targets, включая `.git`, отклоняются.
 - `csk install` и `csk global install` показывают причины отказа и безопасную цепочку ошибок; секреты брокеров и URL-учётные данные скрываются.

@@ -1417,6 +1417,7 @@ def test_compiled_dry_run_preserves_every_persistent_surface(
             goarch="arm64",
             tuning={"GOARM64": "v8.0"},
         )
+        executable = Path("/fixture/goroot/bin/go")
         toolchain = build_toolchain.ToolchainIdentity(
             algorithm=build_toolchain.TOOLCHAIN_ALGORITHM,
             content_sha256="sha256:" + "a" * 64,

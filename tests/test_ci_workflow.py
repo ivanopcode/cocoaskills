@@ -372,7 +372,16 @@ def test_fast_selections_are_exact_checked_in_node_inventories() -> None:
     ubuntu = _nodeids("go-e2e-ubuntu-smoke-nodeids.txt")
 
     assert len(protocol) == 10
-    assert len(native) == 5
+    assert native == [
+        "tests/test_go_build_e2e.py::test_go_install_builds_without_network_and_does_not_launch[project]",
+        "tests/test_go_build_e2e.py::test_go_install_builds_through_version_manager_shim_once[goenv]",
+        "tests/test_go_build_e2e.py::test_go_install_builds_through_version_manager_shim_once[asdf]",
+        "tests/test_go_build_e2e.py::test_go_install_builds_through_version_manager_shim_once[mise]",
+        "tests/test_go_build_e2e.py::test_explicit_go_shim_forwards_argv_stdout_stderr_and_exit[project]",
+        "tests/test_go_build_e2e.py::test_real_go_cache_hit_and_relevant_source_mutation",
+        "tests/test_go_build_e2e.py::test_real_go_target_swap_failure_rolls_back_live_state",
+        "tests/test_go_build_e2e.py::test_interrupted_real_go_install_recovers_on_next_public_command",
+    ]
     assert macos_worker_domain == [
         "tests/test_go_build_e2e.py::test_real_go_cache_hit_and_relevant_source_mutation"
     ]
