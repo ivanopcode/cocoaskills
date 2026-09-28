@@ -123,6 +123,152 @@ def test_windows_root_path_rejects_nul_before_resolving_win32_api(
         )
 
 
+def test_windows_skill_frontmatter_read_uses_handle_identity_on_python_311(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Python 3.11 stat identity cannot be compared with FileIdInfo."""
+
+    legacy_stat = SimpleNamespace(
+        st_mode=stat.S_IFREG | 0o666,
+        st_ino=0x9ABCDEF001234567,
+        st_dev=0x12345678,
+        st_nlink=1,
+    )
+    handle_stat = winfs.WindowsStat(
+        st_mode=stat.S_IFREG | 0o666,
+        st_ino=0x0123456789ABCDEF0011223344556677,
+        st_dev=0x123456789ABCDEF0,
+        st_nlink=1,
+        st_uid=0,
+        st_gid=0,
+        st_size=70,
+        st_atime=0,
+        st_mtime=0,
+        st_ctime=0,
+        st_file_attributes=0,
+        st_reparse_tag=0,
+    )
+    content = (
+        b"---\nname: review\ndescription: Python 3.11 identity probe\n---\n"
+    )
+    legacy_stat_calls: list[Path] = []
+    opened: list[tuple[Path, int, dict[str, object]]] = []
+    handle_stat_calls: list[int] = []
+    closed: list[int] = []
+    handles = iter((41, 42))
+    reads = iter((content, b""))
+
+    def legacy_lstat(path: Path) -> SimpleNamespace:
+        legacy_stat_calls.append(path)
+        return legacy_stat
+
+    def open_file(
+        path: Path, flags: int, **kwargs: object
+    ) -> int:
+        opened.append((path, flags, kwargs))
+        return next(handles)
+
+    def backend_stat(handle: int) -> winfs.WindowsStat:
+        handle_stat_calls.append(handle)
+        return handle_stat
+
+    monkeypatch.setattr(_selection_fs, "_WINDOWS_SELECTION", True)
+    monkeypatch.setattr(_selection_fs.os, "lstat", legacy_lstat)
+    monkeypatch.setattr(_selection_fs, "_open_descriptor", open_file)
+    monkeypatch.setattr(winfs, "stat_handle", backend_stat)
+    monkeypatch.setattr(
+        _selection_fs,
+        "_read_descriptor",
+        lambda *_args, **_kwargs: next(reads),
+    )
+    monkeypatch.setattr(_selection_fs, "_close_quietly", closed.append)
+
+    name = selection.read_skill_md_name(
+        Path("C:/source/review"),
+        "'review'",
+        resolved_root=Path("C:/source"),
+    )
+
+    assert name == "review"
+    assert legacy_stat_calls == []
+    assert opened == [
+        (
+            Path("C:/source/review/SKILL.md"),
+            _selection_fs._WINDOWS_FILE_FLAG,
+            {},
+        )
+    ] * 2
+    assert handle_stat_calls == [41, 42]
+    assert closed == [
+        41,
+        42,
+    ]
+
+
+def test_windows_skill_frontmatter_read_refuses_regular_file_swap_after_entry_inspection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A same-volume regular-file replacement after inspection is refused."""
+
+    member = _write_skill(tmp_path / "review", "review")
+    skill_file = member / "SKILL.md"
+    original_stat = os.stat(skill_file)
+    replacement = tmp_path / "replacement.md"
+    replacement.write_text(
+        "---\nname: replacement\ndescription: replacement fixture\n---\n",
+        encoding="utf-8",
+    )
+    replacement_stat = os.stat(replacement)
+    assert original_stat.st_dev == replacement_stat.st_dev
+    assert original_stat.st_ino != replacement_stat.st_ino
+
+    close = _selection_fs._close_quietly
+    close_count = 0
+    replacement_installed = False
+    if os.name != "nt":
+        # Exercise the Windows branch locally with real descriptors and a real
+        # os.replace; native Windows keeps the NT backend below.
+        monkeypatch.setattr(_selection_fs, "_WINDOWS_SELECTION", True)
+        monkeypatch.setattr(
+            _selection_fs,
+            "_open_descriptor",
+            lambda path, _flags, **_kwargs: os.open(path, os.O_RDONLY),
+        )
+        monkeypatch.setattr(
+            _selection_fs,
+            "_fstat",
+            lambda fd, **_kwargs: os.fstat(fd),
+        )
+        monkeypatch.setattr(
+            _selection_fs,
+            "_read_descriptor",
+            lambda fd, size, **_kwargs: os.read(fd, size),
+        )
+        close = os.close
+
+    def close_and_replace(fd: int) -> None:
+        nonlocal close_count, replacement_installed
+        close(fd)
+        close_count += 1
+        if close_count == 1:
+            os.replace(replacement, skill_file)
+            replacement_installed = True
+
+    monkeypatch.setattr(_selection_fs, "_close_quietly", close_and_replace)
+
+    with pytest.raises(
+        source_errors.SourceError, match="changed after entry inspection"
+    ):
+        selection.read_skill_md_name(
+            member,
+            "'review'",
+            resolved_root=tmp_path,
+        )
+
+    assert replacement_installed
+    assert close_count == 2
+
+
 def test_windows_untyped_nt_probe_requests_only_handle_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
