@@ -278,6 +278,30 @@ def test_collection_member_missing_skill_md_fails(tmp_path: Path) -> None:
     assert excinfo.value.code == source_errors.CODE_MEMBER_INVALID
 
 
+@pytest.mark.posix_traversal_independent
+def test_skill_md_open_race_keeps_missing_entry_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The POSIX direct-file open race keeps its established refusal text."""
+
+    member = _write_skill(tmp_path / "review", "review")
+    monkeypatch.setattr(_selection_fs, "_WINDOWS_SELECTION", False)
+
+    def missing_open(*_args: object, **_kwargs: object) -> int:
+        raise FileNotFoundError("vanished")
+
+    monkeypatch.setattr(_selection_fs, "_open_descriptor", missing_open)
+
+    with pytest.raises(
+        source_errors.SourceError, match="Skill member 'review' has no SKILL.md"
+    ) as excinfo:
+        selection.read_skill_md_name(
+            member, "'review'", resolved_root=tmp_path
+        )
+
+    assert excinfo.value.code == source_errors.CODE_MEMBER_INVALID
+
+
 @pytest.mark.parametrize(
     "frontmatter",
     [

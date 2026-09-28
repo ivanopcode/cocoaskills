@@ -337,12 +337,7 @@ def read_regular_path(path: Path, *, code: str, label: str, what: str) -> bytes:
     try:
         fd = _open_descriptor(path, _file_flags(nofollow=True))
     except FileNotFoundError as exc:
-        if _WINDOWS_SELECTION:
-            raise SourceError(code, f"Skill member {label} has no {what}") from exc
-        raise SourceError(
-            code,
-            f"Skill member {label} file {what!r} cannot be read: {exc}",
-        ) from exc
+        raise SourceError(code, f"Skill member {label} has no {what}") from exc
     except _FS_ERRORS as exc:
         raise SourceError(
             code,
