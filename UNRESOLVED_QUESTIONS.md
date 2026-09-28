@@ -37,3 +37,7 @@ keeps every existing probe and identity check and emits a stable warning. The
 manager still refuses families below its supported floor and untested
 families below the newest qualified one. The amendment proposal is filed as
 [curator-spec issue #101](https://github.com/relux-works/curator-spec/issues/101).
+This section is the conformance deviation record: the default path deliberately
+warns and continues for newer families, while the released-corpus refusal vector
+runs with strict refusal enabled and a sibling conformance test pins the default
+warning-and-continue behavior.

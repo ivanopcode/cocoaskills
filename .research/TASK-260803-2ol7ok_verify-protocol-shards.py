@@ -19,7 +19,7 @@ EXPECTED_PROTOCOL = "0ed5c691e9208eea52f21db2fc05e226ce3516fd"
 # The released suite at EXPECTED_PROTOCOL decides this number: rc.9 publishes
 # eight schema cases that rc.6 did not, each of which parametrises one more
 # test_rc6_generated_schema_case_is_consumed node. 1045 was the rc.6 figure.
-EXPECTED_BASELINE_COUNT = 1053
+EXPECTED_BASELINE_COUNT = 1054
 EXPECTED_TIMEOUT_MINUTES = {
     "p00-contract-and-registry": 5,
     "p01-lifecycle-cached-baseline": 30,

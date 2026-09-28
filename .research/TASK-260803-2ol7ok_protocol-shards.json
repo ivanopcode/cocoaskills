@@ -3,7 +3,7 @@
   "task_id": "TASK-260803-2ol7ok",
   "source_commit": "8026a2ee1eb22f98c57c42ccb3cf8fd06f166fcf",
   "protocol_commit": "0ed5c691e9208eea52f21db2fc05e226ce3516fd",
-  "baseline_count": 1053,
+  "baseline_count": 1054,
   "baseline_nodes": [
     "tests/test_protocol_conformance.py::test_rc6_candidate_manifest_and_release_record_are_exact_non_release_evidence",
     "tests/test_protocol_conformance.py::test_rc6_in_scope_vector_inventory_is_exhaustive",
@@ -1057,7 +1057,8 @@
     "tests/test_protocol_conformance.py::test_registry_client_rollback_state_vectors[case0]",
     "tests/test_protocol_conformance.py::test_registry_client_rollback_state_vectors[case1]",
     "tests/test_protocol_conformance.py::test_registry_client_rollback_state_vectors[case2]",
-    "tests/test_protocol_conformance.py::test_registry_client_rollback_state_vectors[case3]"
+    "tests/test_protocol_conformance.py::test_registry_client_rollback_state_vectors[case3]",
+    "tests/test_protocol_conformance.py::test_rc6_default_future_go_family_warns_and_continues"
   ],
   "shards": [
     {
@@ -1109,7 +1110,8 @@
         "function::test_registry_client_retry_execution_policy",
         "function::test_registry_client_snapshot_transition_vectors",
         "function::test_registry_client_pagination_rejection_vectors",
-        "function::test_registry_client_rollback_state_vectors"
+        "function::test_registry_client_rollback_state_vectors",
+        "default-future-family-policy"
       ],
       "selectors": [
         "tests/test_protocol_conformance.py::test_rc6_candidate_manifest_and_release_record_are_exact_non_release_evidence",
@@ -1158,9 +1160,10 @@
         "tests/test_protocol_conformance.py::test_registry_client_retry_execution_policy",
         "tests/test_protocol_conformance.py::test_registry_client_snapshot_transition_vectors",
         "tests/test_protocol_conformance.py::test_registry_client_pagination_rejection_vectors",
-        "tests/test_protocol_conformance.py::test_registry_client_rollback_state_vectors"
+        "tests/test_protocol_conformance.py::test_registry_client_rollback_state_vectors",
+        "tests/test_protocol_conformance.py::test_rc6_default_future_go_family_warns_and_continues"
       ],
-      "node_count": 573,
+      "node_count": 574,
       "nodes": [
         "tests/test_protocol_conformance.py::test_rc6_candidate_manifest_and_release_record_are_exact_non_release_evidence",
         "tests/test_protocol_conformance.py::test_rc6_in_scope_vector_inventory_is_exhaustive",
@@ -1734,7 +1737,8 @@
         "tests/test_protocol_conformance.py::test_registry_client_rollback_state_vectors[case0]",
         "tests/test_protocol_conformance.py::test_registry_client_rollback_state_vectors[case1]",
         "tests/test_protocol_conformance.py::test_registry_client_rollback_state_vectors[case2]",
-        "tests/test_protocol_conformance.py::test_registry_client_rollback_state_vectors[case3]"
+        "tests/test_protocol_conformance.py::test_registry_client_rollback_state_vectors[case3]",
+        "tests/test_protocol_conformance.py::test_rc6_default_future_go_family_warns_and_continues"
       ],
       "timeout_minutes": 5
     },
