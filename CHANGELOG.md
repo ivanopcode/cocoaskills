@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-09-28
+
 ### Изменено
 
-- `go-v1` принимает квалифицированные Go 1.26 и 1.27; более новые семейства проходят под полным lockdown с предупреждением и настраиваемым строгим отказом.
+- `go-v1` принимает квалифицированные Go 1.26 и 1.27. Более новые семейства проходят под полным lockdown с предупреждением `untested_go_family`; строгий отказ включается через `builds.go_future_families = "refuse"` или `CSK_GO_FUTURE_FAMILIES=refuse`.
 
 ### Исправлено
 
@@ -747,7 +749,8 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.18.0...main
+[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.18.1...main
+[0.18.1]: https://github.com/ivanopcode/cocoaskills/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.15.0...v0.16.0
