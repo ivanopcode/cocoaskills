@@ -293,7 +293,8 @@ def test_skill_md_open_race_keeps_missing_entry_refusal(
     monkeypatch.setattr(_selection_fs, "_open_descriptor", missing_open)
 
     with pytest.raises(
-        source_errors.SourceError, match="Skill member 'review' has no SKILL.md"
+        source_errors.SourceError,
+        match="Skill member 'review' file 'SKILL.md' cannot be read",
     ) as excinfo:
         selection.read_skill_md_name(
             member, "'review'", resolved_root=tmp_path
