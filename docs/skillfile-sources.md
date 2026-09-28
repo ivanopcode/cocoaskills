@@ -53,23 +53,23 @@ Skillfile схемы 2 сохраняет поля `schema_version`, `project`, 
 7. Публикация. Команда раскладывает контекст скиллов в каталоги адаптеров, script-команды в защищённое runtime-хранилище, а shim команд в `.agents/bin`. Публикация транзакционная: сбой откатывает все изменения.
 8. Лок. Первая установка записывает `Skillfile.lock.json` с commit или байтами каждого источника, пакетной идентичностью и `content_sha256`.
 
-Пример Skillfile с двумя скиллами из git и зависимостью между ними:
+Пример Skillfile со скиллом из git, у которого есть зависимость:
 
 ```json
 {
   "schema_version": 2,
   "sources": {
-    "wiki": {"git": "git@gitlab.example.com:skills/skill-wiki.git", "tag": "v1.1.0"},
-    "wiki-memory": {"git": "git@gitlab.example.com:skills/skill-wiki-memory.git", "tag": "v1.0.2"}
+    "wiki-memory": {"git": "git@gitlab.example.com:skills/skill-wiki-memory.git", "tag": "v1.1.0"}
   },
   "skills": [
-    {"name": "skill-wiki", "from": "wiki", "directory": "."},
     {"name": "skill-wiki-memory", "from": "wiki-memory", "directory": "."}
   ]
 }
 ```
 
-Скилл `skill-wiki-memory` объявляет в `dependencies.skills` требование к `skill-wiki`, поэтому оба скилла стоят в одном Skillfile. Без `skill-wiki` установка остановится на этапе замыкания.
+Скилл `skill-wiki-memory` объявляет `skill-wiki` в `dependencies.skills` с точным commit. Команда `csk install` на этапе замыкания сама загружает `skill-wiki` и ставит его раньше потребителя, отдельная запись в Skillfile не нужна. Если проект перечисляет провайдера явно, оба требования должны указывать на один commit: в одном замыкании имя скилла разрешается в один commit, а расхождение прерывает установку.
+
+Транзитивное требование в проекте на схеме 2 должно закреплять commit (`ref.kind` равно `revision`). Требование с `tag` или `branch` вызывает отказ `source_selection_invalid`. Требование к команде через `dependencies.commands` с типом `skill` провайдера не загружает: такой провайдер нужно перечислить в Skillfile явно.
 
 Для приватного репозитория по SSH команде нужен доступ к его группе. Одна настройка покрывает все источники группы:
 
