@@ -1878,8 +1878,10 @@ def test_worker_environment_matches_the_fixed_darwin_vector(tmp_path: Path):
 
 def test_worker_bootstrap_uses_one_empty_private_bytecode_cache(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     plan, _, _ = _worker_fixture(tmp_path)
+    monkeypatch.setenv("HOME", "/operator/home")
     assert go_v1._indispensable_worker_environment(
         go_v1.PLATFORM_MACOS,
         plan.worker_cache,
@@ -1891,6 +1893,7 @@ def test_worker_bootstrap_uses_one_empty_private_bytecode_cache(
         "PYTHONHOME": str(plan.executable.startup.python_home),
         "PYTHONPATH": str(plan.executable.startup.site_root),
         "PYTHONPYCACHEPREFIX": str(plan.worker_cache),
+        "HOME": str(plan.worker_cache),
     }
     go_v1._verify_empty_worker_cache(plan.worker_cache)
     (plan.worker_cache / "injected.pyc").write_bytes(b"poison")
@@ -1917,6 +1920,7 @@ def test_windows_worker_bootstrap_uses_manager_owned_profile(
 
     assert environment["USERPROFILE"] == str(plan.worker_cache)
     assert environment["USERPROFILE"] != r"C:\attacker"
+    assert "HOME" not in environment
     assert environment["SYSTEMROOT"] == r"C:\Windows"
     assert environment["WINDIR"] == r"C:\Windows"
 

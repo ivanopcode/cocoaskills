@@ -2226,12 +2226,14 @@ def _observe_concurrent_private_builds(
             target: toolchain.NativeTarget,
             identity: toolchain.ToolchainIdentity,
             backend: cache.BuildCacheBackend,
+            executable: Path | None = None,
         ) -> tuple[planner.BuildPlan, ...]:
             ordinary = real_inspect_provider(
                 provider,
                 target=target,
                 identity=identity,
                 backend=backend,
+                executable=executable,
             )
             if provider.name != "shared-provider":
                 return ordinary
@@ -2253,6 +2255,7 @@ def _observe_concurrent_private_builds(
                         inspection=backend.inspect(
                             cache.CacheExpectation(input=normalized_input)
                         ),
+                        go_executable=executable,
                     )
                 )
             return tuple(normalized)
@@ -2735,6 +2738,7 @@ def _observe_dry_run(
     class FakeSession:
         target = identities["build_input"].target
         toolchain = identities["build_input"].toolchain
+        executable = Path("/fixture/goroot/bin/go")
 
         def __enter__(self) -> FakeSession:
             observed_argv.extend(
@@ -2807,6 +2811,7 @@ def _observe_dry_run(
         target: toolchain.NativeTarget,
         identity: toolchain.ToolchainIdentity,
         backend: cache.BuildCacheBackend,
+        executable: Path | None = None,
     ) -> tuple[planner.BuildPlan, ...]:
         if provider.name != "skill-build":
             return real_inspect_provider(
@@ -2814,6 +2819,7 @@ def _observe_dry_run(
                 target=target,
                 identity=identity,
                 backend=backend,
+                executable=executable,
             )
         normative_input = identities["build_input"]
         return (
@@ -2824,6 +2830,7 @@ def _observe_dry_run(
                 inspection=backend.inspect(
                     cache.CacheExpectation(input=normative_input)
                 ),
+                go_executable=executable,
             ),
         )
 
@@ -4182,12 +4189,14 @@ def _observe_private_builds(
         target: toolchain.NativeTarget,
         identity: toolchain.ToolchainIdentity,
         backend: cache.BuildCacheBackend,
+        executable: Path | None = None,
     ) -> tuple[planner.BuildPlan, ...]:
         ordinary = real_inspect_provider(
             provider,
             target=target,
             identity=identity,
             backend=backend,
+            executable=executable,
         )
         if provider.name != "compiled":
             return ordinary
@@ -4209,6 +4218,7 @@ def _observe_private_builds(
                     inspection=backend.inspect(
                         cache.CacheExpectation(input=normalized_input)
                     ),
+                    go_executable=executable,
                 )
             )
         return tuple(normalized)

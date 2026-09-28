@@ -2862,6 +2862,13 @@ def _build_private_misses(
             tempfile.TemporaryDirectory(prefix="csk-build-operation-")
         )
     )
+    selected_executables = {plan.go_executable for plan in plans}
+    if len(selected_executables) != 1 or None in selected_executables:
+        raise _concurrent_state_change(
+            "the selected Go executable is missing or changed between planning and build"
+        )
+    selected_executable = next(iter(selected_executables))
+    assert selected_executable is not None
     forbidden = tuple(
         path
         for path in (
@@ -2879,6 +2886,7 @@ def _build_private_misses(
                 private_base=private_base,
                 operator_search_path=operator_search_path,
                 forbidden_roots=forbidden,
+                go_executable=selected_executable,
                 go_future_families=config_module.resolve_go_future_families(
                     config.builds
                 ),

@@ -18,17 +18,18 @@ rm -rf ~/.cocoaskills/runtime/*/*/.venv
 
 После удаления каталогов venv следующая команда скилла автоматически пересоздаст изолированное окружение.
 
-## go-v1 toolchain_executable_mismatch: selected Go executable is not below a GOROOT bin directory
+## go-v1 toolchain_shim_unresolved
 
-В переменной `PATH` первым стоит шим менеджера версий (goenv, asdf, mise). Это скрипт-обёртка вне отпечатываемого дерева тулчейна, поэтому инсталлятор отклоняет его.
+В `PATH` может стоять shim менеджера версий Go (goenv, asdf или mise). csk один раз запрашивает через него `GOROOT`, затем использует найденный `<GOROOT>/bin/go` для проверок и fingerprint. Если ответ отсутствует, не является абсолютным существующим каталогом или содержит неподходящий бинарник, csk откажется с `toolchain_shim_unresolved`.
 
-Укажите путь к каноническому бинарнику Go при запуске установки:
+Поставьте реальный Go первым в `PATH` либо используйте `mise activate`, чтобы добавить настоящий бинарник вместо shim:
 
 ```bash
-PATH="$(go env GOROOT)/bin:$PATH" csk install
+export PATH="$(go env GOROOT)/bin:$PATH"
+csk install
 ```
 
-Переменная `PATH` с приоритетом `GOROOT/bin` позволяет инсталлятору валидировать тулчейн и успешно собрать команду.
+На Windows `.cmd` и `.bat` shim не запускаются direct-process probe runner; укажите каталог с `go.exe`.
 
 ## go-v1 unsupported_go_family
 

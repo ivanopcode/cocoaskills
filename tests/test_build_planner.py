@@ -27,6 +27,7 @@ class _FakeToolchainSession:
             go_relpath=toolchain.GO_RELPATH,
             go_version="go version go1.25.5 darwin/arm64",
         )
+        self.executable = Path("/trusted/go/bin/go")
         self._events = events
 
     def __enter__(self) -> _FakeToolchainSession:
@@ -169,6 +170,9 @@ def test_plan_builds_is_provider_first_command_lexical_and_records_all_outcomes(
         ("provider-second", "c-corrupt"),
         ("provider-second", "d-unsupported"),
     ]
+    assert [plan.go_executable for plan in plans] == [
+        Path("/trusted/go/bin/go")
+    ] * len(plans)
     assert [plan.result for plan in plans] == [
         "cache-hit",
         "would-preflight-and-build",
