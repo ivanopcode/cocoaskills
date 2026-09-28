@@ -1158,6 +1158,7 @@ def _select_toolchain(
 ) -> _Selection | None:
     launcher: Path
     configured_root: Path | None = None
+    operator_path_candidate = config.go_executable is None and config.goroot is None
     if config.go_executable is not None:
         launcher = config.go_executable
     elif config.goroot is not None:
@@ -1172,60 +1173,65 @@ def _select_toolchain(
             "trusted Go executable must be absolute",
         )
     _reject_forbidden_launcher(launcher, forbidden)
-    try:
-        resolved_launcher = launcher.resolve(strict=True)
-    except (OSError, RuntimeError) as exc:
-        raise ToolchainError(
-            "go_toolchain_missing",
-            "trusted Go executable is unavailable",
-        ) from exc
-    _reject_forbidden_launcher(resolved_launcher, forbidden)
-
     expected_name = _platform_go_name(host)
-    if host.windows and resolved_launcher.suffix.casefold() in {".cmd", ".bat"}:
+    if host.windows and launcher.suffix.casefold() in {".cmd", ".bat"}:
         raise _unresolved_shim(
             launcher,
             "Windows batch shims cannot be executed by the direct-process probe runner",
         )
-    if not _path_name_matches(resolved_launcher.name, expected_name, host):
+    if not _path_name_matches(launcher.name, expected_name, host):
         raise ToolchainError(
             "toolchain_executable_mismatch",
             f"selected executable is not {expected_name}",
         )
-    if not _path_name_matches(resolved_launcher.parent.name, "bin", host):
+
+    resolved_goroot: Path | None = None
+    if operator_path_candidate and not _is_real_launcher_candidate(launcher, host):
         if defer_shims:
             return None
         if shim_resolver is not None:
-            goroot = shim_resolver(launcher.absolute())
-            _reject_forbidden_launcher(goroot, forbidden)
-            candidate = goroot / "bin" / expected_name
-            try:
-                resolved_launcher = candidate.resolve(strict=True)
-            except (OSError, RuntimeError) as exc:
-                raise _unresolved_shim(
-                    launcher,
-                    f"resolved GOROOT has no usable {candidate.name}",
-                ) from exc
+            # _validate_shim_answer returns the exact physical root that passed
+            # the forbidden-root and no-link checks. Keep it as the authority;
+            # resolving bin/go again here could silently select a second root.
+            resolved_goroot = shim_resolver(launcher.absolute())
+            resolved_launcher = resolved_goroot / "bin" / expected_name
         else:
             error = ToolchainError(
                 "toolchain_executable_mismatch",
-                "selected Go executable is not below a GOROOT bin directory",
+                "selected Go executable is not a real GOROOT bin launcher",
             )
-            # Preserve the direct selector's diagnostic for callers that do not
-            # have an operation-private bootstrap context.
             error.add_note(
                 "version-manager shims (goenv, asdf, mise) require bootstrap "
                 "resolution; put a real Go toolchain first on PATH, or use "
                 "mise activate instead of shims"
             )
             raise error
-    goroot = resolved_launcher.parent.parent
+    else:
+        try:
+            resolved_launcher = launcher.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise ToolchainError(
+                "go_toolchain_missing",
+                "trusted Go executable is unavailable",
+            ) from exc
+        _reject_forbidden_launcher(resolved_launcher, forbidden)
+
+    if resolved_goroot is None:
+        goroot = resolved_launcher.parent.parent
+        try:
+            goroot = goroot.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise ToolchainError(
+                "go_toolchain_missing",
+                "trusted GOROOT is unavailable",
+            ) from exc
+    else:
+        goroot = resolved_goroot
     try:
-        goroot = goroot.resolve(strict=True)
         root_stat = goroot.lstat()
     except (OSError, RuntimeError) as exc:
         raise ToolchainError("go_toolchain_missing", "trusted GOROOT is unavailable") from exc
-    if not stat.S_ISDIR(root_stat.st_mode) or stat.S_ISLNK(root_stat.st_mode):
+    if not stat.S_ISDIR(root_stat.st_mode) or _is_reparse_point(root_stat):
         raise ToolchainError(
             "go_toolchain_missing",
             "trusted GOROOT is not a real directory",
@@ -1336,11 +1342,31 @@ def _validate_shim_answer(
     if not path.is_absolute():
         raise _unresolved_shim(shim, "GOROOT answer must be an absolute path")
     try:
+        answer_stat = path.lstat()
+    except (OSError, RuntimeError) as exc:
+        raise _unresolved_shim(shim, "GOROOT answer does not name an existing directory") from exc
+    if not stat.S_ISDIR(answer_stat.st_mode) or _is_reparse_point(answer_stat):
+        raise _unresolved_shim(shim, "GOROOT answer is not a real directory")
+
+    answer_bin = path / "bin"
+    try:
+        bin_stat = answer_bin.lstat()
+    except OSError as exc:
+        raise _unresolved_shim(
+            shim,
+            f"GOROOT answer has no real bin directory {answer_bin}",
+        ) from exc
+    if not stat.S_ISDIR(bin_stat.st_mode) or _is_reparse_point(bin_stat):
+        raise _unresolved_shim(
+            shim,
+            f"GOROOT bin path {answer_bin} must be a real directory",
+        )
+    try:
         goroot = path.resolve(strict=True)
         root_stat = goroot.lstat()
     except (OSError, RuntimeError) as exc:
         raise _unresolved_shim(shim, "GOROOT answer does not name an existing directory") from exc
-    if not stat.S_ISDIR(root_stat.st_mode) or stat.S_ISLNK(root_stat.st_mode):
+    if not stat.S_ISDIR(root_stat.st_mode) or _is_reparse_point(root_stat):
         raise _unresolved_shim(shim, "GOROOT answer is not a real directory")
     try:
         _reject_forbidden_launcher(goroot, forbidden)
@@ -1359,7 +1385,7 @@ def _validate_shim_answer(
         ) from exc
     if (
         not stat.S_ISREG(executable_stat.st_mode)
-        or stat.S_ISLNK(executable_stat.st_mode)
+        or _is_reparse_point(executable_stat)
         or executable_stat.st_nlink != 1
     ):
         raise _unresolved_shim(
@@ -1376,6 +1402,47 @@ def _validate_shim_answer(
     return goroot
 
 
+def _is_reparse_point(entry_stat: os.stat_result) -> bool:
+    if stat.S_ISLNK(entry_stat.st_mode):
+        return True
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    attributes = getattr(entry_stat, "st_file_attributes", 0)
+    return bool(attributes & reparse_flag)
+
+
+def _is_real_launcher_candidate(path: Path, host: _Host) -> bool:
+    """Return whether a PATH entry has the physical shape of a Go launcher.
+
+    The full clean ``go env -json`` probe later confirms that this launcher's
+    GOROOT equals the root derived here. Anything without this filesystem and
+    native-executable shape is resolved as a manager shim before other probes.
+    """
+    if not _path_name_matches(path.parent.name, "bin", host):
+        return False
+    try:
+        root_stat = path.parent.parent.lstat()
+        bin_stat = path.parent.lstat()
+        executable_stat = path.lstat()
+    except OSError:
+        return False
+    if (
+        not stat.S_ISDIR(root_stat.st_mode)
+        or _is_reparse_point(root_stat)
+        or not stat.S_ISDIR(bin_stat.st_mode)
+        or _is_reparse_point(bin_stat)
+        or not stat.S_ISREG(executable_stat.st_mode)
+        or _is_reparse_point(executable_stat)
+        or executable_stat.st_nlink != 1
+        or (not host.windows and executable_stat.st_mode & 0o111 == 0)
+    ):
+        return False
+    try:
+        _validate_launcher(path, host)
+    except ToolchainError:
+        return False
+    return True
+
+
 def _validate_launcher(path: Path, host: _Host) -> None:
     try:
         initial = path.lstat()
@@ -1384,7 +1451,7 @@ def _validate_launcher(path: Path, host: _Host) -> None:
             "untrusted_go_executable",
             "selected Go launcher is unavailable",
         ) from exc
-    if not stat.S_ISREG(initial.st_mode):
+    if not stat.S_ISREG(initial.st_mode) or _is_reparse_point(initial):
         raise ToolchainError(
             "untrusted_go_executable",
             "selected Go launcher is not a regular file",
@@ -1430,8 +1497,18 @@ def _verify_selected_root(
         current = goroot.lstat()
     except OSError as exc:
         raise ToolchainError("toolchain_mutated", "fingerprinted GOROOT disappeared") from exc
-    if not stat.S_ISDIR(current.st_mode) or not _same_stat(root_stat, current):
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or _is_reparse_point(current)
+        or not _same_stat(root_stat, current)
+    ):
         raise ToolchainError("toolchain_mutated", "fingerprinted GOROOT was replaced")
+    try:
+        current_bin = (goroot / "bin").lstat()
+    except OSError as exc:
+        raise ToolchainError("toolchain_mutated", "selected Go bin directory disappeared") from exc
+    if not stat.S_ISDIR(current_bin.st_mode) or _is_reparse_point(current_bin):
+        raise ToolchainError("toolchain_mutated", "selected Go bin directory was replaced")
     try:
         _validate_launcher(executable, host)
     except ToolchainError as exc:

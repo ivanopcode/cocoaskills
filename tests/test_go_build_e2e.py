@@ -396,6 +396,49 @@ def test_go_install_builds_through_version_manager_shim_once(
 
 @pytest.mark.csk_e2e_native
 @NATIVE
+@pytest.mark.skipif(os.name == "nt", reason="the executable shim fixture uses a POSIX shell script")
+def test_go_install_builds_through_bin_directory_shim_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    required_go_e2e_host: tuple[Path, Path],
+) -> None:
+    go_executable = required_go_e2e_host[1]
+    goroot_output = subprocess.run(
+        [go_executable, "env", "GOROOT"],
+        check=True,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+    ).stdout
+    goroot = Path(goroot_output.strip()).resolve(strict=True)
+    shim_directory = tmp_path / "tool" / "bin"
+    counter = tmp_path / "bin-shim-calls.txt"
+    _write_go_version_manager_shim(
+        shim_directory,
+        shape="goenv",
+        goroot=goroot,
+        counter=counter,
+    )
+    monkeypatch.setenv(
+        "PATH",
+        os.pathsep.join((os.fspath(shim_directory), os.environ["PATH"])),
+    )
+    cfg, project, _ = _setup_scope(tmp_path, skills_root, csk_home, "project")
+
+    result = _install(cfg, "project")
+
+    _assert_ok(result)
+    assert counter.read_text(encoding="utf-8") == "invoked\n"
+    build = _marker_build(csk_home, project, "project", "argv-exit")
+    receipt = _receipt(csk_home, build)
+    assert receipt["input"]["toolchain"]["go_version"].startswith("go version go1.25.5")  # type: ignore[index]
+    assert _artifact(csk_home, build).is_file()
+
+
+@pytest.mark.csk_e2e_native
+@NATIVE
 @pytest.mark.parametrize("scope", ["project", "global", "hybrid"])
 def test_explicit_go_shim_forwards_argv_stdout_stderr_and_exit(
     monkeypatch: pytest.MonkeyPatch,

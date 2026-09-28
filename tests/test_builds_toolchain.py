@@ -534,6 +534,28 @@ def test_shim_goroot_inside_forbidden_root_refuses(tmp_path: Path):
     assert len(runner.calls) == 1
 
 
+def test_shim_goroot_symlinked_bin_cannot_alias_forbidden_root(tmp_path: Path):
+    config, runner, _goroot, _private_base = _setup_shim(tmp_path)
+    forbidden_goroot = _make_goroot(config.forbidden_roots[0] / "nested-go")
+    answer_goroot = tmp_path / "answer-goroot"
+    answer_goroot.mkdir()
+    (answer_goroot / "bin").symlink_to(
+        forbidden_goroot / "bin",
+        target_is_directory=True,
+    )
+    runner.goroot = forbidden_goroot
+    runner.shim_stdout = f"{answer_goroot}\n".encode()
+
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.establish_toolchain(config)
+
+    _assert_code("toolchain_shim_unresolved", raised)
+    assert "bin" in str(raised.value)
+    assert "real directory" in str(raised.value)
+    assert runner.shim_calls == 1
+    assert len(runner.calls) == 1
+
+
 def test_shim_and_real_launcher_have_identical_toolchain_fingerprint(tmp_path: Path):
     real_root = _make_goroot(tmp_path / "shared-go")
     shim_config, shim_runner, _shim_root, _ = _setup_shim(
@@ -1078,8 +1100,8 @@ def test_wrapper_is_rejected_before_any_probe(tmp_path: Path):
     with pytest.raises(toolchain.ToolchainError) as raised:
         toolchain.establish_toolchain(config)
 
-    _assert_code("untrusted_go_executable", raised)
-    assert not runner.calls
+    _assert_code("toolchain_shim_unresolved", raised)
+    assert [call[0] for call in runner.calls] == [(str(executable), "env", "GOROOT")]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="unprivileged Windows symlinks are not portable")
@@ -1087,18 +1109,21 @@ def test_outside_launcher_symlink_resolves_to_real_goroot_binary(tmp_path: Path)
     config, runner, goroot, _ = _setup(tmp_path)
     operator_bin = tmp_path / "operator-bin"
     operator_bin.mkdir()
-    (operator_bin / "go").symlink_to(goroot / "bin" / "go")
+    shim = operator_bin / "go"
+    shim.symlink_to(goroot / "bin" / "go")
+    resolving_runner = ShimRecordingRunner(goroot, shim)
     linked = toolchain.ToolchainConfig(
         private_base=config.private_base,
         operator_search_path=toolchain.OperatorSearchPath((str(operator_bin),)),
         forbidden_roots=config.forbidden_roots,
-        runner=runner,
+        runner=resolving_runner,
     )
 
     snapshot = toolchain.probe_toolchain(linked)
 
     assert snapshot.executable == (goroot / "bin" / "go").resolve()
     assert snapshot.goroot == goroot.resolve()
+    assert resolving_runner.shim_calls == 1
 
 
 def test_private_probe_base_cannot_be_project_managed(tmp_path: Path):
@@ -1376,8 +1401,8 @@ def test_launcher_must_be_regular_and_executable(tmp_path: Path):
     executable.chmod(0o644)
     with pytest.raises(toolchain.ToolchainError) as raised:
         toolchain.establish_toolchain(config)
-    _assert_code("untrusted_go_executable", raised)
-    assert not runner.calls
+    _assert_code("toolchain_shim_unresolved", raised)
+    assert [call[0] for call in runner.calls] == [(str(executable), "env", "GOROOT")]
 
 
 def test_tree_mutation_before_close_fails_and_still_deletes_private_state(
