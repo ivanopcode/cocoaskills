@@ -437,7 +437,7 @@ def test_relative_existing_shim_goroot_is_rejected(tmp_path: Path, monkeypatch):
     ("shim_stdout", "reason"),
     [
         (b"relative/go-root\n", "absolute path"),
-        (b"/missing/go-root\n", "existing directory"),
+        (None, "existing directory"),
         (b"/first/root\n/second/root\n", "exactly one line"),
         (b"\xff\n", "valid UTF-8"),
     ],
@@ -445,9 +445,11 @@ def test_relative_existing_shim_goroot_is_rejected(tmp_path: Path, monkeypatch):
 )
 def test_bad_shim_goroot_answers_refuse_with_actionable_code(
     tmp_path: Path,
-    shim_stdout: bytes,
+    shim_stdout: bytes | None,
     reason: str,
 ):
+    if shim_stdout is None:
+        shim_stdout = f"{tmp_path / 'missing-go-root'}\n".encode()
     config, runner, _goroot, private_base = _setup_shim(
         tmp_path,
         shim_stdout=shim_stdout,
