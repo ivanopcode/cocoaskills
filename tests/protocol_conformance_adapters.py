@@ -1181,7 +1181,12 @@ def _probe_toolchain_rejection(
             ) as (config, host, _goroot),
             pytest.raises(toolchain.ToolchainError) as raised,
         ):
-            toolchain._establish_toolchain(config, host)
+            # curator-spec issue #101 tracks csk's deliberate default-warn
+            # deviation; this conformance vector exercises the strict mode.
+            toolchain._establish_toolchain(
+                replace(config, go_future_families="refuse"),
+                host,
+            )
         return _RejectionTrace(raised.value.code)
 
     if name == "wrong-go-executable-path":

@@ -4,8 +4,8 @@
   "source_commit": "8026a2ee1eb22f98c57c42ccb3cf8fd06f166fcf",
   "protocol_commit": "0ed5c691e9208eea52f21db2fc05e226ce3516fd",
   "audited_files_sha256": {
-    "tests/test_protocol_conformance.py": "666c712dc4e9f2784b2c1f26aa1f313e22bf764e2d2b8e82661e225ad1a71e5a",
-    "tests/protocol_conformance_adapters.py": "ee933fa93c93145de754654b1b3e2d17f57d792adfa5170cae32e23ea5701a07",
+    "tests/test_protocol_conformance.py": "06d5fa20a02ac40e075d367d056961abbef6d38b4088b368180c715046fab435",
+    "tests/protocol_conformance_adapters.py": "bb968b68c2d37f02516c9e2b71f7be0891462b9fde9ed90649527c2ea73adc9a",
     "tests/protocol_lifecycle_observations.py": "21e08f59921f199362c4ad13cf03ce6f97c7383a98489aebe142e1dd098bf3bd",
     "tests/conftest.py": "48dc8e8816b0922c7581aa31988aada450736693f4a367039ed60469c653ceee"
   },
@@ -63,6 +63,24 @@
       "change": "generalized required_go_e2e_host from a Go 1.25-only assertion to verify the explicitly selected CSK_E2E_GO_FAMILY, so the Go build E2E fixture can qualify 1.26 and 1.27.",
       "isolation_neutral": true,
       "rationale": "The audited protocol nodes do not request required_go_e2e_host; rg finds its consumers only in tests/test_go_build_e2e.py. The fixture remains non-autouse and changes no protocol node collection, shared state, footprint, atomic cluster, or shard assignment."
+    },
+    {
+      "task_id": "BUG-260928-2expo0",
+      "file": "tests/test_protocol_conformance.py",
+      "previous_sha256": "666c712dc4e9f2784b2c1f26aa1f313e22bf764e2d2b8e82661e225ad1a71e5a",
+      "sha256": "06d5fa20a02ac40e075d367d056961abbef6d38b4088b368180c715046fab435",
+      "change": "added test_rc6_default_future_go_family_warns_and_continues as one new protocol node at the end of the ordered inventory; the node uses the existing Darwin toolchain fixture and is assigned to p00.",
+      "isolation_neutral": false,
+      "rationale": "The protocol test inventory grows by one deterministic node; all existing node ids, footprints, clusters, and shard assignments remain unchanged. The new node isolates environment and warning state, uses a temporary toolchain fixture, and has no subprocess or cwd effect."
+    },
+    {
+      "task_id": "BUG-260928-2expo0",
+      "file": "tests/protocol_conformance_adapters.py",
+      "previous_sha256": "ee933fa93c93145de754654b1b3e2d17f57d792adfa5170cae32e23ea5701a07",
+      "sha256": "bb968b68c2d37f02516c9e2b71f7be0891462b9fde9ed90649527c2ea73adc9a",
+      "change": "made only the unsupported-go-future-family vector inject strict refusal policy before probing, so its released-corpus expected refusal is tested without changing csk default behavior.",
+      "isolation_neutral": true,
+      "rationale": "Existing rejection nodes keep their process, filesystem, environment, atomic-cluster, and shard footprints; only the future-family probe policy changes from inherited default warn to explicit strict refusal."
     }
   ],
   "method": {
@@ -1628,6 +1646,13 @@
         "tests/test_protocol_conformance.py::test_registry_client_rollback_state_vectors[case3]"
       ],
       "rationale": "Atomic at parametrized pytest function granularity."
+    },
+    "default-future-family-policy": {
+      "members": [
+        "tests/test_protocol_conformance.py::test_rc6_default_future_go_family_warns_and_continues"
+      ],
+      "rationale": "This isolated default-policy probe uses its own Go 1.99 fixture, resets its one-warning state, and does not share observations or mutable fixture state with other nodes.",
+      "node_count": 1
     }
   },
   "nodes": [
@@ -24794,6 +24819,28 @@
         "shared_external_state": true
       },
       "shared_state_detail": [
+        "pinned CURATOR_CONFORMANCE_ROOT: authenticated read-only import/runtime input"
+      ]
+    },
+    {
+      "node_id": "tests/test_protocol_conformance.py::test_rc6_default_future_go_family_warns_and_continues",
+      "function": "test_rc6_default_future_go_family_warns_and_continues",
+      "source_line": 4674,
+      "atomic_cluster": "default-future-family-policy",
+      "shard": "p00-contract-and-registry",
+      "footprint": {
+        "environment": true,
+        "cwd": false,
+        "temp_roots": true,
+        "subprocesses": false,
+        "locks": true,
+        "caches": false,
+        "monkeypatches": true,
+        "platform_apis": true,
+        "order_assumptions": false,
+        "shared_external_state": true
+      },
+      "shared_external_state_detail": [
         "pinned CURATOR_CONFORMANCE_ROOT: authenticated read-only import/runtime input"
       ]
     }

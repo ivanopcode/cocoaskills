@@ -27,7 +27,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from protocol_conformance_adapters import (
     _BUILD_REJECTION_BINDINGS,
     _LIFECYCLE_CASE_FIELDS,
-    _project_toolchain_link_target,
+    _project_toolchain_link_target, _projected_darwin_toolchain,
     assert_build_positive_case,
     assert_build_rejection_case,
     assert_build_source_case,
@@ -107,6 +107,7 @@ EXPECTED_BUILD_DRIVER_FILES = (
     "toolchain-sha256.txt",
     "toolchain.preimage.bin",
 )
+
 IN_SCOPE_SCHEMA_NAMES = frozenset(
     {
         "agent-skill-v6.schema.json",
@@ -4668,3 +4669,45 @@ def test_registry_client_rollback_state_vectors(case: dict[str, Any], tmp_path: 
         (registry,), state_dir, fetch_snapshot=lambda _url: snapshot, now=now
     )
     assert (registry_url not in unavailable) is case["accepted"]
+
+
+def test_rc6_default_future_go_family_warns_and_continues(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pin csk's default-warn deviation from protocol core §4.2.1.
+
+    Spec proposal: https://github.com/relux-works/curator-spec/issues/101
+    """
+
+    monkeypatch.delenv(config.GO_FUTURE_FAMILIES_ENV_VAR, raising=False)
+    default_mode = config.resolve_go_future_families(config.BuildConfig())
+    assert default_mode == "warn"
+
+    toolchain.reset_go_future_warning_state()
+    try:
+        with _projected_darwin_toolchain(
+            tmp_path,
+            "default-untested-go-family",
+            version_stdout=b"go version go1.99.0 darwin/arm64\n",
+        ) as (fixture_config, host, _goroot):
+            session = toolchain._establish_toolchain(
+                replace(fixture_config, go_future_families=default_mode),
+                host,
+            )
+            try:
+                assert session.toolchain.go_version == "go version go1.99.0 darwin/arm64"
+                assert session.environment["GOTOOLCHAIN"] == "local"
+                assert session.environment["GOENV"] == "off"
+                assert session.environment["GOPROXY"] == "off"
+                assert session.environment["CGO_ENABLED"] == "0"
+            finally:
+                session.close()
+
+        warning = capsys.readouterr().err
+        assert warning.count("untested_go_family") == 1
+        assert "Go family 1.99" in warning
+        assert "full go-v1 lockdown" in warning
+    finally:
+        toolchain.reset_go_future_warning_state()
