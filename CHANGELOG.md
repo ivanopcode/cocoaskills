@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Исправлено
+
+- Проверка файлов schema 2 в Windows сверяет идентичности no-follow NT-дескрипторов при инспекции и чтении, сохраняя отказ при подмене файла.
+
 ## [0.18.1] - 2026-09-28
 
 ### Изменено

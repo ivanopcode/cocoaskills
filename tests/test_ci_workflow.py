@@ -347,8 +347,13 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
 
     ordinary = _job(workflow, "fast_ordinary")
     assert "if: github.event_name == 'pull_request'" in ordinary
-    assert "os: [ubuntu-latest, macos-latest, windows-latest]" in ordinary
-    assert 'python-version: "3.14"' in ordinary
+    matrix = yaml.safe_load(workflow)["jobs"]["fast_ordinary"]["strategy"]["matrix"]
+    assert matrix["os"] == ["ubuntu-latest", "macos-latest", "windows-latest"]
+    assert matrix["python-version"] == ["3.14"]
+    assert matrix["include"] == [
+        {"os": "windows-latest", "python-version": "3.11"}
+    ]
+    assert "python-version: ${{ matrix.python-version }}" in ordinary
     assert ordinary.count("--ignore=") == 2
     assert "--ignore=tests/test_protocol_conformance.py" in ordinary
     assert "--ignore=tests/test_go_build_e2e.py" in ordinary
