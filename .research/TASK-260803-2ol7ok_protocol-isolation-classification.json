@@ -6,7 +6,7 @@
   "audited_files_sha256": {
     "tests/test_protocol_conformance.py": "666c712dc4e9f2784b2c1f26aa1f313e22bf764e2d2b8e82661e225ad1a71e5a",
     "tests/protocol_conformance_adapters.py": "ee933fa93c93145de754654b1b3e2d17f57d792adfa5170cae32e23ea5701a07",
-    "tests/protocol_lifecycle_observations.py": "21e08f59921f199362c4ad13cf03ce6f97c7383a98489aebe142e1dd098bf3bd",
+    "tests/protocol_lifecycle_observations.py": "834dd2c10188b9b515b4fa6c59f8b8a896ab8801cde3807db5959076177c8378",
     "tests/conftest.py": "48dc8e8816b0922c7581aa31988aada450736693f4a367039ed60469c653ceee"
   },
   "audit_revisions": [
@@ -63,6 +63,15 @@
       "change": "generalized required_go_e2e_host from a Go 1.25-only assertion to verify the explicitly selected CSK_E2E_GO_FAMILY, so the Go build E2E fixture can qualify 1.26 and 1.27.",
       "isolation_neutral": true,
       "rationale": "The audited protocol nodes do not request required_go_e2e_host; rg finds its consumers only in tests/test_go_build_e2e.py. The fixture remains non-autouse and changes no protocol node collection, shared state, footprint, atomic cluster, or shard assignment."
+    },
+    {
+      "task_id": "TASK-260928-32eqca",
+      "file": "tests/protocol_lifecycle_observations.py",
+      "previous_sha256": "21e08f59921f199362c4ad13cf03ce6f97c7383a98489aebe142e1dd098bf3bd",
+      "sha256": "834dd2c10188b9b515b4fa6c59f8b8a896ab8801cde3807db5959076177c8378",
+      "change": "Forward the selected Go executable through existing lifecycle observation wrappers and BuildPlan fixtures so protocol observations follow the planner\u2019s resolved launcher.",
+      "isolation_neutral": true,
+      "rationale": "No protocol test was added, removed, renamed, or reparameterized. The change only carries the selected executable value through existing planner observation seams; it does not alter environment, cwd, temp-root, subprocess, lock, cache, or shared-state behavior. Collection IDs, node footprints, atomic clusters, and shard assignments are unchanged."
     }
   ],
   "method": {
