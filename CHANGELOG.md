@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.3] - 2026-09-29
+
 ### Исправлено
 
-- Shim Go из goenv, asdf и mise разрешается одним приватным `env GOROOT` probe с проверкой структуры GOROOT перед fingerprint.
+- Shim Go из goenv, asdf и mise в `PATH` больше не блокирует сборку CLI. csk один раз запрашивает у shim `go env GOROOT`, проверяет, что ответ является установкой Go (`VERSION`, `src/runtime`, `pkg/tool`), и собирает бинарником `<GOROOT>/bin/go`. Если shim не вернул пригодный GOROOT, установка отклоняется с `toolchain_shim_unresolved`.
+- Каждый исполняемый файл тулчейна перед запуском проходит одну проверку допуска: и путь, и его полностью разрешённая цель не должны лежать в каталоге проекта или репозитория.
 
 ## [0.18.2] - 2026-09-29
 
