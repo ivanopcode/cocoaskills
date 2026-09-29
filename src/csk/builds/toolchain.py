@@ -1444,7 +1444,7 @@ def _is_reparse_point(entry_stat: os.stat_result) -> bool:
     if stat.S_ISLNK(entry_stat.st_mode):
         return True
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-    attributes = getattr(entry_stat, "st_file_attributes", 0)
+    attributes = getattr(entry_stat, "st_file_attributes", 0) or 0
     return bool(attributes & reparse_flag)
 
 

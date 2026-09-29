@@ -5,10 +5,12 @@ import hashlib
 import json
 import os
 import shlex
+import stat
 import sys
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -293,6 +295,27 @@ def _assert_go_path_in_detail(
     executable = "go.exe" if os.name == "nt" else "go"
     expected = (Path(config.operator_search_path.entries[0]) / executable).resolve()
     assert expected.as_posix() in detail.replace("\\", "/")
+
+
+def _override_launcher_file_attributes(
+    monkeypatch: pytest.MonkeyPatch,
+    executable: Path,
+    file_attributes: int | None,
+) -> None:
+    original_lstat = Path.lstat
+
+    def synthesized_lstat(path: Path):
+        result = original_lstat(path)
+        if path == executable:
+            return SimpleNamespace(
+                st_mode=result.st_mode,
+                st_dev=result.st_dev,
+                st_ino=result.st_ino,
+                st_file_attributes=file_attributes,
+            )
+        return result
+
+    monkeypatch.setattr(Path, "lstat", synthesized_lstat)
 
 
 def test_establish_uses_only_exact_bootstrap_argv_and_clean_environment(
@@ -1546,6 +1569,57 @@ def test_launcher_must_be_regular_and_executable(tmp_path: Path):
         toolchain.establish_toolchain(config)
     _assert_code("untrusted_go_executable", raised)
     assert runner.calls == []
+
+
+def test_launcher_accepts_synthesized_stat_with_none_file_attributes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    goroot = _make_goroot(tmp_path / "trusted-go")
+    executable = goroot / "bin" / ("go.exe" if os.name == "nt" else "go")
+    _override_launcher_file_attributes(monkeypatch, executable, None)
+
+    toolchain._validate_launcher(executable, toolchain._native_host())
+
+
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="Windows os.stat_result exposes st_file_attributes",
+)
+def test_launcher_accepts_windows_stat_result_with_none_file_attributes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    goroot = _make_goroot(tmp_path / "trusted-go")
+    executable = goroot / "bin" / "go.exe"
+    original_lstat = Path.lstat
+    entry_stat = os.stat_result(tuple(original_lstat(executable)))
+
+    assert entry_stat.st_file_attributes is None
+    assert toolchain._is_reparse_point(entry_stat) is False
+
+    def synthesized_lstat(path: Path):
+        if path == executable:
+            return entry_stat
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", synthesized_lstat)
+    toolchain._validate_launcher(executable, toolchain._native_host())
+
+
+def test_launcher_rejects_reparse_file_attribute(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    goroot = _make_goroot(tmp_path / "trusted-go")
+    executable = goroot / "bin" / ("go.exe" if os.name == "nt" else "go")
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    _override_launcher_file_attributes(monkeypatch, executable, reparse_flag)
+
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain._validate_launcher(executable, toolchain._native_host())
+
+    _assert_code("untrusted_go_executable", raised)
 
 
 def test_tree_mutation_before_close_fails_and_still_deletes_private_state(
