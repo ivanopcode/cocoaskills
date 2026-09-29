@@ -175,6 +175,16 @@ def _assert_ok(result: object) -> None:
     assert not result.errors, result.errors  # type: ignore[attr-defined]
 
 
+def _host_go_version(go_executable: Path) -> str:
+    return subprocess.run(
+        [go_executable, "version"],
+        check=True,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+    ).stdout.strip()
+
+
 def _marker(csk_home: Path, project: Path, scope: str) -> Path:
     if scope == "global":
         root = csk_home / "global" / "skills"
@@ -453,6 +463,7 @@ def test_go_install_builds_through_version_manager_shim_once(
     shape: str,
 ) -> None:
     go_executable = required_go_e2e_host[1]
+    expected_go_version = _host_go_version(go_executable)
     goroot_output = subprocess.run(
         [go_executable, "env", "GOROOT"],
         check=True,
@@ -481,7 +492,7 @@ def test_go_install_builds_through_version_manager_shim_once(
     assert counter.read_text(encoding="utf-8") == "invoked\n"
     build = _marker_build(csk_home, project, "project", "argv-exit")
     receipt = _receipt(csk_home, build)
-    assert receipt["input"]["toolchain"]["go_version"].startswith("go version go1.25.5")  # type: ignore[index]
+    assert receipt["input"]["toolchain"]["go_version"] == expected_go_version  # type: ignore[index]
     assert _artifact(csk_home, build).is_file()
 
 
@@ -496,6 +507,7 @@ def test_go_install_builds_through_bin_directory_shim_once(
     required_go_e2e_host: tuple[Path, Path],
 ) -> None:
     go_executable = required_go_e2e_host[1]
+    expected_go_version = _host_go_version(go_executable)
     goroot_output = subprocess.run(
         [go_executable, "env", "GOROOT"],
         check=True,
@@ -524,7 +536,7 @@ def test_go_install_builds_through_bin_directory_shim_once(
     assert counter.read_text(encoding="utf-8") == "invoked\n"
     build = _marker_build(csk_home, project, "project", "argv-exit")
     receipt = _receipt(csk_home, build)
-    assert receipt["input"]["toolchain"]["go_version"].startswith("go version go1.25.5")  # type: ignore[index]
+    assert receipt["input"]["toolchain"]["go_version"] == expected_go_version  # type: ignore[index]
     assert _artifact(csk_home, build).is_file()
 
 
@@ -543,13 +555,7 @@ def test_native_bin_shim_uses_resolution_probe(
     missing_fact: str,
 ) -> None:
     go_executable = required_go_e2e_host[1]
-    expected_go_version = subprocess.run(
-        [go_executable, "version"],
-        check=True,
-        text=True,
-        encoding="utf-8",
-        capture_output=True,
-    ).stdout.strip()
+    expected_go_version = _host_go_version(go_executable)
     shim_directory = tmp_path / "tool" / "bin"
     call_log = tmp_path / "native-shim-calls.txt"
     shim = _compile_native_go_forwarder(

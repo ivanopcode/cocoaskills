@@ -1,5 +1,22 @@
 # Logbook
 
+## 2026-09-29 - BUG-260929-2vj4mm: repair shim and merge-lane regressions
+
+`_is_reparse_point` now normalizes a synthesized `st_file_attributes=None` to
+zero before applying the Windows reparse flag. The flag check still rejects a
+regular-mode stat carrying `FILE_ATTRIBUTE_REPARSE_POINT`. Launcher tests drive
+`_validate_launcher`; the None regression reproduced the original `TypeError`
+before the change. A narrowing mutant that checked the adjacent bit was killed
+by `test_launcher_rejects_reparse_file_attribute`.
+
+The version-manager and bin-directory Go shim E2E tests now compare their
+receipts with the selected host Go executable's own `go version` output. The
+toolchain/planner suites passed (123 passed, 3 skipped), and the affected Go
+shim E2E cases passed locally (4 passed with Go 1.25.5 and the declared
+candidate suite). Strict mypy and the source distribution/wheel build passed.
+Cross-platform workflow-dispatch run evidence is recorded in the task-scoped
+`BUG-260929-2vj4mm_results.md` outcome.
+
 ## 2026-09-27 - BUG-260927-ucxvpy: isolate Windows Gitfile failures to fixtures
 
 Revision-5 CI evidence from run 36339889068 showed the Windows failures were
