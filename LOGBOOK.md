@@ -5528,3 +5528,63 @@ Revision 2 takes entry type and identity from a separate no-follow NT handle, cl
 - Final Python 3.11 affected suites: 4,948 passed, 15 skipped across the six scoped modules; two logged command shards cover all six. Legacy identity-source, volume-only identity, and entry-type narrowing mutants each fail their named negative test. The existing regular-file swap regression remains byte-for-byte unchanged from probe commit `a2a6816` and passes.
 - Rebuilt sdist/wheel, strict mypy, twine metadata check, probe workflow actionlint, and `git diff --check` pass. A broader ordinary run from an earlier checkpoint had one unrelated `test_cli_init_non_git_warns_but_creates_project` failure because `tmp_path` was under the outer Git checkout; the six scoped suites above are the final required local test evidence.
 - Signed probe commit `f1fca092547b836488335024ee9a9465670c6452` contains the final source and Windows tests. The probe adds only the temporary Windows Python 3.11 fast-ordinary matrix lane. Run [36452248157](https://github.com/ivanopcode/cocoaskills/actions/runs/36452248157) succeeded on that exact head. Windows fast-ordinary Python 3.11 (job 109029629222) passed 10,896 tests and skipped 618 in 754.52s; Python 3.14 (job 109029629168) passed 10,896 and skipped 618 in 883.42s. Other workflow jobs, including Python 3.14 macOS and Ubuntu ordinary lanes, also succeeded. PR #101 remains OPEN and draft, never marked ready or merged.
+
+## 2026-09-29 TASK-260928-3vujqh: append-only merge policy and release runner
+
+`.gitattributes` applies Git's built-in `union` driver to `CHANGELOG.md` and
+`LOGBOOK.md`; the test merges two branches that append to both files and keeps
+both sides. `.scripts/release.sh` implements the stable release path and
+checks `delivery trunk-verify` against the exact fast-forwarded head before
+signing a tag.
+
+Revision 2 answers the four findings in
+`TASK-260928-3vujqh_review-verdict-rev1.md`: trunk evidence must parse as one
+unique-key `delivery.trunk-verify/v1` document with the exact head,
+`verdict: green`, and `exit_code: 0`; mixed smoke errors are never retried;
+failed or empty failed-job reads stop before retry; and `gh api` receives the
+repository in its endpoint path. The strict `gh` stub rejects invalid options
+per subcommand. The live release tests exercise these production call sites,
+and five narrowing mutants are killed by named behavioral tests.
+
+The revision 2 script suite passes (39 tests); the repository's release
+contract and CI workflow suites pass (86 tests). Bash syntax, ShellCheck,
+Python compilation, and a zsh-safety scan pass. No real provider publish or
+distribution lookup was attempted. `delivery` is not installed on this PATH;
+the contract is exercised with isolated executable stubs, and missing-binary
+refusal is covered separately. The local candidate remains uncommitted.
+
+## 2026-09-29 TASK-260928-3vujqh: revision 3 smoke recovery and run identity
+
+Removed automatic smoke retry and the PyPI-lag classifier. A failed smoke run
+prints every validated failed-job link, the exact `gh run rerun <run-id>
+--failed` command, and the `--resume-from verify` command; it never invokes
+`gh run rerun` itself. The resume path validates the signed local tag against
+the published tag, rediscovers the exact release and smoke runs, and then
+performs only the final PyPI, Homebrew, and mise checks. Homebrew API content
+decoding accepts line-wrapped Base64 while still validating the alphabet.
+
+The checkout-status read now refuses unknown state. Release and smoke runs
+are filtered by workflow file and exact commit SHA; smoke must have
+`createdAt` later than the release run's `startedAt`. Release-run watch
+failures are classified as red only when failed-job details are readable and
+validated; failed or empty reads return unknown. Captured provider fixtures
+preserve the real `main` smoke branch rather than inventing a tag branch. The
+strict `gh` stub, exact-head trunk-evidence check, and repository-in-endpoint
+`gh api` form remain covered.
+
+Final evidence: release script suite 45 passed, release contract suite 23
+passed, CI workflow suite 63 passed, ShellCheck, `bash -n`, Python compilation,
+strict mypy for `.scripts/release_support.py`, and `git diff --check` all exit
+0. Logs are under `.temp/TASK-260928-3vujqh/`. Eleven narrowing mutants are
+killed by named tests, including separate mutants for both union attributes,
+red/unknown gates, status-read failure, automatic retry, exact trunk evidence,
+foreign release and smoke SHAs, stale smoke timestamps, and the GH API option.
+`rg` found no `|| true`, unquoted Bash modifier, or variable named `path`; the
+single `2>/dev/null` is the documented `quiet_external` wrapper, which hides
+credential-bearing diagnostics while preserving the child command's status.
+
+The `delivery` executable is not installed on this PATH (`command -v delivery`
+exited 1), so no real trunk pipeline or release was run. The production script
+gate, green/red/unknown evidence, and missing-binary refusal use isolated
+executable stubs; no release, tag, mirror push, or smoke rerun was published.
+The candidate remains uncommitted in the Story worktree.

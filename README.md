@@ -346,6 +346,17 @@ csk shell-init                      # Генерирует или устанав
   артефакты теста не создаются.
 - `actionlint` validates GitHub Actions workflows. Run
   `actionlint .github/workflows/ci.yml`; validation logs belong under `.temp/`.
+- `.scripts/release.sh` cuts and publishes signed stable releases. Run
+  `.scripts/release.sh 0.18.4 --wb-notes .temp/wb-release-0.18.4.md` from a
+  clean, current `main` checkout; use `--dry-run` to print every release step.
+  If distribution smoke fails, run its printed `gh run rerun <run-id> --failed`
+  command manually, then resume with
+  `.scripts/release.sh 0.18.4 --resume-from verify`.
+  It requires `gh`, `glab`, `delivery`, a loaded SSH signing key, `curl`, and
+  `mise`. See [`RELEASING.md`](RELEASING.md) for the gates, Wildberries steps,
+  and output behavior. It creates a local release branch and signed tag;
+  published build artifacts stay in GitHub Actions and no local release log is
+  retained.
 - GitHub Actions runs the cross-platform CI matrices. The merge protocol lane
   keeps full Linux/macOS coverage and uses the checked-in `.research/` manifest,
   classification, and verifier for six deterministic Windows shards. Each

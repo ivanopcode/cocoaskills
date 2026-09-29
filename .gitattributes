@@ -5,3 +5,5 @@
 # Python source file to LF so the working tree matches the committed bytes on
 # every platform, independent of core.autocrlf.
 *.py text eol=lf
+CHANGELOG.md merge=union
+LOGBOOK.md merge=union
