@@ -9,6 +9,7 @@ are reconstructed from observed CocoaSkills traces and state.
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import json
 import os
@@ -17,7 +18,6 @@ import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any
@@ -25,11 +25,13 @@ from unittest import mock
 
 import pytest
 from jsonschema.validators import validator_for
+from protocol_lifecycle_observations import (
+    manager_lifecycle_case_diagnostics,
+    observe_manager_lifecycle_case,
+)
 from referencing import Registry, Resource
 
 from csk import (
-    closure,
-    gc,
     hashing,
     install_marker,
     protocol_json,
@@ -37,10 +39,6 @@ from csk import (
     whitelist,
 )
 from csk.builds import cache, go_v1, metadata, source, toolchain
-from protocol_lifecycle_observations import (
-    manager_lifecycle_case_diagnostics,
-    observe_manager_lifecycle_case,
-)
 
 JsonObject = dict[str, Any]
 
@@ -214,7 +212,7 @@ def _decode_records(records: list[JsonObject]) -> list[tuple[str, bytes]]:
     ]
 
 
-@lru_cache(maxsize=None)
+@functools.cache
 def _schema_validator(repository_root: Path, schema_name: str) -> Any:
     schemas_root = repository_root / "schemas" / "v1"
     documents = [
@@ -2262,7 +2260,7 @@ class _RecordingProbeRunner:
 
     def run(
         self,
-        argv: tuple[str, ...],
+        argv: toolchain.ProbeArgv,
         *,
         cwd: Path,
         environment: Any,
@@ -2270,9 +2268,11 @@ class _RecordingProbeRunner:
         output_limit: int,
     ) -> toolchain.ProbeResult:
         del timeout, output_limit
+        assert argv and isinstance(argv[0], toolchain.AdmittedExecutable)
+        recorded_argv = (str(argv[0].path), *argv[1:])
         values = dict(environment)
-        self.calls.append((argv, cwd, values))
-        arguments = argv[1:]
+        self.calls.append((recorded_argv, cwd, values))
+        arguments = recorded_argv[1:]
         if arguments == ("telemetry", "off"):
             return toolchain.ProbeResult(returncode=self.telemetry_returncode)
         if arguments == ("version",):

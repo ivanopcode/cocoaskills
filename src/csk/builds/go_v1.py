@@ -5739,6 +5739,9 @@ def _indispensable_worker_environment(
         "PYTHONPYCACHEPREFIX": os.fspath(worker_cache),
     }
     if platform == PLATFORM_MACOS:
+        # The hardened worker cannot consult the host's account database to
+        # resolve Path.home(); bind pathlib to the existing private empty root.
+        result["HOME"] = os.fspath(worker_cache)
         return result
     # CPython's Windows pathlib startup requires USERPROFILE even when the
     # worker never reads user configuration.  Bind it to the manager-owned

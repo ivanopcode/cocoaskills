@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import argparse
-import json
 import io
+import json
 import os
 import random
 import shutil
@@ -15,8 +15,8 @@ import pytest
 from conftest import make_project, make_skill_repo, run, write_skillfile
 
 from csk import cli, config, git_admission, installer, locking, shims, status
-from csk.builds import toolchain
 from csk.build_repository import LockedCommit
+from csk.builds import toolchain
 from csk.sources import _selection_fs
 from csk.sources import diagnostics as source_diagnostics
 from csk.sources import errors as source_errors
@@ -299,6 +299,8 @@ def test_cli_project_install_refuses_future_go_family_under_operator_policy(
     (go_bin / go_name).write_bytes(header + b"fake-go-1.28")
     (go_bin / go_name).chmod(0o755)
     (go_root / "VERSION").write_text("go1.28.0\n", encoding="utf-8")
+    (go_root / "src" / "runtime").mkdir(parents=True)
+    (go_root / "pkg" / "tool").mkdir(parents=True)
 
     probe_calls: list[tuple[str, ...]] = []
     version = f"go version go1.28.0 {host.goos}/{host.goarch}\n".encode()

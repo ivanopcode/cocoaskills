@@ -23,12 +23,11 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType, TracebackType
-from typing import BinaryIO, Final, Protocol
-
+from typing import BinaryIO, Final, Protocol, Self, TypeAlias
 
 TOOLCHAIN_ALGORITHM: Final = "curator-go-toolchain-v1"
 GO_RELPATH: Final = "bin/go"
@@ -214,12 +213,27 @@ class ProbeResult:
     returncode: int = 0
 
 
+_ADMISSION_SEAL: Final = object()
+
+
+@dataclass(frozen=True)
+class AdmittedExecutable:
+    """Executable path that passed the forbidden-root and file-type gate."""
+
+    path: Path
+    lexical_path: Path
+    _seal: object
+
+
+ProbeArgv: TypeAlias = tuple[AdmittedExecutable, *tuple[str, ...]]
+
+
 class ProbeRunner(Protocol):
     """Direct-process seam used only for the three bootstrap probes."""
 
     def run(
         self,
-        argv: tuple[str, ...],
+        argv: ProbeArgv,
         *,
         cwd: Path,
         environment: Mapping[str, str],
@@ -233,13 +247,22 @@ class SubprocessProbeRunner:
 
     def run(
         self,
-        argv: tuple[str, ...],
+        argv: ProbeArgv,
         *,
         cwd: Path,
         environment: Mapping[str, str],
         timeout: float,
         output_limit: int,
     ) -> ProbeResult:
+        if (
+            not argv
+            or not isinstance(argv[0], AdmittedExecutable)
+            or argv[0]._seal is not _ADMISSION_SEAL
+        ):
+            raise ToolchainError(
+                "untrusted_go_executable",
+                "Go probe executable was not admitted",
+            )
         if output_limit <= 0:
             raise ToolchainError(
                 "process_output_limit",
@@ -247,7 +270,7 @@ class SubprocessProbeRunner:
             )
         try:
             process = subprocess.Popen(
-                argv,
+                (os.fspath(argv[0].path), *argv[1:]),
                 cwd=cwd,
                 env=dict(environment),
                 stdin=subprocess.DEVNULL,
@@ -288,7 +311,7 @@ class SubprocessProbeRunner:
                             output_exceeded.set()
                             stop_requested.set()
                             return
-            except BaseException as exc:
+            except BaseException as exc:  # noqa: BLE001 - preserve all reader-thread failures
                 with budget_lock:
                     reader_errors.append(exc)
                 stop_requested.set()
@@ -529,7 +552,7 @@ class ToolchainSession:
         verify_error: BaseException | None = None
         try:
             self.verify()
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - cleanup must preserve the original failure
             verify_error = exc
         cleanup_error = _remove_private_state(self._operation_root, self._private_base)
         if verify_error is not None:
@@ -554,7 +577,7 @@ class ToolchainSession:
             self._close_error = cleanup_error
             raise cleanup_error
 
-    def __enter__(self) -> ToolchainSession:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(
@@ -569,7 +592,7 @@ class ToolchainSession:
             return
         try:
             self.close()
-        except BaseException as close_error:
+        except BaseException as close_error:  # noqa: BLE001 - do not mask the active exception
             exc.add_note(f"toolchain session teardown also failed: {close_error}")
 
 
@@ -583,9 +606,11 @@ def preflight_toolchain(config: ToolchainConfig) -> None:
     """Reject unsupported or non-native Go executables without writing state.
 
     The complete probe still runs in :func:`establish_toolchain`.  This first
-    pass deliberately uses only ``go version`` so status failure boundaries
-    can be decided before allocating operation-private configuration, cache,
-    telemetry, or temporary directories.
+    pass deliberately uses only ``go version`` for real launchers so status
+    failure boundaries can be decided before allocating operation-private
+    configuration, cache, telemetry, or temporary directories. Manager shims
+    defer to establishment so their single ``go env GOROOT`` probe uses that
+    operation-private bootstrap.
     """
 
     host = _native_host()
@@ -594,7 +619,12 @@ def preflight_toolchain(config: ToolchainConfig) -> None:
     if output_limit <= 0 or output_limit > DEFAULT_OUTPUT_LIMIT:
         output_limit = DEFAULT_OUTPUT_LIMIT
     forbidden = _canonical_forbidden_roots(config.forbidden_roots)
-    selection = _select_toolchain(config, host, forbidden)
+    selection = _select_toolchain(config, host, forbidden, defer_shims=True)
+    if selection is None:
+        # A shim needs the operation-private environment created by the full
+        # bootstrap. Resolve it there so one operation never runs the shim in
+        # both preflight and establishment.
+        return
     runner = SubprocessProbeRunner() if config.runner is None else config.runner
     environment: dict[str, str] = {
         "GOENV": "off",
@@ -617,7 +647,7 @@ def preflight_toolchain(config: ToolchainConfig) -> None:
     )
     try:
         result = runner.run(
-            (str(selection.executable), "version"),
+            (_admit_executable(selection.executable, forbidden), "version"),
             cwd=selection.goroot,
             environment=dict(sorted(environment.items())),
             timeout=probe_timeout,
@@ -747,19 +777,80 @@ def _establish_toolchain(config: ToolchainConfig, host: _Host) -> ToolchainSessi
     if output_limit <= 0 or output_limit > DEFAULT_OUTPUT_LIMIT:
         output_limit = DEFAULT_OUTPUT_LIMIT
     forbidden = _canonical_forbidden_roots(config.forbidden_roots)
-    selection = _select_toolchain(config, host, forbidden)
-    private_base = _validate_private_base(config.private_base, forbidden)
-
+    runner = SubprocessProbeRunner() if config.runner is None else config.runner
+    private_base: Path | None = None
     operation_root: Path | None = None
+    layout: _ProbeLayout | None = None
+    probe_boundary: _ProbeBoundary | None = None
+    bootstrap: dict[str, str] | None = None
     try:
-        operation_root = Path(
-            tempfile.mkdtemp(prefix=".csk-go-probe-", dir=private_base)
-        ).resolve(strict=True)
-        _restrict_directory(operation_root)
-        layout = _create_probe_layout(operation_root, host)
-        probe_boundary = _capture_probe_boundary(layout)
-        bootstrap = _bootstrap_environment(layout, host)
-        runner = SubprocessProbeRunner() if config.runner is None else config.runner
+        def ensure_probe_context() -> tuple[
+            Path,
+            _ProbeLayout,
+            _ProbeBoundary,
+            dict[str, str],
+        ]:
+            nonlocal private_base, operation_root, layout, probe_boundary, bootstrap
+            if operation_root is None:
+                private_base = _validate_private_base(config.private_base, forbidden)
+                operation_root = Path(
+                    tempfile.mkdtemp(prefix=".csk-go-probe-", dir=private_base)
+                ).resolve(strict=True)
+                _restrict_directory(operation_root)
+                layout = _create_probe_layout(operation_root, host)
+                probe_boundary = _capture_probe_boundary(layout)
+                bootstrap = _bootstrap_environment(layout, host)
+            assert private_base is not None
+            assert layout is not None
+            assert probe_boundary is not None
+            assert bootstrap is not None
+            return private_base, layout, probe_boundary, bootstrap
+
+        def resolve_shim(shim: Path) -> Path:
+            _private_base, shim_layout, shim_boundary, shim_environment = (
+                ensure_probe_context()
+            )
+            _verify_probe_boundary(shim_boundary)
+            admitted_shim = _admit_executable(shim, forbidden)
+            try:
+                result = runner.run(
+                    (admitted_shim, "env", "GOROOT"),
+                    cwd=shim_layout.empty,
+                    environment=shim_environment,
+                    timeout=probe_timeout,
+                    output_limit=output_limit,
+                )
+            except ToolchainError as exc:
+                _verify_probe_boundary(shim_boundary)
+                raise _unresolved_shim(shim, str(exc)) from exc
+            except Exception as exc:
+                _verify_probe_boundary(shim_boundary)
+                raise _unresolved_shim(shim, f"probe failed: {exc}") from exc
+            _verify_probe_boundary(shim_boundary)
+            if len(result.stdout) + len(result.stderr) > output_limit:
+                raise _unresolved_shim(shim, "probe output exceeded its byte limit")
+            if result.returncode != 0:
+                raise _unresolved_shim(
+                    shim,
+                    f"probe exited with status {result.returncode}",
+                )
+            return _validate_shim_answer(
+                shim,
+                result.stdout,
+                host,
+                forbidden,
+            )
+
+        selection = _select_toolchain(
+            config,
+            host,
+            forbidden,
+            shim_resolver=resolve_shim,
+        )
+        if selection is None:
+            raise AssertionError("toolchain selection deferred outside preflight")
+        private_base, layout, probe_boundary, bootstrap = ensure_probe_context()
+        assert operation_root is not None
 
         def run_probe(arguments: tuple[str, ...], failure_code: str) -> ProbeResult:
             _verify_selected_root(
@@ -769,7 +860,10 @@ def _establish_toolchain(config: ToolchainConfig, host: _Host) -> ToolchainSessi
                 host,
             )
             _verify_probe_boundary(probe_boundary)
-            argv = (str(selection.executable), *arguments)
+            argv: ProbeArgv = (
+                _admit_executable(selection.executable, forbidden),
+                *arguments,
+            )
             try:
                 result = runner.run(
                     argv,
@@ -862,7 +956,7 @@ def _establish_toolchain(config: ToolchainConfig, host: _Host) -> ToolchainSessi
             host=host,
         )
     except BaseException as exc:
-        if operation_root is not None:
+        if operation_root is not None and private_base is not None:
             cleanup_error = _remove_private_state(operation_root, private_base)
             if cleanup_error is not None:
                 exc.add_note(str(cleanup_error))
@@ -1085,9 +1179,13 @@ def _select_toolchain(
     config: ToolchainConfig,
     host: _Host,
     forbidden: tuple[Path, ...],
-) -> _Selection:
+    *,
+    shim_resolver: Callable[[Path], Path] | None = None,
+    defer_shims: bool = False,
+) -> _Selection | None:
     launcher: Path
     configured_root: Path | None = None
+    operator_path_candidate = config.go_executable is None and config.goroot is None
     if config.go_executable is not None:
         launcher = config.go_executable
     elif config.goroot is not None:
@@ -1102,42 +1200,65 @@ def _select_toolchain(
             "trusted Go executable must be absolute",
         )
     _reject_forbidden_launcher(launcher, forbidden)
-    try:
-        resolved_launcher = launcher.resolve(strict=True)
-    except (OSError, RuntimeError) as exc:
-        raise ToolchainError(
-            "go_toolchain_missing",
-            "trusted Go executable is unavailable",
-        ) from exc
-    _reject_forbidden_launcher(resolved_launcher, forbidden)
-
     expected_name = _platform_go_name(host)
-    if not _path_name_matches(resolved_launcher.name, expected_name, host):
+    if host.windows and launcher.suffix.casefold() in {".cmd", ".bat"}:
+        raise _unresolved_shim(
+            launcher,
+            "Windows batch shims cannot be executed by the direct-process probe runner",
+        )
+    if not _path_name_matches(launcher.name, expected_name, host):
         raise ToolchainError(
             "toolchain_executable_mismatch",
             f"selected executable is not {expected_name}",
         )
-    if not _path_name_matches(resolved_launcher.parent.name, "bin", host):
-        error = ToolchainError(
-            "toolchain_executable_mismatch",
-            "selected Go executable is not below a GOROOT bin directory",
-        )
-        # The detail is the cross-implementation protocol string; the operator
-        # remedy rides along as a note (see the toolchain_timeout pattern).
-        error.add_note(
-            "version-manager shims (goenv, asdf, mise) are wrapper scripts "
-            "outside the fingerprinted toolchain tree and are never accepted; "
-            "put the real <GOROOT>/bin on PATH first, for example "
-            "PATH=\"$(go env GOROOT)/bin:$PATH\""
-        )
-        raise error
-    goroot = resolved_launcher.parent.parent
+
+    resolved_goroot: Path | None = None
+    if operator_path_candidate and not _is_real_launcher_candidate(launcher, host):
+        if defer_shims:
+            return None
+        if shim_resolver is not None:
+            # _validate_shim_answer returns the exact physical root that passed
+            # the forbidden-root and no-link checks. Keep it as the authority;
+            # resolving bin/go again here could silently select a second root.
+            resolved_goroot = shim_resolver(launcher.absolute())
+            resolved_launcher = resolved_goroot / "bin" / expected_name
+        else:
+            error = ToolchainError(
+                "toolchain_executable_mismatch",
+                "selected Go executable is not a real GOROOT bin launcher",
+            )
+            error.add_note(
+                "version-manager shims (goenv, asdf, mise) require bootstrap "
+                "resolution; put a real Go toolchain first on PATH, or use "
+                "mise activate instead of shims"
+            )
+            raise error
+    else:
+        try:
+            resolved_launcher = launcher.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise ToolchainError(
+                "go_toolchain_missing",
+                "trusted Go executable is unavailable",
+            ) from exc
+        _reject_forbidden_launcher(resolved_launcher, forbidden)
+
+    if resolved_goroot is None:
+        goroot = resolved_launcher.parent.parent
+        try:
+            goroot = goroot.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise ToolchainError(
+                "go_toolchain_missing",
+                "trusted GOROOT is unavailable",
+            ) from exc
+    else:
+        goroot = resolved_goroot
     try:
-        goroot = goroot.resolve(strict=True)
         root_stat = goroot.lstat()
     except (OSError, RuntimeError) as exc:
         raise ToolchainError("go_toolchain_missing", "trusted GOROOT is unavailable") from exc
-    if not stat.S_ISDIR(root_stat.st_mode) or stat.S_ISLNK(root_stat.st_mode):
+    if not stat.S_ISDIR(root_stat.st_mode) or _is_reparse_point(root_stat):
         raise ToolchainError(
             "go_toolchain_missing",
             "trusted GOROOT is not a real directory",
@@ -1204,10 +1325,169 @@ def _search_operator_path(search_path: OperatorSearchPath, host: _Host) -> Path:
         candidate = directory / name
         if os.path.lexists(candidate):
             return candidate.absolute()
+        if host.windows:
+            for extension in (".cmd", ".bat"):
+                batch_candidate = directory / f"go{extension}"
+                if os.path.lexists(batch_candidate):
+                    return batch_candidate.absolute()
     raise ToolchainError(
         "go_toolchain_missing",
         "captured operator PATH contains no Go executable",
     )
+
+
+def _unresolved_shim(shim: Path, reason: str) -> ToolchainError:
+    return ToolchainError(
+        "toolchain_shim_unresolved",
+        f"Go shim {shim} could not be resolved: {reason}; remediation: put a real "
+        "Go toolchain first on PATH, or use mise activate instead of shims",
+    )
+
+
+def _validate_shim_answer(
+    shim: Path,
+    stdout: bytes,
+    host: _Host,
+    forbidden: tuple[Path, ...],
+) -> Path:
+    try:
+        text = stdout.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise _unresolved_shim(shim, "GOROOT answer is not valid UTF-8") from exc
+    if (
+        not text.endswith("\n")
+        or text.count("\n") != 1
+        or "\x00" in text
+    ):
+        raise _unresolved_shim(shim, "GOROOT answer must be exactly one line")
+    answer = text[:-1]
+    answer = answer.removesuffix("\r")
+    if "\r" in answer or "\n" in answer or "\x00" in answer:
+        raise _unresolved_shim(shim, "GOROOT answer must be exactly one line")
+    path = Path(answer)
+    if not path.is_absolute():
+        raise _unresolved_shim(shim, "GOROOT answer must be an absolute path")
+    try:
+        answer_stat = path.lstat()
+    except (OSError, RuntimeError) as exc:
+        raise _unresolved_shim(shim, "GOROOT answer does not name an existing directory") from exc
+    if not stat.S_ISDIR(answer_stat.st_mode) or _is_reparse_point(answer_stat):
+        raise _unresolved_shim(shim, "GOROOT answer is not a real directory")
+
+    answer_bin = path / "bin"
+    try:
+        bin_stat = answer_bin.lstat()
+    except OSError as exc:
+        raise _unresolved_shim(
+            shim,
+            f"GOROOT answer has no real bin directory {answer_bin}",
+        ) from exc
+    if not stat.S_ISDIR(bin_stat.st_mode) or _is_reparse_point(bin_stat):
+        raise _unresolved_shim(
+            shim,
+            f"GOROOT bin path {answer_bin} must be a real directory",
+        )
+    try:
+        goroot = path.resolve(strict=True)
+        root_stat = goroot.lstat()
+    except (OSError, RuntimeError) as exc:
+        raise _unresolved_shim(shim, "GOROOT answer does not name an existing directory") from exc
+    if not stat.S_ISDIR(root_stat.st_mode) or _is_reparse_point(root_stat):
+        raise _unresolved_shim(shim, "GOROOT answer is not a real directory")
+    if not _is_structural_goroot(goroot):
+        raise _unresolved_shim(
+            shim,
+            "GOROOT answer is not structurally a Go installation",
+        )
+    try:
+        _reject_forbidden_launcher(goroot, forbidden)
+    except ToolchainError as exc:
+        raise _unresolved_shim(
+            shim,
+            f"GOROOT answer is under a forbidden root: {goroot}",
+        ) from exc
+    executable = goroot / "bin" / _platform_go_name(host)
+    try:
+        executable_stat = executable.lstat()
+    except OSError as exc:
+        raise _unresolved_shim(
+            shim,
+            f"GOROOT answer has no regular executable {executable}",
+        ) from exc
+    if (
+        not stat.S_ISREG(executable_stat.st_mode)
+        or _is_reparse_point(executable_stat)
+        or executable_stat.st_nlink != 1
+    ):
+        raise _unresolved_shim(
+            shim,
+            f"GOROOT executable {executable} must be a regular file with one link",
+        )
+    try:
+        _admit_executable(executable, forbidden)
+    except ToolchainError as exc:
+        raise _unresolved_shim(
+            shim,
+            f"GOROOT executable {executable} failed executable admission: {exc.detail}",
+        ) from exc
+    try:
+        _validate_launcher(executable, host)
+    except ToolchainError as exc:
+        raise _unresolved_shim(
+            shim,
+            f"GOROOT executable {executable} is not usable: {exc.detail}",
+        ) from exc
+    return goroot
+
+
+def _is_reparse_point(entry_stat: os.stat_result) -> bool:
+    if stat.S_ISLNK(entry_stat.st_mode):
+        return True
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    attributes = getattr(entry_stat, "st_file_attributes", 0)
+    return bool(attributes & reparse_flag)
+
+
+def _is_real_launcher_candidate(path: Path, host: _Host) -> bool:
+    """Classify a PATH candidate only from its resolved GOROOT structure."""
+    try:
+        resolved = Path(os.path.realpath(path, strict=True))
+        root = resolved.parent.parent
+        root_stat = root.lstat()
+        bin_stat = resolved.parent.lstat()
+        executable_stat = resolved.lstat()
+    except (OSError, RuntimeError):
+        return False
+    if (
+        not _path_name_matches(resolved.name, _platform_go_name(host), host)
+        or not _path_name_matches(resolved.parent.name, "bin", host)
+        or not stat.S_ISDIR(root_stat.st_mode)
+        or _is_reparse_point(root_stat)
+        or not stat.S_ISDIR(bin_stat.st_mode)
+        or _is_reparse_point(bin_stat)
+        or not stat.S_ISREG(executable_stat.st_mode)
+        or _is_reparse_point(executable_stat)
+        or executable_stat.st_nlink != 1
+    ):
+        return False
+    return _is_structural_goroot(root)
+
+
+def _is_structural_goroot(root: Path) -> bool:
+    """Check the filesystem facts that define a GOROOT without executing Go."""
+    version = root / "VERSION"
+    runtime = root / "src" / "runtime"
+    tools = root / "pkg" / "tool"
+    try:
+        version_stat = version.lstat()
+        if not stat.S_ISREG(version_stat.st_mode):
+            return False
+        with version.open("rb") as stream:
+            if stream.read(4) != b"go1.":
+                return False
+        return runtime.is_dir() and tools.is_dir()
+    except (OSError, RuntimeError):
+        return False
 
 
 def _validate_launcher(path: Path, host: _Host) -> None:
@@ -1218,7 +1498,7 @@ def _validate_launcher(path: Path, host: _Host) -> None:
             "untrusted_go_executable",
             "selected Go launcher is unavailable",
         ) from exc
-    if not stat.S_ISREG(initial.st_mode):
+    if not stat.S_ISREG(initial.st_mode) or _is_reparse_point(initial):
         raise ToolchainError(
             "untrusted_go_executable",
             "selected Go launcher is not a regular file",
@@ -1264,8 +1544,18 @@ def _verify_selected_root(
         current = goroot.lstat()
     except OSError as exc:
         raise ToolchainError("toolchain_mutated", "fingerprinted GOROOT disappeared") from exc
-    if not stat.S_ISDIR(current.st_mode) or not _same_stat(root_stat, current):
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or _is_reparse_point(current)
+        or not _same_stat(root_stat, current)
+    ):
         raise ToolchainError("toolchain_mutated", "fingerprinted GOROOT was replaced")
+    try:
+        current_bin = (goroot / "bin").lstat()
+    except OSError as exc:
+        raise ToolchainError("toolchain_mutated", "selected Go bin directory disappeared") from exc
+    if not stat.S_ISDIR(current_bin.st_mode) or _is_reparse_point(current_bin):
+        raise ToolchainError("toolchain_mutated", "selected Go bin directory was replaced")
     try:
         _validate_launcher(executable, host)
     except ToolchainError as exc:
@@ -1664,7 +1954,7 @@ def _validated_link_target(
     link_directory = posixpath.dirname(protocol_path)
     normalized_target = target.replace("\\", "/") if os.name == "nt" else target
     lexical = posixpath.normpath(posixpath.join(link_directory, normalized_target))
-    if lexical == ".." or lexical.startswith("../") or lexical.startswith("/"):
+    if lexical == ".." or lexical.startswith(("../", "/")):
         raise ToolchainError(
             "toolchain_link_escape",
             f"toolchain link {protocol_path!r} escapes GOROOT",
@@ -1899,6 +2189,52 @@ def _reject_forbidden_launcher(path: Path, forbidden: tuple[Path, ...]) -> None:
                 "untrusted_go_executable",
                 "selected Go executable is under a repository or project-managed root",
             )
+
+
+def _admit_executable(
+    path: Path,
+    forbidden: tuple[Path, ...],
+) -> AdmittedExecutable:
+    """Admit a process executable by lexical path, final target, and file type."""
+    lexical = Path(os.path.abspath(os.fspath(path)))
+    physical_roots = tuple(
+        Path(os.path.realpath(os.path.abspath(os.fspath(root))))
+        for root in forbidden
+    )
+
+    def reject_if_forbidden(candidate: Path) -> None:
+        for root in physical_roots:
+            if _same_path_or_lexical(candidate, root) or _strictly_below_lexical(
+                candidate,
+                root,
+            ):
+                raise ToolchainError(
+                    "untrusted_go_executable",
+                    "selected Go executable is under a repository or project-managed root",
+                )
+
+    reject_if_forbidden(lexical)
+    try:
+        resolved = Path(os.path.realpath(lexical, strict=True))
+    except (OSError, RuntimeError) as exc:
+        raise ToolchainError(
+            "untrusted_go_executable",
+            "selected Go executable is unavailable",
+        ) from exc
+    reject_if_forbidden(resolved)
+    try:
+        target_stat = resolved.lstat()
+    except OSError as exc:
+        raise ToolchainError(
+            "untrusted_go_executable",
+            "selected Go executable is unavailable",
+        ) from exc
+    if not stat.S_ISREG(target_stat.st_mode):
+        raise ToolchainError(
+            "untrusted_go_executable",
+            "selected Go executable does not resolve to a regular file",
+        )
+    return AdmittedExecutable(resolved, lexical, _ADMISSION_SEAL)
 
 
 def _validate_private_base(path: Path, forbidden: tuple[Path, ...]) -> Path:

@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import shlex
 import sys
 import time
 from dataclasses import replace
@@ -13,7 +14,6 @@ import pytest
 
 from csk import config as manager_config
 from csk.builds import toolchain
-
 
 _TUNING_VALUES = {
     "GO386": "sse2",
@@ -50,7 +50,7 @@ class RecordingRunner:
 
     def run(
         self,
-        argv: tuple[str, ...],
+        argv: toolchain.ProbeArgv,
         *,
         cwd: Path,
         environment: dict[str, str],
@@ -58,10 +58,12 @@ class RecordingRunner:
         output_limit: int,
     ) -> toolchain.ProbeResult:
         del timeout, output_limit
+        assert argv and isinstance(argv[0], toolchain.AdmittedExecutable)
+        recorded_argv = (str(argv[0].path), *argv[1:])
         copied_environment = dict(environment)
-        self.calls.append((argv, cwd, copied_environment))
+        self.calls.append((recorded_argv, cwd, copied_environment))
         self.operation_roots.append(cwd.parent)
-        arguments = argv[1:]
+        arguments = recorded_argv[1:]
         returncode = self.returncodes.get(arguments, 0)
         if arguments == ("telemetry", "off"):
             _telemetry_dir(copied_environment, self.host).mkdir(
@@ -87,7 +89,58 @@ class RecordingRunner:
                 values.update(self.environment_overrides)
                 payload = json.dumps(values, separators=(",", ":")).encode("utf-8")
             return toolchain.ProbeResult(stdout=payload, returncode=returncode)
-        raise AssertionError(f"unexpected Go probe argv: {argv!r}")
+        raise AssertionError(f"unexpected Go probe argv: {recorded_argv!r}")
+
+
+class ShimRecordingRunner(RecordingRunner):
+    def __init__(
+        self,
+        goroot: Path,
+        shim: Path,
+        *,
+        shim_stdout: bytes | None = None,
+        shim_returncode: int = 0,
+        version: str | None = None,
+    ):
+        super().__init__(goroot, version=version)
+        self.shim = shim
+        self.shim_stdout = shim_stdout
+        self.shim_returncode = shim_returncode
+        self.shim_calls = 0
+        self.shim_probe_options: list[tuple[float, int]] = []
+
+    def run(
+        self,
+        argv: toolchain.ProbeArgv,
+        *,
+        cwd: Path,
+        environment: dict[str, str],
+        timeout: float,
+        output_limit: int,
+    ) -> toolchain.ProbeResult:
+        assert argv and isinstance(argv[0], toolchain.AdmittedExecutable)
+        recorded_argv = (str(argv[0].path), *argv[1:])
+        if recorded_argv == (str(self.shim.resolve()), "env", "GOROOT"):
+            self.shim_calls += 1
+            self.shim_probe_options.append((timeout, output_limit))
+            copied_environment = dict(environment)
+            self.calls.append((recorded_argv, cwd, copied_environment))
+            self.operation_roots.append(cwd.parent)
+            return toolchain.ProbeResult(
+                stdout=(
+                    f"{self.goroot}\n".encode()
+                    if self.shim_stdout is None
+                    else self.shim_stdout
+                ),
+                returncode=self.shim_returncode,
+            )
+        return super().run(
+            argv,
+            cwd=cwd,
+            environment=environment,
+            timeout=timeout,
+            output_limit=output_limit,
+        )
 
 
 class RepointingConfigRunner(RecordingRunner):
@@ -103,7 +156,7 @@ class RepointingConfigRunner(RecordingRunner):
 
     def run(
         self,
-        argv: tuple[str, ...],
+        argv: toolchain.ProbeArgv,
         *,
         cwd: Path,
         environment: dict[str, str],
@@ -169,6 +222,8 @@ def _make_goroot(path: Path) -> Path:
     executable.write_bytes(_native_header(host) + b"fake-go")
     executable.chmod(0o755)
     (path / "VERSION").write_text("go1.25.5\n", encoding="utf-8")
+    (path / "src" / "runtime").mkdir(parents=True)
+    (path / "pkg" / "tool").mkdir(parents=True)
     return path
 
 
@@ -195,6 +250,36 @@ def _setup(
         runner=runner,
     )
     return config, runner, goroot, private_base
+
+
+def _setup_shim(
+    tmp_path: Path,
+    *,
+    goroot: Path | None = None,
+    shim_stdout: bytes | None = None,
+    shim_returncode: int = 0,
+    version: str | None = None,
+) -> tuple[toolchain.ToolchainConfig, ShimRecordingRunner, Path, Path]:
+    config, _runner, default_goroot, private_base = _setup(tmp_path)
+    selected_goroot = default_goroot if goroot is None else goroot
+    shim_directory = tmp_path / "goenv" / "shims"
+    shim_directory.mkdir(parents=True)
+    shim = shim_directory / ("go.exe" if os.name == "nt" else "go")
+    shim.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    shim.chmod(0o755)
+    runner = ShimRecordingRunner(
+        selected_goroot,
+        shim,
+        shim_stdout=shim_stdout,
+        shim_returncode=shim_returncode,
+        version=version,
+    )
+    config = replace(
+        config,
+        operator_search_path=toolchain.OperatorSearchPath((str(shim_directory),)),
+        runner=runner,
+    )
+    return config, runner, selected_goroot, private_base
 
 
 def _assert_code(expected: str, raised: pytest.ExceptionInfo[toolchain.ToolchainError]) -> None:
@@ -271,6 +356,381 @@ def test_establish_uses_only_exact_bootstrap_argv_and_clean_environment(
 
     session.close()
     assert not operation_root.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="exercises the Windows go.exe launcher shape")
+def test_windows_go_exe_uses_structural_root_and_direct_probe_sequence(tmp_path: Path):
+    config, runner, goroot, _private_base = _setup(tmp_path)
+
+    session = toolchain.establish_toolchain(config)
+    try:
+        executable = str(goroot / "bin" / "go.exe")
+        assert session.snapshot.executable == Path(executable)
+        assert [call[0] for call in runner.calls] == [
+            (executable, "telemetry", "off"),
+            (executable, "version"),
+            (executable, "env", "-json", *toolchain.GO_ENV_FIELDS),
+        ]
+    finally:
+        session.close()
+
+
+def test_manager_shim_resolution_runs_exactly_once_under_bootstrap(tmp_path: Path):
+    config, runner, goroot, _private_base = _setup_shim(tmp_path)
+
+    session = toolchain.establish_toolchain(config)
+    try:
+        executable = str((goroot / "bin" / ("go.exe" if os.name == "nt" else "go")).resolve())
+        assert session.snapshot.executable == Path(executable)
+        assert runner.shim_calls == 1
+        assert [call[0] for call in runner.calls] == [
+            (str(runner.shim), "env", "GOROOT"),
+            (executable, "telemetry", "off"),
+            (executable, "version"),
+            (executable, "env", "-json", *toolchain.GO_ENV_FIELDS),
+        ]
+        assert len({call[1] for call in runner.calls}) == 1
+        probe_cwd = runner.calls[0][1]
+        assert probe_cwd == session.operation_root / "empty"
+        assert runner.calls[0][2]["GOENV"] == "off"
+        assert runner.calls[0][2]["GOTOOLCHAIN"] == "local"
+        assert runner.calls[0][2]["LC_ALL"] == "C"
+        assert runner.calls[0][2]["LANG"] == "C"
+        assert "GOROOT" not in runner.calls[0][2]
+        assert "GOOS" not in runner.calls[0][2]
+        assert "GOARCH" not in runner.calls[0][2]
+        assert runner.calls[0][2]["PATH"] == str(session.operation_root / "empty-path")
+        assert set(runner.calls[0][2]) == {
+            "GOENV",
+            "GOTOOLCHAIN",
+            "LC_ALL",
+            "LANG",
+            "GOPATH",
+            "GOMODCACHE",
+            "GOCACHE",
+            "GOTMPDIR",
+            "HOME",
+            "XDG_CONFIG_HOME",
+            "PATH",
+            "TMPDIR",
+        } | (
+            {"APPDATA", "LOCALAPPDATA", "USERPROFILE", "TEMP", "TMP"}
+            | {name for name in ("SYSTEMROOT", "WINDIR") if os.environ.get(name)}
+            if os.name == "nt"
+            else set()
+        )
+        assert runner.shim_probe_options == [
+            (
+                toolchain.DEFAULT_PROBE_TIMEOUT,
+                toolchain.DEFAULT_OUTPUT_LIMIT,
+            )
+        ]
+        for name in (
+            "GOPATH",
+            "GOMODCACHE",
+            "GOCACHE",
+            "GOTMPDIR",
+            "HOME",
+            "XDG_CONFIG_HOME",
+            "TMPDIR",
+        ):
+            assert Path(runner.calls[0][2][name]).is_relative_to(session.operation_root)
+    finally:
+        session.close()
+
+
+def test_relative_existing_shim_goroot_is_rejected(tmp_path: Path, monkeypatch):
+    config, runner, goroot, _private_base = _setup_shim(
+        tmp_path,
+        shim_stdout=b"trusted-go\n",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.establish_toolchain(config)
+
+    _assert_code("toolchain_shim_unresolved", raised)
+    assert "GOROOT answer must be an absolute path" in str(raised.value)
+    assert runner.shim_calls == 1
+    assert len(runner.calls) == 1
+    assert goroot.is_dir()
+
+
+@pytest.mark.parametrize(
+    ("shim_stdout", "reason"),
+    [
+        (b"relative/go-root\n", "absolute path"),
+        (None, "existing directory"),
+        (b"/first/root\n/second/root\n", "exactly one line"),
+        (b"\xff\n", "valid UTF-8"),
+    ],
+    ids=["relative", "missing", "multiple-lines", "invalid-utf8"],
+)
+def test_bad_shim_goroot_answers_refuse_with_actionable_code(
+    tmp_path: Path,
+    shim_stdout: bytes | None,
+    reason: str,
+):
+    if shim_stdout is None:
+        shim_stdout = f"{tmp_path / 'missing-go-root'}\n".encode()
+    config, runner, _goroot, private_base = _setup_shim(
+        tmp_path,
+        shim_stdout=shim_stdout,
+    )
+
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.establish_toolchain(config)
+
+    _assert_code("toolchain_shim_unresolved", raised)
+    message = str(raised.value)
+    assert str(runner.shim) in message
+    assert reason in message
+    assert "put a real Go toolchain first on PATH" in message
+    assert "mise activate" in message
+    assert runner.shim_calls == 1
+    assert len(runner.calls) == 1
+    assert not list(private_base.glob(".csk-go-probe-*"))
+
+
+def test_nonzero_shim_probe_refuses_with_actionable_code(tmp_path: Path):
+    config, runner, _goroot, _private_base = _setup_shim(
+        tmp_path,
+        shim_returncode=17,
+    )
+
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.establish_toolchain(config)
+
+    _assert_code("toolchain_shim_unresolved", raised)
+    assert "exited with status 17" in str(raised.value)
+    assert str(runner.shim) in str(raised.value)
+    assert runner.shim_calls == 1
+    assert len(runner.calls) == 1
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink creation is not portable on Windows")
+def test_shim_goroot_with_symlinked_go_refuses(tmp_path: Path):
+    config, runner, goroot, _private_base = _setup_shim(tmp_path)
+    elsewhere = _make_goroot(tmp_path / "elsewhere")
+    executable = goroot / "bin" / "go"
+    executable.unlink()
+    executable.symlink_to(elsewhere / "bin" / "go")
+
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.establish_toolchain(config)
+
+    _assert_code("toolchain_shim_unresolved", raised)
+    assert "must be a regular file with one link" in str(raised.value)
+    assert runner.shim_calls == 1
+    assert len(runner.calls) == 1
+
+
+def test_shim_goroot_with_hardlinked_go_refuses(tmp_path: Path):
+    config, runner, goroot, _private_base = _setup_shim(tmp_path)
+    elsewhere = _make_goroot(tmp_path / "elsewhere")
+    executable = goroot / "bin" / ("go.exe" if os.name == "nt" else "go")
+    executable.unlink()
+    os.link(elsewhere / "bin" / executable.name, executable)
+
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.establish_toolchain(config)
+
+    _assert_code("toolchain_shim_unresolved", raised)
+    assert "must be a regular file with one link" in str(raised.value)
+    assert runner.shim_calls == 1
+    assert len(runner.calls) == 1
+
+
+def test_shim_goroot_inside_forbidden_root_refuses(tmp_path: Path):
+    config, runner, _goroot, _private_base = _setup_shim(tmp_path)
+    forbidden = config.forbidden_roots[0]
+    forbidden_goroot = _make_goroot(forbidden / "nested-go")
+    runner.goroot = forbidden_goroot
+
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.establish_toolchain(config)
+
+    _assert_code("toolchain_shim_unresolved", raised)
+    assert "under a forbidden root" in str(raised.value)
+    assert str(runner.shim) in str(raised.value)
+    assert runner.shim_calls == 1
+    assert len(runner.calls) == 1
+
+
+def test_shim_answer_without_structural_goroot_refuses(tmp_path: Path):
+    config, runner, goroot, _private_base = _setup_shim(tmp_path)
+    (goroot / "pkg" / "tool").rmdir()
+
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.establish_toolchain(config)
+
+    _assert_code("toolchain_shim_unresolved", raised)
+    assert "not structurally a Go installation" in str(raised.value)
+    assert runner.shim_calls == 1
+    assert len(runner.calls) == 1
+
+
+def _assert_forbidden_shim_alias_is_not_executed(
+    tmp_path: Path,
+    *,
+    chain: bool,
+) -> None:
+    forbidden = tmp_path / "project"
+    forbidden.mkdir()
+    marker = tmp_path / "executed"
+    target = forbidden / "go"
+    target.write_text(
+        "#!/bin/sh\n"
+        f"printf executed > {shlex.quote(str(marker))}\n"
+        f"printf '%s\\n' {shlex.quote(str(tmp_path / 'unused-goroot'))}\n",
+        encoding="utf-8",
+    )
+    target.chmod(0o755)
+
+    first = tmp_path / "outside-first"
+    first.mkdir()
+    if chain:
+        second = tmp_path / "outside-second"
+        second.mkdir()
+        (second / "go").symlink_to(target)
+        (first / "go").symlink_to(second / "go")
+    else:
+        (first / "go").symlink_to(target)
+    private = tmp_path / "private"
+    private.mkdir()
+    config = toolchain.ToolchainConfig(
+        private_base=private,
+        operator_search_path=toolchain.OperatorSearchPath((str(first),)),
+        forbidden_roots=(forbidden,),
+    )
+
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.establish_toolchain(config)
+
+    assert not marker.exists(), "forbidden project-owned shim executed through an alias"
+    _assert_code("untrusted_go_executable", raised)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink creation is not portable on Windows")
+def test_symlink_to_forbidden_shim_is_not_executed(tmp_path: Path):
+    _assert_forbidden_shim_alias_is_not_executed(tmp_path, chain=False)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink creation is not portable on Windows")
+def test_symlink_chain_to_forbidden_shim_is_not_executed(tmp_path: Path):
+    _assert_forbidden_shim_alias_is_not_executed(tmp_path, chain=True)
+
+
+def test_shim_goroot_symlinked_bin_cannot_alias_forbidden_root(tmp_path: Path):
+    config, runner, _goroot, _private_base = _setup_shim(tmp_path)
+    forbidden_goroot = _make_goroot(config.forbidden_roots[0] / "nested-go")
+    answer_goroot = tmp_path / "answer-goroot"
+    answer_goroot.mkdir()
+    (answer_goroot / "bin").symlink_to(
+        forbidden_goroot / "bin",
+        target_is_directory=True,
+    )
+    runner.goroot = forbidden_goroot
+    runner.shim_stdout = f"{answer_goroot}\n".encode()
+
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.establish_toolchain(config)
+
+    _assert_code("toolchain_shim_unresolved", raised)
+    assert "bin" in str(raised.value)
+    assert "real directory" in str(raised.value)
+    assert runner.shim_calls == 1
+    assert len(runner.calls) == 1
+
+
+def test_shim_and_real_launcher_have_identical_toolchain_fingerprint(tmp_path: Path):
+    real_root = _make_goroot(tmp_path / "shared-go")
+    shim_config, shim_runner, _shim_root, _ = _setup_shim(
+        tmp_path / "shared-shim",
+        goroot=real_root,
+    )
+    real_config, real_runner, _unused_root, _ = _setup(tmp_path / "shared-real")
+    real_runner.goroot = real_root
+    real_config = replace(
+        real_config,
+        operator_search_path=toolchain.OperatorSearchPath((str(real_root / "bin"),)),
+    )
+
+    shim_session = toolchain.establish_toolchain(shim_config)
+    real_session = toolchain.establish_toolchain(real_config)
+    try:
+        assert shim_session.toolchain == real_session.toolchain
+        assert shim_runner.shim_calls == 1
+        assert len(real_runner.calls) == 3
+        executable = str(real_root / "bin" / ("go.exe" if os.name == "nt" else "go"))
+        assert [call[0] for call in real_runner.calls] == [
+            (executable, "telemetry", "off"),
+            (executable, "version"),
+            (executable, "env", "-json", *toolchain.GO_ENV_FIELDS),
+        ]
+    finally:
+        shim_session.close()
+        real_session.close()
+
+
+def test_shim_resolution_keeps_future_family_warning_gate(tmp_path: Path, capsys):
+    host = toolchain._native_host()
+    version = f"go version go1.28.1 {host.goos}/{host.goarch}\n"
+    config, runner, _goroot, _ = _setup_shim(tmp_path, version=version)
+    toolchain.reset_go_future_warning_state()
+
+    session = toolchain.establish_toolchain(config)
+    try:
+        warning = capsys.readouterr().err
+        assert "untested_go_family" in warning
+        assert "1.28" in warning
+        assert runner.shim_calls == 1
+        assert len(runner.calls) == 4
+    finally:
+        session.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows batch shim behavior is host-specific")
+@pytest.mark.parametrize("extension", [".cmd", ".bat"])
+def test_windows_batch_shims_refuse_clearly(tmp_path: Path, extension: str):
+    config, runner, _goroot, _private_base = _setup(tmp_path)
+    shim_directory = tmp_path / "batch-shims"
+    shim_directory.mkdir()
+    shim = shim_directory / f"go{extension}"
+    shim.write_text("@echo off\r\n", encoding="utf-8")
+    config = replace(
+        config,
+        operator_search_path=toolchain.OperatorSearchPath((str(shim_directory),)),
+    )
+
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.establish_toolchain(config)
+
+    _assert_code("toolchain_shim_unresolved", raised)
+    assert str(shim) in str(raised.value)
+    assert "cannot be executed by the direct-process probe runner" in str(raised.value)
+    assert "remediation" in str(raised.value)
+    assert runner.calls == []
+
+
+def test_windows_bat_shim_refusal_gate_on_any_host(tmp_path: Path):
+    config, _runner, _goroot, _private_base = _setup(tmp_path)
+    shim_directory = tmp_path / "batch-shims"
+    shim_directory.mkdir()
+    shim = shim_directory / "go.bat"
+    shim.write_text("@echo off\r\n", encoding="utf-8")
+    config = replace(
+        config,
+        operator_search_path=toolchain.OperatorSearchPath((str(shim_directory),)),
+    )
+    host = toolchain._Host(goos="windows", goarch="amd64", windows=True)
+
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain._select_toolchain(config, host, ())
+
+    _assert_code("toolchain_shim_unresolved", raised)
+    assert str(shim) in str(raised.value)
+    assert "cannot be executed by the direct-process probe runner" in str(raised.value)
 
 
 def test_preflight_uses_only_version_and_does_not_allocate_private_state(
@@ -727,27 +1187,38 @@ def test_wrapper_is_rejected_before_any_probe(tmp_path: Path):
     with pytest.raises(toolchain.ToolchainError) as raised:
         toolchain.establish_toolchain(config)
 
-    _assert_code("untrusted_go_executable", raised)
-    assert not runner.calls
+    _assert_code("toolchain_shim_unresolved", raised)
+    assert [call[0] for call in runner.calls] == [(str(executable), "env", "GOROOT")]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="unprivileged Windows symlinks are not portable")
 def test_outside_launcher_symlink_resolves_to_real_goroot_binary(tmp_path: Path):
-    config, runner, goroot, _ = _setup(tmp_path)
+    config, _runner, goroot, _ = _setup(tmp_path)
     operator_bin = tmp_path / "operator-bin"
     operator_bin.mkdir()
-    (operator_bin / "go").symlink_to(goroot / "bin" / "go")
+    shim = operator_bin / "go"
+    shim.symlink_to(goroot / "bin" / "go")
+    resolving_runner = ShimRecordingRunner(goroot, shim)
     linked = toolchain.ToolchainConfig(
         private_base=config.private_base,
         operator_search_path=toolchain.OperatorSearchPath((str(operator_bin),)),
         forbidden_roots=config.forbidden_roots,
-        runner=runner,
+        runner=resolving_runner,
     )
 
-    snapshot = toolchain.probe_toolchain(linked)
-
-    assert snapshot.executable == (goroot / "bin" / "go").resolve()
-    assert snapshot.goroot == goroot.resolve()
+    session = toolchain.establish_toolchain(linked)
+    try:
+        executable = str((goroot / "bin" / "go").resolve())
+        assert session.snapshot.executable == Path(executable)
+        assert session.snapshot.goroot == goroot.resolve()
+        assert resolving_runner.shim_calls == 0
+        assert [call[0] for call in resolving_runner.calls] == [
+            (executable, "telemetry", "off"),
+            (executable, "version"),
+            (executable, "env", "-json", *toolchain.GO_ENV_FIELDS),
+        ]
+    finally:
+        session.close()
 
 
 def test_private_probe_base_cannot_be_project_managed(tmp_path: Path):
@@ -782,9 +1253,10 @@ def test_default_runner_closes_stdin_and_shares_bounded_output_budget(
     tmp_path: Path,
 ):
     runner = toolchain.SubprocessProbeRunner()
+    admitted = toolchain._admit_executable(Path(sys.executable), (tmp_path,))
     closed_stdin = runner.run(
         (
-            sys.executable,
+            admitted,
             "-c",
             "import sys; print(sys.stdin.buffer.read() == b'')",
         ),
@@ -799,7 +1271,7 @@ def test_default_runner_closes_stdin_and_shares_bounded_output_budget(
     with pytest.raises(toolchain.ToolchainError) as raised:
         runner.run(
             (
-                sys.executable,
+                admitted,
                 "-c",
                 "import sys; sys.stdout.write('a'*10); sys.stderr.write('b'*10)",
             ),
@@ -813,10 +1285,11 @@ def test_default_runner_closes_stdin_and_shares_bounded_output_budget(
 
 def test_default_runner_enforces_deadline(tmp_path: Path):
     runner = toolchain.SubprocessProbeRunner()
+    admitted = toolchain._admit_executable(Path(sys.executable), (tmp_path,))
     with pytest.raises(toolchain.ToolchainError) as raised:
         runner.run(
             (
-                sys.executable,
+                admitted,
                 "-c",
                 "import time; time.sleep(1)",
             ),
@@ -826,6 +1299,52 @@ def test_default_runner_enforces_deadline(tmp_path: Path):
             output_limit=64,
         )
     _assert_code("process_timeout", raised)
+
+
+def test_default_runner_refuses_an_unadmitted_path_before_start(tmp_path: Path):
+    runner = toolchain.SubprocessProbeRunner()
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        runner.run(
+            (sys.executable, "-c", "raise SystemExit(99)"),  # type: ignore[arg-type]
+            cwd=tmp_path,
+            environment={},
+            timeout=1,
+            output_limit=64,
+        )
+    _assert_code("untrusted_go_executable", raised)
+
+
+def test_runner_rejects_unadmitted_forbidden_alias_before_exec(tmp_path: Path):
+    forbidden = tmp_path / "project"
+    forbidden.mkdir()
+    marker = tmp_path / "executed"
+    target = forbidden / "go"
+    target.write_text(
+        "#!/bin/sh\n"
+        f"printf executed > {shlex.quote(str(marker))}\n",
+        encoding="utf-8",
+    )
+    target.chmod(0o755)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    alias = outside / "go"
+    alias.symlink_to(target)
+    runner = toolchain.SubprocessProbeRunner()
+    raised: toolchain.ToolchainError | None = None
+    try:
+        runner.run(
+            (str(alias),),  # type: ignore[arg-type]
+            cwd=tmp_path,
+            environment={},
+            timeout=1,
+            output_limit=64,
+        )
+    except toolchain.ToolchainError as exc:
+        raised = exc
+
+    assert not marker.exists(), "runner executed an unadmitted forbidden alias"
+    assert raised is not None, "runner accepted an unadmitted executable"
+    assert raised.code == "untrusted_go_executable"
 
 
 def test_probe_must_not_modify_manager_owned_empty_directory(tmp_path: Path):
@@ -1026,7 +1545,7 @@ def test_launcher_must_be_regular_and_executable(tmp_path: Path):
     with pytest.raises(toolchain.ToolchainError) as raised:
         toolchain.establish_toolchain(config)
     _assert_code("untrusted_go_executable", raised)
-    assert not runner.calls
+    assert runner.calls == []
 
 
 def test_tree_mutation_before_close_fails_and_still_deletes_private_state(

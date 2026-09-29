@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Исправлено
+
+- Shim Go из goenv, asdf и mise разрешается одним приватным `env GOROOT` probe с проверкой структуры GOROOT перед fingerprint.
+
 ## [0.18.2] - 2026-09-29
 
 ### Исправлено
