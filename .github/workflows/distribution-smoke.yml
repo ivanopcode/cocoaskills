@@ -33,7 +33,7 @@ jobs:
       stable_latest: ${{ steps.version.outputs.stable_latest }}
     steps:
       - name: Checkout release contract
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Resolve and verify published release
         id: version
@@ -86,7 +86,7 @@ jobs:
       MISE_PIPX_REGISTRY_URL: https://pypi.org/simple/{}
     steps:
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -270,7 +270,7 @@ jobs:
           PY
 
       - name: Upload content hash
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: content-hash-${{ matrix.os }}-${{ matrix.channel }}
           path: ${{ runner.temp }}/content-sha256-${{ matrix.os }}-${{ matrix.channel }}.txt
@@ -283,7 +283,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download content hashes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: content-hash-*
           path: hashes
@@ -327,7 +327,7 @@ jobs:
       CSK_VERSION: ${{ needs.resolve-version.outputs.version }}
     steps:
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
