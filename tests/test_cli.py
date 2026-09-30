@@ -859,10 +859,17 @@ def test_cli_lock_contention_returns_lock_exit(tmp_path, csk_home, skills_root):
     )
     lock_path = csk_home / ".lock"
     # The holder must be alive, otherwise the stale-lock breaker removes it.
-    lock_path.write_text(json.dumps({"pid": os.getpid(), "created_at": time.time()}), encoding="utf-8")
+    holder_record = json.dumps({"pid": os.getpid(), "created_at": time.time()})
+    lock_path.write_text(holder_record, encoding="utf-8")
     env = os.environ.copy()
     env["CSK_CONFIG"] = str(cfg_path)
-    env["CSK_LOCK_TIMEOUT"] = "0.1"
+    # BUG-260923-24ujhn: a 0.1 s budget could expire inside lock preparation
+    # on a loaded runner, failing with "timed out during preparation" before
+    # the holder was ever seen. A zero timeout means a single acquisition
+    # attempt with no wall-clock deadline (preparation is not budgeted), and
+    # the live holder is rejected on that first attempt, so the outcome no
+    # longer depends on how fast the runner is.
+    env["CSK_LOCK_TIMEOUT"] = "0"
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
 
     proc = subprocess.run(
@@ -870,12 +877,15 @@ def test_cli_lock_contention_returns_lock_exit(tmp_path, csk_home, skills_root):
         text=True,
         capture_output=True,
         env=env,
-        timeout=5,
+        timeout=120,
         check=False,
     )
 
-    assert proc.returncode == cli.EXIT_LOCK
+    assert proc.returncode == cli.EXIT_LOCK, proc.stderr
     assert "another csk process holds lock" in proc.stderr
+    assert "timed out" not in proc.stderr
+    # The live holder's record is left byte-for-byte intact.
+    assert lock_path.read_text(encoding="utf-8") == holder_record
 
 
 def _register_project(monkeypatch, csk_home, skills_root, project):
