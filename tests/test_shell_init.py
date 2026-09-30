@@ -10,6 +10,15 @@ import pytest
 
 from csk import env_files, shell_init
 
+# BUG-260923-321yai: these timeouts only turn a hung hook into a failure; they
+# are not a performance budget. A cold Git-bash start on a loaded
+# windows-latest runner took more than 5 s (the same test then ran in about
+# 0.3 s once bash was warm), which failed the activation test with
+# TimeoutExpired before a single hook assertion ran. A hook that really hangs
+# (the non-absolute PWD loop, re-entrant sourcing) never returns, so it still
+# fails here, just later.
+_SHELL_HANG_GUARD_SECONDS = 120
+
 
 def _posix_shell_command(executable: str, script: str) -> list[str]:
     if Path(executable).name == "zsh":
@@ -75,7 +84,7 @@ printf 'left=%s\n' "${CSK_ACTIVE_ENV-unset}"
         check=False,
         capture_output=True,
         text=True,
-        timeout=5,
+        timeout=_SHELL_HANG_GUARD_SECONDS,
         env={
             **os.environ,
             "HOOK_PATH": str(hook_path),
@@ -112,7 +121,7 @@ printf 'completed\n'
         check=False,
         capture_output=True,
         text=True,
-        timeout=2,
+        timeout=_SHELL_HANG_GUARD_SECONDS,
         env={
             **os.environ,
             "BROKEN_PWD": broken_pwd,
@@ -140,7 +149,7 @@ def test_posix_hook_sources_global_env_without_external_dirname(tmp_path: Path, 
         check=False,
         capture_output=True,
         text=True,
-        timeout=5,
+        timeout=_SHELL_HANG_GUARD_SECONDS,
         env={
             **os.environ,
             "CSK_CONFIG": str(csk_home / "config.json"),
@@ -175,7 +184,7 @@ def test_posix_hook_can_disable_project_filesystem_scan(tmp_path: Path, shell: s
         check=False,
         capture_output=True,
         text=True,
-        timeout=5,
+        timeout=_SHELL_HANG_GUARD_SECONDS,
         env={
             **os.environ,
             "CSK_AUTO_ENV": "0",
@@ -204,7 +213,7 @@ def test_bash_hook_does_not_duplicate_prompt_command_when_sourced_twice(tmp_path
         check=False,
         capture_output=True,
         text=True,
-        timeout=5,
+        timeout=_SHELL_HANG_GUARD_SECONDS,
         env={**os.environ, "HOOK_PATH": str(hook_path), "SHELL": executable},
     )
 
@@ -238,7 +247,7 @@ def test_zsh_hook_does_not_reenter_while_sourcing_project_env(tmp_path: Path) ->
         check=False,
         capture_output=True,
         text=True,
-        timeout=5,
+        timeout=_SHELL_HANG_GUARD_SECONDS,
         env={
             **os.environ,
             "HOOK_PATH": str(hook_path),
