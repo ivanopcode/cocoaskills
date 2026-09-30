@@ -53,7 +53,7 @@ RESOLVER_SCRIPT = ROOT / ".github" / "scripts" / "floor_resolve.py"
 
 _FLOOR_GATE_RUN = "python -I " + GATE_SCRIPT.relative_to(ROOT).as_posix()
 _FLOOR_RESOLVE_RUN = "python3 " + RESOLVER_SCRIPT.relative_to(ROOT).as_posix()
-_FLOOR_SETUP_USES = "actions/setup-python@v5"
+_FLOOR_SETUP_USES = "actions/setup-python@v7"
 
 # Exact key whitelists for the floor_syntax job (TASK-260918-16r0fm closes
 # BUG-260917-3txerf rev-2 finding F3): a blacklist can only forbid spellings
@@ -104,7 +104,7 @@ def _assert_floor_shape(job: dict) -> None:
 
     checkout, resolve, setup, compile_step = steps
     assert set(checkout) == _FLOOR_CHECKOUT_KEYS, set(checkout)
-    assert checkout.get("uses") == "actions/checkout@v4"
+    assert checkout.get("uses") == "actions/checkout@v7"
 
     assert set(resolve) == _FLOOR_RESOLVE_KEYS, set(resolve)
     floor_id = resolve.get("id")
@@ -611,8 +611,8 @@ def test_floor_syntax_gate_is_a_cheap_pr_time_floor_compile() -> None:
     assert "\n    runs-on: ubuntu-latest\n" in job
     assert re.search(r"(?m)^ +(matrix|strategy):", job) is None
     assert "\n    timeout-minutes: 10\n" in job
-    assert "actions/checkout@v4" in job
-    assert "actions/setup-python@v5" in job
+    assert "actions/checkout@v7" in job
+    assert "actions/setup-python@v7" in job
     assert "pip install" not in job
 
     # The floor comes from requires-python, never hardcoded: pinning a
@@ -1292,8 +1292,8 @@ def test_floor_evasion_checkout_relocation_is_rejected(relocation: str) -> None:
     it closed at run time if it ever gets that far.
     """
     mutated = _mutate_floor_job(
-        "      - name: Checkout\n        uses: actions/checkout@v4\n",
-        "      - name: Checkout\n        uses: actions/checkout@v4\n" + relocation,
+        "      - name: Checkout\n        uses: actions/checkout@v7\n",
+        "      - name: Checkout\n        uses: actions/checkout@v7\n" + relocation,
     )
     job = yaml.safe_load(mutated)["jobs"]["floor_syntax"]
     with pytest.raises(AssertionError):
@@ -1641,15 +1641,15 @@ def test_floor_gate_fails_when_a_target_is_unlistable(tmp_path: Path) -> None:
             id="job-unknown-key",
         ),
         pytest.param(
-            "      - name: Checkout\n        uses: actions/checkout@v4\n",
+            "      - name: Checkout\n        uses: actions/checkout@v7\n",
             "      - name: Checkout\n"
-            "        uses: actions/checkout@v4\n"
+            "        uses: actions/checkout@v7\n"
             "        working-directory: /tmp\n",
             id="checkout-unknown-key",
         ),
         pytest.param(
+            "        uses: actions/checkout@v7\n",
             "        uses: actions/checkout@v4\n",
-            "        uses: actions/checkout@v3\n",
             id="checkout-uses-value",
         ),
         pytest.param(
@@ -1665,7 +1665,7 @@ def test_floor_gate_fails_when_a_target_is_unlistable(tmp_path: Path) -> None:
             id="setup-unknown-key",
         ),
         pytest.param(
-            "        uses: actions/setup-python@v5\n",
+            "        uses: actions/setup-python@v7\n",
             "        uses: ./tools/setup-python\n",
             id="setup-uses-substring-trap",
         ),
@@ -1912,3 +1912,28 @@ def test_floor_gate_is_immune_to_a_smuggled_compileall(tmp_path: Path) -> None:
     immune = _run_gate_script(gate, sys.executable, root, running, isolated=True)
     assert immune.returncode != 0
     assert "floor compile failed" in immune.stderr
+
+
+# BUG-260806-9mxagv: the first-party JavaScript actions ran on Node 20. Every
+# workflow pins the Node-24 major, so a stray older spelling (or a new
+# first-party action added at a Node-20 major) goes red here rather than
+# surfacing as a runner deprecation warning.
+_NODE24_ACTION_MAJORS = {
+    "actions/checkout": "v7",
+    "actions/setup-python": "v7",
+    "actions/upload-artifact": "v7",
+    "actions/download-artifact": "v8",
+}
+
+
+@pytest.mark.parametrize("name", ["ci.yml", "release.yml", "distribution-smoke.yml"])
+def test_first_party_actions_pin_node24_majors(name: str) -> None:
+    text = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+    pinned = re.findall(r"(?m)^\s+uses:\s*(actions/[A-Za-z0-9_.-]+)@(\S+)\s*$", text)
+    assert pinned, name
+    seen = set()
+    for action, ref in pinned:
+        if action in _NODE24_ACTION_MAJORS:
+            assert ref == _NODE24_ACTION_MAJORS[action], (name, action, ref)
+            seen.add(action)
+    assert "actions/checkout" in seen, name

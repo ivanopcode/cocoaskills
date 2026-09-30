@@ -18,12 +18,12 @@ jobs:
       prerelease: ${{ steps.release.outputs.prerelease }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -48,7 +48,7 @@ jobs:
           --write-checksums
 
       - name: Upload Python distributions
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python-dist
           path: |
@@ -56,7 +56,7 @@ jobs:
             dist/*.whl
 
       - name: Upload checksums
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: checksums
           path: dist/SHA256SUMS
@@ -72,16 +72,16 @@ jobs:
       id-token: write
     steps:
       - name: Checkout release contract
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download distributions
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: python-dist
           path: dist
 
       - name: Download checksums
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: checksums
           path: dist
@@ -114,16 +114,16 @@ jobs:
       id-token: write
     steps:
       - name: Checkout release contract
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download distributions
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: python-dist
           path: dist
 
       - name: Download checksums
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: checksums
           path: dist
@@ -142,7 +142,7 @@ jobs:
           attestations: true
 
       - name: Restore verified checksums for GitHub Release
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: checksums
           path: dist
@@ -191,16 +191,16 @@ jobs:
       contents: read
     steps:
       - name: Checkout release contract
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download checksums
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: checksums
           path: dist
 
       - name: Checkout Homebrew tap
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ vars.HOMEBREW_TAP_REPOSITORY || 'ivanopcode/homebrew-csk' }}
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
