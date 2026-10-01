@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import manifest
 from .config import DEFAULT_WORKTREE_ALIAS_PATTERN
+from .tool_paths import resolve_tool
 
 
 class ProjectResolutionError(Exception):
@@ -83,7 +84,7 @@ def find_project_root(start: Path) -> Path:
 def git_branch(project_root: Path) -> str | None:
     for args in (["branch", "--show-current"], ["rev-parse", "--abbrev-ref", "HEAD"]):
         proc = subprocess.run(
-            ["git", "-C", str(project_root), *args],
+            [resolve_tool("git"), "-C", str(project_root), *args],
             text=True,
             capture_output=True,
             check=False,

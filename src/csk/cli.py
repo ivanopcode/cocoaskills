@@ -38,6 +38,7 @@ from .audit import trust as audit_trust
 from .audit.backends import AuditBackendError
 from .audit.model import Decision
 from .locking import GlobalLock, LockError
+from .tool_paths import resolve_tool
 from .sources import diagnostics as source_diagnostics
 from .sources import errors as source_errors
 from .sources import lock as source_lock
@@ -98,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         audit_runner.AuditError,
         AuditBackendError,
         git_ops.GitError,
+        FileNotFoundError,
         ValueError,
     ) as exc:
         rendered = source_diagnostics.format_exception(exc)
@@ -1239,6 +1241,7 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
                 stored = build_https.read_namespaced_token(
                     rule.scope,
                     build_https.scope_host(rule.scope),
+                    git=resolve_tool("git"),
                     home=build_https.resolve_operator_home(),
                 )
                 parts.append("stored=yes" if stored else "stored=NO")
@@ -1257,10 +1260,10 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
         host = build_https.scope_host(args.scope)
         home = build_https.resolve_operator_home()
         had_token = (
-            build_https.read_namespaced_token(args.scope, host, home=home)
+            build_https.read_namespaced_token(args.scope, host, git=resolve_tool("git"), home=home)
             is not None
         )
-        build_https.delete_namespaced_token(args.scope, host, home=home)
+        build_https.delete_namespaced_token(args.scope, host, git=resolve_tool("git"), home=home)
         if had_token:
             print(f"Removed build-https scope {args.scope} and its stored token")
         else:
@@ -1286,6 +1289,7 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
                 args.scope,
                 build_https.scope_host(args.scope),
                 token,
+                git=resolve_tool("git"),
                 home=build_https.resolve_operator_home(),
             )
         except build_https.BuildHTTPSError as exc:
@@ -1772,7 +1776,7 @@ def _nearest_parent_manifest(root: Path) -> Path | None:
 
 def _is_inside_git_worktree(root: Path) -> bool:
     proc = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+        [resolve_tool("git"), "-C", str(root), "rev-parse", "--is-inside-work-tree"],
         text=True,
         capture_output=True,
         check=False,

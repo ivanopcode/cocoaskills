@@ -9,7 +9,10 @@ import unicodedata
 from io import BytesIO
 from dataclasses import dataclass
 from pathlib import Path
+
 from typing import Any
+
+from .tool_paths import resolve_tool
 
 from .identifiers import is_valid_portable_path
 
@@ -40,8 +43,15 @@ class ResolvedRef:
     commit: str
 
 
+def _git_executable() -> str:
+    try:
+        return resolve_tool("git")
+    except FileNotFoundError as exc:
+        raise GitError(str(exc)) from exc
+
+
 def git(repo: Path, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    cmd = ["git", "-C", str(repo), *args]
+    cmd = [_git_executable(), "-C", str(repo), *args]
     proc = _run(cmd, text=True, capture_output=True)
     if check and proc.returncode != 0:
         stderr = proc.stderr.strip() or proc.stdout.strip()
@@ -57,7 +67,7 @@ def clone_repo(remote_url: str, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "GIT_ALLOW_PROTOCOL": ALLOWED_GIT_PROTOCOLS}
     proc = _run(
-        ["git", "clone", "--", remote_url, str(destination)],
+        [_git_executable(), "clone", "--", remote_url, str(destination)],
         text=True,
         capture_output=True,
         env=env,
@@ -99,7 +109,7 @@ def archive(repo: Path, commit: str, destination: Path) -> None:
         raise GitError(f"Refusing suspicious archive commit: {commit!r}")
     destination.mkdir(parents=True, exist_ok=True)
     proc = _run(
-        ["git", "-C", str(repo), "archive", "--format=tar", commit],
+        [_git_executable(), "-C", str(repo), "archive", "--format=tar", commit],
         capture_output=True,
     )
     if proc.returncode != 0:
