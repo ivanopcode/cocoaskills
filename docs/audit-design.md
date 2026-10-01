@@ -328,6 +328,18 @@ cloud) -> AuditRequest` scrubs when `cloud` is true.
 
 Built-in backends:
 
+The `command` and `codex` child environment is built by
+`csk.audit.backends.environment.backend_environment`. `BASE_ENV_ALLOWLIST`
+contains `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `TMPDIR`, `TEMP`, and `TMP`;
+`LC_*` locale variables also pass. On Windows, `WINDOWS_ENV_ALLOWLIST` adds
+`SYSTEMROOT` and `COMSPEC` (names are matched case-insensitively there).
+`CODEX_REQUIRED_ENV` adds `CODEX_HOME` for the optional Codex configuration/state
+directory override. `COMMAND_REQUIRED_ENV` is empty. No other variables pass.
+In particular, names ending in `*_TOKEN` or `*_KEY`, `SSH_AUTH_SOCK`, and `GIT_*`
+are excluded even if they match `LC_*`. `command.env` overrides allowed values
+only; it cannot expand the allowlist. Command adapters must obtain credentials
+through their own approved storage rather than inherited token variables.
+
 - `command` (generic): writes the `AuditRequest` as JSON to a configured
   command's stdin and reads `Finding[]` JSON from stdout. Any future agent
   system is wrapped here. `cloud` is declared in config.
@@ -702,3 +714,12 @@ This release is sequenced after v0.9.0 and does not block the foundation.
 - The audit preserves the existing per-scope system-dependency behavior (project
   hard-fail, global soft-filter) by gating exactly the plans each scope will
   write; it does not unify or change it (section 17).
+
+Registry token files are checked with `lstat` before opening: symlinks and Windows
+reparse points are refused. The opened descriptor must have the same device,
+inode and regular-file type; unavailable file identity support refuses the file.
+`O_NOFOLLOW` is also used where available. Tokens use only `A-Za-z0-9-._~+/=`
+without spaces. A file may terminate its single line with LF or CRLF; environment
+values have no line terminator. HTTP publication errors use a fixed diagnostic
+that cannot include headers. All CLI parsers disable option abbreviation; token
+option prefixes are refused before argument diagnostics can echo their values.
