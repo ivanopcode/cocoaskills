@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Исправлено
+
+- `csk install --dry-run` в Windows больше не сообщает `corrupt` для допустимого локального build-репозитория при отсутствующем кэше внешних сборок. Отсутствующий путь считается промахом кэша, и dry-run сообщает `would-preflight-and-build`, как реальная установка.
+
 ## [0.18.3] - 2026-09-29
 
 ### Исправлено

@@ -5,8 +5,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
+from test_build_cache_windows import _protect
 
-from csk import protocol_json
+from csk import build_repository_pipeline, protocol_json
+from csk.builds import cache_windows
 from csk.build_repository_pipeline import (
     AUDIT_BLOCKED,
     ARTIFACT_INVALID,
@@ -36,6 +38,34 @@ from csk.git_admission import (
 
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+
+@pytest.mark.parametrize(
+    "winerror", [2, 3, 5], ids=["missing-file", "missing-path", "access-denied"]
+)
+def test_windows_external_path_validation_preserves_missing_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, winerror: int
+) -> None:
+    # Exercise the real Windows handle-open/validation adapter on every host.
+    # Only the Win32 API result is simulated; no platform globals are changed.
+    monkeypatch.setattr(
+        cache_windows,
+        "_api",
+        lambda: SimpleNamespace(
+            kernel32=SimpleNamespace(CreateFileW=lambda *_args: None)
+        ),
+    )
+    monkeypatch.setattr(cache_windows, "_last_error", lambda: winerror)
+    monkeypatch.setattr(
+        cache_windows,
+        "_windows_error",
+        lambda error, *_args: OSError(error, "simulated Windows open failure"),
+    )
+    expected = FileNotFoundError if winerror in {2, 3} else ValueError
+    with pytest.raises(expected):
+        build_repository_pipeline._validate_windows_path(
+            tmp_path / "external-cache", directory=True
+        )
 
 
 def _snapshot(*, outside: bytes = b"not-visible", tag_verified: bool = False) -> Snapshot:
@@ -465,7 +495,10 @@ def test_corrupt_artifact_is_quarantined_before_rebuild(tmp_path: Path) -> None:
     assert any((store.root / "quarantine").iterdir())
 
 
-def test_dry_run_detects_corruption_without_quarantine(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "damage", ["modified-artifact", "missing-artifact", "missing-receipt"]
+)
+def test_dry_run_detects_corruption_without_quarantine(tmp_path: Path, damage: str) -> None:
     store = DiskProtectedStore(tmp_path / "external-cache")
     compiler = _Compiler([])
     first = run_pipeline(
@@ -474,14 +507,38 @@ def test_dry_run_detects_corruption_without_quarantine(tmp_path: Path) -> None:
     assert first.cache_key is not None
     entry = store.root / "artifacts" / first.cache_key.removeprefix("sha256:")
     artifact = entry / "artifact"
-    artifact.chmod(0o700)
-    artifact.write_bytes(b"corrupt")
+    if damage == "modified-artifact":
+        if build_repository_pipeline.os.name == "nt":
+            _protect(artifact, cache_windows._MUTABLE_FILE)
+        else:
+            artifact.chmod(0o700)
+        artifact.write_bytes(b"corrupt")
+        if build_repository_pipeline.os.name == "nt":
+            _protect(artifact, cache_windows._SEALED_ARTIFACT)
+    else:
+        # An existing entry with a missing file remains corrupt even though
+        # an absent cache root is a normal miss.
+        missing = artifact if damage == "missing-artifact" else entry / "receipt.json"
+        if build_repository_pipeline.os.name == "nt":
+            _protect(entry, cache_windows._MUTABLE_DIRECTORY)
+            _protect(missing, cache_windows._MUTABLE_FILE)
+        else:
+            entry.chmod(0o700)
+        missing.unlink()
+        if build_repository_pipeline.os.name == "nt":
+            _protect(entry, cache_windows._SEALED_ENTRY)
+        else:
+            entry.chmod(0o500)
 
     result = run_pipeline(
         _request(tmp_path, Operation.DRY_RUN, [], compiler, store=store)
     )
     assert result.state == "corrupt"
-    assert result.code == ARTIFACT_INVALID
+    assert result.code == (
+        build_repository_pipeline.RECEIPT_INVALID
+        if damage == "missing-receipt"
+        else ARTIFACT_INVALID
+    )
     assert entry.exists()
     assert not (store.root / "quarantine").exists()
 

@@ -6,12 +6,22 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from conftest import commit_all, init_git_repo, make_config, make_project, make_skill_repo, write_files, write_skillfile
 from test_install import _stub_trusted_toolchain
 
-from csk import git_admission, global_install, install_marker, installer, status
+from csk import (
+    build_repository_pipeline,
+    cli,
+    git_admission,
+    global_install,
+    install_marker,
+    installer,
+    status,
+)
+from csk.builds import cache_windows, go_v1
 from csk.builds import toolchain as build_toolchain
 
 
@@ -138,6 +148,141 @@ def _skill_repository(
         },
         tag="v1",
     )
+
+
+@pytest.mark.parametrize(
+    "winerror", [None, 2, 3],
+    ids=["native", "windows-missing-file", "windows-missing-path"],
+)
+def test_cli_external_build_dry_run_matches_real_install_on_fresh_home(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    capsys: pytest.CaptureFixture[str],
+    winerror: int | None,
+) -> None:
+    """BUG-260808-3vudh8: a missing Windows cache is not a corrupt repository."""
+    project = make_project(tmp_path)
+    external, commit = _external_repository(tmp_path)
+    _skill_repository(skills_root, commit)
+    write_skillfile(
+        project,
+        {
+            "schema_version": 1,
+            "agents": ["codex_cli"],
+            "skills": [{"name": "external-skill", "tag": "v1"}],
+        },
+    )
+    (project / "Skillfile.dev.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "substitutions": {},
+                "build_repository_substitutions": {
+                    "external-skill": {"tools": {"path": "../external-tool"}}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with (project / ".gitignore").open("a", encoding="utf-8") as stream:
+        stream.write("Skillfile.dev.json\n")
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    monkeypatch.setattr(cli.config, "load_config", lambda: cfg)
+    monkeypatch.chdir(project)
+    _stub_trusted_toolchain(monkeypatch)
+    tool = _git_tool()
+    monkeypatch.setattr(installer, "_external_git_tool", lambda *_args, **_kwargs: tool)
+
+    admitted: list[str] = []
+    real_admit = git_admission.admit_local
+
+    def admit_local(path: Path, selected_tool: git_admission.GitTool) -> git_admission.Snapshot:
+        assert path == external
+        snapshot = real_admit(path, selected_tool)
+        admitted.append(snapshot.digest)
+        return snapshot
+
+    monkeypatch.setattr(git_admission, "admit_local", admit_local)
+    compiled: list[str] = []
+    fake_build = go_v1.build
+
+    def record_build(request: go_v1.BuildRequest) -> go_v1.BuildResult:
+        compiled.append(request.command)
+        return fake_build(request)
+
+    monkeypatch.setattr(go_v1, "build", record_build)
+    cache_root = csk_home / "external-builds"
+    marker_path = project / ".agents/skills/external-skill/.csk-install.json"
+    assert not cache_root.exists()
+    if winerror is not None:
+        # Route only an absent read-only cache root through the Windows
+        # adapter. Existing paths and the real install retain native checks.
+        protected_dir = build_repository_pipeline.DiskProtectedStore._protected_dir
+
+        def windows_missing_dir(
+            store: build_repository_pipeline.DiskProtectedStore, path: Path, *, create: bool
+        ) -> None:
+            if path == cache_root and not create and not path.exists():
+                with monkeypatch.context() as win32:
+                    win32.setattr(
+                        cache_windows,
+                        "_api",
+                        lambda: SimpleNamespace(
+                            kernel32=SimpleNamespace(CreateFileW=lambda *_args: None)
+                        ),
+                    )
+                    win32.setattr(cache_windows, "_last_error", lambda: winerror)
+                    win32.setattr(
+                        cache_windows,
+                        "_windows_error",
+                        lambda error, *_args: OSError(error, "simulated Windows open failure"),
+                    )
+                    build_repository_pipeline._validate_windows_path(
+                        path, directory=True
+                    )
+            protected_dir(store, path, create=create)
+
+        monkeypatch.setattr(
+            build_repository_pipeline.DiskProtectedStore,
+            "_protected_dir",
+            windows_missing_dir,
+        )
+
+    def invoke(*arguments: str) -> str:
+        code = cli.main(["install", *arguments, "--verbose"])
+        captured = capsys.readouterr()
+        assert code == cli.EXIT_OK, (captured.out, captured.err)
+        reports = [
+            line.strip()
+            for line in captured.out.splitlines()
+            if "external build external-skill.external-tool:" in line
+        ]
+        assert len(reports) == 1, (captured.out, captured.err)
+        return reports[0]
+
+    dry_report = invoke("--dry-run")
+    assert compiled == []
+    assert not cache_root.exists()
+    assert not marker_path.exists()
+
+    # Run the real install before comparing, so a false corrupt dry-run is
+    # paired with the successful installation that exposed the original bug.
+    install_report = invoke()
+    assert compiled == ["external-tool"]
+    assert marker_path.is_file()
+    assert dry_report == install_report
+    assert ": would-preflight-and-build " in dry_report
+    marker = install_marker.read_install_marker(marker_path.read_bytes())
+    build = marker.builds["external-tool"]
+    assert f"source={admitted[0]} cache={build.cache_key}" in dry_report
+
+    cached_report = invoke("--dry-run")
+    assert ": cache-hit " in cached_report
+    assert cached_report.split("source=", 1)[1] == dry_report.split("source=", 1)[1]
+    assert admitted == [admitted[0]] * 3
+    assert compiled == ["external-tool"]
 
 
 def test_project_external_build_install_offline_repair_activation_and_uninstall(

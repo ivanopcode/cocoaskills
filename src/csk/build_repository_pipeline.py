@@ -1040,6 +1040,7 @@ def _validate_windows_path(
                 | cache_windows._READ_CONTROL
                 | cache_windows._FILE_READ_ATTRIBUTES
             ),
+            missing=FileNotFoundError("external protected object is absent"),
         ) as handle:
             if directory != handle.standard.directory:
                 raise ValueError("protected object type differs")
@@ -1057,6 +1058,10 @@ def _validate_windows_path(
                     return
                 except BaseException as exc:  # private backend typed failures
                     last = exc
+    except FileNotFoundError:
+        # A fresh read-only cache has no root yet. Preserve absence so cache
+        # lookup can distinguish a miss from an existing invalid entry.
+        raise
     except BaseException as exc:
         last = exc
     raise ValueError(f"Windows protected object is untrusted: {last}")
