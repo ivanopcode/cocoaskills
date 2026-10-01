@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import git_ops, manifest, skillspec, snapshot
+from .command_names import require_unreserved_command_name
 from .config import GlobalConfig
 from .dev_substitutions import Substitution
 from .source_identity import (
@@ -66,6 +67,24 @@ class ClosureNode:
             if edge.mode != "runtime":
                 continue
             active.update(edge.commands or exported)
+        return active
+
+    def active_build_commands(self) -> set[str]:
+        exported = {
+            command.name
+            for command in self.spec.commands.values()
+            if command.type == "build"
+        }
+        if any(edge.mode == "full" for edge in self.edges):
+            return exported
+        active: set[str] = set()
+        for edge in self.edges:
+            if edge.mode == "runtime":
+                active.update(
+                    command
+                    for command in (edge.commands or exported)
+                    if command in exported
+                )
         return active
 
     def consumers(self) -> list[str]:
@@ -184,6 +203,11 @@ def _closure_failure(
 
 
 def detect_active_command_collisions(nodes: list[ClosureNode]) -> None:
+    # Check both script and build exports, including external repositories,
+    # while leaving the existing skill-versus-skill collision check intact.
+    for node in nodes:
+        for command in sorted(node.active_commands() | node.active_build_commands()):
+            require_unreserved_command_name(command)
     owners: dict[str, str] = {}
     for node in nodes:
         for command in sorted(node.active_commands()):

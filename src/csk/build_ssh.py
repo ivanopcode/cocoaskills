@@ -28,6 +28,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from .tool_paths import resolve_tool
+
 
 class BuildSSHError(ValueError):
     pass
@@ -186,7 +188,7 @@ def discover_candidates(
     if agent_socket:
         try:
             probe = subprocess.run(
-                ("ssh-add", "-l"),
+                (resolve_tool("ssh-add", search_path=env.get("PATH")), "-l"),
                 env={"SSH_AUTH_SOCK": agent_socket, "PATH": env.get("PATH", "")},
                 capture_output=True,
                 text=True,

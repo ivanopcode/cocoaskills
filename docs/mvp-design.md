@@ -789,10 +789,13 @@ Command collision policy:
 <project>/.agents/env.ps1
 ```
 
-`env.sh` optionally adds project `.agents/bin` to `PATH` for an interactive
+`env.sh` optionally appends project `.agents/bin` to `PATH` for an interactive
 POSIX shell.
 
-`env.ps1` optionally adds project `.agents\bin` to `PATH` for PowerShell.
+`env.ps1` optionally appends project `.agents\bin` to `PATH` for PowerShell.
+Commands already available on `PATH` take precedence over project commands,
+so activating a project does not shadow existing binaries. Run `csk install`
+to regenerate existing project env files with this ordering.
 
 Agent-facing execution does not require either file to be sourced. Installed
 skills resolve the nearest project shim explicitly, with a `.cmd` suffix on
@@ -818,8 +821,9 @@ remains available.
 
 Since v0.6.0, `csk shell-init` also activates the user-wide global scope from
 `~/.cocoaskills/global/env.sh` or `env.ps1` before project-local activation.
-This makes global commands available outside project checkouts while preserving
-project-local shadowing inside managed projects.
+This makes global commands available outside project checkouts. During shell
+activation, existing commands, including global commands, take precedence over
+project commands appended to `PATH`.
 
 `csk bootstrap` states that no shell profile changes are required and may point
 to the optional cached hook for human convenience. `csk install` reports an

@@ -16,7 +16,10 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+
 from typing import TYPE_CHECKING, Any, Final, Protocol
+
+from .tool_paths import resolve_tool
 
 from . import (
     adapters,
@@ -1113,23 +1116,7 @@ def _freeze_build_providers(
 
 
 def _active_build_command_names(node: closure.ClosureNode) -> set[str]:
-    exported = {
-        command.name
-        for command in node.spec.commands.values()
-        if command.type == "build"
-    }
-    if any(edge.mode == "full" for edge in node.edges):
-        return exported
-    active: set[str] = set()
-    for edge in node.edges:
-        if edge.mode != "runtime":
-            continue
-        active.update(
-            command
-            for command in (edge.commands or tuple(exported))
-            if command in exported
-        )
-    return active
+    return node.active_build_commands()
 
 
 def _active_local_build_command_names(node: closure.ClosureNode) -> set[str]:
@@ -1152,10 +1139,10 @@ def _active_external_build_command_names(node: closure.ClosureNode) -> set[str]:
 def _operator_program(
     name: str, operator_search_path: build_toolchain.OperatorSearchPath
 ) -> Path:
-    found = shutil.which(name, path=os.pathsep.join(operator_search_path.entries))
-    if found is None:
-        raise InstallError(f"operator-provided {name} is unavailable")
-    return Path(found).resolve(strict=True)
+    try:
+        return Path(resolve_tool(name, search_path=os.pathsep.join(operator_search_path.entries)))
+    except FileNotFoundError as exc:
+        raise InstallError(f"operator-provided {name} is unavailable") from exc
 
 
 def _external_git_tool(

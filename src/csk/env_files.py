@@ -20,10 +20,14 @@ def write_env_files(project_root: Path) -> None:
         "else\n"
         "  _csk_env_path=\"$0\"\n"
         "fi\n"
-        "CSK_PROJECT_ROOT=\"$(cd \"$(dirname \"$_csk_env_path\")/..\" && pwd)\"\n"
-        "unset _csk_env_path\n"
+        "case \"$_csk_env_path\" in\n"
+        "  */*) _csk_env_dir=${_csk_env_path%/*} ;;\n"
+        "  *) _csk_env_dir=. ;;\n"
+        "esac\n"
+        "CSK_PROJECT_ROOT=\"$(cd \"$_csk_env_dir/..\" && pwd)\"\n"
+        "unset _csk_env_path _csk_env_dir\n"
         "export CSK_PROJECT_ROOT\n"
-        "export PATH=\"$CSK_PROJECT_ROOT/.agents/bin:$PATH\"\n",
+        "export PATH=\"${PATH:+$PATH:}$CSK_PROJECT_ROOT/.agents/bin\"\n",
         encoding="utf-8",
     )
     env_ps1.write_text(
@@ -31,7 +35,11 @@ def write_env_files(project_root: Path) -> None:
         "$CskAgentsDir = Split-Path -Parent $MyInvocation.MyCommand.Path\n"
         "$CskProjectRoot = Split-Path -Parent $CskAgentsDir\n"
         "$env:CSK_PROJECT_ROOT = $CskProjectRoot\n"
-        "$env:PATH = \"$CskProjectRoot\\.agents\\bin;$env:PATH\"\n",
+        "if ($env:PATH) {\n"
+        "  $env:PATH = \"$env:PATH;$CskProjectRoot\\.agents\\bin\"\n"
+        "} else {\n"
+        "  $env:PATH = \"$CskProjectRoot\\.agents\\bin\"\n"
+        "}\n",
         encoding="utf-8",
     )
 

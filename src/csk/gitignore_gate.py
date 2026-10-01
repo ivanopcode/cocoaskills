@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from .tool_paths import resolve_tool
+
 
 class GitignoreError(Exception):
     pass
@@ -13,7 +15,7 @@ def missing_entries(project_root: Path, entries: list[str]) -> list[str]:
     for entry in entries:
         probe = entry.rstrip("/") + "/.csk-probe"
         proc = subprocess.run(
-            ["git", "-C", str(project_root), "check-ignore", "-q", probe],
+            [resolve_tool("git"), "-C", str(project_root), "check-ignore", "-q", probe],
             text=True,
             capture_output=True,
         )

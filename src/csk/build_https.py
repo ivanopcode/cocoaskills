@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from .build_ssh import default_scope, scope_matches, validate_scope
+from .tool_paths import resolve_tool
 
 __all__ = [
     "BuildHTTPSError",
@@ -215,7 +216,7 @@ def _run_credential(
     payload = "".join(f"{key}={value}\n" for key, value in request.items()) + "\n"
     try:
         completed = subprocess.run(
-            (git or "git", "credential", action),
+            (resolve_tool("git", executable=git), "credential", action),
             input=payload.encode("utf-8"),
             capture_output=True,
             timeout=_GIT_TIMEOUT,
