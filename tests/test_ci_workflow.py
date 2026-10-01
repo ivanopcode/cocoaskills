@@ -364,6 +364,33 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
         assert "timeout-minutes: 20" in job
 
 
+def test_external_build_repeat_is_manual_windows_only() -> None:
+    workflow = _workflow()
+    jobs = yaml.safe_load(workflow)["jobs"]
+    job = jobs["windows_external_build_repeat"]
+    assert job["if"] == "github.event_name == 'workflow_dispatch'"
+    assert job["runs-on"] == "windows-latest"
+    assert job["timeout-minutes"] == 240
+    go_setup = next(step for step in job["steps"] if step.get("uses") == "actions/setup-go@v7")
+    assert go_setup["with"] == {"go-version": "1.25.5", "cache": False}
+    run_steps = [step for step in job["steps"] if "run" in step]
+    repeat = next(step for step in run_steps if step["name"] == "Repeat cold external build installs")
+    assert repeat["env"] == {"CSK_EXTERNAL_BUILD_REPEAT": "1"}
+    assert shlex.split(repeat["run"]) == [
+        "python", "-m", "pytest", "-v", "tests/test_external_build_repeat.py",
+        "-m", "csk_external_build_repeat", "-o", "junit_family=legacy",
+        "--junitxml=external-build-repeat-results.xml",
+    ]
+    upload = next(step for step in job["steps"] if step.get("uses") == "actions/upload-artifact@v7")
+    assert upload["if"] == "always()"
+    assert upload["with"]["path"] == "external-build-repeat-results.xml"
+    assert upload["with"]["if-no-files-found"] == "error"
+    # Includes workflow-level env inherited by every ordinary PR/push job.
+    repeat_job = _job(workflow, "windows_external_build_repeat")
+    assert "CSK_EXTERNAL_BUILD_REPEAT" not in workflow.replace(repeat_job, "", 1)
+    assert repeat_job.count("CSK_EXTERNAL_BUILD_REPEAT") == 1
+
+
 def test_fast_selections_are_exact_checked_in_node_inventories() -> None:
     workflow = _workflow()
     protocol = _nodeids("protocol-fast-nodeids.txt")

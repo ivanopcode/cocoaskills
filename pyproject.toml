@@ -77,6 +77,7 @@ version_file = "src/csk/_version.py"
 testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
+  "csk_external_build_repeat: opt-in cold external build installs (manual Windows CI)",
   "csk_e2e_native: real compiled-command E2E coverage on macOS and Windows",
   "csk_e2e_ubuntu: portable and source-aware fail-closed E2E coverage on Ubuntu",
   "posix_traversal_independent: tests that run without descriptor-relative traversal",
