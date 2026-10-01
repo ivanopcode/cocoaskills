@@ -74,6 +74,72 @@ def source_command(shell: str, hook_path: Path) -> str:
     raise ValueError(f"Unsupported shell: {shell}")
 
 
+def _posix_approval_hook() -> str:
+    return r'''
+_csk_realpath() {
+  local file="$1" parent target
+  local _CSK_CHECKING_ENV=1
+  while [ -L "$file" ]; do
+    command -v readlink >/dev/null 2>&1 || return 1
+    target="$(readlink "$file")" || return 1
+    case "$target" in
+      /*) file="$target" ;;
+      *) file="${file%/*}/$target" ;;
+    esac
+  done
+  parent="${file%/*}"
+  [ "$parent" != "$file" ] || parent="."
+  [ -n "$parent" ] || parent="/"
+  parent="$(cd -P -- "$parent" && pwd -P)" || return 1
+  file="${parent%/}/${file##*/}"
+  printf '%s\n' "$file"
+}
+
+_csk_env_approved() {
+  local file="$1" result line key seen
+  local store="$HOME/.cocoaskills/shell/approved"
+  _csk_checked_path="$(_csk_realpath "$file" 2>/dev/null)" || _csk_checked_path="$file"
+  _csk_source_path="$_csk_checked_path"
+  # Compare Python's native Windows path while sourcing the POSIX spelling
+  # so generated env.sh can use BASH_SOURCE unchanged in Git Bash.
+  if command -v cygpath >/dev/null 2>&1; then
+    _csk_checked_path="$(cygpath -wa "$_csk_source_path")" || return 1
+  fi
+  _csk_checked_digest="unavailable"
+  if command -v shasum >/dev/null 2>&1; then
+    result="$(shasum -a 256 < "$_csk_source_path" 2>/dev/null)" && _csk_checked_digest="${result%% *}"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    result="$(sha256sum < "$_csk_source_path" 2>/dev/null)" && _csk_checked_digest="${result%% *}"
+  elif command -v openssl >/dev/null 2>&1; then
+    result="$(openssl dgst -sha256 < "$_csk_source_path" 2>/dev/null)" && _csk_checked_digest="${result##* }"
+  fi
+  case "$_csk_checked_digest" in
+    *[!0-9a-f]*|'') _csk_checked_digest="unavailable" ;;
+  esac
+  if [ "${#_csk_checked_digest}" = 64 ] && [ -r "$store" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      if [ "$line" = "$_csk_checked_digest  $_csk_checked_path" ]; then
+        return 0
+      fi
+    done < "$store"
+  fi
+  key="$_csk_checked_digest  $_csk_checked_path"
+  seen=0
+  while IFS= read -r line; do
+    [ "$line" != "$key" ] || seen=1
+  done <<EOF
+${_CSK_SKIPPED_ENVS:-}
+EOF
+  if [ "$seen" = 0 ]; then
+    _CSK_SKIPPED_ENVS="${_CSK_SKIPPED_ENVS:+$_CSK_SKIPPED_ENVS
+}$key"
+    printf 'csk: skipped %s: not approved (review it, then run: csk shell approve %s)\n' "$_csk_checked_path" "$_csk_checked_path" >&2
+  fi
+  return 1
+}
+'''
+
+
 def _posix_hook(*, include_global: bool) -> str:
     global_part = r'''
 _csk_global_env_file() {
@@ -96,16 +162,20 @@ _csk_global_env_file() {
 _csk_source_global_env() {
   local global_env
   global_env="$(_csk_global_env_file 2>/dev/null || true)"
-  if [ -n "$global_env" ] && [ "$CSK_ACTIVE_GLOBAL_ENV" != "$global_env" ]; then
-    . "$global_env"
-    CSK_ACTIVE_GLOBAL_ENV="$global_env"
-    export CSK_ACTIVE_GLOBAL_ENV
+  if [ -n "$global_env" ] && _csk_env_approved "$global_env"; then
+    global_env="$_csk_checked_path"
+    if [ "${_CSK_ACTIVE_GLOBAL_LINE:-}" != "$_csk_checked_digest  $global_env" ]; then
+      CSK_ACTIVE_GLOBAL_ENV="$global_env"
+      _CSK_ACTIVE_GLOBAL_LINE="$_csk_checked_digest  $global_env"
+      export CSK_ACTIVE_GLOBAL_ENV
+      . "$_csk_source_path"
+    fi
   fi
 }
 ''' if include_global else ""
     source_global = "  _csk_source_global_env\n" if include_global else ""
     return f'''# CocoaSkill shell hook
-{global_part}
+{_posix_approval_hook()}{global_part}
 _csk_find_env() {{
   local dir="${{PWD:-}}"
   case "$dir" in
@@ -129,7 +199,8 @@ _csk_find_env() {{
 }}
 
 _csk_auto_env() {{
-  local env_file
+  local env_file approved=0
+  [ "${{_CSK_CHECKING_ENV:-0}}" != 1 ] || return 0
 {source_global}  if [ "${{CSK_AUTO_ENV:-1}}" = "0" ]; then
     if [ -n "$CSK_ACTIVE_ENV" ]; then
       PATH="$CSK_OLD_PATH"
@@ -140,21 +211,26 @@ _csk_auto_env() {{
     return 0
   fi
   env_file="$(_csk_find_env 2>/dev/null || true)"
-  if [ -n "$CSK_ACTIVE_ENV" ] && [ "$CSK_ACTIVE_ENV" != "$env_file" ]; then
+  if [ -n "$env_file" ] && _csk_env_approved "$env_file"; then
+    env_file="$_csk_checked_path"
+    approved=1
+  fi
+  if [ -n "$CSK_ACTIVE_ENV" ] && {{ [ "$CSK_ACTIVE_ENV" != "$env_file" ] || [ "$approved" = 0 ] || [ "${{_CSK_ACTIVE_ENV_LINE:-}}" != "$_csk_checked_digest  $env_file" ]; }}; then
     PATH="$CSK_OLD_PATH"
     export PATH
     unset CSK_ACTIVE_ENV
     unset CSK_OLD_PATH
   fi
-  if [ -n "$env_file" ] && [ "$CSK_ACTIVE_ENV" != "$env_file" ]; then
+  if [ "$approved" = 1 ] && [ "$CSK_ACTIVE_ENV" != "$env_file" ]; then
     CSK_OLD_PATH="$PATH"
     export CSK_OLD_PATH
     # Mark the environment active before sourcing it. zsh runs chpwd hooks for
     # a cd inside env.sh command substitutions, so setting this afterwards can
     # recursively source the same file.
     CSK_ACTIVE_ENV="$env_file"
+    _CSK_ACTIVE_ENV_LINE="$_csk_checked_digest  $env_file"
     export CSK_ACTIVE_ENV
-    . "$env_file"
+    . "$_csk_source_path"
   fi
 }}
 

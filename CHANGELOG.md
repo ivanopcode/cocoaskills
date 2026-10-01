@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Исправлено
 
 - `csk install --dry-run` в Windows больше не сообщает `corrupt` для допустимого локального build-репозитория при отсутствующем кэше внешних сборок. Отсутствующий путь считается промахом кэша, и dry-run сообщает `would-preflight-and-build`, как реальная установка.
+- Bash и zsh теперь загружают проектный и глобальный env-файл только при совпадении SHA256 и realpath с `~/.cocoaskills/shell/approved`. Изменённые и неизвестные файлы пропускаются с подсказкой `csk shell approve PATH`; команды `csk shell revoke PATH` и `csk shell approvals` управляют разрешениями. csk автоматически записывает digest создаваемых `env.sh` и `env.ps1`. Для обновления hook выполните `csk shell-init --install`, `csk install` или `csk global install`; ранее созданные env-файлы получат разрешение при следующей записи csk.
+- Глобальная установка в Windows в режиме auto использует copy, если между source и adapter нельзя построить relative path. Проверка устройства и поддержки symlink больше не допускает ошибку при размещении каталогов на разных drive roots.
 
 ## [0.18.3] - 2026-09-29
 
