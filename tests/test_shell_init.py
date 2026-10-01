@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from csk import env_files, shell_init
+from csk import env_files, shell_init, cli
 
 # BUG-260923-321yai: these timeouts only turn a hung hook into a failure; they
 # are not a performance budget. A cold Git-bash start on a loaded
@@ -236,6 +236,7 @@ def test_zsh_hook_does_not_reenter_while_sourcing_project_env(tmp_path: Path) ->
         "_csk_auto_env\n",
         encoding="utf-8",
     )
+    assert cli.main(["shell", "approve", str(agents_dir / "env.sh"), "--yes"]) == 0
     hook_path = tmp_path / "hook.sh"
     hook_path.write_text(shell_init.shell_init("zsh", include_global=False), encoding="utf-8")
 

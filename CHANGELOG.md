@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Исправлено
+
+- Bash и zsh теперь загружают проектный и глобальный env-файл только при совпадении SHA256 и realpath с `~/.cocoaskills/shell/approved`. Изменённые и неизвестные файлы пропускаются с подсказкой `csk shell approve PATH`; команды `csk shell revoke PATH` и `csk shell approvals` управляют разрешениями. csk автоматически записывает digest создаваемых `env.sh` и `env.ps1`. Для обновления hook выполните `csk shell-init --install`, `csk install` или `csk global install`; ранее созданные env-файлы получат разрешение при следующей записи csk.
+
 ## [0.18.3] - 2026-09-29
 
 ### Исправлено
