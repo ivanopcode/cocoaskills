@@ -603,7 +603,7 @@ def test_namespaced_username_separates_manager_entries() -> None:
 
 
 def test_credential_reads_go_through_git_on_every_platform(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     """No platform branch: one mechanism, whichever helper the operator has."""
 
@@ -618,12 +618,15 @@ def test_credential_reads_go_through_git_on_every_platform(
         return _Completed()
 
     monkeypatch.setattr(build_https.subprocess, "run", fake_run)
+    executable = tmp_path / "git.exe"
+    executable.write_bytes(b"fixture")
+    executable.chmod(0o755)
     material = build_https.read_host_credentials(
-        "gitlab.example.com", "/usr/bin/git", "/home/operator"
+        "gitlab.example.com", str(executable), str(tmp_path)
     )
     assert material == ("oauth2", "s3cret")
     argv, payload = calls[0]
-    assert argv == ("/usr/bin/git", "credential", "fill")
+    assert argv == (str(executable.resolve()), "credential", "fill")
     assert "host=gitlab.example.com" in payload
 
 

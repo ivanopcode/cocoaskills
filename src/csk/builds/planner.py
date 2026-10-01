@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 from typing import Any, Protocol
 
 from .. import skillspec
+from ..command_names import require_unreserved_command_name
 from . import cache, metadata, source, toolchain
 
 if TYPE_CHECKING:
@@ -301,7 +302,7 @@ def detect_command_collisions(
     *,
     occupied: Mapping[str, str] | None = None,
 ) -> None:
-    """Reject build/build and script/build collisions before any Go probe."""
+    """Reject reserved exports and command collisions before any Go probe."""
 
     owners = dict(occupied or {})
     for provider in providers:
@@ -309,6 +310,7 @@ def detect_command_collisions(
             provider.commands,
             key=lambda item: item.name.encode("utf-8"),
         ):
+            require_unreserved_command_name(command.name)
             previous = owners.get(command.name)
             if previous is not None:
                 raise BuildPlanningError(
@@ -353,6 +355,9 @@ def plan_builds(
     """
 
     active = tuple(provider for provider in providers if provider.commands)
+    for provider in active:
+        for command in provider.commands:
+            require_unreserved_command_name(command.name)
     if not active and generation_probe is None:
         return ()
     if max_generation_attempts < 1:

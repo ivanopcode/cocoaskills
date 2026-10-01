@@ -44,6 +44,7 @@ from .. import (
     hashing,
 )
 from .. import identifiers, install_marker, locale, locking, manifest, shims
+from ..command_names import require_unreserved_command_name
 from ..source_identity import canonical_source_identity
 from ..build_repository import (
     GO_REPOSITORY_V1_DRIVER,
@@ -1401,12 +1402,18 @@ def run_schema2_command_gates(
 
     Capabilities are mandatory at skill-spec parse time
     (``load_member_spec`` refuses schema-3 members without them);
-    collisions, system-command readiness, skill command
+    reserved names, collisions, system-command readiness, skill command
     dependencies, the script execution policy and build-root
     script placement are refused here, before any staging. Build
     collisions join once the build providers exist.
     """
 
+    for member in members:
+        spec = specs_map[member.name]
+        for command in sorted(
+            set(active_script_commands(spec)) | set(active_build_commands(spec))
+        ):
+            require_unreserved_command_name(command)
     check_schema2_command_collisions(members, specs_map)
     check_schema2_system_commands(members, specs_map)
     check_schema2_skill_dependencies(members, specs_map)
