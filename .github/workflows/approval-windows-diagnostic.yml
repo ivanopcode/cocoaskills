@@ -1,0 +1,43 @@
+name: Approval Windows diagnostic
+on: pull_request
+jobs:
+  lifecycle:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        source: ['36b80945b0b851f41fb623211ce39a39e0b88bb0']
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: diagnostic
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.source }}
+          path: source
+      - uses: actions/checkout@v7
+        with:
+          repository: relux-works/curator-spec
+          ref: 0ed5c691e9208eea52f21db2fc05e226ce3516fd
+          path: protocol-spec
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.5'
+          cache: false
+      - run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+          git config --global core.autocrlf false
+          git config --global core.symlinks false
+          git -C source reset --hard HEAD
+          Move-Item -LiteralPath "${{ github.workspace }}/protocol-spec" -Destination "${{ runner.temp }}/protocol-spec"
+      - run: python -m pip install "./source[dev]"
+      - run: python ../diagnostic/.github/scripts/approval-windows-diagnostic.py -vv --showlocals -rP tests/test_shell_approvals.py::test_global_upgrade_cross_drive_auto_approves_final_env_paths tests/test_protocol_conformance.py::test_rc6_repair_binding_detects_omitted_audit_gate --basetemp="${{ runner.temp }}/csk-diagnostic" -o cache_dir="${{ runner.temp }}/csk-diagnostic-cache"
+        working-directory: source
+        env:
+          CURATOR_CONFORMANCE_ROOT: ${{ runner.temp }}/protocol-spec/conformance/v1
