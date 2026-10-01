@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Исправлено
 
 - `csk install --dry-run` в Windows больше не сообщает `corrupt` для допустимого локального build-репозитория при отсутствующем кэше внешних сборок. Отсутствующий путь считается промахом кэша, и dry-run сообщает `would-preflight-and-build`, как реальная установка.
+- `csk audit --publish` читает токен из `CSK_REGISTRY_TOKEN` или `--token-file PATH`. Файл должен быть обычным, размером не более 64 KiB и на POSIX не иметь прав чтения для группы и остальных пользователей. Явно указанный файл имеет приоритет; непригодный файл приводит к отказу без перехода к переменной окружения.
+- Флаг `--token` отклоняется с подсказкой без вывода его значения. Для выбора источника HTTPS-учётных данных в `csk config build-https add` используется `--token-source` вместо `--token`. Скрипты с `--token git-credentials` или `--token keyring` нужно перевести на `--token-source git-credentials` или `--token-source keyring`.
+- Дочерние процессы аудита `codex` и `command` получают только разрешённые переменные окружения. Произвольные переменные, токены, ключи, `SSH_AUTH_SOCK` и `GIT_*` не передаются, включая записи `command.env`.
 
 ## [0.18.3] - 2026-09-29
 

@@ -38,6 +38,7 @@ from .audit import trust as audit_trust
 from .audit.backends import AuditBackendError
 from .audit.model import Decision
 from .locking import GlobalLock, LockError
+from .registry_token import registry_token
 from .sources import diagnostics as source_diagnostics
 from .sources import errors as source_errors
 from .sources import lock as source_lock
@@ -49,6 +50,18 @@ EXIT_OK = 0
 EXIT_PARTIAL_FAIL = 1
 EXIT_CONFIG = 2
 EXIT_LOCK = 3
+
+
+class _RefuseTokenAction(argparse.Action):
+    def __call__(
+        self, parser: argparse.ArgumentParser, namespace: argparse.Namespace,
+        values: object, option_string: str | None = None,
+    ) -> None:
+        message = "--token is refused; use CSK_REGISTRY_TOKEN or --token-file for registry authorization"
+        if parser.prog.endswith("config build-https add"):
+            message = ("--token is refused; select an HTTPS credential source with --token-source or --token-env; "
+                       "for audit --publish use CSK_REGISTRY_TOKEN or --token-file")
+        parser.error(message)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -345,15 +358,15 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
         epilog=(
             "Scopes use the same canonical-identity grammar as build-ssh.\n"
             "The config stores the token SOURCE, never a token:\n"
-            "  --token git-credentials  reuse the Git HTTPS entry your OS\n"
+            "  --token-source git-credentials  reuse the Git HTTPS entry your OS\n"
             "                           secret store already holds for the host\n"
-            "  --token keyring          use the token 'build-https login' saved\n"
+            "  --token-source keyring          use the token 'build-https login' saved\n"
             "  --token-env NAME         read the token from an environment variable\n\n"
             "CSK_BUILD_HTTPS_TOKEN overrides every scope for one run; it is\n"
             "sent to every HTTPS build repository host in the closure unless\n"
             "CSK_BUILD_HTTPS_HOST pins it to one host.\n\n"
             "Examples:\n"
-            "  csk config build-https add gitlab.example.com/group --token git-credentials\n"
+            "  csk config build-https add gitlab.example.com/group --token-source git-credentials\n"
             "  csk config build-https login gitlab.example.com/group\n"
             "  csk config build-https list"
         ),
@@ -367,6 +380,10 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
     build_https_add.add_argument("scope")
     build_https_add.add_argument(
         "--token",
+        action=_RefuseTokenAction, nargs="?", help=argparse.SUPPRESS,
+    )
+    build_https_add.add_argument(
+        "--token-source",
         choices=list(build_https.TOKEN_SOURCES),
         default=None,
         help="token source: git-credentials or keyring",
@@ -747,7 +764,11 @@ def _add_audit(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     parser.add_argument("--registry", help="registry base URL for --publish")
     parser.add_argument(
         "--token",
-        help="auditor token for --publish (or set CSK_REGISTRY_TOKEN)",
+        action=_RefuseTokenAction, nargs="?", help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--token-file", metavar="PATH",
+        help="read the registry token from a regular UTF-8 file, private on POSIX (or set CSK_REGISTRY_TOKEN)",
     )
 
 
@@ -1301,9 +1322,9 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
         print(f"Stored a token for {args.scope} through your Git credential helper")
         return EXIT_OK
     # add
-    if (args.token is None) == (args.token_env is None):
+    if (args.token_source is None) == (args.token_env is None):
         print(
-            "build-https add requires exactly one of --token or --token-env",
+            "build-https add requires exactly one of --token-source or --token-env",
             file=sys.stderr,
         )
         return EXIT_CONFIG
@@ -1311,7 +1332,7 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
         build_ssh.validate_scope(args.scope)
         rule = build_https.BuildHTTPSRule(
             scope=args.scope,
-            token=args.token,
+            token=args.token_source,
             token_env=args.token_env,
             username=args.username or "token",
         )
@@ -1595,13 +1616,9 @@ def _cmd_audit(args: argparse.Namespace) -> int:
 
 
 def _cmd_audit_publish(args: argparse.Namespace) -> int:
-    import os
-
     if not args.registry:
         raise ValueError("--publish requires --registry")
-    token = args.token or os.environ.get("CSK_REGISTRY_TOKEN")
-    if not token:
-        raise ValueError("--publish requires --token or the CSK_REGISTRY_TOKEN environment variable")
+    token = registry_token(args.token_file)
     try:
         record_json = Path(args.publish).read_bytes()
     except OSError as exc:

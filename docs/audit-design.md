@@ -328,6 +328,18 @@ cloud) -> AuditRequest` scrubs when `cloud` is true.
 
 Built-in backends:
 
+The `command` and `codex` child environment is built by
+`csk.audit.backends.environment.backend_environment`. `BASE_ENV_ALLOWLIST`
+contains `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `TMPDIR`, `TEMP`, and `TMP`;
+`LC_*` locale variables also pass. On Windows, `WINDOWS_ENV_ALLOWLIST` adds
+`SYSTEMROOT` and `COMSPEC` (names are matched case-insensitively there).
+`CODEX_REQUIRED_ENV` adds `CODEX_HOME` for the optional Codex configuration/state
+directory override. `COMMAND_REQUIRED_ENV` is empty. No other variables pass.
+In particular, names ending in `*_TOKEN` or `*_KEY`, `SSH_AUTH_SOCK`, and `GIT_*`
+are excluded even if they match `LC_*`. `command.env` overrides allowed values
+only; it cannot expand the allowlist. Command adapters must obtain credentials
+through their own approved storage rather than inherited token variables.
+
 - `command` (generic): writes the `AuditRequest` as JSON to a configured
   command's stdin and reads `Finding[]` JSON from stdout. Any future agent
   system is wrapped here. `cloud` is declared in config.

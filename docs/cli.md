@@ -700,7 +700,7 @@ csk hybrid status
 ```bash
 usage: csk audit [-h] [--all] [--global] [--json] [--allow CONTENT_SHA256]
                  [--reason REASON] [--publish RECORD] [--registry REGISTRY]
-                 [--token TOKEN]
+                 [--token-file PATH]
                  [target]
 ```
 
@@ -715,7 +715,9 @@ usage: csk audit [-h] [--all] [--global] [--json] [--allow CONTENT_SHA256]
 * `--reason REASON`: обязательное текстовое обоснование применения флага `--allow`.
 * `--publish RECORD`: отправляет подписанный JSON-файл отчета в реестр аудита.
 * `--registry REGISTRY`: URL реестра аудита для публикации отчета.
-* `--token TOKEN`: токен аудитора для авторизации в реестре (переменная: `CSK_REGISTRY_TOKEN`).
+* `--token-file PATH`: обычный UTF-8 файл с токеном реестра размером не более 64 KiB; размер проверяется по открытому descriptor до чтения. На POSIX чтение для группы и остальных пользователей запрещено (например, права `0600`; `0620` также допустимы, поскольку запись для группы не даёт права чтения). Пробелы и перевод строки по краям удаляются. Явно указанный файл имеет приоритет перед `CSK_REGISTRY_TOKEN`; непригодный или пустой файл приводит к отказу без перехода к переменной окружения.
+* `CSK_REGISTRY_TOKEN`: источник токена реестра, когда `--token-file` не указан.
+* `--token`: отклоняется с подсказкой использовать `CSK_REGISTRY_TOKEN` или `--token-file`; значение не выводится.
 
 **Пример использования:**
 
@@ -917,7 +919,7 @@ usage: csk config build-https [-h] {add,login,list,remove} ...
 
 ```bash
 # Использовать существующие HTTPS-креды Git для хоста
-csk config build-https add gitlab.example.com/portals/infra --token git-credentials
+csk config build-https add gitlab.example.com/portals/infra --token-source git-credentials
 
 # Сохранить personal access token через credential helper (скрытый ввод)
 csk config build-https login gitlab.example.com/vendor
@@ -939,7 +941,7 @@ csk config build-https remove gitlab.example.com/vendor
 **Синопсис:**
 
 ```bash
-usage: csk config build-https add [-h] [--token {git-credentials,keyring}]
+usage: csk config build-https add [-h] [--token-source {git-credentials,keyring}]
                                   [--token-env NAME] [--username NAME]
                                   scope
 ```
@@ -948,11 +950,11 @@ usage: csk config build-https add [-h] [--token {git-credentials,keyring}]
 
 * `scope`: префикс канонической идентичности, например `gitlab.example.com/group`.
 * `-h`, `--help`: выводит краткое справочное сообщение.
-* `--token {git-credentials,keyring}`: источник токена. `git-credentials` читает существующую HTTPS-запись оператора для хоста; `keyring` читает токен, сохраненный командой `login`.
+* `--token-source {git-credentials,keyring}`: источник токена. `git-credentials` читает существующую HTTPS-запись оператора для хоста; `keyring` читает токен, сохраненный командой `login`.
 * `--token-env NAME`: имя переменной окружения, из которой токен читается на входе в процесс.
 * `--username NAME`: имя пользователя HTTPS (по умолчанию `token`).
 
-Требуется ровно один из флагов `--token` или `--token-env`. Литеральный токен не принимается ни одним флагом.
+Требуется ровно один из флагов `--token-source` или `--token-env`. Литеральный токен не принимается ни одним флагом. Старый `--token` отклоняется без вывода его значения.
 
 ### csk config build-https login
 

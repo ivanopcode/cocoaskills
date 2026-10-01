@@ -153,7 +153,7 @@ csk config build-ssh add gitlab.example.com/portals/infra \
 Приватный репозиторий сборки работает и по SSH, и по HTTPS. Для HTTPS ничего заводить не нужно, если вы уже клонируете по HTTPS: `csk` предложит переиспользовать ваши собственные креды Git при первой установке за один Enter. Для неинтерактивного случая выполните команду:
 
 ```bash
-csk config build-https add gitlab.example.com/portals/infra --token git-credentials
+csk config build-https add gitlab.example.com/portals/infra --token-source git-credentials
 ```
 
 В CI задайте переменную `CSK_BUILD_HTTPS_TOKEN` (и `CSK_BUILD_HTTPS_HOST`, если репозитории сборки живут на разных хостах).
@@ -340,6 +340,9 @@ csk shell-init                      # Генерирует или устанав
   `.github/workflows/ci.yml`; build state is under `<csk-home>/builds/go-v1/`.
 - `mypy` performs strict source type checking. Run `uv run mypy`; it writes no
   persistent artifact unless output is redirected to `.temp/`.
+- `uv run python tests/audit_secrets_mutants.py` runs the audit security
+  narrowing mutants in disposable copies and names each failing regression.
+  Save its output under `.temp/<TASK-ID>/`.
 - `PyYAML` используется только в dev extra как независимый oracle для
   дифференциальных тестов frontmatter. Запускайте
   `uv run pytest -q tests/test_frontmatter_differential.py`; постоянные

@@ -812,6 +812,7 @@ def test_config_show_missing_reports_does_not_exist(monkeypatch, tmp_path, capsy
 @pytest.mark.parametrize("err", ERRNO_CASES)
 def test_audit_publish_read_refuses(monkeypatch, tmp_path, skills_root, csk_home, capsys, err):
     _configured(tmp_path, skills_root, csk_home, monkeypatch)
+    monkeypatch.setenv("CSK_REGISTRY_TOKEN", "synthetic-token")
     record = tmp_path / "record.json"
     record.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
     with fault_at(
@@ -819,8 +820,7 @@ def test_audit_publish_read_refuses(monkeypatch, tmp_path, skills_root, csk_home
         target=record, err=err,
     ) as firings:
         code = cli.main(
-            ["audit", "--publish", str(record), "--registry", "https://r.example",
-             "--token", "t0ken"]
+            ["audit", "--publish", str(record), "--registry", "https://r.example"]
         )
     assert firings == [err]
     assert code == cli.EXIT_CONFIG
@@ -831,9 +831,10 @@ def test_audit_publish_missing_is_structured_refusal(
     monkeypatch, tmp_path, skills_root, csk_home, capsys
 ):
     _configured(tmp_path, skills_root, csk_home, monkeypatch)
+    monkeypatch.setenv("CSK_REGISTRY_TOKEN", "synthetic-token")
     record = tmp_path / "record.json"
     code = cli.main(
-        ["audit", "--publish", str(record), "--registry", "https://r.example", "--token", "t0ken"]
+        ["audit", "--publish", str(record), "--registry", "https://r.example"]
     )
     assert code == cli.EXIT_CONFIG
     assert "cannot read audit record file" in capsys.readouterr().err
