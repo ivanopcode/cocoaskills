@@ -210,7 +210,7 @@ agent-skill.json
 - Поле `hint` обязательно и объясняет оператору подключение сервера.
 - Необязательное поле `transport` документирует транспорт: `stdio` или `http`.
 - Поле `required_in` выбирает семантику проверки: `any` (по умолчанию) требует сервер хотя бы в одном целевом окружении агента, `all` требует сервер во всех окружениях.
-- Проверяемые конфигурации агентов: Claude Code (`<project>/.mcp.json`, `~/.claude.json`), Codex CLI (`~/.codex/config.toml`), Cursor (`<project>/.cursor/mcp.json`, `~/.cursor/mcp.json`), Gemini (`~/.gemini/settings.json`). Отсутствующие или некорректные файлы считаются отсутствием настроенных серверов.
+- Проверяемые конфигурации агентов: Claude Code (`<project>/.mcp.json`, `~/.claude.json`), Codex CLI (`<project>/.codex/config.toml`, `~/.codex/config.toml`), Cursor (`<project>/.cursor/mcp.json`, `~/.cursor/mcp.json`), Gemini (`<project>/.gemini/settings.json`, `~/.gemini/settings.json`), Windsurf (`~/.codeium/windsurf/mcp_config.json`), OpenCode (`<project>/opencode.json`, `<project>/opencode.jsonc`, `~/.config/opencode/opencode.json`, `~/.config/opencode/opencode.jsonc`). Отсутствующие или некорректные файлы считаются отсутствием настроенных серверов.
 - Неуспешная проверка останавливает установку и выводит подсказку. Маркеры установки фиксируют найденные места расположения серверов.
 
 ### Схема v6
