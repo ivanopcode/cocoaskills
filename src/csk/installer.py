@@ -3989,8 +3989,12 @@ def _runtime_path_entries(plan: SkillPlan, bin_dir: Path) -> tuple[Path, ...]:
     for dependency in _system_dependencies(plan):
         if not dependency.command:
             continue
+        command_path = Path(dependency.command)
         try:
-            executable = resolve_tool(dependency.command)
+            executable = resolve_tool(
+                command_path.name if command_path.is_absolute() else dependency.command,
+                executable=dependency.command if command_path.is_absolute() else None,
+            )
         except (FileNotFoundError, ValueError) as exc:
             raise InstallError(
                 f"Cannot resolve system command {dependency.command!r} "

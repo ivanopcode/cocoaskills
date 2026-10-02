@@ -41,7 +41,7 @@ def _link(link: Path, target: Path, *, directory: bool = False) -> None:
         raise
 
 
-def _plan(tmp_path: Path, declaration: str) -> installer.SkillPlan:
+def _plan(tmp_path: Path, declaration: str, command: str = "external-helper") -> installer.SkillPlan:
     root = tmp_path / "snapshot"
     scripts = root / "scripts"
     scripts.mkdir(parents=True)
@@ -54,7 +54,7 @@ def _plan(tmp_path: Path, declaration: str) -> installer.SkillPlan:
             "tool": {"type": "script", "unix_path": "scripts/tool", "win_path": "scripts/tool.cmd"},
         },
     }
-    dependency = {"type": "system", "command": "external-helper"}
+    dependency = {"type": "system", "command": command}
     if declaration == "legacy":
         data["commands"]["external-helper"] = dependency
     else:
@@ -73,8 +73,9 @@ def _plan(tmp_path: Path, declaration: str) -> installer.SkillPlan:
 @pytest.mark.parametrize("location", ["project", "global", "published", "custom"])
 @pytest.mark.parametrize("alias_kind", ["direct", "executable-chain", "directory-chain"])
 @pytest.mark.parametrize("has_trusted", [False, True], ids=["shim-only", "trusted-fallback"])
+@pytest.mark.parametrize("command_form", ["name", "absolute"])
 def test_launcher_manifest_dependency_cannot_capture_shim_path(
-    tmp_path, monkeypatch, declaration, location, alias_kind, has_trusted,
+    tmp_path, monkeypatch, declaration, location, alias_kind, has_trusted, command_form,
 ):
     """Drive real runtime materialization, including manifest parsing and shim writing."""
     roots = {
@@ -103,11 +104,12 @@ def test_launcher_manifest_dependency_cannot_capture_shim_path(
             _link(intermediate / shim_tool.name, shim_tool)
             _link(search / shim_tool.name, intermediate / shim_tool.name)
     monkeypatch.setenv("PATH", os.pathsep.join(map(str, [search, *([trusted.parent] if has_trusted else [])])))
-    plan = _plan(tmp_path, declaration)
+    command = str(search / shim_tool.name) if command_form == "absolute" else "external-helper"
+    plan = _plan(tmp_path, declaration, command)
     bin_dir = tmp_path / "project" / ".agents" / "bin"
     home = tmp_path / "home"
-    if not has_trusted:
-        with pytest.raises(installer.InstallError, match="outside project and csk shims"):
+    if not has_trusted or command_form == "absolute":
+        with pytest.raises(installer.InstallError, match="csk shims"):
             installer.install_runtime_commands(home, bin_dir, plan)
         assert not bin_dir.exists(), "refusal must precede launcher publication"
         assert not (home / "runtime").exists()
@@ -120,6 +122,23 @@ def test_launcher_manifest_dependency_cannot_capture_shim_path(
     assert str(root) not in content
     assert str(search) not in content
     assert str(intermediate) not in content
+    proc = subprocess.run(
+        [str(launcher)], env={**os.environ, "PATH": os.defpath},
+        text=True, capture_output=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "system-ok"
+
+
+@pytest.mark.parametrize("declaration", ["explicit", "legacy"])
+def test_launcher_admits_absolute_system_dependency(tmp_path, monkeypatch, declaration):
+    tool = _tool(tmp_path / "trusted tools")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    plan = _plan(tmp_path, declaration, str(tool))
+    bin_dir = tmp_path / "bin"
+    assert installer.install_runtime_commands(tmp_path / "home", bin_dir, plan) == {"tool"}
+    launcher = bin_dir / ("tool.cmd" if os.name == "nt" else "tool")
+    assert str(tool.parent.resolve()) in launcher.read_text(encoding="utf-8")
     proc = subprocess.run(
         [str(launcher)], env={**os.environ, "PATH": os.defpath},
         text=True, capture_output=True, timeout=30,
