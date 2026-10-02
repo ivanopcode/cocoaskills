@@ -45,6 +45,7 @@ from .. import (
 )
 from .. import identifiers, install_marker, locale, locking, manifest, shims
 from ..command_names import require_unreserved_command_name
+from ..tool_paths import resolve_tool
 from ..source_identity import canonical_source_identity
 from ..build_repository import (
     GO_REPOSITORY_V1_DRIVER,
@@ -1092,29 +1093,7 @@ def stage_member_runtime(
         ) from exc
 
 
-def schema2_shim_path_entries(
-    spec: skillspec.SkillSpec, *, final_bin: Path
-) -> tuple[Path, ...]:
-    """Derive the launcher PATH entries for one member's shims.
-
-    Mirrors the legacy lane exactly: the final project bin dir
-    first (so a consumer script reaches provider commands by bare
-    name), then the running interpreter's directory, then the
-    resolved directory of every declared system dependency,
-    deduplicated by normalized spelling. Entries are absolute
-    final paths, so staged and live launchers carry identical
-    bytes.
-    """
-
-    candidates = [final_bin.absolute()]
-    if sys.executable:
-        candidates.append(Path(sys.executable).resolve().parent)
-    for dependency in spec.dependencies.values():
-        if dependency.type != "system" or not dependency.command:
-            continue
-        executable = shutil.which(dependency.command)
-        if executable:
-            candidates.append(Path(executable).resolve().parent)
+def _dedupe_schema2_path_candidates(candidates: list[Path]) -> tuple[Path, ...]:
     entries: list[Path] = []
     seen: set[str] = set()
     for candidate in candidates:
@@ -1124,6 +1103,61 @@ def schema2_shim_path_entries(
         seen.add(key)
         entries.append(candidate)
     return tuple(entries)
+
+
+def schema2_shim_path_entries(
+    spec: skillspec.SkillSpec, *, final_bin: Path
+) -> tuple[Path, ...]:
+    """Derive the manager-owned launcher PATH prefix for one member's shims.
+
+    Mirrors the legacy lane exactly: the final project bin dir
+    first (so a consumer script reaches provider commands by bare
+    name), then the running interpreter's directory. The prefix
+    never depends on manifest content. The spec parameter stays
+    so every publication site keeps one call shape. Entries are
+    absolute final paths, so staged and live launchers carry
+    identical bytes.
+    """
+
+    candidates = [final_bin.absolute()]
+    if sys.executable:
+        candidates.append(Path(sys.executable).resolve().parent)
+    return _dedupe_schema2_path_candidates(candidates)
+
+
+def schema2_shim_path_suffix(
+    spec: skillspec.SkillSpec, *, name: str
+) -> tuple[Path, ...]:
+    """Derive the launcher PATH suffix for one member's shims.
+
+    Each declared system dependency directory is resolved through
+    the manager's own resolver, which refuses shim directories
+    and symlink chains through them. Launchers append the suffix
+    after the inherited PATH, so it fills gaps for minimal-PATH
+    launches without outranking the caller. An unresolvable
+    dependency refuses the member instead of publishing a
+    launcher without its tool.
+    """
+
+    candidates: list[Path] = []
+    for dependency in spec.dependencies.values():
+        if dependency.type != "system" or not dependency.command:
+            continue
+        command_path = Path(dependency.command)
+        try:
+            executable = resolve_tool(
+                command_path.name if command_path.is_absolute() else dependency.command,
+                executable=dependency.command if command_path.is_absolute() else None,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            hint = f" Hint: {dependency.hint}" if dependency.hint else ""
+            raise SourceError(
+                CODE_MEMBER_MISSING,
+                f"Missing system command {dependency.command!r} for "
+                f"{name}: {exc}.{hint}",
+            ) from exc
+        candidates.append(Path(executable).parent)
+    return _dedupe_schema2_path_candidates(candidates)
 
 
 def schema2_script_target(
@@ -3063,6 +3097,7 @@ def stage_schema2_desired(
     final_bin = project_path / ".agents" / "bin"
     for name, staged in staged_members.items():
         entries = schema2_shim_path_entries(staged.spec, final_bin=final_bin)
+        suffix = schema2_shim_path_suffix(staged.spec, name=name)
         for command_name in active_script_commands(staged.spec):
             command = staged.spec.commands[command_name]
             target = schema2_script_target(
@@ -3070,7 +3105,7 @@ def stage_schema2_desired(
             )
             try:
                 staged_shim = shims.write_bin_shim(
-                    staged_bin, command_name, target, path_entries=entries
+                    staged_bin, command_name, target, path_entries=entries, path_suffix=suffix
                 )
             except shims.ShimError as exc:
                 raise SourceError(
@@ -3095,7 +3130,7 @@ def stage_schema2_desired(
                 )
             try:
                 staged_shim = shims.activate_build_command(
-                    staged_bin, activation, path_entries=entries
+                    staged_bin, activation, path_entries=entries, path_suffix=suffix
                 )
             except shims.ShimError as exc:
                 raise SourceError(

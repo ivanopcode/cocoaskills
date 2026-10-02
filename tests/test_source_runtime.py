@@ -406,11 +406,13 @@ def test_shim_runs_frozen_bytes_after_live_edit(
     entries = publish.schema2_shim_path_entries(
         consumer_spec, final_bin=project / ".agents" / "bin"
     )
+    suffix = publish.schema2_shim_path_suffix(consumer_spec, name="consumer")
     mismatch = shims.inspect_bin_shim(
         project / ".agents" / "bin",
         "consume",
         _expected_consumer_target(project, csk_home, runtime_roots=runtime_roots),
         path_entries=entries,
+        path_suffix=suffix,
     )
     assert mismatch is None, mismatch
 

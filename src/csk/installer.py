@@ -3391,6 +3391,7 @@ def _stage_materialization(
                     plan,
                     final_project_bin,
                 ),
+                path_suffix=_runtime_path_suffix(plan),
             )
             command_names.add(name)
         expected_commands.update(command_names)
@@ -3982,17 +3983,7 @@ def _system_dependencies(plan: SkillPlan) -> list[CommandSpec]:
     return legacy + explicit
 
 
-def _runtime_path_entries(plan: SkillPlan, bin_dir: Path) -> tuple[Path, ...]:
-    candidates = [bin_dir.absolute()]
-    if sys.executable:
-        candidates.append(Path(sys.executable).resolve().parent)
-    for dependency in _system_dependencies(plan):
-        if not dependency.command:
-            continue
-        executable = shutil.which(dependency.command)
-        if executable:
-            candidates.append(Path(executable).resolve().parent)
-
+def _dedupe_path_candidates(candidates: list[Path]) -> tuple[Path, ...]:
     entries: list[Path] = []
     seen: set[str] = set()
     for candidate in candidates:
@@ -4002,6 +3993,49 @@ def _runtime_path_entries(plan: SkillPlan, bin_dir: Path) -> tuple[Path, ...]:
         seen.add(key)
         entries.append(candidate)
     return tuple(entries)
+
+
+def _runtime_path_entries(plan: SkillPlan, bin_dir: Path) -> tuple[Path, ...]:
+    """Derive the manager-owned launcher PATH prefix.
+
+    The prefix holds only the skill's own bin directory and the manager
+    interpreter's directory. It never depends on manifest content: no
+    dependency name or command can add, remove, or reorder an entry here.
+    The plan parameter stays so every publication site keeps one call shape.
+    """
+
+    candidates = [bin_dir.absolute()]
+    if sys.executable:
+        candidates.append(Path(sys.executable).resolve().parent)
+    return _dedupe_path_candidates(candidates)
+
+
+def _runtime_path_suffix(plan: SkillPlan) -> tuple[Path, ...]:
+    """Derive the launcher PATH suffix from declared system dependencies.
+
+    Each dependency directory is resolved through the manager's own
+    resolver, which refuses shim directories and symlink chains through
+    them. Launchers append the suffix after the inherited PATH, so it
+    fills gaps for minimal-PATH launches without outranking the caller.
+    """
+
+    candidates: list[Path] = []
+    for dependency in _system_dependencies(plan):
+        if not dependency.command:
+            continue
+        command_path = Path(dependency.command)
+        try:
+            executable = resolve_tool(
+                command_path.name if command_path.is_absolute() else dependency.command,
+                executable=dependency.command if command_path.is_absolute() else None,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            raise InstallError(
+                f"Cannot resolve system command {dependency.command!r} "
+                f"for {plan.decl.name}: {exc}"
+            ) from exc
+        candidates.append(Path(executable).parent)
+    return _dedupe_path_candidates(candidates)
 
 
 def _validate_skills(
@@ -4080,6 +4114,7 @@ def install_runtime_commands(
     final_home = csk_home if activation_home is None else activation_home
     final_bin = bin_dir if activation_bin_dir is None else activation_bin_dir
     path_entries = _runtime_path_entries(plan, final_bin)
+    path_suffix = _runtime_path_suffix(plan)
     active_scripts = tuple(
         command
         for command in plan.spec.commands.values()
@@ -4117,6 +4152,7 @@ def install_runtime_commands(
             command.name,
             runtime_path,
             path_entries=path_entries,
+            path_suffix=path_suffix,
         )
         commands.add(command.name)
     return commands

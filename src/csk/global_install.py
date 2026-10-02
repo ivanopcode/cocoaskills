@@ -1070,6 +1070,7 @@ def _stage_global_materialization(
                     plan,
                     final_bin,
                 ),
+                path_suffix=installer._runtime_path_suffix(plan),
             )
             command_names.add(name)
         expected_commands.update(command_names)

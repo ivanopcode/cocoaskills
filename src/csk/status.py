@@ -852,6 +852,7 @@ def _node_build_statuses(
         spec=node.spec,
     )
     path_entries = installer._runtime_path_entries(plan_wrapper, bin_dir)
+    path_suffix = installer._runtime_path_suffix(plan_wrapper)
     result: list[build_currentness.BuildStatus] = []
     for name in commands:
         recorded = marker_builds.get(name)
@@ -877,6 +878,7 @@ def _node_build_statuses(
                     recorded=recorded,
                     bin_dir=bin_dir,
                     path_entries=path_entries,
+                    path_suffix=path_suffix,
                     boundary_error=marker_inspection.build_boundary_error,
                 )
             )
@@ -904,6 +906,7 @@ def _node_build_statuses(
                 recorded=recorded,
                 cache_backend=cache_backend,
                 path_entries=path_entries,
+                path_suffix=path_suffix,
                 boundary_error=marker_inspection.build_boundary_error,
             )
         )
@@ -919,6 +922,7 @@ def _classify_external_build(
     recorded: install_marker.InstallMarkerBuildV3,
     bin_dir: Path,
     path_entries: tuple[Path, ...],
+    path_suffix: tuple[Path, ...],
     boundary_error: tuple[str, str] | None,
 ) -> build_currentness.BuildStatus:
     def result(label: str, detail: str) -> build_currentness.BuildStatus:
@@ -989,6 +993,7 @@ def _classify_external_build(
         name,
         activation.artifact_path,
         path_entries=path_entries,
+        path_suffix=path_suffix,
     )
     if shim_error is not None:
         return result("build-shim-drift", shim_error)
