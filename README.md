@@ -340,6 +340,16 @@ csk shell-init                      # Генерирует или устанав
   `.github/workflows/ci.yml`; build state is under `<csk-home>/builds/go-v1/`.
 - `mypy` performs strict source type checking. Run `uv run mypy`; it writes no
   persistent artifact unless output is redirected to `.temp/`.
+- Launcher PATH has a manager-owned prefix and a dependency suffix. The prefix
+  holds only the skill bin directory and the manager interpreter directory and
+  never depends on manifest content. Dependency directories resolve through the
+  manager's `tool_paths` resolver and are appended after the inherited PATH, so
+  the caller's PATH always wins. Run `uv run pytest -q
+  tests/test_launcher_tool_paths.py tests/test_tool_paths.py
+  tests/test_tool_paths_symlinks.py tests/test_shims.py` to check prefix
+  independence, shim exclusion, symlink chains, refusal before publication,
+  suffix order, and legitimate dependency launch. Save validation logs under
+  `.temp/`.
 - `PyYAML` используется только в dev extra как независимый oracle для
   дифференциальных тестов frontmatter. Запускайте
   `uv run pytest -q tests/test_frontmatter_differential.py`; постоянные

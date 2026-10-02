@@ -828,11 +828,12 @@ project commands appended to `PATH`.
 `csk bootstrap` states that no shell profile changes are required and may point
 to the optional cached hook for human convenience. `csk install` reports an
 off-`PATH` project bin as informational: agent skills use it directly.
-Project and global runtime shims prepend their own bin directory, the Python
-environment that installed them, and the resolved directories of declared
-system dependencies before preserving the inherited `PATH`. Nested skill
-commands therefore work from zsh, bash, PowerShell, Git Bash, CI, and agent
-processes without profile activation.
+Project and global runtime shims prepend their own bin directory and the Python
+environment that installed them, then preserve the inherited `PATH`, and
+finally append the resolved directories of declared system dependencies, so
+the caller's `PATH` always wins. Nested skill commands therefore work from
+zsh, bash, PowerShell, Git Bash, CI, and agent processes without profile
+activation.
 
 ## Locale Policy
 

@@ -600,6 +600,7 @@ def write_project_shim(
     *,
     platform_name: str | None = None,
     path_entries: tuple[Path, ...] = (),
+    path_suffix: tuple[Path, ...] = (),
 ) -> Path:
     return write_bin_shim(
         project_bin_dir(project_root),
@@ -607,6 +608,7 @@ def write_project_shim(
         runtime_path,
         platform_name=platform_name,
         path_entries=path_entries,
+        path_suffix=path_suffix,
     )
 
 
@@ -617,6 +619,7 @@ def write_global_shim(
     *,
     platform_name: str | None = None,
     path_entries: tuple[Path, ...] = (),
+    path_suffix: tuple[Path, ...] = (),
 ) -> Path:
     return write_bin_shim(
         global_bin_dir(csk_home),
@@ -624,6 +627,7 @@ def write_global_shim(
         runtime_path,
         platform_name=platform_name,
         path_entries=path_entries,
+        path_suffix=path_suffix,
     )
 
 
@@ -633,12 +637,14 @@ def write_project_build_shim(
     *,
     platform_name: str | None = None,
     path_entries: tuple[Path, ...] = (),
+    path_suffix: tuple[Path, ...] = (),
 ) -> Path:
     return activate_build_command(
         project_bin_dir(project_root),
         activation,
         platform_name=platform_name,
         path_entries=path_entries,
+        path_suffix=path_suffix,
     )
 
 
@@ -648,12 +654,14 @@ def write_global_build_shim(
     *,
     platform_name: str | None = None,
     path_entries: tuple[Path, ...] = (),
+    path_suffix: tuple[Path, ...] = (),
 ) -> Path:
     return activate_build_command(
         global_bin_dir(csk_home),
         activation,
         platform_name=platform_name,
         path_entries=path_entries,
+        path_suffix=path_suffix,
     )
 
 
@@ -663,6 +671,7 @@ def activate_build_command(
     *,
     platform_name: str | None = None,
     path_entries: tuple[Path, ...] = (),
+    path_suffix: tuple[Path, ...] = (),
 ) -> Path:
     """Publish one launcher for an already validated compiled artifact."""
 
@@ -674,6 +683,7 @@ def activate_build_command(
         activation.artifact_path,
         platform_name=platform_name,
         path_entries=path_entries,
+        path_suffix=path_suffix,
     )
 
 
@@ -684,6 +694,7 @@ def inspect_bin_shim(
     *,
     platform_name: str | None = None,
     path_entries: tuple[Path, ...] = (),
+    path_suffix: tuple[Path, ...] = (),
 ) -> str | None:
     """Return ``None`` only when a managed launcher exactly matches.
 
@@ -699,6 +710,7 @@ def inspect_bin_shim(
         subject=f"Command {command_name!r} launcher target",
     )
     entries = _require_path_entries(path_entries, platform=platform)
+    suffix = _require_path_entries(path_suffix, platform=platform)
     try:
         before = shim.lstat()
     except FileNotFoundError:
@@ -706,7 +718,7 @@ def inspect_bin_shim(
     except OSError as exc:
         return f"managed launcher cannot be inspected: {shim}: {exc}"
 
-    if platform != WINDOWS_PLATFORM and not entries:
+    if platform != WINDOWS_PLATFORM and not entries and not suffix:
         if not stat.S_ISLNK(before.st_mode):
             return f"managed launcher is not the expected symbolic link: {shim}"
         try:
@@ -734,9 +746,9 @@ def inspect_bin_shim(
     if _shim_state(before) != _shim_state(after):
         return f"managed launcher changed while it was inspected: {shim}"
     expected = (
-        _windows_launcher(target, entries).encode("utf-8")
+        _windows_launcher(target, entries, suffix).encode("utf-8")
         if platform == WINDOWS_PLATFORM
-        else _unix_launcher(target, entries).encode("utf-8")
+        else _unix_launcher(target, entries, suffix).encode("utf-8")
     )
     if raw != expected:
         return f"managed launcher bytes do not match the selected artifact: {shim}"
@@ -752,7 +764,16 @@ def write_bin_shim(
     *,
     platform_name: str | None = None,
     path_entries: tuple[Path, ...] = (),
+    path_suffix: tuple[Path, ...] = (),
 ) -> Path:
+    """Publish one launcher with a PATH prefix and an optional PATH suffix.
+
+    ``path_entries`` is prepended before the inherited PATH and holds only
+    manager-owned directories. ``path_suffix`` is appended after the
+    inherited PATH, so dependency directories fill gaps for minimal-PATH
+    launches without outranking the caller's own PATH.
+    """
+
     platform = _resolve_platform(platform_name)
     shim = shim_path(bin_dir, command_name, platform_name=platform)
     target = _require_launcher_target(
@@ -760,15 +781,16 @@ def write_bin_shim(
         subject=f"Command {command_name!r} launcher target",
     )
     entries = _require_path_entries(path_entries, platform=platform)
+    suffix = _require_path_entries(path_suffix, platform=platform)
     bin_dir.mkdir(parents=True, exist_ok=True)
     _clear_shim(shim)
     # Both launchers carry explicit line endings, so newline translation is
     # disabled: a Windows host would otherwise write CR CR LF into a .cmd.
     if platform == WINDOWS_PLATFORM:
-        shim.write_text(_windows_launcher(target, entries), encoding="utf-8", newline="")
+        shim.write_text(_windows_launcher(target, entries, suffix), encoding="utf-8", newline="")
         return shim
-    if entries:
-        shim.write_text(_unix_launcher(target, entries), encoding="utf-8", newline="\n")
+    if entries or suffix:
+        shim.write_text(_unix_launcher(target, entries, suffix), encoding="utf-8", newline="\n")
         _grant_execute(shim)
         return shim
     shim.symlink_to(os.path.relpath(target, shim.parent))
@@ -1023,7 +1045,11 @@ def _require_path_entries(path_entries: Sequence[Path], *, platform: str) -> tup
     return tuple(entries)
 
 
-def _windows_launcher(target: Path, path_entries: tuple[Path, ...]) -> str:
+def _windows_launcher(
+    target: Path,
+    path_entries: tuple[Path, ...],
+    path_suffix: tuple[Path, ...] = (),
+) -> str:
     lines = [
         "@echo off",
         "setlocal DisableDelayedExpansion",
@@ -1031,22 +1057,42 @@ def _windows_launcher(target: Path, path_entries: tuple[Path, ...]) -> str:
         # so clear it in the local scope before reading the real value below.
         'set "ERRORLEVEL="',
     ]
-    if path_entries:
-        prefix = ";".join(_escape_cmd_value(str(entry)) for entry in path_entries)
-        lines.append(f'set "PATH={prefix};%PATH%"')
+    if path_entries or path_suffix:
+        segments = ["%PATH%"]
+        if path_entries:
+            prefix = ";".join(_escape_cmd_value(str(entry)) for entry in path_entries)
+            segments.insert(0, prefix)
+        if path_suffix:
+            suffix = ";".join(_escape_cmd_value(str(entry)) for entry in path_suffix)
+            segments.append(suffix)
+        lines.append(f'set "PATH={";".join(segments)}"')
     lines.append(f'call "{_escape_cmd_value(str(target))}" %*')
     lines.append("exit /b %ERRORLEVEL%")
     return "".join(f"{line}\r\n" for line in lines)
 
 
-def _unix_launcher(target: Path, path_entries: tuple[Path, ...]) -> str:
+def _unix_launcher(
+    target: Path,
+    path_entries: tuple[Path, ...],
+    path_suffix: tuple[Path, ...] = (),
+) -> str:
     prefix = ":".join(str(entry) for entry in path_entries)
+    suffix = ":".join(str(entry) for entry in path_suffix)
+    if prefix and suffix:
+        with_path = f"{shlex.quote(prefix)}:\"$PATH\":{shlex.quote(suffix)}"
+        without_path = f"{shlex.quote(prefix)}:{shlex.quote(suffix)}"
+    elif prefix:
+        with_path = f"{shlex.quote(prefix)}:\"$PATH\""
+        without_path = shlex.quote(prefix)
+    else:
+        with_path = f"\"$PATH\":{shlex.quote(suffix)}"
+        without_path = shlex.quote(suffix)
     return (
         "#!/bin/sh\n"
         'if [ -n "${PATH:-}" ]; then\n'
-        f"  PATH={shlex.quote(prefix)}:\"$PATH\"\n"
+        f"  PATH={with_path}\n"
         "else\n"
-        f"  PATH={shlex.quote(prefix)}\n"
+        f"  PATH={without_path}\n"
         "fi\n"
         "export PATH\n"
         f"exec {shlex.quote(str(target))} \"$@\"\n"

@@ -86,6 +86,7 @@ def classify_build(
     recorded: MarkerBuild | None,
     cache_backend: cache.BuildCacheBackend,
     path_entries: tuple[Path, ...],
+    path_suffix: tuple[Path, ...] = (),
     boundary_error: tuple[str, str] | None = None,
     platform_name: str | None = None,
 ) -> BuildStatus:
@@ -164,6 +165,7 @@ def classify_build(
         activation.artifact_path,
         platform_name=platform_name,
         path_entries=path_entries,
+        path_suffix=path_suffix,
     )
     if shim_error is not None:
         return result("build-shim-drift", shim_error)

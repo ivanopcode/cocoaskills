@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import stat
 import subprocess
 import sys
@@ -641,3 +642,197 @@ def test_unix_runtime_command_becomes_executable(tmp_path):
     )
 
     assert stat.S_IMODE(runtime.stat().st_mode) & stat.S_IXUSR
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Executes a POSIX shim")
+def test_unix_wrapper_appends_suffix_after_inherited_path(tmp_path):
+    prefix_bin = tmp_path / "prefix bin"
+    prefix_bin.mkdir()
+    suffix_bin = tmp_path / "suffix bin"
+    suffix_bin.mkdir()
+    (suffix_bin / "helper").write_text("#!/bin/sh\necho suffix-tool\n", encoding="utf-8")
+    (suffix_bin / "helper").chmod(0o755)
+    runtime = tmp_path / "runtime" / "tool"
+    runtime.parent.mkdir()
+    runtime.write_text("#!/bin/sh\nhelper\n", encoding="utf-8")
+    runtime.chmod(0o755)
+
+    shim = shims.write_project_shim(
+        tmp_path / "project",
+        "tool",
+        runtime,
+        platform_name="unix",
+        path_entries=(prefix_bin,),
+        path_suffix=(suffix_bin,),
+    )
+    content = shim.read_text(encoding="utf-8")
+    assert f"{shlex.quote(str(prefix_bin))}:\"$PATH\":{shlex.quote(str(suffix_bin))}" in content
+
+    shadow_bin = tmp_path / "caller"
+    shadow_bin.mkdir()
+    (shadow_bin / "helper").write_text("#!/bin/sh\necho caller-wins\n", encoding="utf-8")
+    (shadow_bin / "helper").chmod(0o755)
+    proc = subprocess.run(
+        [str(shim)],
+        check=True,
+        text=True,
+        capture_output=True,
+        env={"PATH": str(shadow_bin)},
+    )
+    assert proc.stdout.strip() == "caller-wins"
+
+    proc = subprocess.run(
+        [str(shim)],
+        check=True,
+        text=True,
+        capture_output=True,
+        env={"PATH": os.defpath},
+    )
+    assert proc.stdout.strip() == "suffix-tool"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Executes a POSIX shim")
+def test_unix_suffix_only_stands_alone_without_inherited_path(tmp_path):
+    suffix_bin = tmp_path / "suffix"
+    suffix_bin.mkdir()
+    (suffix_bin / "helper").write_text("#!/bin/sh\necho suffix-tool\n", encoding="utf-8")
+    (suffix_bin / "helper").chmod(0o755)
+    runtime = tmp_path / "runtime" / "tool"
+    runtime.parent.mkdir()
+    runtime.write_text("#!/bin/sh\nhelper\n", encoding="utf-8")
+    runtime.chmod(0o755)
+
+    shim = shims.write_project_shim(
+        tmp_path / "project",
+        "tool",
+        runtime,
+        platform_name="unix",
+        path_suffix=(suffix_bin,),
+    )
+    content = shim.read_text(encoding="utf-8")
+    assert f"PATH=\"$PATH\":{shlex.quote(str(suffix_bin))}" in content
+    assert f"PATH={shlex.quote(str(suffix_bin))}" in content
+    assert not shim.is_symlink()
+
+    proc = subprocess.run(
+        [str(shim)],
+        check=True,
+        text=True,
+        capture_output=True,
+        env={"PATH": ""},
+    )
+    assert proc.stdout.strip() == "suffix-tool"
+
+
+def test_windows_wrapper_appends_suffix_after_inherited_path(tmp_path):
+    runtime = tmp_path / "home" / "runtime" / "skill" / "abc" / "bin" / "tool.cmd"
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text("@echo off\r\n", encoding="utf-8")
+    prefix_bin = tmp_path / "prefix bin"
+    suffix_bin = tmp_path / "suffix bin"
+
+    shim = shims.write_project_shim(
+        tmp_path / "project",
+        "tool",
+        runtime,
+        platform_name="windows",
+        path_entries=(prefix_bin,),
+        path_suffix=(suffix_bin,),
+    )
+
+    assert _cmd_lines(shim) == [
+        "@echo off",
+        "setlocal DisableDelayedExpansion",
+        'set "ERRORLEVEL="',
+        f'set "PATH={prefix_bin};%PATH%;{suffix_bin}"',
+        f'call "{runtime}" %*',
+        "exit /b %ERRORLEVEL%",
+    ]
+
+
+def test_windows_suffix_only_follows_inherited_path(tmp_path):
+    runtime = tmp_path / "home" / "runtime" / "skill" / "abc" / "bin" / "tool.cmd"
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text("@echo off\r\n", encoding="utf-8")
+    suffix_bin = tmp_path / "suffix"
+
+    shim = shims.write_project_shim(
+        tmp_path / "project",
+        "tool",
+        runtime,
+        platform_name="windows",
+        path_suffix=(suffix_bin,),
+    )
+
+    assert f'set "PATH=%PATH%;{suffix_bin}"' in shim.read_text(encoding="utf-8")
+
+
+def test_windows_launcher_escapes_percent_in_path_suffix(tmp_path):
+    target = tmp_path / "runtime" / "tool.cmd"
+    target.parent.mkdir(parents=True)
+    target.write_text("@echo off\r\n", encoding="utf-8")
+    suffix = tmp_path / "50%suffix"
+    suffix.mkdir()
+
+    shim = shims.write_project_shim(
+        tmp_path / "project",
+        "tool",
+        target,
+        platform_name="windows",
+        path_suffix=(suffix,),
+    )
+    content = shim.read_text(encoding="utf-8")
+
+    assert f'set "PATH=%PATH%;{str(suffix).replace("%", "%%")}"' in content
+    assert "50%%suffix" in content
+
+
+@pytest.mark.parametrize(
+    ("platform_name", "separator"),
+    [("unix", ":"), ("windows", ";")],
+)
+def test_launcher_rejects_a_path_suffix_carrying_the_platform_separator(tmp_path, platform_name, separator):
+    if platform_name == "unix" and sys.platform == "win32":
+        pytest.skip("POSIX launcher layout")
+    target = tmp_path / "runtime" / "tool"
+    target.parent.mkdir(parents=True)
+    target.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    with pytest.raises(shims.ShimError, match="must not contain"):
+        shims.write_project_shim(
+            tmp_path / "project",
+            "tool",
+            target,
+            platform_name=platform_name,
+            path_suffix=(tmp_path / f"suffix{separator}injected",),
+        )
+
+
+@pytest.mark.parametrize("platform_name", ["unix", "windows"])
+def test_inspect_bin_shim_round_trips_prefix_and_suffix(tmp_path, platform_name):
+    if platform_name == "unix" and sys.platform == "win32":
+        pytest.skip("POSIX launcher layout")
+    target = tmp_path / "runtime" / "tool"
+    target.parent.mkdir(parents=True)
+    target.write_text("#!/bin/sh\n", encoding="utf-8")
+    prefix = tmp_path / "prefix"
+    suffix = tmp_path / "suffix"
+    bin_dir = tmp_path / "project" / ".agents" / "bin"
+
+    shims.write_bin_shim(
+        bin_dir, "tool", target, platform_name=platform_name,
+        path_entries=(prefix,), path_suffix=(suffix,),
+    )
+
+    assert shims.inspect_bin_shim(
+        bin_dir, "tool", target, platform_name=platform_name,
+        path_entries=(prefix,), path_suffix=(suffix,),
+    ) is None
+    assert shims.inspect_bin_shim(
+        bin_dir, "tool", target, platform_name=platform_name,
+        path_entries=(prefix,), path_suffix=(),
+    ) is not None
+    assert shims.inspect_bin_shim(
+        bin_dir, "tool", target, platform_name=platform_name,
+        path_entries=(prefix, suffix), path_suffix=(),
+    ) is not None
