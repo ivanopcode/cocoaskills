@@ -8,6 +8,7 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from . import (
     __version__,
@@ -38,6 +39,7 @@ from .audit import trust as audit_trust
 from .audit.backends import AuditBackendError
 from .audit.model import Decision
 from .locking import GlobalLock, LockError
+from .registry_token import registry_token
 from .tool_paths import resolve_tool
 from .sources import diagnostics as source_diagnostics
 from .sources import errors as source_errors
@@ -50,6 +52,35 @@ EXIT_OK = 0
 EXIT_PARTIAL_FAIL = 1
 EXIT_CONFIG = 2
 EXIT_LOCK = 3
+
+
+class _CskArgumentParser(argparse.ArgumentParser):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # argparse uses this class for all descendants, including nested ones.
+        kwargs["allow_abbrev"] = False
+        super().__init__(*args, **kwargs)
+
+
+class _RefuseTokenAction(argparse.Action):
+    def __call__(
+        self, parser: argparse.ArgumentParser, namespace: argparse.Namespace,
+        values: object, option_string: str | None = None,
+    ) -> None:
+        message = "--token is refused; use CSK_REGISTRY_TOKEN or --token-file for registry authorization"
+        if parser.prog.endswith("config build-https add"):
+            message = ("--token is refused; select an HTTPS credential source with --token-source or --token-env; "
+                       "for audit --publish use CSK_REGISTRY_TOKEN or --token-file")
+        parser.error(message)
+
+
+def _token_source_type(value: str) -> str:
+    # Shaped selector validation: argparse `choices` would echo a mistakenly
+    # supplied literal token verbatim ("invalid choice: '<value>'"). The type
+    # callable names only the allowed enum members, never the supplied value.
+    if value not in build_https.TOKEN_SOURCES:
+        allowed = ", ".join(build_https.TOKEN_SOURCES)
+        raise argparse.ArgumentTypeError(f"must be one of {allowed}")
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -75,6 +106,14 @@ def main(argv: list[str] | None = None) -> int:
     if is_check:
         arguments = arguments[1:]
     try:
+        # Refuse before argparse can echo unknown/ambiguous options and values.
+        safe_token_options = {"--token-file", "--token-source", "--token-env"}
+        for argument in arguments:
+            option = argument.split("=", 1)[0]
+            if ((option.startswith("--token") or option in {"--t", "--to", "--tok", "--toke"})
+                    and option not in safe_token_options):
+                parser.error("--token is refused; use CSK_REGISTRY_TOKEN or --token-file for registry authorization; "
+                             "for HTTPS credentials select --token-source or --token-env")
         args = parser.parse_args(arguments)
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else EXIT_CONFIG
@@ -147,7 +186,7 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
         "  csk shell-init         print or install shell hook code\n\n"
         "Run 'csk <command> --help' for command-specific documentation."
     )
-    parser = argparse.ArgumentParser(
+    parser: argparse.ArgumentParser = _CskArgumentParser(
         prog="csk",
         description="CocoaSkill local skill manager",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -347,15 +386,15 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
         epilog=(
             "Scopes use the same canonical-identity grammar as build-ssh.\n"
             "The config stores the token SOURCE, never a token:\n"
-            "  --token git-credentials  reuse the Git HTTPS entry your OS\n"
+            "  --token-source git-credentials  reuse the Git HTTPS entry your OS\n"
             "                           secret store already holds for the host\n"
-            "  --token keyring          use the token 'build-https login' saved\n"
+            "  --token-source keyring          use the token 'build-https login' saved\n"
             "  --token-env NAME         read the token from an environment variable\n\n"
             "CSK_BUILD_HTTPS_TOKEN overrides every scope for one run; it is\n"
             "sent to every HTTPS build repository host in the closure unless\n"
             "CSK_BUILD_HTTPS_HOST pins it to one host.\n\n"
             "Examples:\n"
-            "  csk config build-https add gitlab.example.com/group --token git-credentials\n"
+            "  csk config build-https add gitlab.example.com/group --token-source git-credentials\n"
             "  csk config build-https login gitlab.example.com/group\n"
             "  csk config build-https list"
         ),
@@ -369,7 +408,12 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
     build_https_add.add_argument("scope")
     build_https_add.add_argument(
         "--token",
-        choices=list(build_https.TOKEN_SOURCES),
+        action=_RefuseTokenAction, nargs="?", help=argparse.SUPPRESS,
+    )
+    build_https_add.add_argument(
+        "--token-source",
+        type=_token_source_type,
+        metavar="{" + ",".join(build_https.TOKEN_SOURCES) + "}",
         default=None,
         help="token source: git-credentials or keyring",
     )
@@ -561,7 +605,7 @@ def _add_install(
 
 
 def _build_check_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser: argparse.ArgumentParser = _CskArgumentParser(
         prog="csk check",
         description="Validate a schema-2 Skillfile without installing.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -749,7 +793,11 @@ def _add_audit(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     parser.add_argument("--registry", help="registry base URL for --publish")
     parser.add_argument(
         "--token",
-        help="auditor token for --publish (or set CSK_REGISTRY_TOKEN)",
+        action=_RefuseTokenAction, nargs="?", help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--token-file", metavar="PATH",
+        help="read the registry token from a regular UTF-8 file, private on POSIX (or set CSK_REGISTRY_TOKEN)",
     )
 
 
@@ -1305,9 +1353,9 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
         print(f"Stored a token for {args.scope} through your Git credential helper")
         return EXIT_OK
     # add
-    if (args.token is None) == (args.token_env is None):
+    if (args.token_source is None) == (args.token_env is None):
         print(
-            "build-https add requires exactly one of --token or --token-env",
+            "build-https add requires exactly one of --token-source or --token-env",
             file=sys.stderr,
         )
         return EXIT_CONFIG
@@ -1315,7 +1363,7 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
         build_ssh.validate_scope(args.scope)
         rule = build_https.BuildHTTPSRule(
             scope=args.scope,
-            token=args.token,
+            token=args.token_source,
             token_env=args.token_env,
             username=args.username or "token",
         )
@@ -1599,22 +1647,19 @@ def _cmd_audit(args: argparse.Namespace) -> int:
 
 
 def _cmd_audit_publish(args: argparse.Namespace) -> int:
-    import os
-
     if not args.registry:
         raise ValueError("--publish requires --registry")
-    token = args.token or os.environ.get("CSK_REGISTRY_TOKEN")
-    if not token:
-        raise ValueError("--publish requires --token or the CSK_REGISTRY_TOKEN environment variable")
+    token = registry_token(args.token_file)
     try:
         record_json = Path(args.publish).read_bytes()
     except OSError as exc:
         raise ValueError(f"cannot read audit record file {args.publish}: {exc}") from exc
+    registry_url = config.canonical_registry_url(args.registry, field="--registry")
     try:
-        registry_url = config.canonical_registry_url(args.registry, field="--registry")
         response = audit_registry.http_publish_record(registry_url, token, record_json)
-    except audit_registry.RegistryError as exc:
-        raise ValueError(str(exc)) from exc
+    except Exception:
+        # HTTP exceptions may embed Authorization headers, even for valid tokens.
+        raise ValueError("cannot publish audit record: registry request failed") from None
     print(json.dumps(response, sort_keys=True))
     return EXIT_OK
 

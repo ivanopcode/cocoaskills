@@ -128,7 +128,7 @@ same host, so neither overwrites the other.
 Manage the scopes with the subcommands:
 
 ```sh
-csk config build-https add gitlab.example.com/portals/infra --token git-credentials
+csk config build-https add gitlab.example.com/portals/infra --token-source git-credentials
 csk config build-https login gitlab.example.com/vendor      # hidden PAT input
 csk config build-https list
 csk config build-https remove gitlab.example.com/vendor     # also drops the keyring entry
