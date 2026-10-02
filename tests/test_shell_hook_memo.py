@@ -218,9 +218,6 @@ def test_hook_survives_set_e(tmp_path: Path, shell: str, state: str) -> None:
 
 @pytest.mark.parametrize('shell', ['bash', 'zsh'])
 def test_hook_warm_path_budget(tmp_path: Path, shell: str) -> None:
-    perl = _shell_tool(shell, 'perl')
-    if perl is None:
-        pytest.skip('perl unavailable for timing')
     digest = next((t for t in ('shasum', 'sha256sum', 'openssl') if _shell_tool(shell, t)), None)
     if digest is None:
         pytest.skip('no digest tool')
@@ -230,21 +227,28 @@ def test_hook_warm_path_budget(tmp_path: Path, shell: str) -> None:
     env_files.write_global_env_files(home)
     config = str(home / 'config.json')
 
-    timing = (
-        '_csk_auto_env; '
-        'printf \'t0=%s\\n\' "$("$PERL" -MTime::HiRes=time -e \'print time\')"; '
-        'i=0; while [ $i -lt 40 ]; do _csk_auto_env; i=$((i+1)); done; '
-        'printf \'t1=%s\\n\' "$("$PERL" -MTime::HiRes=time -e \'print time\')"'
-    )
-    measured = _run_hook(tmp_path, shell, project, timing, PERL=perl.as_posix(), CSK_CONFIG=config)
-    assert measured.returncode == 0, measured.stderr
-    stamps = {}
-    for line in measured.stdout.splitlines():
-        if line.startswith('t0=') or line.startswith('t1='):
-            key, _, value = line.partition('=')
-            stamps[key] = float(value)
-    mean_ms = (stamps['t1'] - stamps['t0']) * 1000 / 40
-    assert mean_ms < 50.0, f'warm mean {mean_ms:.1f}ms exceeds the 10ms budget with CI margin'
+    # The 10ms budget is decided for macOS bash/zsh; a Windows fork costs as
+    # much as the whole budget, so the timing half runs on POSIX only. The
+    # exec-count pin below holds on every platform.
+    if os.name != 'nt':
+        perl = _shell_tool(shell, 'perl')
+        if perl is None:
+            pytest.skip('perl unavailable for timing')
+        timing = (
+            '_csk_auto_env; '
+            'printf \'t0=%s\\n\' "$("$PERL" -MTime::HiRes=time -e \'print time\')"; '
+            'i=0; while [ $i -lt 40 ]; do _csk_auto_env; i=$((i+1)); done; '
+            'printf \'t1=%s\\n\' "$("$PERL" -MTime::HiRes=time -e \'print time\')"'
+        )
+        measured = _run_hook(tmp_path, shell, project, timing, PERL=perl.as_posix(), CSK_CONFIG=config)
+        assert measured.returncode == 0, measured.stderr
+        stamps = {}
+        for line in measured.stdout.splitlines():
+            if line.startswith('t0=') or line.startswith('t1='):
+                key, _, value = line.partition('=')
+                stamps[key] = float(value)
+        mean_ms = (stamps['t1'] - stamps['t0']) * 1000 / 40
+        assert mean_ms < 50.0, f'warm mean {mean_ms:.1f}ms exceeds the 10ms budget with CI margin'
 
     tools = tmp_path / 'counttools'
     tools.mkdir()

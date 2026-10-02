@@ -9,15 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from csk import cli
 from test_shell_approvals import _run_hook, _store
 
 
-def _approve_bytes(args: list[str], cwd: Path) -> subprocess.CompletedProcess[bytes]:
-    root = Path(__file__).resolve().parents[1] / 'src'
-    return subprocess.run(
-        [sys.executable, '-m', 'csk', *args], cwd=cwd,
-        env={**os.environ, 'PYTHONPATH': str(root)}, capture_output=True, timeout=60,
-    )
 
 
 def _render_terminal_lines(data: bytes) -> list[str]:
@@ -40,7 +35,7 @@ def _render_terminal_lines(data: bytes) -> list[str]:
     return [''.join(cells).rstrip() for cells in rows]
 
 
-def test_approve_escapes_hidden_payload_line(tmp_path: Path) -> None:
+def test_approve_escapes_hidden_payload_line(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     project = tmp_path / 'proj'
     (project / '.agents').mkdir(parents=True)
     marker = tmp_path / 'PWNED'
@@ -48,9 +43,8 @@ def test_approve_escapes_hidden_payload_line(tmp_path: Path) -> None:
     benign = '# set up local tooling paths' + ' ' * 40
     env = project / '.agents/env.sh'
     env.write_bytes(f'{evil}\r{benign}\n'.encode())
-    completed = _approve_bytes(['shell', 'approve', '--yes'], project)
-    assert completed.returncode == 0, completed.stderr
-    out = completed.stdout
+    assert cli.main(['shell', 'approve', str(env), '--yes']) == 0
+    out = capsys.readouterr().out.encode('utf-8')
     assert b'\r' not in out
     assert b'shown escaped' in out
     visible = '\n'.join(_render_terminal_lines(out))
@@ -59,7 +53,7 @@ def test_approve_escapes_hidden_payload_line(tmp_path: Path) -> None:
     assert _store().exists()
 
 
-def test_approve_escapes_terminal_escapes(tmp_path: Path) -> None:
+def test_approve_escapes_terminal_escapes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     project = tmp_path / 'proj'
     (project / '.agents').mkdir(parents=True)
     marker = tmp_path / 'PWNED_A'
@@ -67,23 +61,21 @@ def test_approve_escapes_terminal_escapes(tmp_path: Path) -> None:
     env.write_bytes(
         b'echo harmless\ntouch "' + str(marker).encode() + b'"\n\x1b[1A\x1b[2K\r# nothing to see\n'
     )
-    completed = _approve_bytes(['shell', 'approve', '--yes'], project)
-    assert completed.returncode == 0, completed.stderr
-    out = completed.stdout
+    assert cli.main(['shell', 'approve', str(env), '--yes']) == 0
+    out = capsys.readouterr().out.encode('utf-8')
     assert b'\x1b' not in out
     assert b'\r' not in out
     assert b'shown escaped' in out
     assert b'\\x1b[1A\\x1b[2K\\x0d' in out
 
 
-def test_approve_escapes_del_and_c1(tmp_path: Path) -> None:
+def test_approve_escapes_del_and_c1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     project = tmp_path / 'proj'
     (project / '.agents').mkdir(parents=True)
     env = project / '.agents/env.sh'
     env.write_bytes('payload\x7f here\u0085 done\n'.encode('utf-8'))
-    completed = _approve_bytes(['shell', 'approve', '--yes'], project)
-    assert completed.returncode == 0, completed.stderr
-    out = completed.stdout
+    assert cli.main(['shell', 'approve', str(env), '--yes']) == 0
+    out = capsys.readouterr().out.encode('utf-8')
     assert b'\x7f' not in out
     assert '\u0085'.encode('utf-8') not in out
     assert b'\\x7f' in out
@@ -91,16 +83,16 @@ def test_approve_escapes_del_and_c1(tmp_path: Path) -> None:
     assert b'shown escaped' in out
 
 
-def test_approve_leaves_clean_content_byte_identical(tmp_path: Path) -> None:
+def test_approve_leaves_clean_content_byte_identical(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     project = tmp_path / 'proj'
     (project / '.agents').mkdir(parents=True)
     env = project / '.agents/env.sh'
     content = '# reviewed\n\techo "caf\u00e9 \u0421\u043a\u0438\u043b\u043b"\n'
     env.write_text(content, encoding='utf-8')
-    completed = _approve_bytes(['shell', 'approve', '--yes'], project)
-    assert completed.returncode == 0, completed.stderr
-    assert content.encode('utf-8') in completed.stdout
-    assert b'shown escaped' not in completed.stdout
+    assert cli.main(['shell', 'approve', str(env), '--yes']) == 0
+    out = capsys.readouterr().out.encode('utf-8')
+    assert content.encode('utf-8') in out
+    assert b'shown escaped' not in out
 
 
 @pytest.mark.parametrize('shell', ['bash', 'zsh'])
@@ -164,7 +156,7 @@ def test_hook_notice_remedy_pastes_safely(tmp_path: Path, shell: str, dirname: s
     stub.chmod(0o755)
     pasted = subprocess.run(
         [executable, '-c', suggested], cwd=tmp_path,
-        env={**os.environ, 'PATH': f'{stub_dir}:{os.environ["PATH"]}'},
+        env={**os.environ, 'PATH': f'{stub_dir}{os.pathsep}{os.environ["PATH"]}'},
         capture_output=True, timeout=30,
     )
     assert pasted.returncode == 0, pasted.stderr

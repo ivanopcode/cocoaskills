@@ -254,7 +254,11 @@ def test_store_health_narrowing_mutants_are_killed(tmp_path: Path, mutant: str) 
     module.write_text(text.replace(old, '    except OSError as exc:'))
     test_file = 'tests/test_install_store_health.py'
     test = 'test_install_store_health_independence_property'
-    selection = test + ' and mode-666-file'
+    # control-bytes runs on every platform (mode states are POSIX-only); on
+    # Windows the single fastest lane keeps the nested run small.
+    selection = test + ' and (mode-666-file or control-bytes)'
+    if os.name == 'nt':
+        selection += ' and global-init'
     result = subprocess.run(
         [sys.executable, '-m', 'pytest', '-q', test_file, '-k', selection,
          '--basetemp=' + str(tmp_path / 'mutant-tmp')],
