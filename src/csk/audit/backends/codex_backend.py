@@ -13,6 +13,7 @@ from ..backend_config import CodexBackendConfig
 from ..capabilities import CapabilityManifest
 from ..model import Finding, Severity
 from .base import AuditBackendError, AuditRequest
+from .environment import CODEX_REQUIRED_ENV, backend_environment
 
 
 class CodexBackend:
@@ -64,6 +65,7 @@ class CodexBackend:
                     argv,
                     input=prompt.encode("utf-8"),
                     cwd=cwd,
+                    env=backend_environment(CODEX_REQUIRED_ENV),
                     capture_output=True,
                     timeout=timeout,
                     check=False,

@@ -966,12 +966,12 @@ def test_boundary_audit_publish_refuses(
     monkeypatch, tmp_path, skills_root, csk_home, capsys, err
 ):
     _configured(tmp_path, skills_root, csk_home, monkeypatch)
+    monkeypatch.setenv("CSK_REGISTRY_TOKEN", "synthetic-token")
     record = tmp_path / "record.json"
     record.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
     with broad_fault(monkeypatch, target=record, err=err) as firings:
         code = cli.main(
-            ["audit", "--publish", str(record), "--registry", "https://r.example",
-             "--token", "t0ken"]
+            ["audit", "--publish", str(record), "--registry", "https://r.example"]
         )
     assert firings, "broad fault never fired; test is vacuous"
     assert code == cli.EXIT_CONFIG
@@ -1951,10 +1951,11 @@ def test_sweep_audit_publish_each_ordinal_refuses(monkeypatch, tmp_path, capsys)
 
     The unfaulted run itself exits 2 (the probe record fails name
     validation); the sweep distinguishes the fault refusal ("cannot
-    read audit record file") from that validation error.
+    read audit record file") from the shaped publication error.
     """
     monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
+    monkeypatch.setenv("CSK_REGISTRY_TOKEN", "synthetic-token")
 
     def setup(tag: str):
         base = tmp_path / f"ap{tag}"
@@ -1968,7 +1969,7 @@ def test_sweep_audit_publish_each_ordinal_refuses(monkeypatch, tmp_path, capsys)
         record.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
         return record, [
             "audit", "--publish", str(record),
-            "--registry", "https://r.example", "--token", "t0ken",
+            "--registry", "https://r.example",
         ]
 
     _sweep_cli(
@@ -1977,8 +1978,8 @@ def test_sweep_audit_publish_each_ordinal_refuses(monkeypatch, tmp_path, capsys)
         setup=setup,
         sites=[("io.open", "csk.cli", "_cmd_audit_publish")],
         expect={1: ("refuse", "cannot read audit record file")},
-        dry=(cli.EXIT_CONFIG, "", "audit record requires"),
-        kp1=(cli.EXIT_CONFIG, "", "audit record requires"),
+        dry=(cli.EXIT_CONFIG, "", "cannot publish audit record"),
+        kp1=(cli.EXIT_CONFIG, "", "cannot publish audit record"),
     )
 
 
