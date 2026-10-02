@@ -1,5 +1,20 @@
 # Logbook
 
+## 2026-10-01 - TASK-260917-2u0otf: integrate audit secret isolation
+
+Applied the reviewed batch3 C1 patch with `git apply --3way` on current
+origin/main `0fb23b712c373704b6e4067cd81c50baf342a642`; there were no conflicts.
+The worker's full-suite and ten filesystem fault-injection cases were unrun,
+so their prior focused green evidence is not reused as full-suite evidence.
+Token files now have a 64 KiB descriptor-size gate before reading and a bounded
+binary read that also rejects growth after fstat. CLI regressions accept the
+exact byte limit, reject one byte over without reading, and exercise both
+open-time and post-fstat growth. Two additional narrowing mutants admit one
+extra byte at the respective gates. The harness reports failing test names.
+Validation commands, real exit codes, coverage bounds and exact-candidate
+draft-PR/dispatch probe identities are recorded in the task-scoped board
+outcome `TASK-260917-2u0otf_results.md`. The Story candidate remains uncommitted.
+
 ## 2026-09-29 - BUG-260929-2vj4mm: repair shim and merge-lane regressions
 
 `_is_reparse_point` now normalizes a synthesized `st_file_attributes=None` to
@@ -5597,3 +5612,16 @@ narrowing-mutant behavioral runs) as Windows-skipped. Pure-Python release
 support tests remain selected on every platform. The generated `gh` test stub
 is invoked through `sys.executable` so that test stays cross-platform. The
 release guide states that maintainers run the script on macOS or Linux.
+
+### TASK-260917-2u0otf revision 2: token refusal and disclosure rework
+
+Reproduced all four review findings through cli.main (6 failures in the original
+review suite). Added device/inode/type validation around token-file open, Windows
+reparse refusal, fail-closed identity capability handling, strict token grammar,
+fixed HTTP error diagnostics, parser abbreviation refusal and guarded home
+expansion. Kept original reviewer test names in test_audit_secrets_review.py;
+POSIX-only attacks are explicitly skipped on Windows, with portable real regular
+replacement and capability attacks added. Updated narrowing mutants to attack
+the layered gates and added dedicated revision-2 mutants. The 64-KiB positive
+test now uses ASCII to match the decided grammar. Exact-candidate validation
+and hosted evidence are recorded in the task results resource.
