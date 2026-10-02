@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import re
 import stat
 import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, NoReturn
 
 from . import (
     __version__,
@@ -38,6 +40,7 @@ from .audit import trust as audit_trust
 from .audit.backends import AuditBackendError
 from .audit.model import Decision
 from .locking import GlobalLock, LockError
+from .registry_token import registry_token
 from .tool_paths import resolve_tool
 from .sources import diagnostics as source_diagnostics
 from .sources import errors as source_errors
@@ -50,6 +53,154 @@ EXIT_OK = 0
 EXIT_PARTIAL_FAIL = 1
 EXIT_CONFIG = 2
 EXIT_LOCK = 3
+
+
+_TOKEN_SHORT_FORMS = frozenset({"--t", "--to", "--tok", "--toke"})
+_SAFE_TOKEN_OPTIONS = frozenset({"--token-file", "--token-source", "--token-env"})
+_REDACTED = "[REDACTED]"
+
+
+def _redact_token_values(message: str) -> str:
+    # One shaped usage-error hook: redact the value following any --token*
+    # option name, in both --opt VALUE and --opt=VALUE forms, plus the quoted
+    # invalid-choice value for token options. Only unrecognized-arguments and
+    # invalid-choice diagnostics can echo user input; other shaped messages
+    # (refusals, missing values, ambiguous options) pass through unchanged.
+    # The rest of the message and the exit code are preserved by the caller.
+    if "invalid choice:" in message and "--token" in message:
+        message = re.sub(
+            r"(argument\s+--token[^\s:]*:\s+invalid choice:\s+')([^']*)(')",
+            r"\1" + _REDACTED + r"\3",
+            message,
+        )
+    if message.startswith("unrecognized arguments:"):
+        message = re.sub(
+            r"(--token[^\s=]*)=([^\s]*)",
+            r"\1=" + _REDACTED,
+            message,
+        )
+        message = re.sub(
+            r"(--t|--to|--tok|--toke)=([^\s]*)",
+            r"\1=" + _REDACTED,
+            message,
+        )
+        message = re.sub(
+            r"(--token[^\s=]*)\s+([^\s]+)",
+            r"\1 " + _REDACTED,
+            message,
+        )
+        message = re.sub(
+            r"(--t|--to|--tok|--toke)\s+([^\s]+)",
+            r"\1 " + _REDACTED,
+            message,
+        )
+    return message
+
+
+def _strip_token_options_for_detection(arguments: list[str]) -> list[str]:
+    # Remove --token* options and their separate values so an option value
+    # that coincides with a command name is not mistaken for the selection.
+    filtered: list[str] = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        option = argument.split("=", 1)[0]
+        if option.startswith("--token") or option in _TOKEN_SHORT_FORMS:
+            if "=" in argument:
+                index += 1
+            else:
+                index += 1
+                if index < len(arguments):
+                    index += 1
+        else:
+            filtered.append(argument)
+            index += 1
+    return filtered
+
+
+def _find_subparsers_action(
+    parser: argparse.ArgumentParser,
+) -> argparse._SubParsersAction[argparse.ArgumentParser] | None:
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action
+    return None
+
+
+def _declared_token_options(
+    root: argparse.ArgumentParser, arguments: list[str]
+) -> set[str]:
+    # Selected-parser-scoped exemption: only options the deepest selected
+    # subcommand declares are allowed through to argparse. Anything else
+    # token-like is refused before dispatch. Unknown or missing selections
+    # declare nothing, failing closed.
+    filtered = _strip_token_options_for_detection(arguments)
+    top = _find_subparsers_action(root)
+    if top is None:
+        return set()
+    selected_name: str | None = None
+    selected_index = -1
+    for position, token in enumerate(filtered):
+        if token in top.choices:
+            selected_name = token
+            selected_index = position
+            break
+    if selected_name is None:
+        return set()
+    current: argparse.ArgumentParser = top.choices[selected_name]
+    while True:
+        sub = _find_subparsers_action(current)
+        if sub is None:
+            break
+        next_name: str | None = None
+        next_index = -1
+        for position in range(selected_index + 1, len(filtered)):
+            if filtered[position] in sub.choices:
+                next_name = filtered[position]
+                next_index = position
+                break
+        if next_name is None:
+            break
+        current = sub.choices[next_name]
+        selected_index = next_index
+    declared: set[str] = set()
+    for action in current._actions:
+        for option_string in getattr(action, "option_strings", []):
+            if option_string in _SAFE_TOKEN_OPTIONS:
+                declared.add(option_string)
+    return declared
+
+
+class _CskArgumentParser(argparse.ArgumentParser):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # argparse uses this class for all descendants, including nested ones.
+        kwargs["allow_abbrev"] = False
+        super().__init__(*args, **kwargs)
+
+    def error(self, message: str) -> NoReturn:
+        super().error(_redact_token_values(message))
+
+
+class _RefuseTokenAction(argparse.Action):
+    def __call__(
+        self, parser: argparse.ArgumentParser, namespace: argparse.Namespace,
+        values: object, option_string: str | None = None,
+    ) -> None:
+        message = "--token is refused; use CSK_REGISTRY_TOKEN or --token-file for registry authorization"
+        if parser.prog.endswith("config build-https add"):
+            message = ("--token is refused; select an HTTPS credential source with --token-source or --token-env; "
+                       "for audit --publish use CSK_REGISTRY_TOKEN or --token-file")
+        parser.error(message)
+
+
+def _token_source_type(value: str) -> str:
+    # Shaped selector validation: argparse `choices` would echo a mistakenly
+    # supplied literal token verbatim ("invalid choice: '<value>'"). The type
+    # callable names only the allowed enum members, never the supplied value.
+    if value not in build_https.TOKEN_SOURCES:
+        allowed = ", ".join(build_https.TOKEN_SOURCES)
+        raise argparse.ArgumentTypeError(f"must be one of {allowed}")
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -75,6 +226,17 @@ def main(argv: list[str] | None = None) -> int:
     if is_check:
         arguments = arguments[1:]
     try:
+        # Refuse before argparse can echo unknown/ambiguous options and values.
+        # The exemption is scoped to the selected subcommand: only credential
+        # options the selected parser declares pass through to argparse.
+        safe_token_options = {"--token-file", "--token-source", "--token-env"}
+        declared = (_declared_token_options(parser, arguments) & safe_token_options) if not is_check else set()
+        for argument in arguments:
+            option = argument.split("=", 1)[0]
+            if ((option.startswith("--token") or option in _TOKEN_SHORT_FORMS)
+                    and option not in declared):
+                parser.error("--token is refused; use CSK_REGISTRY_TOKEN or --token-file for registry authorization; "
+                             "for HTTPS credentials select --token-source or --token-env")
         args = parser.parse_args(arguments)
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else EXIT_CONFIG
@@ -147,7 +309,7 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
         "  csk shell-init         print or install shell hook code\n\n"
         "Run 'csk <command> --help' for command-specific documentation."
     )
-    parser = argparse.ArgumentParser(
+    parser: argparse.ArgumentParser = _CskArgumentParser(
         prog="csk",
         description="CocoaSkill local skill manager",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -347,15 +509,15 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
         epilog=(
             "Scopes use the same canonical-identity grammar as build-ssh.\n"
             "The config stores the token SOURCE, never a token:\n"
-            "  --token git-credentials  reuse the Git HTTPS entry your OS\n"
+            "  --token-source git-credentials  reuse the Git HTTPS entry your OS\n"
             "                           secret store already holds for the host\n"
-            "  --token keyring          use the token 'build-https login' saved\n"
+            "  --token-source keyring          use the token 'build-https login' saved\n"
             "  --token-env NAME         read the token from an environment variable\n\n"
             "CSK_BUILD_HTTPS_TOKEN overrides every scope for one run; it is\n"
             "sent to every HTTPS build repository host in the closure unless\n"
             "CSK_BUILD_HTTPS_HOST pins it to one host.\n\n"
             "Examples:\n"
-            "  csk config build-https add gitlab.example.com/group --token git-credentials\n"
+            "  csk config build-https add gitlab.example.com/group --token-source git-credentials\n"
             "  csk config build-https login gitlab.example.com/group\n"
             "  csk config build-https list"
         ),
@@ -369,7 +531,12 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
     build_https_add.add_argument("scope")
     build_https_add.add_argument(
         "--token",
-        choices=list(build_https.TOKEN_SOURCES),
+        action=_RefuseTokenAction, nargs="?", help=argparse.SUPPRESS,
+    )
+    build_https_add.add_argument(
+        "--token-source",
+        type=_token_source_type,
+        metavar="{" + ",".join(build_https.TOKEN_SOURCES) + "}",
         default=None,
         help="token source: git-credentials or keyring",
     )
@@ -561,7 +728,7 @@ def _add_install(
 
 
 def _build_check_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser: argparse.ArgumentParser = _CskArgumentParser(
         prog="csk check",
         description="Validate a schema-2 Skillfile without installing.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -749,7 +916,11 @@ def _add_audit(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     parser.add_argument("--registry", help="registry base URL for --publish")
     parser.add_argument(
         "--token",
-        help="auditor token for --publish (or set CSK_REGISTRY_TOKEN)",
+        action=_RefuseTokenAction, nargs="?", help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--token-file", metavar="PATH",
+        help="read the registry token from a regular UTF-8 file, private on POSIX (or set CSK_REGISTRY_TOKEN)",
     )
 
 
@@ -1305,9 +1476,9 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
         print(f"Stored a token for {args.scope} through your Git credential helper")
         return EXIT_OK
     # add
-    if (args.token is None) == (args.token_env is None):
+    if (args.token_source is None) == (args.token_env is None):
         print(
-            "build-https add requires exactly one of --token or --token-env",
+            "build-https add requires exactly one of --token-source or --token-env",
             file=sys.stderr,
         )
         return EXIT_CONFIG
@@ -1315,7 +1486,7 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
         build_ssh.validate_scope(args.scope)
         rule = build_https.BuildHTTPSRule(
             scope=args.scope,
-            token=args.token,
+            token=args.token_source,
             token_env=args.token_env,
             username=args.username or "token",
         )
@@ -1599,22 +1770,19 @@ def _cmd_audit(args: argparse.Namespace) -> int:
 
 
 def _cmd_audit_publish(args: argparse.Namespace) -> int:
-    import os
-
     if not args.registry:
         raise ValueError("--publish requires --registry")
-    token = args.token or os.environ.get("CSK_REGISTRY_TOKEN")
-    if not token:
-        raise ValueError("--publish requires --token or the CSK_REGISTRY_TOKEN environment variable")
+    token = registry_token(args.token_file)
     try:
         record_json = Path(args.publish).read_bytes()
     except OSError as exc:
         raise ValueError(f"cannot read audit record file {args.publish}: {exc}") from exc
+    registry_url = config.canonical_registry_url(args.registry, field="--registry")
     try:
-        registry_url = config.canonical_registry_url(args.registry, field="--registry")
         response = audit_registry.http_publish_record(registry_url, token, record_json)
-    except audit_registry.RegistryError as exc:
-        raise ValueError(str(exc)) from exc
+    except Exception:
+        # HTTP exceptions may embed Authorization headers, even for valid tokens.
+        raise ValueError("cannot publish audit record: registry request failed") from None
     print(json.dumps(response, sort_keys=True))
     return EXIT_OK
 
