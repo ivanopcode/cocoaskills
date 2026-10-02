@@ -3989,9 +3989,14 @@ def _runtime_path_entries(plan: SkillPlan, bin_dir: Path) -> tuple[Path, ...]:
     for dependency in _system_dependencies(plan):
         if not dependency.command:
             continue
-        executable = shutil.which(dependency.command)
-        if executable:
-            candidates.append(Path(executable).resolve().parent)
+        try:
+            executable = resolve_tool(dependency.command)
+        except (FileNotFoundError, ValueError) as exc:
+            raise InstallError(
+                f"Cannot resolve system command {dependency.command!r} "
+                f"for {plan.decl.name}: {exc}"
+            ) from exc
+        candidates.append(Path(executable).parent)
 
     entries: list[Path] = []
     seen: set[str] = set()

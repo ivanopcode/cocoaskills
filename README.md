@@ -340,6 +340,11 @@ csk shell-init                      # Генерирует или устанав
   `.github/workflows/ci.yml`; build state is under `<csk-home>/builds/go-v1/`.
 - `mypy` performs strict source type checking. Run `uv run mypy`; it writes no
   persistent artifact unless output is redirected to `.temp/`.
+- Launcher dependency PATH admission uses the manager's `tool_paths` resolver.
+  Run `uv run pytest -q tests/test_launcher_tool_paths.py tests/test_tool_paths.py
+  tests/test_tool_paths_symlinks.py tests/test_shims.py` to check shim exclusion,
+  symlink chains, refusal before publication, and legitimate dependency launch.
+  Save validation logs under `.temp/`.
 - `PyYAML` используется только в dev extra как независимый oracle для
   дифференциальных тестов frontmatter. Запускайте
   `uv run pytest -q tests/test_frontmatter_differential.py`; постоянные
