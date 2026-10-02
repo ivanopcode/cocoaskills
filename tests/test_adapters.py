@@ -137,6 +137,7 @@ def test_transaction_auto_mode_probes_only_private_staging(monkeypatch, tmp_path
     supported = adapters._transaction_links_supported(
         stage_root,
         live_root / ".claude" / "skills" / "skill-a",
+        stage_root,
     )
 
     assert supported
@@ -167,6 +168,7 @@ def test_transaction_auto_mode_rejects_cross_device_staging_without_probe(
     supported = adapters._transaction_links_supported(
         stage_root,
         live_directory / "skill-a",
+        stage_root,
     )
 
     assert not supported
@@ -175,3 +177,31 @@ def test_transaction_auto_mode_rejects_cross_device_staging_without_probe(
         live_root / ".claude",
         live_directory,
     ]
+
+
+def test_transaction_auto_mode_copies_when_relative_address_is_unavailable(monkeypatch, tmp_path):
+    stage_root = tmp_path / 'private-stage'
+    canonical = tmp_path / 'canonical'
+    skill = canonical / 'skill-a'
+    skill.mkdir(parents=True)
+    (skill / 'SKILL.md').write_text('managed', encoding='utf-8')
+    target = adapters.AdapterTarget(
+        target_class='60-adapter-ledger', identifier='cross-drive',
+        live_path=tmp_path / 'home' / '.claude' / 'skills' / 'skill-a',
+        kind='entry', desired_kind='mirror', skill_name='skill-a', canonical_root=canonical,
+    )
+    # Native Windows evidence reproduces this failure even after a positive
+    # device/link probe. The host test drives the same staging entry point.
+    monkeypatch.setattr(adapters, '_device_id', lambda _path: 1)
+    monkeypatch.setattr(adapters, '_link_probe', lambda _path: True)
+    def unavailable_relative_address(*_args):
+        raise ValueError("path is on mount 'C:', start on mount 'D:'")
+    monkeypatch.setattr(adapters.os.path, 'relpath', unavailable_relative_address)
+
+    desired = adapters.stage_project_adapter_targets(
+        stage_root, (target,), source_roots={canonical: canonical}, mode='auto',
+    )
+    staged = desired[(target.target_class, target.identifier)]
+    assert staged is not None and not staged.is_symlink()
+    assert (staged / 'SKILL.md').read_text() == 'managed'
+    assert not target.live_path.exists()

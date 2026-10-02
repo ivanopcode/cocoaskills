@@ -3467,7 +3467,7 @@ def _stage_materialization(
         all_hybrid_names | hybrid_store_names,
     )
     shims.remove_stale_shims(staged_project, expected_commands)
-    env_files.write_env_files(staged_project)
+    env_files.write_env_files(staged_project, approval_root=project.path)
     _prune_staged_runtime(
         config,
         project.path,

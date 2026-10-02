@@ -348,7 +348,7 @@ def stage_project_adapter_targets(
         if mode == "auto":
             selected_mode = (
                 "symlink"
-                if _transaction_links_supported(stage_root, target.live_path)
+                if _transaction_links_supported(stage_root, target.live_path, canonical)
                 else "copy"
             )
         if selected_mode == "symlink":
@@ -362,11 +362,17 @@ def stage_project_adapter_targets(
     return desired
 
 
-def _transaction_links_supported(stage_root: Path, live_path: Path) -> bool:
+def _transaction_links_supported(stage_root: Path, live_path: Path, link_source: Path) -> bool:
     live_directory = _nearest_existing_directory(live_path.parent)
     try:
         same_device = _device_id(stage_root) == _device_id(live_directory)
     except OSError:
+        return False
+    try:
+        # A device/link probe does not attest relative addressing across Windows
+        # drive roots. Auto mode already falls back to copying when unsupported.
+        os.path.relpath(link_source, live_path.parent)
+    except ValueError:
         return False
     # Auto mode must not probe by writing into the live project before the
     # transaction commits. A successful probe on the same filesystem is the

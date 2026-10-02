@@ -29,6 +29,7 @@ from . import (
     manifest,
     project_resolver,
     shell_init,
+    shell_approvals,
     skillcheck,
     status,
 )
@@ -420,6 +421,14 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
         action="store_true",
         help="atomically cache the hook under the CocoaSkills home and print the profile source command",
     )
+    approval = sub.add_parser("shell", help="Review and manage shell env-file approvals.")
+    approval_sub = approval.add_subparsers(dest="shell_command", required=True)
+    approve = approval_sub.add_parser("approve", help="Print an env file and approve its exact digest.")
+    approve.add_argument("path", nargs="?", help="env file; defaults to the nearest env for PWD")
+    approve.add_argument("--yes", action="store_true", help="approve without interactive confirmation")
+    revoke = approval_sub.add_parser("revoke", help="Remove approval for an env-file path.")
+    revoke.add_argument("path")
+    approval_sub.add_parser("approvals", help="List digest and realpath approval records.")
     return parser
 
 
@@ -770,6 +779,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         cfg = config.load_config()
         print(_render_project_resolution(cfg, args))
         return EXIT_OK
+    if args.command == "shell":
+        return _cmd_shell(args)
     if args.command == "shell-init":
         selected_shell = shell_init.detect_shell() if args.shell == "auto" else args.shell
         if args.install:
@@ -1509,6 +1520,8 @@ def _cmd_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
     )
     cfg = _cfg_with_audit_override(cfg, args)
     results = installer.install(cfg, alias=args.alias, options=options)
+    if not options.dry_run:
+        _refresh_existing_cached_hooks_best_effort(cfg.path.parent)
     failed = False
     for result in results:
         for message in result.messages:
@@ -1527,6 +1540,13 @@ def _cmd_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
 def _global_only(args: argparse.Namespace | None) -> list[str] | None:
     selected = getattr(args, "only", None) if args is not None else None
     return list(selected) if selected else None
+
+
+def _refresh_existing_cached_hooks_best_effort(csk_home: Path) -> None:
+    try:
+        shell_init.refresh_existing_cached_hooks(csk_home)
+    except OSError as exc:
+        print(f"csk: warning: could not refresh cached shell hooks: {exc}", file=sys.stderr)
 
 
 def _cmd_global_update(
@@ -1557,6 +1577,8 @@ def _cmd_global_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> i
     )
     cfg = _cfg_with_audit_override(cfg, args)
     result = global_install.install(cfg, options=options, only=_global_only(args))
+    if not options.dry_run:
+        _refresh_existing_cached_hooks_best_effort(cfg.path.parent)
     for message in result.messages:
         print(message)
     for error in result.errors:
@@ -1855,6 +1877,36 @@ def _render_configured_project_resolution(project: config.ProjectConfig, worktre
             f"agents: {', '.join(project.agents)}",
         ]
     )
+
+
+def _cmd_shell(args: argparse.Namespace) -> int:
+    if args.shell_command == "approvals":
+        print(shell_approvals.approvals(), end="")
+        return EXIT_OK
+    path = shell_approvals.canonical_path(Path(args.path) if args.path else shell_approvals.default_env_file())
+    if args.shell_command == "revoke":
+        shell_approvals.revoke(path)
+        return EXIT_OK
+    digest, rendered = shell_approvals.review(path)
+    shown, was_escaped = shell_approvals.escape_review_content(rendered)
+    print(f"Path: {path}\nSHA256: {digest}")
+    if was_escaped:
+        print("Note: control characters in this file are shown escaped.")
+    print(shown, end="" if shown.endswith("\n") else "\n")
+    if not args.yes:
+        if not sys.stdin.isatty():
+            raise ValueError("csk shell approve requires an interactive terminal; review the file and pass --yes")
+        try:
+            confirmed = input("Approve this exact file? [y/N] ").strip().lower() in {"y", "yes"}
+        except EOFError:
+            confirmed = False
+        if not confirmed:
+            print("Not approved.")
+            return EXIT_CONFIG
+    # Approve only the bytes that were printed, even if the file changes while
+    # the operator reviews it. The hook rejects a different digest.
+    shell_approvals.record({path: digest})
+    return EXIT_OK
 
 
 if __name__ == "__main__":
