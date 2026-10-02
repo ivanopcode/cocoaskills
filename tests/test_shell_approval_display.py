@@ -136,6 +136,11 @@ METACHAR_DIRS = [
 @pytest.mark.parametrize('shell', ['bash', 'zsh'])
 @pytest.mark.parametrize('dirname, case', [pytest.param(d, c, id=c) for d, c in METACHAR_DIRS])
 def test_hook_notice_remedy_pastes_safely(tmp_path: Path, shell: str, dirname: str, case: str) -> None:
+    if os.name == 'nt' and case in {'pipe', 'glob', 'dquote', 'semicolon-nospace', 'newline', 'esc'}:
+        pytest.skip('Win32 reserves this character in file names')
+    executable = shutil.which(shell)
+    if executable is None:
+        pytest.skip(f'{shell} unavailable')
     project = tmp_path / 'proj'
     evil_dir = project / dirname
     (evil_dir / '.agents').mkdir(parents=True)
@@ -158,7 +163,7 @@ def test_hook_notice_remedy_pastes_safely(tmp_path: Path, shell: str, dirname: s
     stub.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > {captured}\n")
     stub.chmod(0o755)
     pasted = subprocess.run(
-        ['/bin/bash', '-c', suggested], cwd=tmp_path,
+        [executable, '-c', suggested], cwd=tmp_path,
         env={**os.environ, 'PATH': f'{stub_dir}:{os.environ["PATH"]}'},
         capture_output=True, timeout=30,
     )
@@ -221,7 +226,7 @@ def test_display_narrowing_mutants_are_killed(tmp_path: Path, mutant: str) -> No
         assert hook_text.count(old_close) == 1
         hook.write_text(hook_text.replace(old_close, new_close))
         test = 'test_hook_notice_remedy_pastes_safely'
-        selection = test + ' and semicolon-nospace'
+        selection = test + ' and (semicolon-nospace or squote)'
     result = subprocess.run(
         [sys.executable, '-m', 'pytest', '-q', test_file, '-k', selection,
          '--basetemp=' + str(tmp_path / 'mutant-tmp')],

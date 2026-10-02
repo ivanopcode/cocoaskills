@@ -361,6 +361,7 @@ _csk_global_env_file() {
   if [ -f "$home_dir/global/env.sh" ]; then
     _csk_found_global="$home_dir/global/env.sh"
   fi
+  return 0
 }
 '''
     global_part = r'''
@@ -436,8 +437,10 @@ _csk_memo_populate() {{
   if [ -n "$_csk_found_global" ]; then
     _CSK_MEMO_GLOB_REAL="$(_csk_realpath "$_csk_found_global" 2>/dev/null)" || return 0
   fi
-  _csk_memo_key_new="$(_csk_stat_key "$_CSK_MEMO_PROJ_REAL" "$_CSK_MEMO_GLOB_REAL" "$HOME/.cocoaskills/shell/approved" "$HOME/.cocoaskills/shell")"
-  _csk_memo_rc_new=$?
+  # A bare assignment from a failing substitution would kill set -e shells,
+  # so the rc is captured through the || list instead of $?.
+  _csk_memo_rc_new=0
+  _csk_memo_key_new="$(_csk_stat_key "$_CSK_MEMO_PROJ_REAL" "$_CSK_MEMO_GLOB_REAL" "$HOME/.cocoaskills/shell/approved" "$HOME/.cocoaskills/shell")" || _csk_memo_rc_new=$?
   if [ "$_csk_memo_rc_new" != 0 ] && ! command -v ls >/dev/null 2>&1; then
     return 0
   fi
@@ -471,8 +474,8 @@ _csk_auto_env() {{
       _csk_memo_ok=0
     fi
     if [ "$_csk_memo_ok" = 1 ]; then
-      _csk_memo_key_new="$(_csk_stat_key "${{_CSK_MEMO_PROJ_REAL:-}}" "${{_CSK_MEMO_GLOB_REAL:-}}" "$HOME/.cocoaskills/shell/approved" "$HOME/.cocoaskills/shell")"
-      _csk_memo_rc_new=$?
+      _csk_memo_rc_new=0
+      _csk_memo_key_new="$(_csk_stat_key "${{_CSK_MEMO_PROJ_REAL:-}}" "${{_CSK_MEMO_GLOB_REAL:-}}" "$HOME/.cocoaskills/shell/approved" "$HOME/.cocoaskills/shell")" || _csk_memo_rc_new=$?
       if [ "$_csk_memo_rc_new" = "${{_CSK_MEMO_RC:-}}" ] && [ "$_csk_memo_key_new" = "${{_CSK_MEMO_KEY:-}}" ]; then
         if [ "$_csk_memo_rc_new" = 0 ] || command -v ls >/dev/null 2>&1; then
           return 0
@@ -482,6 +485,7 @@ _csk_auto_env() {{
   fi
   _csk_auto_env_slow
   _csk_memo_populate
+  return 0
 }}
 
 _csk_auto_env_slow() {{
@@ -519,6 +523,7 @@ _csk_auto_env_slow() {{
     export CSK_ACTIVE_ENV
     . "$_csk_source_path"
   fi
+  return 0
 }}
 
 case "$SHELL" in

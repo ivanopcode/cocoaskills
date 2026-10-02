@@ -178,6 +178,45 @@ def test_hook_memo_identity_property(
 
 
 @pytest.mark.parametrize('shell', ['bash', 'zsh'])
+@pytest.mark.parametrize('state', ['fresh', 'approved', 'skipped'])
+def test_hook_survives_set_e(tmp_path: Path, shell: str, state: str) -> None:
+    executable = shutil.which(shell)
+    if executable is None:
+        pytest.skip(f'{shell} unavailable')
+    digest = next((t for t in ('shasum', 'sha256sum', 'openssl') if _shell_tool(shell, t)), None)
+    if digest is None:
+        pytest.skip('no digest tool')
+    from csk import shell_init
+
+    project = tmp_path / 'project'
+    (project / '.agents').mkdir(parents=True)
+    env = project / '.agents/env.sh'
+    env.write_text('echo hello\n')
+    if state == 'approved':
+        assert cli.main(['shell', 'approve', str(env), '--yes']) == 0
+    if state == 'skipped':
+        other = tmp_path / 'other' / '.agents/env.sh'
+        other.parent.mkdir(parents=True)
+        other.write_text('echo other\n')
+        assert cli.main(['shell', 'approve', str(other), '--yes']) == 0
+    hook = tmp_path / 'hook.sh'
+    hook.write_text(shell_init.shell_init(shell))
+    args = [executable, '-dfc'] if shell == 'zsh' else [executable, '--noprofile', '--norc', '-c']
+    script = 'set -e; cd "$PROJECT_PATH"; . "$HOOK"; _csk_auto_env; _csk_auto_env; printf "survived\\n"'
+    result = subprocess.run(
+        [*args, script], cwd=project,
+        env={**os.environ, 'HOOK': hook.as_posix(), 'PROJECT_PATH': project.as_posix(), 'SHELL': executable},
+        text=True, capture_output=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] == 'survived'
+    if state == 'skipped':
+        assert 'not approved' in result.stderr
+    if state == 'approved':
+        assert result.stderr == ''
+
+
+@pytest.mark.parametrize('shell', ['bash', 'zsh'])
 def test_hook_warm_path_budget(tmp_path: Path, shell: str) -> None:
     perl = _shell_tool(shell, 'perl')
     if perl is None:

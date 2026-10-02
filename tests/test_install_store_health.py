@@ -205,8 +205,10 @@ def test_hook_metadata_suffix_shim(tmp_path: Path, shell: str, suffix: str, trus
     digest = next((t for t in ('shasum', 'sha256sum', 'openssl') if _shell_tool(shell, t)), None)
     if digest is None:
         pytest.skip('no digest tool')
-    sed = shutil.which('sed')
-    assert sed
+    sed_tool = _shell_tool(shell, 'sed')
+    if sed_tool is None:
+        pytest.skip('sed undiscoverable')
+    sed = sed_tool.as_posix()
     project = tmp_path / 'project'
     env_files.write_env_files(project)
     tools = tmp_path / 'shimtools'
