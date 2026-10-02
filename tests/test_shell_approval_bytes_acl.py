@@ -235,8 +235,15 @@ def test_byte_acl_narrowing_mutants_are_killed(tmp_path: Path, mutant: str) -> N
         pytest.skip('real macOS chmod +a narrowing proof')
     source = Path(__file__).resolve().parents[1]
     checkout = tmp_path / 'mutant'
-    shutil.copytree(source / 'src', checkout / 'src')
-    shutil.copytree(source / 'tests', checkout / 'tests', ignore=shutil.ignore_patterns('__pycache__'))
+    shutil.copytree(source / 'src', checkout / 'src', ignore=shutil.ignore_patterns('__pycache__'))
+    (checkout / 'tests').mkdir()
+    for name in ('conftest.py', 'draft_sources_accounting.py', 'test_adapters.py',
+                 'test_build_cache_windows.py',
+                 'test_shell_approvals.py', 'test_shell_approval_trust.py',
+                 'test_shell_approval_bytes_acl.py', 'test_shell_approval_display.py',
+                 'test_shell_hook_upgrade.py', 'test_install_store_health.py',
+                 'test_shell_hook_memo.py'):
+        shutil.copy2(source / 'tests' / name, checkout / 'tests' / name)
     shutil.copy2(source / 'pyproject.toml', checkout / 'pyproject.toml')
     module = checkout / 'src/csk/shell_approvals.py'
     hook = checkout / 'src/csk/shell_init.py'

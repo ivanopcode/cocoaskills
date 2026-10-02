@@ -216,9 +216,9 @@ def test_hook_metadata_suffix_shim(tmp_path: Path, shell: str, suffix: str, trus
     real_ls = _shell_tool(shell, 'ls')
     assert real_ls
     shim = tools / 'ls'
-    shim.write_text(
-        '#!/bin/sh\n' + shlex.quote(real_ls.as_posix()) + ' "$@" | ' + shlex.quote(sed)
-        + " -E 's/^([-d][-rwxsStT-]{9})[@+]?/\\1" + suffix + "/'\n"
+    shim.write_bytes(
+        ('#!/bin/sh\n' + shlex.quote(real_ls.as_posix()) + ' "$@" | ' + shlex.quote(sed)
+         + " -E 's/^([-d][-rwxsStT-]{9})[@+]?/\\1" + suffix + "/'\n").encode()
     )
     shim.chmod(0o755)
     names = ['id', 'tr', 'cmp', digest, 'readlink', 'perl', 'cygpath']
@@ -244,8 +244,15 @@ def test_hook_metadata_suffix_shim(tmp_path: Path, shell: str, suffix: str, trus
 def test_store_health_narrowing_mutants_are_killed(tmp_path: Path, mutant: str) -> None:
     source = Path(__file__).resolve().parents[1]
     checkout = tmp_path / 'mutant'
-    shutil.copytree(source / 'src', checkout / 'src')
-    shutil.copytree(source / 'tests', checkout / 'tests', ignore=shutil.ignore_patterns('__pycache__'))
+    shutil.copytree(source / 'src', checkout / 'src', ignore=shutil.ignore_patterns('__pycache__'))
+    (checkout / 'tests').mkdir()
+    for name in ('conftest.py', 'draft_sources_accounting.py', 'test_adapters.py',
+                 'test_build_cache_windows.py',
+                 'test_shell_approvals.py', 'test_shell_approval_trust.py',
+                 'test_shell_approval_bytes_acl.py', 'test_shell_approval_display.py',
+                 'test_shell_hook_upgrade.py', 'test_install_store_health.py',
+                 'test_shell_hook_memo.py'):
+        shutil.copy2(source / 'tests' / name, checkout / 'tests' / name)
     shutil.copy2(source / 'pyproject.toml', checkout / 'pyproject.toml')
     module = checkout / 'src/csk/env_files.py'
     text = module.read_text()

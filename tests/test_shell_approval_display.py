@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -88,7 +89,7 @@ def test_approve_leaves_clean_content_byte_identical(tmp_path: Path, capsys: pyt
     (project / '.agents').mkdir(parents=True)
     env = project / '.agents/env.sh'
     content = '# reviewed\n\techo "caf\u00e9 \u0421\u043a\u0438\u043b\u043b"\n'
-    env.write_text(content, encoding='utf-8')
+    env.write_text(content, encoding='utf-8', newline='\n')
     assert cli.main(['shell', 'approve', str(env), '--yes']) == 0
     out = capsys.readouterr().out.encode('utf-8')
     assert content.encode('utf-8') in out
@@ -152,7 +153,7 @@ def test_hook_notice_remedy_pastes_safely(tmp_path: Path, shell: str, dirname: s
     stub_dir.mkdir()
     captured = tmp_path / 'argv.txt'
     stub = stub_dir / 'csk'
-    stub.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > {captured}\n")
+    stub.write_bytes(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > {shlex.quote(captured.as_posix())}\n".encode())
     stub.chmod(0o755)
     pasted = subprocess.run(
         [executable, '-c', suggested], cwd=tmp_path,
@@ -194,8 +195,15 @@ def test_display_and_quote_helper_through_shell(tmp_path: Path, shell: str) -> N
 def test_display_narrowing_mutants_are_killed(tmp_path: Path, mutant: str) -> None:
     source = Path(__file__).resolve().parents[1]
     checkout = tmp_path / 'mutant'
-    shutil.copytree(source / 'src', checkout / 'src')
-    shutil.copytree(source / 'tests', checkout / 'tests', ignore=shutil.ignore_patterns('__pycache__'))
+    shutil.copytree(source / 'src', checkout / 'src', ignore=shutil.ignore_patterns('__pycache__'))
+    (checkout / 'tests').mkdir()
+    for name in ('conftest.py', 'draft_sources_accounting.py', 'test_adapters.py',
+                 'test_build_cache_windows.py',
+                 'test_shell_approvals.py', 'test_shell_approval_trust.py',
+                 'test_shell_approval_bytes_acl.py', 'test_shell_approval_display.py',
+                 'test_shell_hook_upgrade.py', 'test_install_store_health.py',
+                 'test_shell_hook_memo.py'):
+        shutil.copy2(source / 'tests' / name, checkout / 'tests' / name)
     shutil.copy2(source / 'pyproject.toml', checkout / 'pyproject.toml')
     test_file = 'tests/test_shell_approval_display.py'
     if mutant == 'escape-cr-only':
