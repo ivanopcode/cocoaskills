@@ -8,6 +8,10 @@ from dataclasses import replace
 from conftest import make_config, make_project, make_skill_repo, write_skillfile
 from csk import config, installer
 from csk.audit import runner
+from csk.audit.backend_config import parse_backend_config
+from csk.audit.backends.base import AuditRequest
+from csk.audit.backends.codex_backend import CodexBackend
+from csk.audit.capabilities import CapabilityManifest
 from csk.audit.model import Decision, Severity
 from csk.audit.source_policy import SourcePolicy
 
@@ -23,7 +27,7 @@ import sys
 
 payload = json.load(sys.stdin.buffer)
 if payload["skill"] != "csk-audit-canary":
-    with open(os.environ["REQUEST_LOG"], "w", encoding="utf-8") as fh:
+    with open(sys.argv[1], "w", encoding="utf-8") as fh:
         json.dump(payload, fh, sort_keys=True)
 print(json.dumps({
     "schema_version": 1,
@@ -77,8 +81,7 @@ print(json.dumps({
             backends={
                 "local-command": {
                     "kind": "command",
-                    "command": [sys.executable, str(backend)],
-                    "env": {"REQUEST_LOG": str(request_log)},
+                    "command": [sys.executable, str(backend), str(request_log)],
                 }
             },
         ),
@@ -263,7 +266,7 @@ import sys
 
 payload = json.load(sys.stdin.buffer)
 if payload["skill"] != "csk-audit-canary":
-    with open(os.environ["REQUEST_LOG"], "w", encoding="utf-8") as fh:
+    with open(sys.argv[1], "w", encoding="utf-8") as fh:
         json.dump(payload, fh, sort_keys=True)
 print(json.dumps({
     "schema_version": 1,
@@ -307,8 +310,7 @@ print(json.dumps({
                 "cloud-command": {
                     "kind": "command",
                     "cloud": True,
-                    "command": [sys.executable, str(backend)],
-                    "env": {"REQUEST_LOG": str(request_log)},
+                    "command": [sys.executable, str(backend), str(request_log)],
                 }
             },
         ),
@@ -385,6 +387,32 @@ def test_codex_backend_constructs_hermetic_exec_command(monkeypatch, tmp_path, c
     assert "SKILL.md" in real["stdin"]
 
 
+def test_codex_wrapper_runs_extract_and_canary_without_secret_argv(tmp_path, monkeypatch):
+    log_path = tmp_path / "codex-log.jsonl"
+    _write_fake_codex(tmp_path, monkeypatch, log_path)
+    monkeypatch.setenv("CSK_REGISTRY_TOKEN", "synthetic-registry-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-api-secret")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-state"))
+    backend = CodexBackend(parse_backend_config(
+        "fixture", {"kind": "codex", "oss": True, "local_provider": "ollama"},
+        global_model=None, allow_cloud=False,
+    ))
+    request = AuditRequest(
+        skill="fixture", source="fixture", commit="fixture", content_sha256="sha256:" + "0" * 64,
+        files={}, capabilities=CapabilityManifest.implicit_none(), contract_reference="fixture",
+        response_schema={}, static_findings=(), redacted=False,
+    )
+    assert backend.is_available()
+    assert backend.extract(request, timeout=5) == ()
+    assert backend.run_canary()
+    entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    assert len(entries) == 2
+    for entry in entries:
+        assert entry["cwd_entries"] == []
+        assert entry["argv"][-1] == "-"
+        assert not any("synthetic-" in arg for arg in entry["argv"])
+
+
 def _write_backend_script(tmp_path, body: str):
     script = tmp_path / "backend.py"
     script.write_text(body.lstrip(), encoding="utf-8")
@@ -399,7 +427,8 @@ import json
 import os
 import sys
 
-argv = sys.argv[1:]
+log_path = sys.argv[1]
+argv = sys.argv[2:]
 stdin = sys.stdin.read()
 response_file = argv[argv.index("--output-last-message") + 1]
 entry = {
@@ -408,7 +437,7 @@ entry = {
     "cwd_entries": sorted(os.listdir(os.getcwd())),
     "stdin": stdin,
 }
-with open(os.environ["CODEX_LOG"], "a", encoding="utf-8") as fh:
+with open(log_path, "a", encoding="utf-8") as fh:
     fh.write(json.dumps(entry, sort_keys=True) + "\\n")
 if "csk-audit-canary" in stdin:
     findings = [
@@ -434,10 +463,9 @@ with open(response_file, "w", encoding="utf-8") as fh:
     )
     if sys.platform == "win32":
         wrapper = tmp_path / "codex.cmd"
-        wrapper.write_text(f'@echo off\r\n"{sys.executable}" "{fake}" %*\r\n', encoding="utf-8")
+        wrapper.write_text(f'@echo off\r\n"{sys.executable}" "{fake}" "{log_path}" %*\r\n', encoding="utf-8")
     else:
         wrapper = tmp_path / "codex"
-        wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{fake}" "$@"\n', encoding="utf-8")
+        wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{fake}" "{log_path}" "$@"\n', encoding="utf-8")
         wrapper.chmod(0o755)
-    monkeypatch.setenv("CODEX_LOG", str(log_path))
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))

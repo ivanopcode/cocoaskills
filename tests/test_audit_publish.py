@@ -63,9 +63,12 @@ def test_publish_posts_record(tmp_path, skills_root, csk_home, monkeypatch, caps
         return FakeResponse()
 
     monkeypatch.setattr(audit_registry, "_open_registry_request", fake_urlopen)
+    token_file = tmp_path / "registry-token"
+    token_file.write_text("t0ken\n", encoding="utf-8")
+    token_file.chmod(0o600)
 
     code = cli.main(
-        ["audit", "--publish", str(record), "--registry", "https://r.example", "--token", "t0ken"]
+        ["audit", "--publish", str(record), "--registry", "https://r.example", "--token-file", str(token_file)]
     )
     assert code == 0
     assert captured["url"] == "https://r.example/v1/records"
@@ -112,7 +115,8 @@ def test_publish_requires_registry(tmp_path, skills_root, csk_home, monkeypatch)
     record = tmp_path / "record.json"
     record.write_text("{}", encoding="utf-8")
     # No --registry, exits configuration error.
-    assert cli.main(["audit", "--publish", str(record), "--token", "t"]) == cli.EXIT_CONFIG
+    monkeypatch.setenv("CSK_REGISTRY_TOKEN", "synthetic-token")
+    assert cli.main(["audit", "--publish", str(record)]) == cli.EXIT_CONFIG
 
 
 def test_publish_requires_token(tmp_path, skills_root, csk_home, monkeypatch):

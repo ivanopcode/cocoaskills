@@ -4,6 +4,7 @@ The committed files in ``tests/fixtures/cli-golden-v1/`` preserve the original
 capture from released commit ``ac840828d947d0559b9dd18dcc783bc422a4b341``.
 The active gate renders that released source and the candidate under the same
 Python interpreter because argparse help wrapping changed after Python 3.12.
+Audit help permits only the explicit security token-input difference below.
 Both runs use the terminal width from ``base_run_env`` and capture through
 ``StringIO(newline="\\n")``; line endings remain byte-exact and only path
 separators are normalized.
@@ -123,6 +124,27 @@ def test_cli_v1_golden_byte_identical(
         label="released",
     )
 
+    if slug == "audit-help":
+        # Keep every other help byte under the released comparison. The
+        # token option is the one intentional security-related difference.
+        old_usage = b"[--token TOKEN]"
+        old_option = (
+            b"  --token TOKEN         auditor token for --publish (or set\n"
+            b"                        CSK_REGISTRY_TOKEN)\n"
+        )
+        new_option = (
+            b"  --token-file PATH     read the registry token from a regular UTF-8 file,\n"
+            b"                        private on POSIX (or set CSK_REGISTRY_TOKEN)\n"
+        )
+        assert released.stdout.count(old_usage) == 1
+        assert released.stdout.count(old_option) == 1
+        released = CLIOutput(
+            exit_code=released.exit_code,
+            stdout=released.stdout.replace(old_usage, b"[--token-file PATH]").replace(old_option, new_option),
+            stderr=released.stderr, version=released.version,
+            terminal_width=released.terminal_width,
+        )
+
     assert candidate.exit_code == released.exit_code
     assert _normalize(
         tokenize_output(
@@ -138,6 +160,40 @@ def test_cli_v1_golden_byte_identical(
     ) == _normalize(
         tokenize_output(released.stderr, root=str(released_root), version=released.version)
     )
+
+
+def _audit_help_fixture(tmp_path: Path) -> Path:
+    # Help never examines Git state, so its replay needs only the config
+    # paths that the shared capture helper repoints. Other replay cases
+    # retain their full released Git fixture.
+    root = tmp_path / "audit-help-pristine"
+    (root / "home").mkdir(parents=True)
+    (root / "home" / "config.json").write_text(json.dumps({
+        "schema_version": 1, "skills_root": (root / "skills").as_posix(),
+        "projects": {"demo": {"path": (root / "project").as_posix()}},
+    }), encoding="utf-8")
+    return root
+
+
+def test_audit_help_uses_safe_token_sources(tmp_path, released_v1_source) -> None:
+    test_cli_v1_golden_byte_identical(
+        "audit-help", _audit_help_fixture(tmp_path), released_v1_source, tmp_path,
+    )
+
+
+def test_audit_help_comparison_rejects_unrelated_drift(tmp_path, released_v1_source, monkeypatch) -> None:
+    mutant_root = tmp_path / "mutant-project"
+    shutil.copytree(PROJECT_ROOT / "src", mutant_root / "src")
+    source = mutant_root / "src" / "csk" / "cli.py"
+    text = source.read_text(encoding="utf-8")
+    before = 'help="required reason for --allow"'
+    assert text.count(before) == 1
+    source.write_text(text.replace(before, 'help="required reason for --allowx"'), encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "PROJECT_ROOT", mutant_root)
+    with pytest.raises(AssertionError):
+        test_cli_v1_golden_byte_identical(
+            "audit-help", _audit_help_fixture(tmp_path), released_v1_source, tmp_path,
+        )
 
 
 def test_golden_fixture_inventory_is_complete() -> None:
