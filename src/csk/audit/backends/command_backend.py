@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import tempfile
@@ -12,6 +11,7 @@ from ..backend_config import CommandBackendConfig
 from ..capabilities import CapabilityManifest
 from ..model import Finding, Severity
 from .base import AuditBackendError, AuditRequest
+from .environment import COMMAND_REQUIRED_ENV, backend_environment
 
 
 class CommandBackend:
@@ -55,8 +55,7 @@ class CommandBackend:
         cwd = self.config.cwd
         with tempfile.TemporaryDirectory(prefix="csk-audit-command-") as tmp:
             run_cwd = cwd or Path(tmp)
-            env = os.environ.copy()
-            env.update(self.config.env)
+            env = backend_environment(COMMAND_REQUIRED_ENV, overrides=self.config.env)
             try:
                 proc = subprocess.run(
                     list(self.config.command),
