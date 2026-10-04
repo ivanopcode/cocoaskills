@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 import pytest
-from conftest import make_project, make_skill_repo, run, write_skillfile
+from conftest import assert_own_git_repo, make_project, make_skill_repo, run, write_skillfile
 
 from csk import cli, config, git_admission, installer, locking, shims, status
 from csk.build_repository import LockedCommit
@@ -228,6 +228,7 @@ def test_cli_init_non_git_then_git_init_leaves_installable_empty_project(monkeyp
     assert cli.main(["init", str(project)]) == 0
     run(["git", "init"], project)
     run(["git", "branch", "-M", "main"], project)
+    assert_own_git_repo(project)
     run(["git", "config", "user.name", "Test User"], project)
     run(["git", "config", "user.email", "test@example.com"], project)
     cfg_path = csk_home / "config.json"

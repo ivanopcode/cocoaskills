@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from git_fixture_isolation import check_own_git_dir, scrub_git_child_env
+
 
 # .scripts/release.sh is a POSIX (zsh) maintainer script; only tests that invoke
 # it are skipped on Windows. Pure-Python release_support.py tests still run there.
@@ -33,9 +35,20 @@ SUPPORT_SPEC.loader.exec_module(release_support)
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    # Fixture git children never inherit repository discovery: an ambient
+    # GIT_DIR/GIT_WORK_TREE once redirected a fixture's config writes into
+    # the enclosing checkout (BUG-261004-473myt).
+    env = scrub_git_child_env(dict(os.environ), repo)
     return subprocess.run(
-        ["git", *args], cwd=repo, text=True, capture_output=True, check=False
+        ["git", *args], cwd=repo, text=True, capture_output=True, check=False, env=env
     )
+
+
+def _assert_own_repo(repo: Path) -> None:
+    """Prove the discovered repository is this fixture's own before config writes."""
+    resolved = _git(repo, "rev-parse", "--absolute-git-dir")
+    assert resolved.returncode == 0, resolved.stderr
+    check_own_git_dir(repo, resolved.stdout)
 
 
 def test_union_merge_keeps_both_branches_appends_for_changelog_and_logbook(
@@ -45,6 +58,7 @@ def test_union_merge_keeps_both_branches_appends_for_changelog_and_logbook(
     repo.mkdir()
     init = _git(repo, "init", "--initial-branch=main", "--quiet")
     assert init.returncode == 0, init.stderr
+    _assert_own_repo(repo)
     assert _git(repo, "config", "user.name", "Release Test").returncode == 0
     assert _git(repo, "config", "user.email", "release-test@example.invalid").returncode == 0
 
@@ -454,6 +468,7 @@ def _seed_real_git_push_repositories(
 
     init = _git(project, "init", "--initial-branch=main", "--quiet")
     assert init.returncode == 0, init.stderr
+    _assert_own_repo(project)
     for key, value in (
         ("user.name", "Release Test"),
         ("user.email", "release-test@example.invalid"),

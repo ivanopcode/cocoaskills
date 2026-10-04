@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
-from conftest import commit_all, make_config, make_project, make_skill_repo, run, write_skillfile
+from conftest import assert_own_git_repo, commit_all, make_config, make_project, make_skill_repo, run, write_skillfile
 from csk import cli, installer, status
 from csk.config import AuditConfig
 
@@ -71,6 +71,7 @@ def test_path_substitution_reads_the_local_checkout(tmp_path, skills_root, csk_h
     project, provider_repo, provider_commit, cfg = _setup(tmp_path, skills_root, csk_home)
     dev_checkout = tmp_path / "dev-provider"
     run(["git", "clone", str(provider_repo), str(dev_checkout)], tmp_path)
+    assert_own_git_repo(dev_checkout)
     run(["git", "config", "user.name", "Dev"], dev_checkout)
     run(["git", "config", "user.email", "dev@example.com"], dev_checkout)
     (dev_checkout / "SKILL.md").write_text("---\nname: test\n---\n\n# Dev state\n", encoding="utf-8")
@@ -96,6 +97,7 @@ def test_git_branch_substitution_resolves_the_branch_head(tmp_path, skills_root,
     project, provider_repo, provider_commit, cfg = _setup(tmp_path, skills_root, csk_home)
     fork = tmp_path / "fork-provider"
     run(["git", "clone", str(provider_repo), str(fork)], tmp_path)
+    assert_own_git_repo(fork)
     run(["git", "config", "user.name", "Dev"], fork)
     run(["git", "config", "user.email", "dev@example.com"], fork)
     run(["git", "checkout", "-b", "feature"], fork)

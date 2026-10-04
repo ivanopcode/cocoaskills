@@ -12,19 +12,37 @@ from csk import deprecation, locking
 from csk.config import GlobalConfig, ProjectConfig
 
 from draft_sources_accounting import record as _record_draft_sources_outcome
+from git_fixture_isolation import check_own_git_dir, scrub_git_child_env
 
 
 def run(cmd: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
+    env: dict[str, str] | None = None
+    if cmd and Path(cmd[0]).name in ("git", "git.exe"):
+        # Fixture git children never inherit repository discovery: an ambient
+        # GIT_DIR/GIT_WORK_TREE once redirected a fixture's config writes
+        # into the enclosing checkout (BUG-261004-473myt). Non-git children
+        # keep the inherited environment untouched.
+        env = scrub_git_child_env(dict(os.environ), cwd)
+    proc = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, env=env)
     if check and proc.returncode != 0:
         raise AssertionError(f"{cmd} failed in {cwd}\nstdout={proc.stdout}\nstderr={proc.stderr}")
     return proc
+
+
+def assert_own_git_repo(path: Path) -> None:
+    """Prove the discovered repository is this fixture's own before config writes.
+
+    Backstop for a redirector the scrub in ``run`` does not know: every
+    fixture init or clone that goes on to write git config calls this first.
+    """
+    check_own_git_dir(path, run(["git", "rev-parse", "--absolute-git-dir"], path).stdout)
 
 
 def init_git_repo(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     run(["git", "init"], path)
     run(["git", "branch", "-M", "main"], path)
+    assert_own_git_repo(path)
     run(["git", "config", "user.name", "Test User"], path)
     run(["git", "config", "user.email", "test@example.com"], path)
     return path
