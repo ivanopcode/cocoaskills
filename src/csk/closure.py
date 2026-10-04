@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import stat
 import tempfile
 from collections.abc import Callable, Sequence
@@ -32,6 +33,59 @@ PROJECT_EDGE = "<project>"
 
 class ClosureError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class MissingSystemCommand:
+    skill: str
+    command: str | None
+    hint: str | None = None
+
+
+def format_missing_system_commands(missing: Sequence[MissingSystemCommand]) -> str:
+    ordered = sorted(missing, key=lambda item: (item.skill, item.command or ""))
+    parts: list[str] = []
+    for item in ordered:
+        hint = f" Hint: {item.hint}" if item.hint else ""
+        parts.append(f"Missing system command {item.command!r} for {item.skill}.{hint}")
+    return "; ".join(parts)
+
+
+class MissingSystemCommandsError(ClosureError):
+    def __init__(self, missing: Sequence[MissingSystemCommand]) -> None:
+        self.missing: list[MissingSystemCommand] = list(missing)
+        super().__init__(format_missing_system_commands(self.missing))
+
+
+def missing_system_commands_for_spec(
+    skill_name: str, spec: skillspec.SkillSpec
+) -> list[MissingSystemCommand]:
+    legacy = [command for command in spec.commands.values() if command.type == "system"]
+    explicit = [
+        skillspec.CommandSpec(
+            name=dependency.name,
+            type="system",
+            command=dependency.command,
+            hint=dependency.hint,
+            source=dependency.source,
+        )
+        for dependency in spec.dependencies.values()
+        if dependency.type == "system"
+    ]
+    seen: set[tuple[str, str | None]] = set()
+    missing: list[MissingSystemCommand] = []
+    for command in legacy + explicit:
+        key = (skill_name, command.command)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not command.command or shutil.which(command.command) is None:
+            missing.append(
+                MissingSystemCommand(
+                    skill=skill_name, command=command.command, hint=command.hint
+                )
+            )
+    return missing
 
 
 @dataclass(frozen=True)
@@ -118,6 +172,7 @@ def build_closure(
     node_resolver: Callable[[_Pending], ClosureNode] | None = None,
     error_factory: Callable[[str, str], BaseException] | None = None,
     ref_comparator: Callable[[ClosureNode, _Pending], str] | None = None,
+    check_system_commands: bool = True,
 ) -> list[ClosureNode]:
     """Expand direct skills and their requirements into an ordered closure.
 
@@ -135,8 +190,17 @@ def build_closure(
     schema-2 closure supplies it because its nodes carry materialized
     snapshot directories rather than git repositories. ``None`` resolves
     through the node's repository exactly as before.
+
+    When ``check_system_commands`` is true (the schema-1 default), every
+    node's system commands and system dependencies are checked as soon as
+    its manifest is known, and every missing command across the closure is
+    reported in one :class:`MissingSystemCommandsError` before the closure
+    returns, so no validation, freezing, build planning, build-repository
+    fetch or publication starts. The schema-2 full closure disables this
+    and keeps its own plan-time gate.
     """
     nodes: dict[str, ClosureNode] = {}
+    missing_system: list[MissingSystemCommand] = []
     fetched_repos = fetched_repos if fetched_repos is not None else set()
     pending: list[_Pending] = [
         _Pending(
@@ -168,6 +232,10 @@ def build_closure(
                     read_only=read_only,
                 )
             nodes[item.name] = node
+            if check_system_commands:
+                missing_system.extend(
+                    missing_system_commands_for_spec(node.name, node.spec)
+                )
             for requirement in node.spec.requirements.values():
                 pending.append(
                     _Pending(
@@ -189,7 +257,10 @@ def build_closure(
         node.chains.append(item.chain)
 
     _validate_requirement_commands(nodes, error_factory=error_factory)
-    return _topological_order(nodes, error_factory=error_factory)
+    ordered = _topological_order(nodes, error_factory=error_factory)
+    if check_system_commands and missing_system:
+        raise MissingSystemCommandsError(missing_system)
+    return ordered
 
 
 def _closure_failure(
@@ -860,4 +931,5 @@ def build_source_closure(
         node_resolver=resolve_item,
         error_factory=_source_closure_error,
         ref_comparator=_source_ref_commit,
+        check_system_commands=False,
     )

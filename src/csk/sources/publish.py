@@ -1324,9 +1324,11 @@ def check_schema2_system_commands(
 
     Mirrors the legacy lane's readiness check exactly: every declared
     system dependency names an executable that must resolve on the
-    operator PATH before any shim is published.
+    operator PATH before any shim is published. Every missing command
+    across the selected members is reported in one diagnostic.
     """
 
+    missing: list[str] = []
     for member in members:
         spec = specs_map[member.name]
         for dependency in spec.dependencies.values():
@@ -1334,11 +1336,12 @@ def check_schema2_system_commands(
                 continue
             if not dependency.command or shutil.which(dependency.command) is None:
                 hint = f" Hint: {dependency.hint}" if dependency.hint else ""
-                raise SourceError(
-                    CODE_MEMBER_MISSING,
+                missing.append(
                     f"Missing system command {dependency.command!r} for "
-                    f"{member.name}.{hint}",
+                    f"{member.name}.{hint}"
                 )
+    if missing:
+        raise SourceError(CODE_MEMBER_MISSING, "; ".join(sorted(missing)))
 
 
 def check_schema2_skill_dependencies(
