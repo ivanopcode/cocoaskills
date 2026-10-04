@@ -28,6 +28,7 @@ from . import (
     closure,
     consumers,
     dev_substitutions,
+    dispatch,
     env_files,
     gc,
     git_admission,
@@ -2780,6 +2781,12 @@ def _runtime_references_for_plan(
                 resolved / ".agents" / "skills"
             )
         )
+    # Dispatch-pinned commits stay until a new generation commits: an
+    # interrupted publication must leave the active generation's bytes
+    # intact, and the post-install collector reclaims superseded ones.
+    references.update(
+        dispatch.referenced_skill_commits(config.path.parent)
+    )
     return references
 
 
@@ -3142,7 +3149,7 @@ def _commit_materialization(
                 "cannot create private materialization staging: "
                 + "; ".join(staging_errors)
             )
-        desired, messages = _stage_materialization(
+        desired, messages, dispatch_commands = _stage_materialization(
             staging_root,
             config,
             project,
@@ -3169,6 +3176,30 @@ def _commit_materialization(
             expected_generation=expected_generation,
             engine=engine,
             home_lock=home_lock,
+        )
+        if not dispatch.publish_supported():
+            # POSIX-only slice: Windows installs materialize without
+            # dispatch records (Windows launchers are a separate task).
+            return messages
+        try:
+            _dispatch_generation, dispatch_warnings = dispatch.publish_project(
+                config.path.parent,
+                canonical_root=dispatch.canonical_root_for_project(
+                    project.path
+                ),
+                project_alias=project.alias,
+                checkout_alias=project.checkout_alias,
+                skills=[
+                    (node.name, node.resolved.commit) for node in nodes
+                ],
+                commands=dispatch_commands,
+            )
+        except dispatch.DispatchPublishError as exc:
+            raise InstallError(
+                f"{project.alias}: dispatch publication failed: {exc}"
+            ) from exc
+        messages.extend(
+            f"{project.alias}: {warning}" for warning in dispatch_warnings
         )
         return messages
 
@@ -3261,12 +3292,14 @@ def _stage_materialization(
 ) -> tuple[
     dict[tuple[str, str], Path | None],
     list[str],
+    dict[str, tuple[str, str, str]],
 ]:
     staged_project = staging_root / "project"
     staged_home = staging_root / "home"
     staged_project.mkdir()
     staged_home.mkdir()
     desired: dict[tuple[str, str], Path | None] = {}
+    dispatch_commands: dict[str, tuple[str, str, str]] = {}
     _copy_live_directory(
         project.path / ".agents",
         staged_project / ".agents",
@@ -3305,6 +3338,7 @@ def _stage_materialization(
             only=active_scripts,
             activation_home=config.path.parent,
             activation_bin_dir=final_project_bin,
+            command_targets=dispatch_commands,
         )
         provider_builds = dict(published_builds.get(node.name, {}))
         if set(provider_builds) != active_builds:
@@ -3392,6 +3426,17 @@ def _stage_materialization(
                     final_project_bin,
                 ),
                 path_suffix=_runtime_path_suffix(plan),
+            )
+            previous_dispatch = dispatch_commands.get(name)
+            if previous_dispatch is not None and previous_dispatch[0] != node.name:
+                raise InstallError(
+                    f"Command collision for {name!r}: exported by "
+                    f"{previous_dispatch[0]} and {node.name}"
+                )
+            dispatch_commands[name] = (
+                node.name,
+                str(activation.artifact_path),
+                "build",
             )
             command_names.add(name)
         expected_commands.update(command_names)
@@ -3538,7 +3583,7 @@ def _stage_materialization(
                 "materialization target has no staged state: "
                 f"{target.target_class}/{target.identifier}"
             )
-    return desired, messages
+    return desired, messages, dispatch_commands
 
 
 def _copy_live_directory(source: Path, destination: Path) -> None:
@@ -4103,6 +4148,7 @@ def install_runtime_commands(
     only: set[str] | None = None,
     activation_home: Path | None = None,
     activation_bin_dir: Path | None = None,
+    command_targets: dict[str, tuple[str, str, str]] | None = None,
 ) -> set[str]:
     commands: set[str] = set()
     # Fail closed at the single shim publication point. A manager that does not
@@ -4147,6 +4193,18 @@ def install_runtime_commands(
             )
         if activation_home is not None:
             runtime_path = final_home / runtime_path.relative_to(csk_home)
+        if command_targets is not None:
+            previous = command_targets.get(command.name)
+            if previous is not None and previous[0] != plan.decl.name:
+                raise InstallError(
+                    f"Command collision for {command.name!r}: exported by "
+                    f"{previous[0]} and {plan.decl.name}"
+                )
+            command_targets[command.name] = (
+                plan.decl.name,
+                str(runtime_path),
+                "script",
+            )
         shims.write_bin_shim(
             bin_dir,
             command.name,
