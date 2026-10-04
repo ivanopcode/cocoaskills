@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import stat
 import tempfile
 from collections.abc import Callable, Sequence
@@ -32,6 +33,101 @@ PROJECT_EDGE = "<project>"
 
 class ClosureError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class MissingSystemCommand:
+    skill: str
+    command: str | None
+    hint: str | None = None
+
+
+def format_missing_system_commands(missing: Sequence[MissingSystemCommand]) -> str:
+    ordered = sorted(missing, key=lambda item: (item.skill, item.command or ""))
+    parts: list[str] = []
+    for item in ordered:
+        hint = f" Hint: {item.hint}" if item.hint else ""
+        parts.append(f"Missing system command {item.command!r} for {item.skill}.{hint}")
+    return "; ".join(parts)
+
+
+class MissingSystemCommandsError(ClosureError):
+    def __init__(self, missing: Sequence[MissingSystemCommand]) -> None:
+        self.missing: list[MissingSystemCommand] = list(missing)
+        super().__init__(format_missing_system_commands(self.missing))
+
+
+def _merge_system_hint(existing: str | None, new: str | None) -> str | None:
+    """Merge two hints for one (skill, executable) pair without dropping either.
+
+    A hintless legacy entry followed by a hinted explicit dependency (or the
+    reverse) keeps the useful hint. Two distinct non-empty hints join with
+    "; " so neither repair line is lost; identical hints collapse to one.
+    """
+
+    if not existing:
+        return new
+    if not new:
+        return existing
+    if new == existing:
+        return existing
+    existing_parts = [part for part in existing.split("; ") if part]
+    if new in existing_parts or new in existing:
+        return existing
+    return f"{existing}; {new}"
+
+
+def missing_system_commands_for_spec(
+    skill_name: str, spec: skillspec.SkillSpec
+) -> list[MissingSystemCommand]:
+    legacy = [command for command in spec.commands.values() if command.type == "system"]
+    explicit = [
+        skillspec.CommandSpec(
+            name=dependency.name,
+            type="system",
+            command=dependency.command,
+            hint=dependency.hint,
+            source=dependency.source,
+        )
+        for dependency in spec.dependencies.values()
+        if dependency.type == "system"
+    ]
+    merged_hints: dict[tuple[str, str | None], str | None] = {}
+    order: list[tuple[str, str | None]] = []
+    for command in legacy + explicit:
+        key = (skill_name, command.command)
+        if key not in merged_hints:
+            merged_hints[key] = command.hint
+            order.append(key)
+        else:
+            merged_hints[key] = _merge_system_hint(merged_hints[key], command.hint)
+    missing: list[MissingSystemCommand] = []
+    for skill, executable in order:
+        if not executable or shutil.which(executable) is None:
+            missing.append(
+                MissingSystemCommand(
+                    skill=skill, command=executable, hint=merged_hints[(skill, executable)]
+                )
+            )
+    return missing
+
+
+def collect_missing_system_commands(
+    named_specs: Sequence[tuple[str, skillspec.SkillSpec]],
+) -> list[MissingSystemCommand]:
+    """Aggregate missing system commands across members with one shared check.
+
+    The single system-command readiness predicate for every surface: project
+    and global install, dry-run, project and global status, schema 1 and 2.
+    Each member contributes its legacy system commands plus explicit system
+    dependencies (hints merged per executable); the caller formats the whole
+    list with :func:`format_missing_system_commands` in one diagnostic.
+    """
+
+    missing: list[MissingSystemCommand] = []
+    for skill_name, spec in named_specs:
+        missing.extend(missing_system_commands_for_spec(skill_name, spec))
+    return missing
 
 
 @dataclass(frozen=True)
@@ -118,6 +214,7 @@ def build_closure(
     node_resolver: Callable[[_Pending], ClosureNode] | None = None,
     error_factory: Callable[[str, str], BaseException] | None = None,
     ref_comparator: Callable[[ClosureNode, _Pending], str] | None = None,
+    check_system_commands: bool = True,
 ) -> list[ClosureNode]:
     """Expand direct skills and their requirements into an ordered closure.
 
@@ -135,6 +232,14 @@ def build_closure(
     schema-2 closure supplies it because its nodes carry materialized
     snapshot directories rather than git repositories. ``None`` resolves
     through the node's repository exactly as before.
+
+    When ``check_system_commands`` is true (the schema-1 default), every
+    missing system command across the closure is reported in one
+    :class:`MissingSystemCommandsError` before the closure returns, via the
+    shared :func:`collect_missing_system_commands` aggregate also used by
+    the schema-2 plan-time and status gates, so no validation, freezing,
+    build planning, build-repository fetch or publication starts. The
+    schema-2 full closure disables this and keeps its own plan-time gate.
     """
     nodes: dict[str, ClosureNode] = {}
     fetched_repos = fetched_repos if fetched_repos is not None else set()
@@ -189,7 +294,14 @@ def build_closure(
         node.chains.append(item.chain)
 
     _validate_requirement_commands(nodes, error_factory=error_factory)
-    return _topological_order(nodes, error_factory=error_factory)
+    ordered = _topological_order(nodes, error_factory=error_factory)
+    if check_system_commands:
+        missing_system = collect_missing_system_commands(
+            [(node.name, node.spec) for node in ordered]
+        )
+        if missing_system:
+            raise MissingSystemCommandsError(missing_system)
+    return ordered
 
 
 def _closure_failure(
@@ -860,4 +972,5 @@ def build_source_closure(
         node_resolver=resolve_item,
         error_factory=_source_closure_error,
         ref_comparator=_source_ref_commit,
+        check_system_commands=False,
     )
