@@ -19,14 +19,7 @@ def test_review_stale_lock_real_transport(
         monkeypatch,
         annotated_tag=True,
     )
-    tag_object = subprocess.run(
-        ["git", "rev-parse", "refs/tags/v1"],
-        cwd=kit,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=20,
-    ).stdout.strip()
+    tag_object = run(["git", "rev-parse", "refs/tags/v1"], kit).stdout.strip()
     assert tag_object != commit
 
     old_lock = _read_lock(project)
