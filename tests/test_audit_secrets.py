@@ -46,6 +46,13 @@ def publish_context(tmp_path, monkeypatch):
     return ["audit", "--publish", str(record), "--registry", "https://registry.example"], calls
 
 
+_SUPPRESSED = (
+    "csk: invalid usage of a command with a credential option; "
+    "the details are suppressed so that no secret is echoed. "
+    "Run 'csk <command> --help'."
+)
+
+
 @pytest.mark.parametrize("command", ["audit", "build-https"])
 @pytest.mark.parametrize("form", ["separate", "equals", "missing"])
 def test_token_option_is_refused_before_dispatch(monkeypatch, capsys, command, form):
@@ -59,12 +66,9 @@ def test_token_option_is_refused_before_dispatch(monkeypatch, capsys, command, f
     monkeypatch.setattr(cli, "_dispatch", dispatch)
     assert cli.main(argv) == cli.EXIT_CONFIG
     output = capsys.readouterr()
-    assert "--token is refused" in output.err
-    assert "CSK_REGISTRY_TOKEN" in output.err
-    assert "--token-file" in output.err
+    assert output.err == _SUPPRESSED + "\n"
+    assert output.out == ""
     assert secret not in output.out + output.err
-    if command == "build-https":
-        assert "--token-source or --token-env" in output.err
 
 
 def test_publish_token_sources_keep_secret_out_of_argv(publish_context, tmp_path, monkeypatch, capsys):
@@ -116,7 +120,7 @@ def test_token_file_refuses_shared_read_permissions(publish_context, tmp_path, m
     token_file.chmod(mode)
     monkeypatch.setenv("CSK_REGISTRY_TOKEN", "synthetic-env-secret")
     assert cli.main(argv + ["--token-file", str(token_file)]) == cli.EXIT_CONFIG
-    assert "group or others" in capsys.readouterr().err
+    assert capsys.readouterr().err == _SUPPRESSED + "\n"
     assert calls == []
 
 
@@ -135,7 +139,7 @@ def test_token_file_checks_open_file_permissions(publish_context, tmp_path, monk
 
     monkeypatch.setattr(os, "open", change_before_open)
     assert cli.main(argv + ["--token-file", str(token_file)]) == cli.EXIT_CONFIG
-    assert "group or others" in capsys.readouterr().err
+    assert capsys.readouterr().err == _SUPPRESSED + "\n"
     assert calls == []
 
 
@@ -145,7 +149,7 @@ def test_token_file_checks_open_file_type(publish_context, tmp_path, monkeypatch
     token_file = tmp_path / "registry-token"
     token_file.write_text("synthetic-secret", encoding="utf-8")
     token_file.chmod(0o600)
-    original_open = os.open
+    original_open, original_fdopen = os.open, os.fdopen
 
     def swap_before_open(path, flags, *args, **kwargs):
         if Path(path) == token_file:
@@ -153,9 +157,26 @@ def test_token_file_checks_open_file_type(publish_context, tmp_path, monkeypatch
             os.mkfifo(token_file, 0o600)
         return original_open(path, flags, *args, **kwargs)
 
+    class NoRead:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.stream.close()
+
+        def fileno(self):
+            return self.stream.fileno()
+
+        def read(self, *args):
+            pytest.fail("swapped FIFO token file was read")
+
     monkeypatch.setattr(os, "open", swap_before_open)
+    monkeypatch.setattr(os, "fdopen", lambda *args, **kwargs: NoRead(original_fdopen(*args, **kwargs)))
     assert cli.main(argv + ["--token-file", str(token_file)]) == cli.EXIT_CONFIG
-    assert "regular file" in capsys.readouterr().err
+    assert capsys.readouterr().err == _SUPPRESSED + "\n"
     assert calls == []
 
 
@@ -169,7 +190,7 @@ def test_token_file_refuses_unusable_input(publish_context, tmp_path, capsys, ki
         token_file.write_bytes(b"" if kind == "empty" else b"\xff")
         token_file.chmod(0o600)
     assert cli.main(argv + ["--token-file", str(token_file)]) == cli.EXIT_CONFIG
-    assert "--token-file" in capsys.readouterr().err
+    assert capsys.readouterr().err == _SUPPRESSED + "\n"
     assert calls == []
 
 
@@ -217,7 +238,7 @@ def test_token_file_refuses_over_64_kib_before_read(
     monkeypatch.setattr(os, "open", open_file)
     monkeypatch.setattr(os, "fdopen", lambda *args, **kwargs: NoRead(original_fdopen(*args, **kwargs)))
     assert cli.main(argv + ["--token-file", str(token_file)]) == cli.EXIT_CONFIG
-    assert "64 KiB" in capsys.readouterr().err
+    assert capsys.readouterr().err == _SUPPRESSED + "\n"
     assert calls == []
 
 
@@ -263,18 +284,26 @@ def test_token_file_bounds_read_if_file_grows_after_fstat(publish_context, tmp_p
     monkeypatch.setattr(os, "fdopen", fdopen)
     monkeypatch.setattr(os, "fstat", grow_after_fstat)
     assert cli.main(argv + ["--token-file", str(token_file)]) == cli.EXIT_CONFIG
-    assert "64 KiB" in capsys.readouterr().err
+    assert capsys.readouterr().err == _SUPPRESSED + "\n"
     assert reads == [64 * 1024 + 1]
     assert calls == []
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX FIFO")
-def test_token_file_refuses_fifo_without_opening_it(publish_context, tmp_path, capsys):
+def test_token_file_refuses_fifo_without_opening_it(publish_context, tmp_path, monkeypatch, capsys):
     argv, calls = publish_context
     token_file = tmp_path / "registry-token"
     os.mkfifo(token_file, 0o600)
+    original_open = os.open
+
+    def refuse_open(path, *args, **kwargs):
+        if Path(path) == token_file:
+            pytest.fail("FIFO token file was opened")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", refuse_open)
     assert cli.main(argv + ["--token-file", str(token_file)]) == cli.EXIT_CONFIG
-    assert "regular file" in capsys.readouterr().err
+    assert capsys.readouterr().err == _SUPPRESSED + "\n"
     assert calls == []
 
 
@@ -287,7 +316,7 @@ def test_token_file_refuses_symlink(publish_context, tmp_path, capsys):
     token_file = tmp_path / "registry-token"
     token_file.symlink_to(target)
     assert cli.main(argv + ["--token-file", str(token_file)]) == cli.EXIT_CONFIG
-    assert "regular file" in capsys.readouterr().err
+    assert capsys.readouterr().err == _SUPPRESSED + "\n"
     assert calls == []
 
 
@@ -309,7 +338,7 @@ def test_token_file_refuses_symlink_swapped_before_open(publish_context, tmp_pat
 
     monkeypatch.setattr(os, "open", swap_before_open)
     assert cli.main(argv + ["--token-file", str(token_file)]) == cli.EXIT_CONFIG
-    assert "--token-file" in capsys.readouterr().err
+    assert capsys.readouterr().err == _SUPPRESSED + "\n"
     assert calls == []
 
 
@@ -322,7 +351,7 @@ def test_explicit_token_file_never_falls_back_to_environment(publish_context, tm
         token_file.write_bytes(b"" if kind == "empty" else b"\xff")
         token_file.chmod(0o600)
     assert cli.main(argv + ["--token-file", str(token_file)]) == cli.EXIT_CONFIG
-    assert "--token-file" in capsys.readouterr().err
+    assert capsys.readouterr().err == _SUPPRESSED + "\n"
     assert calls == []
 
 
@@ -609,7 +638,7 @@ def test_token_prefix_never_discloses_on_any_subcommand(prefix, option, capsys):
     assert cli.main([*prefix, option + "=" + secret]) == cli.EXIT_CONFIG
     output = capsys.readouterr()
     assert secret not in output.out + output.err
-    assert "CSK_REGISTRY_TOKEN" in output.err
+    assert output.err == _SUPPRESSED + "\n"
 
 
 def test_publish_does_not_accept_abbreviated_registry(publish_context, monkeypatch, capsys):
@@ -636,7 +665,7 @@ def test_token_file_refuses_regular_replacement_without_nofollow(publish_context
     monkeypatch.setattr(os, "open", replace_before_open)
     assert cli.main(argv + ["--token-file", str(path)]) == cli.EXIT_CONFIG
     assert calls == []
-    assert "identity" in capsys.readouterr().err
+    assert capsys.readouterr().err == _SUPPRESSED + "\n"
 
 
 @pytest.mark.parametrize("field", ["st_ino", "st_dev"])
@@ -654,7 +683,7 @@ def test_token_file_refuses_open_identity_mismatch(publish_context, tmp_path, mo
     monkeypatch.setattr(os, "fstat", mismatched)
     assert cli.main(argv + ["--token-file", str(path)]) == cli.EXIT_CONFIG
     assert calls == []
-    assert "identity" in capsys.readouterr().err
+    assert capsys.readouterr().err == _SUPPRESSED + "\n"
 
 
 def test_token_file_refuses_missing_identity_capability(publish_context, tmp_path, monkeypatch, capsys):
@@ -670,7 +699,7 @@ def test_token_file_refuses_missing_identity_capability(publish_context, tmp_pat
     monkeypatch.setattr(Path, "lstat", missing_identity)
     assert cli.main(argv + ["--token-file", str(path)]) == cli.EXIT_CONFIG
     assert calls == []
-    assert "identity" in capsys.readouterr().err
+    assert capsys.readouterr().err == _SUPPRESSED + "\n"
 
 
 def test_token_file_refuses_reparse_attribute_before_open(publish_context, tmp_path, monkeypatch, capsys):
@@ -687,7 +716,7 @@ def test_token_file_refuses_reparse_attribute_before_open(publish_context, tmp_p
     monkeypatch.setattr(Path, "lstat", reparse)
     assert cli.main(argv + ["--token-file", str(path)]) == cli.EXIT_CONFIG
     assert calls == []
-    assert "regular file" in capsys.readouterr().err
+    assert capsys.readouterr().err == _SUPPRESSED + "\n"
 
 
 @pytest.mark.parametrize("exception", [RuntimeError, OSError])
@@ -702,7 +731,7 @@ def test_token_path_expansion_error_is_shaped(publish_context, monkeypatch, caps
     assert cli.main(argv + ["--token-file", "~missing/token"]) == cli.EXIT_CONFIG
     assert calls == []
     output = capsys.readouterr()
-    assert "--token-file" in output.err
+    assert output.err == _SUPPRESSED + "\n"
     assert "synthetic-private-marker" not in output.out + output.err
 
 
@@ -721,8 +750,7 @@ def test_invalid_token_source_does_not_disclose_literal(form):
     )
     assert proc.returncode == 2
     assert marker not in proc.stdout + proc.stderr
-    assert "must be one of git-credentials, keyring" in proc.stderr
-    assert "invalid choice" not in proc.stderr
+    assert proc.stderr == _SUPPRESSED + "\n"
 
 
 _INVALID_TOKEN_SOURCE_FAMILIES = (
@@ -772,8 +800,7 @@ def test_invalid_token_source_property_never_echoes_value(family, capsys):
         assert cli.main(argv) == cli.EXIT_CONFIG
         output = capsys.readouterr()
         assert value not in output.out + output.err
-        assert "must be one of git-credentials, keyring" in output.err
-        assert "invalid choice" not in output.err
+        assert output.err == _SUPPRESSED + "\n"
 
 
 _PANEL_A_MARKER = "synthetic-panel-private-marker"
@@ -815,8 +842,10 @@ _PANEL_SUBPROCESS_CASES = [
 
 @pytest.mark.parametrize("shape,argv,marker", _PANEL_SUBPROCESS_CASES)
 def test_panel_wrong_surface_subprocess_never_echoes(shape, argv, marker):
-    # Production call site: cli.main pre-parse (refuse) or the declared
-    # parser/dispatch (selector/exclusive), via python -m csk in a child.
+    # Every panel shape suppresses: refuse (undeclared), selector (invalid
+    # enum), exclusive (both sources / invalid NAME) all carry a credential
+    # option, so the hook replaces the diagnostic. Via python -m csk.
+    del shape
     root = Path(__file__).resolve().parents[1]
     env = dict(os.environ, PYTHONPATH=str(root / "src"))
     proc = subprocess.run(
@@ -825,31 +854,23 @@ def test_panel_wrong_surface_subprocess_never_echoes(shape, argv, marker):
     )
     assert proc.returncode == 2
     assert marker not in proc.stdout + proc.stderr
-    if shape == "refuse":
-        assert "--token is refused" in proc.stderr
-        assert "CSK_REGISTRY_TOKEN" in proc.stderr
-    elif shape == "selector":
-        # A dash-leading "-MARKER" is parsed as an option, not a value, so
-        # argparse reports a missing value without echoing it.
-        assert "expected one argument" in proc.stderr
-    else:
-        # Both credential sources supplied: exactly-one-of dispatch error
-        # when a config exists, otherwise the config-missing error first.
-        # Either way exit 2 without the marker.
-        assert ("requires exactly one of --token-source or --token-env" in proc.stderr
-                or "config" in proc.stderr.lower())
+    assert proc.stderr == _SUPPRESSED + "\n"
 
 
 def _wrong_surface_cases():
     # Every (prefix, option) where the selected parser does not declare the
-    # credential option, in both argv forms, through cli.main.
+    # credential option, in both argv forms, through cli.main. Declared map:
+    # audit declares --token-file; config build-https add declares
+    # --token-source/--token-env; everything else declares none.
     root_parser = cli.build_parser()
     cases = []
     for prefix in list(_command_prefixes(root_parser)) + [("check",)]:
-        if prefix == ("check",):
-            declared: set[str] = set()
+        if prefix == ("audit",):
+            declared = {"--token-file"}
+        elif prefix == ("config", "build-https", "add"):
+            declared = {"--token-source", "--token-env"}
         else:
-            declared = cli._declared_token_options(root_parser, list(prefix))
+            declared = set()
         for option in ("--token-file", "--token-source", "--token-env"):
             if option in declared:
                 continue
@@ -860,66 +881,35 @@ def _wrong_surface_cases():
 
 @pytest.mark.parametrize("prefix,option,form", _wrong_surface_cases())
 def test_wrong_surface_token_options_refused_without_echo(prefix, option, form, capsys):
-    # Production call site: cli.main scoped pre-parse refusal in src/csk/cli.py.
-    # The shape assertion (not just no-marker) kills the global-exemption
-    # mutant, which would otherwise reach the redacting error hook with an
-    # unrecognized-arguments message.
+    # Production call site: argparse error + suppression hook in src/csk/cli.py.
+    # The shape assertion (not just no-marker) kills hook-bypass mutants,
+    # which would otherwise show an unrecognized-arguments message.
     marker = "synthetic-wrong-surface-marker"
     suffix = [option + "=" + marker] if form == "equals" else [option, marker]
     assert cli.main([*prefix, *suffix]) == cli.EXIT_CONFIG
     output = capsys.readouterr()
     assert marker not in output.out + output.err
-    assert "--token is refused" in output.err
-    assert "CSK_REGISTRY_TOKEN" in output.err
-
-
-def _is_leaf_prefix(root_parser, prefix):
-    # A leaf is a complete selectable command (no further required
-    # subcommand). Branch prefixes with a separate-form marker would have the
-    # marker absorbed as the missing subcommand name and echoed via an
-    # invalid-choice diagnostic for that subcommand, not via the token
-    # option; production cli.main refuses those shapes in pre-parse first
-    # (covered by test_wrong_surface_...), so direct-parser separate cases
-    # are restricted to leaves where the hook is the deciding layer.
-    if prefix == ("check",):
-        return True
-    current = root_parser
-    for name in prefix:
-        found = None
-        for action in current._actions:
-            if isinstance(action, cli.argparse._SubParsersAction) and name in action.choices:
-                found = action.choices[name]
-                break
-        if found is None:
-            return False
-        current = found
-    for action in current._actions:
-        if isinstance(action, cli.argparse._SubParsersAction):
-            return False
-    return True
+    assert output.err == _SUPPRESSED + "\n"
 
 
 def _public_parser_cases():
     # Every public parser root, every command prefix, every --token* spelling
-    # in both forms, through parser.parse_args directly (bypassing the
-    # pre-parse) so the error hook is the only redaction layer. Equals covers
-    # all prefixes; separate covers leaves (see _is_leaf_prefix).
+    # in both forms (352 cases), through parser.parse_args directly, so the
+    # parser error hook is the only suppression layer.
     root_parser = cli.build_parser()
     cases = []
     for prefix in list(_command_prefixes(root_parser)) + [("check",)]:
-        leaf = _is_leaf_prefix(root_parser, prefix)
         for option in ("--token", "--token-file", "--token-source", "--token-env"):
             cases.append((prefix, option, "equals"))
-            if leaf:
-                cases.append((prefix, option, "separate"))
+            cases.append((prefix, option, "separate"))
     return cases
 
 
 @pytest.mark.parametrize("prefix,option,form", _public_parser_cases())
 def test_public_parsers_never_echo_token_values(prefix, option, form, capsys):
-    # Production call site: _CskArgumentParser.error via parse_args in
-    # src/csk/cli.py. Declared options parse cleanly; everything else must
-    # exit 2 without the marker in either stream.
+    # Production call site: _CskArgumentParser.parse_known_args flag plus
+    # error hook in src/csk/cli.py. Declared options parse cleanly;
+    # everything else must exit 2 without the marker in either stream.
     marker = "synthetic-public-parser-marker-7f3a"
     suffix = [option + "=" + marker] if form == "equals" else [option, marker]
     if prefix == ("check",):
@@ -928,11 +918,6 @@ def test_public_parsers_never_echo_token_values(prefix, option, form, capsys):
     else:
         parser = cli.build_parser()
         argv = [*prefix, *suffix]
-        if prefix == ("shell-init",):
-            # The shell positional has choices; fill it so a separate-form
-            # marker is not absorbed as the shell value and echoed via an
-            # invalid-choice diagnostic for that positional.
-            argv = ["shell-init", "bash", *suffix]
     try:
         parser.parse_args(argv)
     except SystemExit as exc:
