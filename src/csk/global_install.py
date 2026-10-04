@@ -16,6 +16,7 @@ from . import (
     config as config_module,
     consumers,
     dev_substitutions,
+    dispatch,
     env_files,
     gc,
     git_admission,
@@ -846,6 +847,10 @@ def _global_runtime_references_for_plan(
                 resolved / ".agents" / "skills"
             )
         )
+    # Dispatch-pinned commits stay until a new generation commits: an
+    # interrupted publication must leave the active generation's bytes
+    # intact, and the post-install collector reclaims superseded ones.
+    references.update(dispatch.referenced_skill_commits(csk_home))
     return references
 
 
@@ -897,7 +902,7 @@ def _commit_global_materialization(
                 "cannot create private global materialization staging: "
                 + "; ".join(staging_errors)
             )
-        desired, messages = _stage_global_materialization(
+        desired, messages, dispatch_commands = _stage_global_materialization(
             staging_root,
             config,
             options,
@@ -924,6 +929,24 @@ def _commit_global_materialization(
             engine=engine,
             home_lock=home_lock,
         )
+        if not dispatch.publish_supported():
+            # POSIX-only slice: Windows installs materialize without
+            # dispatch records (Windows launchers are a separate task).
+            return messages
+        try:
+            _dispatch_generation, dispatch_warnings = dispatch.publish_global(
+                csk_home,
+                skills=[
+                    (node.name, node.resolved.commit) for node in nodes
+                ],
+                commands=dispatch_commands,
+                retained_skill_names=frozenset(retained.names),
+            )
+        except dispatch.DispatchPublishError as exc:
+            raise installer.InstallError(
+                f"global: dispatch publication failed: {exc}"
+            ) from exc
+        messages.extend(f"global: {warning}" for warning in dispatch_warnings)
         return messages
 
 
@@ -946,7 +969,11 @@ def _stage_global_materialization(
     adapter_targets: tuple[adapters.AdapterTarget, ...],
     user_bin_targets: tuple[global_bins.UserBinTarget, ...],
     retained: RetainedGlobalSkills = RetainedGlobalSkills(),
-) -> tuple[dict[tuple[str, str], Path | None], list[str]]:
+) -> tuple[
+    dict[tuple[str, str], Path | None],
+    list[str],
+    dict[str, tuple[str, str, str]],
+]:
     csk_home = Path(os.path.abspath(config.path.parent))
     staged_home = staging_root / "home"
     staged_home.mkdir()
@@ -964,6 +991,7 @@ def _stage_global_materialization(
     desired: dict[tuple[str, str], Path | None] = {}
     messages: list[str] = []
     expected_commands: set[str] = set()
+    dispatch_commands: dict[str, tuple[str, str, str]] = {}
 
     for node in nodes:
         plan = installer.SkillPlan(
@@ -983,6 +1011,7 @@ def _stage_global_materialization(
             only=active_scripts,
             activation_home=csk_home,
             activation_bin_dir=final_bin,
+            command_targets=dispatch_commands,
         )
         provider_builds = dict(published_builds.get(node.name, {}))
         if set(provider_builds) != active_builds:
@@ -1071,6 +1100,17 @@ def _stage_global_materialization(
                     final_bin,
                 ),
                 path_suffix=installer._runtime_path_suffix(plan),
+            )
+            previous_dispatch = dispatch_commands.get(name)
+            if previous_dispatch is not None and previous_dispatch[0] != node.name:
+                raise installer.InstallError(
+                    f"Command collision for {name!r}: exported by "
+                    f"{previous_dispatch[0]} and {node.name}"
+                )
+            dispatch_commands[name] = (
+                node.name,
+                str(activation.artifact_path),
+                "build",
             )
             command_names.add(name)
         expected_commands.update(command_names)
@@ -1177,7 +1217,7 @@ def _stage_global_materialization(
                 "global materialization target has no staged state: "
                 f"{target.target_class}/{target.identifier}"
             )
-    return desired, messages
+    return desired, messages, dispatch_commands
 
 
 def _prune_staged_global_runtime(
