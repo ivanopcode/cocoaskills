@@ -20,6 +20,8 @@ from io import BytesIO
 from pathlib import Path, PurePath
 from typing import Any
 
+from git_fixture_isolation import check_own_git_dir, discover_git_dir, run_fixture_git
+
 GOLDEN_ROOT_TOKEN = "{{GOLDEN_ROOT}}"
 VERSION_TOKEN = "{{VERSION}}"
 PATH_HASH_TOKEN = "{{PATH_HASH}}"
@@ -165,13 +167,13 @@ COMMITTED_COMMANDS: tuple[GoldenCommand, ...] = GOLDEN_COMMANDS
 
 
 def run_git(args: list[str], cwd: Path, *, env: dict[str, str] | None = None) -> str:
-    merged = dict(os.environ)
-    merged.update(PINNED_GIT_ENV)
+    overrides = dict(PINNED_GIT_ENV)
     if env:
-        merged.update(env)
-    proc = subprocess.run(
-        ["git", *args], cwd=cwd, text=True, capture_output=True, env=merged
-    )
+        overrides.update(env)
+    # The shared runner scrubs after the merge so neither the ambient
+    # environment nor an explicit override can smuggle a redirector into the
+    # child, and attests the fixture repository before the child runs.
+    proc = run_fixture_git(args, cwd=cwd, extra_env=overrides, check=False)
     if proc.returncode != 0:
         raise AssertionError(
             f"git {args} failed in {cwd}\nstdout={proc.stdout}\nstderr={proc.stderr}"
@@ -183,6 +185,9 @@ def _init_repo(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     run_git(["init"], path)
     run_git(["branch", "-M", "main"], path)
+    # Backstop for a redirector the scrub does not know: prove the discovered
+    # repository is this fixture's own before the first config write lands.
+    check_own_git_dir(path, discover_git_dir(path))
     run_git(["config", "user.name", "Golden Test"], path)
     run_git(["config", "user.email", "golden@example.com"], path)
     run_git(["config", "commit.gpgsign", "false"], path)
@@ -344,10 +349,10 @@ def base_run_env(root: Path) -> dict[str, str | None]:
 
 def extract_release_source(commit: str, destination: Path, *, cwd: Path) -> Path:
     """Extract one released ``src/csk`` tree without changing the checkout."""
-    proc = subprocess.run(
-        ["git", "archive", "--format=tar", commit, "src/csk"],
+    proc = run_fixture_git(
+        ["archive", "--format=tar", commit, "src/csk"],
         cwd=cwd,
-        capture_output=True,
+        text=False,
         check=False,
     )
     if proc.returncode != 0:
