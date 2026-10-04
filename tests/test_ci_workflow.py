@@ -355,7 +355,10 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
     assert "-n 4 --dist=loadfile" in ordinary
     assert '${{ runner.temp }}/csk-ordinary' in ordinary
     assert '${{ runner.temp }}/csk-pytest-cache' in ordinary
-    assert "timeout-minutes: 20" in ordinary
+    # BUG-261004-473myt rev3b: the git-heavy ordinary suite needs ~21 min
+    # on Windows (five consecutive zero-failure 20-min timeouts at
+    # 91-99%); the lane budget is 30 so only a true hang consumes it.
+    assert "timeout-minutes: 30" in ordinary
 
     for job_id in ("fast_protocol", "fast_go_e2e"):
         job = _job(workflow, job_id)

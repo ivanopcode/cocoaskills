@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from git_fixture_isolation import check_own_git_dir, discover_git_dir, run_fixture_git
+
 
 # .scripts/release.sh is a POSIX (zsh) maintainer script; only tests that invoke
 # it are skipped on Windows. Pure-Python release_support.py tests still run there.
@@ -33,9 +35,15 @@ SUPPORT_SPEC.loader.exec_module(release_support)
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args], cwd=repo, text=True, capture_output=True, check=False
-    )
+    # Fixture git children run through the one shared runner: an ambient
+    # GIT_DIR/GIT_WORK_TREE once redirected a fixture's config writes into
+    # the enclosing checkout (BUG-261004-473myt).
+    return run_fixture_git(args, cwd=repo, check=False)
+
+
+def _assert_own_repo(repo: Path) -> None:
+    """Prove the discovered repository is this fixture's own before config writes."""
+    check_own_git_dir(repo, discover_git_dir(repo))
 
 
 def test_union_merge_keeps_both_branches_appends_for_changelog_and_logbook(
@@ -45,6 +53,7 @@ def test_union_merge_keeps_both_branches_appends_for_changelog_and_logbook(
     repo.mkdir()
     init = _git(repo, "init", "--initial-branch=main", "--quiet")
     assert init.returncode == 0, init.stderr
+    _assert_own_repo(repo)
     assert _git(repo, "config", "user.name", "Release Test").returncode == 0
     assert _git(repo, "config", "user.email", "release-test@example.invalid").returncode == 0
 
@@ -444,16 +453,16 @@ def _seed_real_git_push_repositories(
     origin = tmp_path / "origin.git"
     wildberries = tmp_path / "wildberries.git"
     for bare_repository in (origin, wildberries):
-        result = subprocess.run(
-            ["git", "init", "--bare", "--quiet", "--initial-branch=main", str(bare_repository)],
-            text=True,
-            capture_output=True,
+        result = run_fixture_git(
+            ["init", "--bare", "--quiet", "--initial-branch=main", str(bare_repository)],
+            cwd=tmp_path,
             check=False,
         )
         assert result.returncode == 0, result.stderr
 
     init = _git(project, "init", "--initial-branch=main", "--quiet")
     assert init.returncode == 0, init.stderr
+    _assert_own_repo(project)
     for key, value in (
         ("user.name", "Release Test"),
         ("user.email", "release-test@example.invalid"),
@@ -516,12 +525,7 @@ def _seed_real_git_push_repositories(
 
 
 def _real_remote_refs(remote: Path) -> dict[str, str]:
-    result = subprocess.run(
-        ["git", "ls-remote", "--refs", str(remote)],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_fixture_git(["ls-remote", "--refs", str(remote)], check=False)
     assert result.returncode == 0, result.stderr
     return {
         reference: object_id
