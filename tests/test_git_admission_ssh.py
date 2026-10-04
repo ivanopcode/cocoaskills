@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from git_fixture_isolation import run_fixture_git
+
 from csk import git_admission
 from csk.build_repository import LockedCommit, RepositorySource, parse_repository_source
 from csk.sources import repository_policy, transport
@@ -56,14 +58,16 @@ def _fixture_repository(root: Path) -> tuple[Path, str]:
         "GIT_COMMITTER_DATE": "1700000000 +0000",
     }
     def run(*arguments: str, cwd: Path = work) -> str:
-        return subprocess.run(
-            (git, *arguments),
+        # Fixture git children run through the one shared runner, which
+        # scrubs ambient redirectors and attests the fixture repository
+        # (BUG-261004-473myt). The pinned author identity rides along as
+        # the child environment's non-redirector entries.
+        return run_fixture_git(
+            arguments,
             cwd=cwd,
+            executable=git,
             env=environment,
             stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            check=True,
         ).stdout
 
     run("init", "--quiet", "--object-format=sha1", "--initial-branch=main", ".")
@@ -99,19 +103,9 @@ def _tool(
     ssh: Path, credentials: git_admission.OperatorSSHCredentials | None
 ) -> git_admission.GitTool:
     executable = _git_path()
-    version = subprocess.run(
-        (os.fspath(executable), "--version"),
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    version = run_fixture_git(["--version"], executable=executable).stdout.strip()
     exec_path = Path(
-        subprocess.run(
-            (os.fspath(executable), "--exec-path"),
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+        run_fixture_git(["--exec-path"], executable=executable).stdout.strip()
     ).resolve(strict=True)
     return git_admission.GitTool(
         executable=executable,

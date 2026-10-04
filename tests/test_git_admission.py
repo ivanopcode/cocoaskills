@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from git_fixture_isolation import run_fixture_git
+
 from csk import git_admission
 from csk.build_repository import LockedCommit, parse_repository_source
 
@@ -42,15 +44,14 @@ def _git_path() -> Path:
 
 
 def _run_git(cwd: Path | None, *arguments: str) -> str:
-    return subprocess.run(
-        (os.fspath(_git_path()), *arguments),
+    # Fixture git children run through the one shared runner, which scrubs
+    # ambient redirectors and attests the fixture repository (BUG-261004-473myt).
+    return run_fixture_git(
+        arguments,
         cwd=cwd,
+        executable=_git_path(),
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
         timeout=20,
-        check=True,
-        text=True,
     ).stdout
 
 
