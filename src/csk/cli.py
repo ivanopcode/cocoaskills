@@ -3,13 +3,16 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
-import re
 import stat
 import subprocess
 import sys
+import threading
+from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, TypeVar, overload
+
+_N = TypeVar("_N")
 
 from . import (
     __version__,
@@ -56,45 +59,69 @@ EXIT_LOCK = 3
 
 
 _TOKEN_SHORT_FORMS = frozenset({"--t", "--to", "--tok", "--toke"})
+_TOKEN_SHORT_FORMS_SINGLE_DASH = frozenset({"-t", "-to", "-tok", "-toke"})
 _SAFE_TOKEN_OPTIONS = frozenset({"--token-file", "--token-source", "--token-env"})
-_REDACTED = "[REDACTED]"
+_REDACTED = "<redacted>"
+
+
+def _is_token_option_name(option: str) -> bool:
+    # One matcher for the collector and the pre-parse refusal. Case variants
+    # and single-dash spellings count: argparse echoes unknown spellings
+    # verbatim in unrecognized-argument diagnostics, so a mistyped name leaks
+    # the same bytes as the declared one.
+    lowered = option.lower()
+    if lowered.startswith("--token") or lowered in _TOKEN_SHORT_FORMS:
+        return True
+    return lowered.startswith("-token") or lowered in _TOKEN_SHORT_FORMS_SINGLE_DASH
+
+
+def _collect_token_values(arguments: list[str]) -> list[str]:
+    # Collect every value supplied after a --token* name in raw argv, in both
+    # --opt VALUE and --opt=VALUE forms, at any position (before or after a
+    # subcommand, after --), abbreviated or repeated. A token-like element is
+    # never skipped as someone's value: argparse never consumes an
+    # option-looking token as a separate-form value, so such an element always
+    # functions as a name. A bare -- is excluded (argparse reports a missing
+    # value instead of consuming it), as are single-character values, which
+    # carry no credential entropy and occur in every diagnostic.
+    values: list[str] = []
+    for index in range(len(arguments)):
+        argument = arguments[index]
+        name, separator, attached = argument.partition("=")
+        if not _is_token_option_name(name):
+            continue
+        if separator:
+            candidate = attached
+        elif index + 1 < len(arguments):
+            candidate = arguments[index + 1]
+        else:
+            continue
+        if len(candidate) >= 2 and candidate != "--":
+            values.append(candidate)
+    return values
+
+
+class _TokenParseState(threading.local):
+    def __init__(self) -> None:
+        self.values: tuple[str, ...] = ()
+        self.depth: int = 0
+
+
+_token_parse_state = _TokenParseState()
+
+
+def _redact_values(message: str, values: Sequence[str]) -> str:
+    for value in sorted(set(values), key=len, reverse=True):
+        if value:
+            message = message.replace(value, _REDACTED)
+    return message
 
 
 def _redact_token_values(message: str) -> str:
-    # One shaped usage-error hook: redact the value following any --token*
-    # option name, in both --opt VALUE and --opt=VALUE forms, plus the quoted
-    # invalid-choice value for token options. Only unrecognized-arguments and
-    # invalid-choice diagnostics can echo user input; other shaped messages
-    # (refusals, missing values, ambiguous options) pass through unchanged.
-    # The rest of the message and the exit code are preserved by the caller.
-    if "invalid choice:" in message and "--token" in message:
-        message = re.sub(
-            r"(argument\s+--token[^\s:]*:\s+invalid choice:\s+')([^']*)(')",
-            r"\1" + _REDACTED + r"\3",
-            message,
-        )
-    if message.startswith("unrecognized arguments:"):
-        message = re.sub(
-            r"(--token[^\s=]*)=([^\s]*)",
-            r"\1=" + _REDACTED,
-            message,
-        )
-        message = re.sub(
-            r"(--t|--to|--tok|--toke)=([^\s]*)",
-            r"\1=" + _REDACTED,
-            message,
-        )
-        message = re.sub(
-            r"(--token[^\s=]*)\s+([^\s]+)",
-            r"\1 " + _REDACTED,
-            message,
-        )
-        message = re.sub(
-            r"(--t|--to|--tok|--toke)\s+([^\s]+)",
-            r"\1 " + _REDACTED,
-            message,
-        )
-    return message
+    # One value guard for the usage-error path: parser error/exit and the
+    # CLI's own stderr diagnostics. Longest first so overlapping values
+    # (repeats sharing a prefix) redact fully.
+    return _redact_values(message, _token_parse_state.values)
 
 
 def _strip_token_options_for_detection(arguments: list[str]) -> list[str]:
@@ -177,8 +204,40 @@ class _CskArgumentParser(argparse.ArgumentParser):
         kwargs["allow_abbrev"] = False
         super().__init__(*args, **kwargs)
 
+    @overload
+    def parse_known_args(
+        self, args: Iterable[str] | None = ..., namespace: None = ...
+    ) -> tuple[argparse.Namespace, list[str]]: ...
+    @overload
+    def parse_known_args(
+        self, args: Iterable[str] | None, namespace: _N
+    ) -> tuple[_N, list[str]]: ...
+    @overload
+    def parse_known_args(self, *, namespace: _N) -> tuple[_N, list[str]]: ...
+    def parse_known_args(
+        self,
+        args: Iterable[str] | None = None,
+        namespace: Any = None,
+    ) -> tuple[Any, list[str]]:
+        # Collect at the outermost call only: argparse re-enters this method
+        # on each selected subparser with the remaining words, and a nested
+        # collection would lose values placed before the subcommand.
+        if _token_parse_state.depth == 0:
+            explicit = sys.argv[1:] if args is None else args
+            _token_parse_state.values = tuple(_collect_token_values(list(explicit)))
+        _token_parse_state.depth += 1
+        try:
+            return super().parse_known_args(args, namespace)
+        finally:
+            _token_parse_state.depth -= 1
+
     def error(self, message: str) -> NoReturn:
         super().error(_redact_token_values(message))
+
+    def exit(self, status: int = 0, message: str | None = None) -> NoReturn:
+        if message is not None:
+            message = _redact_token_values(message)
+        super().exit(status, message)
 
 
 class _RefuseTokenAction(argparse.Action):
@@ -228,13 +287,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         # Refuse before argparse can echo unknown/ambiguous options and values.
         # The exemption is scoped to the selected subcommand: only credential
-        # options the selected parser declares pass through to argparse.
+        # options the selected parser declares pass through to argparse. A
+        # token name after -- is always refused: past the separator it is a
+        # positional, and its value would lose its provenance. Values are
+        # collected first so every diagnostic below, including this refusal,
+        # is guarded.
+        _token_parse_state.values = tuple(_collect_token_values(arguments))
         safe_token_options = {"--token-file", "--token-source", "--token-env"}
         declared = (_declared_token_options(parser, arguments) & safe_token_options) if not is_check else set()
+        seen_separator = False
         for argument in arguments:
+            if argument == "--":
+                seen_separator = True
             option = argument.split("=", 1)[0]
-            if ((option.startswith("--token") or option in _TOKEN_SHORT_FORMS)
-                    and option not in declared):
+            if _is_token_option_name(option) and (option not in declared or seen_separator):
                 parser.error("--token is refused; use CSK_REGISTRY_TOKEN or --token-file for registry authorization; "
                              "for HTTPS credentials select --token-source or --token-env")
         args = parser.parse_args(arguments)
@@ -266,19 +332,19 @@ def main(argv: list[str] | None = None) -> int:
     ) as exc:
         rendered = source_diagnostics.format_exception(exc)
         if rendered is not None:
-            print(rendered, file=sys.stderr)
+            print(_redact_token_values(rendered), file=sys.stderr)
             return EXIT_CONFIG
-        print(f"error: {exc}", file=sys.stderr)
+        print(_redact_token_values(f"error: {exc}"), file=sys.stderr)
         return EXIT_CONFIG
     except source_transport.TransportError as exc:
         rendered = source_diagnostics.format_transport_exception(exc)
         if rendered is not None:
-            print(rendered, file=sys.stderr)
+            print(_redact_token_values(rendered), file=sys.stderr)
         else:
-            print(f"error: {exc}", file=sys.stderr)
+            print(_redact_token_values(f"error: {exc}"), file=sys.stderr)
         return EXIT_CONFIG
     except LockError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(_redact_token_values(f"error: {exc}"), file=sys.stderr)
         return EXIT_LOCK
 
 
@@ -1492,7 +1558,7 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
         )
         build_https.parse_rules(build_https.serialize_rules((rule,)))
     except (build_ssh.BuildSSHError, build_https.BuildHTTPSError) as exc:
-        print(str(exc), file=sys.stderr)
+        print(_redact_token_values(str(exc)), file=sys.stderr)
         return EXIT_CONFIG
     others = tuple(r for r in cfg.build_https if r.scope != args.scope)
     config.save_config(replace(cfg, build_https=others + (rule,)))
