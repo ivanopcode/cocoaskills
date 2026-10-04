@@ -1,6 +1,8 @@
 """Run C1 narrowing mutants in isolated copies, without Git or network use.
 
-Usage: python tests/audit_secrets_mutants.py
+Usage: python tests/audit_secrets_mutants.py [name-substring ...]
+With arguments, only mutants whose name contains one of the substrings run
+(the control run always runs first).
 """
 
 from __future__ import annotations
@@ -16,8 +18,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TEST = "tests/test_audit_secrets.py"
 REVIEW_TEST = "tests/test_audit_secrets_review.py"
+MATRIX_TEST = "tests/test_token_redaction_matrix.py"
 REFUSAL = 'action=_RefuseTokenAction, nargs="?", help=argparse.SUPPRESS,'
 ENV_CALL = "env = backend_environment(COMMAND_REQUIRED_ENV, overrides=self.config.env)"
+SUBCOMMAND_SKIP_ARGV = (
+    "next((i + 1 for i, a in enumerate(argv) if a in (\"bootstrap\", \"init\", \"skill\", "
+    "\"install\", \"update\", \"upgrade\", \"global\", \"audit\", \"status\", \"gc\", \"add\", \"remove\", "
+    "\"hybrid\", \"list\", \"project\", \"config\", \"shell-init\", \"check\")), len(argv))"
+)
 
 # Each mutation retains a narrower version of a security gate.
 MUTANTS = (
@@ -33,14 +41,6 @@ MUTANTS = (
     ("file-growth-admit-one-extra-byte", "src/csk/registry_token.py", [
         ("if len(raw) > MAX_TOKEN_FILE_BYTES:", "if len(raw) > MAX_TOKEN_FILE_BYTES + 1:", 0),
      ], "token_file_bounds_read_if_file_grows_after_fstat"),
-    ("refuse-only-build-https", "src/csk/cli.py", [
-        (REFUSAL, 'nargs="?", help=argparse.SUPPRESS,', 1),
-        ('and option not in declared', 'and option not in declared and arguments[:1] != ["audit"]', 0)],
-     "token_option_is_refused_before_dispatch and audit"),
-    ("refuse-only-audit", "src/csk/cli.py", [
-        (REFUSAL, 'nargs="?", help=argparse.SUPPRESS,', 0),
-        ('and option not in declared', 'and option not in declared and arguments[:2] != ["config", "build-https"]', 0)],
-     "token_option_is_refused_before_dispatch and build-https"),
     ("file-type-directories-only", "src/csk/registry_token.py", [
         ("not stat.S_ISREG(checked.st_mode)", "stat.S_ISDIR(checked.st_mode)", 0),
         ("if not stat.S_ISREG(info.st_mode):", "if stat.S_ISDIR(info.st_mode):", 0),
@@ -87,9 +87,6 @@ MUTANTS = (
     ("http-error-discloses-valueerror-only", "src/csk/cli.py", [
         ('    except Exception:\n        # HTTP exceptions', '    except Exception as exc:\n        if isinstance(exc, ValueError):\n            raise\n        # HTTP exceptions', 0),
      ], "publish_http_exception_never_echoes_header"),
-    ("token-prefix-allows-tok-only", "src/csk/cli.py", [
-        ('and option not in declared', 'and option not in declared and option != "--tok"', 0),
-     ], "token_prefix_never_discloses_on_any_subcommand"),
     ("abbreviation-audit-only", "src/csk/cli.py", [
         ('kwargs["allow_abbrev"] = False', 'kwargs["allow_abbrev"] = kwargs.get("prog", "").endswith(" audit")', 0),
      ], "publish_does_not_accept_abbreviated_registry"),
@@ -121,22 +118,32 @@ MUTANTS = (
         ('if security_name.endswith(("_TOKEN", "_KEY")) or security_name == "SSH_AUTH_SOCK" or security_name.startswith("GIT_"):',
          'if not security_name.startswith("LC_") and (security_name.endswith(("_TOKEN", "_KEY")) or security_name == "SSH_AUTH_SOCK" or security_name.startswith("GIT_")):', 0),
      ], "backend_child_environment_is_allowlisted and extract"),
-    ("token-source-restores-plain-choices", "src/csk/cli.py", [
-        ("type=_token_source_type,", "choices=list(build_https.TOKEN_SOURCES),", 0),
-     ], "invalid_token_source"),
-    ("credential-exemption-back-to-global", "src/csk/cli.py", [
-        ('and option not in declared', 'and option not in safe_token_options', 0),
-     ], "wrong_surface"),
-    ("credential-exemption-admits-audit-token-source-only", "src/csk/cli.py", [
-        ('and option not in declared', 'and option not in declared and not (arguments[:1] == ["audit"] and option == "--token-source")', 0),
-     ], "wrong_surface"),
-    ("credential-error-hook-bypassed", "src/csk/cli.py", [
-        ('super().error(_redact_token_values(message))', 'super().error(message)', 0),
-     ], "public_parsers"),
-    ("credential-error-hook-equals-only", "src/csk/cli.py", [
-        (r'r"(--token[^\s=]*)\s+([^\s]+)"', r'r"(?!)"', 0),
-        (r'r"\1 " + _REDACTED,', r'r"[NEVER]",', 0),
-     ], "public_parsers"),
+    ("suppression-hook-disabled", "src/csk/cli.py", [
+        ("    for element in argv:", "    return False\n    for element in argv:", 0),
+     ], "redaction_matrix or rev5 or suppression"),
+    ("predicate-misses-short-forms", "src/csk/cli.py", [
+        ('        if element.startswith("-") and not element.startswith("--"):', '        if False:', 0),
+     ], "attached_short"),
+    ("predicate-attached-equals-excluded", "src/csk/cli.py", [
+        ('        if element.startswith("-") and not element.startswith("--"):',
+         '        if element.startswith("-") and not element.startswith("--") and "=" not in element:', 0),
+     ], "attached_short_with_equals"),
+    ("predicate-post-subcommand-only", "src/csk/cli.py", [
+        ("    for element in argv:", f"    for element in argv[{SUBCOMMAND_SKIP_ARGV}]:", 0),
+     ], "separator_after_token"),
+    ("predicate-stops-at-separator", "src/csk/cli.py", [
+        ('        if element == "--":\n            continue', '        if element == "--":\n            break', 0),
+     ], "refusal_is_fixed_message"),
+    ("hook-bypassed-on-parser-error", "src/csk/cli.py", [
+        ("        if _suppression_state.active:\n            super().exit(2, _SUPPRESSED_CREDENTIAL_MESSAGE + \"\\n\")\n        super().error(message)",
+         "        super().error(message)", 0),
+     ], "guarded_in_direct_parser or public_parsers"),
+    ("hook-bypassed-on-dispatch", "src/csk/cli.py", [
+        ("    if not suppress:\n        return _main(argv)", "    return _main(argv)", 0),
+     ], "dispatch_guard or c2_token_file"),
+    ("token-env-validation-dropped", "src/csk/cli.py", [
+        ("    if not re.match(_TOKEN_ENV_NAME_RE, value):", "    if False:", 0),
+     ], "token_env_invalid"),
 )
 
 
@@ -152,22 +159,36 @@ def main() -> int:
         sandbox = Path(tmp)
         shutil.copytree(ROOT / "src", sandbox / "src", ignore=shutil.ignore_patterns("__pycache__"))
         (sandbox / "tests").mkdir()
-        for name in ("test_audit_secrets.py", "test_audit_secrets_review.py", "test_audit_publish.py", "conftest.py", "draft_sources_accounting.py"):
+        for name in ("test_audit_secrets.py", "test_audit_secrets_review.py", "test_audit_publish.py", "conftest.py", "draft_sources_accounting.py",
+                     "test_token_redaction_matrix.py"):
             shutil.copyfile(ROOT / "tests" / name, sandbox / "tests" / name)
+        (sandbox / "tests" / "fixtures").mkdir()
+        shutil.copyfile(ROOT / "tests" / "fixtures" / "c1-redaction-matrix.json",
+                        sandbox / "tests" / "fixtures" / "c1-redaction-matrix.json")
         (sandbox / "pytest.ini").write_text("[pytest]\npythonpath = src\n", encoding="utf-8")
-        env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1", PYTHONDONTWRITEBYTECODE="1")
+        (sandbox / "pytest-tmp").mkdir()
+        # Sandbox-local TMPDIR: pytest's garbage-dir cleanup warnings mention
+        # "error" and would otherwise misclassify kills (kill detection scans
+        # stdout for " failed" without " error").
+        env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1", PYTHONDONTWRITEBYTECODE="1",
+                   TMPDIR=str(sandbox / "pytest-tmp"))
 
-        def run(expression: str | None = None) -> subprocess.CompletedProcess[str]:
-            argv = [sys.executable, "-m", "pytest", "-q", "--tb=no", "-r", "f", "-p", "no:cacheprovider", TEST, REVIEW_TEST]
+        def run(expression: str | None = None, timeout: int = 120) -> subprocess.CompletedProcess[str]:
+            argv = [sys.executable, "-m", "pytest", "-q", "--tb=no", "-r", "f", "-p", "no:cacheprovider", TEST, REVIEW_TEST,
+                   MATRIX_TEST]
             if expression:
                 argv += ["-k", expression]
-            return subprocess.run(argv, cwd=sandbox, env=env, capture_output=True, text=True, timeout=60)
+            return subprocess.run(argv, cwd=sandbox, env=env, capture_output=True, text=True, timeout=timeout)
 
-        control = run()
+        control = run(timeout=300)
         print("CONTROL:", control.stdout.strip().splitlines()[-1], flush=True)
         if control.returncode != 0:
             return 1
-        for name, file, replacements, expression in MUTANTS:
+        wanted = sys.argv[1:]
+        selected = [entry for entry in MUTANTS
+                    if not wanted or any(bit in entry[0] for bit in wanted)]
+        print(f"MUTANTS: {len(selected)}/{len(MUTANTS)} selected", flush=True)
+        for name, file, replacements, expression in selected:
             target = sandbox / file
             original = target.read_text(encoding="utf-8")
             mutated = original
