@@ -441,7 +441,11 @@ def test_main_lane_preserves_full_platform_coverage_and_go_evidence() -> None:
     workflow = _workflow()
 
     ordinary = _job(workflow, "merge_ordinary")
-    assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in ordinary
+    assert (
+        "    if: >-\n"
+        "      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||\n"
+        "      github.event_name == 'workflow_dispatch'\n"
+    ) in ordinary
     assert "os: [ubuntu-latest, macos-latest, windows-latest]" in ordinary
     assert 'python-version: ["3.11", "3.12", "3.13", "3.14"]' in ordinary
     assert ordinary.count("--ignore=") == 2
@@ -567,6 +571,25 @@ def test_the_shard_verifier_is_reachable_before_a_merge() -> None:
         "      github.event_name == 'workflow_dispatch'\n"
     ) in protocol
     assert "Verify and select deterministic Windows protocol shard" in protocol
+
+
+def test_every_merge_lane_runs_on_workflow_dispatch() -> None:
+    """No merge lane may be push-to-main-only: exact-candidate dispatch runs
+    must execute every merge lane, so required coverage can never be a
+    skipped job on the candidate."""
+    workflow = _workflow()
+    for job_id in (
+        "merge_ordinary",
+        "merge_protocol",
+        "merge_go_e2e",
+        "merge_draft_sources",
+    ):
+        job = _job(workflow, job_id)
+        assert (
+            "    if: >-\n"
+            "      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||\n"
+            "      github.event_name == 'workflow_dispatch'\n"
+        ) in job, job_id
 
 
 def test_stable_aggregates_always_run_and_fail_closed() -> None:
@@ -907,7 +930,11 @@ def test_draft_sources_lanes_run_the_harness_against_the_pinned_suite() -> None:
     assert "refs/heads/main" not in fast
 
     merge = _job(workflow, "merge_draft_sources")
-    assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in merge
+    assert (
+        "    if: >-\n"
+        "      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||\n"
+        "      github.event_name == 'workflow_dispatch'\n"
+    ) in merge
 
     assert "os: [ubuntu-latest, macos-latest, windows-latest]" in fast
     assert "os: [ubuntu-latest, macos-latest]" in merge
