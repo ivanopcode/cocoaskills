@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import os
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -10,6 +11,8 @@ from types import ModuleType
 from unittest import mock
 
 import pytest
+
+from git_fixture_isolation import check_own_git_dir, discover_git_dir, scrub_git_child_env
 
 
 ROOT = Path(__file__).parents[1]
@@ -28,11 +31,16 @@ EXPECTED_TIMEOUTS = {
 
 
 def _git(checkout: Path, *args: str) -> str:
+    # The ceiling is pinned above the -C target (the directory git discovers
+    # from), not above the inherited pytest cwd, so a checkout without its own
+    # .git cannot traverse up into an enclosing checkout (BUG-261004-473myt).
+    env = scrub_git_child_env(dict(os.environ), checkout)
     result = subprocess.run(
         ["git", "-C", str(checkout), *args],
         capture_output=True,
         text=True,
         check=True,
+        env=env,
     )
     return result.stdout.strip()
 
@@ -41,6 +49,9 @@ def _git_fixture(tmp_path: Path) -> tuple[Path, str]:
     checkout = tmp_path / "source"
     checkout.mkdir()
     _git(checkout, "init", "-q")
+    # Backstop for a redirector the scrub does not know: prove the discovered
+    # repository is this fixture's own before the first config write lands.
+    check_own_git_dir(checkout, discover_git_dir(checkout))
     _git(checkout, "config", "user.email", "ci@example.com")
     _git(checkout, "config", "user.name", "CI")
     tracked = checkout / "tracked.txt"
