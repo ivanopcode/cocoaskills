@@ -21,6 +21,7 @@ from . import (
     config,
     deprecation,
     dev_substitutions,
+    dispatch,
     gc,
     git_admission,
     git_ops,
@@ -222,15 +223,23 @@ def main(argv: list[str] | None = None) -> int:
     build_toolchain.reset_go_future_warning_state()
     arguments = list(sys.argv[1:] if argv is None else argv)
     is_check = bool(arguments and arguments[0] == "check")
-    parser = _build_check_parser() if is_check else build_parser()
-    if is_check:
+    is_dispatch = bool(arguments and arguments[0] == "dispatch")
+    if is_dispatch:
+        parser = _build_dispatch_parser()
+    else:
+        parser = _build_check_parser() if is_check else build_parser()
+    if is_check or is_dispatch:
         arguments = arguments[1:]
     try:
         # Refuse before argparse can echo unknown/ambiguous options and values.
         # The exemption is scoped to the selected subcommand: only credential
         # options the selected parser declares pass through to argparse.
         safe_token_options = {"--token-file", "--token-source", "--token-env"}
-        declared = (_declared_token_options(parser, arguments) & safe_token_options) if not is_check else set()
+        declared = (
+            (_declared_token_options(parser, arguments) & safe_token_options)
+            if not is_check and not is_dispatch
+            else set()
+        )
         for argument in arguments:
             option = argument.split("=", 1)[0]
             if ((option.startswith("--token") or option in _TOKEN_SHORT_FORMS)
@@ -242,6 +251,9 @@ def main(argv: list[str] | None = None) -> int:
         return int(exc.code) if isinstance(exc.code, int) else EXIT_CONFIG
     if is_check:
         args.command = "check"
+        args.version = False
+    if is_dispatch:
+        args.command = "dispatch"
         args.version = False
     if args.version:
         print(f"csk {__version__}")
@@ -757,6 +769,49 @@ def _build_check_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_dispatch_parser() -> argparse.ArgumentParser:
+    parser: argparse.ArgumentParser = _CskArgumentParser(
+        prog="csk dispatch",
+        description="Project-aware bare command dispatch (POSIX slice).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Installs publish dispatch records automatically; 'dispatch setup'\n"
+            "only ensures the shims directory exists and shows how to put it\n"
+            "on PATH. Bare dispatched names resolve per directory: the deepest\n"
+            "registered project wins, then the global fallback.\n\n"
+            "Files read:\n"
+            "  <manager>/dispatch/current and the active generation registry.\n\n"
+            "Exit codes:\n"
+            "  0 setup shown or installed, 2 config error.\n\n"
+            "Examples:\n"
+            "  csk dispatch setup\n"
+            "  csk dispatch setup --install"
+        ),
+    )
+    sub = parser.add_subparsers(dest="dispatch_command", required=True)
+    setup = sub.add_parser(
+        "setup",
+        help="ensure dispatch shims exist and show the PATH snippet",
+    )
+    setup.add_argument(
+        "--install",
+        action="store_true",
+        help="append the PATH snippet to the shell rc file once",
+    )
+    setup.add_argument(
+        "--shell",
+        default="auto",
+        choices=["auto", "bash", "zsh", "sh", "powershell"],
+        help="shell grammar for the snippet (default: auto)",
+    )
+    setup.add_argument(
+        "--rc-path",
+        default=None,
+        help="rc file for --install (default: shell rc in $HOME)",
+    )
+    return parser
+
+
 def _add_global_only_argument(parser: argparse.ArgumentParser) -> None:
     """Selector that narrows a global operation to the named declared skills."""
 
@@ -954,6 +1009,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         else:
             print(shell_init.shell_init(selected_shell, include_global=not args.no_global))
         return EXIT_OK
+    if args.command == "dispatch":
+        return _cmd_dispatch(args)
     if args.command == "global":
         return _dispatch_global(args)
     if args.command == "audit":
@@ -1523,6 +1580,57 @@ def _cmd_skill_check(args: argparse.Namespace) -> int:
         for issue in issues:
             print(skillcheck.format_issue(issue))
     return EXIT_PARTIAL_FAIL if skillcheck.has_errors(issues) else EXIT_OK
+
+
+def _cmd_dispatch(args: argparse.Namespace) -> int:
+    """Ensure dispatch shims exist and show or install the PATH snippet."""
+    if args.dispatch_command != "setup":
+        print("error: unknown dispatch command", file=sys.stderr)
+        return EXIT_CONFIG
+    csk_home = config.config_path().parent
+    try:
+        registry = dispatch.read_registry(csk_home)
+    except dispatch.DispatchPublishError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+    try:
+        dispatch.refresh_launchers(csk_home, registry)
+    except dispatch.DispatchPublishError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+    shims = dispatch.shims_dir(csk_home)
+    shell = shell_init.detect_shell() if args.shell == "auto" else args.shell
+    try:
+        snippet = dispatch.setup_snippet(shims, shell=shell)
+    except dispatch.DispatchPublishError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+    print(f"Dispatch shims: {shims}")
+    if not args.install:
+        print("Append this directory to your PATH (idempotent):")
+        print(snippet, end="")
+        return EXIT_OK
+    rc_path = (
+        Path(args.rc_path).expanduser()
+        if args.rc_path
+        else dispatch.default_rc_path(shell)
+    )
+    if rc_path is None:
+        print(
+            "error: dispatch setup --install needs --rc-path for this shell",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG
+    try:
+        changed = dispatch.install_setup_snippet(rc_path, snippet)
+    except (dispatch.DispatchPublishError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+    if changed:
+        print(f"Installed dispatch PATH entry in {rc_path}")
+    else:
+        print(f"Dispatch PATH entry already present in {rc_path}")
+    return EXIT_OK
 
 
 def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
