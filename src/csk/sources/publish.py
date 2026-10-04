@@ -1322,23 +1322,21 @@ def check_schema2_system_commands(
 ) -> None:
     """Refuse members whose required system commands are not ready.
 
-    Mirrors the legacy lane's readiness check exactly: every declared
-    system dependency names an executable that must resolve on the
-    operator PATH before any shim is published.
+    Runs the one shared aggregate used by every surface (install, global
+    install, dry-run, project and global status, schema 1 and 2): every
+    declared legacy system command and explicit system dependency names an
+    executable that must resolve on the operator PATH before any shim is
+    published. Every missing command across the selected members is
+    reported in one diagnostic.
     """
 
-    for member in members:
-        spec = specs_map[member.name]
-        for dependency in spec.dependencies.values():
-            if dependency.type != "system":
-                continue
-            if not dependency.command or shutil.which(dependency.command) is None:
-                hint = f" Hint: {dependency.hint}" if dependency.hint else ""
-                raise SourceError(
-                    CODE_MEMBER_MISSING,
-                    f"Missing system command {dependency.command!r} for "
-                    f"{member.name}.{hint}",
-                )
+    missing = closure.collect_missing_system_commands(
+        [(member.name, specs_map[member.name]) for member in members]
+    )
+    if missing:
+        raise SourceError(
+            CODE_MEMBER_MISSING, closure.format_missing_system_commands(missing)
+        )
 
 
 def check_schema2_skill_dependencies(
@@ -6336,6 +6334,10 @@ def _evaluate_live_outputs(
                 pred_files[name], frozen_dir, subject=f"Skill {name!r}"
             )
             specs_map[name] = load_member_spec(frozen_dir, name=name)
+        # Read-only aggregate readiness: the same shared system-command gate
+        # install runs, so dry-run and status --check report the same missing
+        # tools. Raises SourceError, caught below into status errors.
+        check_schema2_system_commands(tuple(members), specs_map)
         bundles = []
         for member in members:
             member_spec = specs_map[member.name]

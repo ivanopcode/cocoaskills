@@ -1284,12 +1284,16 @@ def _build_nodes(
 
     try:
         return resolve(global_manifest.skills)
+    except closure.MissingSystemCommandsError:
+        raise
     except Exception:
         available: list[manifest.SkillDecl] = []
         isolated_errors: list[str] = []
         for decl in global_manifest.skills:
             try:
                 resolve([decl])
+            except closure.MissingSystemCommandsError as exc:
+                isolated_errors.append(str(exc))
             except Exception as exc:  # noqa: BLE001 - preserve per-source diagnostics
                 isolated_errors.append(f"{decl.name}: {exc}")
             else:
