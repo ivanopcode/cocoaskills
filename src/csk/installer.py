@@ -3780,11 +3780,13 @@ def _check_dependencies(plans: list[SkillPlan]) -> None:
 
 
 def _check_system_commands(plans: list[SkillPlan]) -> None:
+    missing: list[closure.MissingSystemCommand] = []
     for plan in plans:
-        for command in _system_dependencies(plan):
-            if not command.command or shutil.which(command.command) is None:
-                hint = f" Hint: {command.hint}" if command.hint else ""
-                raise InstallError(f"Missing system command {command.command!r} for {plan.decl.name}.{hint}")
+        missing.extend(
+            closure.missing_system_commands_for_spec(plan.decl.name, plan.spec)
+        )
+    if missing:
+        raise InstallError(closure.format_missing_system_commands(missing))
 
 
 def _check_skill_command_dependencies(plans: list[SkillPlan]) -> None:
