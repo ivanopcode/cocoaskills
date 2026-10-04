@@ -1839,7 +1839,16 @@ def test_sweep_project_resolve_each_ordinal_refuses(monkeypatch, tmp_path, capsy
 
 
 def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
-    """The project-add fresh dir: require/present/write chain refuses."""
+    """The project-add fresh dir: require/present/write/scope chain refuses.
+
+    Ordinals 1 and 5 still succeed on a single transient fault:
+    the separation pre-check (1) is re-verified at publication
+    (ordinal 6), and realpath swallows one faulted lstat (5) while
+    the root is stated again (ordinals 6 and 7) before recording
+    anything. Ordinal 8 (the volume case-oracle probe) fails closed
+    to exact matching, so the add still succeeds. Every other
+    dispatch-scope fault refuses.
+    """
     monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
 
@@ -1860,14 +1869,24 @@ def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         label="project add",
         setup=setup,
         sites=[
+            ("os.stat", "csk.dispatch", "manager_home_inside_root"),
             ("os.stat", "csk.manifest", "_require_project_dir"),
             ("os.stat", "csk.manifest", "_skillfile_present"),
             ("io.open", "csk.manifest", "_write_skillfile_text"),
+            ("os.lstat", "csk.dispatch", "canonical_root_for_project"),
+            ("os.stat", "csk.dispatch", "_refuse_manager_inside_checkout"),
+            ("os.stat", "csk.dispatch", "_project_entry"),
+            ("os.stat", "csk._dispatch_runtime", "volume_case_insensitive"),
         ],
         expect={
-            1: ("refuse", "Cannot access project path"),
-            2: ("refuse", "Cannot read Skillfile at"),
-            3: ("refuse", "Cannot write Skillfile at"),
+            1: ("ok", "Added project"),
+            2: ("refuse", "Cannot access project path"),
+            3: ("refuse", "Cannot read Skillfile at"),
+            4: ("refuse", "Cannot write Skillfile at"),
+            5: ("ok", "Added project"),
+            6: ("refuse", "dispatch scope failed"),
+            7: ("refuse", "dispatch scope failed"),
+            8: ("ok", "Added project"),
         },
         dry=(cli.EXIT_OK, "Added project", ""),
         kp1=(cli.EXIT_OK, "Added project", ""),
