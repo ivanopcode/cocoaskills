@@ -35,6 +35,8 @@ from test_git_admission_ssh import (
     _tool as _ssh_tool,
 )
 
+from git_fixture_isolation import run_fixture_git
+
 from csk import git_admission
 from csk.build_repository import LockedCommit
 from csk.build_repository_pipeline import (
@@ -67,14 +69,14 @@ def _git_path() -> Path:
 
 
 def _git(cwd: Path | None, *args: str) -> str:
-    return subprocess.run(
-        (_git_path(), *args),
+    # Fixture git children run through the one shared runner, which scrubs
+    # ambient redirectors and attests the fixture repository (BUG-261004-473myt).
+    return run_fixture_git(
+        args,
         cwd=cwd,
-        check=True,
+        executable=_git_path(),
         stdin=subprocess.DEVNULL,
-        capture_output=True,
         timeout=20,
-        text=True,
     ).stdout
 
 
@@ -716,11 +718,10 @@ def _ensure_loopback_https_serves(key_path: str, crt_path: str) -> None:
         with tempfile.TemporaryDirectory(prefix="csk-https-probe") as scratch:
             root = Path(scratch)
             try:
-                completed = subprocess.run(
-                    (os.fspath(_git_path()), "ls-remote", probe_server.url),
+                completed = run_fixture_git(
+                    ["ls-remote", probe_server.url],
+                    executable=_git_path(),
                     stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    text=True,
                     env=_loopback_https_probe_environment(crt_path, root),
                     cwd=root,
                     timeout=20,
@@ -2926,23 +2927,21 @@ def test_git_ssh_envelope_partitions_evidence_from_non_evidence(
         "#!/bin/sh\necho " + f"'{marker}' >&2\nexit 255\n", encoding="utf-8"
     )
     stub.chmod(0o700)
-    environment = dict(os.environ)
-    environment["GIT_SSH"] = os.fspath(stub)
-    environment["GIT_TERMINAL_PROMPT"] = "0"
-    environment["LANG"] = "C"
-    environment["LC_ALL"] = "C"
-    completed = subprocess.run(
-        (
-            os.fspath(_git_path()),
+    # Only the ssh stand-in is explicit: the shared runner pins the locale,
+    # terminal prompt and everything else from its allowlist, so no ambient
+    # GIT_* variable can ride along through an os.environ spread
+    # (BUG-261004-473myt rev3).
+    environment = {"GIT_SSH": os.fspath(stub)}
+    completed = run_fixture_git(
+        [
             "-C",
             os.fspath(work),
             "fetch",
             "--quiet",
             "git@example.org:kit.git",
             "HEAD",
-        ),
-        capture_output=True,
-        text=True,
+        ],
+        executable=_git_path(),
         env=environment,
         timeout=30,
         check=False,
