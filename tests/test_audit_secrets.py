@@ -873,53 +873,27 @@ def test_wrong_surface_token_options_refused_without_echo(prefix, option, form, 
     assert "CSK_REGISTRY_TOKEN" in output.err
 
 
-def _is_leaf_prefix(root_parser, prefix):
-    # A leaf is a complete selectable command (no further required
-    # subcommand). Branch prefixes with a separate-form marker would have the
-    # marker absorbed as the missing subcommand name and echoed via an
-    # invalid-choice diagnostic for that subcommand, not via the token
-    # option; production cli.main refuses those shapes in pre-parse first
-    # (covered by test_wrong_surface_...), so direct-parser separate cases
-    # are restricted to leaves where the hook is the deciding layer.
-    if prefix == ("check",):
-        return True
-    current = root_parser
-    for name in prefix:
-        found = None
-        for action in current._actions:
-            if isinstance(action, cli.argparse._SubParsersAction) and name in action.choices:
-                found = action.choices[name]
-                break
-        if found is None:
-            return False
-        current = found
-    for action in current._actions:
-        if isinstance(action, cli.argparse._SubParsersAction):
-            return False
-    return True
-
-
 def _public_parser_cases():
     # Every public parser root, every command prefix, every --token* spelling
-    # in both forms, through parser.parse_args directly (bypassing the
-    # pre-parse) so the error hook is the only redaction layer. Equals covers
-    # all prefixes; separate covers leaves (see _is_leaf_prefix).
+    # in both forms (352 cases), through parser.parse_args directly
+    # (bypassing the pre-parse) so the value guard is the only redaction
+    # layer. Branch prefixes and the unfilled shell-init positional are
+    # included: a separate-form value absorbed as a subcommand or positional
+    # choice is still a collected value and must be redacted.
     root_parser = cli.build_parser()
     cases = []
     for prefix in list(_command_prefixes(root_parser)) + [("check",)]:
-        leaf = _is_leaf_prefix(root_parser, prefix)
         for option in ("--token", "--token-file", "--token-source", "--token-env"):
             cases.append((prefix, option, "equals"))
-            if leaf:
-                cases.append((prefix, option, "separate"))
+            cases.append((prefix, option, "separate"))
     return cases
 
 
 @pytest.mark.parametrize("prefix,option,form", _public_parser_cases())
 def test_public_parsers_never_echo_token_values(prefix, option, form, capsys):
-    # Production call site: _CskArgumentParser.error via parse_args in
-    # src/csk/cli.py. Declared options parse cleanly; everything else must
-    # exit 2 without the marker in either stream.
+    # Production call site: _CskArgumentParser.parse_known_args collection
+    # plus error in src/csk/cli.py. Declared options parse cleanly;
+    # everything else must exit 2 without the marker in either stream.
     marker = "synthetic-public-parser-marker-7f3a"
     suffix = [option + "=" + marker] if form == "equals" else [option, marker]
     if prefix == ("check",):
@@ -928,11 +902,6 @@ def test_public_parsers_never_echo_token_values(prefix, option, form, capsys):
     else:
         parser = cli.build_parser()
         argv = [*prefix, *suffix]
-        if prefix == ("shell-init",):
-            # The shell positional has choices; fill it so a separate-form
-            # marker is not absorbed as the shell value and echoed via an
-            # invalid-choice diagnostic for that positional.
-            argv = ["shell-init", "bash", *suffix]
     try:
         parser.parse_args(argv)
     except SystemExit as exc:
