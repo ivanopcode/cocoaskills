@@ -7,7 +7,7 @@
     "tests/test_protocol_conformance.py": "06d5fa20a02ac40e075d367d056961abbef6d38b4088b368180c715046fab435",
     "tests/protocol_conformance_adapters.py": "bb1c9b9a32e745b6087bf58bb2ba4d4cf17ccd267cbfef97970cee1ae3a6bca5",
     "tests/protocol_lifecycle_observations.py": "834dd2c10188b9b515b4fa6c59f8b8a896ab8801cde3807db5959076177c8378",
-    "tests/conftest.py": "48dc8e8816b0922c7581aa31988aada450736693f4a367039ed60469c653ceee"
+    "tests/conftest.py": "5fc7858b7949d2b10e206616a63dd8cade3392ae3415a0fdae77496e66b566aa"
   },
   "audit_revisions": [
     {

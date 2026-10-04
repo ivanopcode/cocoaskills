@@ -20,6 +20,8 @@ from io import BytesIO
 from pathlib import Path, PurePath
 from typing import Any
 
+from git_fixture_isolation import check_own_git_dir, discover_git_dir, scrub_git_child_env
+
 GOLDEN_ROOT_TOKEN = "{{GOLDEN_ROOT}}"
 VERSION_TOKEN = "{{VERSION}}"
 PATH_HASH_TOKEN = "{{PATH_HASH}}"
@@ -169,6 +171,9 @@ def run_git(args: list[str], cwd: Path, *, env: dict[str, str] | None = None) ->
     merged.update(PINNED_GIT_ENV)
     if env:
         merged.update(env)
+    # The scrub runs after the merge so neither the ambient environment nor
+    # an explicit override can smuggle a repository redirector into the child.
+    scrub_git_child_env(merged, cwd)
     proc = subprocess.run(
         ["git", *args], cwd=cwd, text=True, capture_output=True, env=merged
     )
@@ -183,6 +188,9 @@ def _init_repo(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     run_git(["init"], path)
     run_git(["branch", "-M", "main"], path)
+    # Backstop for a redirector the scrub does not know: prove the discovered
+    # repository is this fixture's own before the first config write lands.
+    check_own_git_dir(path, discover_git_dir(path))
     run_git(["config", "user.name", "Golden Test"], path)
     run_git(["config", "user.email", "golden@example.com"], path)
     run_git(["config", "commit.gpgsign", "false"], path)
