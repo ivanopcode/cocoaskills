@@ -1,6 +1,8 @@
 """Run C1 narrowing mutants in isolated copies, without Git or network use.
 
-Usage: python tests/audit_secrets_mutants.py
+Usage: python tests/audit_secrets_mutants.py [name-substring ...]
+With arguments, only mutants whose name contains one of the substrings run
+(the control run always runs first).
 """
 
 from __future__ import annotations
@@ -16,8 +18,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TEST = "tests/test_audit_secrets.py"
 REVIEW_TEST = "tests/test_audit_secrets_review.py"
+MATRIX_TEST = "tests/test_token_redaction_matrix.py"
 REFUSAL = 'action=_RefuseTokenAction, nargs="?", help=argparse.SUPPRESS,'
 ENV_CALL = "env = backend_environment(COMMAND_REQUIRED_ENV, overrides=self.config.env)"
+REFUSE_CONDITION = "and (option not in declared or seen_separator)"
+MATCHER_BODY = (
+    "    lowered = option.lower()\n"
+    '    if lowered.startswith("--token") or lowered in _TOKEN_SHORT_FORMS:\n'
+    "        return True\n"
+    "    return lowered.startswith(\"-token\") or lowered in _TOKEN_SHORT_FORMS_SINGLE_DASH"
+)
+SUBCOMMAND_SKIP = (
+    "next((i + 1 for i, a in enumerate(arguments) if a in (\"bootstrap\", \"init\", \"skill\", "
+    "\"install\", \"update\", \"upgrade\", \"global\", \"audit\", \"status\", \"gc\", \"add\", \"remove\", "
+    "\"hybrid\", \"list\", \"project\", \"config\", \"shell-init\", \"check\")), len(arguments))"
+)
 
 # Each mutation retains a narrower version of a security gate.
 MUTANTS = (
@@ -35,11 +50,11 @@ MUTANTS = (
      ], "token_file_bounds_read_if_file_grows_after_fstat"),
     ("refuse-only-build-https", "src/csk/cli.py", [
         (REFUSAL, 'nargs="?", help=argparse.SUPPRESS,', 1),
-        ('and option not in declared', 'and option not in declared and arguments[:1] != ["audit"]', 0)],
+        (REFUSE_CONDITION, REFUSE_CONDITION + ' and arguments[:1] != ["audit"]', 0)],
      "token_option_is_refused_before_dispatch and audit"),
     ("refuse-only-audit", "src/csk/cli.py", [
         (REFUSAL, 'nargs="?", help=argparse.SUPPRESS,', 0),
-        ('and option not in declared', 'and option not in declared and arguments[:2] != ["config", "build-https"]', 0)],
+        (REFUSE_CONDITION, REFUSE_CONDITION + ' and arguments[:2] != ["config", "build-https"]', 0)],
      "token_option_is_refused_before_dispatch and build-https"),
     ("file-type-directories-only", "src/csk/registry_token.py", [
         ("not stat.S_ISREG(checked.st_mode)", "stat.S_ISDIR(checked.st_mode)", 0),
@@ -88,7 +103,7 @@ MUTANTS = (
         ('    except Exception:\n        # HTTP exceptions', '    except Exception as exc:\n        if isinstance(exc, ValueError):\n            raise\n        # HTTP exceptions', 0),
      ], "publish_http_exception_never_echoes_header"),
     ("token-prefix-allows-tok-only", "src/csk/cli.py", [
-        ('and option not in declared', 'and option not in declared and option != "--tok"', 0),
+        (REFUSE_CONDITION, REFUSE_CONDITION + ' and option != "--tok"', 0),
      ], "token_prefix_never_discloses_on_any_subcommand"),
     ("abbreviation-audit-only", "src/csk/cli.py", [
         ('kwargs["allow_abbrev"] = False', 'kwargs["allow_abbrev"] = kwargs.get("prog", "").endswith(" audit")', 0),
@@ -125,18 +140,48 @@ MUTANTS = (
         ("type=_token_source_type,", "choices=list(build_https.TOKEN_SOURCES),", 0),
      ], "invalid_token_source"),
     ("credential-exemption-back-to-global", "src/csk/cli.py", [
-        ('and option not in declared', 'and option not in safe_token_options', 0),
+        (REFUSE_CONDITION, "and (option not in safe_token_options or seen_separator)", 0),
      ], "wrong_surface"),
     ("credential-exemption-admits-audit-token-source-only", "src/csk/cli.py", [
-        ('and option not in declared', 'and option not in declared and not (arguments[:1] == ["audit"] and option == "--token-source")', 0),
+        (REFUSE_CONDITION, REFUSE_CONDITION + ' and not (arguments[:1] == ["audit"] and option == "--token-source")', 0),
      ], "wrong_surface"),
-    ("credential-error-hook-bypassed", "src/csk/cli.py", [
-        ('super().error(_redact_token_values(message))', 'super().error(message)', 0),
-     ], "public_parsers"),
-    ("credential-error-hook-equals-only", "src/csk/cli.py", [
-        (r'r"(--token[^\s=]*)\s+([^\s]+)"', r'r"(?!)"', 0),
-        (r'r"\1 " + _REDACTED,', r'r"[NEVER]",', 0),
-     ], "public_parsers"),
+    ("redaction-guard-disabled", "src/csk/cli.py", [
+        ("    return _redact_values(message, _token_parse_state.values)", "    return message", 0),
+     ], "redaction_matrix or rev5"),
+    ("collection-post-subcommand-only", "src/csk/cli.py", [
+        ("    for index in range(len(arguments)):", f"    for index in range({SUBCOMMAND_SKIP}, len(arguments)):", 0),
+     ], "redaction_matrix or rev5"),
+    ("separator-case-dropped", "src/csk/cli.py", [
+        ("        argument = arguments[index]", "        argument = arguments[index]\n        if argument == \"--\":\n            break", 0),
+        ("(option not in declared or seen_separator)", "(option not in declared)", 0),
+     ], "redaction_matrix or rev5"),
+    ("matcher-double-dash-exact-only", "src/csk/cli.py", [
+        (MATCHER_BODY, '    return option.startswith("--token") or option in _TOKEN_SHORT_FORMS', 0),
+     ], "redaction_matcher"),
+    ("collection-first-value-only", "src/csk/cli.py", [
+        ("            values.append(candidate)", "            values.append(candidate)\n            break", 0),
+     ], "repeated_distinct"),
+    ("redaction-shortest-first", "src/csk/cli.py", [
+        ("    for value in sorted(set(values), key=len, reverse=True):", "    for value in sorted(set(values)):", 0),
+     ], "overlapping_values"),
+    ("guard-handles-raw-form-only", "src/csk/cli.py", [
+        ("            for form in sorted(_redaction_forms(value), key=len, reverse=True):\n                message = message.replace(form, _REDACTED)",
+         "            message = message.replace(value, _REDACTED)", 0),
+     ], "repr_escaped"),
+    ("collection-attached-short-dropped", "src/csk/cli.py", [
+        ("            return argument[: len(name)], argument[len(name) :]", "            return None", 0),
+     ], "attached_short"),
+    ("redaction-stderr-wrapper-dropped", "src/csk/cli.py", [
+        ("    sys.stderr = _RedactingStderr(original_stderr)", "    sys.stderr = original_stderr", 0),
+     ], "dispatch_guard"),
+    ("length-bound-admits-short", "src/csk/cli.py", [
+        ('if len(candidate) >= _TOKEN_VALUE_MIN_LENGTH and candidate != "--":',
+         'if len(candidate) >= _TOKEN_VALUE_MIN_LENGTH - 1 and candidate != "--":', 0),
+     ], "length_bound"),
+    ("length-bound-drops-eight", "src/csk/cli.py", [
+        ('if len(candidate) >= _TOKEN_VALUE_MIN_LENGTH and candidate != "--":',
+         'if len(candidate) > _TOKEN_VALUE_MIN_LENGTH and candidate != "--":', 0),
+     ], "length_bound"),
 )
 
 
@@ -152,22 +197,36 @@ def main() -> int:
         sandbox = Path(tmp)
         shutil.copytree(ROOT / "src", sandbox / "src", ignore=shutil.ignore_patterns("__pycache__"))
         (sandbox / "tests").mkdir()
-        for name in ("test_audit_secrets.py", "test_audit_secrets_review.py", "test_audit_publish.py", "conftest.py", "draft_sources_accounting.py"):
+        for name in ("test_audit_secrets.py", "test_audit_secrets_review.py", "test_audit_publish.py", "conftest.py", "draft_sources_accounting.py",
+                     "test_token_redaction_matrix.py"):
             shutil.copyfile(ROOT / "tests" / name, sandbox / "tests" / name)
+        (sandbox / "tests" / "fixtures").mkdir()
+        shutil.copyfile(ROOT / "tests" / "fixtures" / "c1-redaction-matrix.json",
+                        sandbox / "tests" / "fixtures" / "c1-redaction-matrix.json")
         (sandbox / "pytest.ini").write_text("[pytest]\npythonpath = src\n", encoding="utf-8")
-        env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1", PYTHONDONTWRITEBYTECODE="1")
+        (sandbox / "pytest-tmp").mkdir()
+        # Sandbox-local TMPDIR: pytest's garbage-dir cleanup warnings mention
+        # "error" and would otherwise misclassify kills (kill detection scans
+        # stdout for " failed" without " error").
+        env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1", PYTHONDONTWRITEBYTECODE="1",
+                   TMPDIR=str(sandbox / "pytest-tmp"))
 
-        def run(expression: str | None = None) -> subprocess.CompletedProcess[str]:
-            argv = [sys.executable, "-m", "pytest", "-q", "--tb=no", "-r", "f", "-p", "no:cacheprovider", TEST, REVIEW_TEST]
+        def run(expression: str | None = None, timeout: int = 120) -> subprocess.CompletedProcess[str]:
+            argv = [sys.executable, "-m", "pytest", "-q", "--tb=no", "-r", "f", "-p", "no:cacheprovider", TEST, REVIEW_TEST,
+                   MATRIX_TEST]
             if expression:
                 argv += ["-k", expression]
-            return subprocess.run(argv, cwd=sandbox, env=env, capture_output=True, text=True, timeout=60)
+            return subprocess.run(argv, cwd=sandbox, env=env, capture_output=True, text=True, timeout=timeout)
 
-        control = run()
+        control = run(timeout=300)
         print("CONTROL:", control.stdout.strip().splitlines()[-1], flush=True)
         if control.returncode != 0:
             return 1
-        for name, file, replacements, expression in MUTANTS:
+        wanted = sys.argv[1:]
+        selected = [entry for entry in MUTANTS
+                    if not wanted or any(bit in entry[0] for bit in wanted)]
+        print(f"MUTANTS: {len(selected)}/{len(MUTANTS)} selected", flush=True)
+        for name, file, replacements, expression in selected:
             target = sandbox / file
             original = target.read_text(encoding="utf-8")
             mutated = original
