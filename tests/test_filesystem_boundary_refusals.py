@@ -1839,7 +1839,18 @@ def test_sweep_project_resolve_each_ordinal_refuses(monkeypatch, tmp_path, capsy
 
 
 def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
-    """The project-add fresh dir: require/present/write chain refuses."""
+    """The project-add fresh dir: require/present/write/scope chain refuses.
+
+    Ordinals 1, 2 and 6 still succeed on a single transient fault:
+    the separation pre-check stat (1) is re-verified at publication
+    (ordinal 7), realpath swallows one faulted lstat (2 and 6) while
+    the root is stated again (ordinals 7 and 8) before recording
+    anything. Ordinals 9 and 10 (the volume case-oracle and
+    normalization-oracle probes) fail closed to exact matching, and
+    ordinals 11 and 12 (staging/prune liveness classification of the
+    just-recorded empty scope) skip the record on a faulted read, so
+    the add still succeeds. Every other dispatch-scope fault refuses.
+    """
     monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
 
@@ -1860,14 +1871,36 @@ def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         label="project add",
         setup=setup,
         sites=[
+            ("os.stat", "csk.dispatch", "manager_home_inside_root"),
+            ("os.lstat", "csk.dispatch", "manager_home_inside_root"),
             ("os.stat", "csk.manifest", "_require_project_dir"),
             ("os.stat", "csk.manifest", "_skillfile_present"),
             ("io.open", "csk.manifest", "_write_skillfile_text"),
+            ("os.lstat", "csk.dispatch", "canonical_root_for_project"),
+            ("os.stat", "csk.dispatch", "_refuse_manager_inside_checkout"),
+            ("os.stat", "csk.dispatch", "_project_entry"),
+            ("os.stat", "csk._dispatch_runtime", "volume_case_insensitive"),
+            (
+                "os.stat",
+                "csk._dispatch_runtime",
+                "volume_normalization_insensitive",
+            ),
+            ("os.stat", "csk._dispatch_runtime", "classify_record"),
+            ("os.stat", "csk._dispatch_runtime", "classify_record"),
         ],
         expect={
-            1: ("refuse", "Cannot access project path"),
-            2: ("refuse", "Cannot read Skillfile at"),
-            3: ("refuse", "Cannot write Skillfile at"),
+            1: ("ok", "Added project"),
+            2: ("ok", "Added project"),
+            3: ("refuse", "Cannot access project path"),
+            4: ("refuse", "Cannot read Skillfile at"),
+            5: ("refuse", "Cannot write Skillfile at"),
+            6: ("ok", "Added project"),
+            7: ("refuse", "dispatch scope failed"),
+            8: ("refuse", "dispatch scope failed"),
+            9: ("ok", "Added project"),
+            10: ("ok", "Added project"),
+            11: ("ok", "Added project"),
+            12: ("ok", "Added project"),
         },
         dry=(cli.EXIT_OK, "Added project", ""),
         kp1=(cli.EXIT_OK, "Added project", ""),
