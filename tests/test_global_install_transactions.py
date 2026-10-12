@@ -17,6 +17,7 @@ from conftest import (
     make_config,
     make_project,
     make_skill_repo,
+    run,
     write_files,
 )
 
@@ -393,7 +394,7 @@ def test_global_build_or_publication_failure_preserves_prior_install(
 
     write_files(repo, _build_skill_files("tool", revision="two"))
     commit_all(repo, "compiled v2")
-    subprocess.run(["git", "tag", "v2"], cwd=repo, check=True)
+    run(["git", "tag", "v2"], repo)
     _write_global_skillfile(
         csk_home,
         [{"name": "compiled", "tag": "v2"}],
@@ -530,7 +531,7 @@ def test_global_target_failure_reverse_rolls_back_every_surface(
         _script_skill_files("tool", "extra", revision="two"),
     )
     commit_all(repo, "scripted v2")
-    subprocess.run(["git", "tag", "v2"], cwd=repo, check=True)
+    run(["git", "tag", "v2"], repo)
     _write_global_skillfile(
         csk_home,
         [{"name": "scripted", "tag": "v2"}],

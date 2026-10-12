@@ -18,6 +18,7 @@ from conftest import (
     init_git_repo,
     make_config,
     make_project,
+    run,
     write_skillfile,
 )
 
@@ -640,13 +641,7 @@ def test_empty_source_revision_preserves_real_go_cache_identity(
     first_marker = _marker_payload(csk_home, project, "project")
     first_build = first_marker["builds"]["argv-exit"]  # type: ignore[index]
     first_identity = _verified_build_identity(csk_home, first_build)
-    subprocess.run(
-        ["git", "commit", "--allow-empty", "-m", "irrelevant empty revision"],
-        cwd=repo,
-        check=True,
-        text=True,
-        capture_output=True,
-    )
+    run(["git", "commit", "--allow-empty", "-m", "irrelevant empty revision"], repo)
     _assert_ok(_install(cfg, "project"))
     second_marker = _marker_payload(csk_home, project, "project")
     second_build = second_marker["builds"]["argv-exit"]  # type: ignore[index]

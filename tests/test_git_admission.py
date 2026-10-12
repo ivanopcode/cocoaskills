@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from git_fixture_isolation import run_fixture_git
+
 from csk import git_admission
 from csk.build_repository import LockedCommit, parse_repository_source
 
@@ -42,15 +44,14 @@ def _git_path() -> Path:
 
 
 def _run_git(cwd: Path | None, *arguments: str) -> str:
-    return subprocess.run(
-        (os.fspath(_git_path()), *arguments),
+    # Fixture git children run through the one shared runner, which scrubs
+    # ambient redirectors and attests the fixture repository (BUG-261004-473myt).
+    return run_fixture_git(
+        arguments,
         cwd=cwd,
+        executable=_git_path(),
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
         timeout=20,
-        check=True,
-        text=True,
     ).stdout
 
 
@@ -86,8 +87,12 @@ def _fixture(
         os.fspath(work),
     )
     (work / "README.md").write_bytes(b"hello\0world\n")
-    (work / ".gitattributes").write_text(
-        "README.md filter=evil text eol=crlf export-ignore\n", encoding="utf-8"
+    # Bytes, not text: write_text emits os.linesep (CRLF on Windows), and the
+    # shared runner does not consult the platform system config whose
+    # autocrlf once normalized that back to LF. Byte-exact admission frames
+    # require LF working bytes on every platform (BUG-261004-473myt).
+    (work / ".gitattributes").write_bytes(
+        b"README.md filter=evil text eol=crlf export-ignore\n"
     )
     (work / "bin").mkdir()
     (work / "bin" / "tool").write_bytes(b"tool\n")
