@@ -7,9 +7,14 @@ import re
 import stat
 import subprocess
 import sys
+import threading
+import unicodedata
+from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, TypeVar, overload
+
+_N = TypeVar("_N")
 
 from . import (
     __version__,
@@ -55,120 +60,112 @@ EXIT_CONFIG = 2
 EXIT_LOCK = 3
 
 
-_TOKEN_SHORT_FORMS = frozenset({"--t", "--to", "--tok", "--toke"})
-_SAFE_TOKEN_OPTIONS = frozenset({"--token-file", "--token-source", "--token-env"})
-_REDACTED = "[REDACTED]"
+# Suppression design (rev 4): no value collection, no redaction, no output
+# buffering. If raw argv contains ANY credential-carrying option, argparse
+# usage errors (the parser error/exit-2 path) and the CLI's own pre-dispatch
+# usage refusal are replaced by ONE fixed message containing no argv-derived
+# bytes. Command execution output and exit codes are never buffered, replaced
+# or remapped: a command that legitimately exits non-zero keeps its output.
+# A false positive only costs a less detailed usage error, so the predicate
+# stays broad (normalized lookalikes included).
+_SUPPRESSED_CREDENTIAL_MESSAGE = (
+    "csk: invalid usage of a command with a credential option; "
+    "the details are suppressed so that no secret is echoed. "
+    "Run 'csk <command> --help'."
+)
+# Long-option credential names after normalization: t/to/tok/toke/token*
+# (regex) or anything containing 'token'. Casefolded before matching.
+_TOKEN_NAME_RE = re.compile(r"t(o(k(e(n.*)?)?)?)?")
+# Dash-like characters pasted from rich text, mapped to '-' after NFKC.
+_DASH_LIKE_CHARS = frozenset(
+    [chr(code) for code in range(0x2010, 0x2016)] + ["\u2212", "\ufe58", "\ufe63", "\uff0d"]
+)
+_TOKEN_ENV_NAME_RE = r"[A-Za-z_][A-Za-z0-9_]{0,127}"
+# Every --token* option string declared anywhere in the CLI, byte-identical.
+# Pinned against the real parsers by test_declared_token_options_match_parsers.
+_DECLARED_TOKEN_OPTIONS = frozenset({"--token", "--token-file", "--token-source", "--token-env"})
+_DECLARED_TOKEN_DESTS = {
+    "--token": "token",
+    "--token-file": "token_file",
+    "--token-source": "token_source",
+    "--token-env": "token_env",
+}
 
 
-def _redact_token_values(message: str) -> str:
-    # One shaped usage-error hook: redact the value following any --token*
-    # option name, in both --opt VALUE and --opt=VALUE forms, plus the quoted
-    # invalid-choice value for token options. Only unrecognized-arguments and
-    # invalid-choice diagnostics can echo user input; other shaped messages
-    # (refusals, missing values, ambiguous options) pass through unchanged.
-    # The rest of the message and the exit code are preserved by the caller.
-    if "invalid choice:" in message and "--token" in message:
-        message = re.sub(
-            r"(argument\s+--token[^\s:]*:\s+invalid choice:\s+')([^']*)(')",
-            r"\1" + _REDACTED + r"\3",
-            message,
-        )
-    if message.startswith("unrecognized arguments:"):
-        message = re.sub(
-            r"(--token[^\s=]*)=([^\s]*)",
-            r"\1=" + _REDACTED,
-            message,
-        )
-        message = re.sub(
-            r"(--t|--to|--tok|--toke)=([^\s]*)",
-            r"\1=" + _REDACTED,
-            message,
-        )
-        message = re.sub(
-            r"(--token[^\s=]*)\s+([^\s]+)",
-            r"\1 " + _REDACTED,
-            message,
-        )
-        message = re.sub(
-            r"(--t|--to|--tok|--toke)\s+([^\s]+)",
-            r"\1 " + _REDACTED,
-            message,
-        )
-    return message
+def _normalize_credential_element(element: str) -> str:
+    # NFKC, then casefold, then strip format characters (Cf, e.g. U+200B),
+    # then map dash-likes to '-'. All whitespace is removed (hardening
+    # beyond Cf): a pasted " --token" or a name split by NBSP/space
+    # ("--tok<NBSP>en") must not bypass the predicate; argparse treats
+    # whitespace-containing spellings as positionals and echoes them.
+    text = unicodedata.normalize("NFKC", element)
+    text = text.casefold()
+    text = "".join(char for char in text if unicodedata.category(char) != "Cf")
+    text = "".join("-" if char in _DASH_LIKE_CHARS else char for char in text)
+    return "".join(text.split())
 
 
-def _strip_token_options_for_detection(arguments: list[str]) -> list[str]:
-    # Remove --token* options and their separate values so an option value
-    # that coincides with a command name is not mistaken for the selection.
-    filtered: list[str] = []
-    index = 0
-    while index < len(arguments):
-        argument = arguments[index]
-        option = argument.split("=", 1)[0]
-        if option.startswith("--token") or option in _TOKEN_SHORT_FORMS:
-            if "=" in argument:
-                index += 1
-            else:
-                index += 1
-                if index < len(arguments):
-                    index += 1
-        else:
-            filtered.append(argument)
-            index += 1
-    return filtered
+def _is_credential_option_element(element: object) -> bool:
+    # One per-element test used by the predicate and the pre-dispatch refusal.
+    if not isinstance(element, str) or not element:
+        return False
+    normalized = _normalize_credential_element(element)
+    if not normalized.startswith("-"):
+        return False
+    rest = normalized.lstrip("-")
+    dashes = len(normalized) - len(rest)
+    name = rest.split("=", 1)[0]
+    if not name:
+        return False
+    if dashes == 1:
+        # No parser defines single-dash -t* options (pinned by test), so any
+        # -t... spelling is credential-like: separate (-t VALUE), equals
+        # (-t=VALUE) or attached (-tVALUE, '=' included in the value).
+        return name.startswith("t")
+    return _TOKEN_NAME_RE.fullmatch(name) is not None or "token" in name
 
 
-def _find_subparsers_action(
-    parser: argparse.ArgumentParser,
-) -> argparse._SubParsersAction[argparse.ArgumentParser] | None:
-    for action in parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            return action
-    return None
+def argv_has_credential_option(argv: Sequence[str]) -> bool:
+    # One predicate over raw argv. Broad by design: --token* (any suffix),
+    # the --t/--to/--tok/--toke abbreviations, attached single-dash shorts
+    # (-tVALUE), '=' forms, normalized lookalikes, and anything after a bare
+    # '--' (the scan never stops at '--'). Glued double-dash spellings
+    # without '=' (e.g. '--tokSECRET') are not option forms and stay out of
+    # scope; '--tokenSECRET' matches via the 'token' substring.
+    for element in argv:
+        if element == "--":
+            continue
+        if _is_credential_option_element(element):
+            return True
+    return False
 
 
-def _declared_token_options(
-    root: argparse.ArgumentParser, arguments: list[str]
-) -> set[str]:
-    # Selected-parser-scoped exemption: only options the deepest selected
-    # subcommand declares are allowed through to argparse. Anything else
-    # token-like is refused before dispatch. Unknown or missing selections
-    # declare nothing, failing closed.
-    filtered = _strip_token_options_for_detection(arguments)
-    top = _find_subparsers_action(root)
-    if top is None:
-        return set()
-    selected_name: str | None = None
-    selected_index = -1
-    for position, token in enumerate(filtered):
-        if token in top.choices:
-            selected_name = token
-            selected_index = position
-            break
-    if selected_name is None:
-        return set()
-    current: argparse.ArgumentParser = top.choices[selected_name]
-    while True:
-        sub = _find_subparsers_action(current)
-        if sub is None:
-            break
-        next_name: str | None = None
-        next_index = -1
-        for position in range(selected_index + 1, len(filtered)):
-            if filtered[position] in sub.choices:
-                next_name = filtered[position]
-                next_index = position
-                break
-        if next_name is None:
-            break
-        current = sub.choices[next_name]
-        selected_index = next_index
-    declared: set[str] = set()
-    for action in current._actions:
-        for option_string in getattr(action, "option_strings", []):
-            if option_string in _SAFE_TOKEN_OPTIONS:
-                declared.add(option_string)
-    return declared
+def _misplaced_credential_option(argv: Sequence[str], args: argparse.Namespace) -> bool:
+    # CLI's own usage diagnostic raised before dispatch. Parsing succeeded,
+    # so every credential-looking element was either consumed as a declared
+    # option (legitimate) or treated as a positional (lookalike dash, leading
+    # space, an element containing a space, or anything after '--'). Refuse
+    # the latter with the fixed message: dispatch would echo the bytes.
+    if not _suppression_state.active:
+        return False
+    for element in argv:
+        if not _is_credential_option_element(element):
+            continue
+        name = element.split("=", 1)[0] if isinstance(element, str) else ""
+        if name not in _DECLARED_TOKEN_OPTIONS:
+            return True
+        if getattr(args, _DECLARED_TOKEN_DESTS[name], None) is None:
+            return True
+    return False
+
+
+class _CredentialSuppressionState(threading.local):
+    def __init__(self) -> None:
+        self.active: bool = False
+        self.depth: int = 0
+
+
+_suppression_state = _CredentialSuppressionState()
 
 
 class _CskArgumentParser(argparse.ArgumentParser):
@@ -177,8 +174,52 @@ class _CskArgumentParser(argparse.ArgumentParser):
         kwargs["allow_abbrev"] = False
         super().__init__(*args, **kwargs)
 
+    @overload
+    def parse_known_args(
+        self, args: Iterable[str] | None = ..., namespace: None = ...
+    ) -> tuple[argparse.Namespace, list[str]]: ...
+    @overload
+    def parse_known_args(
+        self, args: Iterable[str] | None, namespace: _N
+    ) -> tuple[_N, list[str]]: ...
+    @overload
+    def parse_known_args(self, *, namespace: _N) -> tuple[_N, list[str]]: ...
+    def parse_known_args(
+        self,
+        args: Iterable[str] | None = None,
+        namespace: Any = None,
+    ) -> tuple[Any, list[str]]:
+        # Decide at the outermost call only: argparse re-enters this method
+        # on each selected subparser with the remaining words, and a nested
+        # decision would lose options placed before the subcommand.
+        if _suppression_state.depth == 0:
+            explicit = sys.argv[1:] if args is None else args
+            try:
+                argv_list = list(explicit)
+            except TypeError:
+                argv_list = []
+            _suppression_state.active = argv_has_credential_option(argv_list)
+        _suppression_state.depth += 1
+        try:
+            return super().parse_known_args(args, namespace)
+        finally:
+            _suppression_state.depth -= 1
+
     def error(self, message: str) -> NoReturn:
-        super().error(_redact_token_values(message))
+        # One hook: when the predicate holds, usage + error become ONE fixed
+        # message with no argv bytes. Never call super().error here, it would
+        # print usage first.
+        if _suppression_state.active:
+            super().exit(2, _SUPPRESSED_CREDENTIAL_MESSAGE + "\n")
+        super().error(message)
+
+    def exit(self, status: int = 0, message: str | None = None) -> NoReturn:
+        # Suppress error exits only; help (status 0) still shows, since it
+        # carries no secret. Invalid options with -h therefore show help
+        # (exit 0, safe); every error with a credential option is suppressed.
+        if _suppression_state.active and status != 0:
+            super().exit(2, _SUPPRESSED_CREDENTIAL_MESSAGE + "\n")
+        super().exit(status, message)
 
 
 class _RefuseTokenAction(argparse.Action):
@@ -186,20 +227,34 @@ class _RefuseTokenAction(argparse.Action):
         self, parser: argparse.ArgumentParser, namespace: argparse.Namespace,
         values: object, option_string: str | None = None,
     ) -> None:
-        message = "--token is refused; use CSK_REGISTRY_TOKEN or --token-file for registry authorization"
-        if parser.prog.endswith("config build-https add"):
-            message = ("--token is refused; select an HTTPS credential source with --token-source or --token-env; "
-                       "for audit --publish use CSK_REGISTRY_TOKEN or --token-file")
-        parser.error(message)
+        # --token is never accepted; the message is fixed and argv-free even
+        # if the suppression hook is bypassed. With the hook active (always
+        # here, since --token triggers the predicate) error() replaces it
+        # with the same suppressed text.
+        parser.error(_SUPPRESSED_CREDENTIAL_MESSAGE)
 
 
 def _token_source_type(value: str) -> str:
     # Shaped selector validation: argparse `choices` would echo a mistakenly
     # supplied literal token verbatim ("invalid choice: '<value>'"). The type
     # callable names only the allowed enum members, never the supplied value.
+    # With a credential option present the hook suppresses this message too.
     if value not in build_https.TOKEN_SOURCES:
         allowed = ", ".join(build_https.TOKEN_SOURCES)
         raise argparse.ArgumentTypeError(f"must be one of {allowed}")
+    return value
+
+
+def _token_env_type(value: str) -> str:
+    # Conservative environment-variable-name shape: a pasted secret that is
+    # not a plausible NAME is refused at parse time (suppressed, since
+    # --token-env triggers the predicate). The message never echoes the value.
+    # fullmatch: '$' would accept a trailing newline.
+    if re.fullmatch(_TOKEN_ENV_NAME_RE, value) is None:
+        raise argparse.ArgumentTypeError(
+            "must be an environment variable name "
+            "([A-Za-z_][A-Za-z0-9_]{0,127})"
+        )
     return value
 
 
@@ -217,26 +272,23 @@ def main(argv: list[str] | None = None) -> int:
             pass
         else:
             return go_v1.run_worker(_launch_context=launch_context)
+    return _main(argv)
+
+
+def _main(argv: list[str] | None) -> int:
     from .builds import toolchain as build_toolchain
 
     build_toolchain.reset_go_future_warning_state()
-    arguments = list(sys.argv[1:] if argv is None else argv)
+    raw_arguments = list(sys.argv[1:] if argv is None else argv)
+    arguments = list(raw_arguments)
     is_check = bool(arguments and arguments[0] == "check")
     parser = _build_check_parser() if is_check else build_parser()
     if is_check:
         arguments = arguments[1:]
     try:
-        # Refuse before argparse can echo unknown/ambiguous options and values.
-        # The exemption is scoped to the selected subcommand: only credential
-        # options the selected parser declares pass through to argparse.
-        safe_token_options = {"--token-file", "--token-source", "--token-env"}
-        declared = (_declared_token_options(parser, arguments) & safe_token_options) if not is_check else set()
-        for argument in arguments:
-            option = argument.split("=", 1)[0]
-            if ((option.startswith("--token") or option in _TOKEN_SHORT_FORMS)
-                    and option not in declared):
-                parser.error("--token is refused; use CSK_REGISTRY_TOKEN or --token-file for registry authorization; "
-                             "for HTTPS credentials select --token-source or --token-env")
+        # Invalid credential options fail in argparse (unknown/invalid-choice/
+        # missing-value) and the parser hook replaces the diagnostic. Help
+        # (-h) still wins when present, which is safe: help carries no secret.
         args = parser.parse_args(arguments)
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else EXIT_CONFIG
@@ -249,6 +301,9 @@ def main(argv: list[str] | None = None) -> int:
     if not args.command:
         parser.print_help()
         return EXIT_OK
+    if _misplaced_credential_option(raw_arguments, args):
+        print(_SUPPRESSED_CREDENTIAL_MESSAGE, file=sys.stderr)
+        return EXIT_CONFIG
     try:
         return _dispatch(args)
     except (
@@ -541,7 +596,7 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
         help="token source: git-credentials or keyring",
     )
     build_https_add.add_argument(
-        "--token-env", default=None, metavar="NAME",
+        "--token-env", type=_token_env_type, default=None, metavar="NAME",
         help="environment variable holding the token",
     )
     build_https_add.add_argument(
