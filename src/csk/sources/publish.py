@@ -1322,23 +1322,21 @@ def check_schema2_system_commands(
 ) -> None:
     """Refuse members whose required system commands are not ready.
 
-    Mirrors the legacy lane's readiness check exactly: every declared
-    system dependency names an executable that must resolve on the
-    operator PATH before any shim is published.
+    Runs the one shared aggregate used by every surface (install, global
+    install, dry-run, project and global status, schema 1 and 2): every
+    declared legacy system command and explicit system dependency names an
+    executable that must resolve on the operator PATH before any shim is
+    published. Every missing command across the selected members is
+    reported in one diagnostic.
     """
 
-    for member in members:
-        spec = specs_map[member.name]
-        for dependency in spec.dependencies.values():
-            if dependency.type != "system":
-                continue
-            if not dependency.command or shutil.which(dependency.command) is None:
-                hint = f" Hint: {dependency.hint}" if dependency.hint else ""
-                raise SourceError(
-                    CODE_MEMBER_MISSING,
-                    f"Missing system command {dependency.command!r} for "
-                    f"{member.name}.{hint}",
-                )
+    missing = closure.collect_missing_system_commands(
+        [(member.name, specs_map[member.name]) for member in members]
+    )
+    if missing:
+        raise SourceError(
+            CODE_MEMBER_MISSING, closure.format_missing_system_commands(missing)
+        )
 
 
 def check_schema2_skill_dependencies(
@@ -3289,6 +3287,7 @@ def _capture_locked_member(
     project_root: Path | None = None,
     recovery: modes.LockedGitRecovery | None = None,
     declared_url: str | None = None,
+    allow_live_drift: bool = False,
 ) -> tuple[snapshot.CapturedPackage | None, store.StoredSnapshot | None]:
     """Serve one locked member's frozen bytes, revalidating live drift.
 
@@ -3297,6 +3296,12 @@ def _capture_locked_member(
     mode captures a path member or fetches the exact locked Git commit;
     it compares the lock before staging the recovered bytes. Read
     failures and present-but-invalid entries remain unavailable.
+
+    ``allow_live_drift`` serves the validated stored bytes even when the
+    live source differs from the lock. Only the status readiness gate
+    sets it: the drift verdict is reported alongside, so staleness is
+    never silent. Without a stored entry there are no locked bytes to
+    serve and drift still refuses.
     """
 
     if isinstance(package, NetworkGit):
@@ -3386,6 +3391,8 @@ def _capture_locked_member(
     except _FS_ERRORS:
         return None, stored
     if captured.inventory["snapshot"] != package.snapshot:
+        if allow_live_drift:
+            return None, stored
         raise SourceError(
             CODE_SNAPSHOT_CHANGED,
             f"Skill {member.name!r} changed since the lock was written; "
@@ -6104,12 +6111,29 @@ def evaluate_schema2_installation(
     stays in the system temporary directory, so project and home trees
     are byte-identical afterwards. Build evidence reconstructs
     read-only; without the machine policy it cannot be verified.
+    Missing system commands are reported alongside currentness on
+    every path: the aggregate readiness check runs once before
+    branching and every exit below carries its result.
     """
 
+    # The aggregate system-command check runs once, before branching:
+    # every return below carries its result alongside currentness, so
+    # an early shortcut (absent install, stale/corrupt lock,
+    # non-current member) never hides missing tools. Validity errors
+    # stay first; the readiness diagnostic follows. See
+    # _status_readiness_errors for the locked-first, live-fallback
+    # sourcing and its no-claim bounds.
+    readiness_errors = _status_readiness_errors(
+        home=home,
+        project_path=project_path,
+        manifest_value=manifest_value,
+    )
     try:
         lock = read_schema2_lock(project_path)
     except SourceError as exc:
-        return Schema2Status(members=(), errors=(str(exc),), lock_sha256=None)
+        return Schema2Status(
+            members=(), errors=(str(exc), *readiness_errors), lock_sha256=None
+        )
     if lock is None:
         members: list[MemberVerdict] = []
         for selector in manifest_value.selectors:
@@ -6136,13 +6160,16 @@ def evaluate_schema2_installation(
                 )
         return Schema2Status(
             members=tuple(members),
-            errors=("schema-2 installation has no lock; run csk install",),
+            errors=(
+                "schema-2 installation has no lock; run csk install",
+                *readiness_errors,
+            ),
             lock_sha256=None,
         )
     if manifest_value.manifest_sha256 is None:
         return Schema2Status(
             members=(),
-            errors=("schema-2 manifest digest is missing",),
+            errors=("schema-2 manifest digest is missing", *readiness_errors),
             lock_sha256=lock.lock_sha256,
         )
     try:
@@ -6171,7 +6198,9 @@ def evaluate_schema2_installation(
             for member in lock.members
         )
         return Schema2Status(
-            members=stale, errors=(str(exc),), lock_sha256=lock.lock_sha256
+            members=stale,
+            errors=(str(exc), *readiness_errors),
+            lock_sha256=lock.lock_sha256,
         )
     source_roots: dict[str, Path] = {}
     for source_alias, acquisition in manifest_value.sources.items():
@@ -6182,7 +6211,7 @@ def evaluate_schema2_installation(
     if lock.lock_sha256 is None:
         return Schema2Status(
             members=(),
-            errors=("schema-2 lock digest is missing",),
+            errors=("schema-2 lock digest is missing", *readiness_errors),
             lock_sha256=None,
         )
     lock_digest = lock.lock_sha256
@@ -6251,6 +6280,15 @@ def evaluate_schema2_installation(
                 )
             )
         if all(verdict.current for verdict in verdicts):
+            if readiness_errors:
+                # Missing tools preempt live-output comparison: members
+                # stay current and errors carry the hoisted diagnostic,
+                # exactly as the inlined gate did before the hoist.
+                return Schema2Status(
+                    members=tuple(verdicts),
+                    errors=readiness_errors,
+                    lock_sha256=lock_digest,
+                )
             return _evaluate_live_outputs(
                 staging_root,
                 home=home,
@@ -6266,9 +6304,263 @@ def evaluate_schema2_installation(
                 verdicts=tuple(verdicts),
                 config=config,
             )
-    return Schema2Status(
-        members=tuple(verdicts), errors=(), lock_sha256=lock_digest
+        # Readiness is independent of output currentness: a non-current member
+        # (missing marker, drifted source) must not hide missing system tools.
+        # The hoisted aggregate above runs from the validated locked specs,
+        # keeping the member verdicts alongside it.
+        return Schema2Status(
+            members=tuple(verdicts),
+            errors=readiness_errors,
+            lock_sha256=lock_digest,
+        )
+
+
+def _capture_locked_status_specs(
+    staging_root: Path,
+    *,
+    home: Path,
+    project_path: Path,
+    manifest_value: manifest.ProjectManifest,
+    lock: SkillfileLock,
+    source_roots: dict[str, Path],
+    allow_live_drift: bool = False,
+) -> tuple[
+    tuple[ResolvedMember, ...],
+    dict[str, CapturedMember],
+    dict[str, Mapping[str, snapshot.FrozenFile]],
+    dict[str, skillspec.SkillSpec],
+]:
+    """Capture validated locked bytes and load member specs for status.
+
+    Read-only: locked members serve from the store under frozen membership
+    (never rescanned), staging stays under the caller's temporary root.
+    Shared by the live-output comparison and the hoisted readiness gate
+    so both report the same missing system commands. Raises SourceError
+    when the locked bytes cannot be served. ``allow_live_drift`` serves
+    validated stored bytes despite live drift; only the readiness gate
+    sets it, and the drift verdict is reported alongside.
+    """
+
+    frozen_mode = modes.FrozenSources(home=home, lock=lock)
+    members = locked_schema2_members(
+        frozen_mode,
+        list(manifest_value.selectors),
+        source_roots,
     )
+    packages = {lock_member.name: lock_member.package for lock_member in lock.members}
+    captured_members: dict[str, CapturedMember] = {}
+    pred_files: dict[str, Mapping[str, snapshot.FrozenFile]] = {}
+    for member in members:
+        package = packages[member.name]
+        raw, served = _capture_locked_member(
+            member, package, home=home, project_root=project_path,
+            allow_live_drift=allow_live_drift,
+        )
+        captured_members[member.name] = CapturedMember(
+            member=member,
+            captured=raw,
+            package=package,
+            package_key=package_identity_sha256(package),
+        )
+        if raw is not None:
+            pred_files[member.name] = raw.frozen_files()
+        elif served is not None:
+            pred_files[member.name] = served.files
+        else:
+            raise SourceError(
+                CODE_SNAPSHOT_UNAVAILABLE,
+                f"Skill {member.name!r} has no served locked snapshot",
+            )
+    specs_map: dict[str, skillspec.SkillSpec] = {}
+    for name in sorted(pred_files):
+        frozen_dir = staging_root / "status-spec" / name
+        materialize_frozen(
+            pred_files[name], frozen_dir, subject=f"Skill {name!r}"
+        )
+        specs_map[name] = load_member_spec(frozen_dir, name=name)
+    return members, captured_members, pred_files, specs_map
+
+
+def _locked_status_specs_or_none(
+    staging_root: Path,
+    *,
+    home: Path,
+    project_path: Path,
+    manifest_value: manifest.ProjectManifest,
+    lock: SkillfileLock,
+    source_roots: dict[str, Path],
+) -> tuple[tuple[ResolvedMember, ...], dict[str, skillspec.SkillSpec]] | None:
+    """Serve validated locked specs for status readiness, else None.
+
+    Drift-tolerant store bytes: the drift verdict is reported alongside
+    by the caller, so staleness is never silent. None means no validated
+    locked specs exist and the caller falls back to live resolution.
+    """
+
+    try:
+        members, _captured, _pred_files, specs_map = _capture_locked_status_specs(
+            staging_root,
+            home=home,
+            project_path=project_path,
+            manifest_value=manifest_value,
+            lock=lock,
+            source_roots=source_roots,
+            allow_live_drift=True,
+        )
+    except SourceError:
+        return None
+    except manifest.ManifestError:
+        return None
+    except _FS_ERRORS:
+        return None
+    return members, specs_map
+
+
+def _live_status_specs_or_none(
+    staging_root: Path,
+    *,
+    home: Path,
+    project_path: Path,
+    manifest_value: manifest.ProjectManifest,
+) -> tuple[tuple[ResolvedMember, ...], dict[str, skillspec.SkillSpec]] | None:
+    """Expand and capture live path-source specs for status readiness.
+
+    Read-only and offline: no store or lock writes, no transport. Only
+    selectors on declared path sources resolve here; a Git (or unknown)
+    acquisition needs the resolving lane, so a manifest referencing one
+    makes no live readiness claim (install and dry-run report its
+    tools). Transitive requirements likewise need the resolving lane
+    and are not expanded: with no usable lock only root members are
+    checked. None means status reports currentness alone.
+    """
+
+    selectors = list(manifest_value.selectors)
+    if manifest_value.skills:
+        return None
+    source_roots: dict[str, Path] = {}
+    for alias in {selector.from_alias for selector in selectors}:
+        acquisition = manifest_value.sources.get(alias)
+        if not isinstance(acquisition, skillfile_v2.PathSource):
+            return None
+        source_roots[alias] = resolve_source_root(
+            project_path, alias, acquisition
+        )
+    try:
+        selected = expand_selectors(
+            selectors,
+            source_roots,
+            root_inputs_aliases=frozenset(source_roots),
+            project_root=project_path,
+        )
+        resolved: list[ResolvedMember] = []
+        for ordinal, member in enumerate(selected):
+            if (
+                _attribute_unique_selector(
+                    selectors,
+                    name=member.name,
+                    directory=member.directory,
+                    from_alias=member.from_alias,
+                )
+                is None
+            ):
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"Selected skill {member.name!r} cannot be attributed "
+                    "to a manifest selector",
+                )
+            resolved.append(
+                ResolvedMember(
+                    name=member.name,
+                    from_alias=member.from_alias,
+                    directory=member.directory,
+                    selection_ordinal=ordinal,
+                    source_root=source_roots[member.from_alias],
+                )
+            )
+        members = tuple(resolved)
+        raw_captures = capture_schema2_members(
+            members, home=home, project_root=project_path
+        )
+        specs_map: dict[str, skillspec.SkillSpec] = {}
+        for name in sorted(raw_captures):
+            frozen_dir = staging_root / "status-live-spec" / name
+            materialize_frozen(
+                raw_captures[name].frozen_files(),
+                frozen_dir,
+                subject=f"Skill {name!r}",
+            )
+            specs_map[name] = load_member_spec(frozen_dir, name=name)
+        return members, specs_map
+    except SourceError:
+        return None
+    except manifest.ManifestError:
+        return None
+    except _FS_ERRORS:
+        return None
+
+
+def _status_readiness_errors(
+    *,
+    home: Path,
+    project_path: Path,
+    manifest_value: manifest.ProjectManifest,
+) -> tuple[str, ...]:
+    """Collect missing system commands once, before status branching.
+
+    The single aggregate readiness result every status exit carries:
+    locked specs first (drift-tolerant store bytes, so a stale lock or
+    drifted source still reports tools), live path-source specs when no
+    lock is usable (absent, unreadable, or unservable). The shared
+    :func:`check_schema2_system_commands` gate runs exactly once here;
+    status branching never re-runs it. Empty means either no tools are
+    missing or no validated specs exist (Git-sourced or transitive-only
+    closures without a usable lock, unreadable sources); then status
+    reports currentness alone.
+    """
+
+    with tempfile.TemporaryDirectory(
+        prefix=".csk-source-status-readiness-"
+    ) as staging_tmp:
+        staging_root = Path(staging_tmp)
+        try:
+            lock = read_schema2_lock(project_path)
+        except SourceError:
+            lock = None
+        found: (
+            tuple[tuple[ResolvedMember, ...], dict[str, skillspec.SkillSpec]]
+            | None
+        ) = None
+        if lock is not None:
+            source_roots = {
+                source_alias: resolve_source_root(
+                    project_path, source_alias, acquisition
+                )
+                for source_alias, acquisition in manifest_value.sources.items()
+                if isinstance(acquisition, skillfile_v2.PathSource)
+            }
+            found = _locked_status_specs_or_none(
+                staging_root,
+                home=home,
+                project_path=project_path,
+                manifest_value=manifest_value,
+                lock=lock,
+                source_roots=source_roots,
+            )
+        if found is None:
+            found = _live_status_specs_or_none(
+                staging_root,
+                home=home,
+                project_path=project_path,
+                manifest_value=manifest_value,
+            )
+        if found is None:
+            return ()
+        members, specs_map = found
+        try:
+            check_schema2_system_commands(members, specs_map)
+        except SourceError as exc:
+            return (str(exc),)
+        return ()
 
 
 def _evaluate_live_outputs(
@@ -6301,45 +6593,22 @@ def _evaluate_live_outputs(
 
     try:
         frozen_mode = modes.FrozenSources(home=home, lock=lock)
-        members = locked_schema2_members(
-            frozen_mode,
-            list(manifest_value.selectors),
-            source_roots,
+        members, captured_members, pred_files, specs_map = _capture_locked_status_specs(
+            staging_root,
+            home=home,
+            project_path=project_path,
+            manifest_value=manifest_value,
+            lock=lock,
+            source_roots=source_roots,
         )
-        packages = {lock_member.name: lock_member.package for lock_member in lock.members}
-        captured_members: dict[str, CapturedMember] = {}
-        pred_files: dict[str, Mapping[str, snapshot.FrozenFile]] = {}
-        for member in members:
-            package = packages[member.name]
-            raw, served = _capture_locked_member(
-                member, package, home=home, project_root=project_path
-            )
-            captured_members[member.name] = CapturedMember(
-                member=member,
-                captured=raw,
-                package=package,
-                package_key=package_identity_sha256(package),
-            )
-            if raw is not None:
-                pred_files[member.name] = raw.frozen_files()
-            elif served is not None:
-                pred_files[member.name] = served.files
-            else:
-                raise SourceError(
-                    CODE_SNAPSHOT_UNAVAILABLE,
-                    f"Skill {member.name!r} has no served locked snapshot",
-                )
-        specs_map: dict[str, skillspec.SkillSpec] = {}
-        for name in sorted(pred_files):
-            frozen_dir = staging_root / "status-spec" / name
-            materialize_frozen(
-                pred_files[name], frozen_dir, subject=f"Skill {name!r}"
-            )
-            specs_map[name] = load_member_spec(frozen_dir, name=name)
+        # No system-command gate here: the hoisted readiness result (see
+        # evaluate_schema2_installation) preempts this comparison when tools
+        # are missing, so this point is reachable only with an empty
+        # readiness result and every exit below is complete as returned.
         bundles = []
         for member in members:
             member_spec = specs_map[member.name]
-            member_package = packages[member.name]
+            member_package = captured_members[member.name].package
             bundles.append(
                 reconstruct_schema2_local_builds(
                     home=home,
