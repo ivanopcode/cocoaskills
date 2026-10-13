@@ -1607,9 +1607,9 @@ def _https_rule_credentials(
         value = os.environ.get(rule.token_env)
         if not value:
             raise InstallError(
-                f"{git_admission.CREDENTIAL_POLICY_INVALID}: build_https scope "
-                f"{rule.scope!r} names environment variable {rule.token_env!r}, "
-                "which is unset"
+                f"{git_admission.CREDENTIAL_POLICY_INVALID}: the environment "
+                f"variable configured for build_https scope {rule.scope!r} is "
+                "not set"
             )
         return git_admission.OperatorHTTPSCredentials(
             scope=rule.scope,

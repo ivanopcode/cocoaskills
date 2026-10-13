@@ -33,6 +33,7 @@ from . import (
     shell_init,
     skillcheck,
     status,
+    usage_errors,
 )
 from .audit import pipeline as audit_pipeline
 from .audit import runner as audit_runner
@@ -55,120 +56,27 @@ EXIT_CONFIG = 2
 EXIT_LOCK = 3
 
 
-_TOKEN_SHORT_FORMS = frozenset({"--t", "--to", "--tok", "--toke"})
-_SAFE_TOKEN_OPTIONS = frozenset({"--token-file", "--token-source", "--token-env"})
-_REDACTED = "[REDACTED]"
+_TOKEN_REFUSED_MESSAGE = (
+    "--token is refused; use CSK_REGISTRY_TOKEN or --token-file for registry authorization"
+)
+_TOKEN_REFUSED_HTTPS_MESSAGE = (
+    "--token is refused; select an HTTPS credential source with --token-source or --token-env; "
+    "for audit --publish use CSK_REGISTRY_TOKEN or --token-file"
+)
+_TOKEN_SOURCE_MESSAGE = "must be one of " + ", ".join(build_https.TOKEN_SOURCES)
+_TOKEN_ENV_MESSAGE = "must be an environment variable name ([A-Za-z_][A-Za-z0-9_]{0,127})"
+_TOKEN_ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 
-
-def _redact_token_values(message: str) -> str:
-    # One shaped usage-error hook: redact the value following any --token*
-    # option name, in both --opt VALUE and --opt=VALUE forms, plus the quoted
-    # invalid-choice value for token options. Only unrecognized-arguments and
-    # invalid-choice diagnostics can echo user input; other shaped messages
-    # (refusals, missing values, ambiguous options) pass through unchanged.
-    # The rest of the message and the exit code are preserved by the caller.
-    if "invalid choice:" in message and "--token" in message:
-        message = re.sub(
-            r"(argument\s+--token[^\s:]*:\s+invalid choice:\s+')([^']*)(')",
-            r"\1" + _REDACTED + r"\3",
-            message,
-        )
-    if message.startswith("unrecognized arguments:"):
-        message = re.sub(
-            r"(--token[^\s=]*)=([^\s]*)",
-            r"\1=" + _REDACTED,
-            message,
-        )
-        message = re.sub(
-            r"(--t|--to|--tok|--toke)=([^\s]*)",
-            r"\1=" + _REDACTED,
-            message,
-        )
-        message = re.sub(
-            r"(--token[^\s=]*)\s+([^\s]+)",
-            r"\1 " + _REDACTED,
-            message,
-        )
-        message = re.sub(
-            r"(--t|--to|--tok|--toke)\s+([^\s]+)",
-            r"\1 " + _REDACTED,
-            message,
-        )
-    return message
-
-
-def _strip_token_options_for_detection(arguments: list[str]) -> list[str]:
-    # Remove --token* options and their separate values so an option value
-    # that coincides with a command name is not mistaken for the selection.
-    filtered: list[str] = []
-    index = 0
-    while index < len(arguments):
-        argument = arguments[index]
-        option = argument.split("=", 1)[0]
-        if option.startswith("--token") or option in _TOKEN_SHORT_FORMS:
-            if "=" in argument:
-                index += 1
-            else:
-                index += 1
-                if index < len(arguments):
-                    index += 1
-        else:
-            filtered.append(argument)
-            index += 1
-    return filtered
-
-
-def _find_subparsers_action(
-    parser: argparse.ArgumentParser,
-) -> argparse._SubParsersAction[argparse.ArgumentParser] | None:
-    for action in parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            return action
-    return None
-
-
-def _declared_token_options(
-    root: argparse.ArgumentParser, arguments: list[str]
-) -> set[str]:
-    # Selected-parser-scoped exemption: only options the deepest selected
-    # subcommand declares are allowed through to argparse. Anything else
-    # token-like is refused before dispatch. Unknown or missing selections
-    # declare nothing, failing closed.
-    filtered = _strip_token_options_for_detection(arguments)
-    top = _find_subparsers_action(root)
-    if top is None:
-        return set()
-    selected_name: str | None = None
-    selected_index = -1
-    for position, token in enumerate(filtered):
-        if token in top.choices:
-            selected_name = token
-            selected_index = position
-            break
-    if selected_name is None:
-        return set()
-    current: argparse.ArgumentParser = top.choices[selected_name]
-    while True:
-        sub = _find_subparsers_action(current)
-        if sub is None:
-            break
-        next_name: str | None = None
-        next_index = -1
-        for position in range(selected_index + 1, len(filtered)):
-            if filtered[position] in sub.choices:
-                next_name = filtered[position]
-                next_index = position
-                break
-        if next_name is None:
-            break
-        current = sub.choices[next_name]
-        selected_index = next_index
-    declared: set[str] = set()
-    for action in current._actions:
-        for option_string in getattr(action, "option_strings", []):
-            if option_string in _SAFE_TOKEN_OPTIONS:
-                declared.add(option_string)
-    return declared
+# Exact argv-free texts the CLI itself raises through parser.error or from a
+# type= callable; every other usage error is rebuilt by usage_errors.
+_STATIC_USAGE_MESSAGES = frozenset(
+    {
+        _TOKEN_REFUSED_MESSAGE,
+        _TOKEN_REFUSED_HTTPS_MESSAGE,
+        _TOKEN_SOURCE_MESSAGE,
+        _TOKEN_ENV_MESSAGE,
+    }
+)
 
 
 class _CskArgumentParser(argparse.ArgumentParser):
@@ -178,7 +86,13 @@ class _CskArgumentParser(argparse.ArgumentParser):
         super().__init__(*args, **kwargs)
 
     def error(self, message: str) -> NoReturn:
-        super().error(_redact_token_values(message))
+        # The one usage-error path for every parser and subparser.  argparse's
+        # own text echoes argv bytes (unrecognized arguments, invalid choice,
+        # typed values, typo'd options), so it is never printed: the message is
+        # classified and rebuilt from parser-defined parts only.
+        text = usage_errors.closed_message(self, message, _STATIC_USAGE_MESSAGES)
+        self.print_usage(sys.stderr)
+        self.exit(EXIT_CONFIG, f"{self.prog}: error: {text}\n")
 
 
 class _RefuseTokenAction(argparse.Action):
@@ -186,10 +100,9 @@ class _RefuseTokenAction(argparse.Action):
         self, parser: argparse.ArgumentParser, namespace: argparse.Namespace,
         values: object, option_string: str | None = None,
     ) -> None:
-        message = "--token is refused; use CSK_REGISTRY_TOKEN or --token-file for registry authorization"
+        message = _TOKEN_REFUSED_MESSAGE
         if parser.prog.endswith("config build-https add"):
-            message = ("--token is refused; select an HTTPS credential source with --token-source or --token-env; "
-                       "for audit --publish use CSK_REGISTRY_TOKEN or --token-file")
+            message = _TOKEN_REFUSED_HTTPS_MESSAGE
         parser.error(message)
 
 
@@ -198,8 +111,16 @@ def _token_source_type(value: str) -> str:
     # supplied literal token verbatim ("invalid choice: '<value>'"). The type
     # callable names only the allowed enum members, never the supplied value.
     if value not in build_https.TOKEN_SOURCES:
-        allowed = ", ".join(build_https.TOKEN_SOURCES)
-        raise argparse.ArgumentTypeError(f"must be one of {allowed}")
+        raise argparse.ArgumentTypeError(_TOKEN_SOURCE_MESSAGE)
+    return value
+
+
+def _token_env_type(value: str) -> str:
+    # Conservative environment-variable-name shape: a pasted secret that is
+    # not a plausible NAME is refused at parse time without echoing it.
+    # fullmatch: '$' would accept a trailing newline.
+    if _TOKEN_ENV_NAME_RE.fullmatch(value) is None:
+        raise argparse.ArgumentTypeError(_TOKEN_ENV_MESSAGE)
     return value
 
 
@@ -226,17 +147,6 @@ def main(argv: list[str] | None = None) -> int:
     if is_check:
         arguments = arguments[1:]
     try:
-        # Refuse before argparse can echo unknown/ambiguous options and values.
-        # The exemption is scoped to the selected subcommand: only credential
-        # options the selected parser declares pass through to argparse.
-        safe_token_options = {"--token-file", "--token-source", "--token-env"}
-        declared = (_declared_token_options(parser, arguments) & safe_token_options) if not is_check else set()
-        for argument in arguments:
-            option = argument.split("=", 1)[0]
-            if ((option.startswith("--token") or option in _TOKEN_SHORT_FORMS)
-                    and option not in declared):
-                parser.error("--token is refused; use CSK_REGISTRY_TOKEN or --token-file for registry authorization; "
-                             "for HTTPS credentials select --token-source or --token-env")
         args = parser.parse_args(arguments)
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else EXIT_CONFIG
@@ -541,7 +451,7 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
         help="token source: git-credentials or keyring",
     )
     build_https_add.add_argument(
-        "--token-env", default=None, metavar="NAME",
+        "--token-env", type=_token_env_type, default=None, metavar="NAME",
         help="environment variable holding the token",
     )
     build_https_add.add_argument(
