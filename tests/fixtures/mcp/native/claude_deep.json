@@ -1,0 +1,19 @@
+{
+  "editor": {
+    "fontSize": 14,
+    "nested": {
+      "deep": [1, 2, {"x": "y"}],
+      "flag": true
+    }
+  },
+  "mcpServers": {
+    "foreign-before": {
+      "command": "before-cmd",
+      "args": ["--x", "ünïcodé ✓"]
+    },
+    "foreign-after": {
+      "command": "after-cmd"
+    }
+  },
+  "other": true
+}
