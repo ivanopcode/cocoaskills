@@ -1,0 +1,17 @@
+# top comment for codex
+model = "gpt-x"
+
+[mcp_servers]
+dotted_entry = { command = "run-dotted", args = ["a", "b"] }
+
+[mcp_servers."quoted.entry"]
+command = "run-quoted"
+
+[tool.other]
+note = """
+a multi-line value with a [ bracket that is not a header
+second line
+"""
+
+[[tool.items]]
+name = "one"

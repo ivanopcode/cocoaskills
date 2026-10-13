@@ -7,3 +7,6 @@
 *.py text eol=lf
 CHANGELOG.md merge=union
 LOGBOOK.md merge=union
+# Native MCP config fixtures are golden byte inputs; CRLF conversion would
+# corrupt the LF goldens and the derived CRLF variants on Windows checkouts.
+tests/fixtures/mcp/native/* text eol=lf
