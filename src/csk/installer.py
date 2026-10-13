@@ -3887,16 +3887,9 @@ def _detect_command_collisions(plans: list[SkillPlan]) -> None:
 
 
 def _check_dependencies(plans: list[SkillPlan]) -> None:
-    _check_system_commands(plans)
+    # System commands are NOT re-checked here: the one aggregate check ran
+    # at closure resolution (closure.build_closure), before this point.
     _check_skill_command_dependencies(plans)
-
-
-def _check_system_commands(plans: list[SkillPlan]) -> None:
-    for plan in plans:
-        for command in _system_dependencies(plan):
-            if not command.command or shutil.which(command.command) is None:
-                hint = f" Hint: {command.hint}" if command.hint else ""
-                raise InstallError(f"Missing system command {command.command!r} for {plan.decl.name}.{hint}")
 
 
 def _check_skill_command_dependencies(plans: list[SkillPlan]) -> None:
