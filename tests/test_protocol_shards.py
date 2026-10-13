@@ -3,13 +3,14 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
-import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 from unittest import mock
 
 import pytest
+
+from git_fixture_isolation import check_own_git_dir, discover_git_dir, run_fixture_git
 
 
 ROOT = Path(__file__).parents[1]
@@ -28,12 +29,10 @@ EXPECTED_TIMEOUTS = {
 
 
 def _git(checkout: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", "-C", str(checkout), *args],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    # The shared runner pins the ceiling above the -C target (the directory
+    # git discovers from), not above the inherited pytest cwd, and attests
+    # the checkout before the child runs (BUG-261004-473myt).
+    result = run_fixture_git(["-C", str(checkout), *args])
     return result.stdout.strip()
 
 
@@ -41,6 +40,9 @@ def _git_fixture(tmp_path: Path) -> tuple[Path, str]:
     checkout = tmp_path / "source"
     checkout.mkdir()
     _git(checkout, "init", "-q")
+    # Backstop for a redirector the scrub does not know: prove the discovered
+    # repository is this fixture's own before the first config write lands.
+    check_own_git_dir(checkout, discover_git_dir(checkout))
     _git(checkout, "config", "user.email", "ci@example.com")
     _git(checkout, "config", "user.name", "CI")
     tracked = checkout / "tracked.txt"
