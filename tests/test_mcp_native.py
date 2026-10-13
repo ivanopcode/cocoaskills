@@ -1790,8 +1790,9 @@ def test_toml_scanner_successive_strings_in_arrays():
 def test_R8_parent_link_introduced_before_open(tmp_path, surface):
     """Panel-a R8 witness, now green: descriptor-held parent refuses a link.
 
-    Kills the new parent-check-after-open mutant. The mock swaps once: every
-    source and destination stays inside the repository-shaped root.
+    Kills the new parent-check-after-open mutant. The mock swaps once at the
+    owned descriptor seam (POSIX and Windows NT paths alike): every source
+    and destination stays inside the repository-shaped root.
     """
     parent = tmp_path / surface.relpath.split("/")[0]
     parent.mkdir()
@@ -1799,16 +1800,21 @@ def test_R8_parent_link_introduced_before_open(tmp_path, surface):
     target.write_bytes(b"{}" if surface.syntax == "json" else b"")
     saved = tmp_path / "saved-parent"
     swapped: list[bool] = [False]
-    real_open = os.open
+    real_open = mn._selection_fs._open_descriptor
 
     def open_after_swap(path, flags, *args, **kwargs):  # type: ignore[no-untyped-def]
         if not swapped[0]:
-            parent.rename(saved)
-            parent.symlink_to(saved, target_is_directory=True)
+            try:
+                parent.rename(saved)
+                parent.symlink_to(saved, target_is_directory=True)
+            except OSError:
+                if os.name == "nt":
+                    pytest.skip("Windows runner cannot create symlinks")
+                raise
             swapped[0] = True
         return real_open(path, flags, *args, **kwargs)
 
-    with patch.object(mn.os, "open", open_after_swap):
+    with patch.object(mn._selection_fs, "_open_descriptor", open_after_swap):
         result, data = mn.read_surface(tmp_path, surface)
     assert parent.is_symlink()
     assert (result.state, result.reason) == ("unreadable", "link"), (result, data)
@@ -1820,19 +1826,24 @@ def test_R8_linked_parent_at_open_is_refused(tmp_path, monkeypatch, surface):
     target = tmp_path / surface.relpath
     target.parent.mkdir()
     target.write_bytes(b"{}" if surface.syntax == "json" else b"")
-    original = mn.os.open
+    original = mn._selection_fs._open_descriptor
     parent = target.parent
     moved = tmp_path / "moved"
     swapped: list[bool] = [False]
 
     def swap(path, flags, *args, **kwargs):  # type: ignore[no-untyped-def]
         if not swapped[0]:
-            parent.rename(moved)
-            parent.symlink_to(moved, target_is_directory=True)
+            try:
+                parent.rename(moved)
+                parent.symlink_to(moved, target_is_directory=True)
+            except OSError:
+                if os.name == "nt":
+                    pytest.skip("Windows runner cannot create symlinks")
+                raise
             swapped[0] = True
         return original(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(mn.os, "open", swap)
+    monkeypatch.setattr(mn._selection_fs, "_open_descriptor", swap)
     result, data = mn.read_surface(tmp_path, surface)
     assert (result.state, result.reason) == ("unreadable", "link"), (result, data)
 
