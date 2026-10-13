@@ -646,7 +646,12 @@ jobs:
 
   merge_ordinary:
     name: Merge ordinary / Python ${{ matrix.python-version }} on ${{ matrix.os }}
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Reachable through workflow_dispatch as well, so an exact-candidate
+    # dispatch run executes the ordinary suite (including dispatch tests)
+    # before the change is merged.
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -1031,7 +1036,11 @@ jobs:
 
   merge_draft_sources:
     name: Merge draft sources / Python 3.14 on ${{ matrix.os }}
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Reachable through workflow_dispatch as well, like merge_ordinary, so an
+    # exact-candidate dispatch run executes this lane before the merge.
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
