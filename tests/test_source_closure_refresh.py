@@ -15,7 +15,6 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -45,6 +44,7 @@ from csk.sources.package_identity import (
     NetworkGit,
     package_identity_sha256,
 )
+from git_fixture_isolation import run_fixture_git
 from tests.conftest import (
     csk_home,  # noqa: F401 - shared fixtures
     commit_all,
@@ -233,14 +233,7 @@ def _make_repo(workdir: Path, commits: list[dict[str, str | bytes]]) -> list[str
         write_files(workdir, files)
         run(["git", "add", "--", "."], workdir)
         run(["git", *_git_identity(), "commit", "--quiet", "-m", f"c{index}"], workdir)
-        completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=workdir,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=20,
-        )
+        completed = run(["git", "rev-parse", "HEAD"], workdir)
         oids.append(completed.stdout.strip())
     return oids
 
@@ -248,20 +241,12 @@ def _make_repo(workdir: Path, commits: list[dict[str, str | bytes]]) -> list[str
 def _real_tool() -> git_admission.GitTool:
     discovered = shutil.which("git")
     executable = Path(discovered).resolve() if discovered is not None else Path("git")
-    version = subprocess.run(
-        [os.fspath(executable), "--version"],
-        capture_output=True,
-        timeout=20,
-        text=True,
-        check=True,
+    version = run_fixture_git(
+        ["--version"], executable=executable, timeout=20
     ).stdout.strip()
     parts = version.split()[2].split(".")
-    exec_path = subprocess.run(
-        [os.fspath(executable), "--exec-path"],
-        capture_output=True,
-        timeout=20,
-        text=True,
-        check=True,
+    exec_path = run_fixture_git(
+        ["--exec-path"], executable=executable, timeout=20
     ).stdout.strip()
     return git_admission.GitTool(
         executable=executable,
@@ -308,8 +293,8 @@ def _prepare_admittable_repo(workdir: Path) -> None:
     packed object store with only HEAD, config, index, objects,
     refs and packed-refs present.
     """
-    subprocess.run(
-        (
+    run(
+        [
             "git",
             "-c",
             "repack.updateServerInfo=false",
@@ -319,11 +304,8 @@ def _prepare_admittable_repo(workdir: Path) -> None:
             "-a",
             "-d",
             "--quiet",
-        ),
-        cwd=workdir,
-        check=True,
-        capture_output=True,
-        timeout=60,
+        ],
+        workdir,
     )
     for child in list((workdir / ".git").iterdir()):
         if child.name in {"HEAD", "config", "index", "objects", "refs", "packed-refs"}:
@@ -381,12 +363,10 @@ class _FakeTransport:
         else:
             workdir = self._workdir(identity, declared_url)
             wanted = f"refs/tags/{ref_value}" if ref_kind == "tag" else f"refs/heads/{ref_value}"
-            completed = subprocess.run(
+            completed = run(
                 ["git", "rev-parse", "--verify", "--quiet", f"{wanted}^{{commit}}"],
-                cwd=workdir,
-                capture_output=True,
-                text=True,
-                timeout=20,
+                workdir,
+                check=False,
             )
             if completed.returncode != 0 or not completed.stdout.strip():
                 raise source_transport.TransportResolutionError(())
@@ -809,14 +789,7 @@ def test_cli_existing_tag_object_lock_refuses_with_upgrade_remediation(
         monkeypatch,
         annotated_tag=True,
     )
-    tag_object = subprocess.run(
-        ["git", "rev-parse", "refs/tags/v1"],
-        cwd=kit,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=20,
-    ).stdout.strip()
+    tag_object = run(["git", "rev-parse", "refs/tags/v1"], kit).stdout.strip()
     assert tag_object != commit
 
     old_lock = _read_lock(project)
@@ -2017,14 +1990,7 @@ def _two_member_git_project(
     )
     run(["git", "add", "--", "."], kit)
     run(["git", *_git_identity(), "commit", "--quiet", "-m", "c1"], kit)
-    moved = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=kit,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=20,
-    ).stdout.strip()
+    moved = run(["git", "rev-parse", "HEAD"], kit).stdout.strip()
     run(["git", "tag", "-f", "v1", moved], kit)
     url = "https://example.test/kit.git"
     fake = _FakeTransport()
@@ -2110,14 +2076,7 @@ def test_root_branch_resolves_but_transitive_branch_refuses(
     kit = tmp_path / "kit"
     _write_git_collection(kit, {"review": {}})
     oids = _make_repo(kit, [{}])
-    branch = subprocess.run(
-        ["git", "branch", "--show-current"],
-        cwd=kit,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=20,
-    ).stdout.strip()
+    branch = run(["git", "branch", "--show-current"], kit).stdout.strip()
     url = "https://example.test/kit.git"
     fake = _FakeTransport()
     fake.add(url, kit, "example.test/kit")
@@ -2313,14 +2272,7 @@ def test_same_repository_two_commits_fail_name_conflict(
     (lib / "extra.txt").write_text("v2\n", encoding="utf-8")
     run(["git", "add", "--", "."], lib)
     run(["git", *_git_identity(), "commit", "--quiet", "-m", "c1"], lib)
-    second = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=lib,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=20,
-    ).stdout.strip()
+    second = run(["git", "rev-parse", "HEAD"], lib).stdout.strip()
     assert first[0] != second
     lib_url = "https://example.test/lib.git"
     fake = _FakeTransport()
@@ -2437,14 +2389,7 @@ def test_same_name_different_commit_refuses_version_conflict(
     (lib / "extra.txt").write_text("v2\n", encoding="utf-8")
     run(["git", "add", "--", "."], lib)
     run(["git", *_git_identity(), "commit", "--quiet", "-m", "c1"], lib)
-    second = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=lib,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=20,
-    ).stdout.strip()
+    second = run(["git", "rev-parse", "HEAD"], lib).stdout.strip()
     assert first[0] != second
     url = "https://example.test/alpha.git"
     fake = _FakeTransport()
@@ -3322,32 +3267,11 @@ def _bare_repo_with_tag(
         run(["git", "tag", "-a", "v1", "-m", "release"], work)
     else:
         run(["git", "tag", "v1"], work)
-    tag_commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=work,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=20,
-    ).stdout.strip()
+    tag_commit = run(["git", "rev-parse", "HEAD"], work).stdout.strip()
     write_files(work, {"file.txt": "v2\n"})
     commit_all(work, "c1")
-    branch_commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=work,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=20,
-    ).stdout.strip()
-    branch = subprocess.run(
-        ["git", "branch", "--show-current"],
-        cwd=work,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=20,
-    ).stdout.strip()
+    branch_commit = run(["git", "rev-parse", "HEAD"], work).stdout.strip()
+    branch = run(["git", "branch", "--show-current"], work).stdout.strip()
     bare = tmp_path / "bare.git"
     run(
         ["git", "clone", "--quiet", "--bare", "--", os.fspath(work), os.fspath(bare)],

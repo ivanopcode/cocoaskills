@@ -7,7 +7,7 @@
     "tests/test_protocol_conformance.py": "06d5fa20a02ac40e075d367d056961abbef6d38b4088b368180c715046fab435",
     "tests/protocol_conformance_adapters.py": "bb1c9b9a32e745b6087bf58bb2ba4d4cf17ccd267cbfef97970cee1ae3a6bca5",
     "tests/protocol_lifecycle_observations.py": "834dd2c10188b9b515b4fa6c59f8b8a896ab8801cde3807db5959076177c8378",
-    "tests/conftest.py": "48dc8e8816b0922c7581aa31988aada450736693f4a367039ed60469c653ceee"
+    "tests/conftest.py": "adbd96050819b47f836738588908f8ec865c539d1e66b51cd9088f9da5578592"
   },
   "audit_revisions": [
     {
@@ -99,6 +99,33 @@
       "change": "Typed the recording probe runner to accept the admitted executable and record its resolved path; applied Ruff cleanup while preserving the current-main strict-mode adaptation for the future-family conformance vector.",
       "isolation_neutral": true,
       "rationale": "This updates only the test seam to match the sealed production probe interface. The existing strict-mode policy adaptation is retained as current-main behavior; no protocol vector, environment, cwd, temp-root, subprocess, lock, cache, platform, or shared-state behavior changes. Node IDs, footprints, atomic clusters, and shard assignments stay unchanged."
+    },
+    {
+      "task_id": "BUG-261004-473myt",
+      "file": "tests/conftest.py",
+      "previous_sha256": "48dc8e8816b0922c7581aa31988aada450736693f4a367039ed60469c653ceee",
+      "sha256": "c4402795c33df8cdab73436ba38d2787af54e73c210d3fae05e68a061f8cb9d7",
+      "change": "revisions 1-3: conftest.run routes fixture git invocations through the shared git_fixture_isolation runner (allowlist child env, own-repo attestation) and init_git_repo asserts own-repo before its config writes (entry backfilled in revision 4; the digest moved without one, rev-3 panel finding F8)",
+      "isolation_neutral": false,
+      "rationale": "Fixture git children now run with a different env/cwd contract (allowlist env, explicit --git-dir routing), so the change is not isolation-neutral by construction. No protocol node was added, removed, renamed or reparameterized: the helpers keep their signatures and build the same repositories, and the revision-3 hosted lanes (PR run 37226522841, dispatch 37226522376) ran the protocol and merge suites green on this exact file, so no node footprint, atomic cluster or shard assignment moved in practice."
+    },
+    {
+      "task_id": "BUG-261004-473myt",
+      "file": "tests/conftest.py",
+      "previous_sha256": "c4402795c33df8cdab73436ba38d2787af54e73c210d3fae05e68a061f8cb9d7",
+      "sha256": "7550b87a400ae10b9fd22349cf9df1e70dfedfe770302b71a5553a8ac4b77384",
+      "change": "revision 4: added the autouse session fixture _csk_git_session_isolation, which removes every GIT_* variable from the pytest process, pins session-private HOME/XDG_CONFIG_HOME/GIT_CONFIG_NOSYSTEM/GIT_CONFIG_GLOBAL/GIT_CEILING_DIRECTORIES, and arms a tripwire over each repository enclosing the test run and the session tmp root (read-only snapshots, session fails on any change)",
+      "isolation_neutral": false,
+      "rationale": "The process environment contract changes for every test, so the change is not isolation-neutral by construction. No node footprint, atomic cluster or shard assignment moves: no test function was added, removed, renamed or reparameterized; the mutation is session-uniform and worker-local (each xdist worker sanitizes its own process once); the protocol test, adapters and lifecycle observers set and read no GIT_* variable (verified by grep); the pinned HOME/XDG_CONFIG_HOME are already overridden per-test by the autouse stable_env fixture and by the adapters' private Go worker env dicts; the one os.environ spread (lifecycle Windows cmd case) feeds a consumer that reads no GIT_*; and the tripwire is read-only and trips only on enclosing-repo mutation, which protocol nodes never perform (the pinned root stays read-only)."
+    },
+    {
+      "task_id": "BUG-261004-473myt",
+      "file": "tests/conftest.py",
+      "previous_sha256": "7550b87a400ae10b9fd22349cf9df1e70dfedfe770302b71a5553a8ac4b77384",
+      "sha256": "adbd96050819b47f836738588908f8ec865c539d1e66b51cd9088f9da5578592",
+      "change": "revision 5: conftest.run passes the caller's git path (executable=cmd[0]) to the shared runner instead of discarding it; the session fixture body is unchanged",
+      "isolation_neutral": true,
+      "rationale": "A one-argument change inside the fixture git helper: the executed binary is now the one the caller named. No protocol node was added, removed, renamed or reparameterized, no GIT_*/cwd/temp-root/lock/cache behavior moves, and the protocol test, adapters and lifecycle observers never call conftest.run with an explicit git path. Node IDs, footprints, atomic clusters and shard assignments stay unchanged."
     }
   ],
   "method": {

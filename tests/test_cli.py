@@ -12,7 +12,8 @@ import time
 from pathlib import Path
 
 import pytest
-from conftest import make_project, make_skill_repo, run, write_skillfile
+from conftest import assert_own_git_repo, make_project, make_skill_repo, run, write_skillfile
+from git_fixture_isolation import run_fixture_git
 
 from csk import cli, config, git_admission, installer, locking, shims, status
 from csk.build_repository import LockedCommit
@@ -228,6 +229,7 @@ def test_cli_init_non_git_then_git_init_leaves_installable_empty_project(monkeyp
     assert cli.main(["init", str(project)]) == 0
     run(["git", "init"], project)
     run(["git", "branch", "-M", "main"], project)
+    assert_own_git_repo(project)
     run(["git", "config", "user.name", "Test User"], project)
     run(["git", "config", "user.email", "test@example.com"], project)
     cfg_path = csk_home / "config.json"
@@ -2890,21 +2892,13 @@ def test_cli_windows_schema2_install_path_and_local_git_then_replay_fresh_home(
     git_executable = shutil.which("git")
     assert git_executable is not None, "Windows end-to-end requires Git"
     executable = Path(git_executable).resolve()
-    version = subprocess.run(
-        [executable, "--version"],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=10,
+    version = run_fixture_git(
+        ["--version"], executable=executable, timeout=10
     ).stdout.strip()
     version_parts = version.split()[2].split(".")
     exec_path = Path(
-        subprocess.run(
-            [executable, "--exec-path"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
+        run_fixture_git(
+            ["--exec-path"], executable=executable, timeout=10
         ).stdout.strip()
     ).resolve()
     tool = git_admission.GitTool(

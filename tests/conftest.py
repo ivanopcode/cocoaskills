@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -11,20 +12,43 @@ import pytest
 from csk import deprecation, locking
 from csk.config import GlobalConfig, ProjectConfig
 
+import git_session_isolation
 from draft_sources_accounting import record as _record_draft_sources_outcome
+from git_fixture_isolation import check_own_git_dir, discover_git_dir, run_fixture_git
 
 
 def run(cmd: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
+    if cmd and Path(cmd[0]).name in ("git", "git.exe"):
+        # Fixture git children run through the one shared runner: an ambient
+        # GIT_DIR/GIT_WORK_TREE once redirected a fixture's config writes
+        # into the enclosing checkout (BUG-261004-473myt). The caller's own
+        # git path (cmd[0]) is the one executed, never a PATH lookup.
+        proc = run_fixture_git(cmd[1:], cwd=cwd, check=False, executable=cmd[0])
+        if check and proc.returncode != 0:
+            raise AssertionError(
+                f"{cmd} failed in {cwd}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+            )
+        return proc
     proc = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
     if check and proc.returncode != 0:
         raise AssertionError(f"{cmd} failed in {cwd}\nstdout={proc.stdout}\nstderr={proc.stderr}")
     return proc
 
 
+def assert_own_git_repo(path: Path) -> None:
+    """Prove the discovered repository is this fixture's own before config writes.
+
+    Backstop for a redirector the scrub in ``run`` does not know: every
+    fixture init or clone that goes on to write git config calls this first.
+    """
+    check_own_git_dir(path, discover_git_dir(path))
+
+
 def init_git_repo(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     run(["git", "init"], path)
     run(["git", "branch", "-M", "main"], path)
+    assert_own_git_repo(path)
     run(["git", "config", "user.name", "Test User"], path)
     run(["git", "config", "user.email", "test@example.com"], path)
     return path
@@ -133,6 +157,27 @@ def make_config(csk_home: Path, skills_root: Path, project: Path, *, agents: lis
             "app": ProjectConfig(alias="app", path=project, agents=agents),
         },
     )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _csk_git_session_isolation(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[None]:
+    """Isolate the whole session's git environment and arm the tripwire.
+
+    Session-level fix for BUG-261004-473myt: before any test runs, every
+    ``GIT_*`` variable is removed from the pytest process and
+    session-private git inputs are pinned, so every child process inherits
+    them however it is spawned. The tripwire snapshots each repository
+    enclosing the test run (and the session tmp root) and fails the session
+    if any of them changes. Tests may still set their own explicit
+    ``GIT_*`` for their fixture repositories.
+    """
+    try:
+        with git_session_isolation.session_isolated(tmp_path_factory):
+            yield
+    except git_session_isolation.TripwireBreach as exc:
+        pytest.fail(str(exc), pytrace=False)
 
 
 @pytest.fixture(autouse=True)

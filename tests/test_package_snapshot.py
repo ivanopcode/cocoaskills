@@ -53,7 +53,7 @@ from csk.sources.errors import (
 )
 from csk.sources.selection import PRUNED_CHILD_NAMES
 from csk.sources.snapshot import FilesystemEquivalence, FrozenFile
-from conftest import commit_all, init_git_repo
+from conftest import commit_all, init_git_repo, run
 
 _AUDIT_EVENTS: list[tuple[str, tuple[Any, ...]]] = []
 
@@ -295,7 +295,7 @@ def test_capture_reads_working_tree_bytes_not_git_head(tmp_path: Path) -> None:
     commit_all(root, "base")
     (root / "tracked.txt").write_bytes(b"dirty-worktree\n")
     (root / "staged.txt").write_bytes(b"staged-bytes\n")
-    subprocess.run(["git", "add", "staged.txt"], cwd=root, check=True)
+    run(["git", "add", "staged.txt"], root)
     (root / "staged.txt").write_bytes(b"worktree-beats-index\n")
     (root / "untracked.txt").write_bytes(b"untracked-bytes\n")
 
