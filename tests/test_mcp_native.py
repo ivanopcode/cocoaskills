@@ -2030,3 +2030,12 @@ def test_r3_json_empty_top_close_indent_golden():
 def test_r3_p2_nonadd_requires_a_span(op):
     with pytest.raises(mn.McpNativeError, match=UNSUP):
         mn._verify_p2(b'ab', b'aXb', 'ab', mn._SpanEdit('aXb', 1, 1), CC.relpath, op)
+
+
+@pytest.mark.parametrize("body", ['x="""a""""\n', "x='''a''''\n"])
+def test_r3_toml_four_quote_close(body):
+    old = body.encode()
+    assert mn.parse_surface_bytes(CODEX, old).state == "present"
+    new = mn.edit_surface_bytes(CODEX, old, AddEntry("own", V_SMALL))
+    assert new.startswith(old)
+    assert mn.parse_surface_bytes(CODEX, new).entries["own"] == V_SMALL
