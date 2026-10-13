@@ -102,6 +102,8 @@ import pytest
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
+from git_fixture_isolation import run_fixture_git
+
 from csk import git_admission, installer, manifest, protocol_json
 from csk.build_repository_pipeline import ExternalBuildError
 from csk.sources import _selection_fs
@@ -1185,11 +1187,11 @@ def _observed_external_build_ready(root: Path) -> Iterator[None]:
     )
     bare = root / "bare.git"
     git = os.fspath(Path(shutil.which("git")).resolve())
-    subprocess.run(
-        (git, "clone", "--quiet", "--bare", os.fspath(external), os.fspath(bare)),
+    run_fixture_git(
+        ["clone", "--quiet", "--bare", os.fspath(external), os.fspath(bare)],
+        executable=git,
+        cwd=root,
         stdin=subprocess.DEVNULL,
-        capture_output=True,
-        check=True,
         timeout=30,
     )
     tool = _transport_git(root / "tool", {git_url: bare})
@@ -2523,22 +2525,18 @@ def _transport_git(root: Path, mappings: Mapping[str, Path]) -> git_admission.Gi
     """Create a trusted Git stand-in that maps only listed test URLs locally."""
 
     real = Path(shutil.which("git")).resolve()
-    version = subprocess.run(
-        (os.fspath(real), "--version"),
+    version = run_fixture_git(
+        ["--version"],
+        executable=real,
         stdin=subprocess.DEVNULL,
-        capture_output=True,
-        check=True,
         timeout=20,
-        text=True,
     ).stdout.strip()
     exec_path = Path(
-        subprocess.run(
-            (os.fspath(real), "--exec-path"),
+        run_fixture_git(
+            ["--exec-path"],
+            executable=real,
             stdin=subprocess.DEVNULL,
-            capture_output=True,
-            check=True,
             timeout=20,
-            text=True,
         ).stdout.strip()
     ).resolve()
     root.mkdir(parents=True)
@@ -2581,19 +2579,23 @@ def _transport_bare(root: Path) -> tuple[Path, str]:
     root.mkdir(parents=True)
     work = root / "work"
     bare = root / "remote.git"
-    subprocess.run(
-        (os.fspath(Path(shutil.which("git")).resolve()), "init", "--quiet", os.fspath(work)),
+    # Fixture git children run through the one shared runner, which scrubs
+    # ambient redirectors and attests the fixture repository (BUG-261004-473myt).
+    git = os.fspath(Path(shutil.which("git")).resolve())
+    run_fixture_git(
+        ["init", "--quiet", os.fspath(work)],
+        executable=git,
         stdin=subprocess.DEVNULL,
-        capture_output=True,
-        check=True,
         timeout=20,
     )
     (work / "README.md").write_bytes(b"draft transport fixture\n")
-    git = os.fspath(Path(shutil.which("git")).resolve())
-    subprocess.run((git, "-C", os.fspath(work), "add", "--", "README.md"), check=True, timeout=20)
-    subprocess.run(
-        (
-            git,
+    run_fixture_git(
+        ["-C", os.fspath(work), "add", "--", "README.md"],
+        executable=git,
+        timeout=20,
+    )
+    run_fixture_git(
+        [
             "-C",
             os.fspath(work),
             "-c",
@@ -2604,24 +2606,21 @@ def _transport_bare(root: Path) -> tuple[Path, str]:
             "--quiet",
             "-m",
             "fixture",
-        ),
+        ],
+        executable=git,
         stdin=subprocess.DEVNULL,
-        capture_output=True,
-        check=True,
         timeout=20,
     )
-    commit = subprocess.run(
-        (git, "-C", os.fspath(work), "rev-parse", "HEAD"),
-        check=True,
+    commit = run_fixture_git(
+        ["-C", os.fspath(work), "rev-parse", "HEAD"],
+        executable=git,
         timeout=20,
-        capture_output=True,
-        text=True,
     ).stdout.strip()
-    subprocess.run(
-        (git, "clone", "--quiet", "--bare", os.fspath(work), os.fspath(bare)),
+    run_fixture_git(
+        ["clone", "--quiet", "--bare", os.fspath(work), os.fspath(bare)],
+        executable=git,
+        cwd=root,
         stdin=subprocess.DEVNULL,
-        capture_output=True,
-        check=True,
         timeout=20,
     )
     return bare, commit

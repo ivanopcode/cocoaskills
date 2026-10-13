@@ -37,9 +37,11 @@ from conftest import (
     init_git_repo,
     make_config,
     make_project,
+    run,
     write_files,
     write_skillfile,
 )
+from git_fixture_isolation import run_fixture_git
 
 from csk import cli, config, install_marker, installer, shims, skillspec
 from csk import dev_substitutions, git_admission, protocol_json
@@ -935,19 +937,9 @@ def _external_git_tool() -> git_admission.GitTool:
     executable_text = shutil.which("git")
     assert executable_text is not None
     executable = Path(executable_text).resolve(strict=True)
-    version = subprocess.run(
-        (os.fspath(executable), "--version"),
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    version = run_fixture_git(["--version"], executable=executable).stdout.strip()
     exec_path = Path(
-        subprocess.run(
-            (os.fspath(executable), "--exec-path"),
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+        run_fixture_git(["--exec-path"], executable=executable).stdout.strip()
     ).resolve(strict=True)
     return git_admission.GitTool(
         executable=executable,
@@ -983,9 +975,9 @@ def _external_repository_with_marker(tmp_path: Path) -> tuple[Path, str]:
     commit = commit_all(repository, "external tool")
     # The operator transfers the source as a bundle and clones it, so admission
     # meets a packed object store, not the loose objects git init leaves here.
-    subprocess.run(
-        (
-            os.fspath(_external_git_tool().executable),
+    run(
+        [
+            "git",
             "-c",
             "repack.updateServerInfo=false",
             "-c",
@@ -994,10 +986,8 @@ def _external_repository_with_marker(tmp_path: Path) -> tuple[Path, str]:
             "-a",
             "-d",
             "--quiet",
-        ),
-        cwd=repository,
-        check=True,
-        capture_output=True,
+        ],
+        repository,
     )
     for child in list((repository / ".git").iterdir()):
         if child.name in {"HEAD", "config", "index", "objects", "refs", "packed-refs"}:
