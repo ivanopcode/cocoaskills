@@ -51,7 +51,7 @@ csk config build-ssh add <host>/<namespace> --agent auto --identity ~/.ssh/<key>
 
 Скоуп аутентификации `build_https` совпал в конфигурации, но выбранный источник токена не вернул данные. Текст ошибки называет конкретный случай из трёх возможных:
 
-1. Правило `token_env` указывает незаданную переменную окружения (`build_https scope '<scope>' names environment variable '<token_env>', which is unset`). Экспортируйте значение переменной из хранилища перед запуском:
+1. Правило `token_env` указывает незаданную переменную окружения (`the environment variable configured for build_https scope '<scope>' is not set`; имя переменной в ошибке намеренно не выводится, его показывает `csk config build-https list`). Экспортируйте значение переменной из хранилища перед запуском:
 
    ```bash
    export CI_TOKEN="$(pass show ci/gitlab)"
