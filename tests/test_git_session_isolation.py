@@ -100,9 +100,19 @@ def test_child_processes_inherit_scrubbed_environment():
         assert child.get("CSK_GIT_SESSION_ISOLATED") == "1", label
         flat = "\\n".join(f"{key}={value}" for key, value in child.items())
         assert "hostile" not in flat, label
-        home, xdg = child.get("HOME"), child.get("XDG_CONFIG_HOME")
-        assert home and home == xdg and "csk-git-session-env" in home, label
-        assert Path(child["GIT_CONFIG_GLOBAL"]).read_bytes() == b"", label
+    exact = shells["python child"]
+    home, xdg = exact.get("HOME"), exact.get("XDG_CONFIG_HOME")
+    assert home and home == xdg and "csk-git-session-env" in home
+    assert Path(exact["GIT_CONFIG_GLOBAL"]).read_bytes() == b""
+    if "sh -c env" in shells:
+        # MSYS/Cygwin sh on Windows rewrites path-valued variables to
+        # POSIX form (/c/...), so the sh leg pins by substring: both home
+        # variables still name the session-private dir, exactly once each.
+        sh_home = shells["sh -c env"].get("HOME") or ""
+        sh_xdg = shells["sh -c env"].get("XDG_CONFIG_HOME") or ""
+        assert sh_home.count("csk-git-session-env") == 1, sh_home
+        assert sh_xdg.count("csk-git-session-env") == 1, sh_xdg
+        assert "global-config" in (shells["sh -c env"].get("GIT_CONFIG_GLOBAL") or "")
 '''
 
 WRITER_TEST = '''\
