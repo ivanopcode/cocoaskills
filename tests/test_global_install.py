@@ -1576,8 +1576,13 @@ def test_global_install_cascades_skill_dependency_removal_when_provider_is_unava
     result = global_install.install(cfg)
 
     assert result.errors
-    assert any("Missing system command '__csk_missing_global_dependency__'" in error for error in result.errors)
-    assert any("Missing skill dependency 'skill-provider'" in error for error in result.errors)
+    # System commands fail fast during closure resolution, before skill
+    # dependency evaluation, so only the system diagnostic is reported
+    # (one diagnostic for every missing command) with no skill cascade,
+    # and nothing materializes (all-or-nothing).
+    assert len(result.errors) == 1
+    assert "Missing system command '__csk_missing_global_dependency__'" in result.errors[0]
+    assert "Missing skill dependency" not in result.errors[0]
     assert not (csk_home / "global" / "skills" / "skill-provider").exists()
     assert not (csk_home / "global" / "skills" / "skill-consumer").exists()
 
