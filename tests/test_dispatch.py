@@ -9131,6 +9131,12 @@ def _oracle_caller_envs(shims: Path, home: Path) -> list[dict[bytes, bytes]]:
         for name in _ORACLE_SHELL_SPECIAL:
             if name in ("ENV", "BASH_ENV"):
                 value = f"/nonexistent-csk-oracle-{_ORACLE_SEED}/{name}"
+            elif name == "OPTIND":
+                # dash aborts startup on a non-numeric OPTIND
+                # ("Illegal number", exit 2), so both oracle legs
+                # would refuse to run; small non-negative integers
+                # exercise the normalization on every lane.
+                value = ["1", "19", "0", "42"][trial % 4]
             elif trial == 0:
                 value = f"caller-{name}"
             else:
