@@ -1973,6 +1973,10 @@ def test_r3_toml_scanner_panel_survivors(body):
     new = mn.edit_surface_bytes(CODEX, old, AddEntry("own", V_SMALL))
     assert new.startswith(old)
     assert mn.parse_surface_bytes(CODEX, new).entries["own"] == V_SMALL
+    if "# standalone" in body:
+        owned = b"[mcp_servers.own]\n" + old
+        removed = mn.edit_surface_bytes(CODEX, owned, RemoveEntry("own"))
+        assert removed == b" # standalone\n"
     scan = _toml_span.scan(body)
     assert scan.has_comment == ('# standalone' in body)
     if '# standalone' in body:
