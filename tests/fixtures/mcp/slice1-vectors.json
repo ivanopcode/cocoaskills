@@ -1,0 +1,232 @@
+{
+  "contract": "csk-skillfile-mcp-slice1-vectors",
+  "invocation_scope": "project",
+  "targets": [
+    "claude_code",
+    "codex_cli",
+    "cursor"
+  ],
+  "vectors": [
+    {
+      "id": "V01",
+      "name": "docs",
+      "declaration": {
+        "server": {
+          "transport": "http",
+          "url": "https://example.invalid/mcp"
+        },
+        "auth": {
+          "kind": "none"
+        }
+      },
+      "expect": "admit",
+      "policy": "approved-exact-plan",
+      "consent_required": false
+    },
+    {
+      "id": "V02",
+      "name": "tools",
+      "declaration": {
+        "server": {
+          "transport": "stdio",
+          "command": "uvx",
+          "args": [
+            "example-tools==1.2.3"
+          ],
+          "env_names": [
+            "TOOLS_TOKEN"
+          ]
+        },
+        "auth": {
+          "kind": "env"
+        }
+      },
+      "expect": "admit",
+      "policy": "approved-exact-plan",
+      "consent_required": true
+    },
+    {
+      "id": "V03",
+      "name": "docs",
+      "declaration": {
+        "server": {
+          "transport": "http",
+          "url": "https://example.invalid/mcp"
+        },
+        "auth": {
+          "kind": "none"
+        }
+      },
+      "expect": "admit",
+      "consent_required": false,
+      "note": "A9: http without env reference admits without consent under D1"
+    },
+    {
+      "id": "V04",
+      "name": "docs",
+      "declaration": {
+        "scope": "user",
+        "server": {
+          "transport": "http",
+          "url": "https://example.invalid/mcp"
+        },
+        "auth": {
+          "kind": "none"
+        }
+      },
+      "expect": "mcp_scope_mismatch"
+    },
+    {
+      "id": "V05",
+      "name": "docs",
+      "declaration": {
+        "agents": [
+          "windsurf"
+        ],
+        "server": {
+          "transport": "http",
+          "url": "https://example.invalid/mcp"
+        },
+        "auth": {
+          "kind": "none"
+        }
+      },
+      "expect": "mcp_agent_selection_invalid"
+    },
+    {
+      "id": "V06",
+      "name": "docs",
+      "declaration": {
+        "server": {
+          "transport": "http",
+          "url": "https://example.invalid/mcp",
+          "headers": {
+            "Authorization": "literal-token"
+          }
+        },
+        "auth": {
+          "kind": "env"
+        }
+      },
+      "expect": "mcp_declaration_invalid"
+    },
+    {
+      "id": "V07",
+      "name": "tools",
+      "declaration": {
+        "server": {
+          "transport": "stdio",
+          "command": "uvx",
+          "args": [
+            "example-tools==1.2.3"
+          ],
+          "env_names": [
+            "PATH"
+          ]
+        },
+        "auth": {
+          "kind": "env"
+        }
+      },
+      "expect": "mcp_env_name_reserved"
+    },
+    {
+      "id": "V08",
+      "name": "tools",
+      "declaration": {
+        "server": {
+          "transport": "stdio",
+          "command": "./tools/server",
+          "args": []
+        },
+        "auth": {
+          "kind": "none"
+        }
+      },
+      "expect": "mcp_command_invalid"
+    },
+    {
+      "id": "V09",
+      "name": "docs",
+      "declaration": {
+        "server": {
+          "transport": "http",
+          "url": "https://example.invalid/mcp",
+          "trust": true
+        },
+        "auth": {
+          "kind": "none"
+        }
+      },
+      "expect": "mcp_declaration_invalid"
+    },
+    {
+      "id": "V10",
+      "name": "docs",
+      "declaration": {
+        "server": {
+          "transport": "http",
+          "url": "https://user:password@example.invalid/mcp"
+        },
+        "auth": {
+          "kind": "none"
+        }
+      },
+      "expect": "mcp_url_invalid"
+    },
+    {
+      "id": "V11",
+      "name": "docs",
+      "declaration": {
+        "server": {
+          "transport": "sse",
+          "url": "https://example.invalid/sse"
+        },
+        "auth": {
+          "kind": "none"
+        }
+      },
+      "expect": "mcp_capability_unsupported"
+    },
+    {
+      "id": "V12",
+      "name": "tools",
+      "declaration": {
+        "server": {
+          "transport": "stdio",
+          "command": "npx",
+          "args": [
+            "-y",
+            "@example/tools@latest"
+          ]
+        },
+        "auth": {
+          "kind": "none"
+        }
+      },
+      "expect": "mcp_runtime_pin_required"
+    },
+    {
+      "id": "V13",
+      "name": "docs",
+      "declaration": {
+        "server": {
+          "transport": "http",
+          "url": "https://example.invalid/mcp",
+          "headers": {
+            "Authorization": {
+              "env": "DOCS_TOKEN",
+              "prefix": "bearer"
+            }
+          }
+        },
+        "auth": {
+          "kind": "env"
+        }
+      },
+      "expect": "mcp_plan_unapproved",
+      "consent_required": true,
+      "note": "A9"
+    }
+  ]
+}
