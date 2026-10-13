@@ -1284,12 +1284,16 @@ def _build_nodes(
 
     try:
         return resolve(global_manifest.skills)
+    except closure.MissingSystemCommandsError:
+        raise
     except Exception:
         available: list[manifest.SkillDecl] = []
         isolated_errors: list[str] = []
         for decl in global_manifest.skills:
             try:
                 resolve([decl])
+            except closure.MissingSystemCommandsError as exc:
+                isolated_errors.append(str(exc))
             except Exception as exc:  # noqa: BLE001 - preserve per-source diagnostics
                 isolated_errors.append(f"{decl.name}: {exc}")
             else:
@@ -1369,15 +1373,9 @@ def _global_generation_probe(
 def _plans_with_available_dependencies(
     plans: list[installer.SkillPlan], result: GlobalResult
 ) -> list[installer.SkillPlan]:
-    available: list[installer.SkillPlan] = []
-    for plan in plans:
-        try:
-            installer._check_system_commands([plan])
-        except installer.InstallError as exc:
-            result.errors.append(str(exc))
-            continue
-        available.append(plan)
-
+    # System commands are NOT re-checked here: the one aggregate check ran
+    # at closure resolution (closure.build_closure in _build_nodes).
+    available = list(plans)
     while True:
         kept: list[installer.SkillPlan] = []
         removed = False
