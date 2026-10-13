@@ -1,0 +1,9 @@
+{
+	"mcpServers": {
+		"foreign": {
+			"command": "tab-cmd",
+			"args": ["a"]
+		}
+	},
+	"other": false
+}
