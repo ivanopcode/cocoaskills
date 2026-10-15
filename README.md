@@ -342,7 +342,9 @@ csk shell-init                      # Генерирует или устанав
   persistent artifact unless output is redirected to `.temp/`.
 - `uv run python tests/audit_secrets_mutants.py` runs the audit security
   narrowing mutants in disposable copies, including review regressions, and names each failing regression.
-  Save its output under `.temp/<TASK-ID>/`.
+  Select a focused set with `uv run python tests/audit_secrets_mutants.py raw-echo-if`
+  or run `uv run pytest -q tests/test_usage_error_closure.py` for the parser
+  closure regressions. Save output under `.temp/<TASK-ID>/`.
 - Launcher PATH has a manager-owned prefix and a dependency suffix. The prefix
   holds only the skill bin directory and the manager interpreter directory and
   never depends on manifest content. Dependency directories resolve through the

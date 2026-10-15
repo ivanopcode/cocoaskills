@@ -420,7 +420,9 @@ def test_rule_credentials_fail_closed_on_an_unset_token_env() -> None:
         installer._https_rule_credentials(rule, "h.example.com/x/tool")
     text = str(excinfo.value)
     assert git_admission.CREDENTIAL_POLICY_INVALID in text
-    assert "unset" in text
+    assert "the environment variable configured for build_https scope 'h.example.com' is not set" in text
+    # The configured NAME is a credential-option value and is never echoed.
+    assert "CSK_TEST_UNSET_PROOF" not in text
 
 
 def test_rule_credentials_fail_closed_on_an_absent_keyring_token(
