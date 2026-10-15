@@ -72,9 +72,10 @@ def scan(text: str) -> ScannedJson:
 
 
 def infer_indent_unit(text: str) -> str:
-    """Infer one nesting unit from an indented line's structural depth.
+    """Infer one nesting unit from a member-start line's structural depth.
 
     Inline objects/arrays count toward depth; brackets in strings do not.
+    Closing lines never determine the unit; tab width must match depth.
     Files without usable nested indentation fall back to two spaces.
     """
     depth = 0
@@ -84,9 +85,9 @@ def infer_indent_unit(text: str) -> str:
         end = 0
         while end < len(line) and line[end] in " \t":
             end += 1
-        if end and depth > 0 and line[end:] and line[end] != "\r":
+        if end and depth > 0 and line[end:] and line[end] not in "}]\r":
             run = line[:end]
-            if run == "\t" * end:
+            if run == "\t" * end and end == depth:
                 return "\t"
             if run == " " * end and end % depth == 0:
                 return " " * (end // depth)
@@ -182,6 +183,9 @@ def plan_add_container(
     unit = infer_indent_unit(text)
     nl = infer_newline(text)
     top = scan_result.top
+    # Preserve the empty root layout independently of member-unit inference.
+    if not top.members:
+        unit = _line_indent(text, top.close_brace) or unit
     outer_indent = unit
     member_indent = unit * 2
     member = render_member(

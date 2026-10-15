@@ -551,7 +551,7 @@ def test_deep_first_indented_line(unit, surface, nl):
     ('{"text": "[ { \\\"", "foreign": {\n    "value": 1\n}}', "  "),
     ('{"text": "[ { \\\"", "foreign": {\n        "value": 1\n}}', "    "),
     ('{"foreign": {\n\t\t"value": 1\n}}', "\t"),
-    ('{\n    }', "    "),
+    ('{\n    }', "  "),
     ('    {}', "  "),
     ('{}', "  "),
 ])
@@ -2075,3 +2075,81 @@ def test_r3_toml_four_quote_close(body):
     new = mn.edit_surface_bytes(CODEX, old, AddEntry("own", V_SMALL))
     assert new.startswith(old)
     assert mn.parse_surface_bytes(CODEX, new).entries["own"] == V_SMALL
+
+
+# Closing a depth-two object/array has depth-one indentation. Later sibling
+# members independently identify the same 2-/4-space unit. Add must retain it.
+@pytest.mark.parametrize('agent',['claude_code','cursor'])
+@pytest.mark.parametrize('unit',['  ','    ','\t'],ids=['2-space','4-space','tab'])
+@pytest.mark.parametrize('nl',['\n','\r\n'],ids=['LF','CRLF'])
+@pytest.mark.parametrize('shape',['object-close','array-close','absent-container', 'absent-with-member'])
+def test_first_indented_closer(agent,unit,nl,shape):
+    nested = '[]' if shape == 'array-close' else '{}'
+    opening,closing=nested
+    old='{"foreign": '+opening+nl+unit+closing
+    if shape == 'absent-with-member': old+=','+nl+unit+'"setting": true'
+    elif shape != 'absent-container': old+=','+nl+unit+'"mcpServers": {}'
+    old+=(nl+'}'+nl)
+    raw=old.encode(); surf=mn.project_surface(agent)
+    assert mn.parse_surface_bytes(surf,raw).state=='present'
+    new=mn.edit_surface_bytes(surf,raw,mn.AddEntry('own',{'command':'new'}))
+    expected=json.loads(raw); expected.setdefault('mcpServers',{})['own']={'command':'new'}
+    assert json.loads(new)==expected
+    offset=(raw.index(b'true')+4 if shape == 'absent-with-member' else
+            raw.index(closing.encode())+1 if shape == 'absent-container' else raw.index(b'{}')+1)
+    extra=len(new)-len(raw)
+    assert new[:offset]==raw[:offset] and new[offset+extra:]==raw[offset:]
+    # The retained absent-container witness has no member-start line at all;
+    # revision 5 explicitly requires the two-space default for this input.
+    expected_unit = '  ' if shape == 'absent-container' else unit
+    assert (nl+expected_unit*2+'"own": {').encode() in new,new.decode()
+    assert (nl+expected_unit*3+'"command": "new"').encode() in new,new.decode()
+
+# First nested member object, singleton deeply nested member, and mixed prefix
+# whitespace have a later unambiguous member line; Add uses that nesting unit.
+@pytest.mark.parametrize('agent',['claude_code','cursor'])
+@pytest.mark.parametrize('old,unit',[
+ ('{"foreign": {"nested": {\n      "only": {}\n    }}, "mcpServers": {}}\n','  '),
+ ('{"foreign": {\n    "only": {"nested": {}}\n  }, "mcpServers": {}}\n','  '),
+ ('{"foreign": {\n \t"mixed": {},\n        "regular": {}\n    }, "mcpServers": {}}\n','    '),
+ ('{"foreign": [{\r\n\t\t\t"only": {}\r\n\t\t}], "mcpServers": {}}\r\n','\t'),
+])
+def test_other_shapes(agent,old,unit):
+    raw=old.encode(); surf=mn.project_surface(agent)
+    new=mn.edit_surface_bytes(surf,raw,mn.AddEntry('own',{'command':'new'}))
+    nl='\r\n' if '\r\n' in old else '\n'
+    assert (nl+unit*2+'"own": {').encode() in new,new.decode()
+    expected=json.loads(raw);expected['mcpServers']['own']={'command':'new'}
+    assert json.loads(new)==expected
+
+
+# The same closing-line inference must also preserve nested value indentation
+# on Replace. Foreign bytes and the postcondition still pass in these examples.
+@pytest.mark.parametrize('agent',['claude_code','cursor'])
+@pytest.mark.parametrize('unit',['  ','    ','\t'],ids=['2-space','4-space','tab'])
+@pytest.mark.parametrize('nl',['\n','\r\n'],ids=['LF','CRLF'])
+@pytest.mark.parametrize('shape', ['object', 'array'])
+def test_replace_after_first_indented_closer(agent,unit,nl,shape):
+    opening = '{"x": "kept"' if shape == 'object' else '["kept"'
+    closing = '}' if shape == 'object' else ']'
+    old=('{"foreign": '+opening+nl+unit+closing+','+nl+unit+'"mcpServers": {'+nl+unit*2+'"own": {"command":"old"}'+nl+unit+'}'+nl+'}'+nl).encode()
+    start=old.index(b'{"command":"old"}');end=start+len(b'{"command":"old"}')
+    new=mn.edit_surface_bytes(mn.project_surface(agent),old,mn.ReplaceEntry('own',{'command':'new'}))
+    assert new[:start]==old[:start] and new.endswith(old[end:])
+    expected=json.loads(old);expected['mcpServers']['own']={'command':'new'}
+    assert json.loads(new)==expected
+    assert (nl+unit*3+'"command": "new"').encode() in new,new.decode()
+
+
+# Closing-only documents use the default; mismatched tab widths and mixed or
+# indivisible space widths are skipped until a usable member-start line.
+@pytest.mark.parametrize("text, unit", [
+    ('{"x": {\n    }}', "  "),
+    ('{"x": [\n\t]}', "  "),
+    ('{"x": {\n\t"skip": {},\n        "use": {}}}', "    "),
+    ('{"x": {\n\t\t\t"skip": {},\n    "use": {}}}', "  "),
+    ('{"x": {\n   "skip": {},\n        "use": {}}}', "    "),
+    ('{"x": {\n \t"skip": {},\n\t\t"use": {}}}', "\t"),
+])
+def test_indent_member_start_qualification(text, unit):
+    assert _json_span.infer_indent_unit(text) == unit
