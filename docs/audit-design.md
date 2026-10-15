@@ -586,18 +586,14 @@ def gate_plans(
     """
 ```
 
-It is called in both paths after the scope's own plan filtering and before any
-write:
-
-- project: after `_check_system_commands(plans)` (hard-fail on missing system
-  deps), before the write loop.
-- global: after `_plans_with_available_system_commands(plans, result)` (which
-  drops unavailable system-command skills), before the write loop.
-
-Because each scope gates exactly the set of plans it is about to write, the
-existing per-scope difference in system-dependency handling (project hard-fails,
-global soft-filters) is preserved automatically — the audit decision is not what
-unifies or diverges that behavior.
+The audit gate runs after plan validation and the single aggregate
+system-command check, before install publication. Project and global schema-1
+installs check the full closure in `closure.build_closure`; schema-2 resolving
+installs check it in `publish.resolve_source_closure`, and frozen reinstalls
+check the locked members once in `publish._plan_and_publish_schema2`. Global
+source isolation aggregates all readable closures once. Missing system commands
+refuse the whole selected install in either scope; audit then gates the plans
+that passed resolution.
 
 ## 18. Module Layout
 
