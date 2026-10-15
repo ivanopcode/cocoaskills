@@ -72,21 +72,38 @@ def scan(text: str) -> ScannedJson:
 
 
 def infer_indent_unit(text: str) -> str:
-    """Infer the indent unit from the first indented line.
+    """Infer one nesting unit from an indented line's structural depth.
 
-    A leading tab means a tab unit, else spaces of the observed width.
-    Files without an indented line fall back to two spaces.
+    Inline objects/arrays count toward depth; brackets in strings do not.
+    Files without usable nested indentation fall back to two spaces.
     """
+    depth = 0
+    in_string = False
+    escaped = False
     for line in text.split("\n"):
         end = 0
         while end < len(line) and line[end] in " \t":
             end += 1
-        if end == 0:
-            continue
-        run = line[:end]
-        if run[0] == "\t":
-            return "\t"
-        return " " * len(run)
+        if end and depth > 0 and line[end:] and line[end] != "\r":
+            run = line[:end]
+            if run == "\t" * end:
+                return "\t"
+            if run == " " * end and end % depth == 0:
+                return " " * (end // depth)
+        for char in line:
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+            elif char == '"':
+                in_string = True
+            elif char in "{[":
+                depth += 1
+            elif char in "}]":
+                depth -= 1
     return "  "
 
 

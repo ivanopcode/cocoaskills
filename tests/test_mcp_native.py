@@ -527,6 +527,38 @@ def test_json_add_four_space_indent():
     )
 
 
+# A first indented member at depth two uses one nesting unit per level;
+# both JSON surfaces preserve the original bytes around the insertion.
+@pytest.mark.parametrize("surface", [CC, CURSOR], ids=["claude_code", "cursor"])
+@pytest.mark.parametrize("unit", ["  ", "    ", "\t"], ids=["two-space", "four-space", "tab"])
+@pytest.mark.parametrize("nl", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_deep_first_indented_line(unit, surface, nl):
+    old = ('{"mcpServers": {' + nl + unit * 2 + '"foreign": {}'
+           + nl + unit + '}' + nl + '}' + nl).encode()
+    new = mn.edit_surface_bytes(surface, old, AddEntry("own", {"command": "new"}))
+    insertion = (',' + nl + unit * 2 + '"own": {' + nl + unit * 3
+                 + '"command": "new"' + nl + unit * 2 + '}').encode()
+    offset = old.index(b'{}') + 2
+    assert new == old[:offset] + insertion + old[offset:]
+    assert_p2(old, new, (offset, offset))
+
+
+# Inline arrays/objects contribute depth, escaped string brackets do not;
+# the existing root-closing-indent golden and unindented fallback are retained.
+@pytest.mark.parametrize("text, unit", [
+    ('{"foreign": [{\n      "value": 1\n}]}', "  "),
+    ('{"foreign": {"deeper": {\n            "value": 1\n}}}', "    "),
+    ('{"text": "[ { \\\"", "foreign": {\n    "value": 1\n}}', "  "),
+    ('{"text": "[ { \\\"", "foreign": {\n        "value": 1\n}}', "    "),
+    ('{"foreign": {\n\t\t"value": 1\n}}', "\t"),
+    ('{\n    }', "    "),
+    ('    {}', "  "),
+    ('{}', "  "),
+])
+def test_indent_unit_structural_depth_controls(text, unit):
+    assert _json_span.infer_indent_unit(text) == unit
+
+
 def test_json_crlf_insert_uses_crlf():
     """Kills M5 (CRLF file gets LF on insert) on the JSON surface."""
     old = to_crlf(b'{\n  "mcpServers": {}\n}\n')
