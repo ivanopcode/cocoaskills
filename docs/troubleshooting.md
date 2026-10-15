@@ -2,6 +2,29 @@
 
 Описанные ниже симптомы возникают при обновлении с ранних версий csk (<=0.12) и при работе с компилируемыми командами.
 
+## Moved upstream tag: `moved_tag` / `would clobber existing tag`
+
+An upstream history rewrite can move an existing release tag to a new commit,
+even when its tree is unchanged. Current csk fetches the new tag, then compares
+it with the installed marker. `csk upgrade app --strict-tags` (or
+`csk global upgrade --strict-tags`) refuses with `moved_tag` and lists every
+affected skill, tag, old commit and new commit. Installed skills stay unchanged;
+retrying still refuses, even after `csk update` has refreshed the cache.
+
+Check the upstream rewrite and the listed commits before accepting it. To accept
+the new commits, run `csk upgrade app` or `csk global upgrade` without
+`--strict-tags`; the command warns and updates the installation. To keep the old
+commit, pin its revision in the Skillfile. `csk update` and `csk global update`
+only refresh repository refs; they do not install skills or accept moved tags.
+On older csk versions that fail with `would clobber existing tag`, upgrade csk
+first; deleting the cache or installed markers is unnecessary.
+
+For caches with several remotes, csk fetches only `origin`. Without `origin`,
+the sole remote is used; multiple remotes without `origin` produce an explicit
+ambiguity error before fetching. Configure `origin` to the intended upstream.
+Repositories without any remote remain local. Network or authentication failures
+are reported as fetch failures, not as moved tags.
+
 ## invalid install marker ... installed_at is not a UTC second timestamp
 
 Маркер установки записан версией csk до 0.12.0 включительно в микросекундном формате; начиная с 0.12.1 csk пишет метку с точностью до секунды. Запустите `csk install` для проекта или `csk global install` для глобальных скиллов. Инсталлятор переустановит скилл и перепишет маркер в формате UTC-секунд без ручного удаления файлов.
