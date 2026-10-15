@@ -1323,6 +1323,8 @@ def _build_nodes(
 ) -> list[closure.ClosureNode]:
     def resolve(
         decls: list[manifest.SkillDecl],
+        *,
+        check_system_commands: bool = True,
     ) -> list[closure.ClosureNode]:
         return closure.build_closure(
             config,
@@ -1332,26 +1334,42 @@ def _build_nodes(
             fetch_existing=options.fetch,
             fetched_repos=set(),
             stack=stack,
+            check_system_commands=check_system_commands,
         )
 
     try:
         return resolve(global_manifest.skills)
+    except closure.MissingSystemCommandsError:
+        raise
     except Exception:
         available: list[manifest.SkillDecl] = []
         isolated_errors: list[str] = []
+        readable_nodes: dict[tuple[str, str], closure.ClosureNode] = {}
         for decl in global_manifest.skills:
             try:
-                resolve([decl])
+                isolated = resolve([decl], check_system_commands=False)
             except Exception as exc:  # noqa: BLE001 - preserve per-source diagnostics
                 isolated_errors.append(f"{decl.name}: {exc}")
             else:
                 available.append(decl)
+                readable_nodes.update(
+                    ((node.name, node.resolved.commit), node) for node in isolated
+                )
         if not isolated_errors:
             raise
         result.errors.extend(isolated_errors)
+        # Isolation is acquisition too: aggregate every readable closure
+        # once, rather than checking and reporting each declaration separately.
+        # Independent closures may read different commits of the same skill.
+        missing = closure.collect_missing_system_commands(
+            [(node.name, node.spec) for node in readable_nodes.values()]
+        )
+        if missing:
+            result.errors.append(closure.format_missing_system_commands(missing))
+            return []
         if not available:
             return []
-        return resolve(available)
+        return resolve(available, check_system_commands=False)
 
 
 def _recheck_generation(
@@ -1421,15 +1439,9 @@ def _global_generation_probe(
 def _plans_with_available_dependencies(
     plans: list[installer.SkillPlan], result: GlobalResult
 ) -> list[installer.SkillPlan]:
-    available: list[installer.SkillPlan] = []
-    for plan in plans:
-        try:
-            installer._check_system_commands([plan])
-        except installer.InstallError as exc:
-            result.errors.append(str(exc))
-            continue
-        available.append(plan)
-
+    # System commands are NOT re-checked here: the one aggregate check ran
+    # at closure resolution (closure.build_closure in _build_nodes).
+    available = list(plans)
     while True:
         kept: list[installer.SkillPlan] = []
         removed = False
