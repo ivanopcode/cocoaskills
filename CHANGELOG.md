@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Исправлено
+
+- `csk upgrade`, `csk update` и глобальные обновления получают переназначенные upstream-теги без ошибки Git `would clobber existing tag`. Обычное обновление предупреждает о каждом изменении относительно установленного commit; `--strict-tags` отказывает с диагностикой `moved_tag` и списком старых и новых commit.
+
 ## [0.19.0] - 2026-10-13
 
 ### Исправлено
