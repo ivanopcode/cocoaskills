@@ -72,8 +72,11 @@ def test_broken_control_refused_before_any_mutant(
         for name in (harness.TEST, harness.REVIEW_TEST, harness.MATRIX_TEST, harness.CLOSURE_TEST):
             (harness_root / name).write_text("", encoding="utf-8")
         expected_exit = 5
-    # A missing mutation target makes accidentally reaching the mutant loop fail loudly.
-    monkeypatch.setattr(harness, "MUTANTS", (("must-not-run", "absent.py", (), ""),))
+    def forbidden_mutation(*args: object) -> str:
+        pytest.fail("mutant execution reached after broken CONTROL")
+
+    monkeypatch.setattr(harness, "_replace_occurrence", forbidden_mutation)
+    monkeypatch.setattr(harness, "MUTANTS", (("must-not-run", "CHANGELOG.md", (("fixture", "mutated", 0),), ""),))
 
     assert harness.main() == 1
     output = capsys.readouterr()
