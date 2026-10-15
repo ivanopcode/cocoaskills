@@ -120,7 +120,26 @@ def archive(repo: Path, commit: str, destination: Path) -> None:
 
 def fetch_repo(repo: Path) -> None:
     ensure_git_repo(repo)
-    git(repo, ["fetch", "--all", "--tags", "--prune"])
+    remotes = git(repo, ["remote"]).stdout.splitlines()
+    if not remotes:
+        return
+    if "origin" in remotes:
+        remote = "origin"
+    elif len(remotes) == 1:
+        remote = remotes[0]
+    else:
+        raise GitError(
+            f"Ambiguous fetch remote in {repo}: {', '.join(remotes)}; "
+            "configure origin or keep a single remote"
+        )
+    # Installed markers, rather than cache refs, anchor moved-tag policy.
+    # One remote owns the shared tag namespace; fetching all remotes would
+    # make conflicting tags depend on fetch order.
+    git(repo, [
+        "fetch", "--force", "--prune", remote,
+        f"+refs/heads/*:refs/remotes/{remote}/*",
+        "+refs/tags/*:refs/tags/*",
+    ])
 
 
 def fetch_all(skills_root: Path) -> list[tuple[Path, str | None]]:

@@ -4184,7 +4184,7 @@ def _check_skill_validation_errors(issues: list[tuple[SkillPlan, skillcheck.Vali
 def _check_moved_tags_strict(skills_dir: Path, plans: list[SkillPlan]) -> None:
     warnings = _moved_tag_warnings(skills_dir, plans)
     if warnings:
-        raise InstallError("; ".join(warnings))
+        raise InstallError("moved_tag: " + "; ".join(warnings))
 
 
 def _moved_tag_warnings(skills_dir: Path, plans: list[SkillPlan]) -> list[str]:

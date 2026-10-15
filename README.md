@@ -343,6 +343,9 @@ csk shell-init                      # Генерирует или устанав
 - `uv run python tests/audit_secrets_mutants.py` runs the audit security
   narrowing mutants in disposable copies, including review regressions, and names each failing regression.
   Save its output under `.temp/<TASK-ID>/`.
+- `uv run python tests/repointed_tags_mutants.py` checks fetch and strict-tag
+  narrowing mutants against the real CLI regressions in disposable copies.
+  Logs and the named failing tests go under `.temp/repointed-tags-mutants/`.
 - Launcher PATH has a manager-owned prefix and a dependency suffix. The prefix
   holds only the skill bin directory and the manager interpreter directory and
   never depends on manifest content. Dependency directories resolve through the
