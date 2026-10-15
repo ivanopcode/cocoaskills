@@ -113,7 +113,12 @@ jobs:
     name: Fast ordinary / Python 3.14 on ${{ matrix.os }}
     if: github.event_name == 'pull_request'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # The git-heavy ordinary suite needs ~21 min on Windows runners
+    # (4 workers, zero-failure timeouts at 91-99%); failures still fail
+    # fast, so only a true hang can consume the budget.
+    # BUG-261004-473myt rev3b: out-of-module, reasoned under handoff
+    # precondition 5 (rework diff bounded).
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
