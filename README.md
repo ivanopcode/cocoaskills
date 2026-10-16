@@ -342,7 +342,9 @@ csk shell-init                      # Генерирует или устанав
   persistent artifact unless output is redirected to `.temp/`.
 - `uv run python tests/audit_secrets_mutants.py` runs the audit security
   narrowing mutants in disposable copies, including review regressions, and names each failing regression.
-  Save its output under `.temp/<TASK-ID>/`.
+  Select a focused set with `uv run python tests/audit_secrets_mutants.py raw-echo-if`
+  or run `uv run pytest -q tests/test_usage_error_closure.py` for the parser
+  closure regressions. Save output under `.temp/<TASK-ID>/`.
 - `uv run python tests/repointed_tags_mutants.py` checks fetch and strict-tag
   narrowing mutants against the real CLI regressions in disposable copies.
   Logs and the named failing tests go under `.temp/repointed-tags-mutants/`.
