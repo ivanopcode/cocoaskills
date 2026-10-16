@@ -1,0 +1,11 @@
+# leading comment
+[mcp_servers.docs]
+# interior comment one
+url = "https://docs.example/mcp"
+# interior comment two
+[mcp_servers.docs.env_http_headers]
+Authorization = "DOCS_TOKEN"
+
+# trailing comment
+[mcp_servers.other]
+command = "other-cmd"
