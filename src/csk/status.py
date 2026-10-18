@@ -19,6 +19,7 @@ from . import (
     install_marker,
     installer,
     manifest,
+    mcp_project,
     snapshot,
     shims,
 )
@@ -57,6 +58,7 @@ class ProjectStatus:
     errors: tuple[str, ...] = ()
     capability_evidence: Mapping[str, object] | None = None
     capability_evidence_error: str | None = None
+    mcp: tuple[mcp_project.ReportRow, ...] | None = None
 
     @property
     def clean(self) -> bool:
@@ -65,6 +67,7 @@ class ProjectStatus:
             and not self.errors
             and all(skill.label == "up-to-date" for skill in self.skills)
             and all(build.current for build in self.builds)
+            and all(row.action == "current" for row in self.mcp or ())
         )
 
 
@@ -214,10 +217,22 @@ def _collect_project_status(
             [],
             substitution_lines,
         )
-    if project_manifest.schema_version == 2:
-        return _collect_schema2_project_status(
+    if project_manifest.schema_version in (2, 3):
+        result = _collect_schema2_project_status(
             config, project, project_manifest, substitution_lines
         )
+        if project_manifest.schema_version == 3:
+            try:
+                rows = mcp_project.status_project(
+                    project.path,
+                    project_manifest.agents or project.agents or config.default_agents,
+                    project_manifest.mcp_servers,
+                    config.path.parent,
+                )
+                result = replace(result, mcp=rows)
+            except (mcp_project.McpProjectError, OSError) as exc:
+                result = replace(result, mcp=(), errors=(*result.errors, str(exc)))
+        return result
 
     errors: list[str] = []
     csk_home = config.path.parent
@@ -1259,6 +1274,11 @@ def _project_to_payload(project: ProjectStatus) -> dict[str, Any]:
             for skill in project.skills
         ],
     }
+    if project.mcp is not None:
+        payload["mcp"] = [
+            {"server": row.server, "agent": row.agent, "path": row.path, "state": row.action}
+            for row in project.mcp
+        ]
     return payload
 
 
@@ -1326,6 +1346,9 @@ def _render_project_status(
             "  CAPABILITY unavailable (result-only; currentness unchanged): "
             + project.capability_evidence_error
         )
+    if project.mcp is not None:
+        lines.extend(row.render() for row in project.mcp)
+        lines.append("MCP authentication and connectivity: not checked.")
     for error in project.errors:
         lines.append(f"  ERROR {error}")
     return "\n".join(lines)
