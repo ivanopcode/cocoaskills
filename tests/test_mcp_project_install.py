@@ -21,6 +21,7 @@ from csk import (
     mcp_project,
 )
 from csk.sources import publish
+import test_mcp_install_acceptance as acceptance
 
 URL = "https://mcp.example.invalid/mcp"
 AGENTS = ["claude_code", "codex_cli", "cursor"]
@@ -59,6 +60,76 @@ def native_bytes(root):
     return {
         path: (root / path).read_bytes() for path in PATHS if (root / path).exists()
     }
+
+
+# Owned removal pairs survive codec/unreadable refusals in install and dry-run; repairing the surface permits the same removal.
+@pytest.mark.parametrize("change", ["remove", "deselect"])
+@pytest.mark.parametrize("surface_state", ["inline", "unreadable"])
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_owned_removal_refusal_has_total_rows(tmp_path, change, surface_state, dry_run):
+    case = acceptance._case(tmp_path / "owned-removal")
+    case.declare({"docs": URL})
+    acceptance._assert_success(case.run("--fix-gitignore"))
+    path = case.project / PATHS[1]
+    original = path.read_bytes()
+    if surface_state == "inline":
+        path.write_text("mcp_servers = { docs = { url = " + json.dumps(URL) + " } }\n")
+        code = "mcp_native_config_unsupported_syntax"
+    else:
+        path.unlink()
+        path.mkdir()
+        (path / "keep.txt").write_text("foreign directory content")
+        code = "mcp_native_config_unreadable"
+    if change == "remove":
+        case.declare({})
+    else:
+        case.skillfile["agents"] = ["claude_code", "cursor"]
+        case.declare({"docs": URL})
+    before = acceptance._snapshot(case.project, case.home)
+    result = case.run(*(["--dry-run"] if dry_run else []))
+    assert result.returncode != 0, result.stdout
+    assert code in result.stdout
+    assert acceptance._snapshot(case.project, case.home) == before
+    rows = acceptance._expected_rows(f"refused: {code}", dry_run=dry_run)
+    assert acceptance._rows(result, dry_run=dry_run) == rows, result.stdout
+    lines = result.stdout.splitlines()
+    summary = next(
+        i for i, line in enumerate(lines) if code in line and line not in rows
+    )
+    assert max(lines.index(row) for row in rows) < summary
+    acceptance._assert_seed_installed(case)
+
+    if surface_state == "unreadable":
+        (path / "keep.txt").unlink()
+        path.rmdir()
+    path.write_bytes(original)
+    repaired = case.run()
+    acceptance._assert_success(repaired)
+    expected = [
+        f"mcp docs -> {agent} {relpath} ({'removed' if change == 'remove' or agent == 'codex_cli' else 'unchanged'})"
+        for agent, relpath in zip(AGENTS, PATHS)
+    ]
+    assert acceptance._rows(repaired) == expected
+    assert not path.exists()
+    acceptance._assert_seed_installed(case)
+
+
+# Early declaration refusal reports new desired pairs and old owned pairs once, with no publication.
+def test_invalid_declaration_reports_owned_removal_pairs(tmp_path):
+    case = acceptance._case(tmp_path / "invalid-removal")
+    case.declare({"docs": URL})
+    acceptance._assert_success(case.run("--fix-gitignore"))
+    case.skillfile["agents"] = ["cursor"]
+    case.declare({"other": "http://example.invalid"})
+    before = acceptance._snapshot(case.project, case.home)
+    result = case.run()
+    assert result.returncode != 0
+    assert "mcp_url_invalid" in result.stdout
+    assert acceptance._snapshot(case.project, case.home) == before
+    assert acceptance._rows(result) == [
+        *acceptance._expected_rows("refused: mcp_url_invalid"),
+        "mcp other -> cursor .cursor/mcp.json (refused: mcp_url_invalid)",
+    ], result.stdout
 
 
 # A plain URL installs three precise native shapes headlessly, reports them, and repeats without byte changes.

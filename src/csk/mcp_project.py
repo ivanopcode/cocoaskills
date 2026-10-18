@@ -86,8 +86,13 @@ def refused_report(
     return result
 
 
-def _raw_refusal_rows(raw: object, agents: Sequence[str], code: str) -> list[str]:
-    rows = []
+def _raw_refusal_rows(
+    raw: object,
+    agents: Sequence[str],
+    code: str,
+    owned: Sequence[ownership.EntryAddress] = (),
+) -> list[str]:
+    pairs = {(address.name, address.agent, address.relpath) for address in owned}
     if isinstance(raw, dict):
         for name in sorted(
             k
@@ -105,10 +110,11 @@ def _raw_refusal_rows(raw: object, agents: Sequence[str], code: str) -> list[str
                     selected = environments
             for agent in AGENTS:
                 if agent in selected and agent in agents:
-                    rows.append(
-                        f"mcp {name} -> {agent} {native.project_surface(agent).relpath} (refused: {code})"
-                    )
-    return rows
+                    pairs.add((name, agent, native.project_surface(agent).relpath))
+    return [
+        f"mcp {name} -> {agent} {path} (refused: {code})"
+        for name, agent, path in sorted(pairs, key=lambda p: (p[0], AGENTS.index(p[1])))
+    ]
 
 
 @dataclass(frozen=True)
@@ -209,65 +215,32 @@ def plan_project(
     root: Path, target_agents: Sequence[str], raw: object, home: Path
 ) -> ProjectPlan:
     """Return a typed, entirely pre-write plan for one project consumer."""
+    owned: list[ownership.EntryAddress] = []
     try:
-        return _plan_project(root, target_agents, raw, home)
+        return _plan_project(root, target_agents, raw, home, owned)
     except McpProjectError as exc:
         if any(line.startswith("mcp ") for line in str(exc).splitlines()):
             raise
         match = re.search(r"\bmcp_[a-z_]+", str(exc))
         code = match.group() if match else "mcp_declaration_invalid"
         raise McpProjectError(
-            "\n".join([*_raw_refusal_rows(raw, target_agents, code), str(exc)])
+            "\n".join([*_raw_refusal_rows(raw, target_agents, code, owned), str(exc)])
         ) from exc
 
 
 def _plan_project(
-    root: Path, target_agents: Sequence[str], raw: object, home: Path
+    root: Path,
+    target_agents: Sequence[str],
+    raw: object,
+    home: Path,
+    owned: list[ownership.EntryAddress],
 ) -> ProjectPlan:
-    manifest_bytes = (root / "Skillfile.json").read_bytes()
-    current = protocol_json.loads(manifest_bytes)
-    if (
-        not isinstance(current, dict)
-        or current.get("mcp_servers", {}) != raw
-        or (current.get("agents") and current["agents"] != list(target_agents))
-    ):
-        raise refusal(
-            "mcp_declaration_invalid", "Skillfile changed before MCP planning"
-        )
-    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     root = root.resolve()
     home = home.resolve()
     if home.is_relative_to(root):
         raise refusal(
             "mcp_ownership_unknown", "manager home must be outside the project"
         )
-    try:
-        parsed = declarations.parse_mcp_servers(
-            raw, invocation_scope="project", target_agents=target_agents
-        )
-    except declarations.McpDeclarationError as exc:
-        raise McpProjectError(
-            "\n".join(
-                [
-                    *_raw_refusal_rows(raw, target_agents, exc.code),
-                    str(refusal(exc.code, str(exc))),
-                ]
-            )
-        ) from exc
-    if sys.platform == "win32":
-        for decl in parsed.values():
-            if decl.server.transport == "stdio":
-                command = decl.server.command or ""
-                resolved = shutil.which(command)
-                if (
-                    command.lower() in ("npx", "npm", "pnpm", "yarn")
-                    or command.lower().endswith((".cmd", ".bat"))
-                    or (resolved and resolved.lower().endswith((".cmd", ".bat")))
-                ):
-                    raise refusal(
-                        "mcp_windows_batch_unsupported",
-                        f"{decl.name} uses a batch launcher",
-                    )
     consumer = ownership.consumer_id(
         locking.canonical_project_identity(root), "project"
     )
@@ -283,6 +256,47 @@ def _plan_project(
                 raise refusal(
                     "mcp_ownership_unknown", "ledger native profile is unsupported"
                 )
+            if (
+                entry.address.relpath != surface.relpath
+                or entry.address.container != surface.container
+            ):
+                raise refusal(
+                    "mcp_ownership_unknown",
+                    "ledger address is not a supported native surface",
+                )
+        # Keep verified owned pairs even when declaration validation or native edits fail.
+        owned.extend(entry.address for entry in ledger.entries)
+    manifest_bytes = (root / "Skillfile.json").read_bytes()
+    current = protocol_json.loads(manifest_bytes)
+    if (
+        not isinstance(current, dict)
+        or current.get("mcp_servers", {}) != raw
+        or (current.get("agents") and current["agents"] != list(target_agents))
+    ):
+        raise refusal(
+            "mcp_declaration_invalid", "Skillfile changed before MCP planning"
+        )
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    try:
+        parsed = declarations.parse_mcp_servers(
+            raw, invocation_scope="project", target_agents=target_agents
+        )
+    except declarations.McpDeclarationError as exc:
+        raise refusal(exc.code, str(exc)) from exc
+    if sys.platform == "win32":
+        for decl in parsed.values():
+            if decl.server.transport == "stdio":
+                command = decl.server.command or ""
+                resolved = shutil.which(command)
+                if (
+                    command.lower() in ("npx", "npm", "pnpm", "yarn")
+                    or command.lower().endswith((".cmd", ".bat"))
+                    or (resolved and resolved.lower().endswith((".cmd", ".bat")))
+                ):
+                    raise refusal(
+                        "mcp_windows_batch_unsupported",
+                        f"{decl.name} uses a batch launcher",
+                    )
     desired: list[ownership.Desired] = []
     values: dict[ownership.EntryAddress, Mapping[str, object]] = {}
     for decl in parsed.values():
@@ -312,11 +326,6 @@ def _plan_project(
     }
     for address in addresses:
         surface = native.project_surface(address.agent)
-        if address.relpath != surface.relpath or address.container != surface.container:
-            raise refusal(
-                "mcp_ownership_unknown",
-                "ledger address is not a supported native surface",
-            )
         if address.agent not in surfaces:
             surfaces[address.agent] = _read(root, surface)
     observed: dict[ownership.EntryAddress, ownership.Observed] = {}
