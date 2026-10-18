@@ -54,7 +54,7 @@
 - Где ломается: требует поддержки собственных скриптов, не проверяет контрольные суммы и не управляет транзитивными зависимостями.
 - Что делает `csk`: вычисляет граф зависимостей скиллов, фиксирует точные хеши содержимого и изолирует сгенерированные файлы.
 
-Инструмент CocoaSkills не служит публичным реестром пакетов, не выступает runtime-средой для агента и не управляет MCP-серверами. Установщик отвечает только за декларативную доставку и локальную раскладку файлов скиллов.
+Инструмент CocoaSkills доставляет скиллы и записывает объявления MCP в native project configs. csk не запускает MCP-серверы и не выполняет аутентификацию. Публичный реестр пакетов и runtime-среда агента остаются вне его задач.
 
 ## Быстрый старт
 
@@ -168,7 +168,7 @@ csk config build-https add gitlab.example.com/portals/infra --token-source git-c
 
 Проектный режим фиксирует скиллы в файле `Skillfile.json` в корне репозитория. Разработчики коммитят этот файл в систему контроля версий. Вызов `csk install` на любой машине разворачивает одинаковый набор скиллов для всех участников команды.
 
-Файл `Skillfile.json` поддерживается в двух вариантах схемы.
+Проектный `Skillfile.json` поддерживает schema 1, 2 и 3.
 
 Схема 2 является основным форматом проектного Skillfile. Она объявляет источники и выбирает скиллы через селекторы. Команды `csk check`, `csk install`, `csk upgrade` и `csk status` поддерживают её по умолчанию.
 
@@ -212,6 +212,19 @@ csk config build-https add gitlab.example.com/portals/infra --token-source git-c
   ]
 }
 ```
+
+Schema 3 добавляет `mcp_servers` к schema 2. Для URL-only сервера задайте project Skillfile:
+
+```json
+{
+  "schema_version": 3,
+  "agents": ["claude_code", "codex_cli", "cursor"],
+  "skills": [],
+  "mcp_servers": { "docs": "https://mcp.example.com/mcp" }
+}
+```
+
+`csk install` запишет native configs трёх агентов и покажет каждую запись. URL без env reference не требует consent. Managed sessions других environment managers пока не видят эти configs. Подробности: [MCP в project Skillfile](docs/skill-authoring.md#project-mcp-schema-3).
 
 ### Глобальный режим
 

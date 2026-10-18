@@ -117,7 +117,7 @@ python -m pip install --user cocoaskills
 
 ## Источники Skillfile schema 2
 
-Манифест `Skillfile.json` поддерживается в двух вариантах схемы.
+Проектный `Skillfile.json` поддерживает schema 1, 2 и 3. Schema 3 добавляет MCP declarations к schema 2.
 
 Схема 2 является основным форматом проектного Skillfile. Она объявляет источники один раз и выбирает из них скиллы через селекторы. Команды `csk check`, `csk install`, `csk upgrade` и `csk status` поддерживают её по умолчанию.
 
@@ -150,6 +150,54 @@ python -m pip install --user cocoaskills
 ### Границы
 
 На POSIX выборка использует descriptor-relative обход; в Windows потомки открываются через `NtCreateFile` относительно удерживаемого handle, identity читается из `FileIdInfo`, а symlink и junction targets — через `FSCTL_GET_REPARSE_POINT`. Все остальные reparse-теги, включая cloud placeholders, dedup, AppExecLink, WCI и неизвестные значения, отклоняются с указанием тега. Установки по схеме 2 публикуют и контекст, и команды участников: script-команды материализуются из зафиксированного снимка в защищённое runtime-хранилище с shim в `.agents/bin`, build-команды проходят через конвейер сборки с привязкой пакета участника. Каждое требование `dependencies.skills` должно называть участника разрешённого замыкания или принятого лока, а неудовлетворённое требование отклоняет установку, чтобы не ставить неполный скилл. Установка и обновление не принимают унаследованные записи и корень источника `path`. Глобальная область остаётся на схеме 1: `csk global install` отклоняет Skillfile схемы 2.
+
+<a id="project-mcp-reference"></a>
+
+## MCP в project Skillfile schema 3
+
+Schema 3 сохраняет schema 2 и добавляет необязательное поле `mcp_servers`. Поле содержит карту NAME → DECL; имя соответствует `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`. Имена уникальны без учёта регистра; зарезервированные Windows-имена запрещены. DECL содержит HTTPS URL shorthand или объект с обязательным `server` и необязательным `csk`. Объекты закрыты: неизвестные поля вызывают `mcp_declaration_invalid`.
+
+| Поле | Значение и ограничение slice 1 |
+| --- | --- |
+| `server.transport` | Обязательное `http` или `stdio`. |
+| `server.url` | Обязательное для HTTP: `https`, ASCII host, без userinfo, query, fragment и секретов. Максимум 2048 символов; без пробелов, управляющих и format-символов, `$`, фигурных скобок и backslash. |
+| `server.command` | Обязательное для stdio: имя executable без пути и shell. На Windows нужен native executable. |
+| `server.args` | Массив строк для stdio; секреты запрещены, `npx` и `uvx` требуют точной версии пакета. |
+| `server.env_names` | Список имён переменных без значений; управляющие имена вроде `PATH` запрещены. Env reference требует consent. |
+| `server.environments` | Список csk agent ids. По умолчанию используются разрешённые `agents` проекта. Явно выбранный неподдерживаемый агент вызывает отказ. |
+| `csk.headers` | Только HTTP: карта имени заголовка в `{env, prefix?}`. `env` содержит имя переменной; необязательный `prefix` принимает `bearer`. |
+| `csk.auth` | Объект с `kind: "none"`, `"env"` или `"oauth"` и необязательным `help_url`. По умолчанию `env` при env references, иначе `none`; csk не выполняет аутентификацию. |
+| `csk.scope` | Только `project`, это значение по умолчанию. `user` пока не поддерживается. |
+| `csk.git_policy` | Только `local`, это значение по умолчанию. `shared` пока не поддерживается. |
+
+`server` не содержит `headers`, `auth`, `scope` или `git_policy`. Выбор агентов находится в `server.environments`. Поля `auth`, `agents`, `scope` и `git_policy` на уровне DECL запрещены. Schema 1/2 отклоняют `mcp_servers`; глобальный Skillfile отклоняет schema 3. Собственные команды записи Skillfile не повышают schema автоматически.
+
+Поддерживаемые пути: Claude Code `.mcp.json`, Codex CLI `.codex/config.toml`, Cursor `.cursor/mcp.json`. csk пишет только native project configs. Managed sessions других environment managers пока их не видят. [Руководство по MCP](skill-authoring.md#project-mcp-schema-3) описывает consent, ownership, drift и отчёт.
+
+### Коды MCP
+
+Коды стабильны. `mcp_entry_drift` служит предупреждением при пропуске ручной правки; остальные перечисленные ошибки блокируют публикацию:
+
+| Код | Значение |
+| --- | --- |
+| `mcp_declaration_invalid` | Неверный тип, имя или неизвестное поле объявления. |
+| `mcp_scope_mismatch` | Область объявления не совпадает с областью вызова. |
+| `mcp_agent_selection_invalid` | Некорректный выбор агентов или выбор вне целевых агентов проекта. |
+| `mcp_env_name_reserved` | Объявление ссылается на управляющую или зарезервированную env variable. |
+| `mcp_command_invalid` | Небезопасное имя команды, shell/eval или недопустимая форма запуска. |
+| `mcp_url_invalid` | URL нарушает правила HTTPS, host или допустимых компонентов. |
+| `mcp_capability_unsupported` | Запрошенная возможность пока не поддерживается: агент, user scope, `shared` или reference. |
+| `mcp_runtime_pin_required` | Package runner не содержит точной допустимой версии пакета. |
+| `mcp_plan_unapproved` | Публикация требует consent, которого нет. |
+| `mcp_native_config_unsupported_syntax` | Native config нельзя безопасно прочитать или изменить с сохранением остальных байтов. |
+| `mcp_native_config_too_large` | Native config превышает 4 MiB. |
+| `mcp_native_config_unreadable` | Native config недоступен, не является обычным файлом либо содержит ссылку или reparse point. |
+| `mcp_entry_conflict` | Чужая native entry уже использует это имя. |
+| `mcp_entry_drift` | Owned entry изменена пользователем; csk пропускает запись или освобождает ownership с предупреждением. |
+| `mcp_ownership_unknown` | Ledger недоступен или невалиден; csk не может подтвердить ownership. |
+| `mcp_windows_batch_unsupported` | Команда stdio на Windows использует batch launcher. |
+
+Строгие JSON surfaces отклоняют comments, trailing commas, BOM, duplicate keys и невалидный UTF-8. Для Codex CLI csk меняет owned entries только в стандартных группах таблиц `[mcp_servers.NAME]`; комментарии сохраняются. Практические исправления перечислены в [troubleshooting](troubleshooting.md#mcp_entry_conflict).
 
 ## Порядок разрешения исполняемых shims
 

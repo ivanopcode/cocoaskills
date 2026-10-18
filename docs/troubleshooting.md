@@ -1,6 +1,36 @@
 # Диагностика установки
 
-Описанные ниже симптомы возникают при обновлении с ранних версий csk (<=0.12) и при работе с компилируемыми командами.
+Здесь описаны ошибки MCP-конфигурации проекта, обновления с ранних версий csk (<=0.12) и работы с компилируемыми командами.
+
+## mcp_entry_conflict
+
+`csk install` отказывает до публикации скиллов и MCP entries. В native config уже есть чужая запись с тем же именем; совпадение содержимого ownership не даёт.
+
+Выберите другое имя в `mcp_servers` project Skillfile. Если существующая запись больше не нужна, удалите её вручную после проверки и повторите `csk install`. csk не выполняет takeover. Отчёт отмечает конфликтующую пару как `conflict: foreign entry`.
+
+## mcp_entry_drift
+
+Отчёт показывает `skipped: drift` и предупреждение, но установка продолжается. Пользователь изменил запись, которой владеет csk; csk сохраняет ручную правку и ownership.
+
+Сохраните настройку агента или верните запись к установленному виду, чтобы csk снова обновлял её из Skillfile. Удаление native entry при сохранённом объявлении приводит к `restored` на следующей установке. Чтобы убрать сервер окончательно, удалите объявление из Skillfile. Если объявление уже удалено, а запись изменена, csk сообщает `released`: сохраняет запись и забывает ownership. Дальше управляйте записью вручную.
+
+## mcp_plan_unapproved
+
+Headless `csk install` отказывает с `mcp_plan_unapproved`. Объявление stdio или env reference требует consent. Интерактивный отказ от согласия даёт тот же результат.
+
+Запустите `csk install` в терминале с TTY для stdin и stdout. Проверьте план и ответьте `y` или `yes` на запрос `Approve N MCP server(s) for <project>? [y/N]`. Флаги, env variables и файлы проекта не подтверждают consent. Для просмотра без записи используйте `csk install --dry-run`; эта команда не сохраняет согласие. HTTP URL без env reference consent не требует.
+
+## mcp_native_config_unsupported_syntax
+
+`csk install` отказывает до публикации. `.mcp.json` или `.cursor/mcp.json` содержит неподдерживаемый JSON: comments, trailing commas, BOM, duplicate keys или невалидный UTF-8. Для `.codex/config.toml` причиной может быть невалидный TOML или owned entry вне стандартной группы таблиц `[mcp_servers.NAME]`.
+
+Исправьте native config вручную, сохранив остальные настройки. Для JSON используйте строгий UTF-8 JSON без BOM. В TOML приведите изменяемую owned entry к стандартным таблицам. Повторите `csk install`; csk не удаляет комментарии и не перезаписывает файл целиком для исправления синтаксиса.
+
+## mcp_url_invalid
+
+`csk install` отклоняет URL shorthand или `server.url` до публикации. URL использует другую схему, не-ASCII host, userinfo, query, fragment или запрещённые символы. Длина свыше 2048 символов тоже вызывает отказ.
+
+Укажите HTTPS endpoint без этих компонентов и без секретов, например `https://mcp.example.com/mcp`. Для секрета используйте env reference в `csk.headers`; такое объявление требует consent. Не переносите токен из query в путь URL. [Правила объявления](skill-authoring.md#project-mcp-schema-3) описывают обе формы.
 
 ## Moved upstream tag: `moved_tag` / `would clobber existing tag`
 
