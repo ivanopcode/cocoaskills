@@ -52,15 +52,18 @@ class InstallCase:
 
     def run(self, *options: str, globally: bool = False) -> subprocess.CompletedProcess[str]:
         command = ["global", "install"] if globally else ["install", "app"]
-        return subprocess.run(
+        # A merged stream preserves observable ordering between rows and the refusal summary.
+        result = subprocess.run(
             [sys.executable, "-m", "csk", *command, *options],
             cwd=self.project,
             env=self.env,
             stdin=subprocess.DEVNULL,
             text=True,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             timeout=60,
         )
+        return subprocess.CompletedProcess(result.args, result.returncode, result.stdout, "")
 
 
 def _case(root: Path, *, schema: int = 3) -> InstallCase:
@@ -134,12 +137,22 @@ def _assert_success(result: subprocess.CompletedProcess[str]) -> None:
 
 
 def _assert_refusal_without_writes(
-    case: InstallCase, code: str,
+    case: InstallCase, code: str, *, expected_rows: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     before = _snapshot(case.project, case.home)
     result = case.run("--fix-gitignore")
     assert result.returncode != 0, result.stdout + result.stderr
-    assert code in result.stdout + result.stderr
+    rows = _expected_rows(f"refused: {code}") if expected_rows is None else expected_rows
+    assert _rows(result) == rows, "MCP refusal rows must match the exact ordered outcomes"
+    lines = (result.stdout + "\n" + result.stderr).splitlines()
+    code_pattern = rf"(?<!\w){re.escape(code)}(?!\w)"
+    summary_positions = [
+        index for index, line in enumerate(lines)
+        if not line.startswith("mcp ") and re.search(code_pattern, line)
+    ]
+    assert summary_positions, "MCP refusal summary must contain the exact refusal code"
+    last_row = max(index for index, line in enumerate(lines) if line.startswith("mcp "))
+    assert last_row < min(summary_positions), "MCP refusal rows must precede the summary"
     assert _snapshot(case.project, case.home) == before
     return result
 
@@ -293,7 +306,7 @@ def test_removal_preserves_foreign_server_bytes_in_preexisting_file(tmp_path: Pa
 def test_invalid_declaration_refuses_before_any_project_or_home_write(
     tmp_path: Path, declaration: Any, code: str,
 ) -> None:
-    # Each invalid URL/type or closed-field violation returns its code without partial skill or manager writes.
+    # Each invalid declaration reports three exact refusals before its summary and preserves project/home state.
     case = _case(tmp_path / "invalid")
     case.declare({"docs": declaration})
     _assert_refusal_without_writes(case, code)
@@ -301,16 +314,13 @@ def test_invalid_declaration_refuses_before_any_project_or_home_write(
 
 @pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
 def test_foreign_same_name_conflict_refuses_before_any_write(tmp_path: Path) -> None:
-    # A foreign docs entry on the final agent blocks the complete install and reports the conflict.
+    # A foreign docs entry reports two blocked pairs and its conflict before the summary, with no writes.
     case = _case(tmp_path / "conflict")
     write_files(case.project, {".cursor/mcp.json": json.dumps({"mcpServers": {"docs": {"url": URL}}})})
     case.declare({"docs": URL})
-    result = _assert_refusal_without_writes(case, "mcp_entry_conflict")
-    rows = _rows(result)
-    assert len(rows) == 3
-    for row, (agent, path) in zip(rows, SURFACES, strict=True):
-        assert row.startswith(f"mcp docs -> {agent} {path} (")
-    assert rows[-1] == "mcp docs -> cursor .cursor/mcp.json (conflict: foreign entry)"
+    expected = _expected_rows("refused: mcp_entry_conflict")
+    expected[-1] = "mcp docs -> cursor .cursor/mcp.json (conflict: foreign entry)"
+    _assert_refusal_without_writes(case, "mcp_entry_conflict", expected_rows=expected)
 
 
 @pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
@@ -335,7 +345,7 @@ def test_drift_reports_skipped_and_preserves_user_edit(tmp_path: Path) -> None:
 
 @pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
 def test_trailing_comma_native_json_refuses_before_any_write(tmp_path: Path) -> None:
-    # Unsupported native JSON syntax blocks MCP and skill publication without rewriting the input.
+    # Unsupported native JSON reports three exact refusals before its summary and preserves project/home state.
     case = _case(tmp_path / "syntax")
     write_files(case.project, {".mcp.json": '{"mcpServers": {},}\n'})
     case.declare({"docs": URL})
@@ -348,7 +358,7 @@ def test_trailing_comma_native_json_refuses_before_any_write(tmp_path: Path) -> 
 def test_headless_authority_requires_real_consent(
     tmp_path: Path, declaration: dict[str, Any], forged_env: bool,
 ) -> None:
-    # Headless execution/secret routing is unapproved, including with forged CSK approval variables.
+    # Headless authority, including forged approval, reports three unapproved pairs before its summary with no writes.
     case = _case(tmp_path / "consent")
     case.declare({"docs": declaration})
     case.env["DOCS_TOKEN"] = "test-value"
@@ -387,16 +397,15 @@ def test_install_never_starts_server_or_package_runner(
         marker.unlink()
     case.env = env
     case.declare({"docs": declaration})
-    result = case.run("--fix-gitignore")
-    assert not marker.exists()
     if declaration == URL:
+        result = case.run("--fix-gitignore")
         _assert_success(result)
         assert _rows(result) == _expected_rows("added")
     else:
-        assert result.returncode != 0
         # Windows batch launchers are refused before consent under the native-executable contract.
         code = "mcp_windows_batch_unsupported" if os.name == "nt" else "mcp_plan_unapproved"
-        assert code in result.stdout + result.stderr
+        _assert_refusal_without_writes(case, code)
+    assert not marker.exists()
 
 
 @pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
@@ -428,6 +437,7 @@ def test_legacy_schema_still_refuses_mcp_field(tmp_path: Path, schema: int) -> N
     case.declare({"docs": URL})
     result = case.run("--fix-gitignore")
     assert result.returncode != 0
+    assert _rows(result) == []
     assert "Skillfile has unsupported field(s): mcp_servers" in result.stdout + result.stderr
     for _, path in SURFACES:
         assert not (case.project / path).exists()
@@ -454,6 +464,7 @@ def test_global_install_refuses_schema_three(tmp_path: Path) -> None:
     before = _snapshot(case.project, Path(case.env["HOME"]))
     result = case.run(globally=True)
     assert result.returncode != 0
+    assert _rows(result) == []
     assert "Unsupported Skillfile schema_version 3; this Skillfile requires a newer csk" in result.stdout + result.stderr
     assert _snapshot(case.project, Path(case.env["HOME"])) == before
     assert not (case.home / "state/mcp").exists()
