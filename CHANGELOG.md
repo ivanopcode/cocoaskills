@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Добавлено
+
+- Project Skillfile schema 3 объявляет MCP-серверы через URL shorthand или объект `server`/`csk`. `csk install` пишет `.mcp.json` для Claude Code, `.codex/config.toml` для Codex CLI и `.cursor/mcp.json` для Cursor, печатает строку для каждой пары server/agent и запрашивает consent для stdio или env references. Установка не запускает серверы и не выполняет аутентификацию.
+- MCP project configs предназначены для native agent sessions. Managed sessions других environment managers пока не видят эти конфигурации.
+
 ### Исправлено
 
 - Missing system commands are checked once across the full selected closure (roots and transitive requirements) during schema-1 and schema-2 install resolution, and once over locked members on schema-2 frozen reinstalls. One diagnostic reports every missing tool before install publication: store records, builds, adapters, markers, runtime and install locks. Schema-1 acquisition may populate its immutable, content-addressed snapshot cache while reading manifests; schema-2 refusal publishes no new source-store snapshot or record. Global source-isolation fallback combines missing tools from every readable closure in one check and one diagnostic. Exit codes and all-or-nothing behavior are unchanged.
