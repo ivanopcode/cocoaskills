@@ -235,6 +235,19 @@ def test_explicit_agents_are_sorted():
     assert parse_one(http(environments=["cursor", "claude_code"])).agents == ("claude_code", "cursor")
 
 
+# Canonical environment ids are accepted; aliases still refuse even when listed as install targets.
+@pytest.mark.parametrize(("canonical", "aliases"), [
+    ("claude_code", ["claude", "claude-code", "Claude_Code"]),
+    ("codex_cli", ["codex", "codex-cli", "Codex_Cli"]),
+    ("cursor", ["cursor_ai", "cursor-cli", "Cursor"]),
+])
+def test_environment_ids_have_no_aliases(canonical, aliases):
+    assert parse_one(http(environments=[canonical]), targets=[canonical]).agents == (canonical,)
+    for alias in aliases:
+        refused(http(environments=[alias]), "mcp_agent_selection_invalid",
+                "mcp_servers.docs.server.environments.0", targets=[canonical, alias])
+
+
 AGENT_NEGATIVES = [
     ("omitted-no-targets", http(), [], "mcp_agent_selection_invalid"),
     ("empty-list", http(environments=[]), TARGETS, "mcp_agent_selection_invalid"),
@@ -686,6 +699,27 @@ RESERVED_ENV = [
 def test_reserved_env_names_are_refused_in_any_case(name, variant):
     refused(stdio("tool", args=[], env_names=[variant(name)]), "mcp_env_name_reserved",
             "mcp_servers.docs.server.env_names.0")
+
+
+# Proxy, resolver and launcher controls refuse in both reference surfaces and cases; prefixed app names remain valid.
+@pytest.mark.parametrize("name", [
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "FTP_PROXY", "NO_PROXY", "RES_OPTIONS",
+    "HOSTALIASES", "LOCALDOMAIN", "WINDIR", "__PYVENV_LAUNCHER__",
+])
+@pytest.mark.parametrize("variant", [str, str.lower], ids=["upper", "lower"])
+@pytest.mark.parametrize("surface", ["stdio", "header"])
+def test_interoperable_reserved_env_names(name, variant, surface):
+    name = variant(name)
+    allowed = "APP_" + name
+    if surface == "stdio":
+        assert parse_one(stdio("tool", args=[], env_names=[allowed])).server.env_names == (allowed,)
+        body = stdio("tool", args=[], env_names=[name])
+        field = "mcp_servers.docs.server.env_names.0"
+    else:
+        assert parse_one(http({"X-Key": {"env": allowed}})).server.headers[0].env == allowed
+        body = http({"X-Key": {"env": name}})
+        field = "mcp_servers.docs.csk.headers.X-Key.env"
+    refused(body, "mcp_env_name_reserved", field)
 
 
 @pytest.mark.parametrize("name", ["PATHS", "HOMEDIR", "MY_PATH", "LDX", "NODE", "GITHUB_TOKEN", "UVX", "PIPX_HOME",
