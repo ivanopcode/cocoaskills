@@ -109,6 +109,9 @@ def _snapshot(*roots: Path) -> dict[tuple[int, str], tuple[object, ...]]:
     state: dict[tuple[int, str], tuple[object, ...]] = {}
     for index, root in enumerate(roots):
         for path in [root, *sorted(root.rglob("*"))]:
+            relative = path.relative_to(root)
+            if index == 1 and (relative.as_posix() == ".lock" or relative.parts[:1] == ("locks",)):
+                continue
             info = path.lstat()
             if stat.S_ISREG(info.st_mode):
                 content: object = path.read_bytes()
@@ -117,14 +120,18 @@ def _snapshot(*roots: Path) -> dict[tuple[int, str], tuple[object, ...]]:
             else:
                 content = None
             state[index, path.relative_to(root).as_posix()] = (
-                info.st_mode, info.st_mtime_ns, content,
+                info.st_mode, None if stat.S_ISDIR(info.st_mode) else info.st_mtime_ns, content,
             )
     return state
 
 
 def _rows(result: subprocess.CompletedProcess[str], *, dry_run: bool = False) -> list[str]:
     prefix = "would:" if dry_run else "mcp "
-    return [line for line in result.stdout.splitlines() if line.startswith(prefix) and "mcp " in line]
+    return [
+        line for line in result.stdout.splitlines()
+        if line.startswith(prefix)
+        and re.match(r"^(would: )?mcp [A-Za-z0-9][A-Za-z0-9_-]{0,127} -> ", line)
+    ]
 
 
 def _expected_rows(action: str, *, dry_run: bool = False) -> list[str]:
@@ -167,7 +174,6 @@ def _assert_seed_installed(case: InstallCase) -> None:
     ).read_bytes()
 
 
-@pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
 def test_url_shorthand_installs_three_native_configs_headless(tmp_path: Path) -> None:
     # A headless URL-only install publishes all native entries, exact ignore paths and the skill.
     case = _case(tmp_path / "url")
@@ -188,7 +194,6 @@ def test_url_shorthand_installs_three_native_configs_headless(tmp_path: Path) ->
     _assert_seed_installed(case)
 
 
-@pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
 def test_shorthand_and_authless_http_object_have_identical_publication(tmp_path: Path) -> None:
     # Expanding a URL into a header-free HTTP object preserves native bytes and report rows.
     shorthand = _case(tmp_path / "shorthand")
@@ -202,7 +207,6 @@ def test_shorthand_and_authless_http_object_have_identical_publication(tmp_path:
     assert _native_bytes(shorthand) == _native_bytes(expanded)
 
 
-@pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
 def test_server_environments_limits_native_publication(tmp_path: Path) -> None:
     # server.environments narrows MCP publication to Claude while skill publication remains enabled.
     case = _case(tmp_path / "environments")
@@ -224,7 +228,6 @@ def test_server_environments_limits_native_publication(tmp_path: Path) -> None:
     _assert_seed_installed(case)
 
 
-@pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
 def test_repeat_reports_unchanged_and_preserves_native_bytes(tmp_path: Path) -> None:
     # Reinstalling the same declaration leaves all native and ignore bytes unchanged.
     case = _case(tmp_path / "repeat")
@@ -239,7 +242,6 @@ def test_repeat_reports_unchanged_and_preserves_native_bytes(tmp_path: Path) -> 
     assert (case.project / ".gitignore").read_bytes() == ignore_before
 
 
-@pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
 def test_removal_deletes_only_created_empty_native_files(tmp_path: Path) -> None:
     # Removing the last declaration reports removal and deletes all three csk-created files.
     case = _case(tmp_path / "remove-created")
@@ -255,7 +257,6 @@ def test_removal_deletes_only_created_empty_native_files(tmp_path: Path) -> None
     _assert_seed_installed(case)
 
 
-@pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
 def test_removal_preserves_foreign_server_bytes_in_preexisting_file(tmp_path: Path) -> None:
     # Removing docs preserves the raw foreign entry and never deletes a pre-existing native file.
     case = _case(tmp_path / "remove-shared")
@@ -278,7 +279,6 @@ def test_removal_preserves_foreign_server_bytes_in_preexisting_file(tmp_path: Pa
         assert not (case.project / path).exists()
 
 
-@pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
 @pytest.mark.parametrize(
     ("declaration", "code"),
     [
@@ -312,7 +312,6 @@ def test_invalid_declaration_refuses_before_any_project_or_home_write(
     _assert_refusal_without_writes(case, code)
 
 
-@pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
 def test_foreign_same_name_conflict_refuses_before_any_write(tmp_path: Path) -> None:
     # A foreign docs entry reports two blocked pairs and its conflict before the summary, with no writes.
     case = _case(tmp_path / "conflict")
@@ -323,7 +322,6 @@ def test_foreign_same_name_conflict_refuses_before_any_write(tmp_path: Path) -> 
     _assert_refusal_without_writes(case, "mcp_entry_conflict", expected_rows=expected)
 
 
-@pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
 def test_drift_reports_skipped_and_preserves_user_edit(tmp_path: Path) -> None:
     # A user-edited owned entry stays untouched and reports skipped: drift while install succeeds.
     case = _case(tmp_path / "drift")
@@ -343,7 +341,6 @@ def test_drift_reports_skipped_and_preserves_user_edit(tmp_path: Path) -> None:
     assert _native_bytes(case) == before
 
 
-@pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
 def test_trailing_comma_native_json_refuses_before_any_write(tmp_path: Path) -> None:
     # Unsupported native JSON reports three exact refusals before its summary and preserves project/home state.
     case = _case(tmp_path / "syntax")
@@ -352,7 +349,6 @@ def test_trailing_comma_native_json_refuses_before_any_write(tmp_path: Path) -> 
     _assert_refusal_without_writes(case, "mcp_native_config_unsupported_syntax")
 
 
-@pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
 @pytest.mark.parametrize("declaration", [STDIO, ENV_HEADER], ids=["stdio", "env-header"])
 @pytest.mark.parametrize("forged_env", [False, True], ids=["no-approval", "env-is-not-approval"])
 def test_headless_authority_requires_real_consent(
@@ -367,7 +363,6 @@ def test_headless_authority_requires_real_consent(
     _assert_refusal_without_writes(case, "mcp_plan_unapproved")
 
 
-@pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
 @pytest.mark.parametrize("declaration", [URL, STDIO], ids=["url-install", "unapproved-stdio"])
 def test_install_never_starts_server_or_package_runner(
     tmp_path: Path, declaration: Any,
@@ -408,7 +403,6 @@ def test_install_never_starts_server_or_package_runner(
     assert not marker.exists()
 
 
-@pytest.mark.xfail(strict=True, reason="W1: MCP install not wired yet")
 @pytest.mark.parametrize(
     ("declaration", "approval"),
     [(URL, "not-required"), (STDIO, "required")],
@@ -468,3 +462,24 @@ def test_global_install_refuses_schema_three(tmp_path: Path) -> None:
     assert "Unsupported Skillfile schema_version 3; this Skillfile requires a newer csk" in result.stdout + result.stderr
     assert _snapshot(case.project, Path(case.env["HOME"])) == before
     assert not (case.home / "state/mcp").exists()
+
+
+@pytest.mark.parametrize("root_index", [0, 1], ids=["project", "home"])
+@pytest.mark.parametrize("mutation", ["extra", "bytes"])
+def test_snapshot_detects_noncoordination_changes(tmp_path: Path, root_index: int, mutation: str) -> None:
+    # Coordination changes are allowed; an extra file or changed bytes in either root still fails the snapshot.
+    project, home = tmp_path / "project", tmp_path / "home"
+    for root in (project, home):
+        root.mkdir()
+        (root / "record.txt").write_bytes(b"original")
+    before = _snapshot(project, home)
+    (home / ".lock").write_text("coordination")
+    (home / "locks/projects").mkdir(parents=True)
+    (home / "locks/projects/probe.lock").write_text("coordination")
+    assert _snapshot(project, home) == before
+    changed_root = (project, home)[root_index]
+    if mutation == "extra":
+        (changed_root / "unexpected.json").write_bytes(b"unexpected")
+    else:
+        (changed_root / "record.txt").write_bytes(b"changed")
+    assert _snapshot(project, home) != before
