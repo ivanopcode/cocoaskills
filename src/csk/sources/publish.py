@@ -44,7 +44,16 @@ from .. import (
     git_ops,
     hashing,
 )
-from .. import identifiers, install_marker, locale, locking, manifest, shims
+from .. import (
+    identifiers,
+    install_marker,
+    locale,
+    locking,
+    manifest,
+    shims,
+    mcp_project,
+    gitignore_gate,
+)
 from ..command_names import require_unreserved_command_name
 from ..tool_paths import resolve_tool
 from ..source_identity import SourceIdentityError, canonical_source_identity
@@ -210,6 +219,7 @@ _STATUS_READ_ERRORS: Final[tuple[type[Exception], ...]] = (
 _RECHECK_MANAGED: Final = "managed-output"
 _RECHECK_ROOT_FILE: Final = "project-root-file"
 _RECHECK_HOME_ENTRY: Final = "home-store-entry"
+_RECHECK_MCP_NATIVE: Final = "mcp-project-file"
 
 
 @dataclass(frozen=True)
@@ -2312,6 +2322,24 @@ def build_recheck_payloads(
             relative = spec.live_path.relative_to(project_path)
         except ValueError:
             relative = None
+        if relative is not None and spec.target_class in {
+            "mcp-native",
+            "mcp-gitignore",
+        }:
+            parents = list(relative.parts[:-1])
+            native_ancestors = _freeze_home_ancestors(
+                root_spelling, parents, subject=subject
+            )
+            payloads[key] = {
+                "kind": _RECHECK_MCP_NATIVE,
+                "record": record_json,
+                "root": root_spelling,
+                "leaf": relative.as_posix(),
+                "components": parents,
+                "ancestors": _identity_pairs_to_json(native_ancestors),
+                "expected_live": expected_live,
+            }
+            continue
         if spec.target_class == CLASS_LOCK:
             payloads[key] = {
                 "kind": _RECHECK_ROOT_FILE,
@@ -2437,7 +2465,12 @@ def _hook_live_digest(target: JournalTarget, *, subject: str) -> str:
 
 
 def _hook_require_recognized_state(
-    target: JournalTarget, live_digest: str, expected_live: str, *, subject: str
+    target: JournalTarget,
+    live_digest: str,
+    expected_live: str,
+    *,
+    subject: str,
+    allow_pending_backup: bool = False,
 ) -> None:
     """Require the live destination in a state this transaction explains.
 
@@ -2454,6 +2487,19 @@ def _hook_require_recognized_state(
 
     if target.state in {"pending", "rolled_back"}:
         recognized = live_digest == expected_live
+        if (
+            not recognized
+            and allow_pending_backup
+            and target.state == "pending"
+            and live_digest in {ABSENT_DIGEST, target.desired_digest}
+            and expected_live != ABSENT_DIGEST
+        ):
+            # The rename can survive before the journal state save. Require
+            # the complete preimage in the backup, never merely its existence.
+            recognized = (
+                digest_target(Path(target.backup_path), kind=target.kind)
+                == expected_live
+            )
     else:
         recognized = live_digest in {ABSENT_DIGEST, target.desired_digest}
         if not recognized and live_digest == expected_live:
@@ -2571,7 +2617,11 @@ def _hook_root_file(target: JournalTarget, payload: dict[str, Any], *, subject: 
         )
     live_digest = _hook_live_digest(target, subject=subject)
     _hook_require_recognized_state(
-        target, live_digest, expected_live, subject=subject
+        target,
+        live_digest,
+        expected_live,
+        subject=subject,
+        allow_pending_backup=payload.get("kind") == _RECHECK_MCP_NATIVE,
     )
 
 
@@ -2640,6 +2690,20 @@ def make_publication_hook() -> PreWriteHook:
         try:
             if kind == _RECHECK_MANAGED:
                 _hook_managed(target, payload, subject=subject)
+            elif kind == _RECHECK_MCP_NATIVE:
+                root = _payload_str(payload, "root", subject=subject)
+                components = payload["components"]
+                if not isinstance(components, list) or not all(
+                    type(p) is str for p in components
+                ):
+                    raise TransactionError("invalid native parent components")
+                _hook_verify_ancestors(
+                    root,
+                    components,
+                    _payload_identities(payload, "ancestors", subject=subject),
+                    subject=subject,
+                )
+                _hook_root_file(target, payload, subject=subject)
             elif kind == _RECHECK_ROOT_FILE:
                 _hook_root_file(target, payload, subject=subject)
             elif kind == _RECHECK_HOME_ENTRY:
@@ -3422,6 +3486,7 @@ def _commit_schema2(
     expected: dict[tuple[str, str], str],
     payloads: dict[tuple[str, str], dict[str, Any]],
     created_parents: list[Path],
+    extra_targets: tuple[MutableTarget, ...] = (),
 ) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
     """Commit one schema-2 publication transaction, skipping identical targets.
 
@@ -3431,7 +3496,7 @@ def _commit_schema2(
     removed again when publication fails.
     """
 
-    targets: list[MutableTarget] = []
+    targets: list[MutableTarget] = list(extra_targets)
     skipped: list[tuple[str, str]] = []
     for spec in specs:
         key = (spec.target_class, spec.identifier)
@@ -3754,7 +3819,7 @@ def _read_planning_inputs(
     """Read the manifest once for planning: manifest, digest, selectors, Git aliases."""
 
     _manifest_data, fresh = _read_fresh_manifest(project_path)
-    if fresh.schema_version != 2 or fresh.manifest_sha256 is None:
+    if fresh.schema_version not in (2, 3) or fresh.manifest_sha256 is None:
         raise _concurrent_state_change("Skillfile changed during install planning")
     manifest_sha = fresh.manifest_sha256
     selectors = list(fresh.selectors)
@@ -3915,6 +3980,8 @@ def install_schema2(
     ssh_credentials: OperatorSSHCredentials | None = None,
     https_token: OperatorHTTPSToken | None = None,
     interactive: bool = False,
+    mcp_plan: mcp_project.ProjectPlan | None = None,
+    fix_gitignore: bool = False,
 ) -> Schema2InstallResult:
     """Install one schema-2 project: resolve, freeze, publish atomically.
 
@@ -3954,6 +4021,8 @@ def install_schema2(
             ssh_credentials=ssh_credentials,
             https_token=https_token,
             interactive=interactive,
+            mcp_plan=mcp_plan,
+            fix_gitignore=fix_gitignore,
         )
     return _install_schema2_resolving(
         mode=mode,
@@ -3970,6 +4039,8 @@ def install_schema2(
         ssh_credentials=ssh_credentials,
         https_token=https_token,
         interactive=interactive,
+        mcp_plan=mcp_plan,
+        fix_gitignore=fix_gitignore,
     )
 
 
@@ -3989,6 +4060,8 @@ def _install_schema2_frozen(
     ssh_credentials: OperatorSSHCredentials | None = None,
     https_token: OperatorHTTPSToken | None = None,
     interactive: bool = False,
+    mcp_plan: mcp_project.ProjectPlan | None = None,
+    fix_gitignore: bool = False,
 ) -> Schema2InstallResult:
     """Run one locked install: frozen bytes in, published outputs out.
 
@@ -4074,6 +4147,8 @@ def _install_schema2_frozen(
         https_token=https_token,
         interactive=interactive,
         capture=capture,
+        mcp_plan=mcp_plan,
+        fix_gitignore=fix_gitignore,
     )
 
 
@@ -4093,6 +4168,8 @@ def _install_schema2_resolving(
     ssh_credentials: OperatorSSHCredentials | None = None,
     https_token: OperatorHTTPSToken | None = None,
     interactive: bool = False,
+    mcp_plan: mcp_project.ProjectPlan | None = None,
+    fix_gitignore: bool = False,
 ) -> Schema2InstallResult:
     """Run one initial resolve or explicit refresh, then publish.
 
@@ -4228,6 +4305,8 @@ def _install_schema2_resolving(
         https_token=https_token,
         interactive=interactive,
         capture=capture,
+        mcp_plan=mcp_plan,
+        fix_gitignore=fix_gitignore,
     )
 
 
@@ -4248,6 +4327,8 @@ def _plan_and_publish_schema2(
     https_token: OperatorHTTPSToken | None,
     interactive: bool,
     capture: _Schema2Capture,
+    mcp_plan: mcp_project.ProjectPlan | None = None,
+    fix_gitignore: bool = False,
 ) -> Schema2InstallResult:
     """Run the shared gates, builds, planning and atomic publication.
 
@@ -4297,6 +4378,28 @@ def _plan_and_publish_schema2(
                 spec = load_member_spec(frozen_dir, name=name)
             require_installable_member(spec, name=name, satisfied_by=satisfied_by)
             specs_map[name] = spec
+        mcp_warnings: list[str] = []
+        ignore_bytes: bytes | None = None
+        ignore_preimage: str | None = None
+        if mcp_plan is not None:
+            report = mcp_project.check_requirements(
+                mcp_plan,
+                {name: spec.mcp_servers for name, spec in specs_map.items()},
+                agents,
+            )
+            if report.errors:
+                raise mcp_project.McpProjectError("; ".join(report.errors))
+            mcp_warnings.extend(report.warnings)
+            ignores = adapters.required_gitignore_entries(agents)
+            ignores.extend(
+                "/" + mcp_plan.surfaces[agent].surface.relpath
+                for agent, _path in sorted(mcp_plan.created_files)
+                if not gitignore_gate.is_tracked(project_path, _path)
+            )
+            ignore_preimage = digest_target(project_path / ".gitignore")
+            ignore_bytes = gitignore_gate.plan_ignored(
+                project_path, ignores, fix=fix_gitignore
+            )
         check_schema2_requirement_commands(specs_map)
         if isinstance(mode, modes.FrozenSources):
             # The frozen lane has no resolution step: the lock membership is
@@ -4436,6 +4539,9 @@ def _plan_and_publish_schema2(
 
         if dry_run:
             messages = list(plan_messages)
+            if mcp_plan is not None:
+                messages.extend(mcp_plan.report(dry_run=True))
+                messages.extend(mcp_warnings)
             messages.extend(gate.warnings)
             messages.extend(external_messages)
             for member in members:
@@ -4487,7 +4593,10 @@ def _plan_and_publish_schema2(
             # and source roots below are the planning-read values, valid
             # because the hashes are equal.
             manifest_data, reread = _read_fresh_manifest(project_path)
-            if reread.schema_version != 2 or reread.manifest_sha256 != manifest_sha:
+            if (
+                reread.schema_version not in (2, 3)
+                or reread.manifest_sha256 != manifest_sha
+            ):
                 raise _concurrent_state_change("Skillfile changed during install")
             # Locked installs consume the frozen lock membership without
             # expanding selectors, so only fresh resolves re-enumerate.
@@ -4565,7 +4674,46 @@ def _plan_and_publish_schema2(
                     home=home,
                     home_lock=home_lock,
                 )
+            transaction_id = f"{TRANSACTION_PREFIX}-{slug}-{uuid.uuid4().hex}"
+            extra_targets: tuple[MutableTarget, ...] = ()
+            if mcp_plan is not None:
+                extra_targets = mcp_project.stage_targets(
+                    mcp_plan, staging_root, transaction_id
+                )
+                if ignore_bytes is not None:
+                    ignore_staged = staging_root / "mcp-gitignore"
+                    ignore_staged.write_bytes(ignore_bytes)
+                    extra_targets += (
+                        MutableTarget(
+                            "mcp-gitignore",
+                            ".gitignore",
+                            project_path / ".gitignore",
+                            ignore_staged,
+                            expected_preimage_digest=ignore_preimage,
+                        ),
+                    )
+                extra_specs = tuple(
+                    TargetSpec(
+                        t.target_class,
+                        t.identifier,
+                        t.live_path,
+                        t.kind,
+                        t.desired_path,
+                    )
+                    for t in extra_targets
+                )
+
             created_parents = ensure_live_parents(planned, staged=staged.desired)
+            if extra_targets:
+                created_parents.extend(
+                    ensure_live_parents(
+                        extra_specs,
+                        staged={
+                            (t.target_class, t.identifier): t.desired_path
+                            for t in extra_targets
+                        },
+                    )
+                )
             # The record freezes after our own parents exist, so the
             # frozen managed bindings already include them; anything
             # that changes afterwards refuses at write time.
@@ -4595,7 +4743,28 @@ def _plan_and_publish_schema2(
                 live_digests=live_digests,
                 admitted=admitted,
             )
-            transaction_id = f"{TRANSACTION_PREFIX}-{slug}-{uuid.uuid4().hex}"
+            if extra_targets:
+                extra_payloads = build_recheck_payloads(
+                    record=record,
+                    project_path=project_path,
+                    home=home,
+                    staged_specs=extra_specs,
+                    live_digests={
+                        (t.target_class, t.identifier): t.expected_preimage_digest
+                        or ABSENT_DIGEST
+                        for t in extra_targets
+                    },
+                    admitted=admitted,
+                )
+                extra_targets = tuple(
+                    dataclasses.replace(
+                        t,
+                        publication_recheck=extra_payloads[
+                            (t.target_class, t.identifier)
+                        ],
+                    )
+                    for t in extra_targets
+                )
             try:
                 committed, _skipped = _commit_schema2(
                     engine,
@@ -4607,6 +4776,7 @@ def _plan_and_publish_schema2(
                     expected=live_digests,
                     payloads=payloads,
                     created_parents=created_parents,
+                    extra_targets=extra_targets,
                 )
             except BaseException:
                 # _commit_schema2 already removed created parents on failure;
@@ -4624,6 +4794,9 @@ def _plan_and_publish_schema2(
     )
     lock_replaced = (CLASS_LOCK, "Skillfile.lock.json") in committed
     messages = list(plan_messages)
+    if mcp_plan is not None:
+        messages.extend(mcp_plan.report())
+        messages.extend(mcp_warnings)
     messages.extend(gate.warnings)
     messages.extend(external_messages)
     for name in sorted(installed):

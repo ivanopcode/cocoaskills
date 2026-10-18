@@ -140,7 +140,15 @@ def check_scope(scope: str) -> SkillfileScope:
 
 
 def manifest_sha256(data: dict[str, Any]) -> str:
-    """Return the CCJ-1 ``sha256:`` digest of the entire parsed Skillfile."""
+    """Return the CCJ-1 source-lock digest; schemas 1/2 cover the entire input."""
+    if data.get("schema_version") == 3:
+        # MCP declarations and selected adapters do not change source membership.
+        # Keep locked skill snapshots while install reconciles these project inputs.
+        data = {
+            key: value
+            for key, value in data.items()
+            if key not in {"mcp_servers", "agents"}
+        }
     digest = hashlib.sha256(protocol_json.canonical_bytes(data)).hexdigest()
     return f"sha256:{digest}"
 

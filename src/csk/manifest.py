@@ -18,6 +18,7 @@ from .sources.errors import (
 
 SCHEMA_VERSION = 1
 SCHEMA_VERSION_2 = 2
+SCHEMA_VERSION_3 = 3
 MANIFEST_NAME = "Skillfile.json"
 
 class ManifestError(Exception):
@@ -51,6 +52,7 @@ class ProjectManifest:
     sources: dict[str, skillfile_v2.SourceAcquisition] = field(default_factory=dict)
     selectors: list[skillfile_v2.SkillSelector] = field(default_factory=list)
     manifest_sha256: str | None = None
+    mcp_servers: object = field(default_factory=dict)
 
 
 def manifest_path(project_root: Path) -> Path:
@@ -236,11 +238,23 @@ def parse_manifest(
     if not isinstance(data, dict):
         raise ManifestError(f"{path} must contain a JSON object")
     schema = data.get("schema_version")
-    if isinstance(schema, int) and not isinstance(schema, bool) and schema == SCHEMA_VERSION_2:
+    if (
+        isinstance(schema, int)
+        and not isinstance(schema, bool)
+        and schema in (SCHEMA_VERSION_2, SCHEMA_VERSION_3)
+    ):
+        if schema == SCHEMA_VERSION_3 and resolved_scope != "project":
+            raise ManifestError(
+                "Unsupported Skillfile schema_version 3; this Skillfile requires a newer csk"
+            )
         # ``allow_schema_2`` remains in the signature for source compatibility.
         # Schema 2 is now supported independently of legacy opt-in settings.
         return _parse_v2(
-            data, path, skill_extension_fields=skill_extension_fields, scope=resolved_scope
+            data,
+            path,
+            skill_extension_fields=skill_extension_fields,
+            scope=resolved_scope,
+            schema_version=schema,
         )
     unknown_top = sorted(set(data) - {"schema_version", "project", "agents", "locale", "skills"})
     if unknown_top:
@@ -292,10 +306,12 @@ def _parse_v2(
     *,
     skill_extension_fields: set[str] | None,
     scope: skillfile_v2.SkillfileScope,
+    schema_version: int = SCHEMA_VERSION_2,
 ) -> ProjectManifest:
-    unknown_top = sorted(
-        set(data) - {"schema_version", "project", "agents", "locale", "skills", "sources"}
-    )
+    allowed = {"schema_version", "project", "agents", "locale", "skills", "sources"}
+    if schema_version == SCHEMA_VERSION_3:
+        allowed.add("mcp_servers")
+    unknown_top = sorted(set(data) - allowed)
     if unknown_top:
         raise ManifestError(f"Skillfile has unsupported field(s): {', '.join(unknown_top)}")
 
@@ -345,10 +361,11 @@ def _parse_v2(
         agents=list(agents),
         locale=locale,
         skills=skills,
-        schema_version=SCHEMA_VERSION_2,
+        schema_version=schema_version,
         sources=sources,
         selectors=selectors,
         manifest_sha256=skillfile_v2.manifest_sha256(data),
+        mcp_servers=data.get("mcp_servers", {}),
     )
 
 

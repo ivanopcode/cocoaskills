@@ -1778,6 +1778,9 @@ def _cmd_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
     for result in results:
         for message in result.messages:
             print(message)
+        for row in result.mcp_refusal_rows:
+            failed = True
+            print(row, file=sys.stderr)
         for error in result.errors:
             failed = True
             print(f"{result.alias}: {error}", file=sys.stderr)

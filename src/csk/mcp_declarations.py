@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from csk import protocol_json
+from csk.audit import redaction
 from csk.mcp_configs import known_agents
 from csk.skillspec import McpServerRequirement
 
@@ -16,8 +17,8 @@ from csk.skillspec import McpServerRequirement
 # Skillfile `mcp_servers` declarations (schema 3, slice 1): a closed grammar
 # for inline stdio/http servers, per-agent native entry rendering, digests and
 # a pure requirement check. Everything here is pure: no filesystem, network,
-# environment, subprocess or clock access. Nothing in the install path calls
-# this module yet; the Skillfile loader keeps refusing schema 3.
+# environment, subprocess or clock access. Project installs compose these
+# declarations with the native codecs and protected ownership planner.
 
 SLICE1_AGENTS: tuple[str, ...] = ("claude_code", "codex_cli", "cursor")
 
@@ -42,7 +43,7 @@ _PORT_RE = re.compile(r"[0-9]{1,5}")
 
 _DECLARATION_FIELDS = frozenset({"server", "reference", "agents", "scope", "auth", "git_policy"})
 _STDIO_FIELDS = frozenset({"transport", "command", "args", "env_names"})
-_HTTP_FIELDS = frozenset({"transport", "url", "headers"})
+_HTTP_FIELDS = frozenset({"transport", "url", "headers", "env_names"})
 _AUTH_FIELDS = frozenset({"kind", "help_url"})
 _HEADER_REF_FIELDS = frozenset({"env", "prefix"})
 
@@ -127,6 +128,7 @@ class McpDeclarationError(ValueError):
         super().__init__(f"{code}: {message} ({field})")
         self.code = code
         self.field = field
+        self.public_field = False
 
 
 @dataclass(frozen=True)
@@ -210,6 +212,36 @@ class _Draft:
 def parse_mcp_servers(
     raw: object, *, invocation_scope: str, target_agents: Sequence[str]
 ) -> dict[str, McpDeclaration]:
+    """Parse the closed server/csk grammar and normalize URL shorthand."""
+    try:
+        return _parse_mcp_servers(
+            raw, invocation_scope=invocation_scope, target_agents=target_agents
+        )
+    except McpDeclarationError as exc:
+        if exc.public_field:
+            raise
+        field = exc.field
+        parts = field.split(".", 2)
+        if len(parts) == 3:
+            suffix = "." + parts[2]
+            for old, new in (
+                (".server.headers", ".csk.headers"),
+                (".agents", ".server.environments"),
+                (".auth", ".csk.auth"),
+                (".scope", ".csk.scope"),
+                (".git_policy", ".csk.git_policy"),
+            ):
+                if suffix == old or suffix.startswith(old + "."):
+                    suffix = new + suffix[len(old) :]
+                    break
+            field = ".".join(parts[:2]) + suffix
+        message = str(exc).split(": ", 1)[1].rsplit(" (", 1)[0]
+        raise McpDeclarationError(exc.code, field, message) from None
+
+
+def _parse_mcp_servers(
+    raw: object, *, invocation_scope: str, target_agents: Sequence[str]
+) -> dict[str, McpDeclaration]:
     """Parse and classify a Skillfile `mcp_servers` object.
 
     Validation follows the decided order across the whole map: (1) syntax,
@@ -222,6 +254,13 @@ def parse_mcp_servers(
             "mcp_declaration_invalid", "invocation_scope", "invocation scope must be project or user"
         )
     drafts = _step1_shape(raw)
+    for draft in drafts:
+        if draft.scope == "user":
+            raise _fail(
+                "mcp_capability_unsupported",
+                f"{draft.path}.scope",
+                "only project scope is supported",
+            )
     _step2_rules(drafts, invocation_scope)
     selected = {draft.name: _step3_agents(draft, target_agents) for draft in drafts}
     for draft in drafts:
@@ -292,10 +331,74 @@ def _step1_shape(raw: object) -> list[_Draft]:
     return drafts
 
 
+def _public_invalid(path: str, message: str) -> McpDeclarationError:
+    error = _invalid(path, message)
+    error.public_field = True
+    return error
+
+
 def _shape_declaration(name: str, body: object, index: int) -> _Draft:
     path = f"mcp_servers.{name}"
+    if isinstance(body, str):
+        body = {"server": {"transport": "http", "url": body}}
     if not isinstance(body, dict):
-        raise _invalid(path, "declaration must be an object")
+        raise _public_invalid(path, "declaration must be an object or HTTPS URL")
+    for key in body:
+        if key not in {"server", "csk"}:
+            raise _public_invalid(
+                f"{path}.{_path_name(key, index)}", "unknown declaration field"
+            )
+    if "server" not in body:
+        raise _public_invalid(path, "server is required")
+    server = body["server"]
+    if not isinstance(server, dict):
+        raise _public_invalid(f"{path}.server", "server must be an object")
+    for key in server:
+        if key not in {
+            "transport",
+            "url",
+            "command",
+            "args",
+            "env_names",
+            "environments",
+        }:
+            raise _public_invalid(
+                f"{path}.server.{_path_name(key, index)}", "unknown server field"
+            )
+    extensions = body.get("csk", {})
+    if not isinstance(extensions, dict):
+        raise _public_invalid(f"{path}.csk", "csk must be an object")
+    for key in extensions:
+        if key not in {"headers", "auth", "scope", "git_policy"}:
+            raise _public_invalid(
+                f"{path}.csk.{_path_name(key, index)}", "unknown csk field"
+            )
+    normalized_server = {
+        key: value for key, value in server.items() if key != "environments"
+    }
+    if "headers" in extensions:
+        normalized_server["headers"] = extensions["headers"]
+    normalized: dict[str, object] = {"server": normalized_server}
+    normalized.update(
+        {key: value for key, value in extensions.items() if key != "headers"}
+    )
+    if "environments" in server:
+        normalized["agents"] = server["environments"]
+    if "auth" not in normalized:
+        normalized["auth"] = {
+            "kind": "env"
+            if server.get("env_names") or extensions.get("headers")
+            else "none"
+        }
+    return _shape_normalized(name, normalized, index)
+
+
+def _shape_normalized(name: str, body: object, index: int) -> _Draft:
+    path = f"mcp_servers.{name}"
+    if isinstance(body, str):
+        body = {"server": {"transport": "http", "url": body}, "auth": {"kind": "none"}}
+    if not isinstance(body, dict):
+        raise _invalid(path, "declaration must be an object or HTTPS URL")
     for key in body:
         if key not in _DECLARATION_FIELDS:
             raise _invalid(f"{path}.{_path_name(key, index)}", "unknown field")
@@ -304,8 +407,14 @@ def _shape_declaration(name: str, body: object, index: int) -> _Draft:
     if has_server == has_reference:
         raise _invalid(path, "exactly one of server and reference is required")
     if "auth" not in body:
-        raise _invalid(f"{path}.auth", "auth is required")
-    auth = _shape_auth(body["auth"], f"{path}.auth", index)
+        server_raw = body.get("server")
+        if not (
+            isinstance(server_raw, dict)
+            and server_raw.get("transport") == "http"
+            and "headers" not in server_raw
+        ):
+            raise _invalid(f"{path}.auth", "auth is required")
+    auth = _shape_auth(body.get("auth", {"kind": "none"}), f"{path}.auth", index)
 
     agents: tuple[str, ...] | None = None
     if "agents" in body:
@@ -395,7 +504,10 @@ def _shape_server(body: object, path: str, index: int) -> tuple[str, ServerSpec]
         if prefix not in ("none", "bearer") or not isinstance(prefix, str):
             raise _invalid(f"{header_path}.prefix", "must be none or bearer")
         headers.append(HeaderRef(name=header_name, env=env, prefix=prefix))  # type: ignore[arg-type]
-    return transport, ServerSpec(transport="http", url=url, headers=tuple(headers))
+    env_names = _string_list(body.get("env_names", []), f"{path}.env_names")
+    return transport, ServerSpec(
+        transport="http", url=url, headers=tuple(headers), env_names=tuple(env_names)
+    )
 
 
 def _string_list(value: object, path: str) -> list[str]:
@@ -455,6 +567,8 @@ def _check_stdio(server: ServerSpec, path: str) -> None:
         for index, arg in enumerate(args):
             if arg == "eval" or arg.startswith(_EVALUATOR_FLAG_PREFIXES):
                 raise _fail("mcp_command_invalid", f"{path}.args.{index}", "inline evaluation arguments are refused")
+    for index, arg in enumerate(args):
+        _check_secret_material(arg, f"{path}.args.{index}")
     _check_runtime_pin(base, args, path)
     _check_env_names(server.env_names, f"{path}.env_names")
 
@@ -583,11 +697,33 @@ def _valid_port(port: str) -> bool:
     return bool(_PORT_RE.fullmatch(port)) and 1 <= int(port) <= 65535
 
 
+def _check_secret_material(value: str, path: str) -> None:
+    # Reuse the audit signatures without treating a long repeated padding
+    # string as high entropy. This is static detection, not secret resolution.
+    signatures = (
+        redaction.ENV_ASSIGNMENT_RE,
+        redaction.AUTH_HEADER_RE,
+        redaction.PEM_RE,
+    )
+    opaque = any(
+        len(set(match.group())) >= 10
+        for match in redaction.HIGH_ENTROPY_RE.finditer(value)
+    )
+    token = re.search(
+        r"(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|sk-[A-Za-z0-9_-]{16,})",
+        value,
+    )
+    if opaque or token or any(pattern.search(value) for pattern in signatures):
+        raise _invalid(path, "secret material is refused; use an environment reference")
+
+
 def _check_http(server: ServerSpec, path: str, index: int) -> None:
     assert server.url is not None
     problem = _url_problem(server.url, allow_query_fragment=False)
     if problem is not None:
         raise _fail("mcp_url_invalid", f"{path}.url", problem)
+    _check_secret_material(server.url, f"{path}.url")
+    _check_env_names(server.env_names, f"{path}.env_names")
     headers = server.headers
     if len(headers) > _MAX_HEADERS:
         raise _invalid(f"{path}.headers", f"at most {_MAX_HEADERS} headers are allowed")
@@ -631,7 +767,7 @@ def _step3_agents(draft: _Draft, target_agents: Sequence[str]) -> tuple[str, ...
     targets = set(target_agents)
     if draft.agents is None:
         selected = tuple(sorted(targets & set(SLICE1_AGENTS)))
-        if not selected:
+        if not selected and not targets:
             raise _fail("mcp_agent_selection_invalid", path, "no target agent is supported by this slice")
         return selected
     if not draft.agents:

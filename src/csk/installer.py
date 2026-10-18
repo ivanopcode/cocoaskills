@@ -34,6 +34,7 @@ from . import (
     git_admission,
     git_ops,
     gitignore_gate,
+    mcp_project,
     hashing,
     hybrid,
     install_marker,
@@ -110,10 +111,21 @@ class ProjectResult:
     messages: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     builds: list[build_planner.BuildPlan] = field(default_factory=list)
+    mcp_refusal_rows: list[str] = field(default_factory=list)
 
     @property
     def failed(self) -> bool:
-        return bool(self.errors)
+        return bool(self.errors or self.mcp_refusal_rows)
+
+
+class _McpPlanningRetry(build_planner.BuildPlanningError):
+    """Retain the last known MCP rows across the shared planning retry loop."""
+
+    def __init__(
+        self, cause: build_planner.BuildPlanningError, plan: mcp_project.ProjectPlan
+    ):
+        super().__init__(cause.code, cause.detail)
+        self.plan = plan
 
 
 def failure_text(exc: BaseException, *, verbose: bool = False) -> str:
@@ -458,7 +470,13 @@ def _install_project(
                     path=project.path,
                     status="failed",
                 )
-                result.errors.append(failure_text(exc, verbose=options.verbose))
+                message = failure_text(exc, verbose=options.verbose)
+                if isinstance(exc, _McpPlanningRetry):
+                    _record_mcp_failure(
+                        result, exc.plan, exc, detail=message, dry_run=options.dry_run
+                    )
+                else:
+                    result.errors.append(message)
                 return result
     raise AssertionError("unreachable project planning retry state")
 
@@ -516,7 +534,24 @@ def _install_schema2_once(
     """
 
     result = ProjectResult(alias=project.alias, path=project.path, status="ok")
+    mcp_plan = None
     try:
+        if project_manifest.schema_version == 3:
+            if not options.dry_run:
+                with locking.ManagerHomeLock(config.path.parent) as recovery_lock:
+                    _transaction_engine(config.path.parent).recover(recovery_lock)
+            mcp_plan = mcp_project.plan_project(
+                project.path,
+                project_manifest.agents or project.agents or config.default_agents,
+                project_manifest.mcp_servers,
+                config.path.parent,
+            )
+            mcp_project.review_consent(
+                mcp_plan,
+                interactive=options.interactive,
+                dry_run=options.dry_run,
+                project=project.alias,
+            )
         dev_manifest = dev_substitutions.load_manifest(project.path)
         has_source_substitution = bool(dev_manifest.substitutions)
         has_external_substitution = bool(
@@ -652,7 +687,9 @@ def _install_schema2_once(
                 home=home,
                 project_path=project.path,
                 alias=project.alias,
-                agents=project_manifest.agents or project.agents or config.default_agents,
+                agents=project_manifest.agents
+                or project.agents
+                or config.default_agents,
                 locale_value=project_manifest.locale or config.preferred_locale,
                 adapter_mode=config.adapter_mode,
                 dry_run=options.dry_run,
@@ -662,21 +699,64 @@ def _install_schema2_once(
                 ssh_credentials=operator_ssh_credentials,
                 https_token=operator_https_token,
                 interactive=options.interactive and not options.dry_run,
+                mcp_plan=mcp_plan,
+                fix_gitignore=options.fix_gitignore,
             )
         result.messages.extend(outcome.messages)
         return result
     except build_planner.BuildPlanningError as exc:
         if exc.code == "concurrent_state_change":
+            if mcp_plan is not None:
+                raise _McpPlanningRetry(exc, mcp_plan) from exc
             raise
         result.status = "failed"
-        result.errors.append(_schema2_failure_text(exc, verbose=options.verbose))
+        message = _schema2_failure_text(exc, verbose=options.verbose)
+        if project_manifest.schema_version == 3:
+            _record_mcp_failure(
+                result,
+                mcp_plan,
+                exc,
+                dry_run=options.dry_run,
+                detail=message,
+            )
+        else:
+            result.errors.append(message)
         return result
     except locking.LockError:
         raise
     except Exception as exc:
         result.status = "failed"
-        result.errors.append(_schema2_failure_text(exc, verbose=options.verbose))
+        message = _schema2_failure_text(exc, verbose=options.verbose)
+        if project_manifest.schema_version == 3:
+            _record_mcp_failure(
+                result,
+                mcp_plan,
+                exc,
+                dry_run=options.dry_run,
+                detail=message,
+            )
+        else:
+            result.errors.append(message)
         return result
+
+
+def _record_mcp_failure(
+    result: ProjectResult,
+    plan: mcp_project.ProjectPlan | None,
+    error: BaseException,
+    *,
+    detail: str,
+    dry_run: bool,
+) -> None:
+    text = mcp_project.refused_report(plan, error, detail=detail, dry_run=dry_run)
+    summary = []
+    for line in text.splitlines():
+        if line.startswith(("mcp ", "would: mcp ")):
+            result.mcp_refusal_rows.append(line)
+        else:
+            summary.append(line)
+    if summary:
+        result.errors.append("\n".join(summary))
 
 
 def _schema2_failure_text(exc: BaseException, *, verbose: bool = False) -> str:
@@ -816,14 +896,19 @@ def _install_project_once(
         agents = project_manifest.agents or project.agents or config.default_agents
         expected_ignore = adapters.required_gitignore_entries(agents)
         try:
-            gitignore_gate.ensure_ignored(project.path, expected_ignore, fix=options.fix_gitignore and not options.dry_run)
+            if project_manifest.schema_version != 3:
+                gitignore_gate.ensure_ignored(
+                    project.path,
+                    expected_ignore,
+                    fix=options.fix_gitignore and not options.dry_run,
+                )
         except gitignore_gate.GitignoreError as exc:
             result.status = "skipped"
             result.messages.append(f"{project.alias}: {exc}; skipped")
             _publish_empty_dispatch_scope(config, project, options, result)
             return result
 
-        if project_manifest.schema_version == 2:
+        if project_manifest.schema_version in (2, 3):
             return _install_schema2_once(
                 config,
                 project,
