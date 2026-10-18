@@ -127,6 +127,10 @@ class ReportRow:
     path: str
     action: str
 
+    def render(self, *, dry_run: bool = False) -> str:
+        prefix = "would: " if dry_run else ""
+        return f"{prefix}mcp {self.server} -> {self.agent} {self.path} ({self.action})"
+
 
 @dataclass(frozen=True)
 class ProjectPlan:
@@ -149,10 +153,7 @@ class ProjectPlan:
 
     def report(self, *, dry_run: bool = False) -> list[str]:
         prefix = "would: " if dry_run else ""
-        lines = [
-            f"{prefix}mcp {r.server} -> {r.agent} {r.path} ({r.action})"
-            for r in self.rows
-        ]
+        lines = [row.render(dry_run=dry_run) for row in self.rows]
         if dry_run:
             pending = {s.name for s in self.pending}
             for name, decl in sorted(self.declarations.items()):
@@ -221,9 +222,19 @@ def plan_project(
         ) from exc
 
 
-def _plan_project(
+@dataclass(frozen=True)
+class _EntryRead:
+    consumer: str
+    ledger: ownership.Ledger | ownership.LedgerAbsent
+    desired: tuple[ownership.Desired, ...]
+    values: Mapping[ownership.EntryAddress, Mapping[str, object]]
+    surfaces: Mapping[str, SurfaceRead]
+    observed: Mapping[ownership.EntryAddress, ownership.Observed]
+
+
+def _read_declarations(
     root: Path, target_agents: Sequence[str], raw: object, home: Path
-) -> ProjectPlan:
+) -> tuple[Path, Path, str, dict[str, declarations.McpDeclaration]]:
     manifest_bytes = (root / "Skillfile.json").read_bytes()
     current = protocol_json.loads(manifest_bytes)
     if (
@@ -254,20 +265,15 @@ def _plan_project(
                 ]
             )
         ) from exc
-    if sys.platform == "win32":
-        for decl in parsed.values():
-            if decl.server.transport == "stdio":
-                command = decl.server.command or ""
-                resolved = shutil.which(command)
-                if (
-                    command.lower() in ("npx", "npm", "pnpm", "yarn")
-                    or command.lower().endswith((".cmd", ".bat"))
-                    or (resolved and resolved.lower().endswith((".cmd", ".bat")))
-                ):
-                    raise refusal(
-                        "mcp_windows_batch_unsupported",
-                        f"{decl.name} uses a batch launcher",
-                    )
+    return root, home, manifest_sha256, parsed
+
+
+def _read_entries(
+    root: Path,
+    target_agents: Sequence[str],
+    parsed: Mapping[str, declarations.McpDeclaration],
+    home: Path,
+) -> _EntryRead:
     consumer = ownership.consumer_id(
         locking.canonical_project_identity(root), "project"
     )
@@ -338,6 +344,34 @@ def _plan_project(
             except (ValueError, TypeError):
                 pass  # An unrepresentable foreign value is still present, never absent.
         observed[address] = ownership.Observed(address, state, digest)
+    return _EntryRead(consumer, ledger, tuple(desired), values, surfaces, observed)
+
+
+def _plan_project(
+    root: Path, target_agents: Sequence[str], raw: object, home: Path
+) -> ProjectPlan:
+    root, home, manifest_sha256, parsed = _read_declarations(
+        root, target_agents, raw, home
+    )
+    if sys.platform == "win32":
+        for decl in parsed.values():
+            if decl.server.transport == "stdio":
+                command = decl.server.command or ""
+                resolved = shutil.which(command)
+                if (
+                    command.lower() in ("npx", "npm", "pnpm", "yarn")
+                    or command.lower().endswith((".cmd", ".bat"))
+                    or (resolved and resolved.lower().endswith((".cmd", ".bat")))
+                ):
+                    raise refusal(
+                        "mcp_windows_batch_unsupported",
+                        f"{decl.name} uses a batch launcher",
+                    )
+    entry_read = _read_entries(root, target_agents, parsed, home)
+    consumer, ledger = entry_read.consumer, entry_read.ledger
+    desired, values = entry_read.desired, entry_read.values
+    surfaces, observed = entry_read.surfaces, entry_read.observed
+    addresses = set(observed)
     reconciliation = ownership.reconcile(desired, observed, ledger)
     errors = []
     if reconciliation.refusals:
@@ -415,13 +449,7 @@ def _plan_project(
             for a in reconciliation.actions
         ):
             subjects.append(
-                ownership.ConsentSubject(
-                    decl.name,
-                    decl.agents,
-                    "project",
-                    declarations.declaration_digest(decl),
-                    tuple(native.project_surface(a).capability for a in decl.agents),
-                )
+                _consent_subject(decl)
             )
     try:
         pending = (
@@ -471,6 +499,70 @@ def _plan_project(
         frozenset(created),
         tuple(warnings),
     )
+
+
+def _consent_subject(decl: declarations.McpDeclaration) -> ownership.ConsentSubject:
+    return ownership.ConsentSubject(
+        decl.name,
+        decl.agents,
+        "project",
+        declarations.declaration_digest(decl),
+        tuple(native.project_surface(agent).capability for agent in decl.agents),
+    )
+
+
+def status_project(
+    root: Path, target_agents: Sequence[str], raw: object, home: Path
+) -> tuple[ReportRow, ...]:
+    """Observe every desired/owned pair without planning edits or recording consent."""
+    root, home, _, parsed = _read_declarations(root, target_agents, raw, home)
+    read = _read_entries(root, target_agents, parsed, home)
+    reconciliation = ownership.reconcile(read.desired, read.observed, read.ledger)
+    wanted = {item.address for item in read.desired}
+    actions = {item.address: item.kind for item in reconciliation.actions}
+    conflicts = {
+        item.address for item in reconciliation.refusals
+        if item.code == "mcp_entry_conflict"
+    }
+    subjects = tuple(
+        _consent_subject(decl)
+        for decl in parsed.values()
+        if declarations.authority(decl).consent_required
+    )
+    try:
+        pending = {
+            subject.name
+            for subject in ownership.unapproved(
+                read.consumer, subjects, ownership.load_consent(home, read.consumer)
+            )
+        }
+    except ownership.McpOwnershipError as exc:
+        raise refusal(exc.code, "protected consent store cannot be verified") from exc
+    rows = []
+    # Precedence: unreadable > orphaned > conflict/drift > unapproved > outdated > missing > current.
+    # Ownership problems stay visible even when a declaration also lacks consent.
+    ordered = sorted(
+        read.observed.items(), key=lambda item: (item[0].name, AGENTS.index(item[0].agent))
+    )
+    for address, seen in ordered:
+        if seen.state in ("unreadable", "malformed"):
+            state = "unreadable"
+        elif address not in wanted:
+            state = "orphaned"
+        elif address in conflicts:
+            state = "conflict"
+        elif actions.get(address) == "skip_drift":
+            state = "drift"
+        elif address.name in pending:
+            state = "unapproved"
+        elif actions.get(address) == "replace":
+            state = "outdated"
+        elif seen.state != "present":
+            state = "missing"
+        else:
+            state = "current"
+        rows.append(ReportRow(address.name, address.agent, address.relpath, state))
+    return tuple(rows)
 
 
 def review_consent(
