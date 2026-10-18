@@ -15,6 +15,7 @@ from conftest import make_config, make_project, write_files, write_skillfile
 from csk import (
     cli,
     config,
+    locking,
     mcp_declarations,
     mcp_native,
     mcp_ownership,
@@ -368,24 +369,37 @@ def test_normalization_and_closed_object():
         )
 
 
-# Native edits preserve foreign TOML bytes and comments; csk never deletes a pre-existing file.
-def test_foreign_toml_comments_survive_removal(project_cli):
+# LF/CRLF foreign bytes and comments survive add/update/removal; repeats are byte-identical and pre-existing files remain.
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"], ids=["LF", "CRLF"])
+def test_foreign_toml_comments_survive_removal(project_cli, newline):
     root, _, declare = project_cli
     path = root / PATHS[1]
     path.parent.mkdir()
-    before = b'# user preferences\nmodel = "example"\n\n[mcp_servers.foreign]\nurl = "https://foreign.example.invalid"\n'
+    before = b'# user preferences\nmodel = "example"\n\n[mcp_servers.foreign]\nurl = "https://foreign.example.invalid"\n'.replace(
+        b"\n", newline
+    )
     path.write_bytes(before)
     assert install() == 0
-    assert path.read_bytes().startswith(before)
-    data = path.read_text().replace(
-        "[mcp_servers.docs]", "# keep this comment\n[mcp_servers.docs]"
+    added = path.read_bytes()
+    assert added.startswith(before)
+    assert added.replace(newline, b"").find(b"\n") == -1
+    assert install() == 0
+    assert path.read_bytes() == added
+    comment = b"# keep this comment" + newline
+    path.write_bytes(
+        added.replace(b"[mcp_servers.docs]", comment + b"[mcp_servers.docs]")
     )
-    path.write_text(data)
+    updated_url = URL + "/updated"
+    declare({"docs": updated_url})
+    assert install() == 0
+    updated = path.read_bytes()
+    assert updated.startswith(before + newline + comment)
+    assert updated.replace(newline, b"").find(b"\n") == -1
+    assert tomllib.loads(updated.decode())["mcp_servers"]["docs"]["url"] == updated_url
     declare({})
     assert install() == 0
-    assert path.exists()
-    assert before in path.read_bytes() and b"# keep this comment" in path.read_bytes()
-    assert "docs" not in tomllib.loads(path.read_text())["mcp_servers"]
+    assert path.read_bytes() == before + newline + comment
+    assert "docs" not in tomllib.loads(path.read_bytes().decode())["mcp_servers"]
 
 
 # Schema 1/2 retain their unknown-field errors and global scope never accepts schema 3.
@@ -669,7 +683,9 @@ sys.exit(cli.main(["install", "app", "--fix-gitignore"]))
     for agent in AGENTS:
         read, _ = mcp_native.read_surface(root, mcp_native.project_surface(agent))
         assert read.state == "present" and "docs" in read.entries
-    consumer = mcp_ownership.consumer_id(str(root.resolve()), "project")
+    consumer = mcp_ownership.consumer_id(
+        locking.canonical_project_identity(root), "project"
+    )
     ledger = mcp_ownership.load_ledger(home, consumer)
     assert isinstance(ledger, mcp_ownership.Ledger) and len(ledger.entries) == 3
     assert json.loads(path.read_bytes())["foreign"] == "preserve"
@@ -809,7 +825,9 @@ def test_unsupported_ledger_profile_refuses(project_cli, capsys, field):
     capsys.readouterr()
     before = native_bytes(root)
     path = next((home / "state/mcp/ledger").glob("*.json"))
-    consumer = mcp_ownership.consumer_id(str(root.resolve()), "project")
+    consumer = mcp_ownership.consumer_id(
+        locking.canonical_project_identity(root), "project"
+    )
     ledger = mcp_ownership.load_ledger(home, consumer)
     assert isinstance(ledger, mcp_ownership.Ledger)
     entry = ledger.entries[0]
