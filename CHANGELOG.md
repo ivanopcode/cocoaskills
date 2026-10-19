@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Добавлено
 
 - Project Skillfile schema 3 объявляет MCP-серверы через URL shorthand или объект `server`/`csk`. `csk install` пишет `.mcp.json` для Claude Code, `.codex/config.toml` для Codex CLI и `.cursor/mcp.json` для Cursor, печатает строку для каждой пары server/agent и запрашивает consent для stdio или env references. Установка не запускает серверы и не выполняет аутентификацию.
+- `csk status` показывает восемь состояний project MCP в тексте и `--json`; `--check` возвращает 1 для неактуальных записей или `mcp_ownership_unknown`, не меняя конфигурации и не проверяя auth/connectivity.
 - MCP project configs предназначены для native agent sessions. Managed sessions других environment managers пока не видят эти конфигурации.
 
 ### Исправлено

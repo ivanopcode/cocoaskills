@@ -120,7 +120,7 @@ csk remove skill-tracker
 
 ### csk status
 
-Сравнивает объявленный манифест с фактически установленным состоянием файлов скиллов.
+Сравнивает объявленный манифест с фактически установленным состоянием файлов скиллов и project MCP configs schema 3.
 
 **Синопсис:**
 
@@ -133,7 +133,7 @@ usage: csk status [-h] [--all] [--check] [--attest] [--json] [target]
 * `target`: алиас проекта, `.` или путь к проекту.
 * `-h`, `--help`: выводит краткое справочное сообщение.
 * `--all`: показывает статус для всех зарегистрированных проектов.
-* `--check`: завершает выполнение с кодом 1, если хотя бы один скилл требует обновления.
+* `--check`: завершает выполнение с кодом 1 при неактуальном скилле, ошибке проекта или MCP-состоянии кроме `current`.
 * `--attest`: проверяет установленные скиллы через доверенные реестры аудита.
 * `--json`: выводит данные в формате JSON вместо таблицы.
 
@@ -146,6 +146,36 @@ csk status --check
 Команда возвращает нулевой код, если все установленные файлы соответствуют манифесту.
 
 Для Skillfile schema 2 команда показывает актуальность относительно лока `Skillfile.lock.json` и ничего не записывает.
+
+**MCP в project Skillfile schema 3:**
+
+Строки имеют формат `mcp <server> -> <agent> <project-relative path> (<state>)`. csk перечисляет объявленные и ещё owned пары server/agent: сначала по имени сервера, затем `claude_code`, `codex_cli`, `cursor`. Например:
+
+```text
+mcp docs -> claude_code .mcp.json (current)
+mcp docs -> codex_cli .codex/config.toml (current)
+mcp docs -> cursor .cursor/mcp.json (current)
+MCP authentication and connectivity: not checked.
+```
+
+| State | Значение |
+| --- | --- |
+| `current` | Owned entry соответствует объявлению и установленному csk содержимому. |
+| `missing` | Объявленная entry или native config отсутствует. |
+| `outdated` | Объявление изменилось; owned entry ещё содержит прежний результат установки и будет обновлена install. |
+| `drift` | Существующая owned entry изменена вручную. |
+| `conflict` | Чужая запись с тем же именем, включая совпадающее содержимое. |
+| `unapproved` | Для объявления нет требуемого consent. |
+| `unreadable` | Native config нельзя безопасно прочитать или разобрать. |
+| `orphaned` | Owned entry больше не объявлена для этой пары server/agent. |
+
+Приоритет при совпадении условий: `unreadable` → `orphaned` → `conflict`/`drift` → `unapproved` → `outdated` → `missing` → `current`. Непроверяемый приватный ledger или consent store даёт `ERROR mcp_ownership_unknown` без MCP-строк; `--check` в этом случае возвращает 1.
+
+Обычный `status` возвращает 0 даже при неактуальном MCP-состоянии или ошибке в отчёте проекта. `status --check` возвращает 0, только если все MCP-строки `current` (либо их нет) и остальные проверки проекта успешны; иначе 1. Ошибки конфигурации или использования команды дают 2. `status` не исправляет конфигурации, не сохраняет consent, не запускает серверы и не проверяет auth/connectivity.
+
+Для `csk status --json` (также с `--check`) каждый объект в массиве проектов получает массив `mcp`. У каждой строки поля `server`, `agent`, `path`, `state`; например, `{"server":"docs","agent":"codex_cli","path":".codex/config.toml","state":"current"}`. `clean` учитывает MCP и остальные проверки. При `mcp_ownership_unknown` поле `mcp` пустое, а ошибка находится в `errors`. Сообщение про auth/connectivity в JSON не выводится. Project schema 1/2 и global status сохраняют прежний формат без MCP-строк и поля `mcp`.
+
+Полный Skillfile и пример перехода `outdated` → `current` приведены в [руководстве по project MCP](skill-authoring.md#project-mcp-schema-3).
 
 ### csk check
 

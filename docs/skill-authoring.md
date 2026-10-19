@@ -338,6 +338,48 @@ mcp api -> cursor .cursor/mcp.json (refused: mcp_plan_unapproved)
 
 csk печатает подсказки для агентов, получивших запись. В Claude Code выполните `/mcp`, чтобы проверить сервер и войти. Для Codex CLI с `auth.kind: "oauth"` выполните `codex mcp login <name>`. В Cursor откройте `Cursor Settings > MCP`. csk не выполняет эти действия и не проверяет доступность сервера.
 
+#### Проверка MCP через status
+
+После установки URL shorthand из примера выше запустите:
+
+```bash
+csk status
+csk status --check
+csk status --check --json
+```
+
+Для project Skillfile schema 3 `status` показывает каждую объявленную или ещё owned пару server/agent. Формат строки: `mcp <server> -> <agent> <project-relative path> (<state>)`. Порядок совпадает с install: имя сервера по возрастанию, затем `claude_code`, `codex_cli`, `cursor`.
+
+```text
+mcp docs -> claude_code .mcp.json (current)
+mcp docs -> codex_cli .codex/config.toml (current)
+mcp docs -> cursor .cursor/mcp.json (current)
+MCP authentication and connectivity: not checked.
+```
+
+| State | Значение |
+| --- | --- |
+| `current` | Owned entry соответствует объявлению и последней записи csk. |
+| `missing` | Объявленная native entry или её файл отсутствует. |
+| `outdated` | Объявление изменилось, а owned entry сохранила установленное csk содержимое; следующий install обновит её. |
+| `drift` | Пользователь изменил существующую owned entry после установки. |
+| `conflict` | В native config есть чужая одноимённая запись, даже если её содержимое совпадает. |
+| `unapproved` | Для текущего объявления требуется consent, которого ещё нет. |
+| `unreadable` | Native config нельзя безопасно прочитать или разобрать, например из-за некорректного JSON/TOML или symlink. |
+| `orphaned` | Ledger ещё содержит owned entry, но объявление удалено или агент исключён; следующий install обработает её удаление или release. |
+
+Если одновременно подходят несколько состояний, действует приоритет: `unreadable` → `orphaned` → `conflict`/`drift` → `unapproved` → `outdated` → `missing` → `current`. Поэтому повреждённый native config остаётся `unreadable` даже после удаления объявления, а чужая запись остаётся `conflict` при отсутствии consent.
+
+Например, замените URL в Skillfile на `https://mcp.example.com/mcp-v2`, оставив native configs без изменений: строки станут `outdated`, а `csk status --check` вернёт 1. После `csk install` они снова станут `current`. Ручное изменение самой owned entry вместо Skillfile даст `drift`.
+
+Обычный `csk status` возвращает 0 и при неактуальных строках: это отчёт, а не проверочный gate. С `--check` код 0 означает, что все MCP-строки `current` (или строк нет) и остальные проверки проекта тоже успешны. Любое другое MCP-состояние, ошибка проекта или неактуальный скилл дают 1. Ошибки конфигурации или использования команды дают 2.
+
+Если приватный ledger или consent store нельзя проверить, csk выводит `ERROR mcp_ownership_unknown`, а не считает хранилище пустым. MCP-строк для такого проекта нет; `--check` возвращает 1. В JSON ошибка находится в `errors`, а `mcp` остаётся пустым массивом.
+
+В `--json` результат проекта входит в массив проектов. Объект проекта содержит `mcp` — массив строк с полями `server`, `agent`, `path`, `state`; например, `{"server":"docs","agent":"codex_cli","path":".codex/config.toml","state":"current"}`. Поле `clean` учитывает и MCP, и остальные проверки проекта. Текстовая строка про auth/connectivity в JSON не добавляется.
+
+`status` только читает состояние: не меняет native configs, ledger или consent, не запрашивает согласие и не запускает серверы или auth-команды. `current` подтверждает состояние конфигурации; аутентификация и доступность сервера не проверены. Для project schema 1/2 и global status MCP-строки и JSON-поле `mcp` не добавляются.
+
 #### Границы slice 1
 
 Записанные project configs предназначены для native agent sessions. Managed sessions других environment managers пока не видят эти конфигурации. Codex CLI также требует доверия к проекту для загрузки project config. Другие environment managers без поддержки schema 3 отклоняют такой Skillfile с ошибкой обновления версии.
