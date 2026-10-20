@@ -4,6 +4,7 @@ import importlib.util
 import os
 import base64
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -540,6 +541,7 @@ def _dry_run(
     include_delivery: bool = True,
     script: Path = SCRIPT,
     evidence_mode: str = "valid",
+    no_wb: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], str, Path]:
     bin_directory = tmp_path / "bin"
     bin_directory.mkdir()
@@ -594,7 +596,7 @@ def _dry_run(
     )
     env.pop("DELIVERY_BIN", None)
     result = subprocess.run(
-        [str(script), "9.8.7", "--wb-notes", str(notes_file), "--dry-run"],
+        [str(script), "9.8.7", *(["--no-wb"] if no_wb else ["--wb-notes", str(notes_file)]), "--dry-run"],
         cwd=ROOT,
         env=env,
         text=True,
@@ -852,6 +854,11 @@ def _live_release(
     smoke_runs_json: str | None = None,
     resume: bool = False,
     real_git_pushes: bool = False,
+    no_wb: bool = False,
+    resume_wb: bool = False,
+    mirror_case: str = "valid",
+    extra_args: tuple[str, ...] = (),
+    include_glab: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], str, Path]:
     project = tmp_path / "project"
     scripts = project / ".scripts"
@@ -885,7 +892,7 @@ def _live_release(
     else:
         base_head = "a" * 40
     tag_object = "e" * 40
-    remote_tag_exists = int(resume)
+    remote_tag_exists = int(resume or resume_wb)
     release_run_id = "101"
     smoke_run_id = "202"
     if release_runs_json is not None:
@@ -918,17 +925,22 @@ def _live_release(
         "  *'config --path --get user.signingkey'*) printf '%s\\n' \"$CSK_SIGNING_PUBLIC_KEY\" ;;\n"
         "  *'config --path --get gpg.ssh.allowedSignersFile'*) printf '%s\\n' \"$CSK_ALLOWED_SIGNERS\" ;;\n"
         "  *'rev-parse refs/tags/'*) if [[ \"$*\" == *'^{commit}'* ]]; then printf '%s\\n' \"$CSK_CUT_HEAD\"; else printf '%s\\n' \"$CSK_TAG_OBJECT\"; fi ;;\n"
+        "  *'rev-parse FETCH_HEAD'*) printf '%s\\n' \"$CSK_BASE_HEAD\" ;;\n"
         "  *'rev-parse HEAD'*) if [[ -f \"$CSK_COMMITTED_MARKER\" ]]; then printf '%s\\n' \"$CSK_CUT_HEAD\"; else printf '%s\\n' \"$CSK_BASE_HEAD\"; fi ;;\n"
         "  *'rev-parse refs/remotes/origin/main'*) if [[ -f \"$CSK_MAIN_MARKER\" ]]; then printf '%s\\n' \"$CSK_CUT_HEAD\"; else printf '%s\\n' \"$CSK_BASE_HEAD\"; fi ;;\n"
         "  *'show-ref --verify --quiet refs/tags/'*) exit 1 ;;\n"
         "  *'show-ref --verify --quiet refs/heads/'*) exit 1 ;;\n"
-        "  *'ls-remote --tags origin refs/tags/'*) if [[ \"$CSK_REMOTE_TAG_EXISTS\" == 1 ]]; then printf '%s\\trefs/tags/v9.8.7\\n' \"$CSK_TAG_OBJECT\"; else exit 0; fi ;;\n"
+        "  *'ls-remote --tags origin refs/tags/'*) if [[ \"$CSK_REMOTE_TAG_EXISTS\" == 1 && \"$CSK_MIRROR_CASE\" != missing-tag ]]; then printf '%s\\trefs/tags/v9.8.7\\n' \"$CSK_TAG_OBJECT\"; else exit 0; fi ;;\n"
         "  *'ls-remote --tags origin'*) exit 0 ;;\n"
         "  *'ls-remote --heads origin'*) exit 0 ;;\n"
         "  *'switch -c release/'*) exit 0 ;;\n"
         "  *'commit -S'*) : > \"$CSK_COMMITTED_MARKER\" ;;\n"
-        "  *'verify-commit '*|*'verify-tag '*) exit 0 ;;\n"
-        "  *'merge-base --is-ancestor'*) exit 0 ;;\n"
+        "  *'verify-tag '*) [[ \"$CSK_MIRROR_CASE\" != unsigned-tag && \"$CSK_MIRROR_CASE\" != unverified-tag ]] ;;\n"
+        "  *'verify-commit '*) exit 0 ;;\n"
+        "  *'merge-base --is-ancestor'*)\n"
+        "    if [[ \"$CSK_MIRROR_CASE\" == unreachable-tag && \"$*\" == *refs/remotes/origin/main* ]]; then exit 1; fi\n"
+        "    if [[ \"$CSK_MIRROR_CASE\" == divergent-main && \"$*\" != *refs/remotes/origin/main* ]]; then exit 1; fi ;;\n"
+        "  *'ls-remote --heads git@gitlab.'*) printf '%s\\trefs/heads/main\\n' \"$CSK_BASE_HEAD\" ;;\n"
         "  *'push '*refs/heads/main*) : > \"$CSK_MAIN_MARKER\" ;;\n"
         "  *'status --porcelain'*) exit \"$CSK_STATUS_READ_EXIT\" ;;\n"
         "  *) exit 0 ;;\n"
@@ -936,10 +948,21 @@ def _live_release(
     )
 
     _write_gh_stub(bin_directory)
-    _write_executable(
-        bin_directory / "glab",
-        "#!/bin/bash\nprintf 'glab %s\\n' \"$*\" >> \"$CSK_STUB_CALLS\"\nexit 0\n",
-    )
+    if include_glab:
+        _write_executable(
+            bin_directory / "glab",
+            "#!/bin/bash\nprintf 'glab %s\\n' \"$*\" >> \"$CSK_STUB_CALLS\"\n"
+            "if [[ \"$1\" == api ]]; then\n"
+            "  case \"$CSK_MIRROR_CASE\" in\n"
+            "    existing-release) printf '%s\\n' '[{\"tag_name\":\"v9.8.7\"}]' ;;\n"
+            "    unrelated-release) printf '%s\\n' '[{\"tag_name\":\"v9.8.6\"}]' ;;\n"
+            "    unreadable-releases) exit 23 ;;\n"
+            "    malformed-releases) printf '%s\\n' '{\"message\":\"unknown\"}' ;;\n"
+            "    malformed-json-releases) printf '%s\\n' 'not-json' ;;\n"
+            "    *) printf '%s\\n' '[]' ;;\n"
+            "  esac\n"
+            "fi\n",
+        )
     _write_executable(
         bin_directory / "ssh-add",
         "#!/bin/bash\nprintf '256 SHA256:test-key-fingerprint release-test (ED25519)\\n'\n",
@@ -992,6 +1015,7 @@ def _live_release(
             "CSK_CUT_HEAD": cut_head,
             "CSK_TAG_OBJECT": tag_object,
             "CSK_REMOTE_TAG_EXISTS": str(remote_tag_exists),
+            "CSK_MIRROR_CASE": mirror_case,
             "CSK_COMMITTED_MARKER": str(committed_marker),
             "CSK_MAIN_MARKER": str(main_marker),
             "CSK_SIGNING_PUBLIC_KEY": str(signing_public_key),
@@ -1050,10 +1074,15 @@ def _live_release(
     if smoke_runs_json is not None:
         env["CSK_SMOKE_RUNS_JSON"] = smoke_runs_json
     env.pop("DELIVERY_BIN", None)
-    if resume:
+    if resume_wb:
+        release_args = [str(scripts / "release.sh"), "9.8.7", "--resume-from", "wb", "--wb-notes", str(notes_file)]
+    elif resume:
         release_args = [str(scripts / "release.sh"), "9.8.7", "--resume-from", "verify"]
+    elif no_wb:
+        release_args = [str(scripts / "release.sh"), "9.8.7", "--no-wb"]
     else:
         release_args = [str(scripts / "release.sh"), "9.8.7", "--wb-notes", str(notes_file)]
+    release_args.extend(extra_args)
     result = subprocess.run(
         release_args,
         cwd=project,
@@ -1090,6 +1119,168 @@ def test_live_release_gates_the_exact_fast_forward_head_before_signing_tag(
     ):
         assert secret not in result.stdout
         assert secret not in result.stderr
+
+
+@RUNS_POSIX_RELEASE_SCRIPT
+@pytest.mark.parametrize("include_glab", [True, False], ids=["installed", "missing"])
+def test_no_wb_keeps_github_and_distribution_stages_without_glab(tmp_path: Path, include_glab: bool) -> None:
+    # Skipping the mirror needs no glab, but still completes the normal signed GitHub delivery and version checks.
+    result, calls, _ = _live_release(tmp_path, no_wb=True, include_glab=include_glab)
+    assert result.returncode == 0, result.stdout + result.stderr
+    for expected in (
+        "git commit -S", "gh pr create", "gh pr checks 42", "gh pr review 42",
+        "git push --no-follow-tags origin " + "b" * 40 + ":refs/heads/main",
+        "delivery trunk-verify --head " + "b" * 40,
+        "git tag -s v9.8.7", "git verify-tag v9.8.7",
+        "git push --no-follow-tags origin refs/tags/v9.8.7:refs/tags/v9.8.7",
+        "--workflow release.yml", "gh run watch 101", "--workflow distribution-smoke.yml",
+        "gh run watch 202", "curl -fsS", "gh api repos/ivanopcode/homebrew-csk/contents/Formula/cocoaskills.rb",
+        "gh api repos/ivanopcode/homebrew-csk/commits?path=Formula/cocoaskills.rb", "mise ls-remote pipx:cocoaskills",
+    ):
+        assert expected in calls
+    assert "glab " not in calls
+    assert "gitlab." not in calls
+    assert "Release verification passed" in result.stdout
+
+
+@RUNS_POSIX_RELEASE_SCRIPT
+def test_no_wb_dry_run_prints_skip_and_exact_later_command(tmp_path: Path) -> None:
+    # The plan omits mirror publishing commands while retaining the real trunk gate and a usable resume command.
+    result, calls, _ = _dry_run(tmp_path, no_wb=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Wildberries stage skipped (--no-wb)" in result.stdout
+    assert ".scripts/release.sh 9.8.7 --resume-from wb --wb-notes FILE" in result.stdout
+    assert "glab release create" not in result.stdout
+    assert "git push --no-follow-tags \"git@gitlab." not in result.stdout
+    assert "distribution-smoke.yml" in result.stdout
+    assert "Verify PyPI JSON" in result.stdout
+    assert "delivery trunk-verify" in calls
+    assert "git push" not in calls and "glab " not in calls
+
+
+@RUNS_POSIX_RELEASE_SCRIPT
+@pytest.mark.parametrize("option", ["--wb-notes", "--wb-notes="])
+def test_no_wb_with_notes_is_usage_error_before_any_external_command(tmp_path: Path, option: str) -> None:
+    # Both spellings conflict with --no-wb, including an explicitly empty notes value, before even Git discovery.
+    extra = (option, str(tmp_path / "wb-notes.md")) if option == "--wb-notes" else (option,)
+    result, calls, _ = _live_release(tmp_path, no_wb=True, extra_args=extra)
+    assert result.returncode == 2
+    assert "--no-wb cannot be combined with --wb-notes" in result.stderr
+    assert calls == ""
+
+
+@RUNS_POSIX_RELEASE_SCRIPT
+@pytest.mark.parametrize(
+    "case,exit_code,message",
+    [
+        ("missing-tag", 1, "not published on origin"),
+        ("unsigned-tag", 2, "not verified as signed"),
+        ("unverified-tag", 2, "not verified as signed"),
+        ("unreachable-tag", 1, "not an ancestor of origin/main"),
+        ("divergent-main", 1, "mirror main is not an ancestor"),
+        ("existing-release", 1, "mirror release already exists"),
+        ("unreadable-releases", 2, "cannot read mirror releases"),
+        ("malformed-releases", 2, "cannot verify absence of the mirror release"),
+        ("malformed-json-releases", 2, "cannot verify absence of the mirror release"),
+    ],
+    ids=["missing-tag", "unsigned-tag", "unverified-tag", "unreachable-tag", "divergent-main",
+         "existing-release", "unreadable-releases", "malformed-releases", "malformed-json-releases"],
+)
+def test_resume_wb_refuses_before_publishing(
+    tmp_path: Path, case: str, exit_code: int, message: str,
+) -> None:
+    # Every unsafe/unknown precondition fails with its intended reason and no push, release creation or GitHub stage.
+    result, calls, _ = _live_release(tmp_path, resume_wb=True, mirror_case=case)
+    assert result.returncode == exit_code, result.stdout + result.stderr
+    assert message in result.stderr
+    for forbidden in ("git push", "glab release create", "gh ", "curl ", "mise ", "git tag -s", "git commit", "delivery "):
+        assert forbidden not in calls
+
+
+@RUNS_POSIX_RELEASE_SCRIPT
+@pytest.mark.parametrize("mirror_case", ["valid", "unrelated-release"])
+def test_resume_wb_publishes_only_verified_tag_commit_and_mirror_release(tmp_path: Path, mirror_case: str) -> None:
+    # The mirror-only path uses the tag commit (not checkout main) and checks every precondition before publishing.
+    result, calls, project = _live_release(tmp_path, resume_wb=True, include_delivery=False, mirror_case=mirror_case)
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = calls.splitlines()
+    source = SCRIPT.read_text(encoding="utf-8")
+    remote = re.search(r'^readonly WB_REMOTE="([^"]+)"$', source, re.M)[1]
+    mirror_project = re.search(r'^readonly WB_PROJECT="([^"]+)"$', source, re.M)[1]
+    mirror_host, project_path = mirror_project.split("/", 1)
+    expected_api = (
+        f"glab api --hostname {mirror_host} projects/{project_path.replace('/', '%2F')}/releases?per_page=100"
+        " --paginate --output json"
+    )
+    assert [line for line in lines if line.startswith("glab api ")] == [expected_api]
+    push = f"git push --no-follow-tags {remote} {'b' * 40}:refs/heads/main refs/tags/v9.8.7:refs/tags/v9.8.7"
+    release = f"glab release create v9.8.7 --repo {mirror_project} --name CocoaSkills 9.8.7 --notes-file {tmp_path / 'wb-notes.md'}"
+    assert [line for line in lines if line.startswith("git push ")] == [push]
+    assert [line for line in lines if line.startswith("glab release create ")] == [release]
+    for precondition in (
+        "git ls-remote --tags origin refs/tags/v9.8.7", "git verify-tag v9.8.7",
+        f"git merge-base --is-ancestor {'b' * 40} refs/remotes/origin/main",
+        f"git merge-base --is-ancestor {'a' * 40} {'b' * 40}",
+        "glab api ",
+    ):
+        assert precondition in calls
+        assert calls.index(precondition) < calls.index(push)
+    assert calls.index(push) < calls.index(release)
+    for forbidden in ("gh ", "curl ", "mise ", "delivery ", "git tag -s", "git commit", "git switch"):
+        assert forbidden not in calls
+    assert "## [9.8.7]" not in (project / "CHANGELOG.md").read_text(encoding="utf-8")
+
+
+@RUNS_POSIX_RELEASE_SCRIPT
+def test_resume_wb_requires_nonempty_notes_before_any_external_command(tmp_path: Path) -> None:
+    # The mirror-only stage cannot publish without an actual notes path.
+    result, calls, _ = _live_release(tmp_path, resume_wb=True, extra_args=("--wb-notes=",))
+    assert result.returncode == 2
+    assert "--wb-notes FILE is required" in result.stderr
+    assert calls == ""
+
+
+@RUNS_POSIX_RELEASE_SCRIPT
+def test_no_wb_cannot_be_combined_with_a_resume_stage(tmp_path: Path) -> None:
+    # Skip and resume are different modes; the ambiguous combination is refused before Git discovery.
+    result, calls, _ = _live_release(tmp_path, no_wb=True, extra_args=("--resume-from", "verify"))
+    assert result.returncode == 2
+    assert "--no-wb cannot be combined with --resume-from" in result.stderr
+    assert calls == ""
+
+
+@RUNS_POSIX_RELEASE_SCRIPT
+def test_no_wb_checker_detects_a_planted_mirror_publication(tmp_path: Path) -> None:
+    # A local script plant that publishes despite --no-wb is caught by the real harness with working provider spies.
+    source = SCRIPT.read_text(encoding="utf-8")
+    guard = '  if [[ "$no_wb" == true ]]; then\n    print_mirror_skipped\n  else\n    if ! git push'
+    assert source.count(guard) == 1
+    mutant = tmp_path / "release-mirror-mutant.sh"
+    _write_executable(mutant, source.replace(guard, guard.replace('[[ "$no_wb" == true ]]', 'false'), 1))
+    run = _run_nested_release_test(
+        tmp_path, "test_no_wb_keeps_github_and_distribution_stages_without_glab[installed]",
+        {"CSK_RELEASE_SCRIPT": str(mutant)},
+    )
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert "glab release create" in run.stdout
+    assert "1 failed" in run.stdout
+
+
+@RUNS_POSIX_RELEASE_SCRIPT
+def test_resume_wb_checker_detects_a_planted_existing_release_bypass(tmp_path: Path) -> None:
+    # Removing the existing-release refusal is caught as a wrong successful publication, not a setup error.
+    source = SCRIPT.read_text(encoding="utf-8")
+    guard = 'sys.exit(1 if any(item["tag_name"] == sys.argv[1] for item in releases) else 0)'
+    assert source.count(guard) == 1
+    mutant = tmp_path / "release-existing-mutant.sh"
+    _write_executable(mutant, source.replace(guard, "sys.exit(0)", 1))
+    run = _run_nested_release_test(
+        tmp_path, "test_resume_wb_refuses_before_publishing[existing-release]",
+        {"CSK_RELEASE_SCRIPT": str(mutant)},
+    )
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert "assert 0 == 1" in run.stdout
+    assert "1 failed" in run.stdout
 
 
 @RUNS_POSIX_RELEASE_SCRIPT
@@ -1189,7 +1380,7 @@ def test_live_release_real_git_does_not_follow_tags_before_trunk_verification(
         ),
         (
             "wildberries-mirror",
-            'if ! git push --no-follow-tags "$WB_REMOTE"',
+            'if ! git push --no-follow-tags "$WB_REMOTE" "${pr_head}:refs/heads/main"',
             "test_live_release_real_git_pushes_only_explicit_refs_with_follow_tags_enabled",
         ),
     ],

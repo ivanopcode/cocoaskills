@@ -380,11 +380,15 @@ csk shell-init                      # Генерирует или устанав
 - `.scripts/release.sh` cuts and publishes signed stable releases. Run
   `.scripts/release.sh 0.18.4 --wb-notes .temp/wb-release-0.18.4.md` from a
   clean, current `main` checkout; use `--dry-run` to print every release step.
+  Use `.scripts/release.sh 0.20.0 --no-wb` to defer the mirror without requiring
+  `glab` or notes, then publish only that stage later with
+  `.scripts/release.sh 0.20.0 --resume-from wb --wb-notes .temp/wb-release-0.20.0.md`.
   If distribution smoke fails, run its printed `gh run rerun <run-id> --failed`
   command manually, then resume with
   `.scripts/release.sh 0.18.4 --resume-from verify`.
-  It requires `gh`, `glab`, `delivery`, a loaded SSH signing key, `curl`, and
-  `mise`. See [`RELEASING.md`](RELEASING.md) for the gates, Wildberries steps,
+  It requires `gh`, `delivery`, a loaded SSH signing key, `curl`, and
+  `mise`; `glab` is required only when publishing the mirror stage.
+  See [`RELEASING.md`](RELEASING.md) for the gates, Wildberries steps,
   and output behavior. It creates a local release branch and signed tag;
   published build artifacts stay in GitHub Actions and no local release log is
   retained.

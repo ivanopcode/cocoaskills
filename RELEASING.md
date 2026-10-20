@@ -2,7 +2,7 @@
 
 `.scripts/release.sh` owns the stable-release sequence for this repository. It
 creates a CHANGELOG cut pull request, verifies the landed trunk head before
-tagging, publishes the signed tag, mirrors it to Wildberries, and checks the
+tagging, publishes the signed tag, optionally mirrors it to Wildberries, and checks the
 published distribution channels.
 
 ## Supported platforms
@@ -16,7 +16,8 @@ helpers and other platform-independent tests still run.
 
 - Start from a clean local `main` checkout whose commit equals `origin/main`.
 - Install and authenticate `gh` for `ivanopcode/cocoaskills` and `glab` for the
-  Wildberries GitLab project. The script suppresses provider command output
+  Wildberries GitLab project when publishing the mirror stage. `--no-wb` does
+  not require `glab` or mirror authentication. The script suppresses provider command output
   that could contain credential details; it never prints token environment
   variables.
 - Make `delivery` available on `PATH`, or set `DELIVERY_BIN` to its executable
@@ -26,13 +27,27 @@ helpers and other platform-independent tests still run.
   readable `gpg.ssh.allowedSignersFile`. The matching public key must be loaded
   into `ssh-agent`; after a restart, load it with `ssh-add <configured-key>`.
 - Install `bash`, `git`, `python3`, `curl`, `mise`, `ssh-add`, and `ssh-keygen`.
-- Prepare a UTF-8 Russian release note file for the Wildberries GitLab release.
+- Prepare a UTF-8 Russian release note file when publishing the mirror release.
+  It is not needed with `--no-wb`.
 
 ## Command
 
 ```bash
 .scripts/release.sh 0.18.4 --wb-notes .temp/wb-release-0.18.4.md
 ```
+
+To publish to GitHub, PyPI, Homebrew and mise now and defer the mirror:
+
+```bash
+.scripts/release.sh 0.20.0 --no-wb
+```
+
+`--no-wb` skips only the mirror push and GitLab release. The CHANGELOG pull
+request, required checks, exact-head review, fast-forward, trunk verification,
+signed tag, `release.yml`, `distribution-smoke.yml` and distribution version
+checks still run. It never contacts the mirror or invokes `glab`.
+Combining `--no-wb` with `--wb-notes` or `--resume-from` is a usage error
+(exit 2) before any external command runs.
 
 For a non-publishing plan, run:
 
@@ -45,6 +60,8 @@ mirror, notes path, and every release step before it probes
 `delivery trunk-verify` against the current HEAD. No pull request, Git ref,
 release, or mirror command runs in this mode. A live release performs the gate
 later, against the exact CHANGELOG cut head after the fast-forward to `main`.
+With `--no-wb --dry-run`, the plan explicitly marks the mirror stage as
+skipped and prints the exact later command with `FILE` as the notes placeholder.
 
 ## Live release sequence
 
@@ -67,7 +84,7 @@ later, against the exact CHANGELOG cut head after the fast-forward to `main`.
 5. It creates the signed `vVERSION` tag with `git tag -s`, verifies it, pushes
    it to GitHub, and watches the `release.yml` run selected by workflow file
    and the tag's exact commit SHA.
-6. After `release.yml` passes, it pushes `main` and the tag to
+6. Unless `--no-wb` was selected, after `release.yml` passes it pushes `main` and the tag to
    `git@gitlab.wildberries.ru:portals/agentic-infra/cocoaskills.git` and runs
    `glab release create` from the CocoaSkills checkout with the supplied
    Russian notes file. It does not switch into another GitLab project.
@@ -91,6 +108,35 @@ later, against the exact CHANGELOG cut head after the fast-forward to `main`.
 Homebrew reads use the repository in the API endpoint, for example
 `gh api repos/ivanopcode/homebrew-csk/commits?path=Formula/cocoaskills.rb&per_page=1`;
 `gh api` does not accept the `--repo` option.
+
+## Publish only the mirror later
+
+When the owner authorizes the deferred mirror stage, run:
+
+```bash
+.scripts/release.sh 0.20.0 --resume-from wb --wb-notes .temp/wb-release-0.20.0.md
+```
+
+This mode requires only `git`, `python3`, authenticated `glab`, the notes file
+and the configured trust needed to verify the tag signature. It can run from
+another branch; it publishes the tagged commit, not the checkout's HEAD.
+It reads the tag on origin, fetches it and `origin/main` without replacing a
+different local tag, verifies the signed tag with `git verify-tag`, and
+requires its commit to be an ancestor of (or equal to) `origin/main`.
+
+Before publishing, it reads and fetches the mirror's `main`, checks that it
+is an ancestor of (or equal to) the tagged commit, and reads all pages of
+GitLab releases to establish that this tag has no existing release. A missing,
+unsigned or unverified tag, unreachable tag commit, divergent mirror main,
+existing release, or unknown provider response stops before any push or
+release creation. These checks may fetch local Git objects and refs.
+
+It then pushes only `<tagged-commit>:refs/heads/main` and
+`refs/tags/vVERSION:refs/tags/vVERSION` to the mirror with
+`--no-follow-tags`, without force, and creates the mirror release using the
+supplied notes. It runs no CHANGELOG, GitHub, signing, workflow or distribution
+stage. `--resume-from verify` retains its existing post-publish checks and
+does not publish the deferred mirror stage.
 
 The release script does not store credentials or copy provider output into
 files. GitHub and GitLab authentication stays in their respective CLIs. A

@@ -10,17 +10,23 @@ readonly RUN_DISCOVERY_DELAY=10
 
 release_version=""
 wb_notes=""
+wb_notes_given=false
+no_wb=false
 dry_run=false
 resume_from=""
 
 usage() {
   cat <<'USAGE'
 Usage: .scripts/release.sh VERSION --wb-notes FILE [--dry-run]
+       .scripts/release.sh VERSION --no-wb [--dry-run]
+       .scripts/release.sh VERSION --resume-from wb --wb-notes FILE
        .scripts/release.sh VERSION --resume-from verify
 
 VERSION is a stable MAJOR.MINOR.PATCH release. The notes file must contain the
 Russian release notes for the Wildberries GitLab release. The verify resume
 continues only the post-publish checks after a manual distribution-smoke rerun.
+Use --no-wb to skip the mirror, then --resume-from wb to publish only the
+already released signed tag and the mirror release later.
 USAGE
 }
 
@@ -46,6 +52,9 @@ release_version="$1"
 shift
 while (($# > 0)); do
   case "$1" in
+    --no-wb)
+      no_wb=true
+      ;;
     --dry-run)
       dry_run=true
       ;;
@@ -60,6 +69,7 @@ while (($# > 0)); do
       resume_from="${1#*=}"
       ;;
     --wb-notes)
+      wb_notes_given=true
       if (($# < 2)); then
         refuse 2 "--wb-notes requires a file path"
       fi
@@ -67,6 +77,7 @@ while (($# > 0)); do
       shift
       ;;
     --wb-notes=*)
+      wb_notes_given=true
       wb_notes="${1#*=}"
       ;;
     -h|--help)
@@ -84,17 +95,23 @@ done
 if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   refuse 2 "VERSION must be stable MAJOR.MINOR.PATCH"
 fi
-if [[ -n "$resume_from" && "$resume_from" != "verify" ]]; then
-  refuse 2 "the only supported resume stage is verify"
+if [[ -n "$resume_from" && "$resume_from" != "verify" && "$resume_from" != "wb" ]]; then
+  refuse 2 "supported resume stages are verify and wb"
+fi
+if [[ "$no_wb" == true && "$wb_notes_given" == true ]]; then
+  refuse 2 "--no-wb cannot be combined with --wb-notes"
+fi
+if [[ "$no_wb" == true && -n "$resume_from" ]]; then
+  refuse 2 "--no-wb cannot be combined with --resume-from"
 fi
 if [[ "$dry_run" == true && -n "$resume_from" ]]; then
   refuse 2 "--dry-run cannot be combined with --resume-from"
 fi
-if [[ -z "$resume_from" && -z "$wb_notes" ]]; then
+if [[ "$no_wb" == false && "$resume_from" != "verify" && -z "$wb_notes" ]]; then
   refuse 2 "--wb-notes FILE is required for a live release"
 fi
+caller_directory="$(pwd)"
 if [[ -n "$wb_notes" ]]; then
-  caller_directory="$(pwd)"
   if [[ "$wb_notes" != /* ]]; then
     wb_notes="$caller_directory/$wb_notes"
   fi
@@ -194,7 +211,9 @@ print_pre_gate_plan() {
   printf 'Wildberries GitLab project: %s\n' "$WB_PROJECT"
   printf 'Homebrew tap repository: %s\n' "$HOMEBREW_TAP_REPOSITORY"
   printf 'PyPI project: cocoaskills\n'
-  printf 'Wildberries notes file: %s\n' "$wb_notes"
+  if [[ "$no_wb" == false ]]; then
+    printf 'Wildberries notes file: %s\n' "$wb_notes"
+  fi
   printf '%s\n' \
     '1. Refresh main, cut CHANGELOG.md with the resolved date, and sign the release branch commit.'
   printf '2. Live: run git push --no-follow-tags --set-upstream origin "refs/heads/%s:refs/heads/%s", open a pull request to main, and wait for required checks on its exact head.\n' \
@@ -208,15 +227,24 @@ print_post_gate_plan() {
   printf '4. Live: run git tag -s %s -m "CocoaSkills %s" <reviewed-cut-head>, verify it, then run git push --no-follow-tags origin "refs/tags/%s:refs/tags/%s". Dry-run probe head: %s.\n' \
     "$release_tag" "$release_version" "$release_tag" "$release_tag" "$planning_head"
   printf '5. Live: watch release.yml for workflow file release.yml and head SHA <reviewed-cut-head>.\n'
-  printf '6. Live: run git push --no-follow-tags "%s" "<reviewed-cut-head>:refs/heads/main" "refs/tags/%s:refs/tags/%s".\n' \
-    "$WB_REMOTE" "$release_tag" "$release_tag"
-  printf '7. Create the Wildberries GitLab release: glab release create %s --repo %s --name "CocoaSkills %s" --notes-file "%s".\n' \
-    "$release_tag" "$WB_PROJECT" "$release_version" "$wb_notes"
+  if [[ "$no_wb" == true ]]; then
+    print_mirror_skipped
+  else
+    printf '6. Live: run git push --no-follow-tags "%s" "<reviewed-cut-head>:refs/heads/main" "refs/tags/%s:refs/tags/%s".\n' \
+      "$WB_REMOTE" "$release_tag" "$release_tag"
+    printf '7. Create the Wildberries GitLab release: glab release create %s --repo %s --name "CocoaSkills %s" --notes-file "%s".\n' \
+      "$release_tag" "$WB_PROJECT" "$release_version" "$wb_notes"
+  fi
   printf '%s\n' \
     '8. Watch distribution-smoke.yml by workflow file, exact head SHA, and createdAt after the release run started.' \
     'If it fails, inspect every failed job link, run gh run rerun <run-id> --failed manually, then use --resume-from verify.'
   printf '%s\n' \
     '9. Verify PyPI JSON, the Homebrew tap formula and latest commit, and MISE_FETCH_REMOTE_VERSIONS_CACHE=0 mise ls-remote pipx:cocoaskills.'
+}
+
+print_mirror_skipped() {
+  printf '%s\n' 'Wildberries stage skipped (--no-wb).'
+  printf 'Later: .scripts/release.sh %s --resume-from wb --wb-notes FILE\n' "$release_version"
 }
 
 check_origin_repository() {
@@ -595,6 +623,135 @@ resume_verify() {
   printf 'Post-publish verification passed for %s.\n' "$release_tag"
 }
 
+resume_wb() {
+  local tag_ref remote_tag_info remote_tag_object local_tag_object release_head
+  local remote_oid remote_ref mirror_info mirror_head fetched_head mirror_releases check_status
+  local mirror_host mirror_project
+  require_command git
+  require_command glab
+  require_command python3
+  check_origin_repository
+
+  tag_ref="refs/tags/$release_tag"
+  if remote_tag_info="$(git ls-remote --tags origin "$tag_ref")"; then
+    :
+  else
+    refuse 2 "cannot verify the published release tag"
+  fi
+  remote_tag_object=""
+  while read -r remote_oid remote_ref; do
+    if [[ "$remote_ref" == "$tag_ref" ]]; then
+      remote_tag_object="$remote_oid"
+    fi
+  done <<<"$remote_tag_info"
+  if [[ -z "$remote_tag_object" ]]; then
+    refuse 1 "release tag $release_tag is not published on origin"
+  fi
+  if [[ ! "$remote_tag_object" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
+    refuse 2 "published release tag identity is malformed"
+  fi
+  if ! git fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main" \
+    "$tag_ref:$tag_ref" >/dev/null; then
+    refuse 2 "cannot fetch origin/main and the published release tag"
+  fi
+  if local_tag_object="$(git rev-parse "$tag_ref")" &&
+    release_head="$(git rev-parse "$tag_ref^{commit}")"; then
+    :
+  else
+    refuse 2 "cannot resolve the published release tag"
+  fi
+  if [[ "$local_tag_object" != "$remote_tag_object" || ! "$release_head" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
+    refuse 2 "local release tag differs from the published tag"
+  fi
+  if ! git verify-tag "$release_tag" >/dev/null; then
+    refuse 2 "release tag $release_tag is not verified as signed"
+  fi
+  if git merge-base --is-ancestor "$release_head" refs/remotes/origin/main; then
+    :
+  else
+    check_status=$?
+    if ((check_status == 1)); then
+      refuse 1 "release tag is not an ancestor of origin/main"
+    fi
+    refuse 2 "cannot establish release tag ancestry on origin/main"
+  fi
+
+  if mirror_info="$(git ls-remote --heads "$WB_REMOTE" refs/heads/main)"; then
+    :
+  else
+    refuse 2 "cannot read mirror main"
+  fi
+  mirror_head=""
+  while read -r remote_oid remote_ref; do
+    if [[ "$remote_ref" == refs/heads/main ]]; then
+      mirror_head="$remote_oid"
+    fi
+  done <<<"$mirror_info"
+  if [[ ! "$mirror_head" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
+    refuse 2 "mirror main identity is missing or malformed"
+  fi
+  if ! git fetch --no-tags "$WB_REMOTE" refs/heads/main >/dev/null; then
+    refuse 2 "cannot fetch mirror main for ancestry verification"
+  fi
+  if fetched_head="$(git rev-parse FETCH_HEAD)"; then
+    :
+  else
+    refuse 2 "cannot resolve fetched mirror main"
+  fi
+  if [[ "$fetched_head" != "$mirror_head" ]]; then
+    refuse 2 "mirror main changed during verification; retry"
+  fi
+  if git merge-base --is-ancestor "$mirror_head" "$release_head"; then
+    :
+  else
+    check_status=$?
+    if ((check_status == 1)); then
+      refuse 1 "mirror main is not an ancestor of the tagged commit"
+    fi
+    refuse 2 "cannot establish mirror main ancestry"
+  fi
+
+  mirror_host="${WB_PROJECT%%/*}"
+  mirror_project="${WB_PROJECT#*/}"
+  mirror_project="${mirror_project//\//%2F}"
+  if mirror_releases="$(quiet_external glab api --hostname "$mirror_host" \
+    "projects/$mirror_project/releases?per_page=100" --paginate --output json)"; then
+    :
+  else
+    refuse 2 "cannot read mirror releases"
+  fi
+  if quiet_external python3 -c '
+import json, sys
+try:
+    releases = json.load(sys.stdin)
+except (ValueError, TypeError):
+    sys.exit(2)
+if not isinstance(releases, list) or any(
+    not isinstance(item, dict) or not isinstance(item.get("tag_name"), str)
+    for item in releases
+):
+    sys.exit(2)
+sys.exit(1 if any(item["tag_name"] == sys.argv[1] for item in releases) else 0)
+' "$release_tag" <<<"$mirror_releases"; then
+    :
+  else
+    check_status=$?
+    if ((check_status == 1)); then
+      refuse 1 "mirror release already exists for $release_tag"
+    fi
+    refuse 2 "cannot verify absence of the mirror release"
+  fi
+  if ! git push --no-follow-tags "$WB_REMOTE" "${release_head}:refs/heads/main" \
+    "$tag_ref:$tag_ref" >/dev/null; then
+    refuse 2 "cannot push the tagged commit and $release_tag to the mirror"
+  fi
+  if ! quiet_external glab release create "$release_tag" --repo "$WB_PROJECT" \
+    --name "CocoaSkills $release_version" --notes-file "$wb_notes" >/dev/null; then
+    refuse 2 "cannot create the mirror release from the supplied notes"
+  fi
+  printf 'Created the mirror release for %s.\n' "$release_tag"
+}
+
 run_release() {
   local delivery_command planning_head current_branch dirty_state base_head
   local origin_main remote_refs cut_head pr_url pr_number pr_head
@@ -603,7 +760,9 @@ run_release() {
 
   require_command git
   require_command gh
-  require_command glab
+  if [[ "$no_wb" == false ]]; then
+    require_command glab
+  fi
   require_command curl
   require_command python3
   require_command mise
@@ -839,17 +998,21 @@ run_release() {
   fi
   printf 'release.yml passed for %s.\n' "$release_tag"
 
-  if ! git push --no-follow-tags "$WB_REMOTE" "${pr_head}:refs/heads/main" \
-    "refs/tags/$release_tag:refs/tags/$release_tag" >/dev/null; then
-    refuse 2 "cannot push main and $release_tag to the Wildberries mirror"
-  fi
-  printf 'Pushed main and %s to the Wildberries mirror.\n' "$release_tag"
+  if [[ "$no_wb" == true ]]; then
+    print_mirror_skipped
+  else
+    if ! git push --no-follow-tags "$WB_REMOTE" "${pr_head}:refs/heads/main" \
+      "refs/tags/$release_tag:refs/tags/$release_tag" >/dev/null; then
+      refuse 2 "cannot push main and $release_tag to the Wildberries mirror"
+    fi
+    printf 'Pushed main and %s to the Wildberries mirror.\n' "$release_tag"
 
-  if ! quiet_external glab release create "$release_tag" --repo "$WB_PROJECT" \
-    --name "CocoaSkills $release_version" --notes-file "$wb_notes" >/dev/null; then
-    refuse 2 "cannot create the Wildberries GitLab release from the supplied notes"
+    if ! quiet_external glab release create "$release_tag" --repo "$WB_PROJECT" \
+      --name "CocoaSkills $release_version" --notes-file "$wb_notes" >/dev/null; then
+      refuse 2 "cannot create the Wildberries GitLab release from the supplied notes"
+    fi
+    printf 'Created the Wildberries GitLab release for %s.\n' "$release_tag"
   fi
-  printf 'Created the Wildberries GitLab release for %s.\n' "$release_tag"
 
   if smoke_run_id="$(select_and_watch_run distribution-smoke.yml workflow_run \
     "$pr_head" "$release_started_at" smoke)"; then
@@ -894,6 +1057,11 @@ fi
 
 if [[ "$resume_from" == "verify" ]]; then
   resume_verify
+  exit 0
+fi
+
+if [[ "$resume_from" == "wb" ]]; then
+  resume_wb
   exit 0
 fi
 
