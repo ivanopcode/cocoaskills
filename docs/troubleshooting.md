@@ -30,7 +30,13 @@ Headless `csk install` отказывает с `mcp_plan_unapproved`. Объяв
 
 `csk install` отклоняет URL shorthand или `server.url` до публикации. URL использует другую схему, не-ASCII host, userinfo, query, fragment или запрещённые символы. Длина свыше 2048 символов тоже вызывает отказ.
 
-Укажите HTTPS endpoint без этих компонентов и без секретов, например `https://mcp.example.com/mcp`. Для секрета используйте env reference в `csk.headers`; такое объявление требует consent. Не переносите токен из query в путь URL. [Правила объявления](skill-authoring.md#project-mcp-schema-3) описывают обе формы.
+Укажите HTTPS endpoint без этих компонентов и без секретов, например `https://mcp.example.com/mcp`. Для секрета используйте env reference в `install.headers`; такое объявление требует consent. Не переносите токен из query в путь URL. [Правила объявления](skill-authoring.md#project-mcp-schema-3) описывают обе формы.
+
+## MCP environments: `skipped: unsupported`
+
+Известный environment id без поддержки записи получает `mcp NAME -> AGENT (skipped: unsupported)` без пути; это не отказ и не отдельное предупреждение. В `status` состояние `unsupported` не влияет на `--check`. Без `server.environments` csk использует resolved agents проекта. Явно выбранный writable id записывается даже вне agents проекта. Неизвестный id, пустой список или дубликат вызывает `mcp_agent_selection_invalid`.
+
+Локальные параметры записи и аутентификации находятся в `install`, например `install.headers`. Старое поле `csk` отклоняется с `mcp_declaration_invalid`; замените его на `install`. Unsupported ids не входят в consent subject; добавление writable агента требует нового согласия.
 
 ## Moved upstream tag: `moved_tag` / `would clobber existing tag`
 

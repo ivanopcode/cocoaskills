@@ -15,7 +15,7 @@
           "transport": "http",
           "url": "https://example.invalid/mcp"
         },
-        "csk": {
+        "install": {
           "auth": {
             "kind": "none"
           }
@@ -39,7 +39,7 @@
             "TOOLS_TOKEN"
           ]
         },
-        "csk": {
+        "install": {
           "auth": {
             "kind": "env"
           }
@@ -57,7 +57,7 @@
           "transport": "http",
           "url": "https://example.invalid/mcp"
         },
-        "csk": {
+        "install": {
           "auth": {
             "kind": "none"
           }
@@ -75,7 +75,7 @@
           "transport": "http",
           "url": "https://example.invalid/mcp"
         },
-        "csk": {
+        "install": {
           "auth": {
             "kind": "none"
           },
@@ -95,13 +95,15 @@
             "windsurf"
           ]
         },
-        "csk": {
+        "install": {
           "auth": {
             "kind": "none"
           }
         }
       },
-      "expect": "mcp_agent_selection_invalid"
+      "expect": "admit",
+      "consent_required": false,
+      "note": "Known unsupported environment is reporting-only"
     },
     {
       "id": "V06",
@@ -111,7 +113,7 @@
           "transport": "http",
           "url": "https://example.invalid/mcp"
         },
-        "csk": {
+        "install": {
           "auth": {
             "kind": "env"
           },
@@ -136,7 +138,7 @@
             "PATH"
           ]
         },
-        "csk": {
+        "install": {
           "auth": {
             "kind": "env"
           }
@@ -153,7 +155,7 @@
           "command": "./tools/server",
           "args": []
         },
-        "csk": {
+        "install": {
           "auth": {
             "kind": "none"
           }
@@ -170,7 +172,7 @@
           "url": "https://example.invalid/mcp",
           "trust": true
         },
-        "csk": {
+        "install": {
           "auth": {
             "kind": "none"
           }
@@ -186,7 +188,7 @@
           "transport": "http",
           "url": "https://user:password@example.invalid/mcp"
         },
-        "csk": {
+        "install": {
           "auth": {
             "kind": "none"
           }
@@ -202,7 +204,7 @@
           "transport": "sse",
           "url": "https://example.invalid/sse"
         },
-        "csk": {
+        "install": {
           "auth": {
             "kind": "none"
           }
@@ -222,7 +224,7 @@
             "@example/tools@latest"
           ]
         },
-        "csk": {
+        "install": {
           "auth": {
             "kind": "none"
           }
@@ -238,7 +240,7 @@
           "transport": "http",
           "url": "https://example.invalid/mcp"
         },
-        "csk": {
+        "install": {
           "auth": {
             "kind": "env"
           },

@@ -33,7 +33,7 @@ ENV_HEADER = {
         "transport": "http",
         "url": URL,
     },
-    "csk": {
+    "install": {
         "headers": {"Authorization": {"env": "DOCS_TOKEN", "prefix": "bearer"}},
     },
 }

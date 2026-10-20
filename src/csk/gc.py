@@ -203,7 +203,8 @@ def _collect_locked(
 
     if registry_valid:
         stats.consumers_pruned = len(known) - len(alive)
-        consumers.replace_consumers(csk_home, alive)
+        if alive != known:
+            consumers.replace_consumers(csk_home, alive)
 
     stats.snapshots_removed = _collect_snapshots(
         csk_home,

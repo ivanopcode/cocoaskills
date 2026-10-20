@@ -224,7 +224,7 @@ Schema 3 добавляет `mcp_servers` к schema 2. Для URL-only серв�
 }
 ```
 
-`csk install` запишет native configs трёх агентов и покажет каждую запись. URL без env reference не требует consent. Managed sessions других environment managers пока не видят эти configs. Подробности: [MCP в project Skillfile](docs/skill-authoring.md#project-mcp-schema-3).
+`csk install` запишет native configs трёх агентов и покажет каждую запись. URL без env reference не требует consent. Объектная форма содержит `server` и необязательный `install` с локальными параметрами записи и аутентификации устанавливающего менеджера. Без `server.environments` используются resolved agents проекта; явный writable id записывается даже вне этого набора. Известные unsupported ids дают строку `skipped: unsupported` без пути, а в status — `unsupported`, не влияющий на `--check`. Неизвестные ids, пустые списки и дубликаты запрещены. Добавление writable агента требует нового consent; unsupported ids в consent subject не входят. Managed sessions других environment managers пока не видят эти configs. Подробности: [MCP в project Skillfile](docs/skill-authoring.md#project-mcp-schema-3).
 
 ### Глобальный режим
 

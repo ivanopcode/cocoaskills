@@ -67,7 +67,7 @@ class ProjectStatus:
             and not self.errors
             and all(skill.label == "up-to-date" for skill in self.skills)
             and all(build.current for build in self.builds)
-            and all(row.action == "current" for row in self.mcp or ())
+            and all(row.action in {"current", "unsupported"} for row in self.mcp or ())
         )
 
 

@@ -3,6 +3,9 @@
   "agents": ["claude_code", "codex_cli", "cursor"],
   "skills": [],
   "mcp_servers": {
-    "docs": "https://mcp.example.com/mcp"
+    "docs": {
+      "server": { "transport": "http", "url": "https://mcp.example.com/mcp" },
+      "install": { "auth": { "kind": "none" } }
+    }
   }
 }

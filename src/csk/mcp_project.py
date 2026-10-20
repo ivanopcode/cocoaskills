@@ -12,7 +12,7 @@ import re
 import shutil
 import stat
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
@@ -69,10 +69,21 @@ def refused_report(
             match = re.search(r"\bmcp_[a-z_]+", text)
             code = match.group() if match else "mcp_declaration_invalid"
         rows = plan.rows if plan is not None else ()
+        if plan is not None:
+            reported = {(row.server, row.agent) for row in rows}
+            # Successful installs omit silent forgets; a refusal still lists every owned pair.
+            rows = _ordered_rows([
+                *rows,
+                *[
+                    ReportRow(address.name, address.agent, address.relpath, "removed")
+                    for address in plan.observed
+                    if (address.name, address.agent) not in reported
+                ],
+            ])
         result = "\n".join(
             [
                 *(
-                    f"mcp {r.server} -> {r.agent} {r.path} (refused: {code})"
+                    replace(r, action="skipped: unsupported" if r.path is None else f"refused: {code}").render()
                     for r in rows
                 ),
                 text,
@@ -92,7 +103,9 @@ def _raw_refusal_rows(
     code: str,
     owned: Sequence[ownership.EntryAddress] = (),
 ) -> list[str]:
-    pairs = {(address.name, address.agent, address.relpath) for address in owned}
+    pairs: set[tuple[str, str, str | None]] = {
+        (address.name, address.agent, address.relpath) for address in owned
+    }
     if isinstance(raw, dict):
         for name in sorted(
             k
@@ -108,13 +121,15 @@ def _raw_refusal_rows(
                     isinstance(a, str) for a in environments
                 ):
                     selected = environments
-            for agent in AGENTS:
-                if agent in selected and agent in agents:
+            for agent in set(selected) & set(mcp_configs.known_agents()):
+                if agent in AGENTS:
                     pairs.add((name, agent, native.project_surface(agent).relpath))
-    return [
-        f"mcp {name} -> {agent} {path} (refused: {code})"
-        for name, agent, path in sorted(pairs, key=lambda p: (p[0], AGENTS.index(p[1])))
-    ]
+                else:
+                    pairs.add((name, agent, None))
+    return [row.render() for row in _ordered_rows(
+        ReportRow(name, agent, path, "skipped: unsupported" if path is None else f"refused: {code}")
+        for name, agent, path in pairs
+    )]
 
 
 @dataclass(frozen=True)
@@ -130,12 +145,28 @@ class SurfaceRead:
 class ReportRow:
     server: str
     agent: str
-    path: str
+    path: str | None
     action: str
 
     def render(self, *, dry_run: bool = False) -> str:
         prefix = "would: " if dry_run else ""
-        return f"{prefix}mcp {self.server} -> {self.agent} {self.path} ({self.action})"
+        path = f" {self.path}" if self.path is not None else ""
+        return f"{prefix}mcp {self.server} -> {self.agent}{path} ({self.action})"
+
+
+def _ordered_rows(rows: Iterable[ReportRow]) -> tuple[ReportRow, ...]:
+    return tuple(sorted(rows, key=lambda row: (
+        row.server, AGENTS.index(row.agent) if row.agent in AGENTS else len(AGENTS), row.agent
+    )))
+
+
+def _unsupported_rows(
+    parsed: Mapping[str, declarations.McpDeclaration], *, status: bool = False
+) -> list[ReportRow]:
+    return [
+        ReportRow(decl.name, agent, None, "unsupported" if status else "skipped: unsupported")
+        for decl in parsed.values() for agent in decl.unsupported_agents
+    ]
 
 
 @dataclass(frozen=True)
@@ -165,7 +196,7 @@ class ProjectPlan:
             for name, decl in sorted(self.declarations.items()):
                 approval = (
                     ("required" if name in pending else "approved")
-                    if declarations.authority(decl).consent_required
+                    if decl.agents and declarations.authority(decl).consent_required
                     else "not-required"
                 )
                 lines.append(f"would: mcp {name} approval: {approval}")
@@ -371,7 +402,7 @@ def _plan_project(
     manifest_sha256, parsed = _read_declarations(root, target_agents, raw)
     if sys.platform == "win32":
         for decl in parsed.values():
-            if decl.server.transport == "stdio":
+            if decl.agents and decl.server.transport == "stdio":
                 command = decl.server.command or ""
                 resolved = shutil.which(command)
                 if (
@@ -389,7 +420,7 @@ def _plan_project(
     surfaces, observed = entry_read.surfaces, entry_read.observed
     addresses = set(observed)
     reconciliation = ownership.reconcile(desired, observed, ledger)
-    errors = []
+    errors: list[str] = []
     if reconciliation.refusals:
         refused_by_address = {
             r.address: (surfaces[r.address.agent].read.reason or r.code)
@@ -398,6 +429,7 @@ def _plan_project(
             for r in reconciliation.refusals
         }
         blocking_code = refused_by_address[reconciliation.refusals[0].address]
+        refused_rows = []
         for address in sorted(addresses, key=lambda a: (a.name, AGENTS.index(a.agent))):
             code = refused_by_address.get(address, blocking_code)
             report_action = (
@@ -405,9 +437,8 @@ def _plan_project(
                 if code == "mcp_entry_conflict" and address in refused_by_address
                 else f"refused: {code}"
             )
-            errors.append(
-                f"mcp {address.name} -> {address.agent} {address.relpath} ({report_action})"
-            )
+            refused_rows.append(ReportRow(address.name, address.agent, address.relpath, report_action))
+        errors.extend(row.render() for row in _ordered_rows([*refused_rows, *_unsupported_rows(parsed)]))
     for item in reconciliation.refusals:
         read = surfaces[item.address.agent].read
         code = (read.reason if read.state == "malformed" else item.code) or item.code
@@ -477,26 +508,18 @@ def _plan_project(
         )
     except ownership.McpOwnershipError as exc:
         raise refusal(exc.code, "protected consent store cannot be verified") from exc
-    rows = tuple(
-        ReportRow(a.address.name, a.address.agent, a.address.relpath, _ACTIONS[a.kind])
-        for a in sorted(
-            reconciliation.actions,
-            key=lambda a: (a.address.name, AGENTS.index(a.address.agent)),
-        )
-        if a.kind != "forget"
-    )
-    warnings = (
-        [
-            f"mcp_capability_unsupported: {agent}"
-            for agent in sorted(set(target_agents) - set(AGENTS))
-        ]
-        if parsed
-        else []
-    )
-    warnings.extend(
+    rows = _ordered_rows([
+        *_unsupported_rows(parsed),
+        *[
+            ReportRow(a.address.name, a.address.agent, a.address.relpath, _ACTIONS[a.kind])
+            for a in reconciliation.actions
+            if a.kind != "forget"
+        ],
+    ])
+    warnings = [
         f"{w.code}: {w.address.name} -> {w.address.agent}; {w.detail}. Remove the declaration, or delete the native entry so csk restores it."
         for w in reconciliation.warnings
-    )
+    ]
     return ProjectPlan(
         root,
         home,
@@ -544,7 +567,7 @@ def status_project(
     subjects = tuple(
         _consent_subject(decl)
         for decl in parsed.values()
-        if declarations.authority(decl).consent_required
+        if decl.agents and declarations.authority(decl).consent_required
     )
     try:
         pending = {
@@ -579,7 +602,7 @@ def status_project(
         else:
             state = "current"
         rows.append(ReportRow(address.name, address.agent, address.relpath, state))
-    return tuple(rows)
+    return _ordered_rows([*rows, *_unsupported_rows(parsed, status=True)])
 
 
 def review_consent(

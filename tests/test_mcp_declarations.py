@@ -68,7 +68,7 @@ def object_decl(server, *, headers=None, auth=None, environments=None, **extensi
         extensions["auth"] = auth
     if headers is not None:
         extensions["headers"] = headers
-    return {"server": server, "csk": extensions}
+    return {"server": server, "install": extensions}
 
 
 def bearer(env: str = "DOCS_TOKEN") -> dict:
@@ -168,51 +168,51 @@ DECLARATION_NEGATIVES = [
     ("unknown-top-field", {**http(), "trust": True}, "mcp_declaration_invalid", "mcp_servers.docs.trust"),
     ("env-top-field", {**http(), "env": {"A": "b"}}, "mcp_declaration_invalid", "mcp_servers.docs.env"),
     ('server-and-reference', {**http(), 'reference': {'kind': 'git'}}, 'mcp_declaration_invalid', 'mcp_servers.docs.reference'),
-    ("neither-server-nor-reference", {'csk': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid", "mcp_servers.docs"),
-    ("auth-not-object", {**http(), 'csk': {'auth': 'none'}}, "mcp_declaration_invalid", "mcp_servers.docs.csk.auth"),
-    ("auth-unknown-field", {**http(), 'csk': {'auth': {'kind': 'none', 'token': 'x'}}}, "mcp_declaration_invalid",
-     "mcp_servers.docs.csk.auth.token"),
-    ("auth-kind-missing", {**http(), 'csk': {'auth': {}}}, "mcp_declaration_invalid", "mcp_servers.docs.csk.auth.kind"),
-    ("auth-kind-unknown", {**http(), 'csk': {'auth': {'kind': 'basic'}}}, "mcp_declaration_invalid",
-     "mcp_servers.docs.csk.auth.kind"),
-    ("auth-help-url-not-string", {**http(), 'csk': {'auth': {'kind': 'none', 'help_url': 3}}}, "mcp_declaration_invalid",
-     "mcp_servers.docs.csk.auth.help_url"),
-    ("server-not-object", {'server': 'x', 'csk': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid",
+    ("neither-server-nor-reference", {'install': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid", "mcp_servers.docs"),
+    ("auth-not-object", {**http(), 'install': {'auth': 'none'}}, "mcp_declaration_invalid", "mcp_servers.docs.install.auth"),
+    ("auth-unknown-field", {**http(), 'install': {'auth': {'kind': 'none', 'token': 'x'}}}, "mcp_declaration_invalid",
+     "mcp_servers.docs.install.auth.token"),
+    ("auth-kind-missing", {**http(), 'install': {'auth': {}}}, "mcp_declaration_invalid", "mcp_servers.docs.install.auth.kind"),
+    ("auth-kind-unknown", {**http(), 'install': {'auth': {'kind': 'basic'}}}, "mcp_declaration_invalid",
+     "mcp_servers.docs.install.auth.kind"),
+    ("auth-help-url-not-string", {**http(), 'install': {'auth': {'kind': 'none', 'help_url': 3}}}, "mcp_declaration_invalid",
+     "mcp_servers.docs.install.auth.help_url"),
+    ("server-not-object", {'server': 'x', 'install': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid",
      "mcp_servers.docs.server"),
-    ("transport-missing", {'server': {'url': URL}, 'csk': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid",
+    ("transport-missing", {'server': {'url': URL}, 'install': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid",
      "mcp_servers.docs.server.transport"),
-    ("transport-unknown", {'server': {'transport': 'ws', 'url': URL}, 'csk': {'auth': {'kind': 'none'}}},
+    ("transport-unknown", {'server': {'transport': 'ws', 'url': URL}, 'install': {'auth': {'kind': 'none'}}},
      "mcp_declaration_invalid", "mcp_servers.docs.server.transport"),
-    ("transport-not-string", {'server': {'transport': 1, 'url': URL}, 'csk': {'auth': {'kind': 'none'}}},
+    ("transport-not-string", {'server': {'transport': 1, 'url': URL}, 'install': {'auth': {'kind': 'none'}}},
      "mcp_declaration_invalid", "mcp_servers.docs.server.transport"),
-    ("http-with-command", {'server': {'transport': 'http', 'url': URL, 'command': 'x'}, 'csk': {'auth': {'kind': 'none'}}},
+    ("http-with-command", {'server': {'transport': 'http', 'url': URL, 'command': 'x'}, 'install': {'auth': {'kind': 'none'}}},
      "mcp_declaration_invalid", "mcp_servers.docs.server.command"),
-    ("http-with-trust", {'server': {'transport': 'http', 'url': URL, 'trust': True}, 'csk': {'auth': {'kind': 'none'}}},
+    ("http-with-trust", {'server': {'transport': 'http', 'url': URL, 'trust': True}, 'install': {'auth': {'kind': 'none'}}},
      "mcp_declaration_invalid", "mcp_servers.docs.server.trust"),
-    ("http-without-url", {'server': {'transport': 'http'}, 'csk': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid",
+    ("http-without-url", {'server': {'transport': 'http'}, 'install': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid",
      "mcp_servers.docs.server.url"),
-    ("http-url-not-string", {'server': {'transport': 'http', 'url': 1}, 'csk': {'auth': {'kind': 'none'}}},
+    ("http-url-not-string", {'server': {'transport': 'http', 'url': 1}, 'install': {'auth': {'kind': 'none'}}},
      "mcp_declaration_invalid", "mcp_servers.docs.server.url"),
-    ("http-headers-not-object", {'server': {'transport': 'http', 'url': URL}, 'csk': {'auth': {'kind': 'none'}, 'headers': []}}, "mcp_declaration_invalid",
-     "mcp_servers.docs.csk.headers"),
-    ("stdio-with-url", {'server': {'transport': 'stdio', 'command': 'uvx', 'url': URL}, 'csk': {'auth': {'kind': 'none'}}},
+    ("http-headers-not-object", {'server': {'transport': 'http', 'url': URL}, 'install': {'auth': {'kind': 'none'}, 'headers': []}}, "mcp_declaration_invalid",
+     "mcp_servers.docs.install.headers"),
+    ("stdio-with-url", {'server': {'transport': 'stdio', 'command': 'uvx', 'url': URL}, 'install': {'auth': {'kind': 'none'}}},
      "mcp_declaration_invalid", "mcp_servers.docs.server.url"),
-    ("stdio-with-headers", {'server': {'transport': 'stdio', 'command': 'uvx'}, 'csk': {'auth': {'kind': 'none'}, 'headers': {}}}, "mcp_declaration_invalid", "mcp_servers.docs.csk.headers"),
-    ("stdio-with-cwd", {'server': {'transport': 'stdio', 'command': 'uvx', 'cwd': '/'}, 'csk': {'auth': {'kind': 'none'}}},
+    ("stdio-with-headers", {'server': {'transport': 'stdio', 'command': 'uvx'}, 'install': {'auth': {'kind': 'none'}, 'headers': {}}}, "mcp_declaration_invalid", "mcp_servers.docs.install.headers"),
+    ("stdio-with-cwd", {'server': {'transport': 'stdio', 'command': 'uvx', 'cwd': '/'}, 'install': {'auth': {'kind': 'none'}}},
      "mcp_declaration_invalid", "mcp_servers.docs.server.cwd"),
-    ("stdio-with-literal-env", {'server': {'transport': 'stdio', 'command': 'uvx', 'env': {'A': 'b'}}, 'csk': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid", "mcp_servers.docs.server.env"),
-    ("stdio-without-command", {'server': {'transport': 'stdio'}, 'csk': {'auth': {'kind': 'none'}}},
+    ("stdio-with-literal-env", {'server': {'transport': 'stdio', 'command': 'uvx', 'env': {'A': 'b'}}, 'install': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid", "mcp_servers.docs.server.env"),
+    ("stdio-without-command", {'server': {'transport': 'stdio'}, 'install': {'auth': {'kind': 'none'}}},
      "mcp_declaration_invalid", "mcp_servers.docs.server.command"),
-    ("stdio-command-not-string", {'server': {'transport': 'stdio', 'command': ['uvx']}, 'csk': {'auth': {'kind': 'none'}}},
+    ("stdio-command-not-string", {'server': {'transport': 'stdio', 'command': ['uvx']}, 'install': {'auth': {'kind': 'none'}}},
      "mcp_declaration_invalid", "mcp_servers.docs.server.command"),
-    ("stdio-args-not-list", {'server': {'transport': 'stdio', 'command': 'uvx', 'args': 'x'}, 'csk': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid", "mcp_servers.docs.server.args"),
-    ("stdio-arg-not-string", {'server': {'transport': 'stdio', 'command': 'uvx', 'args': [1]}, 'csk': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid", "mcp_servers.docs.server.args"),
-    ("stdio-env-names-not-list", {'server': {'transport': 'stdio', 'command': 'uvx', 'env_names': 'A'}, 'csk': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid",
+    ("stdio-args-not-list", {'server': {'transport': 'stdio', 'command': 'uvx', 'args': 'x'}, 'install': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid", "mcp_servers.docs.server.args"),
+    ("stdio-arg-not-string", {'server': {'transport': 'stdio', 'command': 'uvx', 'args': [1]}, 'install': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid", "mcp_servers.docs.server.args"),
+    ("stdio-env-names-not-list", {'server': {'transport': 'stdio', 'command': 'uvx', 'env_names': 'A'}, 'install': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid",
      "mcp_servers.docs.server.env_names"),
-    ('reference-refused', {'reference': {'kind': 'git'}, 'csk': {'auth': {'kind': 'none'}}}, 'mcp_declaration_invalid', 'mcp_servers.docs.reference'),
-    ('reference-with-agents-refused', {'reference': {'kind': 'file'}, 'csk': {'auth': {'kind': 'none'}}}, 'mcp_declaration_invalid', 'mcp_servers.docs.reference'),
+    ('reference-refused', {'reference': {'kind': 'git'}, 'install': {'auth': {'kind': 'none'}}}, 'mcp_declaration_invalid', 'mcp_servers.docs.reference'),
+    ('reference-with-agents-refused', {'reference': {'kind': 'file'}, 'install': {'auth': {'kind': 'none'}}}, 'mcp_declaration_invalid', 'mcp_servers.docs.reference'),
     ('reference-requires-auth', {'reference': {'kind': 'git'}}, 'mcp_declaration_invalid', 'mcp_servers.docs.reference'),
-    ("sse-refused", {'server': {'transport': 'sse', 'url': 'https://example.invalid/sse'}, 'csk': {'auth': {'kind': 'none'}}}, "mcp_capability_unsupported", "mcp_servers.docs.server.transport"),
+    ("sse-refused", {'server': {'transport': 'sse', 'url': 'https://example.invalid/sse'}, 'install': {'auth': {'kind': 'none'}}}, "mcp_capability_unsupported", "mcp_servers.docs.server.transport"),
 ]
 
 
@@ -253,14 +253,6 @@ AGENT_NEGATIVES = [
     ("empty-list", http(environments=[]), TARGETS, "mcp_agent_selection_invalid"),
     ("duplicate", http(environments=["cursor", "cursor"]), TARGETS, "mcp_agent_selection_invalid"),
     ("unknown-agent", http(environments=["nonesuch"]), TARGETS + ["nonesuch"], "mcp_agent_selection_invalid"),
-    ("known-but-not-a-target", http(environments=["windsurf"]), TARGETS, "mcp_agent_selection_invalid"),
-    ("slice1-agent-not-a-target", http(environments=["cursor"]), ["claude_code"], "mcp_agent_selection_invalid"),
-    ("one-of-two-not-a-target", http(environments=["claude_code", "cursor"]), ["claude_code"],
-     "mcp_agent_selection_invalid"),
-    ("known-outside-slice1", http(environments=["gemini"]), TARGETS + ["gemini"], "mcp_capability_unsupported"),
-    ("opencode-outside-slice1", http(environments=["cursor", "opencode"]), TARGETS + ["opencode"],
-     "mcp_capability_unsupported"),
-    ("windsurf-outside-slice1", http(environments=["windsurf"]), TARGETS + ["windsurf"], "mcp_capability_unsupported"),
 ]
 
 
@@ -312,7 +304,7 @@ def test_scope_mismatch_precedes_capability_and_agent_errors():
 
 
 def test_agent_selection_precedes_capability():
-    refused(http(git_policy="shared", environments=["cursor"]), "mcp_agent_selection_invalid", targets=["claude_code"])
+    refused(http(git_policy="shared", environments=["nonesuch"]), "mcp_agent_selection_invalid", targets=["claude_code"])
 
 
 def test_syntax_precedes_everything():
@@ -320,7 +312,7 @@ def test_syntax_precedes_everything():
 
 
 def test_every_declaration_passes_each_step_before_the_next_step_runs():
-    raw = {"a": http(git_policy="shared"), "b": http(environments=["windsurf"])}
+    raw = {"a": http(git_policy="shared"), "b": http(environments=["nonesuch"])}
     with pytest.raises(McpDeclarationError) as info:
         parse_mcp_servers(raw, invocation_scope="project", target_agents=TARGETS)
     assert info.value.code == "mcp_agent_selection_invalid"
@@ -718,7 +710,7 @@ def test_interoperable_reserved_env_names(name, variant, surface):
     else:
         assert parse_one(http({"X-Key": {"env": allowed}})).server.headers[0].env == allowed
         body = http({"X-Key": {"env": name}})
-        field = "mcp_servers.docs.csk.headers.X-Key.env"
+        field = "mcp_servers.docs.install.headers.X-Key.env"
     refused(body, "mcp_env_name_reserved", field)
 
 
@@ -815,7 +807,7 @@ def test_ipv6_zone_identifiers_and_non_ascii_hosts_are_refused(url):
 
 @pytest.mark.parametrize("url", IPV6_REFUSED)
 def test_help_url_applies_the_same_host_rules(url):
-    refused(http(auth={"kind": "none", "help_url": url}), "mcp_declaration_invalid", "mcp_servers.docs.csk.auth.help_url")
+    refused(http(auth={"kind": "none", "help_url": url}), "mcp_declaration_invalid", "mcp_servers.docs.install.auth.help_url")
 
 
 @pytest.mark.parametrize("url", ["https://[::1]/mcp", "https://[::1]:8443/mcp", "https://[2001:db8::1]/",
@@ -844,7 +836,7 @@ def test_headers_are_sorted_ignoring_case_and_prefix_defaults_to_none():
 def test_header_count_bound():
     ok = {f"X-H{n}": {"env": f"E{n}"} for n in range(16)}
     assert len(parse_one(http(ok)).server.headers) == 16
-    refused(http({**ok, "X-H16": {"env": "E16"}}), "mcp_declaration_invalid", "mcp_servers.docs.csk.headers")
+    refused(http({**ok, "X-H16": {"env": "E16"}}), "mcp_declaration_invalid", "mcp_servers.docs.install.headers")
 
 
 HEADER_NEGATIVES = [
@@ -1077,20 +1069,20 @@ STDIO_VARIANTS = {
     "arg-added": _edit(BASE_STDIO, ("server", "args"), ["-y", "pkg@1.2.3", "x"]),
     "env-name": _edit(BASE_STDIO, ("server", "env_names"), ["T_TWO"]),
     "env-added": _edit(BASE_STDIO, ("server", "env_names"), ["T_ONE", "T_TWO"]),
-    "env-removed": _edit(_edit(BASE_STDIO, ("server", "env_names"), []), ("csk", "auth",), {"kind": "none"}),
-    "auth-help-url": _edit(BASE_STDIO, ("csk", "auth", "help_url"), "https://example.invalid/other"),
-    "auth-help-url-removed": _edit(BASE_STDIO, ("csk", "auth",), {"kind": "env"}),
+    "env-removed": _edit(_edit(BASE_STDIO, ("server", "env_names"), []), ("install", "auth",), {"kind": "none"}),
+    "auth-help-url": _edit(BASE_STDIO, ("install", "auth", "help_url"), "https://example.invalid/other"),
+    "auth-help-url-removed": _edit(BASE_STDIO, ("install", "auth",), {"kind": "env"}),
     "agents": _edit(BASE_STDIO, ("server", "environments",), ["cursor"]),
     "agents-wider": _edit(BASE_STDIO, ("server", "environments",), ["claude_code", "cursor"]),
 }
 STDIO_VARIANTS["command"]["server"]["args"] = ["pkg==1.2.3"]
 HTTP_VARIANTS = {
     "url": _edit(BASE_HTTP, ("server", "url"), "https://example.invalid/mcp2"),
-    "header-env": _edit(BASE_HTTP, ("csk", "headers", "Authorization", "env"), "T_TWO"),
-    "header-prefix": _edit(BASE_HTTP, ("csk", "headers", "Authorization", "prefix"), "none"),
-    "header-name": _edit(BASE_HTTP, ("csk", "headers"), {"authorization": {"env": "T_ONE", "prefix": "bearer"}}),
-    "header-added": _edit(BASE_HTTP, ("csk", "headers", "X-Key"), {"env": "T_TWO"}),
-    "transport-kind-oauth": _edit(_edit(BASE_HTTP, ("csk", "headers"), {}), ("csk", "auth",), {"kind": "oauth"}),
+    "header-env": _edit(BASE_HTTP, ("install", "headers", "Authorization", "env"), "T_TWO"),
+    "header-prefix": _edit(BASE_HTTP, ("install", "headers", "Authorization", "prefix"), "none"),
+    "header-name": _edit(BASE_HTTP, ("install", "headers"), {"authorization": {"env": "T_ONE", "prefix": "bearer"}}),
+    "header-added": _edit(BASE_HTTP, ("install", "headers", "X-Key"), {"env": "T_TWO"}),
+    "transport-kind-oauth": _edit(_edit(BASE_HTTP, ("install", "headers"), {}), ("install", "auth",), {"kind": "oauth"}),
 }
 
 
@@ -1144,6 +1136,7 @@ def test_declaration_digest_uses_its_domain():
 
     decl = parse_one(http())
     normalized = json.loads(json.dumps(asdict(decl)))
+    normalized.pop("unsupported_agents")
     canonical = protocol_json.canonical_bytes(normalized)
     assert declaration_digest(decl) == hashlib.sha256(b"csk-mcp-declaration-v1\0" + canonical).hexdigest()
     assert declaration_digest(decl) != hashlib.sha256(canonical).hexdigest()
@@ -1451,7 +1444,7 @@ def test_ipv6_zone_identifiers_and_non_ascii_hosts_are_refused(url):
 
 @pytest.mark.parametrize("url", IPV6_REFUSED)
 def test_help_url_applies_the_same_host_rules(url):
-    refused(http(auth={"kind": "none", "help_url": url}), "mcp_declaration_invalid", "mcp_servers.docs.csk.auth.help_url")
+    refused(http(auth={"kind": "none", "help_url": url}), "mcp_declaration_invalid", "mcp_servers.docs.install.auth.help_url")
 
 
 @pytest.mark.parametrize("url", ["https://[::1]/mcp", "https://[::1]:8443/mcp", "https://[2001:db8::1]/",
@@ -1476,31 +1469,31 @@ SSE_INVALID = [
     ("cwd", sse(cwd="repo"), "mcp_declaration_invalid", "mcp_servers.docs.server.cwd"),
     ("command", sse(command="x"), "mcp_declaration_invalid", "mcp_servers.docs.server.command"),
     ("args", sse(args=[]), "mcp_declaration_invalid", "mcp_servers.docs.server.args"),
-    ("env-names", sse(env_names=["A"]), "mcp_declaration_invalid", "mcp_servers.docs.csk.auth.kind"),
+    ("env-names", sse(env_names=["A"]), "mcp_declaration_invalid", "mcp_servers.docs.install.auth.kind"),
     ("trust", sse(trust=True), "mcp_declaration_invalid", "mcp_servers.docs.server.trust"),
-    ("no-url", {'server': {'transport': 'sse'}, 'csk': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid",
+    ("no-url", {'server': {'transport': 'sse'}, 'install': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid",
      "mcp_servers.docs.server.url"),
     ("url-not-string", sse(url=3), "mcp_declaration_invalid", "mcp_servers.docs.server.url"),
-    ("headers-not-object", sse(headers=[]), "mcp_declaration_invalid", "mcp_servers.docs.csk.headers"),
+    ("headers-not-object", sse(headers=[]), "mcp_declaration_invalid", "mcp_servers.docs.install.headers"),
     ("literal-header", sse(headers={"Authorization": "literal"}), "mcp_declaration_invalid",
-     "mcp_servers.docs.csk.headers.Authorization"),
+     "mcp_servers.docs.install.headers.Authorization"),
     ("header-unknown-field", sse(headers={"X": {"env": "A", "x": 1}}, auth={"kind": "env"}),
-     "mcp_declaration_invalid", "mcp_servers.docs.csk.headers.X.x"),
+     "mcp_declaration_invalid", "mcp_servers.docs.install.headers.X.x"),
     ("http-url", sse(url="http://example.invalid/sse"), "mcp_url_invalid", "mcp_servers.docs.server.url"),
     ("url-userinfo", sse(url="https://u:p@example.invalid/sse"), "mcp_url_invalid", "mcp_servers.docs.server.url"),
     ("url-zone", sse(url="https://[fe80::1%eth0]/sse"), "mcp_url_invalid", "mcp_servers.docs.server.url"),
     ("url-query", sse(url="https://example.invalid/sse?x=1"), "mcp_url_invalid", "mcp_servers.docs.server.url"),
     ("reserved-header-env", sse(headers={"X": {"env": "PATH"}}, auth={"kind": "env"}), "mcp_env_name_reserved",
-     "mcp_servers.docs.csk.headers.X.env"),
+     "mcp_servers.docs.install.headers.X.env"),
     ("forbidden-header", sse(headers={"Host": {"env": "A"}}, auth={"kind": "env"}), "mcp_declaration_invalid",
-     "mcp_servers.docs.csk.headers.Host"),
+     "mcp_servers.docs.install.headers.Host"),
     ("auth-env-without-reference", sse(auth={"kind": "env"}), "mcp_declaration_invalid",
-     "mcp_servers.docs.csk.auth.kind"),
+     "mcp_servers.docs.install.auth.kind"),
     ("auth-none-with-reference", sse(headers={"X": {"env": "A"}}), "mcp_declaration_invalid",
-     "mcp_servers.docs.csk.auth.kind"),
+     "mcp_servers.docs.install.auth.kind"),
     ("help-url", sse(auth={"kind": "none", "help_url": "http://example.invalid"}), "mcp_declaration_invalid",
-     "mcp_servers.docs.csk.auth.help_url"),
-    ("scope-unsupported", {**sse(), "csk": {"scope": "user"}}, "mcp_capability_unsupported", "mcp_servers.docs.csk.scope"),
+     "mcp_servers.docs.install.auth.help_url"),
+    ("scope-unsupported", {**sse(), "install": {"scope": "user"}}, "mcp_capability_unsupported", "mcp_servers.docs.install.scope"),
 ]
 
 
@@ -1514,7 +1507,7 @@ def test_sse_steps_one_and_two_precede_the_capability_and_agent_steps():
     refused(object_decl({"transport": "sse", "url": URL, "cwd": "x"}, environments=["windsurf"], git_policy="shared"), "mcp_declaration_invalid",
             "mcp_servers.docs.server.cwd")
     refused(object_decl({"transport": "sse", "url": "http://x.invalid"}, environments=["windsurf"], git_policy="shared"), "mcp_url_invalid")
-    refused(object_decl({"transport": "sse", "url": URL}, environments=["windsurf"]), "mcp_agent_selection_invalid", targets=TARGETS)
+    refused(object_decl({"transport": "sse", "url": URL}, environments=["nonesuch"]), "mcp_agent_selection_invalid", targets=TARGETS)
 
 
 def test_sse_with_oauth_and_headerless_auth_is_still_only_a_capability_refusal():
@@ -1527,13 +1520,13 @@ HELP_BAD = "http://example.invalid/help"
 @pytest.mark.parametrize("payload", [{"kind": "git"}, {}, {"url": "https://example.invalid/r", "sha256": "0" * 64},
                                      {"anything": [1, {"x": None}]}])
 def test_reference_contents_do_not_admit_a_removed_public_field(payload):
-    refused({'reference': payload, 'csk': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid",
+    refused({'reference': payload, 'install': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid",
             "mcp_servers.docs.reference")
 
 
 @pytest.mark.parametrize("payload", [[], "git", None, 3, True, []])
 def test_reference_payload_must_be_an_object(payload):
-    refused({'reference': payload, 'csk': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid", "mcp_servers.docs.reference")
+    refused({'reference': payload, 'install': {'auth': {'kind': 'none'}}}, "mcp_declaration_invalid", "mcp_servers.docs.reference")
 
 
 @pytest.mark.parametrize("auth", [
@@ -1552,21 +1545,21 @@ def test_auth_help_url_is_validated_whatever_the_server_form(auth, form):
         "stdio": {"server": {"transport": "stdio", "command": "tool"}},
         "http": {"server": {"transport": "http", "url": URL}},
     }[form]
-    refused({**declaration, 'csk': {'auth': auth}}, "mcp_declaration_invalid", "mcp_servers.docs.csk.auth.help_url")
+    refused({**declaration, 'install': {'auth': auth}}, "mcp_declaration_invalid", "mcp_servers.docs.install.auth.help_url")
 
 
 @pytest.mark.parametrize("auth", [{}, {"kind": "basic"}, {"kind": "none", "token": "x"}, "none", None])
 def test_reference_is_unknown_even_with_an_invalid_auth_shape(auth):
-    refused({'reference': {'kind': 'git'}, 'csk': {'auth': auth}}, "mcp_declaration_invalid")
+    refused({'reference': {'kind': 'git'}, 'install': {'auth': auth}}, "mcp_declaration_invalid")
 
 
 def test_reference_with_a_valid_help_url_is_an_unknown_field():
-    refused({'reference': {'kind': 'git'}, 'csk': {'auth': {'kind': 'env', 'help_url': 'https://example.invalid/h?x=1#y'}}},
+    refused({'reference': {'kind': 'git'}, 'install': {'auth': {'kind': 'env', 'help_url': 'https://example.invalid/h?x=1#y'}}},
             "mcp_declaration_invalid", "mcp_servers.docs.reference")
 
 
 def test_reference_unknown_field_precedes_scope_capability():
-    refused({'reference': {'kind': 'git'}, 'csk': {'auth': {'kind': 'none'}, 'scope': 'user'}}, "mcp_declaration_invalid")
+    refused({'reference': {'kind': 'git'}, 'install': {'auth': {'kind': 'none'}, 'scope': 'user'}}, "mcp_declaration_invalid")
 
 
 # --- map keys are step-1 syntax ---------------------------------------------------
@@ -1575,7 +1568,7 @@ def test_reference_unknown_field_precedes_scope_capability():
 def test_every_name_is_checked_before_any_declaration_body():
     # "a" sorts first and has a broken body; the later bad name still wins because
     # all map keys are validated before any body is shaped.
-    raw = {"a": {'server': 3, 'csk': {'auth': {'kind': 'none'}}}, "bad name": http()}
+    raw = {"a": {'server': 3, 'install': {'auth': {'kind': 'none'}}}, "bad name": http()}
     with pytest.raises(McpDeclarationError) as info:
         parse_mcp_servers(raw, invocation_scope="project", target_agents=TARGETS)
     assert (info.value.code, info.value.field) == ("mcp_declaration_invalid", "mcp_servers.<invalid name #1>")
@@ -1610,13 +1603,13 @@ def test_errors_never_echo_unvalidated_keys_or_names(surface, key):
     if surface == "name":
         raw = {"good": http(), key: http()}
     elif surface == "header":
-        body["csk"]["headers"] = {key: {"env": "TOKEN", "prefix": "bearer"}}
+        body["install"]["headers"] = {key: {"env": "TOKEN", "prefix": "bearer"}}
     elif surface == "header-ref":
-        body["csk"]["headers"] = {"X-Key": {"env": "TOKEN", key: True}}
+        body["install"]["headers"] = {"X-Key": {"env": "TOKEN", key: True}}
     else:
         if surface == "auth":
-            body["csk"]["auth"] = {"kind": "none"}
-        target = body if surface == "declaration" else body["csk"]["auth"] if surface == "auth" else body[surface]
+            body["install"]["auth"] = {"kind": "none"}
+        target = body if surface == "declaration" else body["install"]["auth"] if surface == "auth" else body[surface]
         target[key] = True
     with pytest.raises(McpDeclarationError) as info:
         parse_mcp_servers(raw, invocation_scope="project", target_agents=TARGETS)
@@ -1642,9 +1635,11 @@ def test_invalid_name_index_is_declared_insertion_index_not_sorted_index():
 
 @pytest.mark.parametrize("agents", [["cursor", "opencode", "claude_code"], ["opencode", "claude_code"],
                                   ["cursor", "gemini", "opencode", "claude_code"]])
-def test_capability_errors_report_the_declared_agent_index(agents):
-    index = next(i for i, agent in enumerate(agents) if agent not in mcp.SLICE1_AGENTS)
-    refused(http(environments=agents), "mcp_capability_unsupported", f"mcp_servers.docs.server.environments.{index}", targets=agents)
+def test_known_agents_are_partitioned_for_writing_and_reporting(agents):
+    # Explicit known ids outside project targets remain writable or reporting-only, never refused.
+    declaration = parse_one(http(environments=agents), targets=["codex_cli"])
+    assert declaration.agents == tuple(sorted(a for a in agents if a in mcp.SLICE1_AGENTS))
+    assert declaration.unsupported_agents == tuple(sorted(a for a in agents if a not in mcp.SLICE1_AGENTS))
 
 
 RUNNER_ALIAS_CASES = [
@@ -1685,4 +1680,4 @@ def test_uvx_package_name_interior_punctuation_is_admitted(name, form):
 
 def test_help_url_refuses_backslash_in_path():
     refused(http(auth={"kind": "none", "help_url": "https://example.invalid/a\\b"}),
-            "mcp_declaration_invalid", "mcp_servers.docs.csk.auth.help_url")
+            "mcp_declaration_invalid", "mcp_servers.docs.install.auth.help_url")

@@ -287,7 +287,7 @@ def test_native_refusals(project_cli, capsys, kind, code):
         {"server": {"transport": "stdio", "command": "my-server", "args": []}},
         {
             "server": {"transport": "http", "url": URL},
-            "csk": {
+            "install": {
                 "headers": {"Authorization": {"env": "DOCS_TOKEN", "prefix": "bearer"}}
             },
         },
@@ -490,14 +490,17 @@ def test_native_gitignore_gate(project_cli, capsys):
     assert run(["git", "ls-files", ".mcp.json"], root).stdout.strip() == ".mcp.json"
 
 
-# Unsupported selected agents warn once, while explicit unsupported environments refuse without native writes.
-def test_unsupported_agent_warning_and_explicit_refusal(project_cli, capsys):
+# Resolved and explicitly listed unsupported environments each get one skipped row without warnings or writes.
+def test_unsupported_agent_rows(project_cli, capsys):
     root, _, declare = project_cli
     declare({"docs": URL}, agents=[*AGENTS, "gemini"])
     assert install() == 0
-    assert capsys.readouterr().out.count("mcp_capability_unsupported: gemini") == 1
+    output = capsys.readouterr().out
+    assert output.count("mcp docs -> gemini (skipped: unsupported)") == 1
+    assert "mcp_capability_unsupported" not in output
     declare(
         {
+            "docs": URL,
             "other": {
                 "server": {"transport": "http", "url": URL, "environments": ["gemini"]}
             }
@@ -505,8 +508,10 @@ def test_unsupported_agent_warning_and_explicit_refusal(project_cli, capsys):
         agents=[*AGENTS, "gemini"],
     )
     before = native_bytes(root)
-    assert install() != 0
-    assert "mcp_capability_unsupported" in capsys.readouterr().err
+    assert install() == 0
+    output = capsys.readouterr().out
+    assert output.count("mcp other -> gemini (skipped: unsupported)") == 1
+    assert "mcp_capability_unsupported" not in output
     assert native_bytes(root) == before
 
 
@@ -528,7 +533,7 @@ def test_no_server_or_auth_process(project_cli, monkeypatch, tmp_path, command, 
         {
             "docs": {
                 "server": {"transport": "http", "url": URL},
-                "csk": {"auth": {"kind": "oauth"}},
+                "install": {"auth": {"kind": "oauth"}},
             },
             "tools": {
                 "server": {

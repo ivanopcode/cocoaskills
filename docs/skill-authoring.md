@@ -236,13 +236,27 @@ Schema 3 сохраняет все поля и правила schema 2. Она �
 }
 ```
 
-`csk install` запишет сервер `docs` для каждого выбранного агента. Этот пример не требует consent и работает без терминала. Его копия хранится в [`tests/fixtures/mcp/docs-example.Skillfile.json`](../tests/fixtures/mcp/docs-example.Skillfile.json).
+`csk install` запишет сервер `docs` для каждого выбранного writable агента. Этот пример не требует consent и работает без терминала. Эквивалентная объектная форма хранится в [`tests/fixtures/mcp/docs-example.Skillfile.json`](../tests/fixtures/mcp/docs-example.Skillfile.json):
+
+```json
+{
+  "schema_version": 3,
+  "agents": ["claude_code", "codex_cli", "cursor"],
+  "skills": [],
+  "mcp_servers": {
+    "docs": {
+      "server": { "transport": "http", "url": "https://mcp.example.com/mcp" },
+      "install": { "auth": { "kind": "none" } }
+    }
+  }
+}
+```
 
 URL shorthand равен объекту `server` с `transport: "http"` и тем же `url`. URL использует `https` и ASCII host. Userinfo, query и fragment запрещены. Не помещайте секреты в URL, включая путь. Ограничение длины составляет 2048 символов; пробелы, управляющие и format-символы, `$`, фигурные скобки и backslash запрещены. Проверка секретов отклоняет обнаруженный токен до записи.
 
 #### Object form
 
-Объект объявления содержит обязательный `server` и необязательный `csk`. Другие поля на этом уровне запрещены. Имя сервера соответствует `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`; имена уникальны без учёта регистра, зарезервированные Windows-имена запрещены.
+Объект объявления содержит обязательный `server` и необязательный `install`. Другие поля на этом уровне запрещены. Имя сервера соответствует `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`; имена уникальны без учёта регистра, зарезервированные Windows-имена запрещены.
 
 Следующий фрагмент задаёт значение поля `mcp_servers` для stdio и HTTP с env header:
 
@@ -256,7 +270,7 @@ URL shorthand равен объекту `server` с `transport: "http"` и те�
       "env_names": ["TOOLS_TOKEN"],
       "environments": ["claude_code", "cursor"]
     },
-    "csk": {
+    "install": {
       "auth": { "kind": "env", "help_url": "https://example.com/tokens" },
       "scope": "project",
       "git_policy": "local"
@@ -264,7 +278,7 @@ URL shorthand равен объекту `server` с `transport: "http"` и те�
   },
   "api": {
     "server": { "transport": "http", "url": "https://api.example.com/mcp" },
-    "csk": {
+    "install": {
       "headers": { "Authorization": { "env": "API_TOKEN", "prefix": "bearer" } },
       "auth": { "kind": "env" }
     }
@@ -276,9 +290,9 @@ URL shorthand равен объекту `server` с `transport: "http"` и те�
 
 Набор полей `server` закрыт: `transport`, `url`, `command`, `args`, `env_names`, `environments`. HTTP использует `url`; stdio использует `command` и массив `args`. `command` содержит имя executable без пути или shell-команды. Для `npx` и `uvx` нужна точная версия пакета, например `example-mcp==1.2.3` для `uvx`. Секреты в `args` запрещены. `env_names` перечисляет имена переменных, а не значения; управляющие переменные вроде `PATH` запрещены. Нативный клиент может передать серверу больше переменных, чем перечисляет `env_names`; csk не гарантирует изоляцию окружения.
 
-`server.environments` перечисляет csk agent ids. Без этого поля действует разрешённый список `agents` проекта. Явное указание неподдерживаемого агента завершает установку с `mcp_capability_unsupported`. Поддерживаемые native targets: `claude_code`, `codex_cli`, `cursor`.
+`server.environments` перечисляет известные environment ids: `claude_code`, `codex_cli`, `cursor`, `gemini`, `windsurf`, `opencode`. Без поля используются resolved agents проекта: csk пишет для `claude_code`, `codex_cli`, `cursor`, а для остальных известных ids показывает `skipped: unsupported` без пути. Явно перечисленный writable агент получает запись, даже если его нет среди agents проекта. Неизвестный id, пустой список или дубликат вызывает `mcp_agent_selection_invalid`.
 
-Набор полей `csk` тоже закрыт. `headers` допустим только для HTTP: имя заголовка сопоставляется объекту с обязательным `env` и необязательным `prefix: "bearer"`. Значения секретов в объявлении не хранятся. `auth` содержит `kind` (`none`, `env` или `oauth`) и необязательный `help_url`. Без `auth` csk выбирает `env` при любой env reference, иначе `none`. `scope` поддерживает только `project`, `git_policy` только `local`. Значения `user` и `shared` отклоняются с `mcp_capability_unsupported`. Полный [справочник полей и кодов отказа](reference.md#project-mcp-reference) перечисляет ограничения.
+`install` задаёт локальные параметры установки: как устанавливающий менеджер пишет и аутентифицирует сервер в native configs. Набор полей `install` тоже закрыт. Поле `csk` не является alias и отклоняется с `mcp_declaration_invalid`. `headers` допустим только для HTTP: имя заголовка сопоставляется объекту с обязательным `env` и необязательным `prefix: "bearer"`. Значения секретов в объявлении не хранятся. `auth` содержит `kind` (`none`, `env` или `oauth`) и необязательный `help_url`. Без `auth` csk выбирает `env` при любой env reference, иначе `none`. `scope` поддерживает только `project`, `git_policy` только `local`. Значения `user` и `shared` отклоняются с `mcp_capability_unsupported`. Полный [справочник полей и кодов отказа](reference.md#project-mcp-reference) перечисляет ограничения.
 
 #### Запись и consent
 
@@ -292,9 +306,9 @@ URL shorthand равен объекту `server` с `transport: "http"` и те�
 
 Для созданного файла csk добавляет точный путь в `.gitignore`: `/.mcp.json`, `/.codex/config.toml` или `/.cursor/mcp.json`. Если проверка требует исправить `.gitignore`, повторите `csk install --fix-gitignore`. Уже отслеживаемый git файл csk меняет на месте и не добавляет в ignore. csk сохраняет байты вне изменяемых записей. JSON-файлы должны быть строгим UTF-8 JSON без BOM, comments и trailing commas.
 
-Consent разрешает публикацию исполняемого кода или env reference. Он нужен для stdio и для любой ссылки на переменную в `env_names` или `csk.headers`. HTTP без env reference, включая `auth.kind: "oauth"`, consent не требует. csk никогда не запускает сервер, package runner или команду аутентификации.
+Consent разрешает публикацию исполняемого кода или env reference. Он нужен для stdio и для любой ссылки на переменную в `env_names` или `install.headers`. HTTP без env reference, включая `auth.kind: "oauth"`, consent не требует. csk никогда не запускает сервер, package runner или команду аутентификации.
 
-Для нового или изменённого объявления с такими полномочиями запустите `csk install` в терминале. csk покажет план и спросит `Approve N MCP server(s) for <project>? [y/N]`. Ответ `y` или `yes` сохраняет consent в приватном csk home. Без терминала или при отказе csk возвращает `mcp_plan_unapproved`. Флаг, env variable, поле Skillfile или файл проекта не дают consent. Сохранённое согласие относится к проверенному объявлению этого проекта.
+Для нового или изменённого объявления с такими полномочиями запустите `csk install` в терминале. csk покажет план и спросит `Approve N MCP server(s) for <project>? [y/N]`. Ответ `y` или `yes` сохраняет consent в приватном csk home. Без терминала или при отказе csk возвращает `mcp_plan_unapproved`. Флаг, env variable, поле Skillfile или файл проекта не дают consent. Сохранённое согласие относится к проверенному объявлению этого проекта и набору writable агентов. Добавление writable агента требует нового согласия. Unsupported ids не входят в consent subject; объявление только для них согласия не требует.
 
 Для просмотра плана запустите `csk install --dry-run`. Команда покажет строки `would:` и состояние consent каждого объявления: `required`, `approved` или `not-required`. Она ничего не пишет и не сохраняет consent. Если единственное препятствие состоит в consent, dry run завершается с кодом 0.
 
@@ -315,7 +329,7 @@ Drift означает, что пользователь изменил owned ent
 
 #### Отчёт и аутентификация
 
-Каждая пара server/agent получает ровно одну строку с точным project-relative path. Порядок стабилен: имя сервера по возрастанию, затем Claude Code, Codex CLI и Cursor. Успешная установка может показать такой отчёт:
+Каждая пара server/agent получает ровно одну строку. Writable пары содержат точный project-relative path; unsupported пары показываются как `mcp NAME -> AGENT (skipped: unsupported)` без пути и отдельного предупреждения. Порядок стабилен: имя сервера по возрастанию, затем Claude Code, Codex CLI и Cursor, затем unsupported ids по алфавиту. Это правило действует и при отказе; dry-run добавляет `would:`. Успешная установка может показать такой отчёт:
 
 ```text
 mcp docs -> claude_code .mcp.json (added)
@@ -324,7 +338,7 @@ mcp docs -> cursor .cursor/mcp.json (added)
 MCP configuration installed. Authentication not checked.
 ```
 
-Действия также включают `updated`, `unchanged`, `restored`, `removed`, `released` и `skipped: drift`. После записи csk явно сообщает, что аутентификацию не проверял.
+Действия также включают `updated`, `unchanged`, `restored`, `removed`, `released`, `skipped: drift` и `skipped: unsupported`. После записи csk явно сообщает, что аутентификацию не проверял.
 
 Отказ тоже перечисляет все затронутые пары до итоговой ошибки. Например, headless install HTTP-сервера `api` с env header из примера сообщает:
 
@@ -348,7 +362,7 @@ csk status --check
 csk status --check --json
 ```
 
-Для project Skillfile schema 3 `status` показывает каждую объявленную или ещё owned пару server/agent. Формат строки: `mcp <server> -> <agent> <project-relative path> (<state>)`. Порядок совпадает с install: имя сервера по возрастанию, затем `claude_code`, `codex_cli`, `cursor`.
+Для project Skillfile schema 3 `status` показывает каждую объявленную или ещё owned пару server/agent. Формат строки: `mcp <server> -> <agent> <project-relative path> (<state>)`. Порядок совпадает с install: имя сервера по возрастанию, затем `claude_code`, `codex_cli`, `cursor`, затем unsupported ids по алфавиту. Для них строка не содержит пути и имеет состояние `unsupported`.
 
 ```text
 mcp docs -> claude_code .mcp.json (current)
@@ -359,6 +373,7 @@ MCP authentication and connectivity: not checked.
 
 | State | Значение |
 | --- | --- |
+| `unsupported` | Известное окружение без поддержки записи; конфигурация не меняется. |
 | `current` | Owned entry соответствует объявлению и последней записи csk. |
 | `missing` | Объявленная native entry или её файл отсутствует. |
 | `outdated` | Объявление изменилось, а owned entry сохранила установленное csk содержимое; следующий install обновит её. |
@@ -372,11 +387,11 @@ MCP authentication and connectivity: not checked.
 
 Например, замените URL в Skillfile на `https://mcp.example.com/mcp-v2`, оставив native configs без изменений: строки станут `outdated`, а `csk status --check` вернёт 1. После `csk install` они снова станут `current`. Ручное изменение самой owned entry вместо Skillfile даст `drift`.
 
-Обычный `csk status` возвращает 0 и при неактуальных строках: это отчёт, а не проверочный gate. С `--check` код 0 означает, что все MCP-строки `current` (или строк нет) и остальные проверки проекта тоже успешны. Любое другое MCP-состояние, ошибка проекта или неактуальный скилл дают 1. Ошибки конфигурации или использования команды дают 2.
+Обычный `csk status` возвращает 0 и при неактуальных строках: это отчёт, а не проверочный gate. С `--check` код 0 означает, что все MCP-строки `current` или `unsupported` (или строк нет) и остальные проверки проекта тоже успешны. Любое другое MCP-состояние, ошибка проекта или неактуальный скилл дают 1. Ошибки конфигурации или использования команды дают 2.
 
 Если приватный ledger или consent store нельзя проверить, csk выводит `ERROR mcp_ownership_unknown`, а не считает хранилище пустым. MCP-строк для такого проекта нет; `--check` возвращает 1. В JSON ошибка находится в `errors`, а `mcp` остаётся пустым массивом.
 
-В `--json` результат проекта входит в массив проектов. Объект проекта содержит `mcp` — массив строк с полями `server`, `agent`, `path`, `state`; например, `{"server":"docs","agent":"codex_cli","path":".codex/config.toml","state":"current"}`. Поле `clean` учитывает и MCP, и остальные проверки проекта. Текстовая строка про auth/connectivity в JSON не добавляется.
+В `--json` результат проекта входит в массив проектов. Объект проекта содержит `mcp` — массив строк с полями `server`, `agent`, `path`, `state`; например, `{"server":"docs","agent":"codex_cli","path":".codex/config.toml","state":"current"}`. Для `unsupported` поле `path` равно `null`. Поле `clean` учитывает и MCP, и остальные проверки проекта. Текстовая строка про auth/connectivity в JSON не добавляется.
 
 `status` только читает состояние: не меняет native configs, ledger или consent, не запрашивает согласие и не запускает серверы или auth-команды. `current` подтверждает состояние конфигурации; аутентификация и доступность сервера не проверены. Для project schema 1/2 и global status MCP-строки и JSON-поле `mcp` не добавляются.
 

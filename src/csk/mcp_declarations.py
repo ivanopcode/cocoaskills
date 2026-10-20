@@ -164,6 +164,8 @@ class McpDeclaration:
     agents: tuple[str, ...]
     scope: Literal["project"] = "project"
     git_policy: Literal["local"] = "local"
+    # Reporting metadata is excluded from the writable model and its consent digest.
+    unsupported_agents: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -214,7 +216,7 @@ class _Draft:
 def parse_mcp_servers(
     raw: object, *, invocation_scope: str, target_agents: Sequence[str]
 ) -> dict[str, McpDeclaration]:
-    """Parse the closed server/csk grammar and normalize URL shorthand."""
+    """Parse the closed server/install grammar and normalize URL shorthand."""
     try:
         return _parse_mcp_servers(
             raw, invocation_scope=invocation_scope, target_agents=target_agents
@@ -227,11 +229,11 @@ def parse_mcp_servers(
         if len(parts) == 3:
             suffix = "." + parts[2]
             for old, new in (
-                (".server.headers", ".csk.headers"),
+                (".server.headers", ".install.headers"),
                 (".agents", ".server.environments"),
-                (".auth", ".csk.auth"),
-                (".scope", ".csk.scope"),
-                (".git_policy", ".csk.git_policy"),
+                (".auth", ".install.auth"),
+                (".scope", ".install.scope"),
+                (".git_policy", ".install.git_policy"),
             ):
                 if suffix == old or suffix.startswith(old + "."):
                     suffix = new + suffix[len(old) :]
@@ -266,7 +268,7 @@ def _parse_mcp_servers(
     _step2_rules(drafts, invocation_scope)
     selected = {draft.name: _step3_agents(draft, target_agents) for draft in drafts}
     for draft in drafts:
-        _step4_capability(draft, selected[draft.name], invocation_scope)
+        _step4_capability(draft, invocation_scope)
     declarations: dict[str, McpDeclaration] = {}
     for draft in drafts:
         assert draft.server is not None
@@ -274,7 +276,8 @@ def _parse_mcp_servers(
             name=draft.name,
             server=_normalized(draft.server),
             auth=draft.auth,
-            agents=selected[draft.name],
+            agents=tuple(a for a in selected[draft.name] if a in SLICE1_AGENTS),
+            unsupported_agents=tuple(a for a in selected[draft.name] if a not in SLICE1_AGENTS),
         )
     return declarations
 
@@ -346,7 +349,7 @@ def _shape_declaration(name: str, body: object, index: int) -> _Draft:
     if not isinstance(body, dict):
         raise _public_invalid(path, "declaration must be an object or HTTPS URL")
     for key in body:
-        if key not in {"server", "csk"}:
+        if key not in {"server", "install"}:
             raise _public_invalid(
                 f"{path}.{_path_name(key, index)}", "unknown declaration field"
             )
@@ -367,13 +370,13 @@ def _shape_declaration(name: str, body: object, index: int) -> _Draft:
             raise _public_invalid(
                 f"{path}.server.{_path_name(key, index)}", "unknown server field"
             )
-    extensions = body.get("csk", {})
+    extensions = body.get("install", {})
     if not isinstance(extensions, dict):
-        raise _public_invalid(f"{path}.csk", "csk must be an object")
+        raise _public_invalid(f"{path}.install", "install must be an object")
     for key in extensions:
         if key not in {"headers", "auth", "scope", "git_policy"}:
             raise _public_invalid(
-                f"{path}.csk.{_path_name(key, index)}", "unknown csk field"
+                f"{path}.install.{_path_name(key, index)}", "unknown install field"
             )
     normalized_server = {
         key: value for key, value in server.items() if key != "environments"
@@ -768,7 +771,7 @@ def _step3_agents(draft: _Draft, target_agents: Sequence[str]) -> tuple[str, ...
     path = f"{draft.path}.agents"
     targets = set(target_agents)
     if draft.agents is None:
-        selected = tuple(sorted(targets & set(SLICE1_AGENTS)))
+        selected = tuple(sorted(targets & set(known_agents())))
         if not selected and not targets:
             raise _fail("mcp_agent_selection_invalid", path, "no target agent is supported by this slice")
         return selected
@@ -778,25 +781,20 @@ def _step3_agents(draft: _Draft, target_agents: Sequence[str]) -> tuple[str, ...
         raise _fail("mcp_agent_selection_invalid", path, "agent list must be unique")
     known = known_agents()
     for index, agent in enumerate(draft.agents):
-        if agent not in known or agent not in targets:
+        if agent not in known:
             raise _fail(
-                "mcp_agent_selection_invalid", f"{path}.{index}", "agent is unknown or not an install target"
+                "mcp_agent_selection_invalid", f"{path}.{index}", "agent is unknown"
             )
     return tuple(sorted(draft.agents))
 
 
-def _step4_capability(draft: _Draft, agents: tuple[str, ...], invocation_scope: str) -> None:
+def _step4_capability(draft: _Draft, invocation_scope: str) -> None:
     if draft.is_reference:
         raise _fail("mcp_capability_unsupported", f"{draft.path}.reference", "references are not supported yet")
     if draft.transport == "sse":
         raise _fail("mcp_capability_unsupported", f"{draft.path}.server.transport", "sse is not supported yet")
     if draft.git_policy == "shared":
         raise _fail("mcp_capability_unsupported", f"{draft.path}.git_policy", "shared git policy is not supported yet")
-    for index, agent in enumerate(draft.agents if draft.agents is not None else agents):
-        if agent not in SLICE1_AGENTS:
-            raise _fail(
-                "mcp_capability_unsupported", f"{draft.path}.agents.{index}", "agent is not supported by this slice"
-            )
     if invocation_scope != "project":
         raise _fail("mcp_capability_unsupported", f"{draft.path}.scope", "only project scope is supported")
 

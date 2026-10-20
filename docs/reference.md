@@ -155,7 +155,7 @@ python -m pip install --user cocoaskills
 
 ## MCP в project Skillfile schema 3
 
-Schema 3 сохраняет schema 2 и добавляет необязательное поле `mcp_servers`. Поле содержит карту NAME → DECL; имя соответствует `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`. Имена уникальны без учёта регистра; зарезервированные Windows-имена запрещены. DECL содержит HTTPS URL shorthand или объект с обязательным `server` и необязательным `csk`. Объекты закрыты: неизвестные поля вызывают `mcp_declaration_invalid`.
+Schema 3 сохраняет schema 2 и добавляет необязательное поле `mcp_servers`. Поле содержит карту NAME → DECL; имя соответствует `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`. Имена уникальны без учёта регистра; зарезервированные Windows-имена запрещены. DECL содержит HTTPS URL shorthand или объект с обязательным `server` и необязательным `install`. Объекты закрыты: неизвестные поля вызывают `mcp_declaration_invalid`.
 
 | Поле | Значение и ограничение slice 1 |
 | --- | --- |
@@ -164,13 +164,13 @@ Schema 3 сохраняет schema 2 и добавляет необязател�
 | `server.command` | Обязательное для stdio: имя executable без пути и shell. На Windows нужен native executable. |
 | `server.args` | Массив строк для stdio; секреты запрещены, `npx` и `uvx` требуют точной версии пакета. |
 | `server.env_names` | Список имён переменных без значений; управляющие имена вроде `PATH` запрещены. Env reference требует consent. |
-| `server.environments` | Список csk agent ids. По умолчанию используются разрешённые `agents` проекта. Явно выбранный неподдерживаемый агент вызывает отказ. |
-| `csk.headers` | Только HTTP: карта имени заголовка в `{env, prefix?}`. `env` содержит имя переменной; необязательный `prefix` принимает `bearer`. |
-| `csk.auth` | Объект с `kind: "none"`, `"env"` или `"oauth"` и необязательным `help_url`. По умолчанию `env` при env references, иначе `none`; csk не выполняет аутентификацию. |
-| `csk.scope` | Только `project`, это значение по умолчанию. `user` пока не поддерживается. |
-| `csk.git_policy` | Только `local`, это значение по умолчанию. `shared` пока не поддерживается. |
+| `server.environments` | Список известных environment ids. Без поля используются resolved agents проекта. Явно указанные writable ids пишутся даже вне agents проекта; известные unsupported ids дают строку без пути. Пустой список, дубликаты и неизвестные ids запрещены. |
+| `install.headers` | Только HTTP: карта имени заголовка в `{env, prefix?}`. `env` содержит имя переменной; необязательный `prefix` принимает `bearer`. |
+| `install.auth` | Объект с `kind: "none"`, `"env"` или `"oauth"` и необязательным `help_url`. По умолчанию `env` при env references, иначе `none`; csk не выполняет аутентификацию. |
+| `install.scope` | Только `project`, это значение по умолчанию. `user` пока не поддерживается. |
+| `install.git_policy` | Только `local`, это значение по умолчанию. `shared` пока не поддерживается. |
 
-`server` не содержит `headers`, `auth`, `scope` или `git_policy`. Выбор агентов находится в `server.environments`. Поля `auth`, `agents`, `scope` и `git_policy` на уровне DECL запрещены. Schema 1/2 отклоняют `mcp_servers`; глобальный Skillfile отклоняет schema 3. Собственные команды записи Skillfile не повышают schema автоматически.
+`server` не содержит `headers`, `auth`, `scope` или `git_policy`. Выбор агентов находится в `server.environments`. Известные ids: `claude_code`, `codex_cli`, `cursor`, `gemini`, `windsurf`, `opencode`. Первые три writable; остальные дают `skipped: unsupported` при install и `unsupported` при status, без пути и без влияния на `--check`. Unsupported ids исключены из consent subject; добавление writable агента требует нового consent. `install` задаёт локальные параметры записи и аутентификации устанавливающего менеджера. Старое поле `csk` отклоняется с `mcp_declaration_invalid`. Поля `auth`, `agents`, `scope` и `git_policy` на уровне DECL запрещены. Schema 1/2 отклоняют `mcp_servers`; глобальный Skillfile отклоняет schema 3. Собственные команды записи Skillfile не повышают schema автоматически.
 
 Поддерживаемые пути: Claude Code `.mcp.json`, Codex CLI `.codex/config.toml`, Cursor `.cursor/mcp.json`. csk пишет только native project configs. Managed sessions других environment managers пока их не видят. [Руководство по MCP](skill-authoring.md#project-mcp-schema-3) описывает consent, ownership, drift и отчёт.
 
@@ -182,11 +182,11 @@ Schema 3 сохраняет schema 2 и добавляет необязател�
 | --- | --- |
 | `mcp_declaration_invalid` | Неверный тип, имя или неизвестное поле объявления. |
 | `mcp_scope_mismatch` | Область объявления не совпадает с областью вызова. |
-| `mcp_agent_selection_invalid` | Некорректный выбор агентов или выбор вне целевых агентов проекта. |
+| `mcp_agent_selection_invalid` | Пустой список, дубликаты или неизвестный environment id. |
 | `mcp_env_name_reserved` | Объявление ссылается на управляющую или зарезервированную env variable. |
 | `mcp_command_invalid` | Небезопасное имя команды, shell/eval или недопустимая форма запуска. |
 | `mcp_url_invalid` | URL нарушает правила HTTPS, host или допустимых компонентов. |
-| `mcp_capability_unsupported` | Запрошенная возможность пока не поддерживается: агент, user scope, `shared` или reference. |
+| `mcp_capability_unsupported` | Запрошенная возможность пока не поддерживается: user scope, `shared` или reference. |
 | `mcp_runtime_pin_required` | Package runner не содержит точной допустимой версии пакета. |
 | `mcp_plan_unapproved` | Публикация требует consent, которого нет. |
 | `mcp_native_config_unsupported_syntax` | Native config нельзя безопасно прочитать или изменить с сохранением остальных байтов. |

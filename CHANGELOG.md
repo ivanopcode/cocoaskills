@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Добавлено
 
-- Project Skillfile schema 3 объявляет MCP-серверы через URL shorthand или объект `server`/`csk`. `csk install` пишет `.mcp.json` для Claude Code, `.codex/config.toml` для Codex CLI и `.cursor/mcp.json` для Cursor, печатает строку для каждой пары server/agent и запрашивает consent для stdio или env references. Установка не запускает серверы и не выполняет аутентификацию.
-- `csk status` показывает восемь состояний project MCP в тексте и `--json`; `--check` возвращает 1 для неактуальных записей или `mcp_ownership_unknown`, не меняя конфигурации и не проверяя auth/connectivity.
+- Project Skillfile schema 3 объявляет MCP-серверы через URL shorthand или объект `server`/`install`. `install` содержит локальные параметры записи и аутентификации устанавливающего менеджера. `csk install` пишет `.mcp.json` для Claude Code, `.codex/config.toml` для Codex CLI и `.cursor/mcp.json` для Cursor, печатает строку для каждой пары server/agent и запрашивает consent для stdio или env references. Установка не запускает серверы и не выполняет аутентификацию.
+- `csk status` показывает состояния project MCP в тексте и `--json`; `--check` возвращает 1 для неактуальных записей или `mcp_ownership_unknown`, не меняя конфигурации и не проверяя auth/connectivity.
 - MCP project configs предназначены для native agent sessions. Managed sessions других environment managers пока не видят эти конфигурации.
+
+- `server.environments` использует известные environment ids: без поля — resolved agents проекта, явно указанные writable ids — даже вне этого набора. Известные unsupported ids получают строку `skipped: unsupported` без пути, включая отказы и dry-run; status показывает `unsupported` без влияния на `--check`. Пустые списки, дубликаты и неизвестные ids отклоняются. Consent связывает только writable agents; новый writable агент требует согласия. Локальные параметры записи и аутентификации находятся в нейтральном `install`; старое поле `csk` отклоняется без alias.
 
 ### Исправлено
 

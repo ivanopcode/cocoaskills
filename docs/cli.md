@@ -133,7 +133,7 @@ usage: csk status [-h] [--all] [--check] [--attest] [--json] [target]
 * `target`: алиас проекта, `.` или путь к проекту.
 * `-h`, `--help`: выводит краткое справочное сообщение.
 * `--all`: показывает статус для всех зарегистрированных проектов.
-* `--check`: завершает выполнение с кодом 1 при неактуальном скилле, ошибке проекта или MCP-состоянии кроме `current`.
+* `--check`: завершает выполнение с кодом 1 при неактуальном скилле, ошибке проекта или MCP-состоянии кроме `current` и `unsupported`.
 * `--attest`: проверяет установленные скиллы через доверенные реестры аудита.
 * `--json`: выводит данные в формате JSON вместо таблицы.
 
@@ -149,7 +149,7 @@ csk status --check
 
 **MCP в project Skillfile schema 3:**
 
-Строки имеют формат `mcp <server> -> <agent> <project-relative path> (<state>)`. csk перечисляет объявленные и ещё owned пары server/agent: сначала по имени сервера, затем `claude_code`, `codex_cli`, `cursor`. Например:
+Строки имеют формат `mcp <server> -> <agent> <project-relative path> (<state>)`. csk перечисляет объявленные и ещё owned пары server/agent: сначала по имени сервера, затем `claude_code`, `codex_cli`, `cursor` и unsupported ids по алфавиту. Строки `mcp NAME -> AGENT (unsupported)` не содержат пути. Например:
 
 ```text
 mcp docs -> claude_code .mcp.json (current)
@@ -160,6 +160,7 @@ MCP authentication and connectivity: not checked.
 
 | State | Значение |
 | --- | --- |
+| `unsupported` | Известное окружение, для которого запись не поддерживается; не влияет на `--check`. |
 | `current` | Owned entry соответствует объявлению и установленному csk содержимому. |
 | `missing` | Объявленная entry или native config отсутствует. |
 | `outdated` | Объявление изменилось; owned entry ещё содержит прежний результат установки и будет обновлена install. |
@@ -171,9 +172,9 @@ MCP authentication and connectivity: not checked.
 
 Приоритет при совпадении условий: `unreadable` → `orphaned` → `conflict`/`drift` → `unapproved` → `outdated` → `missing` → `current`. Непроверяемый приватный ledger или consent store даёт `ERROR mcp_ownership_unknown` без MCP-строк; `--check` в этом случае возвращает 1.
 
-Обычный `status` возвращает 0 даже при неактуальном MCP-состоянии или ошибке в отчёте проекта. `status --check` возвращает 0, только если все MCP-строки `current` (либо их нет) и остальные проверки проекта успешны; иначе 1. Ошибки конфигурации или использования команды дают 2. `status` не исправляет конфигурации, не сохраняет consent, не запускает серверы и не проверяет auth/connectivity.
+Обычный `status` возвращает 0 даже при неактуальном MCP-состоянии или ошибке в отчёте проекта. `status --check` возвращает 0, только если все MCP-строки `current` или `unsupported` (либо их нет) и остальные проверки проекта успешны; иначе 1. Ошибки конфигурации или использования команды дают 2. `status` не исправляет конфигурации, не сохраняет consent, не запускает серверы и не проверяет auth/connectivity.
 
-Для `csk status --json` (также с `--check`) каждый объект в массиве проектов получает массив `mcp`. У каждой строки поля `server`, `agent`, `path`, `state`; например, `{"server":"docs","agent":"codex_cli","path":".codex/config.toml","state":"current"}`. `clean` учитывает MCP и остальные проверки. При `mcp_ownership_unknown` поле `mcp` пустое, а ошибка находится в `errors`. Сообщение про auth/connectivity в JSON не выводится. Project schema 1/2 и global status сохраняют прежний формат без MCP-строк и поля `mcp`.
+Для `csk status --json` (также с `--check`) каждый объект в массиве проектов получает массив `mcp`. У каждой строки поля `server`, `agent`, `path`, `state`; например, `{"server":"docs","agent":"codex_cli","path":".codex/config.toml","state":"current"}`. Для `unsupported` поле `path` равно `null`. `clean` учитывает MCP и остальные проверки; `unsupported` не делает проект неактуальным. При `mcp_ownership_unknown` поле `mcp` пустое, а ошибка находится в `errors`. Сообщение про auth/connectivity в JSON не выводится. Project schema 1/2 и global status сохраняют прежний формат без MCP-строк и поля `mcp`.
 
 Полный Skillfile и пример перехода `outdated` → `current` приведены в [руководстве по project MCP](skill-authoring.md#project-mcp-schema-3).
 
@@ -314,6 +315,8 @@ csk install --verbose
 Команда проверяет гейт аудита и раскладывает файлы скиллов в `.agents/skills`.
 
 Для Skillfile schema 2 команда выполняет начальную установку с разрешением источников при отсутствии лока и установку по локу при его наличии. Команда читает источники `path` с диска, а источники `git` и `repository` получает через ограниченный транспорт по файлу `source-policy.json`. Если сохранённого снимка нет, команда восстанавливает его из источника: для `path` читает текущие байты, для `git` и `repository` получает точный commit из лока. Совпадение идентичности и `content_sha256` продолжает установку. Несовпадение вызывает `source_snapshot_changed`. Недоступный источник вызывает `source_snapshot_unavailable` и указывается в сообщении. Восстановление не меняет лок и не разрешает теги или ветки. Руководство находится в `docs/skillfile-sources.md`.
+
+Для schema 3 объект MCP содержит `server` и необязательный `install`: локальные параметры записи и аутентификации устанавливающего менеджера. Без `server.environments` используются resolved agents проекта; явный writable id пишется даже вне этого набора. Известные unsupported ids дают `mcp NAME -> AGENT (skipped: unsupported)` без пути и отдельного warning, включая отчёт при отказе. Dry-run добавляет `would:`. Неизвестный id, дубликат или пустой список вызывает `mcp_agent_selection_invalid`. Добавление writable агента требует нового consent; unsupported ids в consent subject не входят. [Правила MCP](skill-authoring.md#project-mcp-schema-3) перечисляют ids и поля `install`.
 
 ### csk update
 
