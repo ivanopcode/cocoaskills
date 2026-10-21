@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Исправлено
 
 - Сборки Go-CLI на macOS больше не завершаются ошибкой `build_execution_worker_identity_invalid` при использовании статически слинкованного Python из uv или mise.
+- Скрипт быстрой установки выбирает uv 0.13.4+ с системным хранилищем сертификатов, затем pipx с shared pip 26.2.2+, затем pip 26.2.2+. Старые и непроверенные клиенты отклоняются с командами обновления; установка на macOS рекомендует Homebrew и актуальный curl.
 
 ## [0.20.0] - 2026-10-21
 

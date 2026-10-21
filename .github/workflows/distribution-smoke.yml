@@ -163,8 +163,13 @@ jobs:
       - name: Install with install.sh
         if: matrix.channel == 'install-sh'
         run: |
-          python -m pip install --upgrade pip uv
-          curl -fsSL https://cocoaskills.org/install.sh | sh
+          python -m pip install --upgrade 'pip>=26.2.2' 'uv>=0.13.4'
+          installer_curl=curl
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install curl ca-certificates
+            installer_curl="$(brew --prefix)/opt/curl/bin/curl"
+          fi
+          "$installer_curl" -fsSL https://cocoaskills.org/install.sh | sh
           python -m uv tool dir --bin >> "$GITHUB_PATH"
 
       - name: Verify installed CLI version

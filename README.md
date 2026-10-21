@@ -58,13 +58,14 @@
 
 ## Быстрый старт
 
-1. Установите CocoaSkills одним из способов:
+1. Установите CocoaSkills одним из способов. На macOS предпочтителен Homebrew:
 
    <details open>
-   <summary>pipx (рекомендуется)</summary>
+   <summary>Homebrew (рекомендуется на macOS; также Linux)</summary>
 
    ```bash
-   pipx install cocoaskills
+   brew tap ivanopcode/csk
+   brew install cocoaskills
    ```
 
    </details>
@@ -73,17 +74,16 @@
    <summary>uv tool</summary>
 
    ```bash
-   uv tool install cocoaskills
+   UV_SYSTEM_CERTS=1 uv tool install cocoaskills
    ```
 
    </details>
 
    <details>
-   <summary>Homebrew (macOS, Linux)</summary>
+   <summary>pipx</summary>
 
    ```bash
-   brew tap ivanopcode/csk
-   brew install cocoaskills
+   pipx install cocoaskills
    ```
 
    </details>
@@ -105,6 +105,22 @@
    ```
 
    </details>
+
+   Для установки из Python-экосистемы нужны uv **0.13.4+** или pip **26.2.2+**, включая pip в shared venv pipx. Обновление: `uv self update`, `python3 -m pip install --upgrade pip`, `pipx upgrade-shared`.
+
+   One-liner на macOS загружайте актуальным Homebrew curl (при необходимости `brew install curl`):
+
+   ```bash
+   "$(brew --prefix)/opt/curl/bin/curl" -fsSL https://cocoaskills.org/install.sh | sh
+   ```
+
+   Скрипт проверяет версии и выбирает uv, затем pipx, затем pip; uv запускается с `UV_SYSTEM_CERTS=1`. На других платформах используйте актуальный `curl`. Пока macOS не обновит `/etc/ssl/cert.pem`, не используйте `/usr/bin/curl` для этой загрузки, а Apple git настройте на обновлённый bundle Homebrew:
+
+   ```bash
+   git config --global http.sslCAInfo "$(brew --prefix)/etc/ca-certificates/cert.pem"
+   ```
+
+   Подробности проверки клиентов и доверия хоста — в [справочнике](docs/reference.md#доверие-хоста).
 
    Результат: команда `csk --version` выводит версию CocoaSkills.
 
