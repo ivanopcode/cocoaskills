@@ -24,9 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data and non-credential option values, including audit `--publish PATH`.
   The CLI `--token-env` NAME grammar accepts only ASCII identifiers up to 128
   characters; existing broader configuration identifiers remain loadable.
-
-### Исправлено
-
 - Ошибки использования (usage) больше не показывают значения из argv. Каждый парсер и подпарсер печатает сообщение, собранное по allowlist шаблонов argparse (CPython 3.11–3.14) только из частей, заданных парсером: строк опций, dest, metavar и объявленных choices. Любая часть, пришедшая из argv (неизвестные аргументы, значение вне choices, неприводимое типизированное значение, неоднозначный префикс опции), заменяется текстом `<value not shown>`; сообщение, не подошедшее ни под один шаблон, заменяется фиксированным `invalid usage (details not shown); run 'csk <command> --help'`. Код возврата остаётся 2. Предиката по написанию `--token*` больше нет: опечатки, лукалайки, сокращения и склеенные формы не особенные, они закрыты тем же механизмом.
 - Значения опций с учётными данными (`--token-file` PATH, `--token-env` NAME, `--token-source`) не выводятся ни в одной ошибке или диагностике. Ошибка установки с незаданной переменной окружения теперь называет только область: `the environment variable configured for build_https scope '<scope>' is not set`. `csk config build-https list` по-прежнему показывает настроенное NAME. Значение `--token-env` должно быть именем переменной окружения (`[A-Za-z_][A-Za-z0-9_]{0,127}`, полное совпадение).
 - Граница, принятая сознательно: позиционные аргументы являются данными команды. Значение, переданное позиционно, в том числе после `--`, может появиться в собственных ошибках этой команды (например, `Unknown project alias: …`); ошибки usage значений argv не показывают.
