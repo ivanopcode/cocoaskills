@@ -279,7 +279,10 @@ def test_probes_use_absolute_tools(tmp_path, monkeypatch, resolver, consumer):
     monkeypatch.setattr(subprocess, "run", fake_run)
     if consumer == "https":
         assert build_https.read_host_credentials("fixture.test", home=str(tmp_path)) == ("fixture", "fixture")
-        assert calls == [(str(real_git.resolve()), "credential", "fill")]
+        assert len(calls) == 1
+        assert calls[0][0] == str(real_git.resolve())
+        assert calls[0][-2:] == ("credential", "fill")
+        assert "http.sslVerify=true" in calls[0]
     elif consumer == "ssh":
         found = build_ssh.discover_candidates(
             environment={"PATH": path, "SSH_AUTH_SOCK": "fixture-socket"}, home=str(tmp_path),
@@ -318,6 +321,8 @@ def test_git_ops_use_absolute_git(tmp_path, monkeypatch, resolver, operation):
     def fake_run(argv, **kwargs):
         calls.append(tuple(argv))
         stdout = "" if kwargs.get("text") else archive.getvalue()
+        if "ls-remote" in argv and "--get-url" in argv:
+            stdout = str(tmp_path / "source") + "\n"
         return subprocess.CompletedProcess(argv, 0, stdout=stdout)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -328,8 +333,8 @@ def test_git_ops_use_absolute_git(tmp_path, monkeypatch, resolver, operation):
         git_ops.clone_repo(str(tmp_path / "source"), tmp_path / "destination")
     else:
         git_ops.archive(tmp_path, "a" * 40, tmp_path / "snapshot")
-    assert len(calls) == 1
-    assert calls[0][0] == str(executable.resolve())
+    assert len(calls) == (2 if operation == "clone" else 1)
+    assert all(command[0] == str(executable.resolve()) for command in calls)
 
 
 @pytest.mark.parametrize("command", ["list", "login", "remove"])

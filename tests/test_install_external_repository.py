@@ -148,6 +148,7 @@ def test_cli_external_build_dry_run_matches_real_install_on_fresh_home(
     skills_root: Path,
     csk_home: Path,
     capsys: pytest.CaptureFixture[str],
+    git_ca_bundle: Path,
     winerror: int | None,
 ) -> None:
     """BUG-260808-3vudh8: a missing Windows cache is not a corrupt repository."""

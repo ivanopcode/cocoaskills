@@ -21,6 +21,12 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def _checked_transport_trust(git_ca_bundle: Path) -> None:
+    # Diagnostic seams stub config loading; keep incidental Git trust independent of the operator's real config.
+    assert git_ca_bundle.is_file()
+
+
 def _external_install_case(tmp_path: Path, *, annotated_tag_lock: bool):
     skills_root = tmp_path / "skills"
     skills_root.mkdir(parents=True)
