@@ -433,6 +433,7 @@ csk shell-init                      # Генерирует или устанав
 - [`docs/cli.md`](docs/cli.md): справочник команд `csk`, флагов и кодов завершения.
 - [`docs/reference.md`](docs/reference.md): справочник по матрице установки, зависимостям скиллов, манифестам и аудиту безопасности.
 - [`docs/external-build-repositories.md`](docs/external-build-repositories.md): устройство внешних репозиториев сборки, брокеров кредов SSH/HTTPS и моделей доступа.
+- [`docs/design/linux-go-v1.md`](docs/design/linux-go-v1.md): Linux source-build design proposal, protocol requirements, qualification gates, and pending native probes.
 - [`docs/skillfile-sources.md`](docs/skillfile-sources.md): источники Skillfile schema 2, машинная транспортная политика и семантика лока.
 - [`docs/v0.16-design.md`](docs/v0.16-design.md): RFC 0009, запись проектного решения о формате источников schema 2 (на английском).
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): описание внутренней архитектуры, схемы работы конвейера установки, формата хранилищ и модели безопасности.
