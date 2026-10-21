@@ -5,9 +5,9 @@
   "protocol_commit": "0ed5c691e9208eea52f21db2fc05e226ce3516fd",
   "audited_files_sha256": {
     "tests/test_protocol_conformance.py": "06d5fa20a02ac40e075d367d056961abbef6d38b4088b368180c715046fab435",
-    "tests/protocol_conformance_adapters.py": "bb1c9b9a32e745b6087bf58bb2ba4d4cf17ccd267cbfef97970cee1ae3a6bca5",
-    "tests/protocol_lifecycle_observations.py": "834dd2c10188b9b515b4fa6c59f8b8a896ab8801cde3807db5959076177c8378",
-    "tests/conftest.py": "adbd96050819b47f836738588908f8ec865c539d1e66b51cd9088f9da5578592"
+    "tests/protocol_conformance_adapters.py": "fd5ba2194f753b8c9081e4e9b45e22be4f8a0346778c85ba3e87726a29aad29e",
+    "tests/protocol_lifecycle_observations.py": "05d859d04f328d8538b05935f88d99806b9359598a5e447e35c12dd6972cc9d6",
+    "tests/conftest.py": "f0dcdf6e4bf090921df6f34a0c50abf7817265a2a7f28c7ae2afca37719321d4"
   },
   "audit_revisions": [
     {
@@ -126,6 +126,30 @@
       "change": "revision 5: conftest.run passes the caller's git path (executable=cmd[0]) to the shared runner instead of discarding it; the session fixture body is unchanged",
       "isolation_neutral": true,
       "rationale": "A one-argument change inside the fixture git helper: the executed binary is now the one the caller named. No protocol node was added, removed, renamed or reparameterized, no GIT_*/cwd/temp-root/lock/cache behavior moves, and the protocol test, adapters and lifecycle observers never call conftest.run with an explicit git path. Node IDs, footprints, atomic clusters and shard assignments stay unchanged."
+    },
+    {
+      "file": "tests/conftest.py",
+      "previous_sha256": "adbd96050819b47f836738588908f8ec865c539d1e66b51cd9088f9da5578592",
+      "sha256": "f0dcdf6e4bf090921df6f34a0c50abf7817265a2a7f28c7ae2afca37719321d4",
+      "change": "Change the default explicitly qualified Go E2E family from 1.25 to 1.27.",
+      "isolation_neutral": true,
+      "rationale": "Only the fallback family literal in the non-autouse required_go_e2e_host fixture changes. Protocol shard nodes do not request that fixture. Collection, fixture scopes, subprocess routing, environment isolation, shared state, atomic clusters and shard assignments are unchanged."
+    },
+    {
+      "file": "tests/protocol_conformance_adapters.py",
+      "previous_sha256": "bb1c9b9a32e745b6087bf58bb2ba4d4cf17ccd267cbfef97970cee1ae3a6bca5",
+      "sha256": "fd5ba2194f753b8c9081e4e9b45e22be4f8a0346778c85ba3e87726a29aad29e",
+      "change": "Use the qualified Go 1.27.3 release in existing projected and recorded toolchain identity fixtures.",
+      "isolation_neutral": true,
+      "rationale": "Only three version-string literals change. The same helpers, nodes, temporary roots, runner calls and environment dictionaries are used. No process, cwd, shared-state, fixture-lifetime, atomic-cluster or shard footprint is added or moved; expected identities continue to be derived from the same inputs."
+    },
+    {
+      "file": "tests/protocol_lifecycle_observations.py",
+      "previous_sha256": "834dd2c10188b9b515b4fa6c59f8b8a896ab8801cde3807db5959076177c8378",
+      "sha256": "05d859d04f328d8538b05935f88d99806b9359598a5e447e35c12dd6972cc9d6",
+      "change": "Use the qualified Go 1.27.3 release in the existing alternate-toolchain identity stub.",
+      "isolation_neutral": true,
+      "rationale": "Only the alternate identity version literal changes. The helper signature, session behavior, command forwarding, temporary filesystem and environment footprint are identical, so collection, atomic clusters and shard assignments are unchanged."
     }
   ],
   "method": {
