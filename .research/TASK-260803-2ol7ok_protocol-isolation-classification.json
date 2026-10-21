@@ -7,7 +7,7 @@
     "tests/test_protocol_conformance.py": "06d5fa20a02ac40e075d367d056961abbef6d38b4088b368180c715046fab435",
     "tests/protocol_conformance_adapters.py": "bb1c9b9a32e745b6087bf58bb2ba4d4cf17ccd267cbfef97970cee1ae3a6bca5",
     "tests/protocol_lifecycle_observations.py": "834dd2c10188b9b515b4fa6c59f8b8a896ab8801cde3807db5959076177c8378",
-    "tests/conftest.py": "adbd96050819b47f836738588908f8ec865c539d1e66b51cd9088f9da5578592"
+    "tests/conftest.py": "53836ec25c914e9071218b6bc36d4c183304277fea1aa9a34d515e9ff8478d97"
   },
   "audit_revisions": [
     {
@@ -126,6 +126,15 @@
       "change": "revision 5: conftest.run passes the caller's git path (executable=cmd[0]) to the shared runner instead of discarding it; the session fixture body is unchanged",
       "isolation_neutral": true,
       "rationale": "A one-argument change inside the fixture git helper: the executed binary is now the one the caller named. No protocol node was added, removed, renamed or reparameterized, no GIT_*/cwd/temp-root/lock/cache behavior moves, and the protocol test, adapters and lifecycle observers never call conftest.run with an explicit git path. Node IDs, footprints, atomic clusters and shard assignments stay unchanged."
+    },
+    {
+      "date": "2026-10-21",
+      "file": "tests/conftest.py",
+      "previous_sha256": "adbd96050819b47f836738588908f8ec865c539d1e66b51cd9088f9da5578592",
+      "sha256": "53836ec25c914e9071218b6bc36d4c183304277fea1aa9a34d515e9ff8478d97",
+      "change": "Added the non-autouse generated Git CA bundle fixture and clear CSK_GIT_CA_BUNDLE in stable_env; import the trust module used by that fixture.",
+      "isolation_neutral": false,
+      "rationale": "The per-test environment contract now clears one additional operator variable, so this is not isolation-neutral by construction. The protocol module, adapters and lifecycle observations do not request git_ca_bundle or read CSK_GIT_CA_BUNDLE; their Git fixtures use local repositories. The trust-module import initializes constants and an empty in-memory cache without filesystem, process or environment effects. The new fixture runs only for explicit HTTPS trust and audit tests and writes only public PEM bytes under their tmp_path. Existing stable_env monkeypatch teardown restores the variable per test, uniformly in each worker. No protocol node is added, removed, renamed or reparameterized; no shared process/cwd/temp-root/lock/cache interaction, atomic cluster or shard assignment changes."
     }
   ],
   "method": {
