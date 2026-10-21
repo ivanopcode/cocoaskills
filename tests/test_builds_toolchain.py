@@ -80,6 +80,10 @@ class RecordingRunner:
                 stdout=self.version.encode("utf-8"),
                 returncode=returncode,
             )
+        if arguments == ("env", "GOROOT"):
+            return toolchain.ProbeResult(
+                stdout=f"{self.goroot}\n".encode(), returncode=returncode,
+            )
         if arguments == ("env", "-json", *toolchain.GO_ENV_FIELDS):
             payload = self.env_payload
             if payload is None:
@@ -922,7 +926,7 @@ def test_insecure_go_release_refuses_before_cache_read_or_build(
     assert all(not root.exists() for root in runner.operation_roots)
 
 
-@pytest.mark.parametrize("explicit", [False, True], ids=["path", "explicit"])
+@pytest.mark.parametrize("selection", ["path", "explicit", "native-shim"])
 @pytest.mark.parametrize("entry", [toolchain.preflight_toolchain, toolchain.probe_toolchain])
 @pytest.mark.parametrize(
     "metadata,accepted",
@@ -943,21 +947,39 @@ def test_insecure_go_release_refuses_before_cache_read_or_build(
     ],
 )
 def test_goroot_release_evidence_must_agree(
-    tmp_path, monkeypatch, entry, metadata, accepted, explicit,
+    tmp_path, monkeypatch, entry, metadata, accepted, selection,
 ):
-    # Both gates require matching VERSION metadata; official timestamp/CRLF controls pass.
+    # Resolved roots require matching VERSION; official timestamp/CRLF controls pass.
+    # Read-only preflight defers unresolved PATH launchers without allocating or probing.
     config, runner, goroot, private_base = _setup(tmp_path)
-    if explicit:
+    if selection == "explicit":
         config = replace(
             config, go_executable=goroot / "bin" / ("go.exe" if os.name == "nt" else "go"),
+        )
+    elif selection == "native-shim":
+        shim_root = _make_goroot(tmp_path / "forwarder")
+        (shim_root / "VERSION").unlink()
+        shim = shim_root / "bin" / ("go.exe" if os.name == "nt" else "go")
+        runner = ShimRecordingRunner(goroot, shim)
+        config = replace(
+            config, runner=runner,
+            operator_search_path=toolchain.OperatorSearchPath((str(shim.parent),)),
         )
     path = goroot / "VERSION"
     if metadata is None:
         path.unlink()
     else:
         path.write_bytes(metadata)
-    if accepted:
-        entry(config)
+    deferred = entry is toolchain.preflight_toolchain and (
+        selection == "native-shim" or (selection == "path" and metadata is None)
+    )
+    if deferred:
+        assert entry(config) is None
+        assert runner.calls == []
+    elif accepted:
+        snapshot = entry(config)
+        if entry is toolchain.probe_toolchain:
+            assert snapshot.goroot == goroot
     else:
         def forbidden_fingerprint(*args, **kwargs):
             pytest.fail("contradictory release must refuse before fingerprint/build admission")
@@ -970,8 +992,14 @@ def test_goroot_release_evidence_must_agree(
         assert "remediation:" in raised.value.detail
         assert [call[0][1:] for call in runner.calls] in [
             [("version",)], [("telemetry", "off"), ("version",)],
+            [("env", "GOROOT"), ("telemetry", "off"), ("version",)],
         ]
+    if selection == "native-shim" and not deferred:
+        assert runner.shim_calls == 1
+        assert all(Path(call[0][0]).parent == goroot / "bin" for call in runner.calls[1:])
     assert not list(private_base.iterdir())
+    if entry is toolchain.probe_toolchain:
+        assert all(not root.exists() for root in runner.operation_roots)
 
 
 @pytest.mark.parametrize("version", ["1.26.9", "1.27rc1", "1.27.3-devel"])

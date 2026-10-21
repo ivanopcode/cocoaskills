@@ -1540,12 +1540,14 @@ def _is_real_launcher_candidate(path: Path, host: _Host) -> bool:
         or executable_stat.st_nlink != 1
     ):
         return False
-    return _is_structural_goroot(root)
+    # A native forwarder can have these directories without owning a toolchain.
+    # Without VERSION, resolve its GOROOT before checking release evidence.
+    return _is_structural_goroot(root) and os.path.lexists(root / "VERSION")
 
 
 def _is_structural_goroot(root: Path) -> bool:
     """Recognize the directory layout; release evidence is checked after the probe."""
-    # Missing/malformed VERSION must reach the release gate instead of becoming a deferred shim.
+    # A resolved root with missing/malformed VERSION must reach the release gate.
     try:
         return (root / "src" / "runtime").is_dir() and (root / "pkg" / "tool").is_dir()
     except (OSError, RuntimeError):
