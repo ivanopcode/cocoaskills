@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from csk import deprecation, locking
+from csk import deprecation, git_trust, locking
 from csk.config import GlobalConfig, ProjectConfig
 
 import git_session_isolation
@@ -75,6 +75,33 @@ def skills_root(tmp_path: Path) -> Path:
     root = tmp_path / "skills"
     root.mkdir()
     return root
+
+
+@pytest.fixture
+def git_ca_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A generated clean CA for tests that exercise the HTTPS trust contract."""
+    from datetime import UTC, datetime, timedelta
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Generated test root")])
+    now = datetime.now(UTC)
+    cert = (
+        x509.CertificateBuilder().subject_name(name).issuer_name(name)
+        .public_key(key.public_key()).serial_number(1)
+        .not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    path = tmp_path / "ca.pem"
+    path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    monkeypatch.setenv("CSK_GIT_CA_BUNDLE", str(path))
+    git_trust._VALIDATED.clear()
+    return path
 
 
 @pytest.fixture
@@ -184,6 +211,7 @@ def _csk_git_session_isolation(
 def stable_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     deprecation.reset_for_tests()
     monkeypatch.delenv("CSK_CONFIG", raising=False)
+    monkeypatch.delenv("CSK_GIT_CA_BUNDLE", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
 

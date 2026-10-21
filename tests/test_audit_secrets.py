@@ -542,7 +542,7 @@ def _assert_backend_child_environment_is_allowlisted(tmp_path, monkeypatch, kind
 @pytest.mark.parametrize("mode", ["missing-repo", "existing-repo"])
 @pytest.mark.parametrize("kind", ["command", "codex"])
 @pytest.mark.parametrize("phase", ["extract", "canary"])
-def test_audit_backend_git_auth_boundary(tmp_path, monkeypatch, capsys, mode, kind, phase):
+def test_audit_backend_git_auth_boundary(tmp_path, monkeypatch, capsys, mode, kind, phase, git_ca_bundle):
     # Audit source resolution needs transport auth; skill-content backends do not.
     manager = tmp_path / "manager"
     project = tmp_path / "project"
@@ -589,7 +589,12 @@ def test_audit_backend_git_auth_boundary(tmp_path, monkeypatch, capsys, mode, ki
     observed = json.loads(capture.read_text(encoding="utf-8"))
     assert observed["auth"] == auth
     if mode == "missing-repo":
-        assert observed["argv"][:2] == ["clone", "--"]
+        # HTTPS trust pins precede clone; transport auth still stays out of audit backends.
+        clone_index = observed["argv"].index("clone")
+        assert observed["argv"][clone_index:clone_index + 2] == ["clone", "--"]
+        assert f"http.sslCAInfo={git_ca_bundle}" in observed["argv"][:clone_index]
+        assert "http.sslVerify=true" in observed["argv"][:clone_index]
+        assert "http.followRedirects=false" in observed["argv"][:clone_index]
     else:
         assert observed["argv"][0] == "-C"
         assert observed["argv"][2:4] == ["rev-parse", "--verify"]

@@ -7,14 +7,9 @@ import shutil
 import ssl
 import subprocess
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
 
 from csk import build_https, config, git_admission, git_ops, git_trust, installer
 from csk.build_repository import LockedCommit, parse_repository_source
@@ -23,26 +18,8 @@ from csk.sources import repository_policy, transport
 
 
 @pytest.fixture
-def bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    key = ec.generate_private_key(ec.SECP256R1())
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Generated test root")])
-    now = datetime.now(UTC)
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(1)
-        .not_valid_before(now - timedelta(days=1))
-        .not_valid_after(now + timedelta(days=1))
-        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-        .sign(key, hashes.SHA256())
-    )
-    path = tmp_path / "ca.pem"
-    path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
-    monkeypatch.setenv("CSK_GIT_CA_BUNDLE", str(path))
-    git_trust._VALIDATED.clear()
-    return path
+def bundle(git_ca_bundle: Path) -> Path:
+    return git_ca_bundle
 
 
 def _configuration(tmp_path: Path, bundle: str | None = None) -> config.GlobalConfig:
