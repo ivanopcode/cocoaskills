@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from csk import config as manager_config
-from csk.builds import toolchain
+from csk.builds import planner, source, toolchain
 
 _TUNING_VALUES = {
     "GO386": "sse2",
@@ -41,7 +41,7 @@ class RecordingRunner:
         self.goroot = goroot
         self.host = toolchain._native_host()
         self.version = version or (
-            f"go version go1.25.5 {self.host.goos}/{self.host.goarch}\n"
+            f"go version go1.27.3 {self.host.goos}/{self.host.goarch}\n"
         )
         self.environment_overrides = environment_overrides or {}
         self.calls: list[tuple[tuple[str, ...], Path, dict[str, str]]] = []
@@ -223,7 +223,7 @@ def _make_goroot(path: Path) -> Path:
     executable.parent.mkdir(parents=True)
     executable.write_bytes(_native_header(host) + b"fake-go")
     executable.chmod(0o755)
-    (path / "VERSION").write_text("go1.25.5\n", encoding="utf-8")
+    (path / "VERSION").write_text("go1.27.3\n", encoding="utf-8")
     (path / "src" / "runtime").mkdir(parents=True)
     (path / "pkg" / "tool").mkdir(parents=True)
     return path
@@ -789,13 +789,14 @@ def test_preflight_rejects_unsupported_family_without_private_state(
 
 
 def test_probe_returns_frozen_snapshot_and_removes_private_root(tmp_path: Path):
+    # A qualified probe freezes its identity/environment and removes all private state.
     config, runner, _, private_base = _setup(tmp_path)
 
     snapshot = toolchain.probe_toolchain(config)
 
     assert snapshot.toolchain.algorithm == toolchain.TOOLCHAIN_ALGORITHM
     assert snapshot.toolchain.go_relpath == "bin/go"
-    assert snapshot.toolchain.go_version.startswith("go version go1.25.5 ")
+    assert snapshot.toolchain.go_version.startswith("go version go1.27.3 ")
     assert snapshot.toolchain.content_sha256.startswith("sha256:")
     assert not list(private_base.glob(".csk-go-probe-*"))
     assert runner.operation_roots
@@ -805,13 +806,13 @@ def test_probe_returns_frozen_snapshot_and_removes_private_root(tmp_path: Path):
 
 
 def test_tested_go_families_match_the_qualified_release_set() -> None:
-    assert toolchain.TESTED_GO_FAMILIES == ("1.25", "1.26", "1.27")
+    # Only the two supported families with patched releases are qualified.
+    assert toolchain.TESTED_GO_FAMILIES == ("1.26", "1.27")
 
 
 @pytest.mark.parametrize(
     ("family", "version"),
-    [("1.26", "1.26.8"), ("1.27", "1.27.1")],
-    ids=["go-1.26", "go-1.27"],
+    [("1.26", "1.26.10"), ("1.26", "1.26.11"), ("1.27", "1.27.3"), ("1.27", "1.27.4")],
 )
 def test_qualified_new_go_toolchains_are_accepted_under_the_full_lockdown(
     tmp_path: Path,
@@ -819,6 +820,7 @@ def test_qualified_new_go_toolchains_are_accepted_under_the_full_lockdown(
     family: str,
     version: str,
 ):
+    # Patched releases at and above each floor retain the complete probe lockdown.
     host = toolchain._native_host()
     output = f"go version go{version} {host.goos}/{host.goarch}\n"
     config, runner, _, private_base = _setup(tmp_path, version=output)
@@ -843,8 +845,105 @@ def test_qualified_new_go_toolchains_are_accepted_under_the_full_lockdown(
 
 
 @pytest.mark.parametrize(
+    ("version", "floor"),
+    [
+        ("go1.26.9", "1.26.10"),
+        ("go1.27.0", "1.27.3"),
+        ("go1.27.2", "1.27.3"),
+        ("go1.27rc1", "1.27.3"),
+        ("go1.26beta1", "1.26.10"),
+        ("go1.27", "1.27.3"),
+        ("go1.27.3rc1", "1.27.3"),
+        ("go1.27.3-devel", "1.27.3"),
+        ("go1.26.10+patched", "1.26.10"),
+        ("go1.27.03", "1.27.3"),
+        ("go1.26.010", "1.26.10"),
+        ("devel go1.27-deadbeef", "1.27.3"),
+    ],
+)
+def test_insecure_go_release_refuses_before_cache_read_or_build(
+    tmp_path: Path, version: str, floor: str,
+) -> None:
+    # Below-floor and unprovable releases refuse before cache access or source-aware Go calls.
+    host = toolchain._native_host()
+    config, runner, goroot, private_base = _setup(
+        tmp_path, version=f"go version {version} {host.goos}/{host.goarch}\n",
+    )
+    manager_home = tmp_path / "manager"
+    manager_home.mkdir()
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "source.txt").write_text("source", encoding="utf-8")
+    cache_calls: list[str] = []
+
+    def forbidden_cache(*_args: object, **_kwargs: object) -> None:
+        cache_calls.append("cache-access")
+        raise AssertionError("a refused toolchain must not read or write the cache")
+
+    backend = SimpleNamespace(
+        manager_home=manager_home, inspect=forbidden_cache,
+        publish=forbidden_cache, quarantine=forbidden_cache,
+    )
+
+    def establish(actual: toolchain.ToolchainConfig) -> toolchain.ToolchainSession:
+        return toolchain.establish_toolchain(replace(actual, runner=runner))
+
+    with source.freeze_snapshot(package) as frozen:
+        provider = planner.BuildProvider(
+            name="provider", snapshot=frozen,
+            commands=(planner.BuildCommand(
+                name="tool", driver="go-v1", build_root="build", source_dir="build/cmd/tool",
+            ),),
+        )
+        with pytest.raises(toolchain.ToolchainError) as raised:
+            planner.plan_builds(
+                (provider,), manager_home=manager_home,
+                operator_search_path=config.operator_search_path,
+                cache_backend=backend, establish_toolchain=establish,
+            )
+
+    _assert_code("insecure_go_release", raised)
+    detail = raised.value.detail
+    assert version in detail
+    assert str(goroot / "bin" / ("go.exe" if host.windows else "go")) in detail
+    assert f"minimum release: {floor}" in detail
+    assert '\nremediation: put Go 1.27.3 or newer first on PATH' in detail
+    assert 'go = "1.27.3"' in detail
+    assert "brew upgrade go" in detail
+    assert [call[0][1:] for call in runner.calls] == [("telemetry", "off"), ("version",)]
+    assert cache_calls == []
+    assert list(manager_home.iterdir()) == []
+    assert list(private_base.iterdir()) == []
+    assert all(not root.exists() for root in runner.operation_roots)
+
+
+@pytest.mark.parametrize("version", ["1.26.9", "1.27rc1", "1.27.3-devel"])
+def test_insecure_go_preflight_refuses_without_allocating_private_state(
+    tmp_path: Path, version: str,
+) -> None:
+    # Read-only preflight applies the same floor using only version and leaves no private state.
+    host = toolchain._native_host()
+    config, runner, _, private_base = _setup(
+        tmp_path, version=f"go version go{version} {host.goos}/{host.goarch}\n",
+    )
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.preflight_toolchain(config)
+    _assert_code("insecure_go_release", raised)
+    assert [call[0][1:] for call in runner.calls] == [("version",)]
+    assert list(private_base.iterdir()) == []
+
+
+@pytest.mark.parametrize("version", ["go1.27.3-devel", "devel go1.27-deadbeef"])
+def test_stored_go_version_syntax_stays_strict(version: str) -> None:
+    # Probe-specific refusal diagnostics do not admit custom versions as stored identities.
+    with pytest.raises(toolchain.ToolchainError) as raised:
+        toolchain.parse_normalized_go_version(f"go version {version} darwin/arm64")
+    _assert_code("malformed_go_version", raised)
+
+
+@pytest.mark.parametrize(
     "family,version",
-    [("1.28", "1.28.0"), ("1.100", "1.100.0"), ("2.0", "2.0.0")],
+    [("1.28", "1.28.0"), ("1.28", "1.28rc1"), ("1.100", "1.100.0"), ("2.0", "2.0.0")],
 )
 def test_newer_go_family_is_accepted_once_with_full_lockdown_warning(
     tmp_path: Path,
@@ -852,6 +951,7 @@ def test_newer_go_family_is_accepted_once_with_full_lockdown_warning(
     family: str,
     version: str,
 ):
+    # Future families retain the default once-per-operation warning and full lockdown.
     host = toolchain._native_host()
     output = f"go version go{version} {host.goos}/{host.goarch}\n"
     config, runner, _, private_base = _setup(tmp_path, version=output)
@@ -888,6 +988,7 @@ def test_newer_go_family_can_be_refused_by_operator_policy(
     stored_mode: str,
     environment: dict[str, str],
 ):
+    # Both configured and environment-overridden strict policy still refuse future families.
     host = toolchain._native_host()
     output = f"go version go1.28.0 {host.goos}/{host.goarch}\n"
     config, _, _, private_base = _setup(tmp_path, version=output)
@@ -907,9 +1008,8 @@ def test_newer_go_family_can_be_refused_by_operator_policy(
     _assert_go_path_in_detail(config, raised.value.detail)
     assert ", ".join(toolchain.TESTED_GO_FAMILIES) in raised.value.detail
     assert "remediation:" in raised.value.detail
-    newest_tested = max(toolchain.TESTED_GO_FAMILIES, key=toolchain._go_family_key)
-    assert f'go = "{newest_tested}"' in raised.value.detail
-    assert "brew install go" in raised.value.detail
+    assert 'go = "1.27.3"' in raised.value.detail
+    assert "brew upgrade go" in raised.value.detail
     assert not list(private_base.glob(".csk-go-probe-*"))
 
 
@@ -929,6 +1029,7 @@ def test_context_manager_removes_private_root(tmp_path: Path):
         ("go version go1.22.12 {goos}/{goarch}\n", "unsupported_go_family"),
         ("go version go1.23.9 {goos}/{goarch}\n", "unsupported_go_family"),
         ("go version go1.24.9 {goos}/{goarch}\n", "unsupported_go_family"),
+        ("go version go1.25.5 {goos}/{goarch}\n", "unsupported_go_family"),
         ("go version go1.023.1 {goos}/{goarch}\n", "malformed_go_version"),
     ],
 )
@@ -937,6 +1038,7 @@ def test_release_family_fails_closed(
     version: str,
     expected_code: str,
 ):
+    # Older families remain unsupported and leave no private probe state after refusal.
     host = toolchain._native_host()
     rendered = version.format(goos=host.goos, goarch=host.goarch)
     config, runner, _, private_base = _setup(tmp_path, version=rendered)
@@ -959,10 +1061,10 @@ def test_release_family_fails_closed(
     "payload",
     [
         b"",
-        b"go version go1.25.5 darwin/arm64",
-        b"go version go1.25.5 darwin/arm64\n\n",
-        b"go version go1.25.5\rdarwin/arm64\n",
-        b"go version go1.25.5 darwin/arm64\x00\n",
+        b"go version go1.27.3 darwin/arm64",
+        b"go version go1.27.3 darwin/arm64\n\n",
+        b"go version go1.27.3\rdarwin/arm64\n",
+        b"go version go1.27.3 darwin/arm64\x00\n",
         b"\xff\n",
         b"x" * 4096 + b"\n",
     ],
@@ -974,7 +1076,7 @@ def test_version_normalization_rejects_malformed_output(payload: bytes):
 
 
 def test_version_normalization_accepts_lf_and_crlf():
-    expected = "go version go1.25.5 darwin/arm64"
+    expected = "go version go1.27.3 darwin/arm64"
     assert toolchain.normalize_go_version(expected.encode() + b"\n") == expected
     assert toolchain.normalize_go_version(expected.encode() + b"\r\n") == expected
 
@@ -1437,13 +1539,13 @@ def test_lf_crlf_mode_and_timestamp_are_identity_non_inputs(tmp_path: Path):
     executable.write_bytes(b"GO")
     lf = toolchain.fingerprint_toolchain(
         root.resolve(),
-        b"go version go1.25.5 darwin/arm64\n",
+        b"go version go1.27.3 darwin/arm64\n",
     )
     executable.chmod(0o555)
     os.utime(executable, (1_893_456_000, 1_893_456_000))
     crlf = toolchain.fingerprint_toolchain(
         root.resolve(),
-        b"go version go1.25.5 darwin/arm64\r\n",
+        b"go version go1.27.3 darwin/arm64\r\n",
     )
     assert lf == crlf
 
@@ -1628,7 +1730,7 @@ def test_tree_mutation_before_close_fails_and_still_deletes_private_state(
     config, _, goroot, _ = _setup(tmp_path)
     session = toolchain.establish_toolchain(config)
     operation_root = session.operation_root
-    (goroot / "VERSION").write_text("go1.25.6\n", encoding="utf-8")
+    (goroot / "VERSION").write_text("go1.27.4\n", encoding="utf-8")
 
     with pytest.raises(toolchain.ToolchainError) as raised:
         session.close()
@@ -1797,7 +1899,7 @@ def test_caller_deadline_overrides_an_unusably_small_operator_value(
     monkeypatch: pytest.MonkeyPatch,
 ):
     goroot = _make_goroot(tmp_path / "trusted-go")
-    stdout = b"go version go1.25.5 %s/%s\n" % (
+    stdout = b"go version go1.27.3 %s/%s\n" % (
         toolchain._native_host().goos.encode("ascii"),
         toolchain._native_host().goarch.encode("ascii"),
     )

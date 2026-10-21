@@ -133,10 +133,10 @@ jobs:
           ref: ${{ env.RELEASED_SUITE_PIN }}
           path: protocol-spec
 
-      - name: Set up Go 1.25.5
+      - name: Set up Go 1.27.3
         uses: actions/setup-go@v7
         with:
-          go-version: "1.25.5"
+          go-version: "1.27.3"
           cache: false
 
       - name: Set up Python 3.14
@@ -248,11 +248,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         go:
-          - version: "1.25.5"
-            family: "1.25"
-          - version: "1.26.8"
+          - version: "1.26.10"
             family: "1.26"
-          - version: "1.27.1"
+          - version: "1.27.3"
             family: "1.27"
     env:
       # The candidate identity every step of this job reads: the resolver, the
@@ -673,10 +671,10 @@ jobs:
           ref: ${{ env.RELEASED_SUITE_PIN }}
           path: protocol-spec
 
-      - name: Set up Go 1.25.5
+      - name: Set up Go 1.27.3
         uses: actions/setup-go@v7
         with:
-          go-version: "1.25.5"
+          go-version: "1.27.3"
           cache: false
 
       - name: Set up Python ${{ matrix.python-version }}
@@ -786,10 +784,10 @@ jobs:
           ref: ${{ env.RELEASED_SUITE_PIN }}
           path: protocol-spec
 
-      - name: Set up Go 1.25.5
+      - name: Set up Go 1.27.3
         uses: actions/setup-go@v7
         with:
-          go-version: "1.25.5"
+          go-version: "1.27.3"
           cache: false
 
       - name: Set up Python 3.14
@@ -900,11 +898,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         go:
-          - version: "1.25.5"
-            family: "1.25"
-          - version: "1.26.8"
+          - version: "1.26.10"
             family: "1.26"
-          - version: "1.27.1"
+          - version: "1.27.3"
             family: "1.27"
     env:
       # The candidate identity every step of this job reads: the resolver, the
@@ -1132,10 +1128,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Go 1.25.5
+      - name: Set up Go 1.27.3
         uses: actions/setup-go@v7
         with:
-          go-version: "1.25.5"
+          go-version: "1.27.3"
           cache: false
 
       - name: Set up Python 3.14

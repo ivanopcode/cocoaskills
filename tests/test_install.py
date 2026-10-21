@@ -99,7 +99,7 @@ def _stub_trusted_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
             algorithm=build_toolchain.TOOLCHAIN_ALGORITHM,
             content_sha256="sha256:" + "a" * 64,
             go_relpath=build_toolchain.GO_RELPATH,
-            go_version=f"go version go1.25.5 {host.goos}/{host.goarch}",
+            go_version=f"go version go1.27.3 {host.goos}/{host.goarch}",
         )
 
         def __init__(self, toolchain_config: build_toolchain.ToolchainConfig):
@@ -1422,7 +1422,7 @@ def test_compiled_dry_run_preserves_every_persistent_surface(
             algorithm=build_toolchain.TOOLCHAIN_ALGORITHM,
             content_sha256="sha256:" + "a" * 64,
             go_relpath=build_toolchain.GO_RELPATH,
-            go_version="go version go1.25.5 darwin/arm64",
+            go_version="go version go1.27.3 darwin/arm64",
         )
 
         def __enter__(self):

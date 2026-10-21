@@ -88,7 +88,7 @@ def _install_fake_build_pipeline(
         algorithm=build_toolchain.TOOLCHAIN_ALGORITHM,
         content_sha256="sha256:" + "a" * 64,
         go_relpath=build_toolchain.GO_RELPATH,
-        go_version=f"go version go1.25.5 {target.goos}/{target.goarch}",
+        go_version=f"go version go1.27.3 {target.goos}/{target.goarch}",
     )
 
     class FakeSession:

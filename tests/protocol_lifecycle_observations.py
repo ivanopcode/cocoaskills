@@ -6431,7 +6431,7 @@ def _patch_different_toolchain(
         algorithm=toolchain.TOOLCHAIN_ALGORITHM,
         content_sha256="sha256:" + "b" * 64,
         go_relpath=toolchain.GO_RELPATH,
-        go_version=f"go version go1.25.5 {target.goos}/{target.goarch}",
+        go_version=f"go version go1.27.3 {target.goos}/{target.goarch}",
     )
 
     class Session:

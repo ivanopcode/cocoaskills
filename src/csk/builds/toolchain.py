@@ -31,7 +31,10 @@ from typing import BinaryIO, Final, Protocol, Self, TypeAlias
 
 TOOLCHAIN_ALGORITHM: Final = "curator-go-toolchain-v1"
 GO_RELPATH: Final = "bin/go"
-TESTED_GO_FAMILIES: Final[tuple[str, ...]] = ("1.25", "1.26", "1.27")
+TESTED_GO_FAMILIES: Final[tuple[str, ...]] = ("1.26", "1.27")
+MINIMUM_GO_RELEASES: Final[Mapping[str, str]] = MappingProxyType(
+    {"1.26": "1.26.10", "1.27": "1.27.3"}
+)
 _MINIMUM_GO_FAMILY: Final = (1, 23)
 
 GO_ENV_FIELDS: Final[tuple[str, ...]] = (
@@ -667,14 +670,10 @@ def preflight_toolchain(config: ToolchainConfig) -> None:
             "go_version_failed",
             f"version exited with status {result.returncode}",
         )
-    version, family, version_goos, version_goarch = _parse_go_version(
-        result.stdout
-    )
-    _check_go_family_policy(
-        version,
-        family,
-        selection.executable,
-        config.go_future_families,
+    version, family, version_goos, version_goarch = _check_probed_go_version(
+        result.stdout,
+        go_path=selection.executable,
+        future_families=config.go_future_families,
     )
     if version_goos != host.goos or version_goarch != host.goarch:
         raise ToolchainError(
@@ -893,14 +892,10 @@ def _establish_toolchain(config: ToolchainConfig, host: _Host) -> ToolchainSessi
 
         run_probe(("telemetry", "off"), "telemetry_initialization_failed")
         version_result = run_probe(("version",), "go_version_failed")
-        version, family, version_goos, version_goarch = _parse_go_version(
-            version_result.stdout
-        )
-        _check_go_family_policy(
-            version,
-            family,
-            selection.executable,
-            config.go_future_families,
+        version, family, version_goos, version_goarch = _check_probed_go_version(
+            version_result.stdout,
+            go_path=selection.executable,
+            future_families=config.go_future_families,
         )
         environment_result = run_probe(
             ("env", "-json", *GO_ENV_FIELDS),
@@ -989,19 +984,43 @@ def _go_family_key(family: str) -> tuple[int, int]:
     return int(major), int(minor)
 
 
+def _check_probed_go_version(
+    stdout: bytes, *, go_path: Path, future_families: str,
+) -> tuple[str, str, str, str]:
+    """Refuse unprovable tested-family versions without widening stored identity syntax."""
+
+    version = normalize_go_version(stdout)
+    candidate = re.fullmatch(
+        r"go version (?:devel )?go(?P<family>[0-9]+\.[0-9]+).* [a-z0-9]+/[a-z0-9]+",
+        version,
+    )
+    if candidate is not None and candidate.group("family") in MINIMUM_GO_RELEASES:
+        _check_go_family_policy(version, candidate.group("family"), go_path, future_families)
+        return _parse_go_version(stdout)
+    parsed = _parse_go_version(stdout)
+    _check_go_family_policy(parsed[0], parsed[1], go_path, future_families)
+    return parsed
+
+
+def _go_upgrade_remediation() -> str:
+    newest = max(TESTED_GO_FAMILIES, key=_go_family_key)
+    release = MINIMUM_GO_RELEASES[newest]
+    return (
+        f"remediation: put Go {release} or newer first on PATH, e.g. "
+        f'go = "{release}" in the project .mise.toml or brew upgrade go'
+    )
+
+
 def _unsupported_go_family_detail(
     version: str,
     family: str,
     go_path: Path,
 ) -> str:
     tested = ", ".join(TESTED_GO_FAMILIES)
-    first = min(TESTED_GO_FAMILIES, key=_go_family_key)
-    newest = max(TESTED_GO_FAMILIES, key=_go_family_key)
     return (
         f"found version {version} (family {family}) at Go path {go_path}; "
         f"tested families: {tested}.\n"
-        f"remediation: put Go {first}–{newest} (or newer) first on PATH, e.g. "
-        f'go = "{newest}" in the project .mise.toml or brew install go'
+        f"{_go_upgrade_remediation()}"
     )
 
 
@@ -1029,6 +1048,19 @@ def _check_go_family_policy(
             "unsupported_go_family",
             _unsupported_go_family_detail(version, family, go_path),
         )
+    if family in tested:
+        minimum = MINIMUM_GO_RELEASES[family]
+        release = re.fullmatch(
+            r"go version go([0-9]+)\.([0-9]+)\.(0|[1-9][0-9]*) [a-z0-9]+/[a-z0-9]+",
+            version,
+        )
+        floor = tuple(map(int, minimum.split(".")))
+        if release is None or tuple(map(int, release.groups())) < floor:
+            raise ToolchainError(
+                "insecure_go_release",
+                f"found version {version} (family {family}) at Go path {go_path}; "
+                f"minimum release: {minimum}.\n{_go_upgrade_remediation()}",
+            )
     if is_future:
         _warn_untested_go_family(family, go_path)
 

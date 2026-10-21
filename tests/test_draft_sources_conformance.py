@@ -890,7 +890,7 @@ def _observed_gate_stub_external_build() -> Any:
             algorithm=_build_toolchain.TOOLCHAIN_ALGORITHM,
             content_sha256="sha256:" + "a" * 64,
             go_relpath=_build_toolchain.GO_RELPATH,
-            go_version=f"go version go1.25.5 {host.goos}/{host.goarch}",
+            go_version=f"go version go1.27.3 {host.goos}/{host.goarch}",
         )
 
         def __init__(self, toolchain_config: _build_toolchain.ToolchainConfig):
@@ -5352,7 +5352,7 @@ def _closure_refresh_stub_build_toolchain() -> Any:
             algorithm=_build_toolchain.TOOLCHAIN_ALGORITHM,
             content_sha256="sha256:" + "b" * 64,
             go_relpath=_build_toolchain.GO_RELPATH,
-            go_version=f"go version go1.25.5 {host.goos}/{host.goarch}",
+            go_version=f"go version go1.27.3 {host.goos}/{host.goarch}",
         )
 
         def __init__(self, toolchain_config: _build_toolchain.ToolchainConfig):

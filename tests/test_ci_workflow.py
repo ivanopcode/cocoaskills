@@ -366,6 +366,7 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
 
 
 def test_external_build_repeat_is_manual_windows_only() -> None:
+    # The manual Windows repeat lane retains its structure and uses a qualified Go release.
     workflow = _workflow()
     jobs = yaml.safe_load(workflow)["jobs"]
     job = jobs["windows_external_build_repeat"]
@@ -373,7 +374,7 @@ def test_external_build_repeat_is_manual_windows_only() -> None:
     assert job["runs-on"] == "windows-latest"
     assert job["timeout-minutes"] == 240
     go_setup = next(step for step in job["steps"] if step.get("uses") == "actions/setup-go@v7")
-    assert go_setup["with"] == {"go-version": "1.25.5", "cache": False}
+    assert go_setup["with"] == {"go-version": "1.27.3", "cache": False}
     run_steps = [step for step in job["steps"] if "run" in step]
     repeat = next(step for step in run_steps if step["name"] == "Repeat cold external build installs")
     assert repeat["env"] == {"CSK_EXTERNAL_BUILD_REPEAT": "1"}
@@ -470,13 +471,13 @@ def test_main_lane_preserves_full_platform_coverage_and_go_evidence() -> None:
 
 
 def test_go_qualification_lanes_pin_each_family_across_all_platforms() -> None:
+    # Both existing qualification jobs cover exactly the patched Go families on every OS.
     workflow = yaml.safe_load(_workflow())
     assert isinstance(workflow, dict)
     jobs = workflow["jobs"]
     expected_go = [
-        {"version": "1.25.5", "family": "1.25"},
-        {"version": "1.26.8", "family": "1.26"},
-        {"version": "1.27.1", "family": "1.27"},
+        {"version": "1.26.10", "family": "1.26"},
+        {"version": "1.27.3", "family": "1.27"},
     ]
 
     for job_id in ("fast_go_e2e", "merge_go_e2e"):

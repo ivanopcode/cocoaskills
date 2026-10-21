@@ -345,7 +345,7 @@ def _compile_native_go_forwarder(
     tool_root = shim_directory.parent
     shim_directory.mkdir(parents=True)
     if missing_fact != "VERSION":
-        (tool_root / "VERSION").write_text("go1.25.5\n", encoding="utf-8")
+        (tool_root / "VERSION").write_text("go1.27.3\n", encoding="utf-8")
     (tool_root / "src" / "runtime").mkdir(parents=True)
     if missing_fact != "pkg/tool":
         (tool_root / "pkg" / "tool").mkdir(parents=True)

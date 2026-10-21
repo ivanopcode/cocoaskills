@@ -1094,7 +1094,7 @@ def _projected_darwin_toolchain(
     tmp_path: Path,
     name: str,
     *,
-    version_stdout: bytes = b"go version go1.25.5 darwin/arm64\n",
+    version_stdout: bytes = b"go version go1.27.3 darwin/arm64\n",
     telemetry_returncode: int = 0,
     telemetry_directory: Path | None = None,
 ) -> Iterator[tuple[toolchain.ToolchainConfig, toolchain._Host, Path]]:
@@ -2067,7 +2067,7 @@ def assert_toolchain_case(
         (root / "bin").mkdir(parents=True)
         executable = root / "bin" / "go"
         executable.write_bytes(b"before")
-        version = "go version go1.25.5 darwin/arm64"
+        version = "go version go1.27.3 darwin/arm64"
         digest, tree_state = toolchain._fingerprint_normalized(
             root,
             version,
@@ -2248,7 +2248,7 @@ class _RecordingProbeRunner:
         self,
         goroot: Path,
         *,
-        version_stdout: bytes = b"go version go1.25.5 darwin/arm64\n",
+        version_stdout: bytes = b"go version go1.27.3 darwin/arm64\n",
         telemetry_returncode: int = 0,
         telemetry_directory: Path | None = None,
     ) -> None:

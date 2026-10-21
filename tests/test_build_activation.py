@@ -50,7 +50,7 @@ def _build_input(command: str = "golden-tool", *, goos: str = UNIX_GOOS) -> GoBu
             algorithm=TOOLCHAIN_ALGORITHM,
             content_sha256="sha256:" + "c" * 64,
             go_relpath=GO_RELPATH,
-            go_version=f"go version go1.25.1 {goos}/amd64",
+            go_version=f"go version go1.27.3 {goos}/amd64",
         ),
     )
 

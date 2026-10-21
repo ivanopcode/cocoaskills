@@ -142,7 +142,7 @@ class _Compiler:
     identity: CompilerIdentity = field(
         default_factory=lambda: CompilerIdentity(
             content_sha256="sha256:" + "a" * 64,
-            go_version="go1.25.1",
+            go_version="go1.27.3",
             go_relpath="bin/go",
             goos="darwin",
             goarch="arm64",
@@ -439,7 +439,7 @@ def test_stored_artifact_carries_the_suffix_its_receipt_declares(
         [],
         identity=CompilerIdentity(
             content_sha256="sha256:" + "a" * 64,
-            go_version="go1.25.1",
+            go_version="go1.27.3",
             go_relpath="bin/go",
             goos=goos,
             goarch=goarch,
@@ -614,7 +614,7 @@ def test_external_compiler_adapter_reuses_exact_go_v1_session(
     native_session = SimpleNamespace(
         toolchain=SimpleNamespace(
             content_sha256="sha256:" + "c" * 64,
-            go_version="go1.25.1",
+            go_version="go1.27.3",
             go_relpath="bin/go",
         ),
         target=SimpleNamespace(

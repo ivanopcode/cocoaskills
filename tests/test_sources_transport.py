@@ -1915,7 +1915,7 @@ def test_transport_provenance_stays_out_of_lock_and_package_identity() -> None:
         result.snapshot.digest,
         CompilerIdentity(
             content_sha256="sha256:" + "a" * 64,
-            go_version="go1.25.1",
+            go_version="go1.27.3",
             go_relpath="bin/go",
             goos="darwin",
             goarch="arm64",

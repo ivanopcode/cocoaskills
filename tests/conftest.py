@@ -237,7 +237,7 @@ def required_go_e2e_host(monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
         text=True,
         capture_output=True,
     ).stdout
-    expected_family = os.environ.get("CSK_E2E_GO_FAMILY", "1.25")
+    expected_family = os.environ.get("CSK_E2E_GO_FAMILY", "1.27")
     version_parts = version.strip().split()
     reported_version = version_parts[2].removeprefix("go") if len(version_parts) >= 3 else ""
     reported_family = ".".join(reported_version.split(".")[:2])

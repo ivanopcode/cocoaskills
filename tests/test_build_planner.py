@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ class _FakeToolchainSession:
             algorithm=toolchain.TOOLCHAIN_ALGORITHM,
             content_sha256="sha256:" + "a" * 64,
             go_relpath=toolchain.GO_RELPATH,
-            go_version="go version go1.25.5 darwin/arm64",
+            go_version="go version go1.27.3 darwin/arm64",
         )
         self.executable = Path("/trusted/go/bin/go")
         self._events = events
@@ -82,6 +83,24 @@ def _command(name: str) -> planner.BuildCommand:
         build_root="build",
         source_dir=f"build/cmd/{name}",
     )
+
+
+def test_go_version_alone_changes_the_build_cache_key(tmp_path: Path) -> None:
+    # A version-only toolchain change selects a different key for otherwise identical build inputs.
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "source.txt").write_text("source", encoding="utf-8")
+    session = _FakeToolchainSession([])
+    old_identity = replace(session.toolchain, go_version="go version go1.27.3 darwin/arm64")
+    new_identity = replace(old_identity, go_version="go version go1.27.4 darwin/arm64")
+    with source.freeze_snapshot(root) as frozen:
+        before = metadata.GoBuildInput(
+            build_source=frozen.identity, build_root="build", command="tool",
+            source_dir="build/cmd/tool", target=session.target, toolchain=old_identity,
+        )
+        after = replace(before, toolchain=new_identity)
+    assert before.toolchain.content_sha256 == after.toolchain.content_sha256
+    assert metadata.cache_key(before) != metadata.cache_key(after)
 
 
 def test_generation_probe_does_not_treat_file_parent_as_absence(

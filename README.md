@@ -373,12 +373,20 @@ csk shell-init                      # Генерирует или устанав
 - `pytest` and `pytest-xdist` run the test suite. Run `uv run pytest -q` for the
   full suite or focused test paths; temporary output belongs under `.temp/` or
   an external short-lived temp directory.
-- `Go` compiles `go-v1` skills from the operator-selected `go` on `PATH`; run
-  `go version` to inspect it. Tested families are 1.25, 1.26, and 1.27; newer
-  families warn by default and can be refused with
-  `builds.go_future_families = "refuse"` or `CSK_GO_FUTURE_FAMILIES=refuse`.
-  CI pins Go 1.25.5, 1.26.8, and 1.27.1 with `actions/setup-go@v7` in
-  `.github/workflows/ci.yml`; build state is under `<csk-home>/builds/go-v1/`.
+- `Go` собирает команды `go-v1` выбранным оператором `go` из `PATH`;
+  проверьте его командой `go version`. Квалифицированы семейства 1.26 (от
+  1.26.10) и 1.27 (от 1.27.3). Более ранние и prerelease-версии этих семейств
+  отклоняются с `insecure_go_release`, семейства 1.25 и старше — с
+  `unsupported_go_family`. Строка `remediation:` предлагает поставить Go
+  1.27.3 или новее первым в `PATH`: например, `go = "1.27.3"` в проектном
+  `.mise.toml` либо `brew upgrade go`. Порог нужен для исправленной проверки
+  TLS-сертификатов: собранные CLI включают стандартную библиотеку выбранного Go.
+  Новая версия тулчейна меняет cache key; следующая установка или обновление
+  пересобирает CLI. Семейства новее 1.27 принимаются с предупреждением;
+  строгий отказ задаётся через `builds.go_future_families = "refuse"` или
+  `CSK_GO_FUTURE_FAMILIES=refuse`. CI закрепляет Go 1.26.10 и 1.27.3 через
+  `actions/setup-go@v7` в `.github/workflows/ci.yml`; кэш сборок находится в
+  `<csk-home>/builds/go-v1/`.
 - `mypy` performs strict source type checking. Run `uv run mypy`; it writes no
   persistent artifact unless output is redirected to `.temp/`.
 - `uv run python tests/audit_secrets_mutants.py` runs the audit security
