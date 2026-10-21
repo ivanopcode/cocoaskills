@@ -137,8 +137,10 @@ def test_private_snapshot_survives_operator_path_changes(
         private = Path(environment["GIT_SSL_CAINFO"])
         assert private != selected and private.read_bytes() == original
         assert not private.is_symlink()
-        assert private.stat().st_mode & 0o777 == 0o600
-        assert private.parent.stat().st_mode & 0o777 == 0o700
+        if os.name != "nt":
+            # Windows stat exposes DOS writability, not POSIX file/directory permissions.
+            assert private.stat().st_mode & 0o777 == 0o600
+            assert private.parent.stat().st_mode & 0o777 == 0o700
         assert f"http.sslCAInfo={private}" in command
         assert not any(str(selected) in arg for arg in command)
         assert "GIT_SSL_NO_VERIFY" not in environment
@@ -290,7 +292,7 @@ def test_real_cli_invalid_bundle_precedes_every_git_start(tmp_path, kind):
     if kind in {"included", "include-if"}:
         included = tmp_path / "remotes.conf"
         included.write_text(f'[remote "origin"]\n url = {url}\n')
-        key = "include.path" if kind == "included" else f"includeIf.gitdir:{repo}/.path"
+        key = "include.path" if kind == "included" else f"includeIf.gitdir:{repo.as_posix()}/.path"
         run(["git", "config", key, str(included)], repo)
     else:
         remote = {
@@ -340,8 +342,8 @@ def test_native_git_configuration_still_fetches(git_ca_bundle, tmp_path, kind):
     repo = init_git_repo(tmp_path / "repo")
     if kind in {"included", "include-if"}:
         included = tmp_path / "remote.conf"
-        included.write_text(f'[remote "origin"]\n url = {source}\n')
-        key = "include.path" if kind == "included" else f"includeIf.gitdir:{repo}/.path"
+        included.write_text(f'[remote "origin"]\n url = {source.as_uri()}\n')
+        key = "include.path" if kind == "included" else f"includeIf.gitdir:{repo.as_posix()}/.path"
         run(["git", "config", key, str(included)], repo)
     else:
         run(
