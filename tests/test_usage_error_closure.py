@@ -738,16 +738,42 @@ def test_rev4_f3_installer_does_not_echo_the_configured_env_name(monkeypatch, na
     assert "the environment variable configured for build_https scope 'gitlab.example.com/acme' is not set" in text
 
 
-def test_rev4_f5_changelog_entry_is_under_unreleased():
-    # 3f63mn F5: the entry must not land inside a released section.
-    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+def _changelog_entry_sections(changelog: str, needle: str) -> list[str]:
     sections = re.split(r"(?m)^## ", changelog)
-    unreleased = next(section for section in sections if section.startswith("[Unreleased]"))
-    assert "<value not shown>" in unreleased
-    for section in sections:
-        if section.startswith("[Unreleased]") or not section.startswith("["):
-            continue
-        assert "<value not shown>" not in section, section.splitlines()[0]
+    return [s.splitlines()[0] for s in sections if s.startswith("[") and needle in s]
+
+
+def _shipped_after_0_19_0(heading: str) -> bool:
+    match = re.match(r"\[(\d+)\.(\d+)\.(\d+)\]", heading)
+    return heading.startswith("[Unreleased]") or (
+        match is not None and tuple(map(int, match.groups())) > (0, 19, 0)
+    )
+
+
+def test_rev4_f5_changelog_entry_is_under_unreleased():
+    # 3f63mn F5: the entry is never recorded inside a release that predates the
+    # fix (0.19.0 or older); it sits in [Unreleased] or, after a cut, in the
+    # one release that ships it.
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    headings = _changelog_entry_sections(changelog, "<value not shown>")
+    assert len(headings) == 1, headings
+    assert _shipped_after_0_19_0(headings[0]), headings[0]
+
+
+def test_rev4_f5_changelog_check_rejects_an_old_release_section():
+    # Control: the same check refuses the entry inside 0.19.0 and accepts it in
+    # [Unreleased] or in a newer release (so a release cut stays green).
+    entry = "- usage errors show `<value not shown>`\n"
+    for heading, accepted in (
+        ("[Unreleased]", True),
+        ("[0.20.0] - 2026-10-21", True),
+        ("[0.19.0] - 2026-10-13", False),
+        ("[0.9.9] - 2026-01-01", False),
+    ):
+        text = f"# Changelog\n\n## {heading}\n\n### Fixed\n\n{entry}\n## [0.1.0] - 2025-01-01\n"
+        found = _changelog_entry_sections(text, "<value not shown>")
+        assert found == [heading]
+        assert _shipped_after_0_19_0(found[0]) is accepted, heading
 
 
 def test_legitimately_failing_command_keeps_its_own_output_and_exit_code(redaction_config, capsys):
