@@ -229,7 +229,7 @@ def test_distrust_before_any_child_or_token_environment(
                 OperatorSearchPath(()), require_ssh=False, https_credentials=credentials
             )
     assert error.value.code == git_trust.INVALID
-    assert str(bundle) in str(error.value)
+    assert repr(str(bundle)) in str(error.value)
     if not invalid:
         assert "no certificates remain after filtering" in str(error.value)
     assert "remediation:" in str(error.value)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import ssl
 
 import pytest
@@ -38,7 +39,9 @@ def test_filter_keeps_exact_blocks_and_warns_once(
         with git_trust.private_git_trust() as trust:
             assert trust.ca_file != path
             assert trust.ca_file.read_bytes() == clean + clean
-            assert trust.ca_file.stat().st_mode & 0o777 == 0o600
+            if os.name != "nt":
+                # Windows reports writable DOS mode bits; creation mode is checked separately.
+                assert trust.ca_file.stat().st_mode & 0o777 == 0o600
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             context.load_verify_locations(cafile=str(trust.ca_file))
             assert context.get_ca_certs(binary_form=True) == [
@@ -48,7 +51,7 @@ def test_filter_keeps_exact_blocks_and_warns_once(
     assert len(records) == 1
     assert git_trust.DISTRUSTED in records[0].message
     assert "Generated blocked CA" in records[0].message
-    assert str(git_ca_bundle) in records[0].message
+    assert repr(str(git_ca_bundle)) in records[0].message
     assert "BEGIN CERTIFICATE" not in caplog.text
 
 
@@ -169,3 +172,26 @@ def test_malformed_listed_der_is_not_ignored_in_a_mixed_bundle(
     git_ca_bundle.write_bytes(malformed + clean)
     with pytest.raises(git_trust.GitTrustError, match=git_trust.INVALID):
         git_trust.https_git_args()
+
+
+def test_snapshot_creation_always_requests_private_exclusive_mode(
+    git_ca_bundle, monkeypatch
+):
+    # All platforms request 0600 and exclusive creation; POSIX additionally exposes those permissions through stat.
+    real_open = git_trust.os.open
+    snapshots = []
+
+    def record(path, flags, mode=0o777, **kwargs):
+        if str(path).endswith("ca.pem") and flags & os.O_CREAT:
+            snapshots.append((flags, mode))
+        return real_open(path, flags, mode, **kwargs)
+
+    monkeypatch.setattr(git_trust.os, "open", record)
+    with git_trust.private_git_trust() as trust:
+        assert trust.ca_file.read_bytes() == git_ca_bundle.read_bytes()
+    assert len(snapshots) == 1
+    flags, mode = snapshots[0]
+    assert mode == 0o600
+    assert flags & os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        assert flags & os.O_NOFOLLOW
