@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import platform
 import struct
+import sys
 from pathlib import Path
 
 import pytest
 
 from csk.builds import go_v1
+
+_MACOS_ABSOLUTE_NAME = pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="Absolute Mach-O install names require macOS filesystem path semantics",
+)
 
 
 def _cpu() -> int:
@@ -77,11 +83,15 @@ def test_static_interpreter_ignores_stray_dylibs(tmp_path: Path):
 
 
 @pytest.mark.parametrize("command", (0xC, 0x80000018, 0x8000001F, 0x20, 0x80000023))
-@pytest.mark.parametrize("form", ("rpath", "executable", "absolute"))
+@pytest.mark.parametrize(
+    "form",
+    ("rpath", "executable", pytest.param("absolute", marks=_MACOS_ABSOLUTE_NAME)),
+)
 def test_dynamic_interpreter_binds_approved_link(
     tmp_path: Path, command: int, form: str
 ):
     # Every supported dylib command binds the sole matching candidate through an approved name.
+    # Absolute names are exercised on macOS, where the resolver's filesystem paths apply.
     candidate = tmp_path / "lib" / "libpython3.13.dylib"
     names = {
         "rpath": "@rpath/" + candidate.name,
@@ -126,10 +136,18 @@ def test_fat_interpreter_uses_running_cpu_slice(
 
 @pytest.mark.parametrize(
     "case",
-    ("missing", "mismatch", "loader", "foreign-absolute", "duplicate", "ambiguous"),
+    (
+        "missing",
+        "mismatch",
+        "loader",
+        pytest.param("foreign-absolute", marks=_MACOS_ABSOLUTE_NAME),
+        "duplicate",
+        "ambiguous",
+    ),
 )
 def test_invalid_runtime_links_return_no_identity(tmp_path: Path, case: str):
     # Invalid or ambiguous libpython links refuse with the identity error and return no runtime.
+    # Foreign absolute names are exercised with macOS filesystem path semantics.
     link = "@rpath/libpython3.13.dylib"
     candidates = ("libpython3.13.dylib",)
     names = [link]
@@ -239,6 +257,7 @@ def test_macho_inspects_the_same_bytes_it_hashes(
     assert opens == [executable.path]
 
 
+@_MACOS_ABSOLUTE_NAME
 def test_absolute_runtime_link_can_canonicalize_to_candidate(tmp_path: Path):
     # An absolute alias resolving to the single canonical candidate is an approved install name.
     alias = tmp_path / "alias"
