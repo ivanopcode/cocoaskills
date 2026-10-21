@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-21
+
 ### Добавлено
 
 - Project Skillfile schema 3 объявляет MCP-серверы через URL shorthand или объект `server`/`install`. `install` содержит локальные параметры записи и аутентификации устанавливающего менеджера. `csk install` пишет `.mcp.json` для Claude Code, `.codex/config.toml` для Codex CLI и `.cursor/mcp.json` для Cursor, печатает строку для каждой пары server/agent и запрашивает consent для stdio или env references. Установка не запускает серверы и не выполняет аутентификацию.
