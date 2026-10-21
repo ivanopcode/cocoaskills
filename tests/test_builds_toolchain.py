@@ -240,6 +240,8 @@ def _setup(
     forbidden.mkdir()
     private_base = tmp_path / "private"
     private_base.mkdir()
+    if version is not None and version.split()[2].startswith("go"):
+        (goroot / "VERSION").write_text(version.split()[2] + "\n", encoding="utf-8")
     runner = RecordingRunner(
         goroot,
         version=version,
@@ -262,7 +264,7 @@ def _setup_shim(
     shim_returncode: int = 0,
     version: str | None = None,
 ) -> tuple[toolchain.ToolchainConfig, ShimRecordingRunner, Path, Path]:
-    config, _runner, default_goroot, private_base = _setup(tmp_path)
+    config, _runner, default_goroot, private_base = _setup(tmp_path, version=version)
     selected_goroot = default_goroot if goroot is None else goroot
     shim_directory = tmp_path / "goenv" / "shims"
     shim_directory.mkdir(parents=True)
@@ -848,6 +850,7 @@ def test_qualified_new_go_toolchains_are_accepted_under_the_full_lockdown(
     ("version", "floor"),
     [
         ("go1.26.9", "1.26.10"),
+        ("go1.27.3", "1.27.3"),
         ("go1.27.0", "1.27.3"),
         ("go1.27.2", "1.27.3"),
         ("go1.27rc1", "1.27.3"),
@@ -864,11 +867,13 @@ def test_qualified_new_go_toolchains_are_accepted_under_the_full_lockdown(
 def test_insecure_go_release_refuses_before_cache_read_or_build(
     tmp_path: Path, version: str, floor: str,
 ) -> None:
-    # Below-floor and unprovable releases refuse before cache access or source-aware Go calls.
+    # Below-floor, unprovable, and contradictory releases refuse before cache access or build calls.
     host = toolchain._native_host()
     config, runner, goroot, private_base = _setup(
         tmp_path, version=f"go version {version} {host.goos}/{host.goarch}\n",
     )
+    if version == "go1.27.3":
+        (goroot / "VERSION").write_text("go1.26.9\n", encoding="utf-8")
     manager_home = tmp_path / "manager"
     manager_home.mkdir()
     package = tmp_path / "package"
@@ -915,6 +920,58 @@ def test_insecure_go_release_refuses_before_cache_read_or_build(
     assert list(manager_home.iterdir()) == []
     assert list(private_base.iterdir()) == []
     assert all(not root.exists() for root in runner.operation_roots)
+
+
+@pytest.mark.parametrize("explicit", [False, True], ids=["path", "explicit"])
+@pytest.mark.parametrize("entry", [toolchain.preflight_toolchain, toolchain.probe_toolchain])
+@pytest.mark.parametrize(
+    "metadata,accepted",
+    [
+        (b"go1.27.3\n", True),
+        (b"go1.27.3\ntime 2026-10-19T22:20:36Z\n", True),
+        (b"go1.27.3\r\ntime 2026-10-19T22:20:36Z\r\n", True),
+        (b"go1.26.9\ntime 2026-10-01T00:00:00Z\n", False),
+        (b"go1.27.4\n", False),
+        (None, False),
+        (b"", False),
+        (b"go1.27.3-custom\n", False),
+        (b"go1.27.3\ngo1.26.9\n", False),
+        (b"go1.27.3\ntime 2026-10-19T22:20:36Z\nextra\n", False),
+        (b"go1.27.3\n\n", False),
+        pytest.param(b"go1.27.3\n" + b"x" * 4096, False, id="oversized"),
+        (b"go1.27.3\n\xff", False),
+    ],
+)
+def test_goroot_release_evidence_must_agree(
+    tmp_path, monkeypatch, entry, metadata, accepted, explicit,
+):
+    # Both gates require matching VERSION metadata; official timestamp/CRLF controls pass.
+    config, runner, goroot, private_base = _setup(tmp_path)
+    if explicit:
+        config = replace(
+            config, go_executable=goroot / "bin" / ("go.exe" if os.name == "nt" else "go"),
+        )
+    path = goroot / "VERSION"
+    if metadata is None:
+        path.unlink()
+    else:
+        path.write_bytes(metadata)
+    if accepted:
+        entry(config)
+    else:
+        def forbidden_fingerprint(*args, **kwargs):
+            pytest.fail("contradictory release must refuse before fingerprint/build admission")
+        monkeypatch.setattr(toolchain, "_fingerprint_normalized", forbidden_fingerprint)
+        with pytest.raises(toolchain.ToolchainError) as raised:
+            entry(config)
+        _assert_code("insecure_go_release", raised)
+        assert str(path) in raised.value.detail
+        assert "go1.27.3" in raised.value.detail
+        assert "remediation:" in raised.value.detail
+        assert [call[0][1:] for call in runner.calls] in [
+            [("version",)], [("telemetry", "off"), ("version",)],
+        ]
+    assert not list(private_base.iterdir())
 
 
 @pytest.mark.parametrize("version", ["1.26.9", "1.27rc1", "1.27.3-devel"])

@@ -609,7 +609,7 @@ def preflight_toolchain(config: ToolchainConfig) -> None:
     """Reject unsupported or non-native Go executables without writing state.
 
     The complete probe still runs in :func:`establish_toolchain`.  This first
-    pass deliberately uses only ``go version`` for real launchers so status
+    pass uses only ``go version`` and the selected root's ``VERSION`` file so status
     failure boundaries can be decided before allocating operation-private
     configuration, cache, telemetry, or temporary directories. Manager shims
     defer to establishment so their single ``go env GOROOT`` probe uses that
@@ -675,6 +675,7 @@ def preflight_toolchain(config: ToolchainConfig) -> None:
         go_path=selection.executable,
         future_families=config.go_future_families,
     )
+    _check_goroot_release(selection.goroot, version, family, selection.executable)
     if version_goos != host.goos or version_goarch != host.goarch:
         raise ToolchainError(
             "target_mismatch",
@@ -897,6 +898,7 @@ def _establish_toolchain(config: ToolchainConfig, host: _Host) -> ToolchainSessi
             go_path=selection.executable,
             future_families=config.go_future_families,
         )
+        _check_goroot_release(selection.goroot, version, family, selection.executable)
         environment_result = run_probe(
             ("env", "-json", *GO_ENV_FIELDS),
             "go_env_failed",
@@ -1000,6 +1002,42 @@ def _check_probed_go_version(
     parsed = _parse_go_version(stdout)
     _check_go_family_policy(parsed[0], parsed[1], go_path, future_families)
     return parsed
+
+
+def _check_goroot_release(goroot: Path, version: str, family: str, go_path: Path) -> None:
+    """Require the selected root's bounded release evidence to agree with its binary."""
+
+    path = goroot / "VERSION"
+    expected = version.split()[2].encode("ascii")
+    failure = (
+        f"found version {version} at Go path {go_path}; GOROOT release evidence "
+        f"at {path} is missing, malformed, or disagrees with the binary; "
+        f"minimum release: {MINIMUM_GO_RELEASES.get(family, 'matching release evidence')}.\n"
+        f"{_go_upgrade_remediation()}"
+    )
+    try:
+        initial = path.lstat()
+        if not stat.S_ISREG(initial.st_mode) or _is_reparse_point(initial):
+            raise ToolchainError("insecure_go_release", failure)
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if not _same_stat(initial, opened):
+                raise ToolchainError("insecure_go_release", failure)
+            payload = stream.read(MAX_VERSION_OUTPUT + 1)
+    except OSError as exc:
+        raise ToolchainError("insecure_go_release", failure) from exc
+    # Official distributions may add one timestamp line; other trailing evidence is ambiguous.
+    payload = payload.replace(b"\r\n", b"\n")
+    metadata = re.fullmatch(
+        re.escape(expected)
+        + rb"(?:\ntime [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?\n?",
+        payload,
+    )
+    if len(payload) > MAX_VERSION_OUTPUT or metadata is None:
+        raise ToolchainError("insecure_go_release", failure)
 
 
 def _go_upgrade_remediation() -> str:
@@ -1506,18 +1544,10 @@ def _is_real_launcher_candidate(path: Path, host: _Host) -> bool:
 
 
 def _is_structural_goroot(root: Path) -> bool:
-    """Check the filesystem facts that define a GOROOT without executing Go."""
-    version = root / "VERSION"
-    runtime = root / "src" / "runtime"
-    tools = root / "pkg" / "tool"
+    """Recognize the directory layout; release evidence is checked after the probe."""
+    # Missing/malformed VERSION must reach the release gate instead of becoming a deferred shim.
     try:
-        version_stat = version.lstat()
-        if not stat.S_ISREG(version_stat.st_mode):
-            return False
-        with version.open("rb") as stream:
-            if stream.read(4) != b"go1.":
-                return False
-        return runtime.is_dir() and tools.is_dir()
+        return (root / "src" / "runtime").is_dir() and (root / "pkg" / "tool").is_dir()
     except (OSError, RuntimeError):
         return False
 
