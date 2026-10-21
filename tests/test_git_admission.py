@@ -513,7 +513,10 @@ def test_local_admission_cleanup_failure_is_a_typed_diagnostic(
     base = _private_base(tmp_path, monkeypatch)
     remove = shutil.rmtree
 
-    def refuse(*_arguments: object, **_keywords: object) -> None:
+    def refuse(target: object, *arguments: object, **keywords: object) -> None:
+        # Inject only at the admission-root boundary, leaving tool-probe snapshots independent.
+        if not Path(str(target)).name.startswith("csk-buildrepo-local-"):
+            return remove(target, *arguments, **keywords)
         raise PermissionError(13, "Access is denied", "repo.git/objects/pack/pack.idx")
 
     monkeypatch.setattr(git_admission.shutil, "rmtree", refuse)
@@ -544,7 +547,9 @@ def test_local_admission_cleanup_failure_cannot_mask_an_admission_diagnostic(
             encoding="utf-8",
         )
 
-    def refuse(*_arguments: object, **_keywords: object) -> None:
+    def refuse(target: object, *arguments: object, **keywords: object) -> None:
+        if not Path(str(target)).name.startswith("csk-buildrepo-local-"):
+            return remove(target, *arguments, **keywords)
         raise PermissionError(13, "Access is denied")
 
     monkeypatch.setattr(git_admission.shutil, "rmtree", refuse)
@@ -577,6 +582,8 @@ def test_local_admission_retries_a_transient_cleanup_refusal(
 
     def flaky(target: object, *arguments: object, **keywords: object) -> None:
         nonlocal attempts
+        if not Path(str(target)).name.startswith("csk-buildrepo-local-"):
+            return remove(target, *arguments, **keywords)
         attempts += 1
         if attempts <= 2:
             raise PermissionError(13, "Access is denied")

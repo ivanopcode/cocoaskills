@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import manifest
+from . import git_ops, manifest
 from .config import DEFAULT_WORKTREE_ALIAS_PATTERN
 from .tool_paths import resolve_tool
 
@@ -83,7 +82,7 @@ def find_project_root(start: Path) -> Path:
 
 def git_branch(project_root: Path) -> str | None:
     for args in (["branch", "--show-current"], ["rev-parse", "--abbrev-ref", "HEAD"]):
-        proc = subprocess.run(
+        proc = git_ops.run_git(
             [resolve_tool("git"), "-C", str(project_root), *args],
             text=True,
             capture_output=True,

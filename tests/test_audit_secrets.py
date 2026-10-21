@@ -580,6 +580,9 @@ def test_audit_backend_git_auth_boundary(tmp_path, monkeypatch, capsys, mode, ki
         # Replace only the executable; retain the production argv/env semantics.
         # Stop before network access or repository mutation, portably on Windows.
         assert Path(argv[0]).stem.lower() == "git"
+        if "ls-remote" in argv and "--get-url" in argv:
+            # Discovery is local; preserve it so the observer still records the transport attempt.
+            return subprocess.CompletedProcess(argv, 0, "https://example.invalid/sample.git\n", "")
         return real_run([sys.executable, str(observer), str(capture), *argv[1:]], **kwargs)
 
     with monkeypatch.context() as transport_patch:
@@ -591,13 +594,15 @@ def test_audit_backend_git_auth_boundary(tmp_path, monkeypatch, capsys, mode, ki
     if mode == "missing-repo":
         # HTTPS trust pins precede clone; transport auth still stays out of audit backends.
         clone_index = observed["argv"].index("clone")
-        assert observed["argv"][clone_index:clone_index + 2] == ["clone", "--"]
-        assert f"http.sslCAInfo={git_ca_bundle}" in observed["argv"][:clone_index]
+        assert observed["argv"][clone_index:clone_index + 3] == ["clone", "--no-recurse-submodules", "--"]
+        private = next(item.removeprefix("http.sslCAInfo=") for item in observed["argv"][:clone_index] if item.startswith("http.sslCAInfo="))
+        assert Path(private).is_absolute() and private != str(git_ca_bundle)
+        assert not Path(private).exists()
         assert "http.sslVerify=true" in observed["argv"][:clone_index]
         assert "http.followRedirects=false" in observed["argv"][:clone_index]
     else:
-        assert observed["argv"][0] == "-C"
-        assert observed["argv"][2:4] == ["rev-parse", "--verify"]
+        directory_index = observed["argv"].index("-C")
+        assert observed["argv"][directory_index + 2:directory_index + 4] == ["rev-parse", "--verify"]
     _assert_backend_child_environment_is_allowlisted(tmp_path, monkeypatch, kind, phase)
 
 

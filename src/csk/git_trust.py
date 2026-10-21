@@ -8,6 +8,10 @@ import re
 import ssl
 import stat
 import sys
+import tempfile
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -103,13 +107,32 @@ def https_git_args(config: GlobalConfig | None = None) -> tuple[str, ...]:
 
 def check_git_args(arguments: tuple[str, ...]) -> tuple[str, ...]:
     """Recheck frozen selection before a later operation can expose a token."""
-    for argument in arguments:
-        if argument.startswith("http.sslCAInfo="):
-            _check_bundle(Path(argument.removeprefix("http.sslCAInfo=")))
+    selected = _bundle_path(arguments)
+    if selected is not None:
+        _check_bundle(selected)
     return arguments
 
 
-def _check_bundle(path: Path) -> None:
+def _bundle_path(arguments: tuple[str, ...]) -> Path | None:
+    if sys.platform == "win32" and arguments == ("-c", "http.sslBackend=schannel"):
+        return None
+    prefix = ("-c", "http.sslBackend=openssl") if sys.platform == "win32" else ()
+    if (
+        len(arguments) != len(prefix) + 2
+        or arguments[: len(prefix)] != prefix
+        or arguments[-2] != "-c"
+        or not arguments[-1].startswith("http.sslCAInfo=")
+    ):
+        raise GitTrustError(
+            INVALID, "<configuration>", "invalid frozen Git trust selection"
+        )
+    selected = Path(arguments[-1].removeprefix("http.sslCAInfo="))
+    if not selected.is_absolute():
+        raise GitTrustError(INVALID, str(selected), "expected an absolute regular file")
+    return selected
+
+
+def _check_bundle(path: Path) -> bytes:
     try:
         # Nonblocking open prevents a substituted FIFO from hanging before
         # fstat. Bound the actual read as well as the advertised file size.
@@ -133,7 +156,7 @@ def _check_bundle(path: Path) -> None:
     digest = hashlib.sha256(content).digest()
     policy = tuple(sorted(DISTRUSTED_CERTIFICATES.items()))
     if _checked(str(path), digest, policy):
-        return
+        return content
     matches = list(_CERTIFICATE.finditer(content))
     remainder = _CERTIFICATE.sub(b"", content)
     # Bundles commonly include comments and human-readable CA labels. Never
@@ -144,6 +167,7 @@ def _check_bundle(path: Path) -> None:
         for match in matches:
             pem = match.group().decode("ascii")
             der = ssl.PEM_cert_to_DER_cert(pem)
+            _require_exact_der(der)
             # Base64 decoding alone does not establish an X.509 certificate.
             ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).load_verify_locations(cadata=pem)
             name = DISTRUSTED_CERTIFICATES.get(hashlib.sha256(der).hexdigest())
@@ -154,6 +178,130 @@ def _check_bundle(path: Path) -> None:
             INVALID, str(path), "cannot parse X.509 certificates"
         ) from exc
     _remember(str(path), digest, policy)
+    return content
+
+
+def _require_exact_der(der: bytes) -> None:
+    """The outer DER SEQUENCE must consume the entire PEM payload."""
+    if len(der) < 2 or der[0] != 0x30:
+        raise ValueError("expected an X.509 SEQUENCE")
+    length = der[1]
+    header = 2
+    if length & 0x80:
+        count = length & 0x7F
+        if not count or count > 4 or len(der) < 2 + count or der[2] == 0:
+            raise ValueError("invalid DER length")
+        header += count
+        length = int.from_bytes(der[2:header], "big")
+        if length < 128:
+            raise ValueError("nonminimal DER length")
+    if header + length != len(der):
+        raise ValueError("DER SEQUENCE does not consume the PEM payload")
+
+
+@dataclass(frozen=True)
+class PrivateGitTrust:
+    ca_file: Path | None
+    empty_directory: Path
+
+    def environment(self, original: Mapping[str, str]) -> dict[str, str]:
+        excluded = {
+            "GIT_SSL_CAINFO",
+            "GIT_SSL_CAPATH",
+            "GIT_SSL_NO_VERIFY",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+        }
+        environment = {
+            key: value for key, value in original.items() if key not in excluded
+        }
+        if self.ca_file is not None:
+            environment["GIT_SSL_CAINFO"] = str(self.ca_file)
+        environment["GIT_SSL_CAPATH"] = str(self.empty_directory)
+        return environment
+
+
+def materialize_git_trust(
+    directory: Path, arguments: tuple[str, ...]
+) -> PrivateGitTrust:
+    """Write checked bytes exclusively inside an operation-owned private root."""
+    selected = _bundle_path(arguments)
+    content = None if selected is None else _check_bundle(selected)
+    try:
+        empty = directory / "empty-ca-directory"
+        empty.mkdir(mode=0o700)
+        target = None
+        if content is not None:
+            target = directory / "ca.pem"
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(target, flags, 0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+        return PrivateGitTrust(target, empty)
+    except OSError as exc:
+        raise GitTrustError(
+            INVALID, str(selected or directory), "cannot create private CA snapshot"
+        ) from exc
+
+
+@contextmanager
+def private_git_trust(
+    arguments: tuple[str, ...] | None = None,
+) -> Iterator[PrivateGitTrust]:
+    selected = https_git_args() if arguments is None else arguments
+    try:
+        directory = tempfile.TemporaryDirectory(prefix="csk-git-trust-")
+    except OSError as exc:
+        raise GitTrustError(
+            INVALID, "<private Git state>", "cannot create private CA snapshot"
+        ) from exc
+    with directory as root:
+        yield materialize_git_trust(Path(root), selected)
+
+
+def pinned_command(
+    command: Sequence[str],
+    environment: Mapping[str, str],
+    *,
+    url: str | None = None,
+) -> tuple[str, ...]:
+    """Pin both the generic settings and the effective URL's most specific settings."""
+    settings = {
+        "sslVerify": "true",
+        "followRedirects": "false",
+        "schannelUseSSLCAInfo": "false",
+    }
+    if ca := environment.get("GIT_SSL_CAINFO"):
+        settings["sslCAInfo"] = ca
+    if sys.platform == "win32":
+        settings["sslBackend"] = "openssl" if ca else "schannel"
+    options: list[str] = []
+    for prefix in ("http.", *((f"http.{url}.",) if url is not None else ())):
+        for key, value in settings.items():
+            options.extend(("-c", f"{prefix}{key}={value}"))
+    # Remove earlier manager selections: Git must see only the snapshot path.
+    retained = []
+    index = 1
+    while index < len(command):
+        if (
+            command[index] == "-c"
+            and index + 1 < len(command)
+            and command[index + 1].split("=", 1)[0].lower()
+            in {
+                "http.sslcainfo",
+                "http.sslbackend",
+                "http.sslverify",
+                "http.followredirects",
+                "http.schannelusesslcainfo",
+            }
+        ):
+            index += 2
+            continue
+        retained.append(command[index])
+        index += 1
+    return (command[0], *options, *retained)
 
 
 # Successful validation only: changing a file's bytes or the distrust policy

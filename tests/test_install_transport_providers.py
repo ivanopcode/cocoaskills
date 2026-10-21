@@ -33,6 +33,7 @@ from test_install_external_repository import (
     _skill_repository,
 )
 
+from csk import config as config_module
 from csk import git_admission, installer
 from csk.build_https import BuildHTTPSRule
 from csk.build_ssh import BuildSSHRule
@@ -86,6 +87,8 @@ def _run_install(
     )
     config = make_config(home, skills, project, agents=["codex_cli"])
     config = replace(config, build_ssh=build_ssh, build_https=build_https)
+    # Ancillary Git commands load the same operator configuration as the installer.
+    config_module.save_config(config)
     (home / "source-policy.json").write_text(json.dumps(policy), encoding="utf-8")
     _stub_trusted_toolchain(monkeypatch)
     selected = (

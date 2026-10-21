@@ -659,7 +659,7 @@ def _install_schema2_once(
                     require_ssh=selected,
                     ssh_credentials=selected_ssh,
                     https_credentials=selected_https,
-                    https_trust=(git_admission.https_trust_args(config=config) if endpoint.transport == "https" else None),
+                    https_trust=git_admission.https_trust_args(config=config),
                     timeout_seconds=timeout_seconds,
                     deadline=deadline,
                 )
@@ -1300,10 +1300,8 @@ def _external_git_tool(
     timeout_seconds: float = 10.0,
     deadline: float | None = None,
 ) -> git_admission.GitTool:
-    if https_trust is not None:
-        git_admission.check_https_trust_args(https_trust)
-    elif https_credentials is not None:
-        https_trust = git_admission.https_trust_args()
+    https_trust = (git_admission.https_trust_args() if https_trust is None
+                   else git_admission.check_https_trust_args(https_trust))
 
     def remaining_timeout() -> float:
         remaining = timeout_seconds
@@ -1326,25 +1324,33 @@ def _external_git_tool(
             failure_class="timeout",
         )
     executable = _operator_program("git", operator_search_path)
+    from . import git_trust
+
     try:
-        version = subprocess.run(
-            (os.fspath(executable), "--version"),
-            check=True,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=remaining_timeout(),
-        ).stdout.decode("ascii", "strict").strip()
-        exec_path = Path(
-            subprocess.run(
-                (os.fspath(executable), "--exec-path"),
+        with git_trust.private_git_trust(https_trust) as trust:
+            environment = trust.environment(os.environ)
+            version = subprocess.run(
+                git_trust.pinned_command((os.fspath(executable), "--version"), environment),
                 check=True,
+                env=environment,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 timeout=remaining_timeout(),
-            ).stdout.decode("utf-8", "strict").strip()
-        ).resolve(strict=True)
+            ).stdout.decode("ascii", "strict").strip()
+            exec_path = Path(
+                subprocess.run(
+                    git_trust.pinned_command((os.fspath(executable), "--exec-path"), environment),
+                    check=True,
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    timeout=remaining_timeout(),
+                ).stdout.decode("utf-8", "strict").strip()
+            ).resolve(strict=True)
+    except git_trust.GitTrustError as exc:
+        raise git_admission.GitAdmissionError(exc.code, exc.detail, failure_class="integrity") from exc
     except subprocess.TimeoutExpired as exc:
         raise git_admission.GitAdmissionError(
             git_admission.SOURCE_UNAVAILABLE,
@@ -2298,7 +2304,7 @@ def _publish_external_builds(
                 require_ssh=selected_ssh,
                 ssh_credentials=credentials,
                 https_credentials=https,
-                https_trust=(git_admission.https_trust_args(config=config) if trust_https else None),
+                https_trust=git_admission.https_trust_args(config=config),
                 timeout_seconds=timeout_seconds,
                 deadline=deadline,
             )
