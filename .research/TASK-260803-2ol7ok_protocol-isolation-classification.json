@@ -7,7 +7,7 @@
     "tests/test_protocol_conformance.py": "06d5fa20a02ac40e075d367d056961abbef6d38b4088b368180c715046fab435",
     "tests/protocol_conformance_adapters.py": "bb1c9b9a32e745b6087bf58bb2ba4d4cf17ccd267cbfef97970cee1ae3a6bca5",
     "tests/protocol_lifecycle_observations.py": "834dd2c10188b9b515b4fa6c59f8b8a896ab8801cde3807db5959076177c8378",
-    "tests/conftest.py": "53836ec25c914e9071218b6bc36d4c183304277fea1aa9a34d515e9ff8478d97"
+    "tests/conftest.py": "ef2a3e10957665cba966eedbcfd5aa26f6b2268de9f74710fc9b8dd725eb9005"
   },
   "audit_revisions": [
     {
@@ -87,7 +87,7 @@
       "file": "tests/protocol_lifecycle_observations.py",
       "previous_sha256": "21e08f59921f199362c4ad13cf03ce6f97c7383a98489aebe142e1dd098bf3bd",
       "sha256": "834dd2c10188b9b515b4fa6c59f8b8a896ab8801cde3807db5959076177c8378",
-      "change": "Forward the selected Go executable through existing lifecycle observation wrappers and BuildPlan fixtures so protocol observations follow the planner’s resolved launcher.",
+      "change": "Forward the selected Go executable through existing lifecycle observation wrappers and BuildPlan fixtures so protocol observations follow the planner\u2019s resolved launcher.",
       "isolation_neutral": true,
       "rationale": "No protocol node was added, removed, renamed, or reparameterized. The change carries the selected executable through existing planner observation seams without changing environment, cwd, temp-root, subprocess, lock, cache, platform, or shared-state behavior; node IDs, footprints, atomic clusters, and shard assignments stay unchanged."
     },
@@ -135,6 +135,14 @@
       "change": "Added the non-autouse generated Git CA bundle fixture and clear CSK_GIT_CA_BUNDLE in stable_env; import the trust module used by that fixture.",
       "isolation_neutral": false,
       "rationale": "The per-test environment contract now clears one additional operator variable, so this is not isolation-neutral by construction. The protocol module, adapters and lifecycle observations do not request git_ca_bundle or read CSK_GIT_CA_BUNDLE; their Git fixtures use local repositories. The trust-module import initializes constants and an empty in-memory cache without filesystem, process or environment effects. The new fixture runs only for explicit HTTPS trust and audit tests and writes only public PEM bytes under their tmp_path. Existing stable_env monkeypatch teardown restores the variable per test, uniformly in each worker. No protocol node is added, removed, renamed or reparameterized; no shared process/cwd/temp-root/lock/cache interaction, atomic cluster or shard assignment changes."
+    },
+    {
+      "file": "tests/conftest.py",
+      "previous_sha256": "53836ec25c914e9071218b6bc36d4c183304277fea1aa9a34d515e9ff8478d97",
+      "sha256": "ef2a3e10957665cba966eedbcfd5aa26f6b2268de9f74710fc9b8dd725eb9005",
+      "change": "Use a worker-local session-generated public CA for incidental Git operations; explicit trust tests still select their own mutable bundle or clear the override to exercise platform defaults.",
+      "isolation_neutral": false,
+      "rationale": "The uniform per-test environment now selects public PEM bytes generated under the existing pytest temporary root. Existing stable_env teardown restores the override. No protocol node is added, removed, renamed or reparameterized. Protocol nodes do not inspect this override or use HTTPS Git trust; local Git fixtures retain their repository and environment isolation. The session fixture adds no child process, lock, cwd change or shared external write; the CA is immutable, read-only across tests and worker-local. Existing environment, temporary-root and cache footprints remain conservative; atomic clusters and shard assignments are unchanged."
     }
   ],
   "method": {

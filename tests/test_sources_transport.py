@@ -37,7 +37,7 @@ from test_git_admission_ssh import (
 
 from git_fixture_isolation import run_fixture_git
 
-from csk import git_admission, git_ops
+from csk import git_admission, git_ops, git_trust
 from csk.build_repository import LockedCommit
 from csk.build_repository_pipeline import (
     BuildTarget,
@@ -3972,6 +3972,42 @@ def test_legacy_rewritten_https_retains_checked_trust(
     else:
         assert server.auth_seen == []
         assert any(word in str(captured.value).lower() for word in ("certificate", "ssl", "schannel"))
+
+
+@pytest.mark.parametrize("drop_server_ca", [False, True])
+@pytest.mark.parametrize("strict", [False, True])
+def test_filtered_bundle_reaches_real_git_without_dropped_trust(
+    _tls_server_factory, _loopback_tls_cert, git_ca_bundle,
+    tmp_path, monkeypatch, drop_server_ca, strict,
+):
+    # With a mixed bundle, real Git reaches HTTP only if the loopback CA is retained; dropping it fails TLS in strict and legacy paths.
+    server = _tls_server_factory(status=404, body=b"not found")
+    unrelated = git_ca_bundle.read_bytes()
+    server_ca = Path(_loopback_tls_cert[1]).read_bytes()
+    blocked = server_ca if drop_server_ca else unrelated
+    monkeypatch.setattr(git_trust, "DISTRUSTED_CERTIFICATES", {
+        hashlib.sha256(ssl.PEM_cert_to_DER_cert(blocked.decode())).hexdigest(): "Generated dropped root"
+    })
+    bundle = tmp_path / "mixed.pem"
+    bundle.write_bytes(unrelated + server_ca)
+    monkeypatch.setenv("CSK_GIT_CA_BUNDLE", str(bundle))
+    if strict:
+        tool = _fake_http_tool(tmp_path / "tool", {}, allow_loopback_https=True)
+        with pytest.raises(git_admission.GitAdmissionError) as captured:
+            transport.acquire_plan(
+                _https_mirror_plan(server.url, "https://fixture.test/kit.git"),
+                LockedCommit("sha1", "a" * 40), tool,
+            )
+        assert _observed_first_class(captured.value) == ("tls" if drop_server_ca else "identity")
+    else:
+        with pytest.raises(git_ops.GitError) as captured:
+            git_ops.clone_repo(server.url, tmp_path / "clone")
+        if drop_server_ca:
+            assert any(word in str(captured.value).lower() for word in ("certificate", "ssl", "schannel"))
+        else:
+            assert "not found" in str(captured.value).lower()
+    assert server.auth_seen == ([] if drop_server_ca else [None])
+    assert bundle.read_bytes() == unrelated + server_ca
 
 
 def test_hostile_insteadof_rewrite_does_not_deflect_the_literal_attempt(

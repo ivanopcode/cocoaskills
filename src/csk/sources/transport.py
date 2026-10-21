@@ -49,7 +49,6 @@ _KNOWN_SAFE_CODES = frozenset(
         git_admission.SSH_CREDENTIAL_MISSING,
         git_admission.CREDENTIAL_POLICY_INVALID,
         git_trust.INVALID,
-        git_trust.DISTRUSTED,
     }
 )
 
@@ -418,7 +417,7 @@ def _original_failure(
     failure = GitAdmissionError(
         code,
         str(error).removeprefix(f"{code}: ")
-        if code in {git_trust.INVALID, git_trust.DISTRUSTED}
+        if code == git_trust.INVALID
         and isinstance(error.__cause__, git_trust.GitTrustError)
         else "trusted Git admission failed",
         failure_class=failure_class,
