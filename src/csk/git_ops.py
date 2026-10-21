@@ -178,6 +178,9 @@ def fetch_repo(repo: Path) -> None:
     except (OSError, configparser.Error, UnicodeError) as exc:
         raise GitError("Cannot read repository remote configuration") from exc
     if not remotes:
+        # Preserve the existing missing-Git diagnostic even when no fetch is
+        # needed. No HTTPS endpoint or credential environment is involved.
+        git(repo, ["remote"])
         return
     if "origin" in remotes:
         remote = "origin"
