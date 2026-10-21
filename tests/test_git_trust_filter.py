@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import ssl
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
+from conftest import init_git_repo
 
 from csk import git_ops, git_trust
 
@@ -154,6 +159,131 @@ def test_incomplete_annotations_do_not_hide_malformed_blocks(git_ca_bundle, anno
     git_ca_bundle.write_bytes(annotation + clean)
     with pytest.raises(git_trust.GitTrustError, match=git_trust.INVALID):
         git_trust.https_git_args()
+
+
+def _annotation(text):
+    return (
+        b"=== /CN=Generated root\nCertificate:\n    Data:\n"
+        + text
+        + b"SHA1 Fingerprint=AA:BB\nSHA256 Fingerprint=CC:DD\n"
+    )
+
+
+@pytest.mark.parametrize("prefix", [b"", b" ", b"\t", b"\r\n\t", b"extension: ", b"# "])
+@pytest.mark.parametrize("label", [b"CERTIFICATE", b"TRUSTED CERTIFICATE", b"X509 CRL"])
+@pytest.mark.parametrize("marker", [b"-----BEGIN", b"-----end", b"-----BeGiN"])
+def test_annotation_delimiters_refuse_before_git(
+    git_ca_bundle, monkeypatch, prefix, label, marker
+):
+    # Any unparsed BEGIN/END delimiter in an annotation refuses, regardless of indentation, label, case or comment prefix; plain text still works.
+    clean = git_ca_bundle.read_bytes()
+    git_ca_bundle.write_bytes(
+        _annotation(b"extension: printable value\n# comment\n") + clean
+    )
+    assert git_trust._check_bundle(git_ca_bundle) == clean
+    malformed = _annotation(prefix + marker + b" " + label + b"-----\n") + clean
+    git_ca_bundle.write_bytes(malformed)
+    with pytest.raises(git_trust.GitTrustError) as error:
+        git_trust._check_bundle(git_ca_bundle)
+    assert error.value.code == git_trust.INVALID
+    children = []
+    monkeypatch.setattr(git_ops, "_run", lambda *a, **kw: children.append(a))
+    with pytest.raises(git_ops.GitError, match=git_trust.INVALID):
+        git_ops.run_git(["--version"])
+    assert not children
+    assert git_ca_bundle.read_bytes() == malformed
+
+
+@pytest.mark.parametrize("position", ["prefix", "middle", "suffix"])
+@pytest.mark.parametrize("marker", [b"-----BEGIN", b"-----end"])
+def test_comments_cannot_hide_delimiters(git_ca_bundle, position, marker):
+    # Comment handling cannot discard an unparsed delimiter at any bundle boundary; delimiter-free comments preserve exact PEM bytes.
+    clean = git_ca_bundle.read_bytes()
+    git_ca_bundle.write_bytes(
+        b"# begin and end annotations\n" + clean + b"# plain end\n"
+    )
+    assert git_trust._check_bundle(git_ca_bundle) == clean
+    comment = b"# embedded " + marker + b" CERTIFICATE-----\n"
+    content = {
+        "prefix": comment + clean,
+        "middle": clean + comment + clean,
+        "suffix": clean + comment,
+    }[position]
+    git_ca_bundle.write_bytes(content)
+    with pytest.raises(git_trust.GitTrustError) as error:
+        git_trust._check_bundle(git_ca_bundle)
+    assert error.value.code == git_trust.INVALID
+
+
+@pytest.mark.parametrize("prefix", [b" ", b"\t"])
+def test_real_cli_annotation_delimiters_start_no_git(git_ca_bundle, tmp_path, prefix):
+    # Real update accepts a plain annotation but refuses the reviewer's indented malformed block before any Git start, preserving local state.
+    skills = tmp_path / "skills"
+    repo = init_git_repo(skills / "demo")
+    configuration = tmp_path / "config.json"
+    configuration.write_text(
+        json.dumps({"schema_version": 1, "skills_root": str(skills), "projects": {}})
+    )
+    trace = tmp_path / "trace.json"
+    environment = dict(
+        os.environ,
+        CSK_CONFIG=str(configuration),
+        CSK_GIT_CA_BUNDLE=str(git_ca_bundle),
+        GIT_TRACE2_EVENT=str(trace),
+        PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"),
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_CONFIG_NOSYSTEM="1",
+    )
+    for name in ("GIT_DIR", "GIT_WORK_TREE"):
+        environment.pop(name, None)
+
+    def update():
+        return subprocess.run(
+            [sys.executable, "-m", "csk", "update"],
+            cwd=tmp_path,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+
+    clean = git_ca_bundle.read_bytes()
+    git_ca_bundle.write_bytes(_annotation(b"        Version: 3 (0x2)\n") + clean)
+    positive = update()
+    assert positive.returncode == 0, positive.stdout + positive.stderr
+    assert "fetched demo" in positive.stdout
+    assert any(
+        json.loads(line).get("event") == "start"
+        for line in trace.read_text().splitlines()
+    )
+    trace.unlink()
+    before = {
+        p.relative_to(repo): p.read_bytes() for p in repo.rglob("*") if p.is_file()
+    }
+    config_before = configuration.read_bytes()
+    hidden = (
+        b"\n".join(
+            prefix + line
+            for line in (
+                b"-----BEGIN CERTIFICATE-----",
+                b"@@ invalid base64 @@",
+                b"-----END CERTIFICATE-----",
+            )
+        )
+        + b"\n"
+    )
+    malformed = _annotation(hidden) + clean
+    git_ca_bundle.write_bytes(malformed)
+    negative = update()
+    assert negative.returncode == 1
+    assert git_trust.INVALID in negative.stdout + negative.stderr
+    assert not trace.exists(), negative.stdout + negative.stderr
+    assert {
+        p.relative_to(repo): p.read_bytes() for p in repo.rglob("*") if p.is_file()
+    } == before
+    assert configuration.read_bytes() == config_before
+    assert git_ca_bundle.read_bytes() == malformed
 
 
 @pytest.mark.parametrize("suffix", [b"\x00", b"garbage", b"\x30\x00"])

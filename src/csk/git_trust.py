@@ -216,6 +216,11 @@ def _require_pem_gap(content: bytes, *, annotation: bool) -> None:
     expect_certificate = False
     expect_sha256 = False
     for line in content.splitlines():
+        # Exact certificate blocks were already consumed; no other PEM marker
+        # may disappear into comments or printable OpenSSL annotation text.
+        upper = line.upper()
+        if b"-----BEGIN" in upper or b"-----END" in upper:
+            raise ValueError("unparsed PEM delimiter")
         if any(
             not character.isprintable() and character != "\t"
             for character in line.decode("utf-8")
