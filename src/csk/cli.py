@@ -5,7 +5,6 @@ import getpass
 import json
 import re
 import stat
-import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -2040,7 +2039,7 @@ def _nearest_parent_manifest(root: Path) -> Path | None:
 
 
 def _is_inside_git_worktree(root: Path) -> bool:
-    proc = subprocess.run(
+    proc = git_ops.run_git(
         [resolve_tool("git"), "-C", str(root), "rev-parse", "--is-inside-work-tree"],
         text=True,
         capture_output=True,

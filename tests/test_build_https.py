@@ -628,7 +628,10 @@ def test_credential_reads_go_through_git_on_every_platform(
     )
     assert material == ("oauth2", "s3cret")
     argv, payload = calls[0]
-    assert argv == (str(executable.resolve()), "credential", "fill")
+    assert argv[0] == str(executable.resolve())
+    assert argv[-2:] == ("credential", "fill")
+    assert "http.sslVerify=true" in argv
+    assert any(item.startswith("http.sslCAInfo=") for item in argv)
     assert "host=gitlab.example.com" in payload
 
 

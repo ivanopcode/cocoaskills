@@ -37,7 +37,7 @@ from test_git_admission_ssh import (
 
 from git_fixture_isolation import run_fixture_git
 
-from csk import git_admission
+from csk import git_admission, git_ops
 from csk.build_repository import LockedCommit
 from csk.build_repository_pipeline import (
     BuildTarget,
@@ -3915,11 +3915,14 @@ def test_public_ca_bundle_reaches_real_https_git(
     tool = _fake_http_tool(tmp_path / "tool", {}, allow_loopback_https=True)
     real_run = subprocess.run
     fetches: list[tuple[str, ...]] = []
+    checked_bytes: list[bytes] = []
 
     def record(*args: object, **kwargs: object) -> object:
         command = args[0]
         if isinstance(command, tuple) and "fetch" in command:
             fetches.append(command)
+            selected = next(arg.removeprefix("http.sslCAInfo=") for arg in command if arg.startswith("http.sslCAInfo="))
+            checked_bytes.append(Path(selected).read_bytes())
         return real_run(*args, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", record)
@@ -3930,8 +3933,45 @@ def test_public_ca_bundle_reaches_real_https_git(
         )
     assert _observed_first_class(captured.value) == "identity"
     assert len(fetches) == 1
-    assert f"http.sslCAInfo={_loopback_tls_cert[1]}" in fetches[0]
+    assert f"http.sslCAInfo={_loopback_tls_cert[1]}" not in fetches[0]
+    assert checked_bytes == [Path(_loopback_tls_cert[1]).read_bytes()]
     assert server.auth_seen == [None]
+
+
+@pytest.mark.parametrize("operation", ["clone", "fetch"])
+@pytest.mark.parametrize("spelling", ["literal", "alias", "ssh"])
+@pytest.mark.parametrize("trusted", [True, False])
+def test_legacy_rewritten_https_retains_checked_trust(
+    _tls_server_factory, _loopback_tls_cert, git_ca_bundle,
+    tmp_path, monkeypatch, operation, spelling, trusted,
+):
+    # Real TLS uses the private selected CA despite URL rewrites and hostile TLS config; an unrelated CA never reaches HTTP.
+    server = _tls_server_factory(status=404, body=b"not found")
+    monkeypatch.setenv("CSK_GIT_CA_BUNDLE", _loopback_tls_cert[1] if trusted else str(git_ca_bundle))
+    monkeypatch.setenv("GIT_SSL_NO_VERIFY", "1")
+    configuration = tmp_path / "gitconfig"
+    configuration.write_text(
+        f'[http "{server.url}"]\n sslVerify = false\n sslCAInfo = /unchecked.pem\n'
+        f' sslCAPath = /unchecked-directory\n[url "{server.url}"]\n'
+        ' insteadOf = review:repo.git\n insteadOf = ssh://fixture.invalid/repo.git\n'
+    )
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(configuration))
+    remote = {"literal": server.url, "alias": "review:repo.git", "ssh": "ssh://fixture.invalid/repo.git"}[spelling]
+    repo = tmp_path / "repo"
+    if operation == "fetch":
+        _git(None, "init", "--quiet", str(repo))
+        _git(repo, "remote", "add", "origin", remote)
+    with pytest.raises(git_ops.GitError) as captured:
+        if operation == "fetch":
+            git_ops.fetch_repo(repo)
+        else:
+            git_ops.clone_repo(remote, repo)
+    if trusted:
+        assert server.auth_seen == [None]
+        assert "not found" in str(captured.value).lower()
+    else:
+        assert server.auth_seen == []
+        assert any(word in str(captured.value).lower() for word in ("certificate", "ssl", "schannel"))
 
 
 def test_hostile_insteadof_rewrite_does_not_deflect_the_literal_attempt(

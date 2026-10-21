@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import configparser
 import os
 import shutil
 import subprocess
 import sys
 import tarfile
 import unicodedata
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, overload
 
 from . import git_trust
 from .identifiers import is_valid_portable_path
@@ -29,33 +30,21 @@ class GitError(Exception):
     code: str | None = None
 
 
-def _https_args(url: str) -> list[str]:
-    if not url.lower().startswith("https://"):
-        return []
+@contextmanager
+def _private_trust() -> Iterator[git_trust.PrivateGitTrust]:
     try:
-        return [
-            *git_trust.https_git_args(),
-            "-c", "http.sslVerify=true",
-            "-c", "http.followRedirects=false",
-        ]
+        with git_trust.private_git_trust() as trust:
+            yield trust
     except git_trust.GitTrustError as exc:
         error = GitError(str(exc))
         error.code = exc.code
         raise error from exc
 
 
-def _https_environment(arguments: list[str]) -> dict[str, str]:
-    excluded = {
-        "GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "GIT_SSL_NO_VERIFY",
-        "SSL_CERT_FILE", "SSL_CERT_DIR",
-    }
-    environment = {key: value for key, value in os.environ.items() if key not in excluded}
-    # Git's TLS environment overrides even URL-specific settings in a
-    # legacy clone's configuration. Pin the checked file there as well.
-    for argument in arguments:
-        if argument.startswith("http.sslCAInfo="):
-            environment["GIT_SSL_CAINFO"] = argument.removeprefix("http.sslCAInfo=")
-    environment["GIT_SSL_NO_VERIFY"] = "false"
+def _trust_environment(trust: git_trust.PrivateGitTrust) -> dict[str, str]:
+    environment = trust.environment(os.environ)
+    environment["GIT_ALLOW_PROTOCOL"] = ALLOWED_GIT_PROTOCOLS
+    environment["GIT_NO_LAZY_FETCH"] = "1"
     return environment
 
 
@@ -64,6 +53,22 @@ def _run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
         return subprocess.run(cmd, **kwargs)
     except FileNotFoundError as exc:
         raise GitError("git executable not found; install git and ensure it is on PATH") from exc
+
+
+@overload
+def run_git(command: list[str] | tuple[str, ...], *, text: Literal[True], **kwargs: Any) -> subprocess.CompletedProcess[str]: ...
+
+
+@overload
+def run_git(command: list[str] | tuple[str, ...], **kwargs: Any) -> subprocess.CompletedProcess[Any]: ...
+
+
+def run_git(command: list[str] | tuple[str, ...], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+    """Guard ancillary Git commands, including discovery and credential plumbing."""
+    with _private_trust() as trust:
+        environment = trust.environment(kwargs.pop("env", os.environ))
+        environment["GIT_NO_LAZY_FETCH"] = "1"
+        return subprocess.run(git_trust.pinned_command(command, environment), env=environment, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -81,8 +86,10 @@ def _git_executable() -> str:
 
 
 def git(repo: Path, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    cmd = [_git_executable(), "-C", str(repo), *args]
-    proc = _run(cmd, text=True, capture_output=True)
+    with _private_trust() as trust:
+        environment = _trust_environment(trust)
+        cmd = git_trust.pinned_command([_git_executable(), "-C", str(repo), *args], environment)
+        proc = _run(list(cmd), text=True, capture_output=True, env=environment)
     if check and proc.returncode != 0:
         stderr = proc.stderr.strip() or proc.stdout.strip()
         raise GitError(f"git {' '.join(args)} failed in {repo}: {stderr}")
@@ -94,15 +101,20 @@ def clone_repo(remote_url: str, destination: Path) -> None:
         raise GitError(f"Clone destination already exists: {destination}")
     if not remote_url.strip() or remote_url.startswith("-"):
         raise GitError(f"Refusing to clone suspicious git URL: {remote_url!r}")
-    trust_args = _https_args(remote_url)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    env = {**(_https_environment(trust_args) if trust_args else os.environ), "GIT_ALLOW_PROTOCOL": ALLOWED_GIT_PROTOCOLS}
-    proc = _run(
-        [_git_executable(), *trust_args, "clone", "--", remote_url, str(destination)],
-        text=True,
-        capture_output=True,
-        env=env,
-    )
+    with _private_trust() as trust:
+        environment = _trust_environment(trust)
+        executable = _git_executable()
+        discovery = _run(list(git_trust.pinned_command(
+            [executable, "ls-remote", "--get-url", "--", remote_url], environment,
+        )), text=True, capture_output=True, env=environment)
+        if discovery.returncode or not discovery.stdout.strip():
+            raise GitError("Cannot resolve clone URL through Git configuration")
+        effective_url = discovery.stdout.strip()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        proc = _run(list(git_trust.pinned_command(
+            [executable, "clone", "--no-recurse-submodules", "--", remote_url, str(destination)],
+            environment, url=effective_url,
+        )), text=True, capture_output=True, env=environment)
     if proc.returncode != 0:
         if destination.exists():
             shutil.rmtree(destination)
@@ -138,49 +150,24 @@ def archive(repo: Path, commit: str, destination: Path) -> None:
     ensure_git_repo(repo)
     if not commit or commit.startswith("-") or not all(character in "0123456789abcdef" for character in commit):
         raise GitError(f"Refusing suspicious archive commit: {commit!r}")
-    destination.mkdir(parents=True, exist_ok=True)
-    proc = _run(
-        [_git_executable(), "-C", str(repo), "archive", "--format=tar", commit],
-        capture_output=True,
-    )
+    with _private_trust() as trust:
+        destination.mkdir(parents=True, exist_ok=True)
+        environment = _trust_environment(trust)
+        proc = _run(list(git_trust.pinned_command(
+            [_git_executable(), "-C", str(repo), "archive", "--format=tar", commit], environment,
+        )), capture_output=True, env=environment)
     if proc.returncode != 0:
         raise GitError(f"git archive failed in {repo}: {proc.stderr.decode(errors='replace').strip()}")
     with tarfile.open(fileobj=BytesIO(proc.stdout), mode="r:") as archive_file:
         _extract_archive(archive_file, destination)
 
 
-def _repository_config_path(repo: Path) -> Path:
-    git_dir = repo / ".git"
-    if git_dir.is_file():
-        declaration = git_dir.read_text(encoding="utf-8").strip()
-        if not declaration.startswith("gitdir: "):
-            raise GitError("Cannot read repository Git directory")
-        selected = Path(declaration[8:])
-        git_dir = selected if selected.is_absolute() else repo / selected
-        common_file = git_dir / "commondir"
-        if common_file.exists():
-            common = Path(common_file.read_text(encoding="utf-8").strip())
-            git_dir = common if common.is_absolute() else git_dir / common
-    return git_dir / "config"
-
-
 def fetch_repo(repo: Path) -> None:
     ensure_git_repo(repo)
-    # Inspect ordinary clone remotes before any Git discovery subprocess.
-    parser = configparser.RawConfigParser(strict=False)
-    try:
-        with _repository_config_path(repo).open(encoding="utf-8") as config_file:
-            parser.read_file(config_file)
-        remotes = sorted(
-            section[8:-1] for section in parser.sections()
-            if section.startswith('remote "') and section.endswith('"')
-        )
-    except (OSError, configparser.Error, UnicodeError) as exc:
-        raise GitError("Cannot read repository remote configuration") from exc
+    # Native discovery preserves include/includeIf and Git's boolean syntax.
+    # The shared Git entry point checks trust even for this local command.
+    remotes = sorted(git(repo, ["remote"]).stdout.splitlines())
     if not remotes:
-        # Preserve the existing missing-Git diagnostic even when no fetch is
-        # needed. No HTTPS endpoint or credential environment is involved.
-        git(repo, ["remote"])
         return
     if "origin" in remotes:
         remote = "origin"
@@ -194,20 +181,18 @@ def fetch_repo(repo: Path) -> None:
     # Installed markers, rather than cache refs, anchor moved-tag policy.
     # One remote owns the shared tag namespace; fetching all remotes would
     # make conflicting tags depend on fetch order.
-    url = parser.get(f'remote "{remote}"', "url", fallback="").strip('"')
-    trust_args = _https_args(url)
-    args = [
-        "fetch", "--force", "--prune", "--", remote,
-        f"+refs/heads/*:refs/remotes/{remote}/*",
-        "+refs/tags/*:refs/tags/*",
-    ]
-    if not trust_args:
-        git(repo, args)
-        return
-    proc = _run(
-        [_git_executable(), *trust_args, "-C", str(repo), *args],
-        text=True, capture_output=True, env=_https_environment(trust_args),
-    )
+    effective_url = git(repo, ["remote", "get-url", "--", remote]).stdout.strip()
+    if not effective_url:
+        raise GitError("Cannot resolve fetch URL through Git configuration")
+    with _private_trust() as trust:
+        environment = _trust_environment(trust)
+        args = [
+            "-C", str(repo), "fetch", "--force", "--prune", "--no-recurse-submodules", "--", remote,
+            f"+refs/heads/*:refs/remotes/{remote}/*", "+refs/tags/*:refs/tags/*",
+        ]
+        proc = _run(list(git_trust.pinned_command(
+            [_git_executable(), *args], environment, url=effective_url,
+        )), text=True, capture_output=True, env=environment)
     if proc.returncode != 0:
         raise GitError(f"git fetch failed in {repo}: {proc.stderr.strip()}")
 

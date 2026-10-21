@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
+from . import git_ops
 from .tool_paths import resolve_tool
 
 
@@ -18,7 +18,7 @@ def missing_entries(project_root: Path, entries: list[str]) -> list[str]:
             if entry.startswith("/") and not entry.endswith("/")
             else entry.rstrip("/") + "/.csk-probe"
         )
-        proc = subprocess.run(
+        proc = git_ops.run_git(
             [resolve_tool("git"), "-C", str(project_root), "check-ignore", "-q", probe],
             text=True,
             capture_output=True,
@@ -55,7 +55,7 @@ def append_entries(path: Path, entries: list[str]) -> None:
 
 
 def is_tracked(project_root: Path, relpath: str) -> bool:
-    proc = subprocess.run(
+    proc = git_ops.run_git(
         [
             resolve_tool("git"),
             "-C",

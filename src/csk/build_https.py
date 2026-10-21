@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import git_ops
 from .build_ssh import default_scope, scope_matches, validate_scope
 from .tool_paths import resolve_tool
 
@@ -215,7 +216,7 @@ def _run_credential(
 ) -> dict[str, str] | None:
     payload = "".join(f"{key}={value}\n" for key, value in request.items()) + "\n"
     try:
-        completed = subprocess.run(
+        completed = git_ops.run_git(
             (resolve_tool("git", executable=git), "credential", action),
             input=payload.encode("utf-8"),
             capture_output=True,

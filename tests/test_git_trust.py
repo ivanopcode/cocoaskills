@@ -314,26 +314,34 @@ def test_transport_preserves_only_manager_trust_diagnostics(
     assert "secret-sentinel" not in str(forged.original)
 
 
-def test_clean_pins_and_ssh_unchanged(
+def test_clean_pins_apply_to_ssh_and_https(
     bundle: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A clean CA is pinned in strict fetch; SSH arguments do not consult HTTPS trust.
+    # Every transport pins a private copy; an invalid override blocks SSH too.
     tool = git_admission.GitTool(Path("unused"), Path("unused"), ())
-    (tmp_path / "private").mkdir()
-    paths = git_admission._make_private_paths(tmp_path / "private")
-    source = parse_repository_source("https://example.test/repo.git")
-    args = git_admission._strict_fetch_args(paths, tool, source, "a:refs/csk/locked")
-    assert f"http.sslCAInfo={bundle}" in args
-    assert "http.sslVerify=true" in args
-    assert "http.followRedirects=false" in args
-    ssh = parse_repository_source("git@example.test:repo.git")
-    before = git_admission._strict_fetch_args(paths, tool, ssh, "a:refs/csk/locked")
+    paths = git_admission._make_private_paths(tmp_path)
+    for url in ("https://example.test/repo.git", "git@example.test:repo.git"):
+        source = parse_repository_source(url)
+        environment = git_admission._clean_git_environment(
+            paths, tool, source.transport
+        )
+        args = git_trust.pinned_command(
+            (
+                "git",
+                *git_admission._strict_fetch_args(
+                    paths, tool, source, "a:refs/csk/locked"
+                ),
+            ),
+            environment,
+        )
+        selected = Path(environment["GIT_SSL_CAINFO"])
+        assert selected != bundle and selected.read_bytes() == bundle.read_bytes()
+        assert f"http.sslCAInfo={selected}" in args
+        assert "http.sslVerify=true" in args
+        assert "http.followRedirects=false" in args
     monkeypatch.setenv("CSK_GIT_CA_BUNDLE", "invalid")
-    assert (
-        git_admission._strict_fetch_args(paths, tool, ssh, "a:refs/csk/locked")
-        == before
-    )
-    assert not any("sslCAInfo" in arg or "sslBackend" in arg for arg in before)
+    with pytest.raises(git_admission.GitAdmissionError, match=git_trust.INVALID):
+        git_admission._clean_git_environment(paths, tool, "ssh")
 
 
 def test_clean_resolution_pins_bundle_before_token(
@@ -356,7 +364,13 @@ def test_clean_resolution_pins_bundle_before_token(
     recorded: list[tuple[dict[str, str], tuple[str, ...]]] = []
 
     def resolve(tool, paths, environment, arguments, *, limits):
-        recorded.append((dict(environment), tuple(arguments)))
+        assert Path(environment["GIT_SSL_CAINFO"]).read_bytes() == bundle.read_bytes()
+        recorded.append(
+            (
+                dict(environment),
+                git_trust.pinned_command(("git", *arguments), environment),
+            )
+        )
         return ("a" * 40 + "\trefs/heads/main\n").encode()
 
     monkeypatch.setattr(git_admission, "_run_git_ls_remote", resolve)
@@ -366,7 +380,8 @@ def test_clean_resolution_pins_bundle_before_token(
     assert result.hex == "a" * 40
     assert len(recorded) == 1
     environment, args = recorded[0]
-    assert f"http.sslCAInfo={bundle}" in args
+    assert f"http.sslCAInfo={environment['GIT_SSL_CAINFO']}" in args
+    assert environment["GIT_SSL_CAINFO"] != str(bundle)
     assert environment[git_admission.HTTPS_BROKER_TOKEN_ENV] == "secret-sentinel"
     assert "secret-sentinel" not in repr(args)
 
@@ -399,55 +414,41 @@ def test_legacy_clone_pins_tls_environment(
     monkeypatch.setattr(git_ops, "_git_executable", lambda: "git")
     calls: list[tuple[list[str], dict[str, str]]] = []
 
-    def record(
-        command: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        calls.append((command, kwargs["env"]))
-        return subprocess.CompletedProcess(command, 0, "", "")
+    def record(command, **kwargs):
+        environment = kwargs["env"]
+        assert Path(environment["GIT_SSL_CAINFO"]).read_bytes() == bundle.read_bytes()
+        assert Path(environment["GIT_SSL_CAPATH"]).is_dir()
+        calls.append((command, environment))
+        return subprocess.CompletedProcess(
+            command, 0, "https://example.test/repo.git\n", ""
+        )
 
     monkeypatch.setattr(git_ops, "_run", record)
     git_ops.clone_repo("https://example.test/repo.git", tmp_path / "destination")
-    assert len(calls) == 1
-    command, environment = calls[0]
-    assert f"http.sslCAInfo={bundle}" in command
-    assert environment["GIT_SSL_CAINFO"] == str(bundle)
-    assert environment["GIT_SSL_NO_VERIFY"] == "false"
-    assert "GIT_SSL_CAPATH" not in environment
+    assert len(calls) == 2
+    for command, environment in calls:
+        selected = environment["GIT_SSL_CAINFO"]
+        assert f"http.sslCAInfo={selected}" in command
+        assert selected != str(bundle)
+        assert "GIT_SSL_NO_VERIFY" not in environment
+        assert not Path(selected).exists()
 
 
-def test_ssh_worktree_fetch_ignores_https_override(
+def test_ssh_worktree_fetch_checks_override_before_git(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # SSH fetches in linked worktrees preserve their argv even when the HTTPS override is invalid.
+    # The amended universal gate rejects SSH before discovery, including gitfile worktrees.
     repo = tmp_path / "checkout"
-    metadata = tmp_path / "metadata"
-    common = tmp_path / "common"
-    for path in (repo, metadata, common):
-        path.mkdir()
+    repo.mkdir()
     (repo / ".git").write_text("gitdir: ../metadata\n")
-    (metadata / "commondir").write_text("../common\n")
-    (common / "config").write_text(
-        '[remote "origin"]\nurl = git@example.test:repo.git\n'
-    )
     monkeypatch.setenv("CSK_GIT_CA_BUNDLE", "invalid")
-    calls: list[list[str]] = []
 
-    def record(repo: Path, args: list[str]) -> None:
-        calls.append(args)
+    def forbidden(*args, **kwargs):
+        pytest.fail("Git started before universal trust refusal")
 
-    monkeypatch.setattr(git_ops, "git", record)
-    git_ops.fetch_repo(repo)
-    assert calls == [
-        [
-            "fetch",
-            "--force",
-            "--prune",
-            "--",
-            "origin",
-            "+refs/heads/*:refs/remotes/origin/*",
-            "+refs/tags/*:refs/tags/*",
-        ]
-    ]
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    with pytest.raises(git_ops.GitError, match=git_trust.INVALID):
+        git_ops.fetch_repo(repo)
 
 
 def test_real_git_receives_selected_bundle(bundle: Path, tmp_path: Path) -> None:

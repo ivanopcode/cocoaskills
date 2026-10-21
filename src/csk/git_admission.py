@@ -643,6 +643,7 @@ def _remaining_limits(limits: Limits, deadline: float) -> Limits:
 def validate_git_tool(tool: GitTool, *, timeout_seconds: float = 10.0) -> None:
     if timeout_seconds <= 0:
         raise GitAdmissionError(IDENTITY_INVALID, "trusted Git version probe deadline expired")
+    https_trust_args(tool)
     for label, path, directory in (
         ("git", tool.executable, False),
         ("git exec path", tool.exec_path, True),
@@ -679,15 +680,19 @@ def validate_git_tool(tool: GitTool, *, timeout_seconds: float = 10.0) -> None:
                 IDENTITY_INVALID, f"{label} is not an admitted absolute regular file"
             )
     try:
-        result = subprocess.run(
-            (os.fspath(tool.executable), "--version"),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            env=_clean_discovery_environment(),
-            timeout=timeout_seconds,
-            check=True,
-        )
+        with git_trust.private_git_trust(https_trust_args(tool)) as trust:
+            environment = trust.environment(_clean_discovery_environment())
+            result = subprocess.run(
+                git_trust.pinned_command((os.fspath(tool.executable), "--version"), environment),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=environment,
+                timeout=timeout_seconds,
+                check=True,
+            )
+    except git_trust.GitTrustError as exc:
+        raise GitAdmissionError(exc.code, exc.detail, failure_class="integrity") from exc
     except subprocess.TimeoutExpired as exc:
         raise GitAdmissionError(
             SOURCE_UNAVAILABLE,
@@ -794,9 +799,8 @@ def acquire_network(
     limits: Limits = Limits(),
     connection: NetworkEndpoint | None = None,
 ) -> Snapshot:
-    trust_args = https_trust_args(tool) if source.transport == "https" else ()
-    if source.transport == "https":
-        tool = replace(tool, https_trust_args=trust_args)
+    trust_args = https_trust_args(tool)
+    tool = replace(tool, https_trust_args=trust_args)
     deadline = _admission_deadline(limits)
     # The tool probe is part of the same admission budget as init, fetch and
     # raw-object proof.  A direct caller gets an absolute deadline here; a
@@ -994,9 +998,10 @@ def _run_git_ls_remote(
     limits: Limits,
 ) -> bytes:
     """Run one ``ls-remote`` under the admission budget, capturing stdout."""
+    environment = _operation_trust_environment(paths, tool, environment)
     try:
         completed = subprocess.run(
-            (os.fspath(tool.executable), *arguments),
+            git_trust.pinned_command((os.fspath(tool.executable), *arguments), environment),
             cwd=paths.work,
             env=environment,
             stdin=subprocess.DEVNULL,
@@ -1045,9 +1050,8 @@ def resolve_network_ref(
     The returned commit is unproven until the caller acquires and proves it;
     the caller records it into the lock as the resolved ref.
     """
-    trust_args = https_trust_args(tool) if source.transport == "https" else ()
-    if source.transport == "https":
-        tool = replace(tool, https_trust_args=trust_args)
+    trust_args = https_trust_args(tool)
+    tool = replace(tool, https_trust_args=trust_args)
     deadline = _admission_deadline(limits)
     probe_limits = _remaining_limits(limits, deadline)
     validate_git_tool(
@@ -1122,7 +1126,6 @@ def resolve_network_ref(
                 "http.followRedirects=false",
                 "-c",
                 "http.sslVerify=true",
-                *trust_args,
                 "-c",
                 "http.proxy=",
                 "-c",
@@ -1409,6 +1412,20 @@ def _materialize_https_broker(
     return wrapper
 
 
+def _operation_trust_environment(
+    paths: _PrivatePaths, tool: GitTool, environment: Mapping[str, str],
+) -> dict[str, str]:
+    try:
+        selected = https_trust_args(tool)
+        root = Path(tempfile.mkdtemp(prefix="trust-", dir=paths.https))
+        return git_trust.materialize_git_trust(root, selected).environment(environment)
+    except git_trust.GitTrustError as exc:
+        raise GitAdmissionError(exc.code, exc.detail, failure_class="integrity") from exc
+    except OSError as exc:
+        error = git_trust.GitTrustError(git_trust.INVALID, str(paths.https), "cannot create private CA snapshot")
+        raise GitAdmissionError(error.code, error.detail, failure_class="integrity") from exc
+
+
 def _clean_git_environment(
     paths: _PrivatePaths,
     tool: GitTool,
@@ -1418,8 +1435,7 @@ def _clean_git_environment(
     https_broker: Path | None = None,
     https_token: str | None = None,
 ) -> dict[str, str]:
-    if transport == "https":
-        https_trust_args(tool)
+    trust_environment = _operation_trust_environment(paths, tool, {})
     environment = _clean_discovery_environment()
     environment.update(
         {
@@ -1463,7 +1479,7 @@ def _clean_git_environment(
                 "GIT_SSH_VARIANT": "ssh",
             }
         )
-    return environment
+    return {**environment, **trust_environment}
 
 
 def _strict_fetch_args(
@@ -1517,7 +1533,6 @@ def _strict_fetch_args(
         "http.followRedirects=false",
         "-c",
         "http.sslVerify=true",
-        *(https_trust_args(tool) if source.transport == "https" else ()),
         "-c",
         "http.proxy=",
         "-c",
@@ -1546,9 +1561,10 @@ def _run_git(
     *arguments: str,
     limits: Limits,
 ) -> None:
+    environment = _operation_trust_environment(paths, tool, environment)
     try:
         subprocess.run(
-            (os.fspath(tool.executable), *arguments),
+            git_trust.pinned_command((os.fspath(tool.executable), *arguments), environment),
             cwd=paths.work,
             env=environment,
             stdin=subprocess.DEVNULL,
@@ -1865,9 +1881,10 @@ class _ObjectReader:
             "cat-file",
             "--batch=%(objectname) %(objecttype) %(objectsize)",
         )
+        environment = _operation_trust_environment(paths, tool, environment)
         try:
             self._process = subprocess.Popen(
-                arguments,
+                git_trust.pinned_command(arguments, environment),
                 cwd=paths.work,
                 env=environment,
                 stdin=subprocess.PIPE,
