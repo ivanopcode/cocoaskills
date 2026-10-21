@@ -420,6 +420,27 @@ def test_unsupported_host_interpreter_runtime_identity_fails_closed(
     assert raised.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
 
 
+def _synthetic_python_image(link: str | None = None) -> bytes:
+    cpu = (
+        0x0100000C
+        if go_v1.platform.machine().casefold() in {"arm64", "aarch64"}
+        else 0x01000007
+    )
+    command = b""
+    if link is not None:
+        name = link.encode() + b"\0"
+        size = (24 + len(name) + 7) & ~7
+        command = struct.pack("<6I", 0xC, size, 24, 0, 0, 0) + name.ljust(
+            size - 24, b"\0"
+        )
+    return (
+        struct.pack(
+            "<8I", 0xFEEDFACF, cpu, 0, 2, int(link is not None), len(command), 0, 0
+        )
+        + command
+    )
+
+
 def _make_manager(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     prefix = path.parent.parent
@@ -441,7 +462,7 @@ def _make_manager(path: Path) -> Path:
         )
         stdlib_json = package.parent.parent / "json" / "__init__.py"
     if not interpreter.exists():
-        interpreter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        interpreter.write_bytes(_synthetic_python_image())
         interpreter.chmod(0o755)
     (package / "builds").mkdir(parents=True, exist_ok=True)
     for relative in ("__init__.py", "cli.py", "builds/go_v1.py"):
@@ -774,7 +795,11 @@ def test_manager_identity_rejects_interpreter_replacement(tmp_path: Path):
     reason="native Python runtime image layout is macOS-specific",
 )
 def test_manager_identity_binds_native_python_runtime_image(tmp_path: Path):
+    # A linked runtime is watched and mutations invalidate the complete manager identity.
     manager = _make_manager(tmp_path / "manager" / "bin" / "csk")
+    (manager.parent / "python").write_bytes(
+        _synthetic_python_image("@rpath/libpython3.11.dylib")
+    )
     runtime_image = manager.parent.parent / "lib" / "libpython3.11.dylib"
     runtime_image.write_bytes(b"synthetic Python runtime image")
     runtime_image.chmod(0o755)
@@ -984,6 +1009,7 @@ def test_base_windows_runtime_layout_and_dll_cardinality_fail_closed(
 def test_macos_runtime_layouts_bind_framework_and_fallback_images(
     tmp_path: Path,
 ):
+    # Framework process images retain their layout; a static non-framework image binds itself.
     framework_home = tmp_path / "framework"
     interpreter_path = framework_home / "bin" / "python3.14"
     interpreter_path.parent.mkdir(parents=True)
@@ -1013,7 +1039,7 @@ def test_macos_runtime_layouts_bind_framework_and_fallback_images(
     fallback_home = tmp_path / "fallback"
     fallback_path = fallback_home / "bin" / "python3.14"
     fallback_path.parent.mkdir(parents=True)
-    fallback_path.write_bytes(b"fallback")
+    fallback_path.write_bytes(_synthetic_python_image())
     fallback_path.chmod(0o755)
     fallback = go_v1._resolve_macos_interpreter_runtime(
         go_v1._resolve_executable_identity(fallback_path)
@@ -1023,10 +1049,11 @@ def test_macos_runtime_layouts_bind_framework_and_fallback_images(
 
 
 def test_macos_runtime_layout_rejects_ambiguous_dylibs(tmp_path: Path):
+    # A dynamic interpreter cannot select among multiple regular libpython candidates.
     python_home = tmp_path / "python-home"
     interpreter_path = python_home / "bin" / "python3.14"
     interpreter_path.parent.mkdir(parents=True)
-    interpreter_path.write_bytes(b"launcher")
+    interpreter_path.write_bytes(_synthetic_python_image("@rpath/libpython3.14.dylib"))
     interpreter_path.chmod(0o755)
     library = python_home / "lib"
     library.mkdir()

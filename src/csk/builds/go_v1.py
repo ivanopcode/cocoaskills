@@ -29,6 +29,7 @@ import hashlib
 import hmac
 import json
 import os
+import platform
 import queue
 import secrets
 import shutil
@@ -2072,6 +2073,7 @@ def _resolve_file_identity(
     executable: bool,
     label: str,
     max_bytes: int,
+    _contents: bytearray | None = None,
 ) -> _ExecutableIdentity:
     if not path.is_absolute():
         raise GoV1Error(
@@ -2152,6 +2154,8 @@ def _resolve_file_identity(
                     )
                 remaining -= len(chunk)
                 digest.update(chunk)
+                if _contents is not None:
+                    _contents.extend(chunk)
             if handle.read(1):
                 raise GoV1Error(
                     CODE_WORKER_IDENTITY_INVALID,
@@ -2677,6 +2681,117 @@ def _resolve_windows_interpreter_runtime(
     )
 
 
+def _macos_libpython_links(executable: _ExecutableIdentity) -> tuple[str, ...]:
+    # Capture the exact bytes hashed through the verified descriptor, then
+    # require the complete identity to match before interpreting any commands.
+    data = bytearray()
+    current = _resolve_file_identity(
+        executable.path,
+        executable=True,
+        label="installed manager Mach-O interpreter",
+        max_bytes=_MAX_MANAGER_EXECUTABLE_BYTES,
+        _contents=data,
+    )
+    if current != executable:
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            "installed manager interpreter changed before Mach-O inspection",
+        )
+
+    def invalid() -> GoV1Error:
+        return GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            "installed manager interpreter has an invalid Mach-O image",
+        )
+
+    cpu = {
+        "arm64": 0x0100000C,
+        "aarch64": 0x0100000C,
+        "x86_64": 0x01000007,
+        "amd64": 0x01000007,
+    }.get(platform.machine().casefold())
+    if cpu is None or len(data) < 4:
+        raise invalid()
+    start, end = 0, len(data)
+    magic = bytes(data[:4])
+    fat_formats = {
+        b"\xca\xfe\xba\xbe": (">", False),
+        b"\xca\xfe\xba\xbf": (">", True),
+        b"\xbe\xba\xfe\xca": ("<", False),
+        b"\xbf\xba\xfe\xca": ("<", True),
+    }
+    if magic in fat_formats:
+        endian, wide = fat_formats[magic]
+        if len(data) < 8:
+            raise invalid()
+        count = struct.unpack_from(endian + "I", data, 4)[0]
+        entry_size = 32 if wide else 20
+        table_end = 8 + count * entry_size
+        if not count or table_end > len(data):
+            raise invalid()
+        selected: list[tuple[int, int]] = []
+        ranges: list[tuple[int, int]] = []
+        for index in range(count):
+            position = 8 + index * entry_size
+            slice_cpu = struct.unpack_from(endian + "I", data, position)[0]
+            offset, size = struct.unpack_from(
+                endian + ("QQ" if wide else "II"), data, position + 8
+            )
+            if offset < table_end or size < 32 or offset + size > len(data):
+                raise invalid()
+            ranges.append((offset, offset + size))
+            if slice_cpu == cpu:
+                selected.append((offset, offset + size))
+        ranges.sort()
+        if len(selected) != 1 or any(
+            left[1] > right[0] for left, right in zip(ranges, ranges[1:])
+        ):
+            raise invalid()
+        start, end = selected[0]
+        magic = bytes(data[start : start + 4])
+    thin_formats = {b"\xcf\xfa\xed\xfe": "<", b"\xfe\xed\xfa\xcf": ">"}
+    if magic not in thin_formats or end - start < 32:
+        raise invalid()
+    endian = thin_formats[magic]
+    _, image_cpu, _, file_type, count, size, _, _ = struct.unpack_from(
+        endian + "8I", data, start
+    )
+    position = start + 32
+    commands_end = position + size
+    if image_cpu != cpu or file_type != 2 or commands_end > end or count > size // 8:
+        raise invalid()
+    links: list[str] = []
+    dylib_commands = {0xC, 0x80000018, 0x8000001F, 0x20, 0x80000023}
+    for _ in range(count):
+        if position + 8 > commands_end:
+            raise invalid()
+        command, command_size = struct.unpack_from(endian + "II", data, position)
+        next_position = position + command_size
+        if command_size < 8 or command_size % 8 or next_position > commands_end:
+            raise invalid()
+        if command in dylib_commands:
+            if command_size < 24:
+                raise invalid()
+            name_offset = struct.unpack_from(endian + "I", data, position + 8)[0]
+            if not 24 <= name_offset < command_size:
+                raise invalid()
+            name_start = position + name_offset
+            name_end = data.find(b"\0", name_start, next_position)
+            if name_end <= name_start:
+                raise invalid()
+            try:
+                name = data[name_start:name_end].decode("utf-8", errors="strict")
+            except UnicodeDecodeError as exc:
+                raise invalid() from exc
+            basename = PurePosixPath(name).name.casefold()
+            if basename.startswith("libpython") and basename.endswith(".dylib"):
+                links.append(name)
+        position = next_position
+    if position != commands_end:
+        raise invalid()
+    return tuple(links)
+
+
 def _resolve_macos_interpreter_runtime(
     executable: _ExecutableIdentity,
 ) -> _InterpreterRuntimeIdentity:
@@ -2722,6 +2837,20 @@ def _resolve_macos_interpreter_runtime(
             )
         )
     else:
+        links = _macos_libpython_links(executable)
+        if len(links) > 1:
+            raise GoV1Error(
+                CODE_WORKER_IDENTITY_INVALID,
+                "installed manager interpreter loads multiple Python runtimes",
+            )
+        if not links:
+            return _InterpreterRuntimeIdentity(
+                python_home=python_home,
+                configuration=None,
+                base_executable=executable,
+                process_image=executable,
+                runtime_image=executable,
+            )
         library = python_home / "lib"
         candidates: list[Path] = []
         try:
@@ -2744,18 +2873,31 @@ def _resolve_macos_interpreter_runtime(
                     ):
                         candidates.append(Path(entry.path))
         candidates.sort(key=lambda item: os.fspath(item).encode("utf-8"))
-        if len(candidates) > 1:
+        if len(candidates) != 1:
             raise GoV1Error(
                 CODE_WORKER_IDENTITY_INVALID,
                 "installed manager Python runtime image is ambiguous",
             )
-        runtime_image = (
-            executable
-            if not candidates
-            else _resolve_executable_identity(
-                candidates[0],
-                label="installed manager Python runtime image",
+        candidate = candidates[0]
+        link = links[0]
+        try:
+            approved = link in {
+                f"@rpath/{candidate.name}",
+                f"@executable_path/../lib/{candidate.name}",
+            } or (
+                Path(link).is_absolute()
+                and Path(link).resolve(strict=True) == candidate
             )
+        except (OSError, RuntimeError, ValueError):
+            approved = False
+        if PurePosixPath(link).name != candidate.name or not approved:
+            raise GoV1Error(
+                CODE_WORKER_IDENTITY_INVALID,
+                "installed manager interpreter has an unapproved Python runtime link",
+            )
+        runtime_image = _resolve_executable_identity(
+            candidate,
+            label="installed manager Python runtime image",
         )
         process_image = executable
     return _InterpreterRuntimeIdentity(

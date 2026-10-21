@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Исправлено
+
+- Сборки Go-CLI на macOS больше не завершаются ошибкой `build_execution_worker_identity_invalid` при использовании статически слинкованного Python из uv или mise.
+
 ## [0.20.0] - 2026-10-21
 
 ### Добавлено
