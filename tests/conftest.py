@@ -77,9 +77,8 @@ def skills_root(tmp_path: Path) -> Path:
     return root
 
 
-@pytest.fixture
-def git_ca_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A generated clean CA for tests that exercise the HTTPS trust contract."""
+def _generated_git_ca() -> bytes:
+    """Generate public CA bytes without persisting its private key."""
     from datetime import UTC, datetime, timedelta
 
     from cryptography import x509
@@ -97,8 +96,22 @@ def git_ca_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .sign(key, hashes.SHA256())
     )
+    return cert.public_bytes(serialization.Encoding.PEM)
+
+
+@pytest.fixture(scope="session")
+def incidental_git_ca(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Keep incidental Git operations independent of the host's CA package."""
+    path = tmp_path_factory.mktemp("git-ca") / "ca.pem"
+    path.write_bytes(_generated_git_ca())
+    return path
+
+
+@pytest.fixture
+def git_ca_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A mutable generated CA for explicit HTTPS trust contract tests."""
     path = tmp_path / "ca.pem"
-    path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    path.write_bytes(_generated_git_ca())
     monkeypatch.setenv("CSK_GIT_CA_BUNDLE", str(path))
     git_trust._VALIDATED.clear()
     return path
@@ -208,10 +221,12 @@ def _csk_git_session_isolation(
 
 
 @pytest.fixture(autouse=True)
-def stable_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def stable_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, incidental_git_ca: Path
+) -> None:
     deprecation.reset_for_tests()
     monkeypatch.delenv("CSK_CONFIG", raising=False)
-    monkeypatch.delenv("CSK_GIT_CA_BUNDLE", raising=False)
+    monkeypatch.setenv("CSK_GIT_CA_BUNDLE", str(incidental_git_ca))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
 

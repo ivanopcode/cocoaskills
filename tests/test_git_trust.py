@@ -177,7 +177,7 @@ def test_cache_uses_content_and_policy(
     git_trust.https_git_args()
     assert len(calls) == 1
     _list_certificate(monkeypatch, bundle)
-    with pytest.raises(git_trust.GitTrustError, match=git_trust.DISTRUSTED):
+    with pytest.raises(git_trust.GitTrustError, match=git_trust.INVALID):
         git_trust.https_git_args()
 
 
@@ -190,7 +190,7 @@ def test_distrust_before_any_child_or_token_environment(
     operation: str,
     invalid: bool,
 ) -> None:
-    # Every entry point rejects a generated listed CA before Git discovery or broker environment construction.
+    # An empty filtered bundle stops every entry point before Git discovery or broker environment construction.
     _list_certificate(monkeypatch, bundle)
     if invalid:
         bundle.write_bytes(b"malformed fixture")
@@ -228,10 +228,10 @@ def test_distrust_before_any_child_or_token_environment(
             installer._external_git_tool(
                 OperatorSearchPath(()), require_ssh=False, https_credentials=credentials
             )
-    assert error.value.code == (git_trust.INVALID if invalid else git_trust.DISTRUSTED)
+    assert error.value.code == git_trust.INVALID
     assert str(bundle) in str(error.value)
     if not invalid:
-        assert "Generated blocked CA" in str(error.value)
+        assert "no certificates remain after filtering" in str(error.value)
     assert "remediation:" in str(error.value)
     assert "secret-sentinel" not in str(error.value)
     assert not children
@@ -241,7 +241,7 @@ def test_distrust_before_any_child_or_token_environment(
 def test_named_provider_checks_before_credential_read(
     bundle: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Anonymous HTTPS remains valid; a listed CA blocks the provider before any credential lookup.
+    # Anonymous HTTPS remains valid; an empty filtered bundle blocks the provider before credential lookup.
     endpoint = repository_policy.ResolvedEndpoint(
         "example.test/repo",
         "https",
@@ -290,7 +290,7 @@ def test_named_provider_checks_before_credential_read(
         pytest.fail("credential access preceded trust validation")
 
     monkeypatch.setattr(installer, "_https_rule_credentials", forbidden)
-    with pytest.raises(git_admission.GitAdmissionError, match=git_trust.DISTRUSTED):
+    with pytest.raises(git_admission.GitAdmissionError, match=git_trust.INVALID):
         installer._endpoint_https_credentials(
             endpoint, cfg, None, OperatorSearchPath(())
         )

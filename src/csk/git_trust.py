@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import ssl
@@ -13,6 +14,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -51,6 +53,7 @@ DISTRUSTED_CERTIFICATES = {
 }
 _CERTIFICATE = re.compile(
     rb"-----BEGIN CERTIFICATE-----\s+([A-Za-z0-9+/=\s]+?)-----END CERTIFICATE-----"
+    rb"[ \t]*(?:\r?\n|(?=$))"
 )
 
 
@@ -163,30 +166,100 @@ def _check_bundle(path: Path) -> bytes:
         ) from exc
     digest = hashlib.sha256(content).digest()
     policy = tuple(sorted(DISTRUSTED_CERTIFICATES.items()))
-    if _checked(str(path), digest, policy):
-        return content
-    matches = list(_CERTIFICATE.finditer(content))
-    remainder = _CERTIFICATE.sub(b"", content)
-    # Bundles commonly include comments and human-readable CA labels. Never
-    # silently ignore a broken certificate block alongside a valid one.
-    if not matches or b"-----BEGIN" in remainder or b"-----END" in remainder:
-        raise GitTrustError(INVALID, str(path), "cannot parse PEM certificates")
-    try:
-        for match in matches:
-            pem = match.group().decode("ascii")
-            der = ssl.PEM_cert_to_DER_cert(pem)
-            _require_exact_der(der)
-            # Base64 decoding alone does not establish an X.509 certificate.
-            ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).load_verify_locations(cadata=pem)
-            name = DISTRUSTED_CERTIFICATES.get(hashlib.sha256(der).hexdigest())
-            if name is not None:
-                raise GitTrustError(DISTRUSTED, str(path), f"distrusted CA: {name}")
-    except (ValueError, ssl.SSLError) as exc:
-        raise GitTrustError(
-            INVALID, str(path), "cannot parse X.509 certificates"
-        ) from exc
-    _remember(str(path), digest, policy)
-    return content
+    cache_key = (str(path), digest, policy)
+    cached = _VALIDATED.get(cache_key)
+    if cached is None:
+        matches = list(_CERTIFICATE.finditer(content))
+        end = 0
+        spans = []
+        dropped = set()
+        try:
+            if not matches:
+                raise ValueError("no PEM certificates")
+            for match in matches:
+                _require_pem_gap(content[end : match.start()], annotation=True)
+                end = match.end()
+                pem = match.group().decode("ascii")
+                der = ssl.PEM_cert_to_DER_cert(pem)
+                _require_exact_der(der)
+                # Validate every certificate, including ones that will be dropped.
+                ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).load_verify_locations(
+                    cadata=pem
+                )
+                name = DISTRUSTED_CERTIFICATES.get(hashlib.sha256(der).hexdigest())
+                if name is None:
+                    spans.append(match.span())
+                else:
+                    dropped.add(name)
+            _require_pem_gap(content[end:], annotation=False)
+        except (ValueError, ssl.SSLError) as exc:
+            raise GitTrustError(
+                INVALID,
+                str(path),
+                "cannot parse PEM/X.509 certificates or unexpected bundle data",
+            ) from exc
+        if not spans:
+            raise GitTrustError(
+                INVALID, str(path), "no certificates remain after filtering"
+            )
+        cached = (tuple(spans), tuple(sorted(dropped)))
+        _VALIDATED[cache_key] = cached
+    retained, names = cached
+    if names:
+        _warn_filtered(path, names)
+    return b"".join(content[start:end] for start, end in retained)
+
+
+def _require_pem_gap(content: bytes, *, annotation: bool) -> None:
+    """Accept comments and the annotated OpenSSL format used by macOS bundles."""
+    in_annotation = False
+    expect_certificate = False
+    expect_sha256 = False
+    for line in content.splitlines():
+        if any(
+            not character.isprintable() and character != "\t"
+            for character in line.decode("utf-8")
+        ):
+            raise ValueError("non-text PEM annotation")
+        if not line.strip() or line.lstrip().startswith(b"#"):
+            continue
+        if annotation and line.startswith(b"=== ") and not in_annotation:
+            if expect_certificate:
+                raise ValueError("incomplete PEM annotation")
+            expect_certificate = True
+        elif expect_certificate and line == b"Certificate:":
+            expect_certificate = False
+            in_annotation = True
+        elif in_annotation and re.fullmatch(
+            rb"SHA1 Fingerprint=(?:[0-9A-F]{2}:)*[0-9A-F]{2}", line
+        ):
+            expect_sha256 = True
+        elif expect_sha256 and re.fullmatch(
+            rb"SHA256 Fingerprint=(?:[0-9A-F]{2}:)*[0-9A-F]{2}", line
+        ):
+            in_annotation = False
+            expect_sha256 = False
+        elif in_annotation and not expect_sha256 and not line.startswith(b"-----"):
+            # OpenSSL extension text can contain unindented printable lines.
+            continue
+        else:
+            raise ValueError("unexpected text outside PEM certificate")
+    if expect_certificate or in_annotation:
+        raise ValueError("incomplete PEM annotation")
+
+
+def _warn_filtered(path: Path, names: tuple[str, ...]) -> None:
+    global _WARNED
+    with _WARNING_LOCK:
+        if _WARNED:
+            return
+        _WARNED = True
+    logging.getLogger(__name__).warning(
+        "%s: CA bundle %r: dropped CA certificates: %s",
+        DISTRUSTED,
+        str(path),
+        ", ".join(names),
+    )
 
 
 def _require_exact_der(der: bytes) -> None:
@@ -312,14 +385,11 @@ def pinned_command(
     return (command[0], *options, *retained)
 
 
-# Successful validation only: changing a file's bytes or the distrust policy
-# always requires another parse. The cache retains no certificate bytes.
-_VALIDATED: set[tuple[str, bytes, tuple[tuple[str, str], ...]]] = set()
-
-
-def _checked(path: str, digest: bytes, policy: tuple[tuple[str, str], ...]) -> bool:
-    return (path, digest, policy) in _VALIDATED
-
-
-def _remember(path: str, digest: bytes, policy: tuple[tuple[str, str], ...]) -> None:
-    _VALIDATED.add((path, digest, policy))
+# Cache only successful parses and retained byte ranges, never unchecked output.
+# A different path, content digest or policy always requires another parse.
+_VALIDATED: dict[
+    tuple[str, bytes, tuple[tuple[str, str], ...]],
+    tuple[tuple[tuple[int, int], ...], tuple[str, ...]],
+] = {}
+_WARNING_LOCK = Lock()
+_WARNED = False

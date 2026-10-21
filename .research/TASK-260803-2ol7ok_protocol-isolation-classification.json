@@ -7,7 +7,7 @@
     "tests/test_protocol_conformance.py": "06d5fa20a02ac40e075d367d056961abbef6d38b4088b368180c715046fab435",
     "tests/protocol_conformance_adapters.py": "fd5ba2194f753b8c9081e4e9b45e22be4f8a0346778c85ba3e87726a29aad29e",
     "tests/protocol_lifecycle_observations.py": "05d859d04f328d8538b05935f88d99806b9359598a5e447e35c12dd6972cc9d6",
-    "tests/conftest.py": "8c22fa3de772cac4486692188964a201192f5644d8a3dda34c555c1fa9462087"
+    "tests/conftest.py": "8fd4a959143f82b49ac77abc170b46b2175281c669b48aab14e94862656f63db"
   },
   "audit_revisions": [
     {
@@ -159,6 +159,14 @@
       "change": "Added the non-autouse generated Git CA bundle fixture and clear CSK_GIT_CA_BUNDLE in stable_env; import the trust module used by that fixture.",
       "isolation_neutral": false,
       "rationale": "The per-test environment contract now clears one additional operator variable, so this is not isolation-neutral by construction. The protocol module, adapters and lifecycle observations do not request git_ca_bundle or read CSK_GIT_CA_BUNDLE; their Git fixtures use local repositories. The trust-module import initializes constants and an empty in-memory cache without filesystem, process or environment effects. The new fixture runs only for explicit HTTPS trust and audit tests and writes only public PEM bytes under their tmp_path. Existing stable_env monkeypatch teardown restores the variable per test, uniformly in each worker. No protocol node is added, removed, renamed or reparameterized; no shared process/cwd/temp-root/lock/cache interaction, atomic cluster or shard assignment changes."
+    },
+    {
+      "file": "tests/conftest.py",
+      "previous_sha256": "8c22fa3de772cac4486692188964a201192f5644d8a3dda34c555c1fa9462087",
+      "sha256": "8fd4a959143f82b49ac77abc170b46b2175281c669b48aab14e94862656f63db",
+      "change": "Use a worker-local session-generated public CA for incidental Git operations; explicit trust tests still select their own mutable bundle or clear the override to exercise platform defaults.",
+      "isolation_neutral": false,
+      "rationale": "The uniform per-test environment now selects public PEM bytes generated under the existing pytest temporary root. Existing stable_env teardown restores the override. No protocol node is added, removed, renamed or reparameterized. Protocol nodes do not inspect this override or use HTTPS Git trust; local Git fixtures retain their repository and environment isolation. The session fixture adds no child process, lock, cwd change or shared external write; the CA is immutable, read-only across tests and worker-local. Existing environment, temporary-root and cache footprints remain conservative; atomic clusters and shard assignments are unchanged."
     }
   ],
   "method": {

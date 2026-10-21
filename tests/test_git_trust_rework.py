@@ -51,7 +51,7 @@ def test_der_suffix_cannot_hide_a_listed_certificate(
     original = ssl.PEM_cert_to_DER_cert(git_ca_bundle.read_text())
     git_trust.https_git_args()
     _list_certificate(monkeypatch, git_ca_bundle)
-    with pytest.raises(git_trust.GitTrustError, match=git_trust.DISTRUSTED):
+    with pytest.raises(git_trust.GitTrustError, match=git_trust.INVALID):
         git_trust.https_git_args()
     pem = ssl.DER_cert_to_PEM_cert(original + suffix)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -87,7 +87,7 @@ def test_malformed_outer_der_lengths_fail_closed(git_ca_bundle, der):
     "mode", ["crlf", "spaces", "duplicate-begin", "raw-der", "trailing-junk"]
 )
 def test_reviewer_pem_neighbours(git_ca_bundle, monkeypatch, mode):
-    # PEM whitespace preserves distrust; malformed blocks/raw DER cannot turn a listed root into an accepted bundle.
+    # PEM whitespace leaves an empty filtered bundle; malformed blocks, raw DER and trailing junk are invalid.
     content = git_ca_bundle.read_bytes()
     _list_certificate(monkeypatch, git_ca_bundle)
     if mode == "crlf":
@@ -103,11 +103,7 @@ def test_reviewer_pem_neighbours(git_ca_bundle, monkeypatch, mode):
     git_ca_bundle.write_bytes(content)
     with pytest.raises(git_trust.GitTrustError) as error:
         git_trust.https_git_args()
-    assert error.value.code == (
-        git_trust.INVALID
-        if mode in {"duplicate-begin", "raw-der"}
-        else git_trust.DISTRUSTED
-    )
+    assert error.value.code == git_trust.INVALID
 
 
 @pytest.mark.parametrize("mutation", ["replace", "symlink", "unlink"])
