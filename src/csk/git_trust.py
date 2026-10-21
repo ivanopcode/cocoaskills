@@ -75,13 +75,21 @@ def _configured_bundle(config: GlobalConfig | None) -> str | None:
         from . import config as config_module
 
         path = config_module.config_path()
-        if path.exists() or "CSK_CONFIG" in os.environ:
-            try:
-                config = config_module.load_config(path, quiet=True)
-            except (OSError, ValueError, config_module.ConfigError) as exc:
-                raise GitTrustError(
-                    INVALID, str(path), "cannot load Git trust configuration"
-                ) from exc
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            # Bootstrap commands may invoke Git before any operator config exists.
+            return None
+        except OSError as exc:
+            raise GitTrustError(
+                INVALID, str(path), "cannot inspect Git trust configuration"
+            ) from exc
+        try:
+            config = config_module.load_config(path, quiet=True)
+        except (OSError, ValueError, config_module.ConfigError) as exc:
+            raise GitTrustError(
+                INVALID, str(path), "cannot load Git trust configuration"
+            ) from exc
     return None if config is None else config.git.https_ca_bundle
 
 

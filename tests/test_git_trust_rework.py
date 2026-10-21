@@ -21,6 +21,28 @@ from test_git_trust import _list_certificate
 from csk import git_admission, git_ops, git_trust
 
 
+@pytest.mark.parametrize("state", ["absent", "malformed", "dangling"])
+def test_bootstrap_absent_config_uses_checked_defaults_but_invalid_config_refuses(
+    git_ca_bundle, tmp_path, monkeypatch, state
+):
+    # Bootstrap before config creation still checks the default CA; existing malformed/dangling configs cannot silently select defaults.
+    config = tmp_path / "bootstrap.json"
+    monkeypatch.setenv("CSK_CONFIG", str(config))
+    monkeypatch.delenv("CSK_GIT_CA_BUNDLE")
+    monkeypatch.setattr(git_trust.sys, "platform", "darwin")
+    monkeypatch.setattr(git_trust, "MACOS_BUNDLES", (str(git_ca_bundle),))
+    if state == "malformed":
+        config.write_text("{broken")
+    elif state == "dangling":
+        config.symlink_to(tmp_path / "missing-target")
+    if state == "absent":
+        with git_trust.private_git_trust() as trust:
+            assert trust.ca_file.read_bytes() == git_ca_bundle.read_bytes()
+        git_ca_bundle.write_bytes(b"broken default CA")
+    with pytest.raises(git_trust.GitTrustError, match=git_trust.INVALID):
+        git_trust.https_git_args()
+
+
 @pytest.mark.parametrize("suffix", [b"\x00", b"garbage", b"\x30\x00"])
 def test_der_suffix_cannot_hide_a_listed_certificate(
     git_ca_bundle, monkeypatch, suffix
