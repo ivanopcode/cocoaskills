@@ -114,11 +114,23 @@
    "$(brew --prefix)/opt/curl/bin/curl" -fsSL https://cocoaskills.org/install.sh | sh
    ```
 
-   Скрипт проверяет версии и выбирает uv, затем pipx, затем pip; uv запускается с `UV_SYSTEM_CERTS=1`. На других платформах используйте актуальный `curl`. Пока macOS не обновит `/etc/ssl/cert.pem`, не используйте `/usr/bin/curl` для этой загрузки, а Apple git настройте на обновлённый bundle Homebrew:
+   Скрипт проверяет версии и выбирает uv, затем pipx, затем pip; uv запускается с `UV_SYSTEM_CERTS=1`. `install.sh` предназначен только для POSIX shell на macOS и Linux, не для установки на Windows. На Linux используйте актуальный `curl`. Пока macOS не обновит `/etc/ssl/cert.pem`, не используйте `/usr/bin/curl` для этой загрузки, а Apple git настройте на обновлённый bundle Homebrew:
 
    ```bash
    git config --global http.sslCAInfo "$(brew --prefix)/etc/ca-certificates/cert.pem"
    ```
+
+   На Linux обновите пакет `ca-certificates` средствами дистрибутива: системные curl, git и Python читают его хранилище. Go-бинарники без встроенного x509 blocklist при проверке доверия полагаются только на этот системный bundle.
+
+   На Windows Git for Windows по умолчанию использует OpenSSL и собственный bundle. Предпочтителен Schannel, чтобы применялось уже обновлённое хранилище Windows:
+
+   ```bash
+   git config --global http.sslBackend schannel
+   ```
+
+   Python с python.org использует хранилище Windows; минимумы uv **0.13.4+** и pip **26.2.2+** остаются теми же. Устанавливайте через Python-инструменты выше, без `install.sh`.
+
+   Для приватных HTTPS-репозиториев сборки csk передаёт токен оператора в git на время fetch. На macOS перед использованием HTTPS build token убедитесь, что git доверяет обновлённому bundle; настройка обычных вызовов git показана выше (`http.sslCAInfo`). Изолированный fetch csk не читает пользовательскую и системную Git-конфигурацию, поэтому одной глобальной настройки недостаточно: используемый csk git должен доверять обновлённому хранилищу по умолчанию. Доступ к сборкам по SSH это не затрагивает.
 
    Подробности проверки клиентов и доверия хоста — в [справочнике](docs/reference.md#доверие-хоста).
 
