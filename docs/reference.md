@@ -364,6 +364,33 @@ install marker schema 4.
 
 ## HTTPS-токены внешних репозиториев сборки
 
+Перед запуском git по HTTPS csk выбирает CA bundle и проверяет сертификаты
+по встроенному списку отказа доверия. Это применяется к источникам скиллов,
+разрешению refs и репозиториям сборки, включая анонимные запросы.
+Параметр `git.https_ca_bundle` глобальной конфигурации задаёт абсолютный путь
+к читаемому обычному PEM-файлу; `CSK_GIT_CA_BUNDLE` перекрывает его на запуск:
+
+```json
+"git": {"https_ca_bundle": "/path/to/updated-ca-bundle.pem"}
+```
+
+На macOS выбирается первый существующий файл:
+`/opt/homebrew/etc/ca-certificates/cert.pem`,
+`/usr/local/etc/ca-certificates/cert.pem`, `/etc/ssl/cert.pem`.
+На Linux порядок: `/etc/ssl/certs/ca-certificates.crt`,
+`/etc/pki/tls/certs/ca-bundle.crt`, `/etc/ssl/ca-bundle.pem`, `/etc/ssl/cert.pem`.
+Непригодный выбранный файл вызывает отказ без перехода к следующему.
+На Windows без override используется `http.sslBackend=schannel` и хранилище
+Windows; явный PEM-файл выбирает backend `openssl`.
+
+csk передаёт файл через `http.sslCAInfo`, сохраняет проверку TLS и запрещает
+HTTP redirects. Пользовательский `git config --global http.sslCAInfo` не
+заменяет настройку csk: строгий транспорт изолирует конфигурацию git.
+Пустой, повреждённый, нечитаемый или превышающий 16 MiB bundle отклоняется
+с кодом `git_trust_anchor_invalid`; наличие сертификата из списка отказа —
+`git_trust_anchor_distrusted`. Проверка выполняется до запуска git и передачи
+токена брокеру. SSH не использует эту настройку.
+
 Секция `build_https` глобального файла конфигурации `~/.cocoaskills/config.json` хранит выбор источника токена оператора для скоупов канонической идентичности репозиториев сборки:
 
 ```json

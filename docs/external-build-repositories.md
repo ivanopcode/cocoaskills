@@ -82,6 +82,17 @@ before.
 
 ## Private HTTPS build repositories
 
+Перед запуском HTTPS-транспорта csk выбирает и проверяет CA bundle, затем
+передаёт его git через `http.sslCAInfo`. Переменная `CSK_GIT_CA_BUNDLE`
+перекрывает `git.https_ca_bundle` глобальной конфигурации; требуется абсолютный
+путь к читаемому PEM-файлу. На macOS предпочтителен bundle Homebrew, на Linux —
+bundle дистрибутива. Windows без явного файла использует Schannel и системное
+хранилище, с файлом — OpenSSL. Повреждённый bundle или CA из встроенного списка
+отказа останавливает операцию до запуска git и передачи токена брокеру.
+Проверка применяется также к публичным репозиториям без токена.
+[Порядок выбора](reference.md#https-токены-внешних-репозиториев-сборки)
+и [исправление отказа](troubleshooting.md#git_trust_anchor_distrusted--git_trust_anchor_invalid).
+
 A private HTTPS repository fetch authenticates through the **manager
 credential broker**, the slot the manager profile describes as an OPTIONAL
 member of the allowed process graph. The manager launches the broker itself:
