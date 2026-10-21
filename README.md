@@ -367,6 +367,11 @@ csk shell-init                      # Генерирует или устанав
 
 ## Development tools
 
+Для git по HTTPS csk выбирает и проверяет CA bundle до запуска git и передачи
+токена. Собственный актуальный PEM-файл задаётся через `CSK_GIT_CA_BUNDLE`
+или `git.https_ca_bundle` глобальной конфигурации.
+[Порядок выбора и отказы](docs/reference.md#https-токены-внешних-репозиториев-сборки).
+
 - `uv` installs the development environment and builds release artifacts. Run
   `uv sync --extra dev` and `uv build --out-dir .temp/dist`; build outputs stay
   under `.temp/dist/`.

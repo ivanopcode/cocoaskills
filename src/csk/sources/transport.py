@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, Protocol
 
-from .. import git_admission
+from .. import git_admission, git_trust
 from ..build_repository import LockedCommit, RepositorySource
 from ..git_admission import GitAdmissionError, GitTool, Limits, Snapshot
 from . import repository_policy
@@ -48,6 +48,8 @@ _KNOWN_SAFE_CODES = frozenset(
         git_admission.OBJECT_SEMANTICS_INVALID,
         git_admission.SSH_CREDENTIAL_MISSING,
         git_admission.CREDENTIAL_POLICY_INVALID,
+        git_trust.INVALID,
+        git_trust.DISTRUSTED,
     }
 )
 
@@ -415,7 +417,10 @@ def _original_failure(
 ) -> GitAdmissionError:
     failure = GitAdmissionError(
         code,
-        "trusted Git admission failed",
+        str(error).removeprefix(f"{code}: ")
+        if code in {git_trust.INVALID, git_trust.DISTRUSTED}
+        and isinstance(error.__cause__, git_trust.GitTrustError)
+        else "trusted Git admission failed",
         failure_class=failure_class,
     )
     failure.__cause__ = error

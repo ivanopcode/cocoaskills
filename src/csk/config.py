@@ -66,6 +66,7 @@ MANAGER_KEYS = frozenset(
         "build_https",
         "build_ssh",
         "builds",
+        "git",
         "disable_builtin_registries",
         "experimental",
     }
@@ -145,6 +146,11 @@ class BuildConfig:
 
 
 @dataclass(frozen=True)
+class GitConfig:
+    https_ca_bundle: str | None = None
+
+
+@dataclass(frozen=True)
 class GlobalConfig:
     path: Path
     skills_root: Path
@@ -170,6 +176,7 @@ class GlobalConfig:
     # The run-wide CSK_BUILD_HTTPS_TOKEN environment value keeps precedence.
     build_https: tuple[build_https_module.BuildHTTPSRule, ...] = ()
     builds: BuildConfig = field(default_factory=BuildConfig)
+    git: GitConfig = field(default_factory=GitConfig)
     # Legacy feature switches. They are parsed for configuration compatibility.
     experimental: ExperimentalConfig = field(default_factory=ExperimentalConfig)
 
@@ -367,6 +374,13 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
 
     audit = _parse_audit_config(data.get("audit"))
     builds = _parse_build_config(data.get("builds"))
+    git_raw = data.get("git", {})
+    if not isinstance(git_raw, dict):
+        raise ConfigError("Global config field 'git' must be an object")
+    _reject_unknown_fields(git_raw, {"https_ca_bundle"}, "git")
+    ca_bundle = git_raw.get("https_ca_bundle")
+    if ca_bundle is not None and (not isinstance(ca_bundle, str) or not ca_bundle):
+        raise ConfigError("Global config field 'git.https_ca_bundle' must be a non-empty string")
     # Validate the environment override during config loading without copying
     # it into the file-backed value that save_config persists.
     resolve_go_future_families(builds)
@@ -449,6 +463,7 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
         build_ssh=build_ssh_rules,
         build_https=build_https_rules,
         builds=builds,
+        git=GitConfig(https_ca_bundle=ca_bundle),
         experimental=experimental,
     )
 
@@ -492,6 +507,8 @@ def save_config(config: GlobalConfig) -> None:
         data["build_ssh"] = build_ssh_module.serialize_rules(config.build_ssh)
     if config.build_https:
         data["build_https"] = build_https_module.serialize_rules(config.build_https)
+    if config.git.https_ca_bundle is not None:
+        data["git"] = {"https_ca_bundle": config.git.https_ca_bundle}
     if config.builds.go_future_families != "warn":
         data["builds"] = {
             "go_future_families": config.builds.go_future_families,

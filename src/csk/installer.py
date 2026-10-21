@@ -659,10 +659,14 @@ def _install_schema2_once(
                     require_ssh=selected,
                     ssh_credentials=selected_ssh,
                     https_credentials=selected_https,
+                    https_trust=(git_admission.https_trust_args(config=config) if endpoint.transport == "https" else None),
                     timeout_seconds=timeout_seconds,
                     deadline=deadline,
                 )
-            return git_tools[key]
+            tool = git_tools[key]
+            if endpoint.transport == "https":
+                tool = replace(tool, https_trust_args=git_admission.https_trust_args(config=config))
+            return tool
 
         # The mode is decided here, where the transport grant is
         # built: the publisher receives only the mode, so the frozen
@@ -1292,9 +1296,15 @@ def _external_git_tool(
     require_ssh: bool,
     ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
     https_credentials: git_admission.OperatorHTTPSCredentials | None = None,
+    https_trust: tuple[str, ...] | None = None,
     timeout_seconds: float = 10.0,
     deadline: float | None = None,
 ) -> git_admission.GitTool:
+    if https_trust is not None:
+        git_admission.check_https_trust_args(https_trust)
+    elif https_credentials is not None:
+        https_trust = git_admission.https_trust_args()
+
     def remaining_timeout() -> float:
         remaining = timeout_seconds
         if deadline is not None:
@@ -1357,6 +1367,7 @@ def _external_git_tool(
         ssh=ssh,
         ssh_credentials=ssh_credentials,
         https_credentials=https_credentials,
+        https_trust_args=https_trust,
     )
 
 
@@ -1887,6 +1898,7 @@ def _endpoint_https_credentials(
 ) -> git_admission.OperatorHTTPSCredentials | None:
     """Resolve the named HTTPS provider for this exact endpoint attempt."""
 
+    git_admission.https_trust_args(config=config)
     authentication = endpoint.authentication
     if authentication is None or authentication == "anonymous":
         return None
@@ -2060,6 +2072,7 @@ def _resolve_build_https_credentials(
         if source.transport != "https":
             selection[key] = None
             continue
+        git_admission.https_trust_args(config=config)
         host = source.identity.split("/", 1)[0]
         if run_wide is not None and run_wide.covers(host):
             selection[key] = git_admission.OperatorHTTPSCredentials(
@@ -2273,6 +2286,7 @@ def _publish_external_builds(
         https: git_admission.OperatorHTTPSCredentials | None = None,
         *,
         require_ssh: bool | None = None,
+        trust_https: bool = False,
         timeout_seconds: float = 10.0,
         deadline: float | None = None,
     ) -> git_admission.GitTool:
@@ -2284,10 +2298,16 @@ def _publish_external_builds(
                 require_ssh=selected_ssh,
                 ssh_credentials=credentials,
                 https_credentials=https,
+                https_trust=(git_admission.https_trust_args(config=config) if trust_https else None),
                 timeout_seconds=timeout_seconds,
                 deadline=deadline,
             )
-        return git_tools[key]
+        tool = git_tools[key]
+        if trust_https:
+            # Local admission ignores this field; network admission rechecks
+            # the selected bundle before creating its credential environment.
+            tool = replace(tool, https_trust_args=git_admission.https_trust_args(config=config))
+        return tool
     private_base = Path(
         stack.enter_context(
             tempfile.TemporaryDirectory(prefix="csk-external-build-operation-")
@@ -2337,10 +2357,11 @@ def _publish_external_builds(
                 ssh_selection[(node.name, name)], https_selection[(node.name, name)]
             )
         elif network_plan is not None and _is_legacy_transport_plan(network_plan):
-            # The released lane built exactly one tool from the pre-resolved
-            # declaration selection; keep that call byte-identical.
+            # Bind the pre-resolved declaration's HTTPS trust before Git's
+            # identity probes; local and SSH tools do not need a CA bundle.
             git_tool = _git_tool_for(
-                ssh_selection[(node.name, name)], https_selection[(node.name, name)]
+                ssh_selection[(node.name, name)], https_selection[(node.name, name)],
+                trust_https=network_plan.endpoints[0].transport == "https",
             )
 
         def endpoint_tool(
@@ -2383,6 +2404,7 @@ def _publish_external_builds(
                 None,
                 selected_https,
                 require_ssh=False,
+                trust_https=True,
                 timeout_seconds=timeout_seconds,
                 deadline=deadline,
             )

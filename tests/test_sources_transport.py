@@ -318,22 +318,10 @@ def _tls_server_factory(
     _loopback_tls_cert: tuple[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[Callable[..., _StatusServer]]:
-    """Serve loopback HTTPS fixtures with additive CA trust only.
-
-    The production clean environment is preserved bit-for-bit except for
-    the added GIT_SSL_CAINFO entry, so this fixture cannot mask
-    ambient-config leakage: it only lets the TLS handshake succeed.
-    """
+    """Exercise the public CA-bundle override without altering the clean environment."""
 
     key_path, crt_path = _loopback_tls_cert
-    real_clean = git_admission._clean_git_environment
-
-    def clean_with_ca(*args: object, **kwargs: object) -> dict[str, str]:
-        environment = real_clean(*args, **kwargs)  # type: ignore[arg-type]
-        environment["GIT_SSL_CAINFO"] = crt_path
-        return environment
-
-    monkeypatch.setattr(git_admission, "_clean_git_environment", clean_with_ca)
+    monkeypatch.setenv("CSK_GIT_CA_BUNDLE", crt_path)
     servers: list[_StatusServer] = []
 
     def make(
@@ -3914,6 +3902,36 @@ def test_live_sshd_host_key_mismatch_stays_fail_closed(
         assert _observed_first_class(captured.value) == "host-key"
     finally:
         sshd.close()
+
+
+def test_public_ca_bundle_reaches_real_https_git(
+    _tls_server_factory: Callable[..., _StatusServer],
+    _loopback_tls_cert: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # The selected generated CA reaches real Git: TLS succeeds and the fixture receives the HTTP request.
+    server = _tls_server_factory(status=404, body=b"not found")
+    tool = _fake_http_tool(tmp_path / "tool", {}, allow_loopback_https=True)
+    real_run = subprocess.run
+    fetches: list[tuple[str, ...]] = []
+
+    def record(*args: object, **kwargs: object) -> object:
+        command = args[0]
+        if isinstance(command, tuple) and "fetch" in command:
+            fetches.append(command)
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", record)
+    with pytest.raises(git_admission.GitAdmissionError) as captured:
+        transport.acquire_plan(
+            _https_mirror_plan(server.url, "https://fixture.test/kit.git"),
+            LockedCommit("sha1", "a" * 40), tool,
+        )
+    assert _observed_first_class(captured.value) == "identity"
+    assert len(fetches) == 1
+    assert f"http.sslCAInfo={_loopback_tls_cert[1]}" in fetches[0]
+    assert server.auth_seen == [None]
 
 
 def test_hostile_insteadof_rewrite_does_not_deflect_the_literal_attempt(

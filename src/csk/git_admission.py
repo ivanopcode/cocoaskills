@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import IO, Callable, Mapping, Sequence
 
+from . import git_trust
 from .build_repository import (
     LockedCommit,
     RepositorySource,
@@ -26,6 +27,7 @@ from .build_repository import (
     parse_locked_commit,
     parse_repository_source,
 )
+from .config import GlobalConfig
 
 
 IDENTITY_INVALID = "build_repository_identity_invalid"
@@ -194,6 +196,25 @@ class GitTool:
     ssh: Path | None = None
     ssh_credentials: OperatorSSHCredentials | None = None
     https_credentials: OperatorHTTPSCredentials | None = None
+    https_trust_args: tuple[str, ...] | None = None
+
+
+def https_trust_args(
+    tool: GitTool | None = None, *, config: GlobalConfig | None = None
+) -> tuple[str, ...]:
+    try:
+        if tool is not None and tool.https_trust_args is not None:
+            return check_https_trust_args(tool.https_trust_args)
+        return git_trust.https_git_args(config)
+    except git_trust.GitTrustError as exc:
+        raise GitAdmissionError(exc.code, exc.detail, failure_class="integrity") from exc
+
+
+def check_https_trust_args(arguments: tuple[str, ...]) -> tuple[str, ...]:
+    try:
+        return git_trust.check_git_args(arguments)
+    except git_trust.GitTrustError as exc:
+        raise GitAdmissionError(exc.code, exc.detail, failure_class="integrity") from exc
 
 
 @dataclass(frozen=True)
@@ -773,6 +794,9 @@ def acquire_network(
     limits: Limits = Limits(),
     connection: NetworkEndpoint | None = None,
 ) -> Snapshot:
+    trust_args = https_trust_args(tool) if source.transport == "https" else ()
+    if source.transport == "https":
+        tool = replace(tool, https_trust_args=trust_args)
     deadline = _admission_deadline(limits)
     # The tool probe is part of the same admission budget as init, fetch and
     # raw-object proof.  A direct caller gets an absolute deadline here; a
@@ -1021,6 +1045,9 @@ def resolve_network_ref(
     The returned commit is unproven until the caller acquires and proves it;
     the caller records it into the lock as the resolved ref.
     """
+    trust_args = https_trust_args(tool) if source.transport == "https" else ()
+    if source.transport == "https":
+        tool = replace(tool, https_trust_args=trust_args)
     deadline = _admission_deadline(limits)
     probe_limits = _remaining_limits(limits, deadline)
     validate_git_tool(
@@ -1095,6 +1122,7 @@ def resolve_network_ref(
                 "http.followRedirects=false",
                 "-c",
                 "http.sslVerify=true",
+                *trust_args,
                 "-c",
                 "http.proxy=",
                 "-c",
@@ -1390,6 +1418,8 @@ def _clean_git_environment(
     https_broker: Path | None = None,
     https_token: str | None = None,
 ) -> dict[str, str]:
+    if transport == "https":
+        https_trust_args(tool)
     environment = _clean_discovery_environment()
     environment.update(
         {
@@ -1487,6 +1517,7 @@ def _strict_fetch_args(
         "http.followRedirects=false",
         "-c",
         "http.sslVerify=true",
+        *(https_trust_args(tool) if source.transport == "https" else ()),
         "-c",
         "http.proxy=",
         "-c",

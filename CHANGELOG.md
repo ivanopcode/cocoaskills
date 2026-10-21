@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Исправлено
 
+- HTTPS-транспорт git выбирает и закрепляет CA bundle, проверяет его по встроенному списку отказа доверия и останавливается до запуска git и передачи токена при небезопасном или повреждённом bundle. Добавлены `git.https_ca_bundle` и `CSK_GIT_CA_BUNDLE`; Windows без явного файла использует Schannel.
+
 - Сборки Go-CLI на macOS больше не завершаются ошибкой `build_execution_worker_identity_invalid` при использовании статически слинкованного Python из uv или mise.
 - Скрипт быстрой установки выбирает uv 0.13.4+ с системным хранилищем сертификатов, затем pipx с shared pip 26.2.2+, затем pip 26.2.2+. Старые и непроверенные клиенты отклоняются с командами обновления; установка на macOS рекомендует Homebrew и актуальный curl.
 
