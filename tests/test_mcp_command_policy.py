@@ -115,7 +115,8 @@ def test_embedded_real_publish(project_cli,tmp_path):
         os.close(master)
     native=json.loads((root/'.mcp.json').read_text()) if (root/'.mcp.json').exists() else None
     print(json.dumps({'install_exit':rc,'approval':replied,'transcript':output.decode(errors='replace'),'native':native}))
-    assert rc!=0 and not replied and native is None
+    assert rc == 1 and b"mcp_command_invalid" in output
+    assert not replied and native is None
 
     assert _snapshot(root,home)==before
 
