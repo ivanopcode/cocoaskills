@@ -474,13 +474,13 @@ def test_skill_requirement_uses_planned_view(project_cli, capsys, transport):
         assert not (root / ".agents/skills/demo").exists()
 
 
-# Missing ignore entries refuse without repair; tracked native files remain tracked and are never ignored.
+# Missing MCP ignore entries are repaired automatically; tracked native files remain tracked and are never ignored.
 def test_native_gitignore_gate(project_cli, capsys):
     from conftest import run
 
     root, _, _ = project_cli
-    assert cli.main(["install", "app"]) != 0
-    assert "Missing entries:" in capsys.readouterr().err
+    assert cli.main(["install", "app", "--dry-run"]) == 0
+    assert "would: added MCP gitignore entries:" in capsys.readouterr().out
     assert native_bytes(root) == {}
     path = root / PATHS[0]
     path.write_text('{"mcpServers":{}}')

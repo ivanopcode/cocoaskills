@@ -49,7 +49,7 @@ def test_docs_fixture_installs_three_configs_and_repeats_unchanged(tmp_path: Pat
     # The exact published fixture installs headlessly, then preserves native bytes on reinstall.
     case = _case(tmp_path / "docs", schema=1)
     (case.project / "Skillfile.json").write_bytes(FIXTURE.read_bytes())
-    first = case.run("--fix-gitignore")
+    first = case.run()
     assert first.returncode == 0, first.stdout + first.stderr
     assert _rows(first) == _expected_rows("added")
     before = {path: (case.project / path).read_bytes() for _, path in SURFACES}

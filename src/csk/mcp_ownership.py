@@ -7,7 +7,7 @@ manager-home stores live under ``<csk home>/state/mcp/{ledger,consent}/``:
   touch exactly those and nothing else; this module parses and encodes it, the
   install transaction publishes it;
 * the consent store records which declarations the operator approved; its
-  only write path is :func:`record_consent`.
+  writes use :func:`record_consent` or join the project publication transaction.
 
 Both stores are canonical CCJ-1 plus a line feed, read without following links
 and refused on any deviation. A ledger that cannot be read is "ownership
@@ -574,11 +574,24 @@ def load_consent(csk_home: Path, consumer: str) -> frozenset[str]:
     return parse_consent(data, expected_consumer=consumer)
 
 
+def merge_consent(consumer: str, existing: frozenset[str], keys: Iterable[str]) -> bytes:
+    """Encode a loadable approval candidate; callers authorize and publish it."""
+    added = frozenset(_caller_digest(key, "consent key") for key in keys)
+    encoded = encode_consent(consumer, existing | added)
+    if len(encoded) > _STORE_LIMIT:
+        raise McpOwnershipError(
+            CODE_CONSENT_STORE_FULL,
+            "consent store is full: the merged store would exceed the size limit",
+        )
+    return encoded
+
+
 def record_consent(csk_home: Path, consumer: str, keys: Iterable[str]) -> None:
     """Merge ``keys`` into the approved set with a private atomic write.
 
-    Callers invoke this only after an interactive approval; the module has no
-    other write path. The merge is a read-modify-write, so it runs under the
+    Callers invoke this only after an interactive approval. Project installs
+    instead stage merge_consent bytes in their publication transaction.
+    The merge is a read-modify-write, so this standalone writer runs under the
     manager-home lock to keep concurrent approvals from dropping each other's
     keys. That lock is not reentrant: call this outside any held manager-home
     lock (a project lock may be held). An unreadable or invalid existing store
@@ -594,12 +607,7 @@ def record_consent(csk_home: Path, consumer: str, keys: Iterable[str]) -> None:
         merged = existing | added
         if merged == existing:
             return
-        encoded = encode_consent(consumer, merged)
-        if len(encoded) > _STORE_LIMIT:
-            raise McpOwnershipError(
-                CODE_CONSENT_STORE_FULL,
-                "consent store is full: the merged store would exceed the size limit",
-            )
+        encoded = merge_consent(consumer, existing, added)
         directory = _ensure_private_directory(csk_home)
         _write_private_atomic(directory, f"{consumer}.json", encoded)
 

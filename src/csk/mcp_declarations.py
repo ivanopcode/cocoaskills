@@ -51,8 +51,13 @@ _SHELL_COMMANDS = frozenset(
     {"sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "csh", "tcsh", "cmd", "powershell", "pwsh"}
 )
 _INDIRECTION_COMMANDS = frozenset(
-    {"env", "xargs", "nohup", "sudo", "doas", "su", "busybox", "script"}
+    {
+        "env", "xargs", "nohup", "sudo", "doas", "su", "busybox", "script",
+        "nice", "arch", "caffeinate", "timeout", "gtimeout", "stdbuf", "gstdbuf",
+        "chrt", "taskset", "ionice", "time", "command", "exec", "launchctl", "start",
+    }
 )
+_EVALUATOR_LAUNCHERS = frozenset({"osascript", "open"})
 _EVALUATOR_COMMAND_RE = re.compile(
     r"(?:node|nodejs|deno|bun|python[0-9.]*|ruby|perl|php)(?:\.exe)?", re.IGNORECASE | re.ASCII
 )
@@ -557,6 +562,8 @@ def _check_stdio(server: ServerSpec, path: str) -> None:
         base = base[: -len(".exe")]
     if base in _SHELL_COMMANDS or base in _INDIRECTION_COMMANDS:
         raise _fail("mcp_command_invalid", f"{path}.command", "shells and indirection commands are refused")
+    if base in _EVALUATOR_LAUNCHERS:
+        raise _fail("mcp_command_invalid", f"{path}.command", "evaluator launchers are refused")
     args = server.args
     if len(args) > _MAX_ARGS:
         raise _invalid(f"{path}.args", f"at most {_MAX_ARGS} arguments are allowed")

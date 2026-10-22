@@ -48,6 +48,7 @@ def refusal(code: str, detail: str) -> McpProjectError:
         "mcp_native_config_too_large": "reduce the native config below 4 MiB before retrying.",
         "mcp_windows_batch_unsupported": "select a native executable instead of a batch launcher.",
     }
+    detail = detail.removeprefix(code + ": ")
     return McpProjectError(
         f"{code}: {detail}\nRemedy: {remedies.get(code, 'correct the MCP declaration and retry.')}"
     )
@@ -67,7 +68,7 @@ def refused_report(
         code = getattr(error, "code", None)
         if not isinstance(code, str):
             match = re.search(r"\bmcp_[a-z_]+", text)
-            code = match.group() if match else "mcp_declaration_invalid"
+            code = match.group() if match else "project_preflight_failed"
         rows = plan.rows if plan is not None else ()
         if plan is not None:
             reported = {(row.server, row.agent) for row in rows}
@@ -80,15 +81,19 @@ def refused_report(
                     if (address.name, address.agent) not in reported
                 ],
             ])
-        result = "\n".join(
-            [
-                *(
-                    replace(r, action="skipped: unsupported" if r.path is None else f"refused: {code}").render()
-                    for r in rows
-                ),
-                text,
-            ]
-        )
+        pending = {subject.name for subject in plan.pending} if plan is not None else set()
+        rendered_rows = []
+        for row in rows:
+            if row.path is None:
+                action = "skipped: unsupported"
+            elif code == "project_preflight_failed" or (
+                code == "mcp_plan_unapproved" and row.server not in pending
+            ):
+                action = f"blocked by {code}"
+            else:
+                action = f"refused: {code}"
+            rendered_rows.append(replace(row, action=action).render())
+        result = "\n".join([*rendered_rows, text])
     if dry_run:
         result = "\n".join(
             "would: " + line if line.startswith("mcp ") else line
@@ -605,10 +610,22 @@ def status_project(
     return _ordered_rows([*rows, *_unsupported_rows(parsed, status=True)])
 
 
+def planned_consent(plan: ProjectPlan) -> bytes | None:
+    """Validate a candidate approval store without approving or writing anything."""
+    if not plan.pending:
+        return None
+    try:
+        existing = ownership.load_consent(plan.home, plan.consumer)
+        keys = {ownership.consent_key(plan.consumer, s) for s in plan.pending}
+        return ownership.merge_consent(plan.consumer, existing, keys)
+    except ownership.McpOwnershipError as exc:
+        raise refusal(exc.code, "protected consent store cannot be verified") from exc
+
+
 def review_consent(
     plan: ProjectPlan, *, interactive: bool, dry_run: bool, project: str
 ) -> None:
-    """Only an affirmative terminal response records operator consent."""
+    """Review consent in memory; publication persists it with the native entries."""
     if dry_run:
         return
     for name, decl in sorted(plan.declarations.items()):
@@ -634,11 +651,6 @@ def review_consent(
         answer = ""
     if answer.strip().lower() not in ("y", "yes"):
         raise refusal("mcp_plan_unapproved", "operator did not approve")
-    ownership.record_consent(
-        plan.home,
-        plan.consumer,
-        [ownership.consent_key(plan.consumer, subject) for subject in plan.pending],
-    )
 
 
 def assert_current(plan: ProjectPlan) -> None:
@@ -738,9 +750,21 @@ def check_requirements(
 def stage_targets(
     plan: ProjectPlan, staging_root: Path, transaction_id: str
 ) -> tuple[transactions.MutableTarget, ...]:
-    """Stage private native bytes and the next protected ledger for one commit."""
+    """Stage configs, ledger and candidate consent; the caller gates commit on approval."""
     assert_current(plan)
     targets = []
+    consent = planned_consent(plan)
+    if consent is not None:
+        ownership._ensure_private_directory(plan.home)
+        path = ownership.consent_path(plan.home, plan.consumer)
+        consent_staged = staging_root / "mcp-consent"
+        consent_staged.write_bytes(consent)
+        consent_staged.chmod(0o600)
+        targets.append(transactions.MutableTarget(
+            target_class="mcp-consent", identifier=plan.consumer,
+            live_path=path, desired_path=consent_staged,
+            expected_preimage_digest=transactions.digest_target(path),
+        ))
     for agent, data in sorted(plan.edits.items()):
         snapshot = plan.surfaces[agent]
         desired = None

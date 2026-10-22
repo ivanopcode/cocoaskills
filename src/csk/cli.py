@@ -29,6 +29,7 @@ from . import (
     global_install,
     hybrid,
     installer,
+    mcp_declarations,
     manifest,
     project_resolver,
     shell_init,
@@ -1633,9 +1634,16 @@ def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
     for project in projects:
         try:
             loaded = manifest.load_manifest(project.path)
+            if loaded is not None and loaded.schema_version == 3:
+                mcp_declarations.parse_mcp_servers(
+                    loaded.mcp_servers,
+                    invocation_scope="project",
+                    target_agents=loaded.agents or project.agents or cfg.default_agents,
+                )
         except (
             source_errors.SourceError,
             manifest.ManifestError,
+            mcp_declarations.McpDeclarationError,
             OSError,
         ) as exc:
             _print_check_failure(exc)
@@ -1643,7 +1651,7 @@ def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
             continue
         loaded_manifests.append((project, loaded))
     needs_policy = any(
-        item is not None and item.schema_version == manifest.SCHEMA_VERSION_2
+        item is not None and item.schema_version in (2, 3)
         for _, item in loaded_manifests
     )
     policy: repository_policy.RepositoryPolicy | None = None
@@ -1663,7 +1671,7 @@ def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
             print(f"{project.alias}: Skillfile.json missing")
             failed = True
             continue
-        if item.schema_version != manifest.SCHEMA_VERSION_2:
+        if item.schema_version == 1:
             print(
                 f"{project.alias}: schema_version 1 valid "
                 f"({len(item.skills)} skills)"
@@ -1740,7 +1748,7 @@ def _verify_schema2_project(
         ", network sources planned, not acquired" if has_network_sources else ""
     )
     print(
-        f"{project.alias}: schema_version 2 valid "
+        f"{project.alias}: schema_version {loaded.schema_version} valid "
         f"({len(loaded.sources)} sources, {len(loaded.selectors)} selectors, "
         f"{lock_note}, {policy_note}{acquisition_note})"
     )

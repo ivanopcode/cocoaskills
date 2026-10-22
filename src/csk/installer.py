@@ -546,12 +546,6 @@ def _install_schema2_once(
                 project_manifest.mcp_servers,
                 config.path.parent,
             )
-            mcp_project.review_consent(
-                mcp_plan,
-                interactive=options.interactive,
-                dry_run=options.dry_run,
-                project=project.alias,
-            )
         dev_manifest = dev_substitutions.load_manifest(project.path)
         has_source_substitution = bool(dev_manifest.substitutions)
         has_external_substitution = bool(

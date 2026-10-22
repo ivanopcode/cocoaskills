@@ -294,6 +294,8 @@ URL shorthand равен объекту `server` с `transport: "http"` и те�
 
 `install` задаёт локальные параметры установки: как устанавливающий менеджер пишет и аутентифицирует сервер в native configs. Набор полей `install` тоже закрыт. Поле `csk` не является alias и отклоняется с `mcp_declaration_invalid`. `headers` допустим только для HTTP: имя заголовка сопоставляется объекту с обязательным `env` и необязательным `prefix: "bearer"`. Значения секретов в объявлении не хранятся. `auth` содержит `kind` (`none`, `env` или `oauth`) и необязательный `help_url`. Без `auth` csk выбирает `env` при любой env reference, иначе `none`. `scope` поддерживает только `project`, `git_policy` только `local`. Значения `user` и `shared` отклоняются с `mcp_capability_unsupported`. Полный [справочник полей и кодов отказа](reference.md#project-mcp-reference) перечисляет ограничения.
 
+`csk check` проверяет schema 3 и MCP declarations тем же валидатором и с теми же кодами, что install, без записи и сетевых обращений. Stdio command должен быть bare executable: wrappers (`nice`, `arch`, `caffeinate`, `timeout`, `stdbuf`, `chrt`, `taskset`, `ionice`, `time`, `command`, `exec`, `launchctl`, `start`) и evaluators `osascript`/`open` запрещены. Используйте прямой `npx` с точным `package@1.2.3` или `uvx` с `package==1.2.3`; wrappers не обходят pin policy.
+
 #### Запись и consent
 
 `csk install` пишет native project configs:
@@ -304,11 +306,11 @@ URL shorthand равен объекту `server` с `transport: "http"` и те�
 | Codex CLI (`codex_cli`) | `.codex/config.toml` |
 | Cursor (`cursor`) | `.cursor/mcp.json` |
 
-Для созданного файла csk добавляет точный путь в `.gitignore`: `/.mcp.json`, `/.codex/config.toml` или `/.cursor/mcp.json`. Если проверка требует исправить `.gitignore`, повторите `csk install --fix-gitignore`. Уже отслеживаемый git файл csk меняет на месте и не добавляет в ignore. csk сохраняет байты вне изменяемых записей. JSON-файлы должны быть строгим UTF-8 JSON без BOM, comments и trailing commas.
+Для созданного MCP-файла с `git_policy: "local"` csk автоматически добавляет точный путь в `.gitignore`: `/.mcp.json`, `/.codex/config.toml` или `/.cursor/mcp.json`, и сообщает добавленные entries. Ignore публикуется до native config в одной транзакции. Обычный `csk init` + `csk install` не требует deprecated `--fix-gitignore`; dry-run только показывает план. Для остальных generated paths по-прежнему требуется предварительный `csk init`. Уже отслеживаемый git файл csk меняет на месте и не добавляет в ignore. csk сохраняет байты вне изменяемых записей. JSON-файлы должны быть строгим UTF-8 JSON без BOM, comments и trailing commas.
 
 Consent разрешает публикацию исполняемого кода или env reference. Он нужен для stdio и для любой ссылки на переменную в `env_names` или `install.headers`. HTTP без env reference, включая `auth.kind: "oauth"`, consent не требует. csk никогда не запускает сервер, package runner или команду аутентификации.
 
-Для нового или изменённого объявления с такими полномочиями запустите `csk install` в терминале. csk покажет план и спросит `Approve N MCP server(s) for <project>? [y/N]`. Ответ `y` или `yes` сохраняет consent в приватном csk home. Без терминала или при отказе csk возвращает `mcp_plan_unapproved`. Флаг, env variable, поле Skillfile или файл проекта не дают consent. Сохранённое согласие относится к проверенному объявлению этого проекта и набору writable агентов. Добавление writable агента требует нового согласия. Unsupported ids не входят в consent subject; объявление только для них согласия не требует.
+Для нового или изменённого объявления с такими полномочиями запустите `csk install` в терминале. csk покажет план и спросит `Approve N MCP server(s) for <project>? [y/N]`. Запрос появляется после неинтерактивных preflight-проверок. Ответ `y` или `yes` разрешает публикацию; consent сохраняется в приватном csk home в одной транзакции с конфигурациями. При отказе публикации новое согласие не остаётся сохранённым. Без терминала или при отказе csk возвращает `mcp_plan_unapproved`. Флаг, env variable, поле Skillfile или файл проекта не дают consent. Сохранённое согласие относится к проверенному объявлению этого проекта и набору writable агентов. Добавление writable агента требует нового согласия. Unsupported ids не входят в consent subject; объявление только для них согласия не требует.
 
 Для просмотра плана запустите `csk install --dry-run`. Команда покажет строки `would:` и состояние consent каждого объявления: `required`, `approved` или `not-required`. Она ничего не пишет и не сохраняет consent. Если единственное препятствие состоит в consent, dry run завершается с кодом 0.
 
@@ -348,7 +350,7 @@ mcp api -> codex_cli .codex/config.toml (refused: mcp_plan_unapproved)
 mcp api -> cursor .cursor/mcp.json (refused: mcp_plan_unapproved)
 ```
 
-После этих строк следует отказ `mcp_plan_unapproved` с рекомендацией повторить установку в терминале. Чужая одноимённая запись получает действие `conflict: foreign entry`. Блокирующий отказ не публикует ни native entries, ни скиллы, ни ledger.
+После этих строк следует отказ `mcp_plan_unapproved` с рекомендацией повторить установку в терминале. Чужая одноимённая запись получает действие `conflict: foreign entry`. Блокирующий отказ не публикует ни native entries, ни скиллы, ни ledger. Общая ошибка проекта показывается с её кодом либо как `blocked by project_preflight_failed`; сервер без потребности в consent при блокировке соседним сервером получает `blocked by mcp_plan_unapproved`.
 
 csk печатает подсказки для агентов, получивших запись. В Claude Code выполните `/mcp`, чтобы проверить сервер и войти. Для Codex CLI с `auth.kind: "oauth"` выполните `codex mcp login <name>`. В Cursor откройте `Cursor Settings > MCP`. csk не выполняет эти действия и не проверяет доступность сервера.
 
