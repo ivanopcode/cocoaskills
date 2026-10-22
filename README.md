@@ -269,13 +269,16 @@ fails closed on false positives. Direct supported pinned `npx`/`uvx` remain vali
 The shared inventory includes system and package aliases such as `view`,
 `vimdiff`, `rview` and `editor`, including words inside arguments. In addition,
 `check` and install inspect the current host PATH relative to the project: they
-follow symlinks and read a bounded shebang, without executing the program. A
+follow symlinks before applying parent (`..`) components, including in PATH
+entries, and read a bounded shebang without executing the program. A
 recognized evaluator target or interpreter refuses with `mcp_command_invalid`.
 Only files within PATH directories are opened; a link leaving them can be
 classified by its target name but is not opened. Missing, unreadable or otherwise
 unrecognized targets retain the portable table result. Supported runner recipes
 retain their expected interpreter substrate. This best-effort observation depends
-on this host's PATH; another agent's later PATH or changed executable can differ.
+on this host's PATH. It is a point-in-time check: concurrent replacement of a
+PATH directory or executable can change the result, and another agent's later
+PATH can differ. Parent directories are not frozen during inspection.
 It does not inspect arbitrary binaries or prove what an opaque program runs.
 
 Any remaining bare program runs as is: csk cannot verify what it runs. Consent shows

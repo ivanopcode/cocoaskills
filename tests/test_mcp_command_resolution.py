@@ -208,6 +208,129 @@ def test_resolution_does_not_open_outside_path(tmp_path, monkeypatch, target_nam
     assert not opened
 
 
+def parent_component_fixture(tmp_path, kind, *, evaluator):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    (b / "nested").mkdir()
+    (a / "hop").symlink_to(b / "nested", target_is_directory=True)
+    if kind == "path-entry":
+        (a / "bin").mkdir()
+        (b / "bin").mkdir()
+        executable(a / "bin/myedit", b"opaque\n" if evaluator else b"#!/bin/sh\n")
+        selected = b / "bin/myedit"
+        search = str(a / "hop/../bin")
+    else:
+        executable(a / "payload", b"opaque\n" if evaluator else b"#!/bin/sh\n")
+        selected = b / "payload"
+        target = "hop/../payload" if kind == "relative-target" else str(a / "hop/../payload")
+        (a / "myedit").symlink_to(target)
+        search = str(a) + os.pathsep + str(b)
+    if evaluator:
+        selected.symlink_to("/usr/bin/vim")
+    else:
+        executable(selected)
+    return search, selected
+
+
+# Each static symlink/parent traversal selects Vim at the OS, despite an opaque
+# lexical decoy. Check, dry-run and install refuse before consent or any writes.
+# Only the explicit dispatch witness executes Vim, reaching an owned runner stub.
+@pytest.mark.skipif(sys.platform != "darwin", reason="actual system Vim dispatch witness")
+@pytest.mark.parametrize("kind", ["relative-target", "absolute-target", "path-entry"])
+@pytest.mark.parametrize("argv", [("check", "app"), ("install", "app", "--dry-run"), ("install", "app")])
+def test_parent_component_cli_refuses(project_cli, tmp_path, monkeypatch, capsys, kind, argv):
+    root, home, declare = project_cli
+    search, _ = parent_component_fixture(tmp_path, kind, evaluator=True)
+    stub = tmp_path / "stub"
+    stub.mkdir()
+    marker = tmp_path / "invoked"
+    executable(stub / "npx", b'#!/bin/sh\nprintf "%s\\n" "$*" > "$REVIEW_MARKER"\n')
+    monkeypatch.setenv("PATH", search + os.pathsep + str(stub) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("REVIEW_MARKER", str(marker))
+    args = ["-Nu", "NONE", "-i", "NONE", "-n", "-es", "-c", "call system('n'.'px pkg')", "-c", "qa!"]
+    dispatch = subprocess.run(["myedit", *args], cwd=root, capture_output=True, text=True, timeout=5)
+    assert dispatch.returncode == 0 and marker.read_text() == "pkg\n"
+    marker.unlink()
+    declare(stdio("myedit", args))
+    before = _snapshot(root, home)
+    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("refusal must precede consent"))
+    assert cli.main(list(argv)) == 1
+    output = capsys.readouterr()
+    assert "mcp_command_invalid" in output.out + output.err
+    assert not marker.exists() and _snapshot(root, home) == before
+
+
+# Physical parent traversal may instead reach an opaque executable. The lexical
+# decoy has a refused shebang, so rejecting every traversal cannot satisfy this control.
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink fixture")
+@pytest.mark.parametrize("kind", ["relative-target", "absolute-target", "path-entry"])
+def test_parent_component_positive_control(tmp_path, monkeypatch, kind):
+    search, selected = parent_component_fixture(tmp_path, kind, evaluator=False)
+    monkeypatch.setenv("PATH", search)
+    resolution.validate_host_commands(parse("myedit", ["--port", "1"]), cwd=tmp_path)
+    assert selected.read_bytes() == b"opaque binary fixture\n"
+
+
+# A parent component requires a real preceding directory: a missing entry or
+# ordinary file cannot be erased lexically to reach the refused payload.
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink fixture")
+@pytest.mark.parametrize("kind", ["missing", "not-directory"])
+def test_invalid_parent_component_retains_portable_result(tmp_path, monkeypatch, kind):
+    if kind == "not-directory":
+        executable(tmp_path / "gate")
+    executable(tmp_path / "payload", b"#!/bin/sh\n")
+    (tmp_path / "myedit").symlink_to("gate/../payload")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
+
+
+# Correct physical traversal still stops before an outside-PATH body. An opaque
+# outside script stays unknown; a known outside basename refuses by name alone.
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink fixture")
+@pytest.mark.parametrize("name", ["opaque", "vim"])
+def test_parent_component_outside_body_is_not_opened(tmp_path, monkeypatch, name):
+    a, b, outside = [tmp_path / name for name in ("a", "b", "outside")]
+    for directory in (a, b, outside):
+        directory.mkdir()
+    (b / "nested").mkdir()
+    (a / "hop").symlink_to(b / "nested", target_is_directory=True)
+    executable(outside / name, b"#!/bin/sh\n")
+    (a / "myedit").symlink_to("hop/../../outside/" + name)
+    monkeypatch.setenv("PATH", str(a) + os.pathsep + str(b))
+    monkeypatch.setattr(resolution.os, "open", lambda *a, **kw: pytest.fail("outside body must not be opened"))
+    if name == "vim":
+        with pytest.raises(mcp.McpDeclarationError, match="mcp_command_invalid"):
+            resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
+    else:
+        resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
+
+
+# A bounded long chain retains table-only policy. An unreadable selected file
+# also retains it, without substituting the later known-interpreter executable.
+@pytest.mark.skipif(os.name == "nt", reason="POSIX links and permissions")
+@pytest.mark.parametrize("kind", ["long-chain", "unreadable"])
+def test_resolution_bounded_neighbors(tmp_path, monkeypatch, kind):
+    first, later = tmp_path / "first", tmp_path / "later"
+    first.mkdir()
+    later.mkdir()
+    executable(later / "myedit", b"#!/bin/sh\n")
+    if kind == "long-chain":
+        (first / "myedit").symlink_to("a0")
+        for i in range(45):
+            (first / ("a" + str(i))).symlink_to("a" + str(i + 1))
+        executable(first / "a45", b"#!/bin/sh\n")
+        monkeypatch.setenv("PATH", str(first))
+    else:
+        executable(first / "myedit", b"#!/bin/sh\n").chmod(0o111)
+        monkeypatch.setenv("PATH", str(first) + os.pathsep + str(later))
+    try:
+        resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
+    finally:
+        if kind == "unreadable":
+            (first / "myedit").chmod(0o700)
+
+
 # The review's actual macOS aliases dispatch the obfuscated runner to an owned
 # recording stub; check/dry-run/terminal install must instead refuse with no writes.
 @pytest.mark.skipif(sys.platform != "darwin", reason="actual macOS system alias dispatch witness")
