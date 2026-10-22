@@ -10,6 +10,7 @@ from typing import Literal
 
 from csk import protocol_json
 from csk.audit import redaction
+from csk.mcp_command_aliases import EVALUATOR_ALIASES
 from csk.mcp_configs import known_agents
 from csk.skillspec import McpServerRequirement
 
@@ -89,6 +90,9 @@ _COMMAND_KINDS = {
     **dict.fromkeys(("npm", "pnpm", "yarn"), "manager"),
     "npx": "npx", "uvx": "uvx", "uv": "uv",
 }
+# Preserve specific shell/wrapper/runner classifications while sharing aliases.
+for _alias in EVALUATOR_ALIASES:
+    _COMMAND_KINDS.setdefault(_alias, "evaluator")
 # These views and all launcher decisions share one policy inventory.
 _SHELL_COMMANDS = frozenset(k for k, v in _COMMAND_KINDS.items() if v == "shell")
 _INDIRECTION_COMMANDS = frozenset(k for k, v in _COMMAND_KINDS.items() if v == "indirection")

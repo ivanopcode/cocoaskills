@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from . import locking, mcp_configs, protocol_json, mcp_declarations as declarations
+from . import locking, mcp_configs, mcp_command_resolution, protocol_json, mcp_declarations as declarations
 from . import mcp_native as native, mcp_ownership as ownership, transactions
 from .skillspec import McpServerRequirement
 
@@ -329,6 +329,7 @@ def _read_declarations(
         parsed = declarations.parse_mcp_servers(
             raw, invocation_scope="project", target_agents=target_agents
         )
+        mcp_command_resolution.validate_host_commands(parsed, cwd=root)
     except declarations.McpDeclarationError as exc:
         raise refusal(exc.code, str(exc)) from exc
     return manifest_sha256, parsed

@@ -519,12 +519,13 @@ def test_unsupported_agent_rows(project_cli, capsys):
     assert native_bytes(root) == before
 
 
-# Install never launches declared binaries or auth commands, including after terminal approval.
+# Install never launches declared binaries or auth commands: exact runner recipes
+# publish after approval, while an opaque program with a known shell shebang refuses.
 @pytest.mark.parametrize(
     "command,args", [("npx", ["pkg@1.2.3"]), ("uvx", ["pkg==1.2.3"]), ("my-server", [])]
 )
-def test_no_server_or_auth_process(project_cli, monkeypatch, tmp_path, command, args):
-    root, _, declare = project_cli
+def test_no_server_or_auth_process(project_cli, monkeypatch, tmp_path, capsys, command, args):
+    root, home, declare = project_cli
     traps = tmp_path / "trap-bin"
     traps.mkdir()
     marker = tmp_path / "executed"
@@ -551,8 +552,16 @@ def test_no_server_or_auth_process(project_cli, monkeypatch, tmp_path, command, 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _: "yes")
+    before = acceptance._snapshot(root, home)
+    if command == "my-server":
+        monkeypatch.setattr("builtins.input", lambda _: pytest.fail("resolved shell must refuse before consent"))
     code = install()
-    if sys.platform == "win32" and command == "npx":
+    if command == "my-server":
+        assert code == 1
+        output = capsys.readouterr()
+        assert "mcp_command_invalid" in output.out + output.err
+        assert acceptance._snapshot(root, home) == before
+    elif sys.platform == "win32" and command == "npx":
         assert code != 0
         assert native_bytes(root) == {}
     else:

@@ -29,6 +29,7 @@ from . import (
     hybrid,
     installer,
     mcp_declarations,
+    mcp_command_resolution,
     manifest,
     project_resolver,
     shell_init,
@@ -1634,11 +1635,12 @@ def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
         try:
             loaded = manifest.load_manifest(project.path)
             if loaded is not None and loaded.schema_version == 3:
-                mcp_declarations.parse_mcp_servers(
+                parsed_mcp = mcp_declarations.parse_mcp_servers(
                     loaded.mcp_servers,
                     invocation_scope="project",
                     target_agents=loaded.agents or project.agents or cfg.default_agents,
                 )
+                mcp_command_resolution.validate_host_commands(parsed_mcp, cwd=project.path)
         except (
             source_errors.SourceError,
             manifest.ManifestError,

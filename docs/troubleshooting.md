@@ -45,7 +45,19 @@ on characters outside `[A-Za-z0-9_.+-]`, ignores case, strips path prefixes and
 Thus `a=npx pkg`, `system("npx pkg")`, `--exec=npx` and data containing the word
 `node` refuse; `--node-id` and `my-server --port 1` remain valid. This intentionally
 fails closed on false positives. Direct supported pinned `npx`/`uvx` remain valid.
-Any other bare program runs as is: csk cannot verify what it runs. Consent shows
+The shared inventory includes system and package aliases such as `view`,
+`vimdiff`, `rview` and `editor`, including words inside arguments. In addition,
+`check` and install inspect the current host PATH relative to the project: they
+follow symlinks and read a bounded shebang, without executing the program. A
+recognized evaluator target or interpreter refuses with `mcp_command_invalid`.
+Only files within PATH directories are opened; a link leaving them can be
+classified by its target name but is not opened. Missing, unreadable or otherwise
+unrecognized targets retain the portable table result. Supported runner recipes
+retain their expected interpreter substrate. This best-effort observation depends
+on this host's PATH; another agent's later PATH or changed executable can differ.
+It does not inspect arbitrary binaries or prove what an opaque program runs.
+
+Any remaining bare program runs as is: csk cannot verify what it runs. Consent shows
 its exact command and argument array and states this limit. This is no sandbox or
 proof about arbitrary programs; non-default evaluators outside the recognized
 inventory and hidden execution semantics remain the documented limit.

@@ -1403,8 +1403,9 @@ def test_module_remains_pure_when_install_is_wired():
     src = Path(mcp.__file__).parent
     callers = [path.name for path in src.rglob("*.py") if "mcp_declarations" in path.read_text("utf-8")
                and path.name != "mcp_declarations.py"]
-    # Read-only check and project installation share the pure declaration validator.
-    assert sorted(callers) == ["cli.py", "mcp_project.py"]
+    # Read-only check and installation share the pure grammar; host resolution
+    # composes it separately without introducing I/O into the grammar module.
+    assert sorted(callers) == ["cli.py", "mcp_command_resolution.py", "mcp_project.py"]
 
 
 def test_public_api_touches_no_ambient_state(monkeypatch):

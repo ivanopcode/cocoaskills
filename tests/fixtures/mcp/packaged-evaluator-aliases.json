@@ -1,0 +1,250 @@
+{
+  "date": "2026-10-23",
+  "families": [
+    {
+      "family": "Vim startup modes",
+      "names": [
+        "ex",
+        "exim",
+        "view",
+        "gvim",
+        "gex",
+        "gview",
+        "rvim",
+        "rview",
+        "rgvim",
+        "rgview",
+        "evim",
+        "eview",
+        "vimdiff",
+        "gvimdiff",
+        "vimtutor"
+      ],
+      "source": "https://raw.githubusercontent.com/vim/vim/master/runtime/doc/starting.txt"
+    },
+    {
+      "family": "Debian/Ubuntu Vim alternatives and variants",
+      "names": [
+        "editor",
+        "eview",
+        "evim",
+        "ex",
+        "gview",
+        "gvim",
+        "gvimdiff",
+        "rgview",
+        "rgvim",
+        "rview",
+        "rvim",
+        "vi",
+        "view",
+        "vim",
+        "vim.basic",
+        "vim.gtk3",
+        "vim.motif",
+        "vim.nox",
+        "vim.tiny",
+        "vimdiff"
+      ],
+      "source": "https://sources.debian.org/data/main/v/vim/2%3A9.1.1230-2/debian/vim.alternatives",
+      "sources": [
+        {
+          "names": [
+            "editor",
+            "ex",
+            "rview",
+            "rvim",
+            "vi",
+            "view",
+            "vim",
+            "vim.basic",
+            "vimdiff"
+          ],
+          "sha256": "0d56a50e13e13aa2f66fee19b0148ab3240e2b007c49c4d01023666069e6cba2",
+          "source": "https://sources.debian.org/data/main/v/vim/2%3A9.1.1230-2/debian/vim.alternatives"
+        },
+        {
+          "names": [
+            "editor",
+            "ex",
+            "rview",
+            "vi",
+            "view",
+            "vim.tiny"
+          ],
+          "sha256": "2a74b9d346ab50f0e85d9389b3726032f03e319b3e11d63505a02707e2d05e77",
+          "source": "https://sources.debian.org/data/main/v/vim/2%3A9.1.1230-2/debian/vim-tiny.alternatives"
+        },
+        {
+          "names": [
+            "editor",
+            "ex",
+            "rview",
+            "rvim",
+            "vi",
+            "view",
+            "vim",
+            "vim.nox",
+            "vimdiff"
+          ],
+          "sha256": "00c063085ad8795cb5ac6ec12ab0a49052aa4946d5e8c6389f3f5421a610db73",
+          "source": "https://sources.debian.org/data/main/v/vim/2%3A9.1.1230-2/debian/vim-nox.alternatives"
+        },
+        {
+          "names": [
+            "editor",
+            "eview",
+            "evim",
+            "ex",
+            "gview",
+            "gvim",
+            "gvimdiff",
+            "rgview",
+            "rgvim",
+            "rview",
+            "rvim",
+            "vi",
+            "view",
+            "vim",
+            "vim.gtk3",
+            "vimdiff"
+          ],
+          "sha256": "0f4b060d7f1a90677ce88ec85c1a57424122cae820852648482eda868ff37e11",
+          "source": "https://sources.debian.org/data/main/v/vim/2%3A9.1.1230-2/debian/vim-gtk3.alternatives"
+        },
+        {
+          "names": [
+            "editor",
+            "eview",
+            "evim",
+            "ex",
+            "gview",
+            "gvim",
+            "gvimdiff",
+            "rgview",
+            "rgvim",
+            "rview",
+            "rvim",
+            "vi",
+            "view",
+            "vim",
+            "vim.motif",
+            "vimdiff"
+          ],
+          "sha256": "127c37a04f9cf7081f8071d4656b3f7a16c10100aa73b71313bc36c570f1b896",
+          "source": "https://sources.debian.org/data/main/v/vim/2%3A9.1.1230-2/debian/vim-motif.alternatives"
+        }
+      ]
+    },
+    {
+      "family": "Debian awk alternatives",
+      "names": [
+        "awk",
+        "nawk",
+        "gawk"
+      ],
+      "sha256": "95bc934b1f6c1691adce5105d74508bf3ab81a5bdb58e3bd2553a26bb8baba90",
+      "source": "https://sources.debian.org/data/main/g/gawk/1%3A5.2.1-2/debian/postinst"
+    },
+    {
+      "family": "Fedora minimal Vim",
+      "names": [
+        "ex",
+        "rvi",
+        "rview",
+        "vi",
+        "view"
+      ],
+      "source": "https://packages.fedoraproject.org/pkgs/vim/vim-minimal/fedora-43.html"
+    },
+    {
+      "family": "Alpine Vim packages and upstream startup modes",
+      "names": [
+        "ex",
+        "view",
+        "rvim",
+        "rview",
+        "vimdiff",
+        "gvim",
+        "gview",
+        "gvimdiff"
+      ],
+      "sha256": "2c52fdd6d71e3e25deed6c015620a788b50bb185ec44e1b56dcc41f89b1c734c",
+      "source": "https://raw.githubusercontent.com/alpinelinux/aports/master/community/vim/APKBUILD"
+    },
+    {
+      "family": "BusyBox evaluator and process-spawning applets",
+      "names": [
+        "ash",
+        "hush",
+        "sh",
+        "awk",
+        "vi",
+        "ed",
+        "dc",
+        "find",
+        "sed",
+        "xargs",
+        "env",
+        "envdir",
+        "envuidgid",
+        "cttyhack",
+        "chpst",
+        "chroot",
+        "chrt",
+        "nice",
+        "nohup",
+        "setsid",
+        "setuidgid",
+        "softlimit",
+        "run-parts",
+        "start-stop-daemon",
+        "su",
+        "sulogin",
+        "time",
+        "timeout",
+        "watch",
+        "script",
+        "linux32",
+        "linux64",
+        "setarch",
+        "openvt",
+        "runsv",
+        "runsvdir",
+        "tcpsvd",
+        "udpsvd",
+        "inetd",
+        "httpd",
+        "ftpd",
+        "crond",
+        "crontab",
+        "init",
+        "login",
+        "getty",
+        "ifup",
+        "ifdown",
+        "udhcpc",
+        "mdev",
+        "modprobe",
+        "insmod",
+        "switch_root"
+      ],
+      "source": "https://busybox.net/downloads/BusyBox.html"
+    },
+    {
+      "distribution_source": "https://raw.githubusercontent.com/git-for-windows/build-extra/main/make-file-list.sh",
+      "family": "Git for Windows / MSYS2 Vim aliases",
+      "names": [
+        "ex",
+        "view",
+        "rview",
+        "rvim",
+        "vimdiff",
+        "vimtutor"
+      ],
+      "source": "https://raw.githubusercontent.com/msys2/MSYS2-packages/master/vim/PKGBUILD"
+    }
+  ],
+  "limits": "Package-documented names; no claim of native execution or an exhaustive distribution installation. Restricted editor modes are refused conservatively with the evaluator family.",
+  "schema_version": 1
+}

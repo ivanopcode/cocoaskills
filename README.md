@@ -266,7 +266,19 @@ on characters outside `[A-Za-z0-9_.+-]`, ignores case, strips path prefixes and
 Thus `a=npx pkg`, `system("npx pkg")`, `--exec=npx` and data containing the word
 `node` refuse; `--node-id` and `my-server --port 1` remain valid. This intentionally
 fails closed on false positives. Direct supported pinned `npx`/`uvx` remain valid.
-Any other bare program runs as is: csk cannot verify what it runs. Consent shows
+The shared inventory includes system and package aliases such as `view`,
+`vimdiff`, `rview` and `editor`, including words inside arguments. In addition,
+`check` and install inspect the current host PATH relative to the project: they
+follow symlinks and read a bounded shebang, without executing the program. A
+recognized evaluator target or interpreter refuses with `mcp_command_invalid`.
+Only files within PATH directories are opened; a link leaving them can be
+classified by its target name but is not opened. Missing, unreadable or otherwise
+unrecognized targets retain the portable table result. Supported runner recipes
+retain their expected interpreter substrate. This best-effort observation depends
+on this host's PATH; another agent's later PATH or changed executable can differ.
+It does not inspect arbitrary binaries or prove what an opaque program runs.
+
+Any remaining bare program runs as is: csk cannot verify what it runs. Consent shows
 its exact command and argument array and states this limit. This is no sandbox or
 proof about arbitrary programs; non-default evaluators outside the recognized
 inventory and hidden execution semantics remain the documented limit.
@@ -482,3 +494,14 @@ csk shell-init                      # Генерирует или устанав
 ## Лицензия
 
 Проект распространяется на условиях лицензии [Apache 2.0](LICENSE).
+
+### MCP alias inventory tool
+
+Run `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src uv run python .scripts/scan_mcp_evaluator_aliases.py > .temp/macos-evaluator-aliases.json`
+from the repository to audit system executable aliases without running them.
+The scanner reads `/usr/bin`, `/bin`, `/usr/sbin` and `/sbin`; its dated output
+records symlink, inode, shebang and literal `exec` evidence, plus unreadable-file
+limits. Reviewed snapshots and package source links live in
+`tests/fixtures/mcp/macos-evaluator-aliases.json` and
+`tests/fixtures/mcp/packaged-evaluator-aliases.json`. Restricted editor aliases
+and scripts interpreted by a refused program are conservatively refused too.
