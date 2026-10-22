@@ -48,6 +48,9 @@ def scan(roots: tuple[Path, ...] = ROOTS) -> dict:
             for peer in identities.get((info.st_dev, info.st_ino), []):
                 if peer != str(path) and not path.is_symlink():
                     evidence.append({"mechanism": "hardlink", "target": peer})
+                    # One inode witness proves this entry's relationship; an
+                    # all-pairs expansion repeats the same fact quadratically.
+                    break
             # Bounded script inspection; do not decode binary executables.
             try:
                 with path.open("rb") as stream:
