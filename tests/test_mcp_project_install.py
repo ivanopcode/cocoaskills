@@ -330,6 +330,10 @@ def test_interactive_consent(project_cli, capsys, monkeypatch, answer):
         len(prompts) == 1
         and "Approve 1 MCP server(s) for app? [y/N]" == prompts[0].strip()
     )
+    # Unknown stdio programs disclose their limit alongside the exact argv.
+    output = capsys.readouterr().out
+    assert '["my-server"]' in output
+    assert "csk cannot verify what this program runs." in output
     if answer == "n":
         assert code != 0 and native_bytes(root) == {}
         assert not list((home / "state/mcp/consent").glob("*.json"))

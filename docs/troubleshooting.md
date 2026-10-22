@@ -33,7 +33,23 @@ brew install ca-certificates
 
 `gitignore_required` в MCP-строке указывает на общий ignore preflight, а `blocked by project_preflight_failed` — на общую ошибку без отдельного кода: смотрите следующую диагностику проекта. Это не ошибка MCP declaration. Если согласия требует соседний сервер, сервер без такой потребности получает `blocked by mcp_plan_unapproved`.
 
-`mcp_command_invalid` also refuses any runner/evaluator token inside `args`, including unknown wrappers such as `find . -exec npx pkg ;`. Matching ignores path, case and executable suffixes. Even an intended data argument such as `--tool node` refuses; the diagnostic names the token. Use a direct bare executable with ordinary arguments, or a direct supported exact-pin `npx`/`uvx` recipe. Direct evaluator launchers and inline evaluation remain refused.
+`mcp_command_invalid` also refuses any runner/evaluator token inside `args`, including unknown wrappers such as `find . -exec npx pkg ;`. Matching ignores path, case and executable suffixes. Even an intended data argument such as `--tool node` refuses; the diagnostic names the token. Use a direct bare executable with ordinary arguments, or a direct supported exact-pin `npx`/`uvx` recipe. Direct evaluator-capable commands remain refused.
+
+Staged ignore checks preserve the live `core.excludesFile` source (including relative paths), `.git/info/exclude` and default global excludes.
+
+Pin and no-eval rules cover recognized runners/evaluators. Known evaluator-capable
+commands (including awk/sed, interpreters, editors, debuggers and command-launching
+OS tools) refuse even with plain script arguments. Within each argument, csk splits
+on characters outside `[A-Za-z0-9_.+-]`, ignores case, strips path prefixes and
+`.exe`/`.cmd`/`.bat`/`.ps1`/`.com`, and refuses recognized names as words.
+Thus `a=npx pkg`, `system("npx pkg")`, `--exec=npx` and data containing the word
+`node` refuse; `--node-id` and `my-server --port 1` remain valid. This intentionally
+fails closed on false positives. Direct supported pinned `npx`/`uvx` remain valid.
+Any other bare program runs as is: csk cannot verify what it runs. Consent shows
+its exact command and argument array and states this limit. This is no sandbox or
+proof about arbitrary programs; non-default evaluators outside the recognized
+inventory and hidden execution semantics remain the documented limit.
+
 
 `gitignore_required` can mean a nested rule defeats the proposed automatic MCP ignore repair. Repair that conflicting rule and retry; the refusal leaves native configs and the live `.gitignore` unchanged. Git evaluates the proposed hierarchy before consent. `source_output_overlap` can identify an unwritable output parent; restore write/search access and retry. These readiness checks precede the prompt and do not replace publication-time checks.
 

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Изменено
 
+- MCP pin/no-eval rules применяются к распознанным runners/evaluators: evaluator-capable команды запрещены целиком, а `args` проверяются по словам, включая `a=npx pkg`, `system("npx pkg")`, `--exec=npx`. Ложные срабатывания вроде слова `node` намеренно закрыты отказом; `--node-id`, `my-server --port 1` и точные `npx`/`uvx` сохранены. Любая другая bare program запускается как есть: csk не проверяет, что она запускает; consent показывает точные command/args и этот предел. Это не sandbox; неизвестные non-default evaluators и скрытая семантика программ остаются вне гарантии.
+- Staged MCP ignore сохраняет live-разрешение относительного `core.excludesFile`; уже действующее исключение не вызывает отказ или лишнее изменение `.gitignore`.
+
 - MCP stdio запрещает runner/evaluator в любом токене `args`, включая неизвестные wrappers и path/case/suffix aliases (`.exe`, `.cmd`, `.bat`, `.ps1`, `.com`); намеренные данные вроде `--tool node` тоже отклоняются. Прямые закреплённые `npx`/`uvx` сохранены.
 - Автоматический MCP ignore проверяется эффективным matcher Git на staged hierarchy: поздняя root negation исправляется, конфликт вложенных правил даёт `gitignore_required` до публикации. Готовность существующих output parents проверяется до consent; поздние проверки и rollback сохранены.
 

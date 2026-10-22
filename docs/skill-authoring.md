@@ -294,9 +294,25 @@ URL shorthand равен объекту `server` с `transport: "http"` и те�
 
 `install` задаёт локальные параметры установки: как устанавливающий менеджер пишет и аутентифицирует сервер в native configs. Набор полей `install` тоже закрыт. Поле `csk` не является alias и отклоняется с `mcp_declaration_invalid`. `headers` допустим только для HTTP: имя заголовка сопоставляется объекту с обязательным `env` и необязательным `prefix: "bearer"`. Значения секретов в объявлении не хранятся. `auth` содержит `kind` (`none`, `env` или `oauth`) и необязательный `help_url`. Без `auth` csk выбирает `env` при любой env reference, иначе `none`. `scope` поддерживает только `project`, `git_policy` только `local`. Значения `user` и `shared` отклоняются с `mcp_capability_unsupported`. Полный [справочник полей и кодов отказа](reference.md#project-mcp-reference) перечисляет ограничения.
 
-`csk check` validates schema 3 and MCP declarations with the install parser, without writes or network access. Stdio `command` must be a bare executable. Known shells/wrappers and evaluator launchers such as `osascript`/`open` are refused. Use direct `npx` with an exact `package@1.2.3` or `uvx` with `package==1.2.3`.
+`csk check` validates schema 3 and MCP declarations with the install parser, without writes or network access. Stdio `command` must be a bare executable. Known shells/wrappers and evaluator-capable commands such as `awk`, `python`, `osascript` and `open` are refused. Use direct `npx` with an exact `package@1.2.3` or `uvx` with `package==1.2.3`.
 
-A package runner or evaluator may appear only as `command`, never as an `args` token. Every token is matched by basename across POSIX/Windows paths, ignoring case and `.exe`, `.cmd`, `.bat`, `.ps1`, `.com` suffixes. Unknown wrappers carrying such a token also refuse with `mcp_command_invalid`, naming the token. This deliberately refuses data such as `my-server --tool node`; `my-server --port 1` remains valid. Direct evaluators still reject inline evaluation flags, and direct runners still require the supported exact-pin recipe.
+Recognized runner/evaluator words in `args` refuse with `mcp_command_invalid`.
+
+Staged ignore checks preserve the live `core.excludesFile` source (including relative paths), `.git/info/exclude` and default global excludes.
+
+Pin and no-eval rules cover recognized runners/evaluators. Known evaluator-capable
+commands (including awk/sed, interpreters, editors, debuggers and command-launching
+OS tools) refuse even with plain script arguments. Within each argument, csk splits
+on characters outside `[A-Za-z0-9_.+-]`, ignores case, strips path prefixes and
+`.exe`/`.cmd`/`.bat`/`.ps1`/`.com`, and refuses recognized names as words.
+Thus `a=npx pkg`, `system("npx pkg")`, `--exec=npx` and data containing the word
+`node` refuse; `--node-id` and `my-server --port 1` remain valid. This intentionally
+fails closed on false positives. Direct supported pinned `npx`/`uvx` remain valid.
+Any other bare program runs as is: csk cannot verify what it runs. Consent shows
+its exact command and argument array and states this limit. This is no sandbox or
+proof about arbitrary programs; non-default evaluators outside the recognized
+inventory and hidden execution semantics remain the documented limit.
+
 
 For MCP files csk creates or its ownership ledger records as created, install verifies the proposed ignore hierarchy with Git before publication. Root rules defeated by a later negation are appended effectively; a conflicting nested ignore rule causes `gitignore_required` before consent or publication. Existing user files and tracked files are not automatically ignored. Output-parent readiness is also checked before consent, while publication retains its concurrency checks and rollback.
 

@@ -324,6 +324,22 @@ csk install --verbose
 
 Before consent, install checks existing output-parent readiness and asks Git to evaluate the proposed ignore hierarchy. A root negation is repaired effectively; a conflicting nested rule refuses with `gitignore_required` and unchanged native/ignore state. Runner/evaluator names in any `args` position refuse with `mcp_command_invalid`, including path/case/suffix aliases and tokens intended as data such as `--tool node`.
 
+Staged ignore checks preserve the live `core.excludesFile` source (including relative paths), `.git/info/exclude` and default global excludes.
+
+Pin and no-eval rules cover recognized runners/evaluators. Known evaluator-capable
+commands (including awk/sed, interpreters, editors, debuggers and command-launching
+OS tools) refuse even with plain script arguments. Within each argument, csk splits
+on characters outside `[A-Za-z0-9_.+-]`, ignores case, strips path prefixes and
+`.exe`/`.cmd`/`.bat`/`.ps1`/`.com`, and refuses recognized names as words.
+Thus `a=npx pkg`, `system("npx pkg")`, `--exec=npx` and data containing the word
+`node` refuse; `--node-id` and `my-server --port 1` remain valid. This intentionally
+fails closed on false positives. Direct supported pinned `npx`/`uvx` remain valid.
+Any other bare program runs as is: csk cannot verify what it runs. Consent shows
+its exact command and argument array and states this limit. This is no sandbox or
+proof about arbitrary programs; non-default evaluators outside the recognized
+inventory and hidden execution semantics remain the documented limit.
+
+
 Для schema 3 объект MCP содержит `server` и необязательный `install`: локальные параметры записи и аутентификации устанавливающего менеджера. Без `server.environments` используются resolved agents проекта; явный writable id пишется даже вне этого набора. Известные unsupported ids дают `mcp NAME -> AGENT (skipped: unsupported)` без пути и отдельного warning, включая отчёт при отказе. Dry-run добавляет `would:`. Неизвестный id, дубликат или пустой список вызывает `mcp_agent_selection_invalid`. Добавление writable агента требует нового consent; unsupported ids в consent subject не входят. [Правила MCP](skill-authoring.md#project-mcp-schema-3) перечисляют ids и поля `install`.
 
 ### csk update

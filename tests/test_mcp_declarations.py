@@ -358,16 +358,17 @@ def test_shells_and_indirection_are_refused(command, variant):
 @pytest.mark.parametrize("command", ["node", "nodejs", "deno", "bun", "python", "python3", "ruby", "perl", "php"])
 @pytest.mark.parametrize("flag", ["-e", "--eval", "-c", "-p", "--print", "eval"])
 def test_evaluator_arguments_are_refused(command, flag):
-    refused(stdio(command, args=["server.js", flag]), "mcp_command_invalid", "mcp_servers.docs.server.args.1")
+    refused(stdio(command, args=["server.js", flag]), "mcp_command_invalid", "mcp_servers.docs.server.command")
 
 
 def test_evaluator_arguments_are_refused_for_cased_and_exe_commands():
     refused(stdio("Python.EXE", args=["-c", "x"]), "mcp_command_invalid")
 
 
-def test_evaluator_commands_without_eval_arguments_are_admitted():
-    assert parse_one(stdio("python3", args=["server.py", "--port", "8080"])).server.command == "python3"
-    assert parse_one(stdio("node", args=["server.js"])).server.command == "node"
+# A script path does not remove an evaluator's execution capability.
+def test_evaluator_commands_without_eval_arguments_are_refused():
+    for command, args in [("python3", ["server.py", "--port", "8080"]), ("node", ["server.js"])]:
+        refused(stdio(command, args=args), "mcp_command_invalid", "mcp_servers.docs.server.command")
 
 
 def test_eval_flags_are_fine_for_other_commands():
@@ -618,7 +619,7 @@ EVALUATOR_FORMS = [
 @pytest.mark.parametrize(("command", "args"), EVALUATOR_FORMS, ids=lambda value: str(value))
 def test_glued_and_combined_evaluator_forms_are_refused(command, args):
     error = refused(stdio(command, args=args), "mcp_command_invalid")
-    assert error.field.startswith("mcp_servers.docs.server.args.")
+    assert error.field == "mcp_servers.docs.server.command"
 
 
 @pytest.mark.parametrize(
@@ -630,8 +631,13 @@ def test_glued_and_combined_evaluator_forms_are_refused(command, args):
      ("perlbrew", ["-e"]), ("denoise", ["eval"]), ("bunx2", ["-c"]), ("my-python", ["-c"])],
     ids=lambda value: str(value),
 )
-def test_evaluator_lookalikes_and_plain_scripts_are_admitted(command, args):
-    assert parse_one(stdio(command, args=args)).server.args == tuple(args)
+# Plain scripts still use evaluator commands; unrelated lookalike executable
+# names retain the documented opaque-program boundary.
+def test_evaluator_lookalikes_and_scripts_respect_capability_boundary(command, args):
+    if command.lower() in {"node", "python3.12", "python", "deno", "bun", "ruby", "php"}:
+        refused(stdio(command, args=args), "mcp_command_invalid", "mcp_servers.docs.server.command")
+    else:
+        assert parse_one(stdio(command, args=args)).server.args == tuple(args)
 
 
 @pytest.mark.parametrize("args", [["x", "pkg@1.2.3"], ["x", "pkg@latest"], ["--yes", "x", "pkg@1.2.3"],
@@ -1673,14 +1679,19 @@ RUNNER_ALIAS_CASES = [
 
 @pytest.mark.parametrize(("command", "args"), RUNNER_ALIAS_CASES, ids=[f"{cmd}-{'-'.join(args[:2])}" for cmd, args in RUNNER_ALIAS_CASES])
 def test_panel_runner_aliases_are_refused(command, args):
-    refused(stdio(command, args=args), "mcp_runtime_pin_required")
+    refused(stdio(command, args=args), "mcp_command_invalid" if command in {"bun", "deno"} else "mcp_runtime_pin_required")
 
 
 @pytest.mark.parametrize(("command", "args"), [("bun", ["run", "server.ts"]), ("uv", ["sync"]),
                                              ("deno", ["run", "server.ts"]), ("deno", ["run", "./npm:server.ts"]),
                                              ("tool", ["create", "x", "run"]), ("uvtool", ["run", "pkg"])])
+# Evaluator-capable runners refuse all forms; ordinary non-evaluator names
+# retain the closed runner-recipe interpretation.
 def test_runner_alias_list_is_closed(command, args):
-    assert parse_one(stdio(command, args=args)).server.args == tuple(args)
+    if command in {"bun", "deno"}:
+        refused(stdio(command, args=args), "mcp_command_invalid", "mcp_servers.docs.server.command")
+    else:
+        assert parse_one(stdio(command, args=args)).server.args == tuple(args)
 
 
 @pytest.mark.parametrize("name", ["-x", "--x", ".x", "_x", "x-", "x.", "x_"])
@@ -1730,9 +1741,9 @@ def test_runner_in_args_inventory(wrapper, form):
                 args = ['ordinary', '--port', '1', 'tail']
                 args.insert(position, token)
                 exc = refused(stdio(wrapper, args=args), 'mcp_command_invalid')
-                if wrapper in {'setsid', 'flock', 'unbuffer', 'chronic', 'find', 'unknown-wrapper'}:
+                if wrapper == 'unknown-wrapper':
                     assert exc.field == f'mcp_servers.docs.server.args.{position}'
-                    assert repr(token) in str(exc)
+                    assert repr(token.replace("\\", "/").rsplit("/", 1)[-1]) in str(exc)
     assert parse_one(stdio('my-server', args=['--port', '1'])).server.command == 'my-server'
 
 
@@ -1761,3 +1772,52 @@ def test_uvx_from_runner_is_refused():
     refused(stdio('uvx', args=['--from', 'pkg==1.2.3', 'cmd']), 'mcp_command_invalid',
             'mcp_servers.docs.server.args.2')
     assert parse_one(stdio('uvx', args=['--from', 'pkg==1.2.3', 'pkg-cli'])).server.command == 'uvx'
+
+
+# Independent cross-platform inventory: each evaluator refuses even inert argv;
+# versioned interpreter families are checked separately from the product table.
+_EVALUATORS = (
+    "awk gawk mawk nawk sed gsed perl perl5.34 python python3 pythonw python3.14 pypy pypy3 "
+    "ruby ruby3.3 php php8.3 node nodejs deno bun lua lua5.4 luajit luajit2.1 "
+    "tclsh tclsh8.6 wish wish8.6 Rscript R osascript open sh ash bash dash zsh fish ksh ksh93 "
+    "mksh csh tcsh cmd powershell pwsh wscript cscript mshta rundll32 regsvr32 "
+    "xargs find gfind make gmake ed ex vi vim nvim emacs gdb lldb git ssh busybox toybox env "
+    "script expect tar gtar rsync zip sort split watch less more forfiles "
+    "nice setsid flock chronic unbuffer nohup sudo doas su arch caffeinate timeout gtimeout "
+    "stdbuf gstdbuf chrt taskset ionice time command exec launchctl start"
+).split()
+
+
+@pytest.mark.parametrize("command", _EVALUATORS)
+@pytest.mark.parametrize("suffix", ["", ".EXE", ".cmd", ".bat", ".ps1", ".com"])
+def test_evaluator_command_inventory(command, suffix):
+    refused(stdio(command.upper() + suffix, args=[]), "mcp_command_invalid",
+            "mcp_servers.docs.server.command")
+
+
+# Word boundaries are the specified ASCII alphabet, not shell parsing. A known
+# name embedded in executable-looking text or ordinary data fails closed alike.
+@pytest.mark.parametrize("form", ["a={} pkg", 'system("{} pkg")', "--exec={}", "'{}'", "{}@latest",
+                                   "C:\\bin\\{}.EXE", "/usr/bin/{}.ps1", "({})", "{} pkg"])
+def test_argument_word_inventory(form):
+    for name in [*_EVALUATORS, "npx", "uvx", "bunx", "pnpx", "pipx", "uv", "npm", "pnpm", "yarn"]:
+        token = form.format(name.upper())
+        refused(stdio("my-server", args=["--port", "1", token]), "mcp_command_invalid",
+                "mcp_servers.docs.server.args.2")
+
+
+# Recognized pin recipes and unknown bare programs retain their explicit scope;
+# hyphens are word characters, and jq does not execute subprocesses.
+@pytest.mark.parametrize("command,args", [("npx", ["pkg@1.2.3"]), ("uvx", ["pkg==1.2.3"]),
+    ("my-server", ["--port", "1"]), ("my-server", ["--node-id", "ordinary"]), ("jq", [".name"])])
+def test_word_scan_positive_controls(command, args):
+    assert parse_one(stdio(command, args=args)).server.args == tuple(args)
+
+
+# Refusal identifies only the recognized word, without echoing opaque data
+# around it. This does not certify that arbitrary argument data is secret-free.
+def test_embedded_word_diagnostic_does_not_echo_other_data():
+    exc = refused(stdio("my-server", args=["private-example npx other-value"]),
+                  "mcp_command_invalid", "mcp_servers.docs.server.args.0")
+    assert "'npx'" in str(exc)
+    assert "private-example" not in str(exc) and "other-value" not in str(exc)

@@ -49,16 +49,31 @@ _HEADER_REF_FIELDS = frozenset({"env", "prefix"})
 
 _COMMAND_KINDS = {
     **dict.fromkeys(
-        ("sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "csh", "tcsh", "cmd", "powershell", "pwsh"),
+        ("sh", "ash", "ksh93", "bash", "zsh", "fish", "dash", "ksh", "mksh", "csh", "tcsh", "cmd", "powershell", "pwsh"),
         "shell",
     ),
     **dict.fromkeys((
         "env", "xargs", "nohup", "sudo", "doas", "su", "busybox", "script",
         "nice", "arch", "caffeinate", "timeout", "gtimeout", "stdbuf", "gstdbuf",
         "chrt", "taskset", "ionice", "time", "command", "exec", "launchctl", "start",
+        "setsid", "flock", "chronic", "unbuffer",
     ), "indirection"),
     **dict.fromkeys(("osascript", "open"), "launcher"),
-    **dict.fromkeys(("node", "nodejs", "deno", "bun", "ruby", "perl", "php"), "evaluator"),
+    # Policy inventory (default OS tools plus commonly bundled language runtimes):
+    # text/languages: can evaluate programs or launch processes, even without -e;
+    # editors/debuggers/build/VCS/remote tools: expose command execution;
+    # archivers/stream tools/pagers: expose command hooks or shell escapes;
+    # Windows launchers: execute script, DLL or registered handler code.
+    # jq is deliberately omitted: its filter language has no process execution.
+    # Unknown bare programs remain opaque; this inventory is not a sandbox.
+    **dict.fromkeys((
+        "awk", "gawk", "mawk", "nawk", "sed", "gsed", "node", "nodejs", "deno", "bun",
+        "python", "pythonw", "pypy", "ruby", "perl", "php", "lua", "luajit", "tclsh", "wish",
+        "rscript", "r", "wscript", "cscript", "mshta", "rundll32", "regsvr32",
+        "find", "gfind", "make", "gmake", "ed", "ex", "vi", "vim", "nvim", "emacs",
+        "gdb", "lldb", "git", "ssh", "toybox", "expect",
+        "tar", "gtar", "rsync", "zip", "sort", "split", "watch", "less", "more", "forfiles",
+    ), "evaluator"),
     **dict.fromkeys(("bunx", "pnpx", "pipx"), "unrecognized"),
     **dict.fromkeys(("npm", "pnpm", "yarn"), "manager"),
     "npx": "npx", "uvx": "uvx", "uv": "uv",
@@ -67,11 +82,10 @@ _COMMAND_KINDS = {
 _SHELL_COMMANDS = frozenset(k for k, v in _COMMAND_KINDS.items() if v == "shell")
 _INDIRECTION_COMMANDS = frozenset(k for k, v in _COMMAND_KINDS.items() if v == "indirection")
 _EVALUATOR_LAUNCHERS = frozenset(k for k, v in _COMMAND_KINDS.items() if v == "launcher")
-_PYTHON_COMMAND_RE = re.compile(r"python[0-9.]*", re.ASCII)
+# Default installations also expose versioned interpreter executable names.
+_VERSIONED_EVALUATOR_RE = re.compile(r"(pythonw?|pypy|lua(?:jit)?|tclsh|wish|perl|ruby|php)[0-9.]*", re.ASCII)
+_ARGUMENT_WORD_RE = re.compile(r"[A-Za-z0-9_.+-]+", re.ASCII)
 _EXECUTABLE_SUFFIXES = (".exe", ".cmd", ".bat", ".ps1", ".com")
-# Short flags match as prefixes so that glued (`-cprint(1)`) and clustered (`-pe`)
-# forms are caught; long flags match as prefixes so that `--eval=...` is too.
-_EVALUATOR_FLAG_PREFIXES = ("-e", "-c", "-p", "--eval", "--print")
 _UNRECOGNIZED_RECIPES = frozenset(k for k, v in _COMMAND_KINDS.items() if v == "unrecognized")
 _PACKAGE_MANAGERS = frozenset(k for k, v in _COMMAND_KINDS.items() if v == "manager")
 _PACKAGE_MANAGER_RUNNERS = frozenset({"exec", "dlx"})
@@ -135,8 +149,8 @@ _AuthKind = Literal["none", "env", "oauth"]
 class McpDeclarationError(ValueError):
     """A refusal with a stable `code` and the dotted `field` it applies to.
 
-    The message never echoes declared values: arguments and headers can carry
-    material the operator did not mean to publish.
+    Only recognized launcher words may be named. Other declared argument and
+    header values can carry material the operator did not mean to publish.
     """
 
     def __init__(self, code: str, field: str, message: str) -> None:
@@ -568,16 +582,23 @@ def _normalize_command(token: str) -> str:
 
 
 def _command_kind(base: str) -> str | None:
-    return "evaluator" if _PYTHON_COMMAND_RE.fullmatch(base) else _COMMAND_KINDS.get(base)
+    family = _VERSIONED_EVALUATOR_RE.fullmatch(base)
+    return _COMMAND_KINDS.get(family[1] if family else base)
+
+
+def is_recognized_runner(command: str) -> bool:
+    """Whether stdio consent can describe a recognized runner recipe."""
+    return _command_kind(_normalize_command(command)) in {"npx", "uvx", "uv", "manager", "unrecognized"}
 
 
 def _check_argument_launchers(args: tuple[str, ...], path: str) -> None:
     for index, arg in enumerate(args):
-        if _command_kind(_normalize_command(arg)) is not None:
-            raise _fail(
-                "mcp_command_invalid", f"{path}.args.{index}",
-                f"runner/evaluator token {arg!r} is refused in args; use a direct command",
-            )
+        for word in _ARGUMENT_WORD_RE.findall(arg):
+            if _command_kind(_normalize_command(word)) is not None:
+                raise _fail(
+                    "mcp_command_invalid", f"{path}.args.{index}",
+                    f"runner/evaluator token {word!r} is refused in args; use a direct command",
+                )
 
 
 def _check_stdio(server: ServerSpec, path: str) -> None:
@@ -590,6 +611,8 @@ def _check_stdio(server: ServerSpec, path: str) -> None:
         raise _fail("mcp_command_invalid", f"{path}.command", "shells and indirection commands are refused")
     if base in _EVALUATOR_LAUNCHERS:
         raise _fail("mcp_command_invalid", f"{path}.command", "evaluator launchers are refused")
+    if _command_kind(base) == "evaluator":
+        raise _fail("mcp_command_invalid", f"{path}.command", "evaluator commands are refused")
     args = server.args
     if len(args) > _MAX_ARGS:
         raise _invalid(f"{path}.args", f"at most {_MAX_ARGS} arguments are allowed")
@@ -601,10 +624,6 @@ def _check_stdio(server: ServerSpec, path: str) -> None:
             raise _invalid(arg_path, "control, format and surrogate characters are refused")
         if "${" in arg:
             raise _invalid(arg_path, "variable expansion syntax is refused")
-    if _command_kind(base) == "evaluator":
-        for index, arg in enumerate(args):
-            if arg == "eval" or arg.startswith(_EVALUATOR_FLAG_PREFIXES):
-                raise _fail("mcp_command_invalid", f"{path}.args.{index}", "inline evaluation arguments are refused")
     for index, arg in enumerate(args):
         _check_secret_material(arg, f"{path}.args.{index}")
     _check_runtime_pin(base, args, path)

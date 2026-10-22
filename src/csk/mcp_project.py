@@ -8,6 +8,7 @@ are displayed. The installer publishes staged outputs with the skill targets.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shutil
 import stat
@@ -631,7 +632,7 @@ def review_consent(
     for name, decl in sorted(plan.declarations.items()):
         server = decl.server
         intent = (
-            f"{server.command} {' '.join(server.args)}"
+            json.dumps([server.command, *server.args], ensure_ascii=True)
             if server.transport == "stdio"
             else server.url
         )
@@ -639,6 +640,8 @@ def review_consent(
         print(
             f"MCP plan {name}: {server.transport} {intent}; agents={','.join(decl.agents)}; env={','.join(env) or 'none'}; auth={decl.auth.kind}"
         )
+        if server.transport == "stdio" and not declarations.is_recognized_runner(server.command or ""):
+            print(f"MCP plan {name}: csk cannot verify what this program runs.")
     if not plan.pending:
         return
     if not interactive or not sys.stdin.isatty() or not sys.stdout.isatty():

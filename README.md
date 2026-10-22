@@ -256,6 +256,22 @@ Schema 3 добавляет `mcp_servers` к schema 2. Для URL-only серв�
 
 MCP install verifies effective Git ignore rules and output-parent readiness before consent. Conflicting nested ignore rules refuse without publication. Runner/evaluator tokens in `args` also refuse, including aliases and data such as `--tool node`; see the linked MCP declaration rules.
 
+Staged ignore checks preserve the live `core.excludesFile` source (including relative paths), `.git/info/exclude` and default global excludes.
+
+Pin and no-eval rules cover recognized runners/evaluators. Known evaluator-capable
+commands (including awk/sed, interpreters, editors, debuggers and command-launching
+OS tools) refuse even with plain script arguments. Within each argument, csk splits
+on characters outside `[A-Za-z0-9_.+-]`, ignores case, strips path prefixes and
+`.exe`/`.cmd`/`.bat`/`.ps1`/`.com`, and refuses recognized names as words.
+Thus `a=npx pkg`, `system("npx pkg")`, `--exec=npx` and data containing the word
+`node` refuse; `--node-id` and `my-server --port 1` remain valid. This intentionally
+fails closed on false positives. Direct supported pinned `npx`/`uvx` remain valid.
+Any other bare program runs as is: csk cannot verify what it runs. Consent shows
+its exact command and argument array and states this limit. This is no sandbox or
+proof about arbitrary programs; non-default evaluators outside the recognized
+inventory and hidden execution semantics remain the documented limit.
+
+
 ### Глобальный режим
 
 Глобальный режим устанавливает скиллы один раз на компьютере пользователя в каталог `~/.cocoaskills/global/`. Глобальные скиллы работают во всех каталогах вне зависимости от наличия git-репозитория и файла `Skillfile.json`.

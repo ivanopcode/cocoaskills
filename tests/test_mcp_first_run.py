@@ -290,6 +290,6 @@ def test_find_runner_install_refused_in_terminal(project_cli):
             proc.wait(timeout=5)
         os.close(master)
     assert result == 1, output.decode(errors='replace')
-    assert b'mcp_command_invalid' in output and b"'npx'" in output
+    assert b'mcp_command_invalid' in output and b"mcp_servers.bad.server.command" in output
     assert b'[y/N]' not in output
     assert _snapshot(root, home) == before

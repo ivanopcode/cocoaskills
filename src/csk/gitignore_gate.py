@@ -118,6 +118,26 @@ def verify_planned_ignored(
     if discovery.returncode or len(roots) != 2:
         raise GitignoreError("Cannot evaluate the proposed MCP ignore policy")
     worktree, metadata = map(Path, roots)
+    # Git resolves a relative excludesFile from the live worktree root, not
+    # from the config file or the invocation's subdirectory. Freeze that source
+    # before changing worktrees. --path also applies Git's own ~/ expansion.
+    excludes = git_ops.run_git(
+        [executable, "-C", str(worktree), "config", "--path", "--get", "core.excludesFile"],
+        text=True, capture_output=True,
+    )
+    if excludes.returncode not in (0, 1):
+        raise GitignoreError("Cannot resolve the live Git excludes source")
+    config_args: list[str] = []
+    if excludes.returncode == 0:
+        value = excludes.stdout.removesuffix("\n")
+        if value:
+            source_path = Path(value)
+            if not source_path.is_absolute():
+                source_path = worktree / source_path
+            value = str(source_path)
+        config_args = ["-c", "core.excludesFile=" + value]
+    # info/exclude remains in the reused metadata; implicit XDG/HOME excludes
+    # and config includes retain their original environment and source paths.
     try:
         project_rel = project_root.resolve().relative_to(worktree.resolve())
         staged = staging_root / "ignore-worktree"
@@ -143,7 +163,7 @@ def verify_planned_ignored(
                 target.unlink()
         for entry, probe in zip(entries, probes):
             result = git_ops.run_git(
-                [executable, "--git-dir=" + str(metadata), "--work-tree=" + str(staged),
+                [executable, *config_args, "--git-dir=" + str(metadata), "--work-tree=" + str(staged),
                  "-C", str(staged), "check-ignore", "--no-index", "-q", "--", probe.as_posix()],
                 text=True, capture_output=True,
             )
