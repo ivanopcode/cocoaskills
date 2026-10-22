@@ -1,9 +1,8 @@
-"""Best-effort, read-only host PATH checks, separate from the pure grammar.
+"""Read-only, point-in-time kernel PATH and evaluator-identity observations.
 
-No executable is started. Only candidate files inside PATH directories are read;
-links leaving those directories can be classified by name but are not opened.
-This is a point-in-time host observation, not a promise about concurrent directory
-replacement or another agent's later PATH.
+Only the selected executable's first 256 bytes are read. No command is executed.
+Concurrent replacement and a same-user attacker who can write PATH directories
+are outside this boundary; the check does not freeze filesystem identities.
 """
 
 from __future__ import annotations
@@ -16,121 +15,119 @@ from pathlib import Path
 
 from . import mcp_declarations as declarations
 
+_SYSTEM_DIRECTORIES = ("/usr/bin", "/bin", "/usr/sbin", "/sbin", "/usr/local/bin", "/opt/homebrew/bin")
+_Identity = tuple[int, int]
+
 
 def _known_evaluator(name: str) -> bool:
-    # An opaque alias of a runner cannot inherit the direct recipe's pin check.
     return declarations._command_kind(declarations._normalize_command(name)) is not None
 
 
-def _physical_candidate(
-    candidate: Path, directories: tuple[Path, ...]
-) -> tuple[Path, os.stat_result | None] | None:
-    """Walk links before parent components, stopping at the PATH read boundary.
-
-    Canonical PATH roots establish their physical ancestors. Within their trees
-    only metadata is inspected here; the caller restricts body reads to roots.
-    An outside target is returned with no stat result for name-only classification.
-    """
-    current = Path(candidate.anchor)
-    pending = list(candidate.parts[1:])
-    seen: set[tuple[Path, tuple[str, ...]]] = set()
-    hops = 0
-    while pending:
-        part = pending.pop(0)
-        if part == "..":
-            current = current.parent
-            continue
-        child = current / part
-        if not any(current.is_relative_to(root) for root in directories):
-            if any(root.is_relative_to(child) for root in directories):
-                # These ancestors already resolved when the PATH roots did.
-                current = child
-                continue
-            return child.joinpath(*pending), None
-        info = child.lstat()
-        if stat.S_ISLNK(info.st_mode):
-            state = child, tuple(pending)
-            if state in seen or hops >= 40:
-                return None
-            seen.add(state)
-            hops += 1
-            target = Path(os.readlink(child))
-            if target.is_absolute():
-                current = Path(target.anchor)
-                pending = list(target.parts[1:]) + pending
-            else:
-                pending = list(target.parts) + pending
-        else:
-            if pending and not stat.S_ISDIR(info.st_mode):
-                return None
-            current = child
-    if current.parent not in directories:
-        return current, None
-    return current, current.lstat()
+def _path_directories(path: str, cwd: Path) -> tuple[str, ...]:
+    # Keep every separator, dot and parent component for the kernel. Empty PATH
+    # entries and relative entries are relative to the agent's project cwd.
+    return tuple(os.path.join(os.fspath(cwd), entry) for entry in path.split(os.pathsep))
 
 
-def _resolved_evaluator(command: str, *, path: str, cwd: Path) -> bool:
-    roots = []
-    for entry in path.split(os.pathsep):
+def _identity(info: os.stat_result) -> _Identity:
+    return info.st_dev, info.st_ino
+
+
+def _evaluator_inodes(directories: tuple[str, ...]) -> set[_Identity]:
+    identities: set[_Identity] = set()
+    for directory in dict.fromkeys((*directories, *_SYSTEM_DIRECTORIES)):
         try:
-            roots.append((cwd / entry).resolve(strict=True))
-        except (OSError, RuntimeError, ValueError):
+            if not stat.S_ISDIR(os.stat(directory).st_mode):
+                continue
+            try:
+                with os.scandir(directory) as entries:
+                    # Actual spellings include versioned names, executable
+                    # suffixes and case aliases recognized by the pure table.
+                    names = {entry.name for entry in entries if _known_evaluator(entry.name)}
+            except OSError:
+                # Searchable directories need not permit enumeration.
+                names = {name + suffix for name in declarations._COMMAND_KINDS
+                         for suffix in ("", *declarations._EXECUTABLE_SUFFIXES)}
+            for name in names:
+                try:
+                    info = os.stat(os.path.join(directory, name))
+                except OSError:
+                    continue
+                if stat.S_ISREG(info.st_mode):
+                    identities.add(_identity(info))
+        except (OSError, ValueError):
             continue
-    directories = tuple(dict.fromkeys(roots))
+    return identities
+
+
+def _selected_candidate(command: str, directories: tuple[str, ...]) -> tuple[str, os.stat_result] | None:
     suffixes = [""]
     if os.name == "nt":
         suffixes += [s for s in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if s]
     for directory in directories:
         for suffix in suffixes:
+            candidate = os.path.join(directory, command + suffix)
             try:
-                resolved = _physical_candidate(directory / (command + suffix), directories)
-                if resolved is None:
-                    continue
-                candidate, info = resolved
-                # Never open a script outside the canonical PATH directories.
-                if info is None:
-                    return _known_evaluator(candidate.name)
-                if not stat.S_ISREG(info.st_mode) or (os.name != "nt" and not info.st_mode & 0o111):
-                    continue
-                if _known_evaluator(candidate.name):
-                    return True
-                # O_NOFOLLOW closes the final-component link race on POSIX;
-                # O_NONBLOCK prevents a substituted pipe from blocking reads.
-                try:
-                    descriptor = os.open(candidate, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-                except OSError:
-                    # An unreadable selected executable does not make the
-                    # next PATH entry the executable that would be chosen.
-                    return False
-                try:
-                    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-                        return False
-                    head = os.read(descriptor, 4096)
-                finally:
-                    os.close(descriptor)
-                if head.startswith(b"#!"):
-                    line = head.split(b"\n", 1)[0][2:].decode("utf-8", errors="replace").strip()
-                    try:
-                        words = shlex.split(line)
-                    except ValueError:
-                        words = []
-                    if words and _known_evaluator(words[0]):
-                        return True
-                # The first executable is what PATH selects; later files
-                # must not change the verdict for an earlier opaque binary.
-                return False
-            except (OSError, RuntimeError, ValueError):
+                info = os.stat(candidate)
+                if stat.S_ISREG(info.st_mode) and os.access(candidate, os.X_OK):
+                    return candidate, info
+            except (OSError, ValueError):
                 continue
+    return None
+
+
+def _resolved_evaluator(command: str, *, path: str, cwd: Path) -> bool:
+    directories = _path_directories(path, cwd)
+    selected = _selected_candidate(command, directories)
+    if selected is None:
+        return False
+    candidate, info = selected
+    identities = _evaluator_inodes(directories)
+    if _identity(info) in identities:
+        return True
+    try:
+        # Follow the original candidate path through the kernel, including its
+        # symlinks and directory requirements. Never open an interpreter body.
+        descriptor = os.open(candidate, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                return False
+            head = os.read(descriptor, 256)
+        finally:
+            os.close(descriptor)
+    except OSError:
+        # An unreadable selected file must not substitute a later executable.
+        return False
+    if not head.startswith(b"#!"):
+        return False
+    try:
+        words = shlex.split(head.split(b"\n", 1)[0][2:].decode("utf-8", errors="replace").strip())
+    except ValueError:
+        return False
+    interpreters = [(words[0], False)] if words else []
+    if words and declarations._normalize_command(words[0]) == "env" and len(words) > 1:
+        interpreters.append((words[1], True))
+    for interpreter, search_path in interpreters:
+        if _known_evaluator(interpreter):
+            return True
+        try:
+            if search_path:
+                resolved = _selected_candidate(interpreter, directories)
+                if resolved is not None and _identity(resolved[1]) in identities:
+                    return True
+            elif _identity(os.stat(os.path.join(os.fspath(cwd), interpreter))) in identities:
+                return True
+        except (OSError, ValueError):
+            continue
     return False
 
 
 def validate_host_commands(
     parsed: Mapping[str, declarations.McpDeclaration], *, cwd: Path
 ) -> None:
-    """Refuse resolved evaluator aliases after the portable grammar passes.
+    """Compose kernel identity admission after the portable grammar passes.
 
-    Supported runner recipes have already passed their exact-pin grammar; their
-    own interpreter is expected and does not turn the recipe into an opaque one.
+    Exact validated runner recipes retain their expected interpreter substrate.
     """
     path = os.environ.get("PATH", os.defpath)
     for name, declaration in parsed.items():

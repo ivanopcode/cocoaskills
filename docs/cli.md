@@ -336,18 +336,21 @@ Thus `a=npx pkg`, `system("npx pkg")`, `--exec=npx` and data containing the word
 fails closed on false positives. Direct supported pinned `npx`/`uvx` remain valid.
 The shared inventory includes system and package aliases such as `view`,
 `vimdiff`, `rview` and `editor`, including words inside arguments. In addition,
-`check` and install inspect the current host PATH relative to the project: they
-follow symlinks before applying parent (`..`) components, including in PATH
-entries, and read a bounded shebang without executing the program. A
-recognized evaluator target or interpreter refuses with `mcp_command_invalid`.
-Only files within PATH directories are opened; a link leaving them can be
-classified by its target name but is not opened. Missing, unreadable or otherwise
-unrecognized targets retain the portable table result. Supported runner recipes
-retain their expected interpreter substrate. This best-effort observation depends
-on this host's PATH. It is a point-in-time check: concurrent replacement of a
-PATH directory or executable can change the result, and another agent's later
-PATH can differ. Parent directories are not frozen during inspection.
-It does not inspect arbitrary binaries or prove what an opaque program runs.
+`check` and install inspect the current host PATH relative to the project.
+Kernel `stat` and executable-access checks select the first regular executable,
+keeping symlinks, case aliases, separators and parent components intact. Its
+filesystem identity is compared with recognized evaluator names found in PATH
+and the default system directories. Matching symlinks and hard links refuse
+with `mcp_command_invalid`. Only the selected candidate's first 256 bytes may
+be read, through that candidate path, to recognize a shebang interpreter by name
+or identity; interpreter bodies are not read. No command is executed. Missing,
+unreadable or otherwise unrecognized targets retain the portable table result.
+Supported runner recipes retain their expected interpreter substrate.
+This is a point-in-time host check: concurrent directory/executable replacement
+or another agent's later PATH can differ, and filesystem identities are not
+frozen. A same-user attacker who can write PATH directories already controls the
+agent and is outside this boundary. It does not inspect arbitrary binaries or
+prove what an opaque program runs.
 
 Any remaining bare program runs as is: csk cannot verify what it runs. Consent shows
 its exact command and argument array and states this limit. This is no sandbox or

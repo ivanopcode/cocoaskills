@@ -181,31 +181,40 @@ def test_path_selection_boundaries(tmp_path, monkeypatch, kind):
             resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
 
 
-# Link targets outside PATH may be classified by basename but must never be
-# opened. An opaque outside target and an unknown interpreter remain unknown.
+# Only the selected candidate is opened, through its original kernel-resolved
+# path, and at most 256 bytes are read. A known shebang refuses; an opaque body
+# remains valid even when a symlink reaches outside the literal PATH directory.
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink fixture")
 @pytest.mark.parametrize("target_name", ["vim", "opaque"])
-def test_resolution_does_not_open_outside_path(tmp_path, monkeypatch, target_name):
-    bin_dir = tmp_path / "bin"
+@pytest.mark.parametrize("shebang", [False, True])
+def test_selected_candidate_body_bound(tmp_path, monkeypatch, target_name, shebang):
+    bin_dir, outside = tmp_path / "bin", tmp_path / "outside"
     bin_dir.mkdir()
-    outside = tmp_path / "outside"
     outside.mkdir()
-    target = executable(outside / target_name, b"#!/bin/sh\n")
-    (bin_dir / "myedit").symlink_to(target)
-    original = os.open
-    opened = []
-    def bounded_open(path, *args, **kwargs):
+    body = (b"#!/bin/sh\n" if shebang else b"opaque binary\n") + b"x" * 512
+    executable(outside / target_name, body)
+    candidate = bin_dir / "myedit"
+    candidate.symlink_to(outside / target_name)
+    original_open, original_read = os.open, os.read
+    opened, sizes = [], []
+    def selected_open(path, *args, **kwargs):
         opened.append(Path(path))
-        assert Path(path).parent == bin_dir
-        return original(path, *args, **kwargs)
-    monkeypatch.setattr(resolution.os, "open", bounded_open)
+        assert Path(path) == candidate
+        return original_open(path, *args, **kwargs)
+    def bounded_read(descriptor, size):
+        sizes.append(size)
+        assert size <= 256
+        return original_read(descriptor, size)
+    monkeypatch.setattr(resolution.os, "open", selected_open)
+    monkeypatch.setattr(resolution.os, "read", bounded_read)
     monkeypatch.setenv("PATH", str(bin_dir))
-    if target_name == "vim":
+    if shebang:
         with pytest.raises(mcp.McpDeclarationError, match="mcp_command_invalid"):
             resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
     else:
         resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
-    assert not opened
+    assert opened == [candidate] and sizes == [256]
+    assert (outside / target_name).read_bytes() == body
 
 
 def parent_component_fixture(tmp_path, kind, *, evaluator):
@@ -261,7 +270,7 @@ def test_parent_component_cli_refuses(project_cli, tmp_path, monkeypatch, capsys
     assert not marker.exists() and _snapshot(root, home) == before
 
 
-# Physical parent traversal may instead reach an opaque executable. The lexical
+# Kernel parent traversal may instead reach an opaque executable. The lexical
 # decoy has a refused shebang, so rejecting every traversal cannot satisfy this control.
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink fixture")
 @pytest.mark.parametrize("kind", ["relative-target", "absolute-target", "path-entry"])
@@ -270,6 +279,93 @@ def test_parent_component_positive_control(tmp_path, monkeypatch, kind):
     monkeypatch.setenv("PATH", search)
     resolution.validate_host_commands(parse("myedit", ["--port", "1"]), cwd=tmp_path)
     assert selected.read_bytes() == b"opaque binary fixture\n"
+
+
+# Kernel PATH selection must skip non-program paths and recognize a case alias
+# of the same evaluator. Each valid dispatch reaches only an owned runner stub;
+# all three admission paths must refuse before consent and preserve every byte.
+@pytest.mark.skipif(sys.platform != "darwin", reason="actual system Vim and APFS witness")
+@pytest.mark.parametrize("kind", ["root", "slash", "dot", "file-parent", "case-alias"])
+@pytest.mark.parametrize("argv", [("check", "app"), ("install", "app", "--dry-run"), ("install", "app")])
+def test_kernel_selection_cli_refuses(project_cli, tmp_path, monkeypatch, capsys, kind, argv):
+    root, home, declare = project_cli
+    first, later = tmp_path / "bin", tmp_path / "later"
+    first.mkdir()
+    later.mkdir()
+    (later / "myedit").symlink_to("/usr/bin/vim")
+    search = str(first) + os.pathsep + str(later)
+    if kind == "root":
+        (first / "myedit").symlink_to("/")
+    elif kind in {"slash", "dot"}:
+        executable(first / "opaque")
+        (first / "myedit").symlink_to("opaque/" if kind == "slash" else "opaque/.")
+    elif kind == "file-parent":
+        executable(first / "opaque")
+        (first / "decoy").mkdir()
+        executable(first / "decoy/myedit")
+        search = str(first / "opaque/../decoy") + os.pathsep + str(later)
+    else:
+        alternate = first.with_name("BIN")
+        if not alternate.exists() or not alternate.samefile(first):
+            pytest.skip("requires case-insensitive filesystem")
+        (first / "payload").symlink_to("/usr/bin/vim")
+        (first / "myedit").symlink_to(alternate / "payload")
+    stub = tmp_path / "stub"
+    stub.mkdir()
+    marker = tmp_path / "invoked"
+    executable(stub / "npx", b'#!/bin/sh\nprintf "%s\\n" "$*" > "$REVIEW_MARKER"\n')
+    monkeypatch.setenv("PATH", search + os.pathsep + str(stub) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("REVIEW_MARKER", str(marker))
+    args = ["-Nu", "NONE", "-i", "NONE", "-n", "-es", "-c", "call system('n'.'px pkg')", "-c", "qa!"]
+    result = subprocess.run(["myedit", *args], cwd=root, capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0 and marker.read_text() == "pkg\n"
+    marker.unlink()
+    declare(stdio("myedit", args))
+    before = _snapshot(root, home)
+    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("refusal must precede consent"))
+    assert cli.main(list(argv)) == 1
+    output = capsys.readouterr()
+    assert "mcp_command_invalid" in output.out + output.err
+    assert not marker.exists() and _snapshot(root, home) == before
+
+
+# An opaque hard link of an in-PATH evaluator is identified by inode even when
+# no link target or shebang exposes the evaluator name. Nothing is executed.
+@pytest.mark.skipif(os.name == "nt", reason="POSIX hardlink fixture")
+def test_kernel_identity_hardlink_refuses(tmp_path, monkeypatch):
+    executable(tmp_path / "vim")
+    os.link(tmp_path / "vim", tmp_path / "myedit")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(mcp.McpDeclarationError, match="mcp_command_invalid"):
+        resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
+
+
+# An unknown interpreter name sharing a table-name inode is refused after just
+# the selected script header read; the interpreter body is never opened.
+@pytest.mark.skipif(os.name == "nt", reason="POSIX hardlink/shebang fixture")
+def test_kernel_identity_interpreter_refuses(tmp_path, monkeypatch):
+    executable(tmp_path / "python")
+    os.link(tmp_path / "python", tmp_path / "custom-runtime")
+    candidate = executable(tmp_path / "my-server", ("#!" + str(tmp_path / "custom-runtime") + "\n").encode())
+    monkeypatch.setenv("PATH", str(tmp_path))
+    original = os.open
+    opened = []
+    def selected_open(path, *args, **kwargs):
+        opened.append(Path(path))
+        assert Path(path) == candidate
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(resolution.os, "open", selected_open)
+    with pytest.raises(mcp.McpDeclarationError, match="mcp_command_invalid"):
+        resolution.validate_host_commands(parse("my-server"), cwd=tmp_path)
+    assert opened == [candidate]
+
+
+# Bytes beyond the selected 256-byte header do not participate in admission;
+# this is a bounded header observation, never a scan of arbitrary binary bodies.
+def test_selected_header_bound_positive_control(tmp_path, monkeypatch):
+    executable(tmp_path / "my-server", b"x" * 256 + b"\n#!/bin/sh\n")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    resolution.validate_host_commands(parse("my-server", ["--port", "1"]), cwd=tmp_path)
 
 
 # A parent component requires a real preceding directory: a missing entry or
@@ -285,11 +381,11 @@ def test_invalid_parent_component_retains_portable_result(tmp_path, monkeypatch,
     resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
 
 
-# Correct physical traversal still stops before an outside-PATH body. An opaque
-# outside script stays unknown; a known outside basename refuses by name alone.
+# Parent traversal is left intact on the selected candidate open. Its known
+# shell shebang refuses even beyond the former canonical-root body boundary.
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink fixture")
 @pytest.mark.parametrize("name", ["opaque", "vim"])
-def test_parent_component_outside_body_is_not_opened(tmp_path, monkeypatch, name):
+def test_parent_component_selected_body_refuses(tmp_path, monkeypatch, name):
     a, b, outside = [tmp_path / name for name in ("a", "b", "outside")]
     for directory in (a, b, outside):
         directory.mkdir()
@@ -298,12 +394,16 @@ def test_parent_component_outside_body_is_not_opened(tmp_path, monkeypatch, name
     executable(outside / name, b"#!/bin/sh\n")
     (a / "myedit").symlink_to("hop/../../outside/" + name)
     monkeypatch.setenv("PATH", str(a) + os.pathsep + str(b))
-    monkeypatch.setattr(resolution.os, "open", lambda *a, **kw: pytest.fail("outside body must not be opened"))
-    if name == "vim":
-        with pytest.raises(mcp.McpDeclarationError, match="mcp_command_invalid"):
-            resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
-    else:
+    original = os.open
+    opened = []
+    def selected_open(path, *args, **kwargs):
+        opened.append(Path(path))
+        assert Path(path) == a / "myedit"
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(resolution.os, "open", selected_open)
+    with pytest.raises(mcp.McpDeclarationError, match="mcp_command_invalid"):
         resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
+    assert opened == [a / "myedit"]
 
 
 # A bounded long chain retains table-only policy. An unreadable selected file
