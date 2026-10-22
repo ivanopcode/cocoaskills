@@ -1784,7 +1784,12 @@ _EVALUATORS = (
     "xargs find gfind make gmake ed ex vi vim nvim emacs gdb lldb git ssh busybox toybox env "
     "script expect tar gtar rsync zip sort split watch less more forfiles "
     "nice setsid flock chronic unbuffer nohup sudo doas su arch caffeinate timeout gtimeout "
-    "stdbuf gstdbuf chrt taskset ionice time command exec launchctl start"
+    "stdbuf gstdbuf chrt taskset ionice time command exec launchctl start "
+    "hush rbash rksh chroot chpst setpriv runuser nsenter unshare prlimit run-parts "
+    "start-stop-daemon at batch crontab systemd-run systemctl service schtasks "
+    "automator shortcuts xdg-open gio gtk-launch xterm gnome-terminal konsole "
+    "bsdtar cpio man info sdiff wmic m4 sqlite3 dc scp sftp openssl rpm apt apt-get "
+    "dpkg dnf yum apk gcc g++ cc c++ clang clang++ ld ar"
 ).split()
 
 

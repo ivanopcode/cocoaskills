@@ -49,7 +49,7 @@ _HEADER_REF_FIELDS = frozenset({"env", "prefix"})
 
 _COMMAND_KINDS = {
     **dict.fromkeys(
-        ("sh", "ash", "ksh93", "bash", "zsh", "fish", "dash", "ksh", "mksh", "csh", "tcsh", "cmd", "powershell", "pwsh"),
+        ("sh", "ash", "hush", "rbash", "rksh", "ksh93", "bash", "zsh", "fish", "dash", "ksh", "mksh", "csh", "tcsh", "cmd", "powershell", "pwsh"),
         "shell",
     ),
     **dict.fromkeys((
@@ -57,12 +57,20 @@ _COMMAND_KINDS = {
         "nice", "arch", "caffeinate", "timeout", "gtimeout", "stdbuf", "gstdbuf",
         "chrt", "taskset", "ionice", "time", "command", "exec", "launchctl", "start",
         "setsid", "flock", "chronic", "unbuffer",
+        "chroot", "chpst", "setpriv", "runuser", "nsenter", "unshare", "prlimit",
+        "run-parts", "start-stop-daemon", "at", "batch", "crontab", "systemd-run",
+        "systemctl", "service", "schtasks",
     ), "indirection"),
-    **dict.fromkeys(("osascript", "open"), "launcher"),
+    **dict.fromkeys((
+        "osascript", "open", "automator", "shortcuts", "xdg-open", "gio", "gtk-launch",
+        "xterm", "gnome-terminal", "konsole",
+    ), "launcher"),
     # Policy inventory (default OS tools plus commonly bundled language runtimes):
     # text/languages: can evaluate programs or launch processes, even without -e;
     # editors/debuggers/build/VCS/remote tools: expose command execution;
     # archivers/stream tools/pagers: expose command hooks or shell escapes;
+    # macros/SQL/remote clients: expose system(), .shell or proxy programs;
+    # native compilers/loaders and OS package tools: load code or execute hooks;
     # Windows launchers: execute script, DLL or registered handler code.
     # jq is deliberately omitted: its filter language has no process execution.
     # Unknown bare programs remain opaque; this inventory is not a sandbox.
@@ -72,7 +80,10 @@ _COMMAND_KINDS = {
         "rscript", "r", "wscript", "cscript", "mshta", "rundll32", "regsvr32",
         "find", "gfind", "make", "gmake", "ed", "ex", "vi", "vim", "nvim", "emacs",
         "gdb", "lldb", "git", "ssh", "toybox", "expect",
-        "tar", "gtar", "rsync", "zip", "sort", "split", "watch", "less", "more", "forfiles",
+        "tar", "gtar", "bsdtar", "rsync", "zip", "cpio", "sort", "split", "watch",
+        "less", "more", "man", "info", "sdiff", "forfiles", "wmic",
+        "m4", "sqlite3", "dc", "scp", "sftp", "openssl", "rpm", "apt", "apt-get",
+        "dpkg", "dnf", "yum", "apk", "gcc", "g++", "cc", "c++", "clang", "clang++", "ld", "ar",
     ), "evaluator"),
     **dict.fromkeys(("bunx", "pnpx", "pipx"), "unrecognized"),
     **dict.fromkeys(("npm", "pnpm", "yarn"), "manager"),
