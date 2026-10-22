@@ -203,7 +203,10 @@ def test_effective_mcp_ignore_policy(project_cli, monkeypatch, capsys, rules, dr
 
 
 # Existing unwritable/non-directory parents refuse without asking; fixing them allows consent and repeat.
-@pytest.mark.parametrize('failure', ['readonly', 'not-directory'])
+@pytest.mark.parametrize('failure', [
+    pytest.param('readonly', marks=pytest.mark.skipif(sys.platform == 'win32', reason='POSIX permission bits')),
+    'not-directory',
+])
 def test_output_parent_readiness_before_consent(project_cli, monkeypatch, capsys, failure):
     from test_mcp_install_acceptance import _snapshot
     root, home, declare = project_cli
