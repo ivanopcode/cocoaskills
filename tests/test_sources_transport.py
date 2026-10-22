@@ -56,6 +56,29 @@ from csk.sources import repository_policy, transport
 IDENTITY = "example.org/kit"
 LOCK = LockedCommit("sha1", "0" * 40)
 
+
+@pytest.fixture(autouse=True)
+def _windows_transport_record(request, monkeypatch, tmp_path):
+    if os.name != "nt" or request.node.originalname not in {
+        "test_filtered_bundle_reaches_real_git_without_dropped_trust",
+        "test_hostile_insteadof_rewrite_does_not_deflect_the_literal_attempt",
+    }:
+        return
+    original = git_admission._classify_git_failure_output
+
+    def classify(output):
+        text = output.decode("utf-8", "replace") if isinstance(output, bytes) else str(output)
+        # These token-free loopback fixtures expose only their generated public CA;
+        # replace private temporary paths before publishing the Git envelope.
+        sanitized = text.replace(str(tmp_path), "<fixture>").replace(tmp_path.as_posix(), "<fixture>")
+        result = original(output)
+        print("WINDOWS_GIT_RECORD " + json.dumps({
+            "test": request.node.name, "stderr": sanitized, "classification": result,
+        }))
+        return result
+
+    monkeypatch.setattr(git_admission, "_classify_git_failure_output", classify)
+
 _posix_ssh_only = pytest.mark.skipif(
     os.name == "nt",
     reason="the stand-in ssh program relies on POSIX exec semantics",
