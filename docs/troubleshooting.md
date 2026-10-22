@@ -33,7 +33,9 @@ brew install ca-certificates
 
 `gitignore_required` в MCP-строке указывает на общий ignore preflight, а `blocked by project_preflight_failed` — на общую ошибку без отдельного кода: смотрите следующую диагностику проекта. Это не ошибка MCP declaration. Если согласия требует соседний сервер, сервер без такой потребности получает `blocked by mcp_plan_unapproved`.
 
-`mcp_command_invalid` возникает и для wrappers (`nice`, `arch`, `caffeinate`, `timeout` и подобных) и evaluators `osascript`/`open`. Укажите прямой bare executable. Для `npx` нужен точный `package@1.2.3`, для `uvx` — `package==1.2.3`; неприкреплённый пакет даёт `mcp_runtime_pin_required`.
+`mcp_command_invalid` also refuses any runner/evaluator token inside `args`, including unknown wrappers such as `find . -exec npx pkg ;`. Matching ignores path, case and executable suffixes. Even an intended data argument such as `--tool node` refuses; the diagnostic names the token. Use a direct bare executable with ordinary arguments, or a direct supported exact-pin `npx`/`uvx` recipe. Direct evaluator launchers and inline evaluation remain refused.
+
+`gitignore_required` can mean a nested rule defeats the proposed automatic MCP ignore repair. Repair that conflicting rule and retry; the refusal leaves native configs and the live `.gitignore` unchanged. Git evaluates the proposed hierarchy before consent. `source_output_overlap` can identify an unwritable output parent; restore write/search access and retry. These readiness checks precede the prompt and do not replace publication-time checks.
 
 ## mcp_entry_conflict
 

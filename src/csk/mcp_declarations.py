@@ -47,25 +47,33 @@ _HTTP_FIELDS = frozenset({"transport", "url", "headers", "env_names"})
 _AUTH_FIELDS = frozenset({"kind", "help_url"})
 _HEADER_REF_FIELDS = frozenset({"env", "prefix"})
 
-_SHELL_COMMANDS = frozenset(
-    {"sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "csh", "tcsh", "cmd", "powershell", "pwsh"}
-)
-_INDIRECTION_COMMANDS = frozenset(
-    {
+_COMMAND_KINDS = {
+    **dict.fromkeys(
+        ("sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "csh", "tcsh", "cmd", "powershell", "pwsh"),
+        "shell",
+    ),
+    **dict.fromkeys((
         "env", "xargs", "nohup", "sudo", "doas", "su", "busybox", "script",
         "nice", "arch", "caffeinate", "timeout", "gtimeout", "stdbuf", "gstdbuf",
         "chrt", "taskset", "ionice", "time", "command", "exec", "launchctl", "start",
-    }
-)
-_EVALUATOR_LAUNCHERS = frozenset({"osascript", "open"})
-_EVALUATOR_COMMAND_RE = re.compile(
-    r"(?:node|nodejs|deno|bun|python[0-9.]*|ruby|perl|php)(?:\.exe)?", re.IGNORECASE | re.ASCII
-)
+    ), "indirection"),
+    **dict.fromkeys(("osascript", "open"), "launcher"),
+    **dict.fromkeys(("node", "nodejs", "deno", "bun", "ruby", "perl", "php"), "evaluator"),
+    **dict.fromkeys(("bunx", "pnpx", "pipx"), "unrecognized"),
+    **dict.fromkeys(("npm", "pnpm", "yarn"), "manager"),
+    "npx": "npx", "uvx": "uvx", "uv": "uv",
+}
+# These views and all launcher decisions share one policy inventory.
+_SHELL_COMMANDS = frozenset(k for k, v in _COMMAND_KINDS.items() if v == "shell")
+_INDIRECTION_COMMANDS = frozenset(k for k, v in _COMMAND_KINDS.items() if v == "indirection")
+_EVALUATOR_LAUNCHERS = frozenset(k for k, v in _COMMAND_KINDS.items() if v == "launcher")
+_PYTHON_COMMAND_RE = re.compile(r"python[0-9.]*", re.ASCII)
+_EXECUTABLE_SUFFIXES = (".exe", ".cmd", ".bat", ".ps1", ".com")
 # Short flags match as prefixes so that glued (`-cprint(1)`) and clustered (`-pe`)
 # forms are caught; long flags match as prefixes so that `--eval=...` is too.
 _EVALUATOR_FLAG_PREFIXES = ("-e", "-c", "-p", "--eval", "--print")
-_UNRECOGNIZED_RECIPES = frozenset({"bunx", "pnpx", "pipx"})
-_PACKAGE_MANAGERS = frozenset({"npm", "pnpm", "yarn"})
+_UNRECOGNIZED_RECIPES = frozenset(k for k, v in _COMMAND_KINDS.items() if v == "unrecognized")
+_PACKAGE_MANAGERS = frozenset(k for k, v in _COMMAND_KINDS.items() if v == "manager")
 _PACKAGE_MANAGER_RUNNERS = frozenset({"exec", "dlx"})
 _PACKAGE_MANAGER_ALIASES = frozenset({"x", "create"})
 _NPM_RUNNER_ALIASES = frozenset({"x", "init", "create"})
@@ -552,14 +560,32 @@ def _has_forbidden_char(value: str) -> bool:
     return any(unicodedata.category(char) in ("Cc", "Cf", "Cs") for char in value)
 
 
+def _normalize_command(token: str) -> str:
+    base = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if base.endswith(_EXECUTABLE_SUFFIXES):
+        base = base.rsplit(".", 1)[0]
+    return base
+
+
+def _command_kind(base: str) -> str | None:
+    return "evaluator" if _PYTHON_COMMAND_RE.fullmatch(base) else _COMMAND_KINDS.get(base)
+
+
+def _check_argument_launchers(args: tuple[str, ...], path: str) -> None:
+    for index, arg in enumerate(args):
+        if _command_kind(_normalize_command(arg)) is not None:
+            raise _fail(
+                "mcp_command_invalid", f"{path}.args.{index}",
+                f"runner/evaluator token {arg!r} is refused in args; use a direct command",
+            )
+
+
 def _check_stdio(server: ServerSpec, path: str) -> None:
     command = server.command
     assert command is not None
     if not _COMMAND_RE.fullmatch(command):
         raise _fail("mcp_command_invalid", f"{path}.command", "command must be a bare executable name")
-    base = command.lower()
-    if base.endswith(".exe"):
-        base = base[: -len(".exe")]
+    base = _normalize_command(command)
     if base in _SHELL_COMMANDS or base in _INDIRECTION_COMMANDS:
         raise _fail("mcp_command_invalid", f"{path}.command", "shells and indirection commands are refused")
     if base in _EVALUATOR_LAUNCHERS:
@@ -575,20 +601,18 @@ def _check_stdio(server: ServerSpec, path: str) -> None:
             raise _invalid(arg_path, "control, format and surrogate characters are refused")
         if "${" in arg:
             raise _invalid(arg_path, "variable expansion syntax is refused")
-    if _EVALUATOR_COMMAND_RE.fullmatch(command):
+    if _command_kind(base) == "evaluator":
         for index, arg in enumerate(args):
             if arg == "eval" or arg.startswith(_EVALUATOR_FLAG_PREFIXES):
                 raise _fail("mcp_command_invalid", f"{path}.args.{index}", "inline evaluation arguments are refused")
     for index, arg in enumerate(args):
         _check_secret_material(arg, f"{path}.args.{index}")
     _check_runtime_pin(base, args, path)
+    _check_argument_launchers(args, path)
     _check_env_names(server.env_names, f"{path}.env_names")
 
 
 def _check_runtime_pin(base: str, args: tuple[str, ...], path: str) -> None:
-    # Batch suffixes are runner aliases here; Windows launch feasibility is D4/M3b.
-    if base.endswith((".cmd", ".bat")):
-        base = base[:-4]
     if base == "npx":
         _check_npx(args, path)
     elif base == "uvx":

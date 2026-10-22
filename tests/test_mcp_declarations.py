@@ -468,7 +468,7 @@ def test_uvx_requires_an_exact_pin(args):
 
 @pytest.mark.parametrize("args", [["pkg==1.2.3"], ["example-tools==0.1"], ["pkg==2.0.0rc1", "serve"],
                                   ["pkg==1.0.post2"], ["pkg==1!2.0"], ["pkg[extra]==1.2.3"],
-                                  ["--from", "pkg==1.2.3", "cmd"], ["--from", "pkg==1.2.3", "cmd", "--flag"]])
+                                  ["--from", "pkg==1.2.3", "pkg-cli"], ["--from", "pkg==1.2.3", "pkg-cli", "--flag"]])
 def test_uvx_exact_pins_are_admitted(args):
     assert parse_one(stdio("uvx", args=args)).server.args == tuple(args)
 
@@ -572,7 +572,7 @@ def test_uvx_operators_other_than_exact_equality_are_refused(spec, form):
                                    ["-q", "--offline", "--no-cache", "-n", "--quiet"]])
 @pytest.mark.parametrize("form", ["direct", "from"])
 def test_uvx_boolean_flags_may_precede_the_package(flags, form):
-    tail = ["pkg==1.2.3"] if form == "direct" else ["--from", "pkg==1.2.3", "cmd"]
+    tail = ["pkg==1.2.3"] if form == "direct" else ["--from", "pkg==1.2.3", "pkg-cli"]
     args = flags + tail
     assert parse_one(stdio("uvx", args=args)).server.args == tuple(args)
 
@@ -586,7 +586,7 @@ def test_uvx_boolean_flags_may_precede_the_package(flags, form):
 )
 @pytest.mark.parametrize("form", ["direct", "from"])
 def test_uvx_value_flags_are_refused_before_the_package(flags, form):
-    tail = ["pkg==1.2.3"] if form == "direct" else ["--from", "pkg==1.2.3", "cmd"]
+    tail = ["pkg==1.2.3"] if form == "direct" else ["--from", "pkg==1.2.3", "pkg-cli"]
     refused(stdio("uvx", args=flags + tail), "mcp_runtime_pin_required")
 
 
@@ -1693,10 +1693,71 @@ def test_uvx_package_name_must_start_and_end_alphanumeric(name, form):
 @pytest.mark.parametrize("name", ["x", "1", "x-y", "x_y", "x.y", "x--y"])
 @pytest.mark.parametrize("form", ["direct", "from"])
 def test_uvx_package_name_interior_punctuation_is_admitted(name, form):
-    args = [f"{name}==1.0"] if form == "direct" else ["--from", f"{name}==1.0", "cmd"]
+    args = [f"{name}==1.0"] if form == "direct" else ["--from", f"{name}==1.0", "pkg-cli"]
     assert parse_one(stdio("uvx", args=args)).server.args == tuple(args)
 
 
 def test_help_url_refuses_backslash_in_path():
     refused(http(auth={"kind": "none", "help_url": "https://example.invalid/a\\b"}),
             "mcp_declaration_invalid", "mcp_servers.docs.install.auth.help_url")
+
+
+# Independent contract inventory, deliberately not derived from the product table.
+_ARGUMENT_RUNNERS = (
+    'npx', 'uvx', 'bunx', 'pipx', 'uv', 'npm', 'pnpm', 'yarn', 'bun', 'deno',
+    'node', 'nodejs', 'python', 'python3', 'python27', 'python3.14', 'ruby', 'perl',
+    'php', 'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'mksh', 'csh', 'tcsh',
+    'cmd', 'powershell', 'pwsh', 'osascript', 'open', 'env', 'pnpx',
+)
+_ARGUMENT_WRAPPERS = (
+    'setsid', 'flock', 'unbuffer', 'chronic', 'find', 'unknown-wrapper',
+    'busybox', 'xargs', 'script', 'nohup', 'sudo', 'doas', 'nice',
+)
+_TOKEN_FORMS = (
+    '{}', '{}.exe', '{}.cmd', '{}.bat', '{}.ps1', '{}.com',
+    './{}', '/usr/bin/{}', 'C:\\bin\\{}.PS1',
+)
+
+
+# Every independent runner spelling refuses at beginning/middle/end of unknown-wrapper args.
+# Known wrappers also refuse; the unknown wrappers are the witness for the structural invariant.
+@pytest.mark.parametrize('wrapper', _ARGUMENT_WRAPPERS)
+@pytest.mark.parametrize('form', _TOKEN_FORMS)
+def test_runner_in_args_inventory(wrapper, form):
+    for runner in _ARGUMENT_RUNNERS:
+        for token in (form.format(runner), form.format(runner.upper())):
+            for position in (0, 1, 4):
+                args = ['ordinary', '--port', '1', 'tail']
+                args.insert(position, token)
+                exc = refused(stdio(wrapper, args=args), 'mcp_command_invalid')
+                if wrapper in {'setsid', 'flock', 'unbuffer', 'chronic', 'find', 'unknown-wrapper'}:
+                    assert exc.field == f'mcp_servers.docs.server.args.{position}'
+                    assert repr(token) in str(exc)
+    assert parse_one(stdio('my-server', args=['--port', '1'])).server.command == 'my-server'
+
+
+# Direct command aliases obey pin/evaluation checks; the suffix does not bypass policy.
+@pytest.mark.parametrize('suffix', ['', '.exe', '.cmd', '.bat', '.ps1', '.com'])
+def test_direct_command_aliases(suffix):
+    for runner, package in [('npx', 'pkg@1.2.3'), ('uvx', 'pkg==1.2.3')]:
+        command = runner.upper() + suffix
+        assert parse_one(stdio(command, args=[package])).server.command == command
+        refused(stdio(command, args=['pkg']), 'mcp_runtime_pin_required')
+    for command, args in [('nice', ['npx', 'pkg']), ('cmd', ['/c', 'true']),
+                          ('osascript', ['-e', 'true']), ('python', ['-c', 'print(1)'])]:
+        refused(stdio(command.upper() + suffix, args=args), 'mcp_command_invalid')
+
+
+# Fail closed even when a launcher token was intended as data, with its exact field/message.
+def test_runner_argument_used_as_data():
+    exc = refused(stdio('my-server', args=['--tool', 'node']), 'mcp_command_invalid',
+                  'mcp_servers.docs.server.args.1')
+    assert "'node'" in str(exc)
+    assert parse_one(stdio('my-server', args=['--tool', 'ordinary'])).server.command == 'my-server'
+
+
+# Pinning the distribution never authorizes a shell/runner in the --from command slot.
+def test_uvx_from_runner_is_refused():
+    refused(stdio('uvx', args=['--from', 'pkg==1.2.3', 'cmd']), 'mcp_command_invalid',
+            'mcp_servers.docs.server.args.2')
+    assert parse_one(stdio('uvx', args=['--from', 'pkg==1.2.3', 'pkg-cli'])).server.command == 'uvx'

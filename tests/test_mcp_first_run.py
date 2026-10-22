@@ -153,3 +153,140 @@ def test_late_preflight_precedes_consent(project_cli, monkeypatch, capsys):
     assert not list((home / "state/mcp/consent").glob("*.json"))
     assert cli.main(["install", "app"]) == 0
     assert len(prompts) == 1
+
+
+# Root negations are repaired effectively and once; a later child rule refuses before any publication.
+@pytest.mark.parametrize('rules', ['root-negation', 'after-block', 'nested-negation'])
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_effective_mcp_ignore_policy(project_cli, monkeypatch, capsys, rules, dry_run):
+    import subprocess
+
+    root, home, declare = project_cli
+    ignore = root / '.gitignore'
+    original = ignore.read_text()
+    if rules == 'root-negation':
+        ignore.write_text(original + '\n/.mcp.json\n!/.mcp.json\n')
+    elif rules == 'after-block':
+        ignore.write_text(original + '\n# CocoaSkill\n/.mcp.json\n!/.mcp.json\n')
+    else:
+        declare({'tools': TOOLS})
+        monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
+        monkeypatch.setattr(sys.stdout, 'isatty', lambda: True)
+        monkeypatch.setattr('builtins.input', lambda *_: pytest.fail('ignore preflight prompted'))
+        (root / '.codex').mkdir()
+        (root / '.codex/.gitignore').write_text('!config.toml\n')
+    before = ignore.read_bytes()
+    result = cli.main(['install', 'app', *(['--dry-run'] if dry_run else [])])
+    output = capsys.readouterr()
+    if rules == 'nested-negation':
+        assert result == 1
+        assert 'gitignore_required' in output.err
+        assert 'does not effectively ignore /.codex/config.toml' in output.err
+        assert 'added MCP gitignore entries:' not in output.out
+        assert ignore.read_bytes() == before
+        assert native_bytes(root) == {}
+        assert not (root / 'Skillfile.lock.json').exists()
+    else:
+        assert result == 0, output
+        if dry_run:
+            assert ignore.read_bytes() == before
+            assert native_bytes(root) == {}
+        else:
+            for path in PATHS:
+                check = subprocess.run(['git', '-C', str(root), 'check-ignore', '-q', path])
+                assert check.returncode == 0
+            assert ignore.read_text().count('# CocoaSkill') == 1
+            after = ignore.read_bytes()
+            assert cli.main(['install', 'app']) == 0
+            assert ignore.read_bytes() == after
+    assert not list((home / 'state/mcp/consent').glob('*.json'))
+
+
+# Existing unwritable/non-directory parents refuse without asking; fixing them allows consent and repeat.
+@pytest.mark.parametrize('failure', ['readonly', 'not-directory'])
+def test_output_parent_readiness_before_consent(project_cli, monkeypatch, capsys, failure):
+    from test_mcp_install_acceptance import _snapshot
+    root, home, declare = project_cli
+    declare({'tools': TOOLS})
+    parent = root / '.codex'
+    if failure == 'readonly':
+        parent.mkdir()
+        parent.chmod(0o500)
+    else:
+        parent.write_text('user file\n')
+    before = (root / '.gitignore').read_bytes()
+    snapshot = _snapshot(root, home)
+    prompts = []
+    monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
+    monkeypatch.setattr(sys.stdout, 'isatty', lambda: True)
+    monkeypatch.setattr('builtins.input', lambda prompt: prompts.append(prompt) or 'y')
+    try:
+        assert cli.main(['install', 'app']) == 1
+        error = capsys.readouterr().err
+        assert ('source_output_overlap' if failure == 'readonly' else 'generation_unreadable') in error
+        assert not prompts
+        assert (root / '.gitignore').read_bytes() == before
+        assert native_bytes(root) == {}
+        assert not (root / 'Skillfile.lock.json').exists()
+        assert not list((home / 'state/mcp/consent').glob('*.json'))
+        assert _snapshot(root, home) == snapshot
+        if failure == 'not-directory':
+            assert parent.read_text() == 'user file\n'
+    finally:
+        if failure == 'readonly':
+            parent.chmod(0o700)
+        else:
+            parent.unlink()
+    assert cli.main(['install', 'app']) == 0
+    assert len(prompts) == 1
+    assert len(list((home / 'state/mcp/consent').glob('*.json'))) == 1
+    assert cli.main(['install', 'app']) == 0
+    assert len(prompts) == 1
+
+
+# Real terminal install cannot approve a find -exec runner; every publication surface stays unchanged.
+@pytest.mark.skipif(sys.platform == 'win32', reason='requires POSIX PTY')
+def test_find_runner_install_refused_in_terminal(project_cli):
+    import errno
+    import os
+    import pty
+    import select
+    import subprocess
+    import time
+    from test_mcp_install_acceptance import _snapshot
+
+    root, home, declare = project_cli
+    declare({'bad': {'server': {'transport': 'stdio', 'command': 'find',
+                               'args': ['.', '-prune', '-exec', 'npx', 'pkg', ';']}}})
+    before = _snapshot(root, home)
+    master, slave = pty.openpty()
+    proc = subprocess.Popen([sys.executable, '-m', 'csk', 'install', 'app'], cwd=root,
+                            env=os.environ.copy(), stdin=slave, stdout=slave, stderr=slave)
+    os.close(slave)
+    output = b''
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.1)
+            if ready:
+                try:
+                    data = os.read(master, 65536)
+                except OSError as exc:
+                    if exc.errno == errno.EIO:
+                        break
+                    raise
+                if not data:
+                    break
+                output += data
+            elif proc.poll() is not None:
+                break
+        result = proc.wait(timeout=3)
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=5)
+        os.close(master)
+    assert result == 1, output.decode(errors='replace')
+    assert b'mcp_command_invalid' in output and b"'npx'" in output
+    assert b'[y/N]' not in output
+    assert _snapshot(root, home) == before

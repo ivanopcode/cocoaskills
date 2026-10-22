@@ -322,6 +322,8 @@ csk install --verbose
 
 `csk init` настраивает ignore для обычных generated paths. При установке MCP с `git_policy: "local"` install автоматически добавляет и сообщает точные ignore entries для создаваемых им MCP configs; deprecated `--fix-gitignore` не нужен. Dry-run показывает эти изменения без записи. Consent запрашивается после неинтерактивных preflight-проверок и сохраняется только вместе с успешной публикацией. Отказ проекта передаёт свой код в MCP-строки; если собственного кода нет, строки показывают `blocked by project_preflight_failed`.
 
+Before consent, install checks existing output-parent readiness and asks Git to evaluate the proposed ignore hierarchy. A root negation is repaired effectively; a conflicting nested rule refuses with `gitignore_required` and unchanged native/ignore state. Runner/evaluator names in any `args` position refuse with `mcp_command_invalid`, including path/case/suffix aliases and tokens intended as data such as `--tool node`.
+
 Для schema 3 объект MCP содержит `server` и необязательный `install`: локальные параметры записи и аутентификации устанавливающего менеджера. Без `server.environments` используются resolved agents проекта; явный writable id пишется даже вне этого набора. Известные unsupported ids дают `mcp NAME -> AGENT (skipped: unsupported)` без пути и отдельного warning, включая отчёт при отказе. Dry-run добавляет `would:`. Неизвестный id, дубликат или пустой список вызывает `mcp_agent_selection_invalid`. Добавление writable агента требует нового consent; unsupported ids в consent subject не входят. [Правила MCP](skill-authoring.md#project-mcp-schema-3) перечисляют ids и поля `install`.
 
 ### csk update

@@ -88,9 +88,69 @@ def plan_ignored(project_root: Path, entries: list[str], *, fix: bool) -> bytes 
         raise GitignoreError("Cannot repair a linked .gitignore")
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     lines = {line.strip() for line in existing.splitlines()}
-    to_add = [entry for entry in missing if entry not in lines]
+    # Effective missing entries may already occur before a later negation.
+    # Append them last so the proposed root policy actually repairs that case.
+    to_add = missing
     prefix = "" if existing.endswith("\n") or not existing else "\n"
     header = "" if "# CocoaSkill" in lines else "# CocoaSkill\n"
     return (existing + prefix + header + "\n".join(to_add) + "\n").encode(
         "utf-8"
     )
+
+
+def verify_planned_ignored(
+    project_root: Path, entries: list[str], proposed: bytes | None, staging_root: Path
+) -> None:
+    """Ask Git to evaluate a private copy of the proposed ignore hierarchy.
+
+    Reuse repository metadata read-only, without creating a repository or
+    changing the index/worktree. Include ancestor and nested ignore files:
+    a child negation can defeat an exact root rule and must refuse publication.
+    """
+    if not entries:
+        return
+    executable = resolve_tool("git")
+    discovery = git_ops.run_git(
+        [executable, "-C", str(project_root), "rev-parse", "--show-toplevel", "--absolute-git-dir"],
+        text=True, capture_output=True,
+    )
+    roots = discovery.stdout.splitlines()
+    if discovery.returncode or len(roots) != 2:
+        raise GitignoreError("Cannot evaluate the proposed MCP ignore policy")
+    worktree, metadata = map(Path, roots)
+    try:
+        project_rel = project_root.resolve().relative_to(worktree.resolve())
+        staged = staging_root / "ignore-worktree"
+        staged.mkdir(exist_ok=True)
+        probes = [
+            project_rel / entry.lstrip("/") for entry in entries
+        ]
+        directories = {Path(".")}
+        for probe in probes:
+            directories.update(probe.parents)
+        for rel in sorted(directories, key=lambda p: len(p.parts)):
+            destination = staged / rel
+            destination.mkdir(parents=True, exist_ok=True)
+            source = worktree / rel / ".gitignore"
+            target = destination / ".gitignore"
+            if rel == project_rel and proposed is not None:
+                target.write_bytes(proposed)
+            elif source.is_symlink():
+                raise GitignoreError("Cannot evaluate a linked ignore policy")
+            elif source.exists():
+                target.write_bytes(source.read_bytes())
+            elif target.exists():
+                target.unlink()
+        for entry, probe in zip(entries, probes):
+            result = git_ops.run_git(
+                [executable, "--git-dir=" + str(metadata), "--work-tree=" + str(staged),
+                 "-C", str(staged), "check-ignore", "--no-index", "-q", "--", probe.as_posix()],
+                text=True, capture_output=True,
+            )
+            if result.returncode:
+                raise GitignoreError(
+                    f"Proposed MCP ignore policy does not effectively ignore {entry}; "
+                    "repair conflicting ignore rules before retrying"
+                )
+    except (OSError, ValueError) as exc:
+        raise GitignoreError("Cannot evaluate the proposed MCP ignore policy") from exc

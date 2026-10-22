@@ -254,6 +254,8 @@ Schema 3 добавляет `mcp_servers` к schema 2. Для URL-only серв�
 
 `csk check` проверяет schema 3 и MCP declarations без записи и сети. После `csk init` обычный `csk install` запишет native configs трёх агентов и покажет каждую запись; точные ignore entries для создаваемых MCP configs добавляются автоматически, без deprecated флага. Consent запрашивается после preflight и сохраняется вместе с успешной публикацией. URL без env reference не требует consent. Объектная форма содержит `server` и необязательный `install` с локальными параметрами записи и аутентификации устанавливающего менеджера. Без `server.environments` используются resolved agents проекта; явный writable id записывается даже вне этого набора. Известные unsupported ids дают строку `skipped: unsupported` без пути, а в status — `unsupported`, не влияющий на `--check`. Неизвестные ids, пустые списки и дубликаты запрещены. Добавление writable агента требует нового consent; unsupported ids в consent subject не входят. Managed sessions других environment managers пока не видят эти configs. Подробности: [MCP в project Skillfile](docs/skill-authoring.md#project-mcp-schema-3).
 
+MCP install verifies effective Git ignore rules and output-parent readiness before consent. Conflicting nested ignore rules refuse without publication. Runner/evaluator tokens in `args` also refuse, including aliases and data such as `--tool node`; see the linked MCP declaration rules.
+
 ### Глобальный режим
 
 Глобальный режим устанавливает скиллы один раз на компьютере пользователя в каталог `~/.cocoaskills/global/`. Глобальные скиллы работают во всех каталогах вне зависимости от наличия git-репозитория и файла `Skillfile.json`.

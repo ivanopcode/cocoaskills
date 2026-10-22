@@ -2825,6 +2825,34 @@ def digest_live_targets(
     return digests
 
 
+def preflight_live_parents(paths: tuple[Path, ...]) -> None:
+    """Refuse detectable parent failures without creating directories.
+
+    This is an early readiness check, not authority for a later write. The
+    locked publication still creates/revalidates parents and rolls back.
+    """
+    for path in paths:
+        parent = path.parent
+        needs_write = True
+        while True:
+            try:
+                info = parent.lstat()
+            except FileNotFoundError:
+                parent = parent.parent
+                continue
+            except _FS_ERRORS as exc:
+                raise SourceError(CODE_OUTPUT_OVERLAP, f"Publication parent {parent} cannot be inspected: {exc}") from exc
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                raise SourceError(CODE_OUTPUT_OVERLAP, f"Publication parent {parent} must be a directory without links")
+            access = os.X_OK | (os.W_OK if needs_write else 0)
+            if not os.access(parent, access) or (needs_write and not info.st_mode & 0o222):
+                raise SourceError(CODE_OUTPUT_OVERLAP, f"Publication parent {parent} is not writable/searchable")
+            needs_write = False
+            if parent.parent == parent:
+                break
+            parent = parent.parent
+
+
 def ensure_live_parents(
     specs: tuple[TargetSpec, ...], *, staged: dict[tuple[str, str], Path | None]
 ) -> list[Path]:
@@ -4408,6 +4436,9 @@ def _plan_and_publish_schema2(
             ignores.extend(mcp_ignores)
             ignore_preimage = digest_target(project_path / ".gitignore")
             ignore_bytes = gitignore_gate.plan_ignored(project_path, ignores, fix=True)
+            gitignore_gate.verify_planned_ignored(
+                project_path, mcp_ignores, ignore_bytes, staging_root
+            )
             mcp_project.planned_consent(mcp_plan)
         check_schema2_requirement_commands(specs_map)
         if isinstance(mode, modes.FrozenSources):
@@ -4529,6 +4560,20 @@ def _plan_and_publish_schema2(
             raise _concurrent_state_change(
                 "shared install state changed before the atomic commit"
             ) from exc
+
+        if mcp_plan is not None:
+            readiness_paths = [spec.live_path for spec in planned]
+            readiness_paths.extend(
+                project_path / mcp_plan.surfaces[agent].surface.relpath
+                for agent in mcp_plan.edits
+            )
+            if ignore_bytes is not None:
+                readiness_paths.append(project_path / ".gitignore")
+            if mcp_plan.pending:
+                readiness_paths.append(mcp_ownership.consent_path(home, mcp_plan.consumer))
+            if mcp_plan.edits:
+                readiness_paths.append(mcp_ownership.ledger_path(home, mcp_plan.consumer))
+            preflight_live_parents(tuple(readiness_paths))
 
         external_outputs, external_messages = publish_schema2_external_builds(
             config,
@@ -4697,6 +4742,9 @@ def _plan_and_publish_schema2(
             transaction_id = f"{TRANSACTION_PREFIX}-{slug}-{uuid.uuid4().hex}"
             extra_targets: tuple[MutableTarget, ...] = ()
             if mcp_plan is not None:
+                gitignore_gate.verify_planned_ignored(
+                    project_path, mcp_ignores, ignore_bytes, staging_root
+                )
                 extra_targets = mcp_project.stage_targets(
                     mcp_plan, staging_root, transaction_id
                 )
