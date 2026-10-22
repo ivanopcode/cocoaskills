@@ -985,6 +985,60 @@ def test_windows_schannel_tls_record_classifies_as_tls() -> None:
     assert git_admission._evidence_class(record) == "tls"
 
 
+@pytest.mark.parametrize("port", [51781, 51788])
+def test_windows_openssl_verify_result_record_classifies_as_tls(port: int) -> None:
+    """Exact Windows Git 2.56.0.windows.2 loopback refusals are TLS evidence."""
+    # Captured from both strict-path witnesses in the hosted Windows diagnostic;
+    # the URL is the only varying field, and the verification result is local OpenSSL prose.
+    envelope = (
+        f"fatal: unable to access 'https://127.0.0.1:{port}/kit.git/': "
+        "SSL certificate OpenSSL verify result: self-signed certificate (18)\n"
+    )
+    assert git_admission._classify_git_failure_output(envelope.encode()) == "tls"
+    assert git_admission._evidence_class(envelope.strip().lower()) == "tls"
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        (
+            "fatal: unable to access 'https://127.0.0.1:51781/kit.git/': "
+            "SSL certificate OpenSSL verify result: self-signed certificate (18) extra"
+        ),
+        (
+            "fatal: unable to access 'https://127.0.0.1:51781/kit.git/': "
+            "SSL certificate OpenSSL verify result: self-signed certificate (0)"
+        ),
+        (
+            "fatal: unable to access 'https://127.0.0.1:51781/kit.git/': "
+            "OpenSSL verify result: self-signed certificate (18)"
+        ),
+        (
+            "fatal: unable to access 'https://example.org/"
+            "SSL certificate OpenSSL verify result: self-signed certificate (18)': reset"
+        ),
+        (
+            "remote: fatal: unable to access 'https://127.0.0.1:51781/kit.git/': "
+            "SSL certificate OpenSSL verify result: self-signed certificate (18)"
+        ),
+        (
+            "remote: body\rfatal: unable to access 'https://127.0.0.1:51781/kit.git/': "
+            "SSL certificate OpenSSL verify result: self-signed certificate (18)"
+        ),
+    ],
+)
+def test_windows_openssl_verify_result_near_misses_are_not_evidence(record: str) -> None:
+    # Extra prose, success codes, missing framing, URL interiors and relayed bodies
+    # cannot supply TLS evidence or conflict with a genuine connection refusal.
+    assert git_admission._evidence_class(record.lower()) is None
+    assert git_admission._classify_git_failure_output(record) == "unclassified"
+    refused = (
+        "fatal: unable to access 'https://127.0.0.1:1/kit.git/': "
+        "Failed to connect to 127.0.0.1:1 after 1 ms: Could not connect to server"
+    )
+    assert git_admission._classify_git_failure_output(record + "\n" + refused) == "connection-refused"
+
+
 def test_windows_connection_refused_colon_spelling_classifies() -> None:
     """The newer refused spelling is evidence for the connection-refused class.
 

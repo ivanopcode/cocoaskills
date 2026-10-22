@@ -1630,8 +1630,8 @@ def _run_git(
 #
 # The evidence frames match the curl 8 / OpenSSH 9-10 record generation
 # (verified on curl 8.7.1, git 2.50.1, OpenSSH 10.3, plus the refused
-# spelling git 2.55.0.windows.5 writes); older tool prose fails closed
-# by design.
+# spelling git 2.55.0.windows.5 and the OpenSSL verification result git
+# 2.56.0.windows.2 write); older tool prose fails closed by design.
 
 
 def _evidence_class(record: str) -> str | None:
@@ -1652,6 +1652,16 @@ def _evidence_class(record: str) -> str | None:
         record,
     ) or re.fullmatch(
         r"fatal: unable to access 'https://[^']+': server certificate verification failed.*",
+        record,
+    ) or re.fullmatch(
+        # curl's OpenSSL backend also renders SSL_get_verify_result via
+        # X509_verify_cert_error_string, followed by the nonzero result code
+        # (lib/vtls/openssl.c, Curl_ossl_check_peer_cert). These are local
+        # verification values, not peer-supplied certificate text. Keep the
+        # quoted URL interior separate and require the entire client frame;
+        # remote-prefixed bodies are discarded before this function runs.
+        r"fatal: unable to access 'https://[^']+': ssl certificate openssl "
+        r"verify result: [^()\r\n]+ \([1-9][0-9]*\)",
         record,
     ) or re.fullmatch(
         r"fatal: unable to access 'https://[^']+': schannel: .+",
