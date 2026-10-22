@@ -28,6 +28,24 @@ URL = "https://example.invalid/mcp"
 VECTORS = json.loads((Path(__file__).parent / "fixtures" / "mcp" / "slice1-vectors.json").read_text("utf-8"))
 
 
+# Every wrapper in the product table refuses regardless of payload pinning or executable case/suffix.
+@pytest.mark.parametrize("command", sorted(mcp._INDIRECTION_COMMANDS | mcp._SHELL_COMMANDS | mcp._EVALUATOR_LAUNCHERS))
+@pytest.mark.parametrize("suffix", ["", ".exe"])
+@pytest.mark.parametrize("payload", [["npx", "pkg"], ["npx", "pkg@1.2.3"], ["-e", "do shell script 'true'"]])
+def test_wrapper_table_cannot_hide_runner(command, suffix, payload):
+    refused(stdio(command=command.upper() + suffix, args=payload), "mcp_command_invalid")
+    assert parse_one(stdio(command="npx", args=["pkg@1.2.3"])).server.command == "npx"
+    assert parse_one(stdio()).server.command == "uvx"
+
+
+# Independently listed launchers must stay in the refusal tables; generation alone cannot detect omissions.
+def test_required_wrapper_coverage():
+    assert {"nice", "arch", "caffeinate", "timeout", "stdbuf", "chrt", "taskset", "ionice",
+            "time", "command", "exec", "launchctl", "start"} <= mcp._INDIRECTION_COMMANDS
+    assert {"osascript", "open"} <= mcp._EVALUATOR_LAUNCHERS
+    assert {"cmd", "powershell", "pwsh"} <= mcp._SHELL_COMMANDS
+
+
 # Literal credential signatures in URLs/arguments refuse without echoing their values; normal URLs remain valid.
 @pytest.mark.parametrize("secret", ["ghp_0123456789abcdefghijklmnop", "API_TOKEN=private-example-value", "sk-example0123456789abcdef"])
 @pytest.mark.parametrize("location", ["url", "args"])
@@ -1379,7 +1397,8 @@ def test_module_remains_pure_when_install_is_wired():
     src = Path(mcp.__file__).parent
     callers = [path.name for path in src.rglob("*.py") if "mcp_declarations" in path.read_text("utf-8")
                and path.name != "mcp_declarations.py"]
-    assert callers == ["mcp_project.py"]
+    # Read-only check and project installation share the pure declaration validator.
+    assert sorted(callers) == ["cli.py", "mcp_project.py"]
 
 
 def test_public_api_touches_no_ambient_state(monkeypatch):

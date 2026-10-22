@@ -7,7 +7,7 @@ from .tool_paths import resolve_tool
 
 
 class GitignoreError(Exception):
-    pass
+    code = "gitignore_required"
 
 
 def missing_entries(project_root: Path, entries: list[str]) -> list[str]:
@@ -50,7 +50,8 @@ def append_entries(path: Path, entries: list[str]) -> None:
     if not to_add:
         return
     prefix = "" if existing.endswith("\n") or not existing else "\n"
-    block = prefix + "# CocoaSkill\n" + "\n".join(to_add) + "\n"
+    header = "" if "# CocoaSkill" in lines else "# CocoaSkill\n"
+    block = prefix + header + "\n".join(to_add) + "\n"
     path.write_text(existing + block, encoding="utf-8")
 
 
@@ -89,6 +90,7 @@ def plan_ignored(project_root: Path, entries: list[str], *, fix: bool) -> bytes 
     lines = {line.strip() for line in existing.splitlines()}
     to_add = [entry for entry in missing if entry not in lines]
     prefix = "" if existing.endswith("\n") or not existing else "\n"
-    return (existing + prefix + "# CocoaSkill\n" + "\n".join(to_add) + "\n").encode(
+    header = "" if "# CocoaSkill" in lines else "# CocoaSkill\n"
+    return (existing + prefix + header + "\n".join(to_add) + "\n").encode(
         "utf-8"
     )

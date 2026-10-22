@@ -52,6 +52,7 @@ from .. import (
     manifest,
     shims,
     mcp_project,
+    mcp_ownership,
     gitignore_gate,
 )
 from ..command_names import require_unreserved_command_name
@@ -4275,7 +4276,7 @@ def _install_schema2_resolving(
         )
         pred_files[node.name] = raw.frozen_files()
     members = (*members, *transitive)
-    if not dry_run:
+    if not dry_run and mcp_plan is None:
         stage_schema2_store(home, captured_members)
     capture = _Schema2Capture(
         members=members,
@@ -4391,15 +4392,23 @@ def _plan_and_publish_schema2(
                 raise mcp_project.McpProjectError("; ".join(report.errors))
             mcp_warnings.extend(report.warnings)
             ignores = adapters.required_gitignore_entries(agents)
-            ignores.extend(
-                "/" + mcp_plan.surfaces[agent].surface.relpath
-                for agent, _path in sorted(mcp_plan.created_files)
-                if not gitignore_gate.is_tracked(project_path, _path)
-            )
+            # Preserve the non-MCP gate. Only MCP-owned files are repaired automatically.
+            gitignore_gate.plan_ignored(project_path, ignores, fix=fix_gitignore)
+            owned_files = set(mcp_plan.created_files)
+            if isinstance(mcp_plan.ledger, mcp_ownership.Ledger):
+                owned_files.update(
+                    (e.address.agent, e.address.relpath)
+                    for e in mcp_plan.ledger.entries if e.created_file
+                )
+            mcp_ignores = [
+                "/" + path for _agent, path in sorted(owned_files)
+                if not gitignore_gate.is_tracked(project_path, path)
+            ]
+            added_mcp_ignores = gitignore_gate.missing_entries(project_path, mcp_ignores)
+            ignores.extend(mcp_ignores)
             ignore_preimage = digest_target(project_path / ".gitignore")
-            ignore_bytes = gitignore_gate.plan_ignored(
-                project_path, ignores, fix=fix_gitignore
-            )
+            ignore_bytes = gitignore_gate.plan_ignored(project_path, ignores, fix=True)
+            mcp_project.planned_consent(mcp_plan)
         check_schema2_requirement_commands(specs_map)
         if isinstance(mode, modes.FrozenSources):
             # The frozen lane has no resolution step: the lock membership is
@@ -4540,6 +4549,8 @@ def _plan_and_publish_schema2(
         if dry_run:
             messages = list(plan_messages)
             if mcp_plan is not None:
+                if added_mcp_ignores:
+                    messages.append("would: added MCP gitignore entries: " + ", ".join(added_mcp_ignores))
                 messages.extend(mcp_plan.report(dry_run=True))
                 messages.extend(mcp_warnings)
             messages.extend(gate.warnings)
@@ -4574,6 +4585,15 @@ def _plan_and_publish_schema2(
                 project_path=project_path,
             )
 
+        if mcp_plan is not None:
+            # All non-interactive planning, gates and builds have passed. Review
+            # before publishing store/cache state; consent itself stays staged.
+            mcp_project.assert_current(mcp_plan)
+            mcp_project.review_consent(
+                mcp_plan, interactive=interactive, dry_run=False, project=alias
+            )
+            if isinstance(mode, modes.ResolvingSources):
+                stage_schema2_store(home, captured_members)
         with locking.ManagerHomeLock(home) as home_lock:
             engine = TransactionEngine(home, pre_write_hook=make_publication_hook())
             engine.recover(home_lock)
@@ -4795,6 +4815,8 @@ def _plan_and_publish_schema2(
     lock_replaced = (CLASS_LOCK, "Skillfile.lock.json") in committed
     messages = list(plan_messages)
     if mcp_plan is not None:
+        if added_mcp_ignores:
+            messages.append("added MCP gitignore entries: " + ", ".join(added_mcp_ignores))
         messages.extend(mcp_plan.report())
         messages.extend(mcp_warnings)
     messages.extend(gate.warnings)
@@ -6370,7 +6392,7 @@ def evaluate_schema2_installation(
         return Schema2Status(
             members=tuple(members),
             errors=(
-                "schema-2 installation has no lock; run csk install",
+                f"schema-{manifest_value.schema_version} installation has no lock; run csk install",
                 *readiness_errors,
             ),
             lock_sha256=None,

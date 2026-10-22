@@ -27,6 +27,14 @@ brew install ca-certificates
 
 Здесь описаны ошибки MCP-конфигурации проекта, обновления с ранних версий csk (<=0.12) и работы с компилируемыми командами.
 
+## MCP first run: check, ignore и consent
+
+Начните с `csk init`, затем `csk check` и `csk install`. Schema 3 проходит тот же MCP-валидатор, что install; `check` ничего не записывает и не проверяет auth/connectivity. Install сам добавляет точные ignore entries для создаваемых им MCP configs с локальной git policy. Deprecated `--fix-gitignore` для них не нужен; для остальных generated paths используйте `csk init`.
+
+`gitignore_required` в MCP-строке указывает на общий ignore preflight, а `blocked by project_preflight_failed` — на общую ошибку без отдельного кода: смотрите следующую диагностику проекта. Это не ошибка MCP declaration. Если согласия требует соседний сервер, сервер без такой потребности получает `blocked by mcp_plan_unapproved`.
+
+`mcp_command_invalid` возникает и для wrappers (`nice`, `arch`, `caffeinate`, `timeout` и подобных) и evaluators `osascript`/`open`. Укажите прямой bare executable. Для `npx` нужен точный `package@1.2.3`, для `uvx` — `package==1.2.3`; неприкреплённый пакет даёт `mcp_runtime_pin_required`.
+
 ## mcp_entry_conflict
 
 `csk install` отказывает до публикации скиллов и MCP entries. В native config уже есть чужая запись с тем же именем; совпадение содержимого ownership не даёт.
@@ -43,7 +51,7 @@ brew install ca-certificates
 
 Headless `csk install` отказывает с `mcp_plan_unapproved`. Объявление stdio или env reference требует consent. Интерактивный отказ от согласия даёт тот же результат.
 
-Запустите `csk install` в терминале с TTY для stdin и stdout. Проверьте план и ответьте `y` или `yes` на запрос `Approve N MCP server(s) for <project>? [y/N]`. Флаги, env variables и файлы проекта не подтверждают consent. Для просмотра без записи используйте `csk install --dry-run`; эта команда не сохраняет согласие. HTTP URL без env reference consent не требует.
+Запустите `csk install` в терминале с TTY для stdin и stdout. Проверьте план и ответьте `y` или `yes` на запрос `Approve N MCP server(s) for <project>? [y/N]`. Флаги, env variables и файлы проекта не подтверждают consent. Для просмотра без записи используйте `csk install --dry-run`; эта команда не сохраняет согласие. Запрос согласия появляется после неинтерактивных preflight-проверок, а новое согласие сохраняется в одной транзакции с конфигурациями. После ошибки публикации повторная установка снова запросит согласие. HTTP URL без env reference consent не требует.
 
 ## mcp_native_config_unsupported_syntax
 
