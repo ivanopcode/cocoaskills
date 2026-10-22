@@ -370,7 +370,7 @@ def test_unsupported_rows_sort_with_each_server(project_cli):
 
 
 def test_consent_refusal_retains_absent_owned_pairs(tmp_path):
-    # A late consent refusal includes absent owned entries that success would silently forget, plus unsupported rows.
+    # A consent refusal retains absent owned pairs as blocked by the new plan, plus unsupported rows.
     case = _case(tmp_path / "absent-owned")
     case.declare({"old": URL})
     assert case.run("--fix-gitignore").returncode == 0
@@ -386,7 +386,7 @@ def test_consent_refusal_retains_absent_owned_pairs(tmp_path):
         "mcp api -> cursor .cursor/mcp.json (refused: mcp_plan_unapproved)",
         "mcp api -> gemini (skipped: unsupported)",
         *[
-            f"mcp old -> {agent} {path} (refused: mcp_plan_unapproved)"
+            f"mcp old -> {agent} {path} (blocked by mcp_plan_unapproved)"
             for agent, path in SURFACES
         ],
     ]
