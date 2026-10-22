@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from . import git_ops
@@ -136,8 +137,18 @@ def verify_planned_ignored(
                 source_path = worktree / source_path
             value = str(source_path)
         config_args = ["-c", "core.excludesFile=" + value]
-    # info/exclude remains in the reused metadata; implicit XDG/HOME excludes
-    # and config includes retain their original environment and source paths.
+    else:
+        # Git also permits relative XDG/HOME values for its implicit global
+        # excludes source. Freeze those against the same live root too.
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        home = os.environ.get("HOME")
+        default = Path(xdg) / "git/ignore" if xdg else (
+            Path(home) / ".config/git/ignore" if home else None
+        )
+        if default is not None and not default.is_absolute():
+            config_args = ["-c", "core.excludesFile=" + str(worktree / default)]
+    # info/exclude remains in the reused metadata. Absolute implicit global
+    # excludes and config includes retain their environment and source paths.
     try:
         project_rel = project_root.resolve().relative_to(worktree.resolve())
         staged = staging_root / "ignore-worktree"

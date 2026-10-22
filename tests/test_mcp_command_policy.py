@@ -173,3 +173,27 @@ def test_consent_exact_argv_and_scope(project_cli, monkeypatch, capsys, command,
     output = capsys.readouterr().out
     assert json.dumps([command, *args]) in output
     assert ("csk cannot verify what this program runs." in output) == opaque
+
+
+# Relative implicit global excludes have the same root-context obligation as
+# core.excludesFile; this also keeps subdirectory callers from changing policy.
+@pytest.mark.parametrize("kind", ["xdg", "home"])
+def test_relative_default_excludes(project_cli, tmp_path, monkeypatch, kind):
+    from csk import gitignore_gate
+    root, home, _ = project_cli
+    if kind == "xdg":
+        monkeypatch.setenv("XDG_CONFIG_HOME", "global-config")
+        excludes = root / "global-config/git/ignore"
+    else:
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        monkeypatch.setenv("HOME", "relative-home")
+        excludes = root / "relative-home/.config/git/ignore"
+    excludes.parent.mkdir(parents=True, exist_ok=True)
+    excludes.write_text("/.mcp.json\n/.codex/config.toml\n/.cursor/mcp.json\n")
+    entries = ["/" + path for path in PATHS]
+    assert gitignore_gate.plan_ignored(root, entries, fix=True) is None
+    before = _snapshot(root, home)
+    stage = tmp_path / "private-default-ignore"
+    stage.mkdir()
+    gitignore_gate.verify_planned_ignored(root, entries, None, stage)
+    assert _snapshot(root, home) == before
