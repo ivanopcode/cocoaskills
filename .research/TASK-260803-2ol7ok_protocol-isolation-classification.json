@@ -5,7 +5,7 @@
   "protocol_commit": "0ed5c691e9208eea52f21db2fc05e226ce3516fd",
   "audited_files_sha256": {
     "tests/test_protocol_conformance.py": "06d5fa20a02ac40e075d367d056961abbef6d38b4088b368180c715046fab435",
-    "tests/protocol_conformance_adapters.py": "fd5ba2194f753b8c9081e4e9b45e22be4f8a0346778c85ba3e87726a29aad29e",
+    "tests/protocol_conformance_adapters.py": "d54d77b4c42c3addc2766c7c5ec6e43d35834589fa06e684b39cb24fa038ce69",
     "tests/protocol_lifecycle_observations.py": "05d859d04f328d8538b05935f88d99806b9359598a5e447e35c12dd6972cc9d6",
     "tests/conftest.py": "8fd4a959143f82b49ac77abc170b46b2175281c669b48aab14e94862656f63db"
   },
@@ -167,6 +167,15 @@
       "change": "Use a worker-local session-generated public CA for incidental Git operations; explicit trust tests still select their own mutable bundle or clear the override to exercise platform defaults.",
       "isolation_neutral": false,
       "rationale": "The uniform per-test environment now selects public PEM bytes generated under the existing pytest temporary root. Existing stable_env teardown restores the override. No protocol node is added, removed, renamed or reparameterized. Protocol nodes do not inspect this override or use HTTPS Git trust; local Git fixtures retain their repository and environment isolation. The session fixture adds no child process, lock, cwd change or shared external write; the CA is immutable, read-only across tests and worker-local. Existing environment, temporary-root and cache footprints remain conservative; atomic clusters and shard assignments are unchanged."
+    },
+    {
+      "date": "2026-10-23",
+      "file": "tests/protocol_conformance_adapters.py",
+      "previous_sha256": "fd5ba2194f753b8c9081e4e9b45e22be4f8a0346778c85ba3e87726a29aad29e",
+      "sha256": "d54d77b4c42c3addc2766c7c5ec6e43d35834589fa06e684b39cb24fa038ce69",
+      "change": "Write GOROOT/VERSION matching the probed go version into the fake Darwin roots of _projected_darwin_toolchain and _assert_fixed_environment_and_argv, through the new helper _write_goroot_release_evidence, so the Go release gate accepts the modelled trusted root.",
+      "isolation_neutral": true,
+      "rationale": "No protocol node was added, removed, renamed, or reparameterized. The only new effect is one regular file written under each test's own tmp_path fake GOROOT, beside the launcher the fixture already writes there; environment, cwd, temp-root, subprocess, lock, cache, platform and shared-state footprints are unchanged, so node IDs, atomic clusters and shard assignments stay the same."
     }
   ],
   "method": {
