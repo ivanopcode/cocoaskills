@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -84,6 +85,19 @@ def executable(path, body=b"opaque binary fixture\n"):
     return path
 
 
+def runner_guard(tmp_path, monkeypatch, search):
+    """Every dispatch oracle puts owned recording runners first in PATH."""
+    stub = tmp_path / "stub"
+    stub.mkdir()
+    marker = tmp_path / "invoked"
+    for name in ("npx", "uvx", "npm", "pnpm", "yarn", "bunx", "pipx", "uv", "pnpx", "dx"):
+        executable(stub / name, b'#!/bin/sh\nprintf "%s\\n" "$*" > "$REVIEW_MARKER"\n')
+    monkeypatch.setenv("PATH", str(stub) + os.pathsep + search + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("REVIEW_MARKER", str(marker))
+    assert all(shutil.which(name) == str(stub / name) for name in ("npx", "uvx", "npm", "pnpm", "yarn", "bunx", "pipx"))
+    return marker
+
+
 # Owned aliases and shebangs refuse without executing their marker payload;
 # a chain and executable suffix exercise the same normalized shared inventory.
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink and shebang fixture")
@@ -136,9 +150,9 @@ def test_cli_resolved_evaluator_refuses(project_cli, tmp_path, monkeypatch, caps
     assert _snapshot(root, home) == before
 
 
-# Exact runner recipes retain their interpreter substrate; jq and ordinary
+# Exact runner recipes retain their interpreter substrate; ordinary
 # opaque/unresolvable programs remain valid. No control executable is run.
-@pytest.mark.parametrize("command,args", [("npx", ["pkg@1.2.3"]), ("uvx", ["pkg==1.2.3"]), ("my-server", ["--port", "1"]), ("jq", ["."]), ("missing-server", [])])
+@pytest.mark.parametrize("command,args", [("npx", ["pkg@1.2.3"]), ("uvx", ["pkg==1.2.3"]), ("my-server", ["--port", "1"]), ("my-filter", ["."]), ("missing-server", [])])
 def test_resolution_positive_controls(tmp_path, monkeypatch, command, args):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -182,7 +196,7 @@ def test_path_selection_boundaries(tmp_path, monkeypatch, kind):
 
 
 # Only the selected candidate is opened, through its original kernel-resolved
-# path, and at most 256 bytes are read. A known shebang refuses; an opaque body
+# path, and at most 1024 bytes are read. A known shebang refuses; an opaque body
 # remains valid even when a symlink reaches outside the literal PATH directory.
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink fixture")
 @pytest.mark.parametrize("target_name", ["vim", "opaque"])
@@ -203,7 +217,7 @@ def test_selected_candidate_body_bound(tmp_path, monkeypatch, target_name, sheba
         return original_open(path, *args, **kwargs)
     def bounded_read(descriptor, size):
         sizes.append(size)
-        assert size <= 256
+        assert size <= 1024
         return original_read(descriptor, size)
     monkeypatch.setattr(resolution.os, "open", selected_open)
     monkeypatch.setattr(resolution.os, "read", bounded_read)
@@ -213,7 +227,7 @@ def test_selected_candidate_body_bound(tmp_path, monkeypatch, target_name, sheba
             resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
     else:
         resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
-    assert opened == [candidate] and sizes == [256]
+    assert opened == [candidate] and sizes == [1024]
     assert (outside / target_name).read_bytes() == body
 
 
@@ -251,12 +265,7 @@ def parent_component_fixture(tmp_path, kind, *, evaluator):
 def test_parent_component_cli_refuses(project_cli, tmp_path, monkeypatch, capsys, kind, argv):
     root, home, declare = project_cli
     search, _ = parent_component_fixture(tmp_path, kind, evaluator=True)
-    stub = tmp_path / "stub"
-    stub.mkdir()
-    marker = tmp_path / "invoked"
-    executable(stub / "npx", b'#!/bin/sh\nprintf "%s\\n" "$*" > "$REVIEW_MARKER"\n')
-    monkeypatch.setenv("PATH", search + os.pathsep + str(stub) + os.pathsep + os.environ["PATH"])
-    monkeypatch.setenv("REVIEW_MARKER", str(marker))
+    marker = runner_guard(tmp_path, monkeypatch, search)
     args = ["-Nu", "NONE", "-i", "NONE", "-n", "-es", "-c", "call system('n'.'px pkg')", "-c", "qa!"]
     dispatch = subprocess.run(["myedit", *args], cwd=root, capture_output=True, text=True, timeout=5)
     assert dispatch.returncode == 0 and marker.read_text() == "pkg\n"
@@ -310,12 +319,7 @@ def test_kernel_selection_cli_refuses(project_cli, tmp_path, monkeypatch, capsys
             pytest.skip("requires case-insensitive filesystem")
         (first / "payload").symlink_to("/usr/bin/vim")
         (first / "myedit").symlink_to(alternate / "payload")
-    stub = tmp_path / "stub"
-    stub.mkdir()
-    marker = tmp_path / "invoked"
-    executable(stub / "npx", b'#!/bin/sh\nprintf "%s\\n" "$*" > "$REVIEW_MARKER"\n')
-    monkeypatch.setenv("PATH", search + os.pathsep + str(stub) + os.pathsep + os.environ["PATH"])
-    monkeypatch.setenv("REVIEW_MARKER", str(marker))
+    marker = runner_guard(tmp_path, monkeypatch, search)
     args = ["-Nu", "NONE", "-i", "NONE", "-n", "-es", "-c", "call system('n'.'px pkg')", "-c", "qa!"]
     result = subprocess.run(["myedit", *args], cwd=root, capture_output=True, text=True, timeout=5)
     assert result.returncode == 0 and marker.read_text() == "pkg\n"
@@ -360,10 +364,10 @@ def test_kernel_identity_interpreter_refuses(tmp_path, monkeypatch):
     assert opened == [candidate]
 
 
-# Bytes beyond the selected 256-byte header do not participate in admission;
+# Bytes beyond the selected 1024-byte header do not participate in admission;
 # this is a bounded header observation, never a scan of arbitrary binary bodies.
 def test_selected_header_bound_positive_control(tmp_path, monkeypatch):
-    executable(tmp_path / "my-server", b"x" * 256 + b"\n#!/bin/sh\n")
+    executable(tmp_path / "my-server", b"x" * 1024 + b"\n#!/bin/sh\n")
     monkeypatch.setenv("PATH", str(tmp_path))
     resolution.validate_host_commands(parse("my-server", ["--port", "1"]), cwd=tmp_path)
 
@@ -435,7 +439,7 @@ def test_resolution_bounded_neighbors(tmp_path, monkeypatch, kind):
 # recording stub; check/dry-run/terminal install must instead refuse with no writes.
 @pytest.mark.skipif(sys.platform != "darwin", reason="actual macOS system alias dispatch witness")
 @pytest.mark.parametrize("command", ["view", "vimdiff"])
-def test_default_vim_alias_real_cli_refuses(project_cli, tmp_path, command):
+def test_default_vim_alias_real_cli_refuses(project_cli, tmp_path, monkeypatch, command):
     import errno
     import pty
     import select
@@ -445,11 +449,8 @@ def test_default_vim_alias_real_cli_refuses(project_cli, tmp_path, command):
     assert system_alias.is_symlink() and system_alias.resolve() == Path("/usr/bin/vim")
     args = ["-Nu", "NONE", "-i", "NONE", "-n", "-es", "-c", "call system('n'.'px pkg')", "-c", "qa!"]
     declare(stdio(command, args))
-    stub = tmp_path / "stub-bin"
-    stub.mkdir()
-    marker = tmp_path / "invoked"
-    executable(stub / "npx", b'#!/bin/sh\nprintf "%s\\n" "$*" > "$REVIEW_MARKER"\n')
-    env = dict(os.environ, PATH=str(stub) + os.pathsep + os.environ["PATH"], REVIEW_MARKER=str(marker))
+    marker = runner_guard(tmp_path, monkeypatch, "/usr/bin")
+    env = os.environ.copy()
     dispatch = subprocess.run([str(system_alias), *args], cwd=root, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
     assert dispatch.returncode == 0 and marker.read_text() == "pkg\n"
     before = _snapshot(root, home)

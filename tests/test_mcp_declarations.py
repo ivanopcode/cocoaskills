@@ -1813,9 +1813,9 @@ def test_argument_word_inventory(form):
 
 
 # Recognized pin recipes and unknown bare programs retain their explicit scope;
-# hyphens are word characters, and jq does not execute subprocesses.
+# hyphens are word characters. Base-system names have their own refusal policy.
 @pytest.mark.parametrize("command,args", [("npx", ["pkg@1.2.3"]), ("uvx", ["pkg==1.2.3"]),
-    ("my-server", ["--port", "1"]), ("my-server", ["--node-id", "ordinary"]), ("jq", [".name"])])
+    ("my-server", ["--port", "1"]), ("my-server", ["--node-id", "ordinary"]), ("my-filter", [".name"])])
 def test_word_scan_positive_controls(command, args):
     assert parse_one(stdio(command, args=args)).server.args == tuple(args)
 

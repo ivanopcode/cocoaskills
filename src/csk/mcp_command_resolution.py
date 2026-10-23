@@ -1,6 +1,6 @@
 """Read-only, point-in-time kernel PATH and evaluator-identity observations.
 
-Only the selected executable's first 256 bytes are read. No command is executed.
+Only the selected executable's first 1024 bytes are read. No command is executed.
 Concurrent replacement and a same-user attacker who can write PATH directories
 are outside this boundary; the check does not freeze filesystem identities.
 """
@@ -8,19 +8,25 @@ are outside this boundary; the check does not freeze filesystem identities.
 from __future__ import annotations
 
 import os
-import shlex
 import stat
 from collections.abc import Mapping
 from pathlib import Path
 
 from . import mcp_declarations as declarations
+from .mcp_base_commands import EXEC_CAPABLE_BASE_COMMANDS, is_mcpbridge
 
+_BASE_DIRECTORIES = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 _SYSTEM_DIRECTORIES = ("/usr/bin", "/bin", "/usr/sbin", "/sbin", "/usr/local/bin", "/opt/homebrew/bin")
 _Identity = tuple[int, int]
 
 
+class _ObservationRefused(Exception):
+    """The selected script or identity inventory cannot be safely observed."""
+
+
 def _known_evaluator(name: str) -> bool:
-    return declarations._command_kind(declarations._normalize_command(name)) is not None
+    normalized = declarations._normalize_command(name)
+    return declarations._command_kind(normalized) is not None or normalized in EXEC_CAPABLE_BASE_COMMANDS
 
 
 def _path_directories(path: str, cwd: Path) -> tuple[str, ...]:
@@ -31,6 +37,42 @@ def _path_directories(path: str, cwd: Path) -> tuple[str, ...]:
 
 def _identity(info: os.stat_result) -> _Identity:
     return info.st_dev, info.st_ino
+
+
+def _base_system_roots() -> tuple[str, ...]:
+    if os.name == "nt":
+        root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
+        return (root,) if root else ()
+    return _BASE_DIRECTORIES
+
+
+def _base_system_inodes() -> set[_Identity]:
+    identities: set[_Identity] = set()
+    visited: set[_Identity] = set()
+    pending = list(_base_system_roots())
+    while pending:
+        directory = pending.pop()
+        try:
+            info = os.stat(directory)
+            identity = _identity(info)
+            if not stat.S_ISDIR(info.st_mode) or identity in visited:
+                continue
+            visited.add(identity)
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    try:
+                        info = entry.stat()
+                        if stat.S_ISREG(info.st_mode):
+                            identities.add(_identity(info))
+                        elif os.name == "nt" and entry.is_dir(follow_symlinks=False):
+                            pending.append(entry.path)
+                    except OSError:
+                        continue
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise _ObservationRefused("base-system identities cannot be enumerated") from exc
+    return identities
 
 
 def _evaluator_inodes(directories: tuple[str, ...]) -> set[_Identity]:
@@ -44,10 +86,10 @@ def _evaluator_inodes(directories: tuple[str, ...]) -> set[_Identity]:
                     # Actual spellings include versioned names, executable
                     # suffixes and case aliases recognized by the pure table.
                     names = {entry.name for entry in entries if _known_evaluator(entry.name)}
-            except OSError:
-                # Searchable directories need not permit enumeration.
-                names = {name + suffix for name in declarations._COMMAND_KINDS
-                         for suffix in ("", *declarations._EXECUTABLE_SUFFIXES)}
+            except OSError as exc:
+                # Guessing finite lowercase spellings loses versioned and
+                # mixed-case names. Refuse an incomplete identity observation.
+                raise _ObservationRefused("PATH identities cannot be enumerated") from exc
             for name in names:
                 try:
                     info = os.stat(os.path.join(directory, name))
@@ -76,12 +118,16 @@ def _selected_candidate(command: str, directories: tuple[str, ...]) -> tuple[str
     return None
 
 
-def _resolved_evaluator(command: str, *, path: str, cwd: Path) -> bool:
+def _resolved_evaluator(command: str, *, path: str, cwd: Path, runner: bool = False) -> bool:
     directories = _path_directories(path, cwd)
     selected = _selected_candidate(command, directories)
     if selected is None:
         return False
     candidate, info = selected
+    if _identity(info) in _base_system_inodes():
+        return True
+    if runner:
+        return False
     identities = _evaluator_inodes(directories)
     if _identity(info) in identities:
         return True
@@ -92,7 +138,7 @@ def _resolved_evaluator(command: str, *, path: str, cwd: Path) -> bool:
         try:
             if not stat.S_ISREG(os.fstat(descriptor).st_mode):
                 return False
-            head = os.read(descriptor, 256)
+            head = os.read(descriptor, 1024)
         finally:
             os.close(descriptor)
     except OSError:
@@ -100,26 +146,29 @@ def _resolved_evaluator(command: str, *, path: str, cwd: Path) -> bool:
         return False
     if not head.startswith(b"#!"):
         return False
+    if b"\n" not in head:
+        raise _ObservationRefused("script header has no newline within 1024 bytes")
+    # Kernels split at horizontal whitespace; shell quoting does not apply.
+    # In particular, CR is part of the interpreter path, not whitespace to strip.
+    raw = head.split(b"\n", 1)[0][2:].lstrip(b" \t")
+    interpreter_bytes = raw.split(b" ", 1)[0].split(b"\t", 1)[0]
     try:
-        words = shlex.split(head.split(b"\n", 1)[0][2:].decode("utf-8", errors="replace").strip())
-    except ValueError:
-        return False
-    interpreters = [(words[0], False)] if words else []
-    if words and declarations._normalize_command(words[0]) == "env" and len(words) > 1:
-        interpreters.append((words[1], True))
-    for interpreter, search_path in interpreters:
-        if _known_evaluator(interpreter):
-            return True
-        try:
-            if search_path:
-                resolved = _selected_candidate(interpreter, directories)
-                if resolved is not None and _identity(resolved[1]) in identities:
-                    return True
-            elif _identity(os.stat(os.path.join(os.fspath(cwd), interpreter))) in identities:
-                return True
-        except (OSError, ValueError):
-            continue
-    return False
+        interpreter = interpreter_bytes.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise _ObservationRefused("script interpreter path is not valid UTF-8") from exc
+    if not interpreter:
+        raise _ObservationRefused("script interpreter path is empty")
+    interpreter_path = os.path.join(os.fspath(cwd), interpreter)
+    try:
+        interpreter_info = os.stat(interpreter_path)
+        executable = stat.S_ISREG(interpreter_info.st_mode) and os.access(interpreter_path, os.X_OK)
+    except (OSError, ValueError):
+        executable = False
+    if not executable:
+        raise _ObservationRefused("script interpreter is not an executable regular file")
+    # env is already a recognized wrapper; no unreachable second-stage env X
+    # search and no interpreter-body or nested-interpreter traversal is needed.
+    return _known_evaluator(interpreter) or _identity(interpreter_info) in identities
 
 
 def validate_host_commands(
@@ -134,10 +183,18 @@ def validate_host_commands(
         command = declaration.server.command
         if declaration.server.transport != "stdio" or command is None:
             continue
-        if declarations._normalize_command(command) in {"npx", "uvx", "uv"}:
+        if is_mcpbridge(command, declaration.server.args):
             continue
-        if _resolved_evaluator(command, path=path, cwd=cwd):
+        runner = declarations._normalize_command(command) in {"npx", "uvx", "uv"}
+        try:
+            refused = _resolved_evaluator(command, path=path, cwd=cwd, runner=runner)
+        except _ObservationRefused as exc:
             raise declarations.McpDeclarationError(
                 "mcp_command_invalid", f"mcp_servers.{name}.server.command",
-                "resolved command uses a recognized evaluator or wrapper",
+                f"command {command!r} is unresolvable: {exc}",
+            ) from exc
+        if refused:
+            raise declarations.McpDeclarationError(
+                "mcp_command_invalid", f"mcp_servers.{name}.server.command",
+                "resolved command is a base-system program or recognized evaluator/wrapper",
             )

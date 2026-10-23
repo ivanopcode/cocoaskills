@@ -266,23 +266,39 @@ on characters outside `[A-Za-z0-9_.+-]`, ignores case, strips path prefixes and
 Thus `a=npx pkg`, `system("npx pkg")`, `--exec=npx` and data containing the word
 `node` refuse; `--node-id` and `my-server --port 1` remain valid. This intentionally
 fails closed on false positives. Direct supported pinned `npx`/`uvx` remain valid.
-The shared inventory includes system and package aliases such as `view`,
-`vimdiff`, `rview` and `editor`, including words inside arguments. In addition,
-`check` and install inspect the current host PATH relative to the project.
-Kernel `stat` and executable-access checks select the first regular executable,
-keeping symlinks, case aliases, separators and parent components intact. Its
-filesystem identity is compared with recognized evaluator names found in PATH
-and the default system directories. Matching symlinks and hard links refuse
-with `mcp_command_invalid`. Only the selected candidate's first 256 bytes may
-be read, through that candidate path, to recognize a shebang interpreter by name
-or identity; interpreter bodies are not read. No command is executed. Missing,
-unreadable or otherwise unrecognized targets retain the portable table result.
-Supported runner recipes retain their expected interpreter substrate.
+Системные программы ОС не могут быть MCP-сервером, кроме `xcrun mcpbridge`.
+The exception requires command `xcrun` and args exactly `["mcpbridge"]`; extra
+arguments, other tools and alternate executable spellings refuse. Every
+normalized name in the committed base-system inventory refuses as command,
+regardless of PATH. That inventory combines the dated macOS system-directory
+snapshot with documented Linux base and Windows System32/Git for Windows
+families. Thus `jq` is refused too: it is in the macOS base inventory, even if
+another installation is first in PATH. The evaluator/runner table remains in
+force, and exec-capable base wrappers such as `apply`, `lockf`, `xcrun`,
+`sandbox-exec`, `ssh-agent`, `screen` and `tmux` also refuse as argument words.
+`check` and install use kernel stat/access to select the first regular executable
+without normalizing PATH components. Any selected inode present in `/usr/bin`,
+`/bin`, `/usr/sbin` or `/sbin` (macOS/Linux), or under `%SystemRoot%` (Windows),
+refuses, including an opaque symlink or hardlink alias. Known evaluator inode
+identities in other PATH/default directories also refuse. A searchable directory
+that cannot be enumerated fails closed instead of guessing incomplete versioned
+or case-sensitive spellings. No command is executed.
+Only the selected candidate's first 1024 bytes may be read. For a shebang,
+interpreter text uses strict UTF-8 and kernel-style horizontal whitespace,
+without shell quoting or stripping CR. An invalid/non-executable interpreter or
+no newline within that window refuses with `mcp_command_invalid`, naming the
+bare candidate; selection does not continue to a later PATH entry. Interpreter
+bodies and nested interpreter chains are not read. `env` already refuses as a
+wrapper. Missing or unreadable non-base candidates retain the portable result;
+supported exact-pin runners retain their expected interpreter substrate after
+the base-inode check.
 This is a point-in-time host check: concurrent directory/executable replacement
 or another agent's later PATH can differ, and filesystem identities are not
 frozen. A same-user attacker who can write PATH directories already controls the
-agent and is outside this boundary. It does not inspect arbitrary binaries or
-prove what an opaque program runs.
+agent and is outside this boundary. A third-party evaluator outside base dirs
+remains opaque unless its name or inode matches the evaluator inventory; a copy
+outside those dirs need not share an inventoried inode. This is no sandbox or
+proof of what an opaque program runs.
 
 Any remaining bare program runs as is: csk cannot verify what it runs. Consent shows
 its exact command and argument array and states this limit. This is no sandbox or
@@ -511,3 +527,9 @@ limits. Reviewed snapshots and package source links live in
 `tests/fixtures/mcp/macos-evaluator-aliases.json` and
 `tests/fixtures/mcp/packaged-evaluator-aliases.json`. Restricted editor aliases
 and scripts interpreted by a refused program are conservatively refused too.
+
+
+Run `PYTHONDONTWRITEBYTECODE=1 uv run python .scripts/scan_mcp_base_commands.py > .temp/macos-base-commands.json`
+for a name/stat-only base-system snapshot. Review it with the documented package
+families in `tests/fixtures/mcp/base-system-commands.json`; runtime policy data
+is committed in `src/csk/mcp_base_commands.py`. Neither scanner executes programs.

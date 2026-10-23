@@ -1,0 +1,6343 @@
+{
+  "date": "2026-10-23",
+  "exec_capable": [
+    "alias",
+    "apachectl",
+    "apply",
+    "apropos",
+    "ar",
+    "arch",
+    "as",
+    "asa",
+    "ash",
+    "at",
+    "atq",
+    "atrm",
+    "automator",
+    "awk",
+    "bash",
+    "bashbug",
+    "batch",
+    "bc",
+    "bg",
+    "binhex.pl",
+    "binhex5.34.pl",
+    "bison",
+    "bm4",
+    "bsdtar",
+    "bundle",
+    "bundler",
+    "bzcmp",
+    "bzdiff",
+    "bzless",
+    "bzmore",
+    "c++",
+    "c++filt",
+    "c89",
+    "c99",
+    "caffeinate",
+    "cc",
+    "cd",
+    "chfn",
+    "chpass",
+    "chpst",
+    "chroot",
+    "chrt",
+    "chsh",
+    "clang",
+    "clang++",
+    "clangd",
+    "cmd",
+    "cmpdylib",
+    "codesign_allocate",
+    "command",
+    "config_data",
+    "config_data5.34",
+    "corelist",
+    "corelist5.34",
+    "cpan",
+    "cpan5.34",
+    "cpio",
+    "cpp",
+    "cpu_profiler.d",
+    "crc32",
+    "crc325.34",
+    "crond",
+    "crontab",
+    "cscript",
+    "csh",
+    "ctags",
+    "ctf_insert",
+    "cups-config",
+    "curl-config",
+    "cvadmin",
+    "cvaffinity",
+    "cvcp",
+    "cvdb",
+    "cvdbset",
+    "cvfsck",
+    "cvfsdb",
+    "cvfsid",
+    "cvgather",
+    "cvlabel",
+    "cvmkdir",
+    "cvmkfile",
+    "cvmkfs",
+    "cvupdatefs",
+    "cvversions",
+    "dappprof",
+    "dapptrace",
+    "dash",
+    "dbicadmin",
+    "dbicadmin5.34",
+    "dbilogstrip",
+    "dbilogstrip5.34",
+    "dbiprof",
+    "dbiprof5.34",
+    "dbiproxy",
+    "dbiproxy5.34",
+    "dbmmanage",
+    "dc",
+    "debinhex.pl",
+    "debinhex5.34.pl",
+    "derez",
+    "dpkg",
+    "dsymutil",
+    "dtruss",
+    "dwarfdump",
+    "dyld_info",
+    "ed",
+    "enc2xs",
+    "enc2xs5.34",
+    "encguess",
+    "encguess5.34",
+    "env",
+    "envdir",
+    "envuidgid",
+    "erb",
+    "errinfo",
+    "ex",
+    "exec",
+    "execsnoop",
+    "expect",
+    "eyapp",
+    "eyapp5.34",
+    "fc",
+    "fcgistarter",
+    "fddist",
+    "fg",
+    "find",
+    "findrule",
+    "findrule5.34",
+    "fixproc",
+    "flex",
+    "flex++",
+    "forfiles",
+    "ftpd",
+    "fuser",
+    "g++",
+    "gatherheaderdoc",
+    "gawk",
+    "gcc",
+    "gcov",
+    "gem",
+    "gen_bridge_metadata",
+    "getfileinfo",
+    "getopts",
+    "getty",
+    "git",
+    "git-receive-pack",
+    "git-shell",
+    "git-upload-archive",
+    "git-upload-pack",
+    "gm4",
+    "gnumake",
+    "gperf",
+    "gzexe",
+    "h2ph",
+    "h2ph5.34",
+    "h2xs",
+    "h2xs5.34",
+    "hash",
+    "hdxml2manxml",
+    "headerdoc2html",
+    "heap",
+    "htmltree",
+    "htmltree5.34",
+    "httpd",
+    "httpd-wrapper",
+    "hush",
+    "ifdown",
+    "ifup",
+    "imptrace",
+    "indent",
+    "inetd",
+    "init",
+    "insmod",
+    "install_name_tool",
+    "instmodsh",
+    "instmodsh5.34",
+    "ionice",
+    "iopattern",
+    "iopending",
+    "iosnoop",
+    "iotop",
+    "ip2cc",
+    "ip2cc5.34",
+    "ipcount",
+    "ipcount5.34",
+    "iptab",
+    "iptab5.34",
+    "irb",
+    "java",
+    "jobs",
+    "jrunscript",
+    "jshell",
+    "json_pp",
+    "json_pp5.34",
+    "json_xs",
+    "json_xs5.34",
+    "kadmin.local",
+    "keychain-access",
+    "klist_cdhashes",
+    "krb5-config",
+    "ksh",
+    "lastwords",
+    "launchctl",
+    "ld",
+    "leaks",
+    "less",
+    "lex",
+    "libnetcfg",
+    "libnetcfg5.34",
+    "libtool",
+    "linux32",
+    "linux64",
+    "lipo",
+    "lldb",
+    "llvm-g++",
+    "llvm-gcc",
+    "lockf",
+    "login",
+    "lorder",
+    "lwp-download",
+    "lwp-download5.34",
+    "lwp-dump",
+    "lwp-dump5.34",
+    "lwp-mirror",
+    "lwp-mirror5.34",
+    "lwp-request",
+    "lwp-request5.34",
+    "m4",
+    "macerror",
+    "macerror5.34",
+    "machine",
+    "make",
+    "malloc_history",
+    "man",
+    "manpath",
+    "mdev",
+    "mib2c",
+    "mib2c-update",
+    "mig",
+    "modprobe",
+    "moose-outdated",
+    "moose-outdated5.34",
+    "more",
+    "mount_acfs",
+    "mp2bug",
+    "ncurses5.4-config",
+    "net-server",
+    "net-server5.34",
+    "net-snmp-cert",
+    "net-snmp-config",
+    "net-snmp-create-v3-user",
+    "newgrp",
+    "nice",
+    "nm",
+    "nmedit",
+    "nohup",
+    "objdump",
+    "open",
+    "opensnoop",
+    "openssl",
+    "openvt",
+    "osascript",
+    "otool",
+    "package-stash-conflicts",
+    "package-stash-conflicts5.34",
+    "pagesize",
+    "pagestuff",
+    "par.pl",
+    "par5.34.pl",
+    "pcap-config",
+    "perl",
+    "perlbug",
+    "perlbug5.34",
+    "perldoc",
+    "perldoc5.34",
+    "perlivp",
+    "perlivp5.34",
+    "perlthanks",
+    "perlthanks5.34",
+    "piconv",
+    "piconv5.34",
+    "pip3",
+    "pl2pm",
+    "pl2pm5.34",
+    "pod2html",
+    "pod2html5.34",
+    "pod2man",
+    "pod2man5.34",
+    "pod2readme",
+    "pod2readme5.34",
+    "pod2text",
+    "pod2text5.34",
+    "pod2usage",
+    "pod2usage5.34",
+    "podchecker",
+    "podchecker5.34",
+    "power_report.sh",
+    "powershell",
+    "pp",
+    "pp5.34",
+    "procsystime",
+    "prove",
+    "prove5.34",
+    "ptar",
+    "ptar5.34",
+    "ptardiff",
+    "ptardiff5.34",
+    "ptargrep",
+    "ptargrep5.34",
+    "python3",
+    "rails",
+    "rake",
+    "ranlib",
+    "rdoc",
+    "read",
+    "regsvr32",
+    "resmerger",
+    "resolvelinks",
+    "rez",
+    "ri",
+    "rotatelogs",
+    "rpcgen",
+    "rpm",
+    "rsync",
+    "ruby",
+    "run-parts",
+    "rundll32",
+    "runsv",
+    "runsvdir",
+    "rview",
+    "rvim",
+    "rwsnoop",
+    "sampleproc",
+    "sandbox-exec",
+    "sc_auth",
+    "scandeps.pl",
+    "scandeps5.34.pl",
+    "schtasks",
+    "scp",
+    "screen",
+    "script",
+    "sdiff",
+    "sdx",
+    "sed",
+    "segedit",
+    "setarch",
+    "setfile",
+    "setsid",
+    "setuidgid",
+    "sftp",
+    "sh",
+    "shar",
+    "shasum",
+    "shasum5.34",
+    "shortcuts",
+    "size",
+    "slogin",
+    "smbdiagnose",
+    "sndiskmove",
+    "snfsdefrag",
+    "snmp-bridge-mib",
+    "snmpconf",
+    "snmpd",
+    "snquota",
+    "softlimit",
+    "sort",
+    "sourcekit-lsp",
+    "spfd",
+    "spfd5.34",
+    "spfquery",
+    "spfquery5.34",
+    "splain",
+    "splain5.34",
+    "split",
+    "splitforks",
+    "sqlite3",
+    "ssh",
+    "ssh-agent",
+    "ssh-copy-id",
+    "start",
+    "start-stop-daemon",
+    "stdbuf",
+    "streamzip",
+    "streamzip5.34",
+    "strings",
+    "strip",
+    "su",
+    "sudo",
+    "sulogin",
+    "swift",
+    "swiftc",
+    "switch_root",
+    "tar",
+    "taskpolicy",
+    "taskset",
+    "tclsh",
+    "tclsh8.5",
+    "tcpdump",
+    "tcpsvd",
+    "tcsh",
+    "test-yaml",
+    "test-yaml5.34",
+    "tidy_changelog",
+    "tidy_changelog5.34",
+    "time",
+    "timeout",
+    "timer_analyser.d",
+    "timerfires",
+    "tkcon",
+    "tkmib",
+    "tkpp",
+    "tkpp5.34",
+    "tmux",
+    "topsyscall",
+    "topsysproc",
+    "traptoemail",
+    "treereg",
+    "treereg5.34",
+    "type",
+    "udhcpc",
+    "udpsvd",
+    "ulimit",
+    "umask",
+    "unalias",
+    "unifdef",
+    "unifdefall",
+    "uusched",
+    "uuto",
+    "uux",
+    "vi",
+    "view",
+    "vim",
+    "vimdiff",
+    "vimtutor",
+    "vmmap",
+    "vtool",
+    "wait",
+    "watch",
+    "whatis",
+    "wish",
+    "wish8.5",
+    "wmic",
+    "wscript",
+    "xargs",
+    "xcrun",
+    "xctrace",
+    "xgettext.pl",
+    "xgettext5.34.pl",
+    "xml2-config",
+    "xml2man",
+    "xpath",
+    "xpath5.34",
+    "xsanctl",
+    "xslt-config",
+    "xsubpp",
+    "xsubpp5.34",
+    "yacc",
+    "yamlpp-events",
+    "yamlpp-events5.34",
+    "yamlpp-highlight",
+    "yamlpp-highlight5.34",
+    "yamlpp-load",
+    "yamlpp-load-dump",
+    "yamlpp-load-dump5.34",
+    "yamlpp-load5.34",
+    "yamlpp-parse-emit",
+    "yamlpp-parse-emit5.34",
+    "yapp",
+    "yapp5.34",
+    "zcmp",
+    "zdiff",
+    "zforce",
+    "zip",
+    "zipdetails",
+    "zipdetails5.34",
+    "zipgrep",
+    "zless",
+    "zmore",
+    "znew",
+    "zsh"
+  ],
+  "families": [
+    {
+      "documentation": "https://www.gnu.org/software/coreutils/manual/coreutils.html",
+      "family": "GNU coreutils (Linux base and Git for Windows utility family)",
+      "names": [
+        "arch",
+        "b2sum",
+        "base32",
+        "base64",
+        "basename",
+        "basenc",
+        "cat",
+        "chcon",
+        "chgrp",
+        "chmod",
+        "chown",
+        "chroot",
+        "cksum",
+        "comm",
+        "cp",
+        "csplit",
+        "cut",
+        "date",
+        "dd",
+        "df",
+        "dir",
+        "dircolors",
+        "dirname",
+        "du",
+        "echo",
+        "env",
+        "expand",
+        "expr",
+        "factor",
+        "false",
+        "fmt",
+        "fold",
+        "groups",
+        "head",
+        "hostid",
+        "hostname",
+        "id",
+        "install",
+        "join",
+        "kill",
+        "link",
+        "ln",
+        "logname",
+        "ls",
+        "md5sum",
+        "mkdir",
+        "mkfifo",
+        "mknod",
+        "mktemp",
+        "multicall",
+        "mv",
+        "nice",
+        "nl",
+        "nohup",
+        "nproc",
+        "numfmt",
+        "od",
+        "paste",
+        "pathchk",
+        "pr",
+        "printenv",
+        "printf",
+        "ptx",
+        "pwd",
+        "readlink",
+        "realpath",
+        "rm",
+        "rmdir",
+        "runcon",
+        "seq",
+        "sha1sum",
+        "sha224sum",
+        "sha256sum",
+        "sha384sum",
+        "sha512sum",
+        "shred",
+        "shuf",
+        "sleep",
+        "sort",
+        "split",
+        "stat",
+        "stdbuf",
+        "stty",
+        "sum",
+        "sync",
+        "tac",
+        "tail",
+        "tee",
+        "test",
+        "timeout",
+        "touch",
+        "tr",
+        "true",
+        "truncate",
+        "tsort",
+        "tty",
+        "uname",
+        "unexpand",
+        "uniq",
+        "unlink",
+        "uptime",
+        "users",
+        "vdir",
+        "wc",
+        "who",
+        "whoami",
+        "yes"
+      ],
+      "source": "https://raw.githubusercontent.com/coreutils/coreutils/master/doc/coreutils.texi",
+      "source_sha256": "75d3f2d0f663bd56a6fdc3d62d5814849f57031352ae8b777a704d4e0032ac9e"
+    },
+    {
+      "family": "BusyBox base applet family",
+      "names": [
+        "acpid",
+        "addgroup",
+        "adduser",
+        "adjtimex",
+        "ar",
+        "arp",
+        "arping",
+        "ash",
+        "awk",
+        "basename",
+        "beep",
+        "blkid",
+        "brctl",
+        "bunzip2",
+        "bzcat",
+        "bzip2",
+        "cal",
+        "cat",
+        "catv",
+        "chat",
+        "chattr",
+        "chgrp",
+        "chmod",
+        "chown",
+        "chpasswd",
+        "chpst",
+        "chroot",
+        "chrt",
+        "chvt",
+        "cksum",
+        "clear",
+        "cmp",
+        "comm",
+        "cp",
+        "cpio",
+        "crond",
+        "crontab",
+        "cryptpw",
+        "cut",
+        "date",
+        "dc",
+        "dd",
+        "deallocvt",
+        "delgroup",
+        "deluser",
+        "depmod",
+        "devmem",
+        "df",
+        "dhcprelay",
+        "diff",
+        "dirname",
+        "dmesg",
+        "dnsd",
+        "dnsdomainname",
+        "dos2unix",
+        "dpkg",
+        "du",
+        "dumpkmap",
+        "dumpleases",
+        "echo",
+        "ed",
+        "egrep",
+        "eject",
+        "env",
+        "envdir",
+        "envuidgid",
+        "expand",
+        "expr",
+        "fakeidentd",
+        "false",
+        "fbset",
+        "fbsplash",
+        "fdflush",
+        "fdformat",
+        "fdisk",
+        "fgrep",
+        "find",
+        "findfs",
+        "flash_lock",
+        "flash_unlock",
+        "fold",
+        "free",
+        "freeramdisk",
+        "fsck",
+        "fsck.minix",
+        "fsync",
+        "ftpd",
+        "ftpget",
+        "ftpput",
+        "fuser",
+        "getopt",
+        "getty",
+        "grep",
+        "gunzip",
+        "gzip",
+        "hd",
+        "hdparm",
+        "head",
+        "hexdump",
+        "hostid",
+        "hostname",
+        "httpd",
+        "hush",
+        "hwclock",
+        "id",
+        "ifconfig",
+        "ifdown",
+        "ifenslave",
+        "ifplugd",
+        "ifup",
+        "inetd",
+        "init",
+        "inotifyd",
+        "insmod",
+        "install",
+        "ionice",
+        "ip",
+        "ipaddr",
+        "ipcalc",
+        "ipcrm",
+        "ipcs",
+        "iplink",
+        "iproute",
+        "iprule",
+        "iptunnel",
+        "kbd_mode",
+        "kill",
+        "killall",
+        "killall5",
+        "klogd",
+        "last",
+        "length",
+        "less",
+        "linux32",
+        "linux64",
+        "linuxrc",
+        "ln",
+        "loadfont",
+        "loadkmap",
+        "logger",
+        "login",
+        "logname",
+        "logread",
+        "losetup",
+        "lpd",
+        "lpq",
+        "lpr",
+        "ls",
+        "lsattr",
+        "lsmod",
+        "lzmacat",
+        "lzop",
+        "lzopcat",
+        "makemime",
+        "man",
+        "md5sum",
+        "mdev",
+        "mesg",
+        "microcom",
+        "mkdir",
+        "mkdosfs",
+        "mkfifo",
+        "mkfs.minix",
+        "mkfs.vfat",
+        "mknod",
+        "mkpasswd",
+        "mkswap",
+        "mktemp",
+        "modprobe",
+        "more",
+        "mount",
+        "mountpoint",
+        "mt",
+        "mv",
+        "nameif",
+        "nc",
+        "netstat",
+        "nice",
+        "nmeter",
+        "nohup",
+        "nslookup",
+        "od",
+        "openvt",
+        "passwd",
+        "patch",
+        "pgrep",
+        "pidof",
+        "ping",
+        "ping6",
+        "pipe_progress",
+        "pivot_root",
+        "pkill",
+        "popmaildir",
+        "printenv",
+        "printf",
+        "ps",
+        "pscan",
+        "pwd",
+        "raidautorun",
+        "rdate",
+        "rdev",
+        "readlink",
+        "readprofile",
+        "realpath",
+        "reformime",
+        "renice",
+        "reset",
+        "resize",
+        "rm",
+        "rmdir",
+        "rmmod",
+        "route",
+        "rpm",
+        "rpm2cpio",
+        "rtcwake",
+        "run-parts",
+        "runlevel",
+        "runsv",
+        "runsvdir",
+        "rx",
+        "script",
+        "scriptreplay",
+        "sed",
+        "sendmail",
+        "seq",
+        "setarch",
+        "setconsole",
+        "setfont",
+        "setkeycodes",
+        "setlogcons",
+        "setsid",
+        "setuidgid",
+        "sh",
+        "sha1sum",
+        "sha256sum",
+        "sha512sum",
+        "showkey",
+        "slattach",
+        "sleep",
+        "softlimit",
+        "sort",
+        "split",
+        "start-stop-daemon",
+        "stat",
+        "strings",
+        "stty",
+        "su",
+        "sulogin",
+        "sum",
+        "sv",
+        "svlogd",
+        "swapoff",
+        "swapon",
+        "switch_root",
+        "sync",
+        "sysctl",
+        "syslogd",
+        "tac",
+        "tail",
+        "tar",
+        "taskset",
+        "tcpsvd",
+        "tee",
+        "telnet",
+        "telnetd",
+        "test",
+        "tftp",
+        "tftpd",
+        "time",
+        "timeout",
+        "top",
+        "touch",
+        "tr",
+        "traceroute",
+        "true",
+        "tty",
+        "ttysize",
+        "udhcpc",
+        "udhcpd",
+        "udpsvd",
+        "umount",
+        "uname",
+        "uncompress",
+        "unexpand",
+        "uniq",
+        "unix2dos",
+        "unlzma",
+        "unlzop",
+        "unzip",
+        "uptime",
+        "usleep",
+        "uudecode",
+        "uuencode",
+        "vconfig",
+        "vi",
+        "vlock",
+        "volname",
+        "watch",
+        "watchdog",
+        "wc",
+        "wget",
+        "which",
+        "who",
+        "whoami",
+        "xargs",
+        "yes",
+        "zcat",
+        "zcip"
+      ],
+      "source": "https://busybox.net/downloads/BusyBox.html",
+      "source_sha256": "66abb7783bca78c91b77e4e545b0eec769e4b2cbe11b92993df4d1ee10f9c90d"
+    },
+    {
+      "documentation": "https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands",
+      "family": "Windows System32 and built-in command reference",
+      "names": [
+        "Evntcmd",
+        "active",
+        "add",
+        "adprep",
+        "append",
+        "arp",
+        "assign",
+        "assoc",
+        "at",
+        "atmadm",
+        "attach-vdisk",
+        "attrib",
+        "attributes",
+        "auditpol",
+        "autochk",
+        "autoconv",
+        "autofmt",
+        "automount",
+        "bcdboot",
+        "bcdedit",
+        "bdehdcfg",
+        "bitsadmin",
+        "bootcfg",
+        "break",
+        "cacls",
+        "call",
+        "cd",
+        "certreq",
+        "certutil",
+        "change",
+        "chcp",
+        "chdir",
+        "chglogon",
+        "chgport",
+        "chgusr",
+        "chkdsk",
+        "chkntfs",
+        "choice",
+        "cipher",
+        "clean",
+        "cleanmgr",
+        "clip",
+        "cls",
+        "cmd",
+        "cmdkey",
+        "cmstp",
+        "color",
+        "comp",
+        "compact",
+        "convert",
+        "copy",
+        "create",
+        "cscript",
+        "date",
+        "dcdiag",
+        "dcgpofix",
+        "dcpromo",
+        "defrag",
+        "del",
+        "delete",
+        "detail",
+        "dfsdiag",
+        "dfsrmig",
+        "diantz",
+        "dir",
+        "diskcomp",
+        "diskcopy",
+        "diskpart",
+        "diskperf",
+        "diskraid",
+        "diskshadow",
+        "dispdiag",
+        "dnscmd",
+        "doskey",
+        "driverquery",
+        "dtrace",
+        "echo",
+        "edit",
+        "endlocal",
+        "erase",
+        "eventcreate",
+        "exec",
+        "exit",
+        "expand",
+        "expose",
+        "extend",
+        "extract",
+        "fc",
+        "filesystems",
+        "find",
+        "findstr",
+        "finger",
+        "flattemp",
+        "fondue",
+        "for",
+        "forfiles",
+        "format",
+        "freedisk",
+        "fsutil",
+        "ftp",
+        "ftype",
+        "fveupdate",
+        "getmac",
+        "gettype",
+        "goto",
+        "gpfixup",
+        "gpresult",
+        "gpt",
+        "gpupdate",
+        "graftabl",
+        "help",
+        "helpctr",
+        "hostname",
+        "icacls",
+        "if",
+        "inactive",
+        "ipconfig",
+        "ipxroute",
+        "irftp",
+        "jetpack",
+        "klist",
+        "ksetup",
+        "ktmutil",
+        "ktpass",
+        "label",
+        "list",
+        "lodctr",
+        "logman",
+        "logoff",
+        "lpq",
+        "lpr",
+        "macfile",
+        "makecab",
+        "mapadmin",
+        "md",
+        "mkdir",
+        "mklink",
+        "mmc",
+        "mode",
+        "more",
+        "mount",
+        "mountvol",
+        "move",
+        "mqbkup",
+        "mqsvc",
+        "mqtgsvc",
+        "msdt",
+        "msg",
+        "msiexec",
+        "msinfo32",
+        "mstsc",
+        "nbtstat",
+        "netcfg",
+        "netdom",
+        "netsh",
+        "netstat",
+        "nfsadmin",
+        "nfsshare",
+        "nfsstat",
+        "nlbmgr",
+        "nslookup",
+        "ntbackup",
+        "ntcmdprompt",
+        "ntfrsutl",
+        "offline",
+        "online",
+        "openfiles",
+        "pagefileconfig",
+        "path",
+        "pathping",
+        "pause",
+        "pbadmin",
+        "pentnt",
+        "perfmon",
+        "ping",
+        "pktmon",
+        "pnpunattend",
+        "pnputil",
+        "popd",
+        "powershell",
+        "print",
+        "prncnfg",
+        "prndrvr",
+        "prnjobs",
+        "prnmngr",
+        "prnport",
+        "prnqctl",
+        "prompt",
+        "pubprn",
+        "pushd",
+        "pushprinterconnections",
+        "pwlauncher",
+        "qappsrv",
+        "qprocess",
+        "query",
+        "quser",
+        "qwinsta",
+        "rd",
+        "rdpsign",
+        "recover",
+        "refsutil",
+        "reg",
+        "regini",
+        "regsvr32",
+        "relog",
+        "rem",
+        "remove",
+        "ren",
+        "rename",
+        "repair",
+        "replace",
+        "rescan",
+        "reset",
+        "retain",
+        "revert",
+        "rexec",
+        "risetup",
+        "rmdir",
+        "robocopy",
+        "rpcinfo",
+        "rpcping",
+        "rsh",
+        "rundll32",
+        "rwinsta",
+        "san",
+        "schtasks",
+        "scwcmd",
+        "secedit",
+        "select",
+        "serverceipoptin",
+        "servermanagercmd",
+        "serverweroptin",
+        "setlocal",
+        "setspn",
+        "setx",
+        "sfc",
+        "shadow",
+        "shift",
+        "showmount",
+        "shrink",
+        "shutdown",
+        "sort",
+        "start",
+        "subst",
+        "sxstrace",
+        "sysmon",
+        "sysocmgr",
+        "systeminfo",
+        "takeown",
+        "tapicfg",
+        "taskkill",
+        "tasklist",
+        "tcmsetup",
+        "telnet",
+        "tftp",
+        "time",
+        "timeout",
+        "title",
+        "tlntadmn",
+        "tpmtool",
+        "tpmvscmgr",
+        "tracerpt",
+        "tracert",
+        "tree",
+        "tscon",
+        "tsdiscon",
+        "tsecimp",
+        "tskill",
+        "tsprof",
+        "type",
+        "typeperf",
+        "tzutil",
+        "unexpose",
+        "uniqueid",
+        "unlodctr",
+        "ver",
+        "verifier",
+        "verify",
+        "vol",
+        "vssadmin",
+        "waitfor",
+        "wbadmin",
+        "wdsutil",
+        "wecutil",
+        "wevtutil",
+        "where",
+        "whoami",
+        "winnt",
+        "winnt32",
+        "winrs",
+        "wmic",
+        "writer",
+        "wscript",
+        "xcopy"
+      ],
+      "source": "https://raw.githubusercontent.com/MicrosoftDocs/windowsserverdocs/main/WindowsServerDocs/administration/windows-commands/windows-commands.md",
+      "source_sha256": "b177c3014e3fa42294ed6fd5356d4bfa08e1a58a8b841e383dd5bcdc01837cc7"
+    },
+    {
+      "documentation": "https://github.com/git-for-windows/build-extra/blob/main/make-file-list.sh",
+      "family": "Git for Windows usr/bin program families",
+      "names": [
+        "awk",
+        "bash",
+        "bzip2",
+        "cmp",
+        "column",
+        "curl",
+        "dash",
+        "diff",
+        "diff3",
+        "egrep",
+        "fgrep",
+        "find",
+        "gawk",
+        "getopt",
+        "git",
+        "gpg",
+        "grep",
+        "gzip",
+        "iconv",
+        "less",
+        "nano",
+        "patch",
+        "perl",
+        "scp",
+        "sed",
+        "sftp",
+        "sh",
+        "ssh",
+        "ssh-add",
+        "ssh-agent",
+        "ssh-keygen",
+        "tar",
+        "tmux",
+        "unzip",
+        "vim",
+        "xargs"
+      ],
+      "source": "https://raw.githubusercontent.com/git-for-windows/build-extra/main/make-file-list.sh",
+      "source_sha256": "6edb4e3c268c7211277e1c3fc0fe0a0a4480a9025fae13e2ccc19ef4c4d86f72"
+    }
+  ],
+  "limits": "Portable refusal inventory from a dated mechanical macOS snapshot and documented package families, not an exhaustive census of every OS version. Inventory names are refused regardless of current PATH; only exact xcrun mcpbridge is excepted.",
+  "macos": {
+    "date": "2026-10-23",
+    "entries": [
+      {
+        "name": "[",
+        "path": "/bin/["
+      },
+      {
+        "name": "bash",
+        "path": "/bin/bash"
+      },
+      {
+        "name": "cat",
+        "path": "/bin/cat"
+      },
+      {
+        "name": "chmod",
+        "path": "/bin/chmod"
+      },
+      {
+        "name": "cp",
+        "path": "/bin/cp"
+      },
+      {
+        "name": "csh",
+        "path": "/bin/csh"
+      },
+      {
+        "name": "dash",
+        "path": "/bin/dash"
+      },
+      {
+        "name": "date",
+        "path": "/bin/date"
+      },
+      {
+        "name": "dd",
+        "path": "/bin/dd"
+      },
+      {
+        "name": "df",
+        "path": "/bin/df"
+      },
+      {
+        "name": "echo",
+        "path": "/bin/echo"
+      },
+      {
+        "name": "ed",
+        "path": "/bin/ed"
+      },
+      {
+        "name": "expr",
+        "path": "/bin/expr"
+      },
+      {
+        "name": "hostname",
+        "path": "/bin/hostname"
+      },
+      {
+        "name": "kill",
+        "path": "/bin/kill"
+      },
+      {
+        "name": "ksh",
+        "path": "/bin/ksh"
+      },
+      {
+        "name": "launchctl",
+        "path": "/bin/launchctl"
+      },
+      {
+        "name": "link",
+        "path": "/bin/link"
+      },
+      {
+        "name": "ln",
+        "path": "/bin/ln"
+      },
+      {
+        "name": "ls",
+        "path": "/bin/ls"
+      },
+      {
+        "name": "mkdir",
+        "path": "/bin/mkdir"
+      },
+      {
+        "name": "mv",
+        "path": "/bin/mv"
+      },
+      {
+        "name": "pax",
+        "path": "/bin/pax"
+      },
+      {
+        "name": "ps",
+        "path": "/bin/ps"
+      },
+      {
+        "name": "pwd",
+        "path": "/bin/pwd"
+      },
+      {
+        "name": "realpath",
+        "path": "/bin/realpath"
+      },
+      {
+        "name": "rm",
+        "path": "/bin/rm"
+      },
+      {
+        "name": "rmdir",
+        "path": "/bin/rmdir"
+      },
+      {
+        "name": "sh",
+        "path": "/bin/sh"
+      },
+      {
+        "name": "sleep",
+        "path": "/bin/sleep"
+      },
+      {
+        "name": "stty",
+        "path": "/bin/stty"
+      },
+      {
+        "name": "sync",
+        "path": "/bin/sync"
+      },
+      {
+        "name": "tcsh",
+        "path": "/bin/tcsh"
+      },
+      {
+        "name": "test",
+        "path": "/bin/test"
+      },
+      {
+        "name": "unlink",
+        "path": "/bin/unlink"
+      },
+      {
+        "name": "wait4path",
+        "path": "/bin/wait4path"
+      },
+      {
+        "name": "zsh",
+        "path": "/bin/zsh"
+      },
+      {
+        "name": "apfs_hfs_convert",
+        "path": "/sbin/apfs_hfs_convert"
+      },
+      {
+        "name": "apfs_unlockfv",
+        "path": "/sbin/apfs_unlockfv"
+      },
+      {
+        "name": "disklabel",
+        "path": "/sbin/disklabel"
+      },
+      {
+        "name": "dmesg",
+        "path": "/sbin/dmesg"
+      },
+      {
+        "name": "dynamic_pager",
+        "path": "/sbin/dynamic_pager"
+      },
+      {
+        "name": "fibreconfig",
+        "path": "/sbin/fibreconfig"
+      },
+      {
+        "name": "fsck",
+        "path": "/sbin/fsck"
+      },
+      {
+        "name": "fsck_apfs",
+        "path": "/sbin/fsck_apfs"
+      },
+      {
+        "name": "fsck_cs",
+        "path": "/sbin/fsck_cs"
+      },
+      {
+        "name": "fsck_exfat",
+        "path": "/sbin/fsck_exfat"
+      },
+      {
+        "name": "fsck_fskit",
+        "path": "/sbin/fsck_fskit"
+      },
+      {
+        "name": "fsck_hfs",
+        "path": "/sbin/fsck_hfs"
+      },
+      {
+        "name": "fsck_msdos",
+        "path": "/sbin/fsck_msdos"
+      },
+      {
+        "name": "fsck_udf",
+        "path": "/sbin/fsck_udf"
+      },
+      {
+        "name": "fstyp",
+        "path": "/sbin/fstyp"
+      },
+      {
+        "name": "fstyp_hfs",
+        "path": "/sbin/fstyp_hfs"
+      },
+      {
+        "name": "fstyp_msdos",
+        "path": "/sbin/fstyp_msdos"
+      },
+      {
+        "name": "fstyp_ntfs",
+        "path": "/sbin/fstyp_ntfs"
+      },
+      {
+        "name": "fstyp_udf",
+        "path": "/sbin/fstyp_udf"
+      },
+      {
+        "name": "halt",
+        "path": "/sbin/halt"
+      },
+      {
+        "name": "ifconfig",
+        "path": "/sbin/ifconfig"
+      },
+      {
+        "name": "kextload",
+        "path": "/sbin/kextload"
+      },
+      {
+        "name": "kextunload",
+        "path": "/sbin/kextunload"
+      },
+      {
+        "name": "launchd",
+        "path": "/sbin/launchd"
+      },
+      {
+        "name": "md5",
+        "path": "/sbin/md5"
+      },
+      {
+        "name": "md5sum",
+        "path": "/sbin/md5sum"
+      },
+      {
+        "name": "mknod",
+        "path": "/sbin/mknod"
+      },
+      {
+        "name": "mount",
+        "path": "/sbin/mount"
+      },
+      {
+        "name": "mount_9p",
+        "path": "/sbin/mount_9p"
+      },
+      {
+        "name": "mount_acfs",
+        "path": "/sbin/mount_acfs"
+      },
+      {
+        "name": "mount_apfs",
+        "path": "/sbin/mount_apfs"
+      },
+      {
+        "name": "mount_cd9660",
+        "path": "/sbin/mount_cd9660"
+      },
+      {
+        "name": "mount_cddafs",
+        "path": "/sbin/mount_cddafs"
+      },
+      {
+        "name": "mount_devfs",
+        "path": "/sbin/mount_devfs"
+      },
+      {
+        "name": "mount_exfat",
+        "path": "/sbin/mount_exfat"
+      },
+      {
+        "name": "mount_fdesc",
+        "path": "/sbin/mount_fdesc"
+      },
+      {
+        "name": "mount_ftp",
+        "path": "/sbin/mount_ftp"
+      },
+      {
+        "name": "mount_hfs",
+        "path": "/sbin/mount_hfs"
+      },
+      {
+        "name": "mount_msdos",
+        "path": "/sbin/mount_msdos"
+      },
+      {
+        "name": "mount_nfs",
+        "path": "/sbin/mount_nfs"
+      },
+      {
+        "name": "mount_smbfs",
+        "path": "/sbin/mount_smbfs"
+      },
+      {
+        "name": "mount_tmpfs",
+        "path": "/sbin/mount_tmpfs"
+      },
+      {
+        "name": "mount_udf",
+        "path": "/sbin/mount_udf"
+      },
+      {
+        "name": "mount_virtiofs",
+        "path": "/sbin/mount_virtiofs"
+      },
+      {
+        "name": "mount_webdav",
+        "path": "/sbin/mount_webdav"
+      },
+      {
+        "name": "mpioutil",
+        "path": "/sbin/mpioutil"
+      },
+      {
+        "name": "newfs_apfs",
+        "path": "/sbin/newfs_apfs"
+      },
+      {
+        "name": "newfs_exfat",
+        "path": "/sbin/newfs_exfat"
+      },
+      {
+        "name": "newfs_fskit",
+        "path": "/sbin/newfs_fskit"
+      },
+      {
+        "name": "newfs_hfs",
+        "path": "/sbin/newfs_hfs"
+      },
+      {
+        "name": "newfs_msdos",
+        "path": "/sbin/newfs_msdos"
+      },
+      {
+        "name": "newfs_udf",
+        "path": "/sbin/newfs_udf"
+      },
+      {
+        "name": "nfsd",
+        "path": "/sbin/nfsd"
+      },
+      {
+        "name": "nologin",
+        "path": "/sbin/nologin"
+      },
+      {
+        "name": "pfctl",
+        "path": "/sbin/pfctl"
+      },
+      {
+        "name": "ping",
+        "path": "/sbin/ping"
+      },
+      {
+        "name": "ping6",
+        "path": "/sbin/ping6"
+      },
+      {
+        "name": "quotacheck",
+        "path": "/sbin/quotacheck"
+      },
+      {
+        "name": "reboot",
+        "path": "/sbin/reboot"
+      },
+      {
+        "name": "route",
+        "path": "/sbin/route"
+      },
+      {
+        "name": "sha1",
+        "path": "/sbin/sha1"
+      },
+      {
+        "name": "sha1sum",
+        "path": "/sbin/sha1sum"
+      },
+      {
+        "name": "sha224",
+        "path": "/sbin/sha224"
+      },
+      {
+        "name": "sha224sum",
+        "path": "/sbin/sha224sum"
+      },
+      {
+        "name": "sha256",
+        "path": "/sbin/sha256"
+      },
+      {
+        "name": "sha256sum",
+        "path": "/sbin/sha256sum"
+      },
+      {
+        "name": "sha384",
+        "path": "/sbin/sha384"
+      },
+      {
+        "name": "sha384sum",
+        "path": "/sbin/sha384sum"
+      },
+      {
+        "name": "sha512",
+        "path": "/sbin/sha512"
+      },
+      {
+        "name": "sha512sum",
+        "path": "/sbin/sha512sum"
+      },
+      {
+        "name": "shutdown",
+        "path": "/sbin/shutdown"
+      },
+      {
+        "name": "umount",
+        "path": "/sbin/umount"
+      },
+      {
+        "name": "AssetCacheLocatorUtil",
+        "path": "/usr/bin/AssetCacheLocatorUtil"
+      },
+      {
+        "name": "AssetCacheManagerUtil",
+        "path": "/usr/bin/AssetCacheManagerUtil"
+      },
+      {
+        "name": "AssetCacheTetheratorUtil",
+        "path": "/usr/bin/AssetCacheTetheratorUtil"
+      },
+      {
+        "name": "DeRez",
+        "path": "/usr/bin/DeRez"
+      },
+      {
+        "name": "GetFileInfo",
+        "path": "/usr/bin/GetFileInfo"
+      },
+      {
+        "name": "IOAccelMemory",
+        "path": "/usr/bin/IOAccelMemory"
+      },
+      {
+        "name": "IOMFBDiagnose",
+        "path": "/usr/bin/IOMFBDiagnose"
+      },
+      {
+        "name": "IOMFB_FDR_Loader",
+        "path": "/usr/bin/IOMFB_FDR_Loader"
+      },
+      {
+        "name": "IOSDebug",
+        "path": "/usr/bin/IOSDebug"
+      },
+      {
+        "name": "ResMerger",
+        "path": "/usr/bin/ResMerger"
+      },
+      {
+        "name": "Rez",
+        "path": "/usr/bin/Rez"
+      },
+      {
+        "name": "SafeEjectGPU",
+        "path": "/usr/bin/SafeEjectGPU"
+      },
+      {
+        "name": "SetFile",
+        "path": "/usr/bin/SetFile"
+      },
+      {
+        "name": "SplitForks",
+        "path": "/usr/bin/SplitForks"
+      },
+      {
+        "name": "aa",
+        "path": "/usr/bin/aa"
+      },
+      {
+        "name": "actool",
+        "path": "/usr/bin/actool"
+      },
+      {
+        "name": "aea",
+        "path": "/usr/bin/aea"
+      },
+      {
+        "name": "afclip",
+        "path": "/usr/bin/afclip"
+      },
+      {
+        "name": "afconvert",
+        "path": "/usr/bin/afconvert"
+      },
+      {
+        "name": "afhash",
+        "path": "/usr/bin/afhash"
+      },
+      {
+        "name": "afida",
+        "path": "/usr/bin/afida"
+      },
+      {
+        "name": "afinfo",
+        "path": "/usr/bin/afinfo"
+      },
+      {
+        "name": "afktool",
+        "path": "/usr/bin/afktool"
+      },
+      {
+        "name": "afplay",
+        "path": "/usr/bin/afplay"
+      },
+      {
+        "name": "afscexpand",
+        "path": "/usr/bin/afscexpand"
+      },
+      {
+        "name": "agentxtrap",
+        "path": "/usr/bin/agentxtrap"
+      },
+      {
+        "name": "agvtool",
+        "path": "/usr/bin/agvtool"
+      },
+      {
+        "name": "alias",
+        "path": "/usr/bin/alias"
+      },
+      {
+        "name": "app-sso",
+        "path": "/usr/bin/app-sso"
+      },
+      {
+        "name": "applesingle",
+        "path": "/usr/bin/applesingle"
+      },
+      {
+        "name": "apply",
+        "path": "/usr/bin/apply"
+      },
+      {
+        "name": "apropos",
+        "path": "/usr/bin/apropos"
+      },
+      {
+        "name": "ar",
+        "path": "/usr/bin/ar"
+      },
+      {
+        "name": "arch",
+        "path": "/usr/bin/arch"
+      },
+      {
+        "name": "archiveutil",
+        "path": "/usr/bin/archiveutil"
+      },
+      {
+        "name": "as",
+        "path": "/usr/bin/as"
+      },
+      {
+        "name": "asa",
+        "path": "/usr/bin/asa"
+      },
+      {
+        "name": "assetutil",
+        "path": "/usr/bin/assetutil"
+      },
+      {
+        "name": "at",
+        "path": "/usr/bin/at"
+      },
+      {
+        "name": "atos",
+        "path": "/usr/bin/atos"
+      },
+      {
+        "name": "atq",
+        "path": "/usr/bin/atq"
+      },
+      {
+        "name": "atrm",
+        "path": "/usr/bin/atrm"
+      },
+      {
+        "name": "atsutil",
+        "path": "/usr/bin/atsutil"
+      },
+      {
+        "name": "automationmodetool",
+        "path": "/usr/bin/automationmodetool"
+      },
+      {
+        "name": "automator",
+        "path": "/usr/bin/automator"
+      },
+      {
+        "name": "auval",
+        "path": "/usr/bin/auval"
+      },
+      {
+        "name": "auvaltool",
+        "path": "/usr/bin/auvaltool"
+      },
+      {
+        "name": "avbanalyse",
+        "path": "/usr/bin/avbanalyse"
+      },
+      {
+        "name": "avbcapture",
+        "path": "/usr/bin/avbcapture"
+      },
+      {
+        "name": "avbdiagnose",
+        "path": "/usr/bin/avbdiagnose"
+      },
+      {
+        "name": "avbutil",
+        "path": "/usr/bin/avbutil"
+      },
+      {
+        "name": "avconvert",
+        "path": "/usr/bin/avconvert"
+      },
+      {
+        "name": "avmediainfo",
+        "path": "/usr/bin/avmediainfo"
+      },
+      {
+        "name": "avmetareadwrite",
+        "path": "/usr/bin/avmetareadwrite"
+      },
+      {
+        "name": "awk",
+        "path": "/usr/bin/awk"
+      },
+      {
+        "name": "b64decode",
+        "path": "/usr/bin/b64decode"
+      },
+      {
+        "name": "b64encode",
+        "path": "/usr/bin/b64encode"
+      },
+      {
+        "name": "banner",
+        "path": "/usr/bin/banner"
+      },
+      {
+        "name": "base64",
+        "path": "/usr/bin/base64"
+      },
+      {
+        "name": "basename",
+        "path": "/usr/bin/basename"
+      },
+      {
+        "name": "bashbug",
+        "path": "/usr/bin/bashbug"
+      },
+      {
+        "name": "batch",
+        "path": "/usr/bin/batch"
+      },
+      {
+        "name": "bc",
+        "path": "/usr/bin/bc"
+      },
+      {
+        "name": "bg",
+        "path": "/usr/bin/bg"
+      },
+      {
+        "name": "binhex",
+        "path": "/usr/bin/binhex"
+      },
+      {
+        "name": "binhex.pl",
+        "path": "/usr/bin/binhex.pl"
+      },
+      {
+        "name": "binhex5.34.pl",
+        "path": "/usr/bin/binhex5.34.pl"
+      },
+      {
+        "name": "bintrans",
+        "path": "/usr/bin/bintrans"
+      },
+      {
+        "name": "bioutil",
+        "path": "/usr/bin/bioutil"
+      },
+      {
+        "name": "bison",
+        "path": "/usr/bin/bison"
+      },
+      {
+        "name": "bitesize.d",
+        "path": "/usr/bin/bitesize.d"
+      },
+      {
+        "name": "bm4",
+        "path": "/usr/bin/bm4"
+      },
+      {
+        "name": "bputil",
+        "path": "/usr/bin/bputil"
+      },
+      {
+        "name": "brctl",
+        "path": "/usr/bin/brctl"
+      },
+      {
+        "name": "bsdtar",
+        "path": "/usr/bin/bsdtar"
+      },
+      {
+        "name": "bspatch",
+        "path": "/usr/bin/bspatch"
+      },
+      {
+        "name": "btmdiagnose",
+        "path": "/usr/bin/btmdiagnose"
+      },
+      {
+        "name": "bundle",
+        "path": "/usr/bin/bundle"
+      },
+      {
+        "name": "bundler",
+        "path": "/usr/bin/bundler"
+      },
+      {
+        "name": "bunzip2",
+        "path": "/usr/bin/bunzip2"
+      },
+      {
+        "name": "bzcat",
+        "path": "/usr/bin/bzcat"
+      },
+      {
+        "name": "bzcmp",
+        "path": "/usr/bin/bzcmp"
+      },
+      {
+        "name": "bzdiff",
+        "path": "/usr/bin/bzdiff"
+      },
+      {
+        "name": "bzegrep",
+        "path": "/usr/bin/bzegrep"
+      },
+      {
+        "name": "bzfgrep",
+        "path": "/usr/bin/bzfgrep"
+      },
+      {
+        "name": "bzgrep",
+        "path": "/usr/bin/bzgrep"
+      },
+      {
+        "name": "bzip2",
+        "path": "/usr/bin/bzip2"
+      },
+      {
+        "name": "bzip2recover",
+        "path": "/usr/bin/bzip2recover"
+      },
+      {
+        "name": "bzless",
+        "path": "/usr/bin/bzless"
+      },
+      {
+        "name": "bzmore",
+        "path": "/usr/bin/bzmore"
+      },
+      {
+        "name": "c++",
+        "path": "/usr/bin/c++"
+      },
+      {
+        "name": "c++filt",
+        "path": "/usr/bin/c++filt"
+      },
+      {
+        "name": "c89",
+        "path": "/usr/bin/c89"
+      },
+      {
+        "name": "c99",
+        "path": "/usr/bin/c99"
+      },
+      {
+        "name": "caffeinate",
+        "path": "/usr/bin/caffeinate"
+      },
+      {
+        "name": "cal",
+        "path": "/usr/bin/cal"
+      },
+      {
+        "name": "calendar",
+        "path": "/usr/bin/calendar"
+      },
+      {
+        "name": "cancel",
+        "path": "/usr/bin/cancel"
+      },
+      {
+        "name": "cap_mkdb",
+        "path": "/usr/bin/cap_mkdb"
+      },
+      {
+        "name": "captoinfo",
+        "path": "/usr/bin/captoinfo"
+      },
+      {
+        "name": "cc",
+        "path": "/usr/bin/cc"
+      },
+      {
+        "name": "cd",
+        "path": "/usr/bin/cd"
+      },
+      {
+        "name": "certtool",
+        "path": "/usr/bin/certtool"
+      },
+      {
+        "name": "chflags",
+        "path": "/usr/bin/chflags"
+      },
+      {
+        "name": "chfn",
+        "path": "/usr/bin/chfn"
+      },
+      {
+        "name": "chgrp",
+        "path": "/usr/bin/chgrp"
+      },
+      {
+        "name": "chpass",
+        "path": "/usr/bin/chpass"
+      },
+      {
+        "name": "chsh",
+        "path": "/usr/bin/chsh"
+      },
+      {
+        "name": "cksum",
+        "path": "/usr/bin/cksum"
+      },
+      {
+        "name": "clang",
+        "path": "/usr/bin/clang"
+      },
+      {
+        "name": "clang++",
+        "path": "/usr/bin/clang++"
+      },
+      {
+        "name": "clangd",
+        "path": "/usr/bin/clangd"
+      },
+      {
+        "name": "clear",
+        "path": "/usr/bin/clear"
+      },
+      {
+        "name": "cmp",
+        "path": "/usr/bin/cmp"
+      },
+      {
+        "name": "cmpdylib",
+        "path": "/usr/bin/cmpdylib"
+      },
+      {
+        "name": "codecctl",
+        "path": "/usr/bin/codecctl"
+      },
+      {
+        "name": "codesign",
+        "path": "/usr/bin/codesign"
+      },
+      {
+        "name": "codesign_allocate",
+        "path": "/usr/bin/codesign_allocate"
+      },
+      {
+        "name": "col",
+        "path": "/usr/bin/col"
+      },
+      {
+        "name": "colrm",
+        "path": "/usr/bin/colrm"
+      },
+      {
+        "name": "column",
+        "path": "/usr/bin/column"
+      },
+      {
+        "name": "comm",
+        "path": "/usr/bin/comm"
+      },
+      {
+        "name": "command",
+        "path": "/usr/bin/command"
+      },
+      {
+        "name": "compress",
+        "path": "/usr/bin/compress"
+      },
+      {
+        "name": "compression_tool",
+        "path": "/usr/bin/compression_tool"
+      },
+      {
+        "name": "config_data",
+        "path": "/usr/bin/config_data"
+      },
+      {
+        "name": "config_data5.34",
+        "path": "/usr/bin/config_data5.34"
+      },
+      {
+        "name": "corelist",
+        "path": "/usr/bin/corelist"
+      },
+      {
+        "name": "corelist5.34",
+        "path": "/usr/bin/corelist5.34"
+      },
+      {
+        "name": "cpan",
+        "path": "/usr/bin/cpan"
+      },
+      {
+        "name": "cpan5.34",
+        "path": "/usr/bin/cpan5.34"
+      },
+      {
+        "name": "cpio",
+        "path": "/usr/bin/cpio"
+      },
+      {
+        "name": "cpp",
+        "path": "/usr/bin/cpp"
+      },
+      {
+        "name": "cpu_profiler.d",
+        "path": "/usr/bin/cpu_profiler.d"
+      },
+      {
+        "name": "cpuctl",
+        "path": "/usr/bin/cpuctl"
+      },
+      {
+        "name": "cpuwalk.d",
+        "path": "/usr/bin/cpuwalk.d"
+      },
+      {
+        "name": "crc32",
+        "path": "/usr/bin/crc32"
+      },
+      {
+        "name": "crc325.34",
+        "path": "/usr/bin/crc325.34"
+      },
+      {
+        "name": "creatbyproc.d",
+        "path": "/usr/bin/creatbyproc.d"
+      },
+      {
+        "name": "crlrefresh",
+        "path": "/usr/bin/crlrefresh"
+      },
+      {
+        "name": "crontab",
+        "path": "/usr/bin/crontab"
+      },
+      {
+        "name": "csfdiagnose",
+        "path": "/usr/bin/csfdiagnose"
+      },
+      {
+        "name": "csplit",
+        "path": "/usr/bin/csplit"
+      },
+      {
+        "name": "csreq",
+        "path": "/usr/bin/csreq"
+      },
+      {
+        "name": "csrutil",
+        "path": "/usr/bin/csrutil"
+      },
+      {
+        "name": "ctags",
+        "path": "/usr/bin/ctags"
+      },
+      {
+        "name": "ctf_insert",
+        "path": "/usr/bin/ctf_insert"
+      },
+      {
+        "name": "cu",
+        "path": "/usr/bin/cu"
+      },
+      {
+        "name": "cups-config",
+        "path": "/usr/bin/cups-config"
+      },
+      {
+        "name": "cupstestppd",
+        "path": "/usr/bin/cupstestppd"
+      },
+      {
+        "name": "curl",
+        "path": "/usr/bin/curl"
+      },
+      {
+        "name": "curl-config",
+        "path": "/usr/bin/curl-config"
+      },
+      {
+        "name": "cut",
+        "path": "/usr/bin/cut"
+      },
+      {
+        "name": "cvaffinity",
+        "path": "/usr/bin/cvaffinity"
+      },
+      {
+        "name": "cvcp",
+        "path": "/usr/bin/cvcp"
+      },
+      {
+        "name": "cvmkdir",
+        "path": "/usr/bin/cvmkdir"
+      },
+      {
+        "name": "cvmkfile",
+        "path": "/usr/bin/cvmkfile"
+      },
+      {
+        "name": "dappprof",
+        "path": "/usr/bin/dappprof"
+      },
+      {
+        "name": "dapptrace",
+        "path": "/usr/bin/dapptrace"
+      },
+      {
+        "name": "db_archive",
+        "path": "/usr/bin/db_archive"
+      },
+      {
+        "name": "db_checkpoint",
+        "path": "/usr/bin/db_checkpoint"
+      },
+      {
+        "name": "db_codegen",
+        "path": "/usr/bin/db_codegen"
+      },
+      {
+        "name": "db_deadlock",
+        "path": "/usr/bin/db_deadlock"
+      },
+      {
+        "name": "db_dump",
+        "path": "/usr/bin/db_dump"
+      },
+      {
+        "name": "db_hotbackup",
+        "path": "/usr/bin/db_hotbackup"
+      },
+      {
+        "name": "db_load",
+        "path": "/usr/bin/db_load"
+      },
+      {
+        "name": "db_printlog",
+        "path": "/usr/bin/db_printlog"
+      },
+      {
+        "name": "db_recover",
+        "path": "/usr/bin/db_recover"
+      },
+      {
+        "name": "db_stat",
+        "path": "/usr/bin/db_stat"
+      },
+      {
+        "name": "db_upgrade",
+        "path": "/usr/bin/db_upgrade"
+      },
+      {
+        "name": "db_verify",
+        "path": "/usr/bin/db_verify"
+      },
+      {
+        "name": "dbicadmin",
+        "path": "/usr/bin/dbicadmin"
+      },
+      {
+        "name": "dbicadmin5.34",
+        "path": "/usr/bin/dbicadmin5.34"
+      },
+      {
+        "name": "dbilogstrip",
+        "path": "/usr/bin/dbilogstrip"
+      },
+      {
+        "name": "dbilogstrip5.34",
+        "path": "/usr/bin/dbilogstrip5.34"
+      },
+      {
+        "name": "dbiprof",
+        "path": "/usr/bin/dbiprof"
+      },
+      {
+        "name": "dbiprof5.34",
+        "path": "/usr/bin/dbiprof5.34"
+      },
+      {
+        "name": "dbiproxy",
+        "path": "/usr/bin/dbiproxy"
+      },
+      {
+        "name": "dbiproxy5.34",
+        "path": "/usr/bin/dbiproxy5.34"
+      },
+      {
+        "name": "dc",
+        "path": "/usr/bin/dc"
+      },
+      {
+        "name": "dddiagnose",
+        "path": "/usr/bin/dddiagnose"
+      },
+      {
+        "name": "debinhex.pl",
+        "path": "/usr/bin/debinhex.pl"
+      },
+      {
+        "name": "debinhex5.34.pl",
+        "path": "/usr/bin/debinhex5.34.pl"
+      },
+      {
+        "name": "defaults",
+        "path": "/usr/bin/defaults"
+      },
+      {
+        "name": "delv",
+        "path": "/usr/bin/delv"
+      },
+      {
+        "name": "demandoc",
+        "path": "/usr/bin/demandoc"
+      },
+      {
+        "name": "derq",
+        "path": "/usr/bin/derq"
+      },
+      {
+        "name": "desdp",
+        "path": "/usr/bin/desdp"
+      },
+      {
+        "name": "devicectl",
+        "path": "/usr/bin/devicectl"
+      },
+      {
+        "name": "devmodectl",
+        "path": "/usr/bin/devmodectl"
+      },
+      {
+        "name": "diff",
+        "path": "/usr/bin/diff"
+      },
+      {
+        "name": "diff3",
+        "path": "/usr/bin/diff3"
+      },
+      {
+        "name": "diffstat",
+        "path": "/usr/bin/diffstat"
+      },
+      {
+        "name": "dig",
+        "path": "/usr/bin/dig"
+      },
+      {
+        "name": "dirname",
+        "path": "/usr/bin/dirname"
+      },
+      {
+        "name": "dispqlen.d",
+        "path": "/usr/bin/dispqlen.d"
+      },
+      {
+        "name": "dist_package_tool",
+        "path": "/usr/bin/dist_package_tool"
+      },
+      {
+        "name": "ditto",
+        "path": "/usr/bin/ditto"
+      },
+      {
+        "name": "dmc",
+        "path": "/usr/bin/dmc"
+      },
+      {
+        "name": "dns-sd",
+        "path": "/usr/bin/dns-sd"
+      },
+      {
+        "name": "drutil",
+        "path": "/usr/bin/drutil"
+      },
+      {
+        "name": "dscacheutil",
+        "path": "/usr/bin/dscacheutil"
+      },
+      {
+        "name": "dscl",
+        "path": "/usr/bin/dscl"
+      },
+      {
+        "name": "dserr",
+        "path": "/usr/bin/dserr"
+      },
+      {
+        "name": "dsexport",
+        "path": "/usr/bin/dsexport"
+      },
+      {
+        "name": "dsimport",
+        "path": "/usr/bin/dsimport"
+      },
+      {
+        "name": "dsmemberutil",
+        "path": "/usr/bin/dsmemberutil"
+      },
+      {
+        "name": "dsymutil",
+        "path": "/usr/bin/dsymutil"
+      },
+      {
+        "name": "dtruss",
+        "path": "/usr/bin/dtruss"
+      },
+      {
+        "name": "du",
+        "path": "/usr/bin/du"
+      },
+      {
+        "name": "dwarfdump",
+        "path": "/usr/bin/dwarfdump"
+      },
+      {
+        "name": "dyld_info",
+        "path": "/usr/bin/dyld_info"
+      },
+      {
+        "name": "dyld_usage",
+        "path": "/usr/bin/dyld_usage"
+      },
+      {
+        "name": "egrep",
+        "path": "/usr/bin/egrep"
+      },
+      {
+        "name": "enc2xs",
+        "path": "/usr/bin/enc2xs"
+      },
+      {
+        "name": "enc2xs5.34",
+        "path": "/usr/bin/enc2xs5.34"
+      },
+      {
+        "name": "encguess",
+        "path": "/usr/bin/encguess"
+      },
+      {
+        "name": "encguess5.34",
+        "path": "/usr/bin/encguess5.34"
+      },
+      {
+        "name": "encode_keychange",
+        "path": "/usr/bin/encode_keychange"
+      },
+      {
+        "name": "env",
+        "path": "/usr/bin/env"
+      },
+      {
+        "name": "erb",
+        "path": "/usr/bin/erb"
+      },
+      {
+        "name": "errinfo",
+        "path": "/usr/bin/errinfo"
+      },
+      {
+        "name": "eslogger",
+        "path": "/usr/bin/eslogger"
+      },
+      {
+        "name": "estrace",
+        "path": "/usr/bin/estrace"
+      },
+      {
+        "name": "ex",
+        "path": "/usr/bin/ex"
+      },
+      {
+        "name": "execsnoop",
+        "path": "/usr/bin/execsnoop"
+      },
+      {
+        "name": "expand",
+        "path": "/usr/bin/expand"
+      },
+      {
+        "name": "expect",
+        "path": "/usr/bin/expect"
+      },
+      {
+        "name": "eyapp",
+        "path": "/usr/bin/eyapp"
+      },
+      {
+        "name": "eyapp5.34",
+        "path": "/usr/bin/eyapp5.34"
+      },
+      {
+        "name": "false",
+        "path": "/usr/bin/false"
+      },
+      {
+        "name": "fc",
+        "path": "/usr/bin/fc"
+      },
+      {
+        "name": "fddist",
+        "path": "/usr/bin/fddist"
+      },
+      {
+        "name": "fdesetup",
+        "path": "/usr/bin/fdesetup"
+      },
+      {
+        "name": "fg",
+        "path": "/usr/bin/fg"
+      },
+      {
+        "name": "fgrep",
+        "path": "/usr/bin/fgrep"
+      },
+      {
+        "name": "file",
+        "path": "/usr/bin/file"
+      },
+      {
+        "name": "filebyproc.d",
+        "path": "/usr/bin/filebyproc.d"
+      },
+      {
+        "name": "fileproviderctl",
+        "path": "/usr/bin/fileproviderctl"
+      },
+      {
+        "name": "filtercalltree",
+        "path": "/usr/bin/filtercalltree"
+      },
+      {
+        "name": "find",
+        "path": "/usr/bin/find"
+      },
+      {
+        "name": "findrule",
+        "path": "/usr/bin/findrule"
+      },
+      {
+        "name": "findrule5.34",
+        "path": "/usr/bin/findrule5.34"
+      },
+      {
+        "name": "finger",
+        "path": "/usr/bin/finger"
+      },
+      {
+        "name": "fixproc",
+        "path": "/usr/bin/fixproc"
+      },
+      {
+        "name": "flex",
+        "path": "/usr/bin/flex"
+      },
+      {
+        "name": "flex++",
+        "path": "/usr/bin/flex++"
+      },
+      {
+        "name": "fm",
+        "path": "/usr/bin/fm"
+      },
+      {
+        "name": "fmt",
+        "path": "/usr/bin/fmt"
+      },
+      {
+        "name": "fold",
+        "path": "/usr/bin/fold"
+      },
+      {
+        "name": "fontrestore",
+        "path": "/usr/bin/fontrestore"
+      },
+      {
+        "name": "footprint",
+        "path": "/usr/bin/footprint"
+      },
+      {
+        "name": "fping",
+        "path": "/usr/bin/fping"
+      },
+      {
+        "name": "fs_usage",
+        "path": "/usr/bin/fs_usage"
+      },
+      {
+        "name": "funzip",
+        "path": "/usr/bin/funzip"
+      },
+      {
+        "name": "fuser",
+        "path": "/usr/bin/fuser"
+      },
+      {
+        "name": "g++",
+        "path": "/usr/bin/g++"
+      },
+      {
+        "name": "gatherheaderdoc",
+        "path": "/usr/bin/gatherheaderdoc"
+      },
+      {
+        "name": "gcc",
+        "path": "/usr/bin/gcc"
+      },
+      {
+        "name": "gcore",
+        "path": "/usr/bin/gcore"
+      },
+      {
+        "name": "gcov",
+        "path": "/usr/bin/gcov"
+      },
+      {
+        "name": "gem",
+        "path": "/usr/bin/gem"
+      },
+      {
+        "name": "gen_bridge_metadata",
+        "path": "/usr/bin/gen_bridge_metadata"
+      },
+      {
+        "name": "gencat",
+        "path": "/usr/bin/gencat"
+      },
+      {
+        "name": "genstrings",
+        "path": "/usr/bin/genstrings"
+      },
+      {
+        "name": "getconf",
+        "path": "/usr/bin/getconf"
+      },
+      {
+        "name": "getopt",
+        "path": "/usr/bin/getopt"
+      },
+      {
+        "name": "getopts",
+        "path": "/usr/bin/getopts"
+      },
+      {
+        "name": "git",
+        "path": "/usr/bin/git"
+      },
+      {
+        "name": "git-receive-pack",
+        "path": "/usr/bin/git-receive-pack"
+      },
+      {
+        "name": "git-shell",
+        "path": "/usr/bin/git-shell"
+      },
+      {
+        "name": "git-upload-archive",
+        "path": "/usr/bin/git-upload-archive"
+      },
+      {
+        "name": "git-upload-pack",
+        "path": "/usr/bin/git-upload-pack"
+      },
+      {
+        "name": "gktool",
+        "path": "/usr/bin/gktool"
+      },
+      {
+        "name": "gm4",
+        "path": "/usr/bin/gm4"
+      },
+      {
+        "name": "gnumake",
+        "path": "/usr/bin/gnumake"
+      },
+      {
+        "name": "gperf",
+        "path": "/usr/bin/gperf"
+      },
+      {
+        "name": "gpucapture",
+        "path": "/usr/bin/gpucapture"
+      },
+      {
+        "name": "gpudebug",
+        "path": "/usr/bin/gpudebug"
+      },
+      {
+        "name": "grep",
+        "path": "/usr/bin/grep"
+      },
+      {
+        "name": "groups",
+        "path": "/usr/bin/groups"
+      },
+      {
+        "name": "gunzip",
+        "path": "/usr/bin/gunzip"
+      },
+      {
+        "name": "gzcat",
+        "path": "/usr/bin/gzcat"
+      },
+      {
+        "name": "gzexe",
+        "path": "/usr/bin/gzexe"
+      },
+      {
+        "name": "gzip",
+        "path": "/usr/bin/gzip"
+      },
+      {
+        "name": "h2ph",
+        "path": "/usr/bin/h2ph"
+      },
+      {
+        "name": "h2ph5.34",
+        "path": "/usr/bin/h2ph5.34"
+      },
+      {
+        "name": "h2xs",
+        "path": "/usr/bin/h2xs"
+      },
+      {
+        "name": "h2xs5.34",
+        "path": "/usr/bin/h2xs5.34"
+      },
+      {
+        "name": "hash",
+        "path": "/usr/bin/hash"
+      },
+      {
+        "name": "hdid",
+        "path": "/usr/bin/hdid"
+      },
+      {
+        "name": "hdiutil",
+        "path": "/usr/bin/hdiutil"
+      },
+      {
+        "name": "hdxml2manxml",
+        "path": "/usr/bin/hdxml2manxml"
+      },
+      {
+        "name": "head",
+        "path": "/usr/bin/head"
+      },
+      {
+        "name": "headerdoc2html",
+        "path": "/usr/bin/headerdoc2html"
+      },
+      {
+        "name": "heap",
+        "path": "/usr/bin/heap"
+      },
+      {
+        "name": "hexdump",
+        "path": "/usr/bin/hexdump"
+      },
+      {
+        "name": "hidutil",
+        "path": "/usr/bin/hidutil"
+      },
+      {
+        "name": "hiutil",
+        "path": "/usr/bin/hiutil"
+      },
+      {
+        "name": "host",
+        "path": "/usr/bin/host"
+      },
+      {
+        "name": "hostinfo",
+        "path": "/usr/bin/hostinfo"
+      },
+      {
+        "name": "hotspot.d",
+        "path": "/usr/bin/hotspot.d"
+      },
+      {
+        "name": "hpmdiagnose",
+        "path": "/usr/bin/hpmdiagnose"
+      },
+      {
+        "name": "htmltree",
+        "path": "/usr/bin/htmltree"
+      },
+      {
+        "name": "htmltree5.34",
+        "path": "/usr/bin/htmltree5.34"
+      },
+      {
+        "name": "ibtool",
+        "path": "/usr/bin/ibtool"
+      },
+      {
+        "name": "ibv_devices",
+        "path": "/usr/bin/ibv_devices"
+      },
+      {
+        "name": "ibv_devinfo",
+        "path": "/usr/bin/ibv_devinfo"
+      },
+      {
+        "name": "ibv_uc_pingpong",
+        "path": "/usr/bin/ibv_uc_pingpong"
+      },
+      {
+        "name": "iconutil",
+        "path": "/usr/bin/iconutil"
+      },
+      {
+        "name": "iconv",
+        "path": "/usr/bin/iconv"
+      },
+      {
+        "name": "ictool",
+        "path": "/usr/bin/ictool"
+      },
+      {
+        "name": "id",
+        "path": "/usr/bin/id"
+      },
+      {
+        "name": "imptrace",
+        "path": "/usr/bin/imptrace"
+      },
+      {
+        "name": "indent",
+        "path": "/usr/bin/indent"
+      },
+      {
+        "name": "infocmp",
+        "path": "/usr/bin/infocmp"
+      },
+      {
+        "name": "infotocap",
+        "path": "/usr/bin/infotocap"
+      },
+      {
+        "name": "install",
+        "path": "/usr/bin/install"
+      },
+      {
+        "name": "install_name_tool",
+        "path": "/usr/bin/install_name_tool"
+      },
+      {
+        "name": "instmodsh",
+        "path": "/usr/bin/instmodsh"
+      },
+      {
+        "name": "instmodsh5.34",
+        "path": "/usr/bin/instmodsh5.34"
+      },
+      {
+        "name": "iofile.d",
+        "path": "/usr/bin/iofile.d"
+      },
+      {
+        "name": "iofileb.d",
+        "path": "/usr/bin/iofileb.d"
+      },
+      {
+        "name": "iopattern",
+        "path": "/usr/bin/iopattern"
+      },
+      {
+        "name": "iopending",
+        "path": "/usr/bin/iopending"
+      },
+      {
+        "name": "iosnoop",
+        "path": "/usr/bin/iosnoop"
+      },
+      {
+        "name": "iotop",
+        "path": "/usr/bin/iotop"
+      },
+      {
+        "name": "ip2cc",
+        "path": "/usr/bin/ip2cc"
+      },
+      {
+        "name": "ip2cc5.34",
+        "path": "/usr/bin/ip2cc5.34"
+      },
+      {
+        "name": "ipcount",
+        "path": "/usr/bin/ipcount"
+      },
+      {
+        "name": "ipcount5.34",
+        "path": "/usr/bin/ipcount5.34"
+      },
+      {
+        "name": "ipcrm",
+        "path": "/usr/bin/ipcrm"
+      },
+      {
+        "name": "ipcs",
+        "path": "/usr/bin/ipcs"
+      },
+      {
+        "name": "iperf3-darwin",
+        "path": "/usr/bin/iperf3-darwin"
+      },
+      {
+        "name": "ippeveprinter",
+        "path": "/usr/bin/ippeveprinter"
+      },
+      {
+        "name": "ippfind",
+        "path": "/usr/bin/ippfind"
+      },
+      {
+        "name": "ipptool",
+        "path": "/usr/bin/ipptool"
+      },
+      {
+        "name": "iptab",
+        "path": "/usr/bin/iptab"
+      },
+      {
+        "name": "iptab5.34",
+        "path": "/usr/bin/iptab5.34"
+      },
+      {
+        "name": "irb",
+        "path": "/usr/bin/irb"
+      },
+      {
+        "name": "jar",
+        "path": "/usr/bin/jar"
+      },
+      {
+        "name": "jarsigner",
+        "path": "/usr/bin/jarsigner"
+      },
+      {
+        "name": "java",
+        "path": "/usr/bin/java"
+      },
+      {
+        "name": "javac",
+        "path": "/usr/bin/javac"
+      },
+      {
+        "name": "javadoc",
+        "path": "/usr/bin/javadoc"
+      },
+      {
+        "name": "javap",
+        "path": "/usr/bin/javap"
+      },
+      {
+        "name": "javaws",
+        "path": "/usr/bin/javaws"
+      },
+      {
+        "name": "jcmd",
+        "path": "/usr/bin/jcmd"
+      },
+      {
+        "name": "jconsole",
+        "path": "/usr/bin/jconsole"
+      },
+      {
+        "name": "jcontrol",
+        "path": "/usr/bin/jcontrol"
+      },
+      {
+        "name": "jdb",
+        "path": "/usr/bin/jdb"
+      },
+      {
+        "name": "jdeps",
+        "path": "/usr/bin/jdeps"
+      },
+      {
+        "name": "jhsdb",
+        "path": "/usr/bin/jhsdb"
+      },
+      {
+        "name": "jimage",
+        "path": "/usr/bin/jimage"
+      },
+      {
+        "name": "jinfo",
+        "path": "/usr/bin/jinfo"
+      },
+      {
+        "name": "jjs",
+        "path": "/usr/bin/jjs"
+      },
+      {
+        "name": "jlink",
+        "path": "/usr/bin/jlink"
+      },
+      {
+        "name": "jmap",
+        "path": "/usr/bin/jmap"
+      },
+      {
+        "name": "jobs",
+        "path": "/usr/bin/jobs"
+      },
+      {
+        "name": "join",
+        "path": "/usr/bin/join"
+      },
+      {
+        "name": "jot",
+        "path": "/usr/bin/jot"
+      },
+      {
+        "name": "jpackage",
+        "path": "/usr/bin/jpackage"
+      },
+      {
+        "name": "jps",
+        "path": "/usr/bin/jps"
+      },
+      {
+        "name": "jq",
+        "path": "/usr/bin/jq"
+      },
+      {
+        "name": "jrunscript",
+        "path": "/usr/bin/jrunscript"
+      },
+      {
+        "name": "jshell",
+        "path": "/usr/bin/jshell"
+      },
+      {
+        "name": "json_pp",
+        "path": "/usr/bin/json_pp"
+      },
+      {
+        "name": "json_pp5.34",
+        "path": "/usr/bin/json_pp5.34"
+      },
+      {
+        "name": "json_xs",
+        "path": "/usr/bin/json_xs"
+      },
+      {
+        "name": "json_xs5.34",
+        "path": "/usr/bin/json_xs5.34"
+      },
+      {
+        "name": "jstack",
+        "path": "/usr/bin/jstack"
+      },
+      {
+        "name": "jstat",
+        "path": "/usr/bin/jstat"
+      },
+      {
+        "name": "jstatd",
+        "path": "/usr/bin/jstatd"
+      },
+      {
+        "name": "kcc",
+        "path": "/usr/bin/kcc"
+      },
+      {
+        "name": "kdestroy",
+        "path": "/usr/bin/kdestroy"
+      },
+      {
+        "name": "kextutil",
+        "path": "/usr/bin/kextutil"
+      },
+      {
+        "name": "keychain-access",
+        "path": "/usr/bin/keychain-access"
+      },
+      {
+        "name": "keytool",
+        "path": "/usr/bin/keytool"
+      },
+      {
+        "name": "kgetcred",
+        "path": "/usr/bin/kgetcred"
+      },
+      {
+        "name": "kill.d",
+        "path": "/usr/bin/kill.d"
+      },
+      {
+        "name": "killall",
+        "path": "/usr/bin/killall"
+      },
+      {
+        "name": "kinit",
+        "path": "/usr/bin/kinit"
+      },
+      {
+        "name": "klist",
+        "path": "/usr/bin/klist"
+      },
+      {
+        "name": "kmutil",
+        "path": "/usr/bin/kmutil"
+      },
+      {
+        "name": "kpasswd",
+        "path": "/usr/bin/kpasswd"
+      },
+      {
+        "name": "krb5-config",
+        "path": "/usr/bin/krb5-config"
+      },
+      {
+        "name": "kswitch",
+        "path": "/usr/bin/kswitch"
+      },
+      {
+        "name": "ktrace",
+        "path": "/usr/bin/ktrace"
+      },
+      {
+        "name": "lam",
+        "path": "/usr/bin/lam"
+      },
+      {
+        "name": "last",
+        "path": "/usr/bin/last"
+      },
+      {
+        "name": "lastcomm",
+        "path": "/usr/bin/lastcomm"
+      },
+      {
+        "name": "lastwords",
+        "path": "/usr/bin/lastwords"
+      },
+      {
+        "name": "latency",
+        "path": "/usr/bin/latency"
+      },
+      {
+        "name": "layerutil",
+        "path": "/usr/bin/layerutil"
+      },
+      {
+        "name": "ld",
+        "path": "/usr/bin/ld"
+      },
+      {
+        "name": "ldapadd",
+        "path": "/usr/bin/ldapadd"
+      },
+      {
+        "name": "ldapcompare",
+        "path": "/usr/bin/ldapcompare"
+      },
+      {
+        "name": "ldapdelete",
+        "path": "/usr/bin/ldapdelete"
+      },
+      {
+        "name": "ldapexop",
+        "path": "/usr/bin/ldapexop"
+      },
+      {
+        "name": "ldapmodify",
+        "path": "/usr/bin/ldapmodify"
+      },
+      {
+        "name": "ldapmodrdn",
+        "path": "/usr/bin/ldapmodrdn"
+      },
+      {
+        "name": "ldappasswd",
+        "path": "/usr/bin/ldappasswd"
+      },
+      {
+        "name": "ldapsearch",
+        "path": "/usr/bin/ldapsearch"
+      },
+      {
+        "name": "ldapurl",
+        "path": "/usr/bin/ldapurl"
+      },
+      {
+        "name": "ldapwhoami",
+        "path": "/usr/bin/ldapwhoami"
+      },
+      {
+        "name": "leaks",
+        "path": "/usr/bin/leaks"
+      },
+      {
+        "name": "leave",
+        "path": "/usr/bin/leave"
+      },
+      {
+        "name": "less",
+        "path": "/usr/bin/less"
+      },
+      {
+        "name": "lessecho",
+        "path": "/usr/bin/lessecho"
+      },
+      {
+        "name": "lesskey",
+        "path": "/usr/bin/lesskey"
+      },
+      {
+        "name": "lex",
+        "path": "/usr/bin/lex"
+      },
+      {
+        "name": "libnetcfg",
+        "path": "/usr/bin/libnetcfg"
+      },
+      {
+        "name": "libnetcfg5.34",
+        "path": "/usr/bin/libnetcfg5.34"
+      },
+      {
+        "name": "libtool",
+        "path": "/usr/bin/libtool"
+      },
+      {
+        "name": "lipo",
+        "path": "/usr/bin/lipo"
+      },
+      {
+        "name": "lldb",
+        "path": "/usr/bin/lldb"
+      },
+      {
+        "name": "llvm-g++",
+        "path": "/usr/bin/llvm-g++"
+      },
+      {
+        "name": "llvm-gcc",
+        "path": "/usr/bin/llvm-gcc"
+      },
+      {
+        "name": "loads.d",
+        "path": "/usr/bin/loads.d"
+      },
+      {
+        "name": "locale",
+        "path": "/usr/bin/locale"
+      },
+      {
+        "name": "localedef",
+        "path": "/usr/bin/localedef"
+      },
+      {
+        "name": "locate",
+        "path": "/usr/bin/locate"
+      },
+      {
+        "name": "lockf",
+        "path": "/usr/bin/lockf"
+      },
+      {
+        "name": "lockstat",
+        "path": "/usr/bin/lockstat"
+      },
+      {
+        "name": "log",
+        "path": "/usr/bin/log"
+      },
+      {
+        "name": "logger",
+        "path": "/usr/bin/logger"
+      },
+      {
+        "name": "login",
+        "path": "/usr/bin/login"
+      },
+      {
+        "name": "logname",
+        "path": "/usr/bin/logname"
+      },
+      {
+        "name": "look",
+        "path": "/usr/bin/look"
+      },
+      {
+        "name": "lorder",
+        "path": "/usr/bin/lorder"
+      },
+      {
+        "name": "lp",
+        "path": "/usr/bin/lp"
+      },
+      {
+        "name": "lpoptions",
+        "path": "/usr/bin/lpoptions"
+      },
+      {
+        "name": "lpq",
+        "path": "/usr/bin/lpq"
+      },
+      {
+        "name": "lpr",
+        "path": "/usr/bin/lpr"
+      },
+      {
+        "name": "lprm",
+        "path": "/usr/bin/lprm"
+      },
+      {
+        "name": "lpstat",
+        "path": "/usr/bin/lpstat"
+      },
+      {
+        "name": "lsappinfo",
+        "path": "/usr/bin/lsappinfo"
+      },
+      {
+        "name": "lsbom",
+        "path": "/usr/bin/lsbom"
+      },
+      {
+        "name": "lskq",
+        "path": "/usr/bin/lskq"
+      },
+      {
+        "name": "lsm",
+        "path": "/usr/bin/lsm"
+      },
+      {
+        "name": "lsmp",
+        "path": "/usr/bin/lsmp"
+      },
+      {
+        "name": "lsvfs",
+        "path": "/usr/bin/lsvfs"
+      },
+      {
+        "name": "lwp-download",
+        "path": "/usr/bin/lwp-download"
+      },
+      {
+        "name": "lwp-download5.34",
+        "path": "/usr/bin/lwp-download5.34"
+      },
+      {
+        "name": "lwp-dump",
+        "path": "/usr/bin/lwp-dump"
+      },
+      {
+        "name": "lwp-dump5.34",
+        "path": "/usr/bin/lwp-dump5.34"
+      },
+      {
+        "name": "lwp-mirror",
+        "path": "/usr/bin/lwp-mirror"
+      },
+      {
+        "name": "lwp-mirror5.34",
+        "path": "/usr/bin/lwp-mirror5.34"
+      },
+      {
+        "name": "lwp-request",
+        "path": "/usr/bin/lwp-request"
+      },
+      {
+        "name": "lwp-request5.34",
+        "path": "/usr/bin/lwp-request5.34"
+      },
+      {
+        "name": "m4",
+        "path": "/usr/bin/m4"
+      },
+      {
+        "name": "macbinary",
+        "path": "/usr/bin/macbinary"
+      },
+      {
+        "name": "macerror",
+        "path": "/usr/bin/macerror"
+      },
+      {
+        "name": "macerror5.34",
+        "path": "/usr/bin/macerror5.34"
+      },
+      {
+        "name": "machine",
+        "path": "/usr/bin/machine"
+      },
+      {
+        "name": "macoserror",
+        "path": "/usr/bin/macoserror"
+      },
+      {
+        "name": "mail",
+        "path": "/usr/bin/mail"
+      },
+      {
+        "name": "mailq",
+        "path": "/usr/bin/mailq"
+      },
+      {
+        "name": "mailx",
+        "path": "/usr/bin/mailx"
+      },
+      {
+        "name": "make",
+        "path": "/usr/bin/make"
+      },
+      {
+        "name": "malloc_history",
+        "path": "/usr/bin/malloc_history"
+      },
+      {
+        "name": "man",
+        "path": "/usr/bin/man"
+      },
+      {
+        "name": "mandoc",
+        "path": "/usr/bin/mandoc"
+      },
+      {
+        "name": "mandoc_soelim",
+        "path": "/usr/bin/mandoc_soelim"
+      },
+      {
+        "name": "manpath",
+        "path": "/usr/bin/manpath"
+      },
+      {
+        "name": "mcxquery",
+        "path": "/usr/bin/mcxquery"
+      },
+      {
+        "name": "mcxrefresh",
+        "path": "/usr/bin/mcxrefresh"
+      },
+      {
+        "name": "mddiagnose",
+        "path": "/usr/bin/mddiagnose"
+      },
+      {
+        "name": "mdfind",
+        "path": "/usr/bin/mdfind"
+      },
+      {
+        "name": "mdimport",
+        "path": "/usr/bin/mdimport"
+      },
+      {
+        "name": "mdls",
+        "path": "/usr/bin/mdls"
+      },
+      {
+        "name": "mdschema",
+        "path": "/usr/bin/mdschema"
+      },
+      {
+        "name": "mdutil",
+        "path": "/usr/bin/mdutil"
+      },
+      {
+        "name": "memacct",
+        "path": "/usr/bin/memacct"
+      },
+      {
+        "name": "meminfo",
+        "path": "/usr/bin/meminfo"
+      },
+      {
+        "name": "memory_pressure",
+        "path": "/usr/bin/memory_pressure"
+      },
+      {
+        "name": "mesg",
+        "path": "/usr/bin/mesg"
+      },
+      {
+        "name": "metalperftrace",
+        "path": "/usr/bin/metalperftrace"
+      },
+      {
+        "name": "mg",
+        "path": "/usr/bin/mg"
+      },
+      {
+        "name": "mib2c",
+        "path": "/usr/bin/mib2c"
+      },
+      {
+        "name": "mib2c-update",
+        "path": "/usr/bin/mib2c-update"
+      },
+      {
+        "name": "mig",
+        "path": "/usr/bin/mig"
+      },
+      {
+        "name": "mkbom",
+        "path": "/usr/bin/mkbom"
+      },
+      {
+        "name": "mkfifo",
+        "path": "/usr/bin/mkfifo"
+      },
+      {
+        "name": "mktemp",
+        "path": "/usr/bin/mktemp"
+      },
+      {
+        "name": "modelcatalogdump",
+        "path": "/usr/bin/modelcatalogdump"
+      },
+      {
+        "name": "modelmanagerdump",
+        "path": "/usr/bin/modelmanagerdump"
+      },
+      {
+        "name": "moose-outdated",
+        "path": "/usr/bin/moose-outdated"
+      },
+      {
+        "name": "moose-outdated5.34",
+        "path": "/usr/bin/moose-outdated5.34"
+      },
+      {
+        "name": "more",
+        "path": "/usr/bin/more"
+      },
+      {
+        "name": "mp2bug",
+        "path": "/usr/bin/mp2bug"
+      },
+      {
+        "name": "mpsgraphtool",
+        "path": "/usr/bin/mpsgraphtool"
+      },
+      {
+        "name": "nano",
+        "path": "/usr/bin/nano"
+      },
+      {
+        "name": "nbdst",
+        "path": "/usr/bin/nbdst"
+      },
+      {
+        "name": "nc",
+        "path": "/usr/bin/nc"
+      },
+      {
+        "name": "ncal",
+        "path": "/usr/bin/ncal"
+      },
+      {
+        "name": "ncctl",
+        "path": "/usr/bin/ncctl"
+      },
+      {
+        "name": "ncdestroy",
+        "path": "/usr/bin/ncdestroy"
+      },
+      {
+        "name": "ncinit",
+        "path": "/usr/bin/ncinit"
+      },
+      {
+        "name": "nclist",
+        "path": "/usr/bin/nclist"
+      },
+      {
+        "name": "ncurses5.4-config",
+        "path": "/usr/bin/ncurses5.4-config"
+      },
+      {
+        "name": "net-server",
+        "path": "/usr/bin/net-server"
+      },
+      {
+        "name": "net-server5.34",
+        "path": "/usr/bin/net-server5.34"
+      },
+      {
+        "name": "net-snmp-cert",
+        "path": "/usr/bin/net-snmp-cert"
+      },
+      {
+        "name": "net-snmp-config",
+        "path": "/usr/bin/net-snmp-config"
+      },
+      {
+        "name": "net-snmp-create-v3-user",
+        "path": "/usr/bin/net-snmp-create-v3-user"
+      },
+      {
+        "name": "nettop",
+        "path": "/usr/bin/nettop"
+      },
+      {
+        "name": "networkQuality",
+        "path": "/usr/bin/networkQuality"
+      },
+      {
+        "name": "newaliases",
+        "path": "/usr/bin/newaliases"
+      },
+      {
+        "name": "newgrp",
+        "path": "/usr/bin/newgrp"
+      },
+      {
+        "name": "newproc.d",
+        "path": "/usr/bin/newproc.d"
+      },
+      {
+        "name": "nfsstat",
+        "path": "/usr/bin/nfsstat"
+      },
+      {
+        "name": "nice",
+        "path": "/usr/bin/nice"
+      },
+      {
+        "name": "nl",
+        "path": "/usr/bin/nl"
+      },
+      {
+        "name": "nm",
+        "path": "/usr/bin/nm"
+      },
+      {
+        "name": "nmedit",
+        "path": "/usr/bin/nmedit"
+      },
+      {
+        "name": "nohup",
+        "path": "/usr/bin/nohup"
+      },
+      {
+        "name": "notifyutil",
+        "path": "/usr/bin/notifyutil"
+      },
+      {
+        "name": "nscurl",
+        "path": "/usr/bin/nscurl"
+      },
+      {
+        "name": "nslookup",
+        "path": "/usr/bin/nslookup"
+      },
+      {
+        "name": "nsupdate",
+        "path": "/usr/bin/nsupdate"
+      },
+      {
+        "name": "objdump",
+        "path": "/usr/bin/objdump"
+      },
+      {
+        "name": "ocspcheck",
+        "path": "/usr/bin/ocspcheck"
+      },
+      {
+        "name": "od",
+        "path": "/usr/bin/od"
+      },
+      {
+        "name": "odutil",
+        "path": "/usr/bin/odutil"
+      },
+      {
+        "name": "open",
+        "path": "/usr/bin/open"
+      },
+      {
+        "name": "opendiff",
+        "path": "/usr/bin/opendiff"
+      },
+      {
+        "name": "opensnoop",
+        "path": "/usr/bin/opensnoop"
+      },
+      {
+        "name": "openssl",
+        "path": "/usr/bin/openssl"
+      },
+      {
+        "name": "orbd",
+        "path": "/usr/bin/orbd"
+      },
+      {
+        "name": "osacompile",
+        "path": "/usr/bin/osacompile"
+      },
+      {
+        "name": "osadecompile",
+        "path": "/usr/bin/osadecompile"
+      },
+      {
+        "name": "osalang",
+        "path": "/usr/bin/osalang"
+      },
+      {
+        "name": "osascript",
+        "path": "/usr/bin/osascript"
+      },
+      {
+        "name": "otool",
+        "path": "/usr/bin/otool"
+      },
+      {
+        "name": "pack200",
+        "path": "/usr/bin/pack200"
+      },
+      {
+        "name": "package-stash-conflicts",
+        "path": "/usr/bin/package-stash-conflicts"
+      },
+      {
+        "name": "package-stash-conflicts5.34",
+        "path": "/usr/bin/package-stash-conflicts5.34"
+      },
+      {
+        "name": "pagesize",
+        "path": "/usr/bin/pagesize"
+      },
+      {
+        "name": "pagestuff",
+        "path": "/usr/bin/pagestuff"
+      },
+      {
+        "name": "par.pl",
+        "path": "/usr/bin/par.pl"
+      },
+      {
+        "name": "par5.34.pl",
+        "path": "/usr/bin/par5.34.pl"
+      },
+      {
+        "name": "parl",
+        "path": "/usr/bin/parl"
+      },
+      {
+        "name": "parl5.34",
+        "path": "/usr/bin/parl5.34"
+      },
+      {
+        "name": "parldyn",
+        "path": "/usr/bin/parldyn"
+      },
+      {
+        "name": "parldyn5.34",
+        "path": "/usr/bin/parldyn5.34"
+      },
+      {
+        "name": "passwd",
+        "path": "/usr/bin/passwd"
+      },
+      {
+        "name": "paste",
+        "path": "/usr/bin/paste"
+      },
+      {
+        "name": "patch",
+        "path": "/usr/bin/patch"
+      },
+      {
+        "name": "pathchk",
+        "path": "/usr/bin/pathchk"
+      },
+      {
+        "name": "pathopens.d",
+        "path": "/usr/bin/pathopens.d"
+      },
+      {
+        "name": "pbcopy",
+        "path": "/usr/bin/pbcopy"
+      },
+      {
+        "name": "pbpaste",
+        "path": "/usr/bin/pbpaste"
+      },
+      {
+        "name": "pcap-config",
+        "path": "/usr/bin/pcap-config"
+      },
+      {
+        "name": "pcsctest",
+        "path": "/usr/bin/pcsctest"
+      },
+      {
+        "name": "perl",
+        "path": "/usr/bin/perl"
+      },
+      {
+        "name": "perl5.34",
+        "path": "/usr/bin/perl5.34"
+      },
+      {
+        "name": "perlbug",
+        "path": "/usr/bin/perlbug"
+      },
+      {
+        "name": "perlbug5.34",
+        "path": "/usr/bin/perlbug5.34"
+      },
+      {
+        "name": "perldoc",
+        "path": "/usr/bin/perldoc"
+      },
+      {
+        "name": "perldoc5.34",
+        "path": "/usr/bin/perldoc5.34"
+      },
+      {
+        "name": "perlivp",
+        "path": "/usr/bin/perlivp"
+      },
+      {
+        "name": "perlivp5.34",
+        "path": "/usr/bin/perlivp5.34"
+      },
+      {
+        "name": "perlthanks",
+        "path": "/usr/bin/perlthanks"
+      },
+      {
+        "name": "perlthanks5.34",
+        "path": "/usr/bin/perlthanks5.34"
+      },
+      {
+        "name": "pgrep",
+        "path": "/usr/bin/pgrep"
+      },
+      {
+        "name": "pico",
+        "path": "/usr/bin/pico"
+      },
+      {
+        "name": "piconv",
+        "path": "/usr/bin/piconv"
+      },
+      {
+        "name": "piconv5.34",
+        "path": "/usr/bin/piconv5.34"
+      },
+      {
+        "name": "pidpersec.d",
+        "path": "/usr/bin/pidpersec.d"
+      },
+      {
+        "name": "pip3",
+        "path": "/usr/bin/pip3"
+      },
+      {
+        "name": "pkgbuild",
+        "path": "/usr/bin/pkgbuild"
+      },
+      {
+        "name": "pkill",
+        "path": "/usr/bin/pkill"
+      },
+      {
+        "name": "pl",
+        "path": "/usr/bin/pl"
+      },
+      {
+        "name": "pl2pm",
+        "path": "/usr/bin/pl2pm"
+      },
+      {
+        "name": "pl2pm5.34",
+        "path": "/usr/bin/pl2pm5.34"
+      },
+      {
+        "name": "plockstat",
+        "path": "/usr/bin/plockstat"
+      },
+      {
+        "name": "pluginkit",
+        "path": "/usr/bin/pluginkit"
+      },
+      {
+        "name": "plutil",
+        "path": "/usr/bin/plutil"
+      },
+      {
+        "name": "pmset",
+        "path": "/usr/bin/pmset"
+      },
+      {
+        "name": "pod2html",
+        "path": "/usr/bin/pod2html"
+      },
+      {
+        "name": "pod2html5.34",
+        "path": "/usr/bin/pod2html5.34"
+      },
+      {
+        "name": "pod2man",
+        "path": "/usr/bin/pod2man"
+      },
+      {
+        "name": "pod2man5.34",
+        "path": "/usr/bin/pod2man5.34"
+      },
+      {
+        "name": "pod2readme",
+        "path": "/usr/bin/pod2readme"
+      },
+      {
+        "name": "pod2readme5.34",
+        "path": "/usr/bin/pod2readme5.34"
+      },
+      {
+        "name": "pod2text",
+        "path": "/usr/bin/pod2text"
+      },
+      {
+        "name": "pod2text5.34",
+        "path": "/usr/bin/pod2text5.34"
+      },
+      {
+        "name": "pod2usage",
+        "path": "/usr/bin/pod2usage"
+      },
+      {
+        "name": "pod2usage5.34",
+        "path": "/usr/bin/pod2usage5.34"
+      },
+      {
+        "name": "podchecker",
+        "path": "/usr/bin/podchecker"
+      },
+      {
+        "name": "podchecker5.34",
+        "path": "/usr/bin/podchecker5.34"
+      },
+      {
+        "name": "policytool",
+        "path": "/usr/bin/policytool"
+      },
+      {
+        "name": "power_report.sh",
+        "path": "/usr/bin/power_report.sh"
+      },
+      {
+        "name": "powermetrics",
+        "path": "/usr/bin/powermetrics"
+      },
+      {
+        "name": "pp",
+        "path": "/usr/bin/pp"
+      },
+      {
+        "name": "pp5.34",
+        "path": "/usr/bin/pp5.34"
+      },
+      {
+        "name": "ppdc",
+        "path": "/usr/bin/ppdc"
+      },
+      {
+        "name": "ppdhtml",
+        "path": "/usr/bin/ppdhtml"
+      },
+      {
+        "name": "ppdi",
+        "path": "/usr/bin/ppdi"
+      },
+      {
+        "name": "ppdmerge",
+        "path": "/usr/bin/ppdmerge"
+      },
+      {
+        "name": "ppdpo",
+        "path": "/usr/bin/ppdpo"
+      },
+      {
+        "name": "pr",
+        "path": "/usr/bin/pr"
+      },
+      {
+        "name": "priclass.d",
+        "path": "/usr/bin/priclass.d"
+      },
+      {
+        "name": "pridist.d",
+        "path": "/usr/bin/pridist.d"
+      },
+      {
+        "name": "printenv",
+        "path": "/usr/bin/printenv"
+      },
+      {
+        "name": "printf",
+        "path": "/usr/bin/printf"
+      },
+      {
+        "name": "procsystime",
+        "path": "/usr/bin/procsystime"
+      },
+      {
+        "name": "productbuild",
+        "path": "/usr/bin/productbuild"
+      },
+      {
+        "name": "productsign",
+        "path": "/usr/bin/productsign"
+      },
+      {
+        "name": "profiles",
+        "path": "/usr/bin/profiles"
+      },
+      {
+        "name": "prove",
+        "path": "/usr/bin/prove"
+      },
+      {
+        "name": "prove5.34",
+        "path": "/usr/bin/prove5.34"
+      },
+      {
+        "name": "psm",
+        "path": "/usr/bin/psm"
+      },
+      {
+        "name": "ptar",
+        "path": "/usr/bin/ptar"
+      },
+      {
+        "name": "ptar5.34",
+        "path": "/usr/bin/ptar5.34"
+      },
+      {
+        "name": "ptardiff",
+        "path": "/usr/bin/ptardiff"
+      },
+      {
+        "name": "ptardiff5.34",
+        "path": "/usr/bin/ptardiff5.34"
+      },
+      {
+        "name": "ptargrep",
+        "path": "/usr/bin/ptargrep"
+      },
+      {
+        "name": "ptargrep5.34",
+        "path": "/usr/bin/ptargrep5.34"
+      },
+      {
+        "name": "pwpolicy",
+        "path": "/usr/bin/pwpolicy"
+      },
+      {
+        "name": "python3",
+        "path": "/usr/bin/python3"
+      },
+      {
+        "name": "qlmanage",
+        "path": "/usr/bin/qlmanage"
+      },
+      {
+        "name": "quota",
+        "path": "/usr/bin/quota"
+      },
+      {
+        "name": "rails",
+        "path": "/usr/bin/rails"
+      },
+      {
+        "name": "rake",
+        "path": "/usr/bin/rake"
+      },
+      {
+        "name": "ranlib",
+        "path": "/usr/bin/ranlib"
+      },
+      {
+        "name": "rdma_ctl",
+        "path": "/usr/bin/rdma_ctl"
+      },
+      {
+        "name": "rdoc",
+        "path": "/usr/bin/rdoc"
+      },
+      {
+        "name": "read",
+        "path": "/usr/bin/read"
+      },
+      {
+        "name": "readlink",
+        "path": "/usr/bin/readlink"
+      },
+      {
+        "name": "renice",
+        "path": "/usr/bin/renice"
+      },
+      {
+        "name": "reset",
+        "path": "/usr/bin/reset"
+      },
+      {
+        "name": "resolveLinks",
+        "path": "/usr/bin/resolveLinks"
+      },
+      {
+        "name": "rev",
+        "path": "/usr/bin/rev"
+      },
+      {
+        "name": "ri",
+        "path": "/usr/bin/ri"
+      },
+      {
+        "name": "rmic",
+        "path": "/usr/bin/rmic"
+      },
+      {
+        "name": "rmid",
+        "path": "/usr/bin/rmid"
+      },
+      {
+        "name": "rmiregistry",
+        "path": "/usr/bin/rmiregistry"
+      },
+      {
+        "name": "rpcgen",
+        "path": "/usr/bin/rpcgen"
+      },
+      {
+        "name": "rs",
+        "path": "/usr/bin/rs"
+      },
+      {
+        "name": "rsync",
+        "path": "/usr/bin/rsync"
+      },
+      {
+        "name": "ruby",
+        "path": "/usr/bin/ruby"
+      },
+      {
+        "name": "rview",
+        "path": "/usr/bin/rview"
+      },
+      {
+        "name": "rvim",
+        "path": "/usr/bin/rvim"
+      },
+      {
+        "name": "rwbypid.d",
+        "path": "/usr/bin/rwbypid.d"
+      },
+      {
+        "name": "rwbytype.d",
+        "path": "/usr/bin/rwbytype.d"
+      },
+      {
+        "name": "rwsnoop",
+        "path": "/usr/bin/rwsnoop"
+      },
+      {
+        "name": "safaridriver",
+        "path": "/usr/bin/safaridriver"
+      },
+      {
+        "name": "safarimcp",
+        "path": "/usr/bin/safarimcp"
+      },
+      {
+        "name": "sample",
+        "path": "/usr/bin/sample"
+      },
+      {
+        "name": "sampleproc",
+        "path": "/usr/bin/sampleproc"
+      },
+      {
+        "name": "sandbox-exec",
+        "path": "/usr/bin/sandbox-exec"
+      },
+      {
+        "name": "say",
+        "path": "/usr/bin/say"
+      },
+      {
+        "name": "sc_usage",
+        "path": "/usr/bin/sc_usage"
+      },
+      {
+        "name": "scandeps.pl",
+        "path": "/usr/bin/scandeps.pl"
+      },
+      {
+        "name": "scandeps5.34.pl",
+        "path": "/usr/bin/scandeps5.34.pl"
+      },
+      {
+        "name": "scp",
+        "path": "/usr/bin/scp"
+      },
+      {
+        "name": "screen",
+        "path": "/usr/bin/screen"
+      },
+      {
+        "name": "script",
+        "path": "/usr/bin/script"
+      },
+      {
+        "name": "sdef",
+        "path": "/usr/bin/sdef"
+      },
+      {
+        "name": "sdiff",
+        "path": "/usr/bin/sdiff"
+      },
+      {
+        "name": "sdp",
+        "path": "/usr/bin/sdp"
+      },
+      {
+        "name": "sdx",
+        "path": "/usr/bin/sdx"
+      },
+      {
+        "name": "searchdiagnose",
+        "path": "/usr/bin/searchdiagnose"
+      },
+      {
+        "name": "security",
+        "path": "/usr/bin/security"
+      },
+      {
+        "name": "sed",
+        "path": "/usr/bin/sed"
+      },
+      {
+        "name": "seeksize.d",
+        "path": "/usr/bin/seeksize.d"
+      },
+      {
+        "name": "segedit",
+        "path": "/usr/bin/segedit"
+      },
+      {
+        "name": "seq",
+        "path": "/usr/bin/seq"
+      },
+      {
+        "name": "serialver",
+        "path": "/usr/bin/serialver"
+      },
+      {
+        "name": "servertool",
+        "path": "/usr/bin/servertool"
+      },
+      {
+        "name": "setregion",
+        "path": "/usr/bin/setregion"
+      },
+      {
+        "name": "setuids.d",
+        "path": "/usr/bin/setuids.d"
+      },
+      {
+        "name": "sfltool",
+        "path": "/usr/bin/sfltool"
+      },
+      {
+        "name": "sftp",
+        "path": "/usr/bin/sftp"
+      },
+      {
+        "name": "shar",
+        "path": "/usr/bin/shar"
+      },
+      {
+        "name": "shasum",
+        "path": "/usr/bin/shasum"
+      },
+      {
+        "name": "shasum5.34",
+        "path": "/usr/bin/shasum5.34"
+      },
+      {
+        "name": "shazam",
+        "path": "/usr/bin/shazam"
+      },
+      {
+        "name": "shlock",
+        "path": "/usr/bin/shlock"
+      },
+      {
+        "name": "shortcuts",
+        "path": "/usr/bin/shortcuts"
+      },
+      {
+        "name": "showmount",
+        "path": "/usr/bin/showmount"
+      },
+      {
+        "name": "sigdist.d",
+        "path": "/usr/bin/sigdist.d"
+      },
+      {
+        "name": "sips",
+        "path": "/usr/bin/sips"
+      },
+      {
+        "name": "size",
+        "path": "/usr/bin/size"
+      },
+      {
+        "name": "slogin",
+        "path": "/usr/bin/slogin"
+      },
+      {
+        "name": "smbutil",
+        "path": "/usr/bin/smbutil"
+      },
+      {
+        "name": "snfsdefrag",
+        "path": "/usr/bin/snfsdefrag"
+      },
+      {
+        "name": "snmp-bridge-mib",
+        "path": "/usr/bin/snmp-bridge-mib"
+      },
+      {
+        "name": "snmpbulkget",
+        "path": "/usr/bin/snmpbulkget"
+      },
+      {
+        "name": "snmpbulkwalk",
+        "path": "/usr/bin/snmpbulkwalk"
+      },
+      {
+        "name": "snmpconf",
+        "path": "/usr/bin/snmpconf"
+      },
+      {
+        "name": "snmpdelta",
+        "path": "/usr/bin/snmpdelta"
+      },
+      {
+        "name": "snmpdf",
+        "path": "/usr/bin/snmpdf"
+      },
+      {
+        "name": "snmpget",
+        "path": "/usr/bin/snmpget"
+      },
+      {
+        "name": "snmpgetnext",
+        "path": "/usr/bin/snmpgetnext"
+      },
+      {
+        "name": "snmpinform",
+        "path": "/usr/bin/snmpinform"
+      },
+      {
+        "name": "snmpnetstat",
+        "path": "/usr/bin/snmpnetstat"
+      },
+      {
+        "name": "snmpset",
+        "path": "/usr/bin/snmpset"
+      },
+      {
+        "name": "snmpstatus",
+        "path": "/usr/bin/snmpstatus"
+      },
+      {
+        "name": "snmptable",
+        "path": "/usr/bin/snmptable"
+      },
+      {
+        "name": "snmptest",
+        "path": "/usr/bin/snmptest"
+      },
+      {
+        "name": "snmptranslate",
+        "path": "/usr/bin/snmptranslate"
+      },
+      {
+        "name": "snmptrap",
+        "path": "/usr/bin/snmptrap"
+      },
+      {
+        "name": "snmpusm",
+        "path": "/usr/bin/snmpusm"
+      },
+      {
+        "name": "snmpvacm",
+        "path": "/usr/bin/snmpvacm"
+      },
+      {
+        "name": "snmpwalk",
+        "path": "/usr/bin/snmpwalk"
+      },
+      {
+        "name": "sntp",
+        "path": "/usr/bin/sntp"
+      },
+      {
+        "name": "soelim",
+        "path": "/usr/bin/soelim"
+      },
+      {
+        "name": "sort",
+        "path": "/usr/bin/sort"
+      },
+      {
+        "name": "sourcekit-lsp",
+        "path": "/usr/bin/sourcekit-lsp"
+      },
+      {
+        "name": "spfd",
+        "path": "/usr/bin/spfd"
+      },
+      {
+        "name": "spfd5.34",
+        "path": "/usr/bin/spfd5.34"
+      },
+      {
+        "name": "spfquery",
+        "path": "/usr/bin/spfquery"
+      },
+      {
+        "name": "spfquery5.34",
+        "path": "/usr/bin/spfquery5.34"
+      },
+      {
+        "name": "splain",
+        "path": "/usr/bin/splain"
+      },
+      {
+        "name": "splain5.34",
+        "path": "/usr/bin/splain5.34"
+      },
+      {
+        "name": "split",
+        "path": "/usr/bin/split"
+      },
+      {
+        "name": "sqlite3",
+        "path": "/usr/bin/sqlite3"
+      },
+      {
+        "name": "ssh",
+        "path": "/usr/bin/ssh"
+      },
+      {
+        "name": "ssh-add",
+        "path": "/usr/bin/ssh-add"
+      },
+      {
+        "name": "ssh-agent",
+        "path": "/usr/bin/ssh-agent"
+      },
+      {
+        "name": "ssh-copy-id",
+        "path": "/usr/bin/ssh-copy-id"
+      },
+      {
+        "name": "ssh-keygen",
+        "path": "/usr/bin/ssh-keygen"
+      },
+      {
+        "name": "ssh-keyscan",
+        "path": "/usr/bin/ssh-keyscan"
+      },
+      {
+        "name": "stapler",
+        "path": "/usr/bin/stapler"
+      },
+      {
+        "name": "stat",
+        "path": "/usr/bin/stat"
+      },
+      {
+        "name": "stdbuf",
+        "path": "/usr/bin/stdbuf"
+      },
+      {
+        "name": "streamzip",
+        "path": "/usr/bin/streamzip"
+      },
+      {
+        "name": "streamzip5.34",
+        "path": "/usr/bin/streamzip5.34"
+      },
+      {
+        "name": "stringdups",
+        "path": "/usr/bin/stringdups"
+      },
+      {
+        "name": "strings",
+        "path": "/usr/bin/strings"
+      },
+      {
+        "name": "strip",
+        "path": "/usr/bin/strip"
+      },
+      {
+        "name": "stz",
+        "path": "/usr/bin/stz"
+      },
+      {
+        "name": "su",
+        "path": "/usr/bin/su"
+      },
+      {
+        "name": "sudo",
+        "path": "/usr/bin/sudo"
+      },
+      {
+        "name": "sum",
+        "path": "/usr/bin/sum"
+      },
+      {
+        "name": "sw_vers",
+        "path": "/usr/bin/sw_vers"
+      },
+      {
+        "name": "swcutil",
+        "path": "/usr/bin/swcutil"
+      },
+      {
+        "name": "swift",
+        "path": "/usr/bin/swift"
+      },
+      {
+        "name": "swift-inspect",
+        "path": "/usr/bin/swift-inspect"
+      },
+      {
+        "name": "swiftc",
+        "path": "/usr/bin/swiftc"
+      },
+      {
+        "name": "symbols",
+        "path": "/usr/bin/symbols"
+      },
+      {
+        "name": "symbolscache",
+        "path": "/usr/bin/symbolscache"
+      },
+      {
+        "name": "syscallbypid.d",
+        "path": "/usr/bin/syscallbypid.d"
+      },
+      {
+        "name": "syscallbyproc.d",
+        "path": "/usr/bin/syscallbyproc.d"
+      },
+      {
+        "name": "syscallbysysc.d",
+        "path": "/usr/bin/syscallbysysc.d"
+      },
+      {
+        "name": "sysdiagnose",
+        "path": "/usr/bin/sysdiagnose"
+      },
+      {
+        "name": "syslog",
+        "path": "/usr/bin/syslog"
+      },
+      {
+        "name": "syspolicy_check",
+        "path": "/usr/bin/syspolicy_check"
+      },
+      {
+        "name": "system-override",
+        "path": "/usr/bin/system-override"
+      },
+      {
+        "name": "systemextensionsctl",
+        "path": "/usr/bin/systemextensionsctl"
+      },
+      {
+        "name": "tab2space",
+        "path": "/usr/bin/tab2space"
+      },
+      {
+        "name": "tabs",
+        "path": "/usr/bin/tabs"
+      },
+      {
+        "name": "tail",
+        "path": "/usr/bin/tail"
+      },
+      {
+        "name": "tailspin",
+        "path": "/usr/bin/tailspin"
+      },
+      {
+        "name": "talk",
+        "path": "/usr/bin/talk"
+      },
+      {
+        "name": "tar",
+        "path": "/usr/bin/tar"
+      },
+      {
+        "name": "taskinfo",
+        "path": "/usr/bin/taskinfo"
+      },
+      {
+        "name": "tbtdiagnose",
+        "path": "/usr/bin/tbtdiagnose"
+      },
+      {
+        "name": "tccutil",
+        "path": "/usr/bin/tccutil"
+      },
+      {
+        "name": "tclsh",
+        "path": "/usr/bin/tclsh"
+      },
+      {
+        "name": "tclsh8.5",
+        "path": "/usr/bin/tclsh8.5"
+      },
+      {
+        "name": "tee",
+        "path": "/usr/bin/tee"
+      },
+      {
+        "name": "test-yaml",
+        "path": "/usr/bin/test-yaml"
+      },
+      {
+        "name": "test-yaml5.34",
+        "path": "/usr/bin/test-yaml5.34"
+      },
+      {
+        "name": "textutil",
+        "path": "/usr/bin/textutil"
+      },
+      {
+        "name": "tftp",
+        "path": "/usr/bin/tftp"
+      },
+      {
+        "name": "tic",
+        "path": "/usr/bin/tic"
+      },
+      {
+        "name": "tidy",
+        "path": "/usr/bin/tidy"
+      },
+      {
+        "name": "tidy_changelog",
+        "path": "/usr/bin/tidy_changelog"
+      },
+      {
+        "name": "tidy_changelog5.34",
+        "path": "/usr/bin/tidy_changelog5.34"
+      },
+      {
+        "name": "tiff2icns",
+        "path": "/usr/bin/tiff2icns"
+      },
+      {
+        "name": "tiffutil",
+        "path": "/usr/bin/tiffutil"
+      },
+      {
+        "name": "time",
+        "path": "/usr/bin/time"
+      },
+      {
+        "name": "timer_analyser.d",
+        "path": "/usr/bin/timer_analyser.d"
+      },
+      {
+        "name": "timerfires",
+        "path": "/usr/bin/timerfires"
+      },
+      {
+        "name": "timesyncanalyse",
+        "path": "/usr/bin/timesyncanalyse"
+      },
+      {
+        "name": "tkcon",
+        "path": "/usr/bin/tkcon"
+      },
+      {
+        "name": "tkmib",
+        "path": "/usr/bin/tkmib"
+      },
+      {
+        "name": "tkpp",
+        "path": "/usr/bin/tkpp"
+      },
+      {
+        "name": "tkpp5.34",
+        "path": "/usr/bin/tkpp5.34"
+      },
+      {
+        "name": "tmdiagnose",
+        "path": "/usr/bin/tmdiagnose"
+      },
+      {
+        "name": "tmutil",
+        "path": "/usr/bin/tmutil"
+      },
+      {
+        "name": "tnameserv",
+        "path": "/usr/bin/tnameserv"
+      },
+      {
+        "name": "toe",
+        "path": "/usr/bin/toe"
+      },
+      {
+        "name": "top",
+        "path": "/usr/bin/top"
+      },
+      {
+        "name": "tops",
+        "path": "/usr/bin/tops"
+      },
+      {
+        "name": "topsyscall",
+        "path": "/usr/bin/topsyscall"
+      },
+      {
+        "name": "topsysproc",
+        "path": "/usr/bin/topsysproc"
+      },
+      {
+        "name": "touch",
+        "path": "/usr/bin/touch"
+      },
+      {
+        "name": "tput",
+        "path": "/usr/bin/tput"
+      },
+      {
+        "name": "tr",
+        "path": "/usr/bin/tr"
+      },
+      {
+        "name": "trace",
+        "path": "/usr/bin/trace"
+      },
+      {
+        "name": "traptoemail",
+        "path": "/usr/bin/traptoemail"
+      },
+      {
+        "name": "trash",
+        "path": "/usr/bin/trash"
+      },
+      {
+        "name": "treereg",
+        "path": "/usr/bin/treereg"
+      },
+      {
+        "name": "treereg5.34",
+        "path": "/usr/bin/treereg5.34"
+      },
+      {
+        "name": "trimforce",
+        "path": "/usr/bin/trimforce"
+      },
+      {
+        "name": "true",
+        "path": "/usr/bin/true"
+      },
+      {
+        "name": "truncate",
+        "path": "/usr/bin/truncate"
+      },
+      {
+        "name": "trustcachectl",
+        "path": "/usr/bin/trustcachectl"
+      },
+      {
+        "name": "tset",
+        "path": "/usr/bin/tset"
+      },
+      {
+        "name": "tsort",
+        "path": "/usr/bin/tsort"
+      },
+      {
+        "name": "tty",
+        "path": "/usr/bin/tty"
+      },
+      {
+        "name": "type",
+        "path": "/usr/bin/type"
+      },
+      {
+        "name": "ul",
+        "path": "/usr/bin/ul"
+      },
+      {
+        "name": "ulimit",
+        "path": "/usr/bin/ulimit"
+      },
+      {
+        "name": "umask",
+        "path": "/usr/bin/umask"
+      },
+      {
+        "name": "umtool",
+        "path": "/usr/bin/umtool"
+      },
+      {
+        "name": "unalias",
+        "path": "/usr/bin/unalias"
+      },
+      {
+        "name": "uname",
+        "path": "/usr/bin/uname"
+      },
+      {
+        "name": "uncompress",
+        "path": "/usr/bin/uncompress"
+      },
+      {
+        "name": "unexpand",
+        "path": "/usr/bin/unexpand"
+      },
+      {
+        "name": "unifdef",
+        "path": "/usr/bin/unifdef"
+      },
+      {
+        "name": "unifdefall",
+        "path": "/usr/bin/unifdefall"
+      },
+      {
+        "name": "uniq",
+        "path": "/usr/bin/uniq"
+      },
+      {
+        "name": "units",
+        "path": "/usr/bin/units"
+      },
+      {
+        "name": "unpack200",
+        "path": "/usr/bin/unpack200"
+      },
+      {
+        "name": "unvis",
+        "path": "/usr/bin/unvis"
+      },
+      {
+        "name": "unzip",
+        "path": "/usr/bin/unzip"
+      },
+      {
+        "name": "unzipsfx",
+        "path": "/usr/bin/unzipsfx"
+      },
+      {
+        "name": "update_dyld_shared_cache",
+        "path": "/usr/bin/update_dyld_shared_cache"
+      },
+      {
+        "name": "update_mcdp29xx",
+        "path": "/usr/bin/update_mcdp29xx"
+      },
+      {
+        "name": "uptime",
+        "path": "/usr/bin/uptime"
+      },
+      {
+        "name": "usbcfwflasher",
+        "path": "/usr/bin/usbcfwflasher"
+      },
+      {
+        "name": "usbdiagnose",
+        "path": "/usr/bin/usbdiagnose"
+      },
+      {
+        "name": "usdcat",
+        "path": "/usr/bin/usdcat"
+      },
+      {
+        "name": "usdchecker",
+        "path": "/usr/bin/usdchecker"
+      },
+      {
+        "name": "usdcrush",
+        "path": "/usr/bin/usdcrush"
+      },
+      {
+        "name": "usdextract",
+        "path": "/usr/bin/usdextract"
+      },
+      {
+        "name": "usdrecord",
+        "path": "/usr/bin/usdrecord"
+      },
+      {
+        "name": "usdtree",
+        "path": "/usr/bin/usdtree"
+      },
+      {
+        "name": "usdzip",
+        "path": "/usr/bin/usdzip"
+      },
+      {
+        "name": "users",
+        "path": "/usr/bin/users"
+      },
+      {
+        "name": "uttype",
+        "path": "/usr/bin/uttype"
+      },
+      {
+        "name": "uucp",
+        "path": "/usr/bin/uucp"
+      },
+      {
+        "name": "uudecode",
+        "path": "/usr/bin/uudecode"
+      },
+      {
+        "name": "uuencode",
+        "path": "/usr/bin/uuencode"
+      },
+      {
+        "name": "uuidgen",
+        "path": "/usr/bin/uuidgen"
+      },
+      {
+        "name": "uulog",
+        "path": "/usr/bin/uulog"
+      },
+      {
+        "name": "uuname",
+        "path": "/usr/bin/uuname"
+      },
+      {
+        "name": "uupick",
+        "path": "/usr/bin/uupick"
+      },
+      {
+        "name": "uustat",
+        "path": "/usr/bin/uustat"
+      },
+      {
+        "name": "uuto",
+        "path": "/usr/bin/uuto"
+      },
+      {
+        "name": "uux",
+        "path": "/usr/bin/uux"
+      },
+      {
+        "name": "vi",
+        "path": "/usr/bin/vi"
+      },
+      {
+        "name": "view",
+        "path": "/usr/bin/view"
+      },
+      {
+        "name": "viewdiagnostic",
+        "path": "/usr/bin/viewdiagnostic"
+      },
+      {
+        "name": "vim",
+        "path": "/usr/bin/vim"
+      },
+      {
+        "name": "vimdiff",
+        "path": "/usr/bin/vimdiff"
+      },
+      {
+        "name": "vimtutor",
+        "path": "/usr/bin/vimtutor"
+      },
+      {
+        "name": "vis",
+        "path": "/usr/bin/vis"
+      },
+      {
+        "name": "vm_stat",
+        "path": "/usr/bin/vm_stat"
+      },
+      {
+        "name": "vmmap",
+        "path": "/usr/bin/vmmap"
+      },
+      {
+        "name": "vtool",
+        "path": "/usr/bin/vtool"
+      },
+      {
+        "name": "w",
+        "path": "/usr/bin/w"
+      },
+      {
+        "name": "wait",
+        "path": "/usr/bin/wait"
+      },
+      {
+        "name": "wall",
+        "path": "/usr/bin/wall"
+      },
+      {
+        "name": "wc",
+        "path": "/usr/bin/wc"
+      },
+      {
+        "name": "wdutil",
+        "path": "/usr/bin/wdutil"
+      },
+      {
+        "name": "what",
+        "path": "/usr/bin/what"
+      },
+      {
+        "name": "whatis",
+        "path": "/usr/bin/whatis"
+      },
+      {
+        "name": "whereis",
+        "path": "/usr/bin/whereis"
+      },
+      {
+        "name": "which",
+        "path": "/usr/bin/which"
+      },
+      {
+        "name": "who",
+        "path": "/usr/bin/who"
+      },
+      {
+        "name": "whoami",
+        "path": "/usr/bin/whoami"
+      },
+      {
+        "name": "whois",
+        "path": "/usr/bin/whois"
+      },
+      {
+        "name": "wish",
+        "path": "/usr/bin/wish"
+      },
+      {
+        "name": "wish8.5",
+        "path": "/usr/bin/wish8.5"
+      },
+      {
+        "name": "write",
+        "path": "/usr/bin/write"
+      },
+      {
+        "name": "xar",
+        "path": "/usr/bin/xar"
+      },
+      {
+        "name": "xargs",
+        "path": "/usr/bin/xargs"
+      },
+      {
+        "name": "xattr",
+        "path": "/usr/bin/xattr"
+      },
+      {
+        "name": "xcdebug",
+        "path": "/usr/bin/xcdebug"
+      },
+      {
+        "name": "xcode-select",
+        "path": "/usr/bin/xcode-select"
+      },
+      {
+        "name": "xcodebuild",
+        "path": "/usr/bin/xcodebuild"
+      },
+      {
+        "name": "xcrun",
+        "path": "/usr/bin/xcrun"
+      },
+      {
+        "name": "xcscontrol",
+        "path": "/usr/bin/xcscontrol"
+      },
+      {
+        "name": "xcsdiagnose",
+        "path": "/usr/bin/xcsdiagnose"
+      },
+      {
+        "name": "xctrace",
+        "path": "/usr/bin/xctrace"
+      },
+      {
+        "name": "xed",
+        "path": "/usr/bin/xed"
+      },
+      {
+        "name": "xgettext.pl",
+        "path": "/usr/bin/xgettext.pl"
+      },
+      {
+        "name": "xgettext5.34.pl",
+        "path": "/usr/bin/xgettext5.34.pl"
+      },
+      {
+        "name": "xip",
+        "path": "/usr/bin/xip"
+      },
+      {
+        "name": "xml2-config",
+        "path": "/usr/bin/xml2-config"
+      },
+      {
+        "name": "xml2man",
+        "path": "/usr/bin/xml2man"
+      },
+      {
+        "name": "xmlcatalog",
+        "path": "/usr/bin/xmlcatalog"
+      },
+      {
+        "name": "xmllint",
+        "path": "/usr/bin/xmllint"
+      },
+      {
+        "name": "xpath",
+        "path": "/usr/bin/xpath"
+      },
+      {
+        "name": "xpath5.34",
+        "path": "/usr/bin/xpath5.34"
+      },
+      {
+        "name": "xprotect",
+        "path": "/usr/bin/xprotect"
+      },
+      {
+        "name": "xslt-config",
+        "path": "/usr/bin/xslt-config"
+      },
+      {
+        "name": "xsltproc",
+        "path": "/usr/bin/xsltproc"
+      },
+      {
+        "name": "xsubpp",
+        "path": "/usr/bin/xsubpp"
+      },
+      {
+        "name": "xsubpp5.34",
+        "path": "/usr/bin/xsubpp5.34"
+      },
+      {
+        "name": "xxd",
+        "path": "/usr/bin/xxd"
+      },
+      {
+        "name": "yaa",
+        "path": "/usr/bin/yaa"
+      },
+      {
+        "name": "yacc",
+        "path": "/usr/bin/yacc"
+      },
+      {
+        "name": "yamlpp-events",
+        "path": "/usr/bin/yamlpp-events"
+      },
+      {
+        "name": "yamlpp-events5.34",
+        "path": "/usr/bin/yamlpp-events5.34"
+      },
+      {
+        "name": "yamlpp-highlight",
+        "path": "/usr/bin/yamlpp-highlight"
+      },
+      {
+        "name": "yamlpp-highlight5.34",
+        "path": "/usr/bin/yamlpp-highlight5.34"
+      },
+      {
+        "name": "yamlpp-load",
+        "path": "/usr/bin/yamlpp-load"
+      },
+      {
+        "name": "yamlpp-load-dump",
+        "path": "/usr/bin/yamlpp-load-dump"
+      },
+      {
+        "name": "yamlpp-load-dump5.34",
+        "path": "/usr/bin/yamlpp-load-dump5.34"
+      },
+      {
+        "name": "yamlpp-load5.34",
+        "path": "/usr/bin/yamlpp-load5.34"
+      },
+      {
+        "name": "yamlpp-parse-emit",
+        "path": "/usr/bin/yamlpp-parse-emit"
+      },
+      {
+        "name": "yamlpp-parse-emit5.34",
+        "path": "/usr/bin/yamlpp-parse-emit5.34"
+      },
+      {
+        "name": "yapp",
+        "path": "/usr/bin/yapp"
+      },
+      {
+        "name": "yapp5.34",
+        "path": "/usr/bin/yapp5.34"
+      },
+      {
+        "name": "yes",
+        "path": "/usr/bin/yes"
+      },
+      {
+        "name": "zcat",
+        "path": "/usr/bin/zcat"
+      },
+      {
+        "name": "zcmp",
+        "path": "/usr/bin/zcmp"
+      },
+      {
+        "name": "zdiff",
+        "path": "/usr/bin/zdiff"
+      },
+      {
+        "name": "zegrep",
+        "path": "/usr/bin/zegrep"
+      },
+      {
+        "name": "zfgrep",
+        "path": "/usr/bin/zfgrep"
+      },
+      {
+        "name": "zforce",
+        "path": "/usr/bin/zforce"
+      },
+      {
+        "name": "zgrep",
+        "path": "/usr/bin/zgrep"
+      },
+      {
+        "name": "zip",
+        "path": "/usr/bin/zip"
+      },
+      {
+        "name": "zipcloak",
+        "path": "/usr/bin/zipcloak"
+      },
+      {
+        "name": "zipdetails",
+        "path": "/usr/bin/zipdetails"
+      },
+      {
+        "name": "zipdetails5.34",
+        "path": "/usr/bin/zipdetails5.34"
+      },
+      {
+        "name": "zipgrep",
+        "path": "/usr/bin/zipgrep"
+      },
+      {
+        "name": "zipinfo",
+        "path": "/usr/bin/zipinfo"
+      },
+      {
+        "name": "zipnote",
+        "path": "/usr/bin/zipnote"
+      },
+      {
+        "name": "zipsplit",
+        "path": "/usr/bin/zipsplit"
+      },
+      {
+        "name": "zless",
+        "path": "/usr/bin/zless"
+      },
+      {
+        "name": "zmore",
+        "path": "/usr/bin/zmore"
+      },
+      {
+        "name": "znew",
+        "path": "/usr/bin/znew"
+      },
+      {
+        "name": "zprint",
+        "path": "/usr/bin/zprint"
+      },
+      {
+        "name": "BTLEServer",
+        "path": "/usr/sbin/BTLEServer"
+      },
+      {
+        "name": "BTLEServerAgent",
+        "path": "/usr/sbin/BTLEServerAgent"
+      },
+      {
+        "name": "BlueTool",
+        "path": "/usr/sbin/BlueTool"
+      },
+      {
+        "name": "BootCacheControl",
+        "path": "/usr/sbin/BootCacheControl"
+      },
+      {
+        "name": "DevToolsSecurity",
+        "path": "/usr/sbin/DevToolsSecurity"
+      },
+      {
+        "name": "KernelEventAgent",
+        "path": "/usr/sbin/KernelEventAgent"
+      },
+      {
+        "name": "PasswordService",
+        "path": "/usr/sbin/PasswordService"
+      },
+      {
+        "name": "WirelessRadioManagerd",
+        "path": "/usr/sbin/WirelessRadioManagerd"
+      },
+      {
+        "name": "ab",
+        "path": "/usr/sbin/ab"
+      },
+      {
+        "name": "ac",
+        "path": "/usr/sbin/ac"
+      },
+      {
+        "name": "accton",
+        "path": "/usr/sbin/accton"
+      },
+      {
+        "name": "amt",
+        "path": "/usr/sbin/amt"
+      },
+      {
+        "name": "apachectl",
+        "path": "/usr/sbin/apachectl"
+      },
+      {
+        "name": "appleh13camerad",
+        "path": "/usr/sbin/appleh13camerad"
+      },
+      {
+        "name": "appleh16camerad",
+        "path": "/usr/sbin/appleh16camerad"
+      },
+      {
+        "name": "appsleepd",
+        "path": "/usr/sbin/appsleepd"
+      },
+      {
+        "name": "arp",
+        "path": "/usr/sbin/arp"
+      },
+      {
+        "name": "aslmanager",
+        "path": "/usr/sbin/aslmanager"
+      },
+      {
+        "name": "asr",
+        "path": "/usr/sbin/asr"
+      },
+      {
+        "name": "audit",
+        "path": "/usr/sbin/audit"
+      },
+      {
+        "name": "auditd",
+        "path": "/usr/sbin/auditd"
+      },
+      {
+        "name": "auditreduce",
+        "path": "/usr/sbin/auditreduce"
+      },
+      {
+        "name": "automount",
+        "path": "/usr/sbin/automount"
+      },
+      {
+        "name": "avbdeviced",
+        "path": "/usr/sbin/avbdeviced"
+      },
+      {
+        "name": "bless",
+        "path": "/usr/sbin/bless"
+      },
+      {
+        "name": "bluetoothaudiod",
+        "path": "/usr/sbin/bluetoothaudiod"
+      },
+      {
+        "name": "bluetoothd",
+        "path": "/usr/sbin/bluetoothd"
+      },
+      {
+        "name": "cfprefsd",
+        "path": "/usr/sbin/cfprefsd"
+      },
+      {
+        "name": "chat",
+        "path": "/usr/sbin/chat"
+      },
+      {
+        "name": "checkgid",
+        "path": "/usr/sbin/checkgid"
+      },
+      {
+        "name": "chown",
+        "path": "/usr/sbin/chown"
+      },
+      {
+        "name": "chroot",
+        "path": "/usr/sbin/chroot"
+      },
+      {
+        "name": "ckksctl",
+        "path": "/usr/sbin/ckksctl"
+      },
+      {
+        "name": "coreaudiod",
+        "path": "/usr/sbin/coreaudiod"
+      },
+      {
+        "name": "createhomedir",
+        "path": "/usr/sbin/createhomedir"
+      },
+      {
+        "name": "cron",
+        "path": "/usr/sbin/cron"
+      },
+      {
+        "name": "cupsaccept",
+        "path": "/usr/sbin/cupsaccept"
+      },
+      {
+        "name": "cupsctl",
+        "path": "/usr/sbin/cupsctl"
+      },
+      {
+        "name": "cupsd",
+        "path": "/usr/sbin/cupsd"
+      },
+      {
+        "name": "cupsdisable",
+        "path": "/usr/sbin/cupsdisable"
+      },
+      {
+        "name": "cupsenable",
+        "path": "/usr/sbin/cupsenable"
+      },
+      {
+        "name": "cupsfilter",
+        "path": "/usr/sbin/cupsfilter"
+      },
+      {
+        "name": "cupsreject",
+        "path": "/usr/sbin/cupsreject"
+      },
+      {
+        "name": "cvadmin",
+        "path": "/usr/sbin/cvadmin"
+      },
+      {
+        "name": "cvdb",
+        "path": "/usr/sbin/cvdb"
+      },
+      {
+        "name": "cvdbset",
+        "path": "/usr/sbin/cvdbset"
+      },
+      {
+        "name": "cvfsck",
+        "path": "/usr/sbin/cvfsck"
+      },
+      {
+        "name": "cvfsdb",
+        "path": "/usr/sbin/cvfsdb"
+      },
+      {
+        "name": "cvfsid",
+        "path": "/usr/sbin/cvfsid"
+      },
+      {
+        "name": "cvgather",
+        "path": "/usr/sbin/cvgather"
+      },
+      {
+        "name": "cvlabel",
+        "path": "/usr/sbin/cvlabel"
+      },
+      {
+        "name": "cvmkfs",
+        "path": "/usr/sbin/cvmkfs"
+      },
+      {
+        "name": "cvupdatefs",
+        "path": "/usr/sbin/cvupdatefs"
+      },
+      {
+        "name": "cvversions",
+        "path": "/usr/sbin/cvversions"
+      },
+      {
+        "name": "dbmmanage",
+        "path": "/usr/sbin/dbmmanage"
+      },
+      {
+        "name": "ddns-confgen",
+        "path": "/usr/sbin/ddns-confgen"
+      },
+      {
+        "name": "dev_mkdb",
+        "path": "/usr/sbin/dev_mkdb"
+      },
+      {
+        "name": "diskutil",
+        "path": "/usr/sbin/diskutil"
+      },
+      {
+        "name": "distnoted",
+        "path": "/usr/sbin/distnoted"
+      },
+      {
+        "name": "dnctl",
+        "path": "/usr/sbin/dnctl"
+      },
+      {
+        "name": "dot_clean",
+        "path": "/usr/sbin/dot_clean"
+      },
+      {
+        "name": "dsconfigad",
+        "path": "/usr/sbin/dsconfigad"
+      },
+      {
+        "name": "dsconfigldap",
+        "path": "/usr/sbin/dsconfigldap"
+      },
+      {
+        "name": "dseditgroup",
+        "path": "/usr/sbin/dseditgroup"
+      },
+      {
+        "name": "dsenableroot",
+        "path": "/usr/sbin/dsenableroot"
+      },
+      {
+        "name": "dtrace",
+        "path": "/usr/sbin/dtrace"
+      },
+      {
+        "name": "edquota",
+        "path": "/usr/sbin/edquota"
+      },
+      {
+        "name": "fcgistarter",
+        "path": "/usr/sbin/fcgistarter"
+      },
+      {
+        "name": "fdisk",
+        "path": "/usr/sbin/fdisk"
+      },
+      {
+        "name": "filecoordinationd",
+        "path": "/usr/sbin/filecoordinationd"
+      },
+      {
+        "name": "firmwarepasswd",
+        "path": "/usr/sbin/firmwarepasswd"
+      },
+      {
+        "name": "gpt",
+        "path": "/usr/sbin/gpt"
+      },
+      {
+        "name": "graphicssession",
+        "path": "/usr/sbin/graphicssession"
+      },
+      {
+        "name": "gssd",
+        "path": "/usr/sbin/gssd"
+      },
+      {
+        "name": "hdik",
+        "path": "/usr/sbin/hdik"
+      },
+      {
+        "name": "htcacheclean",
+        "path": "/usr/sbin/htcacheclean"
+      },
+      {
+        "name": "htdbm",
+        "path": "/usr/sbin/htdbm"
+      },
+      {
+        "name": "htdigest",
+        "path": "/usr/sbin/htdigest"
+      },
+      {
+        "name": "htpasswd",
+        "path": "/usr/sbin/htpasswd"
+      },
+      {
+        "name": "httpd",
+        "path": "/usr/sbin/httpd"
+      },
+      {
+        "name": "httpd-wrapper",
+        "path": "/usr/sbin/httpd-wrapper"
+      },
+      {
+        "name": "httxt2dbm",
+        "path": "/usr/sbin/httxt2dbm"
+      },
+      {
+        "name": "installer",
+        "path": "/usr/sbin/installer"
+      },
+      {
+        "name": "ioalloccount",
+        "path": "/usr/sbin/ioalloccount"
+      },
+      {
+        "name": "ioclasscount",
+        "path": "/usr/sbin/ioclasscount"
+      },
+      {
+        "name": "ioreg",
+        "path": "/usr/sbin/ioreg"
+      },
+      {
+        "name": "iostat",
+        "path": "/usr/sbin/iostat"
+      },
+      {
+        "name": "ipconfig",
+        "path": "/usr/sbin/ipconfig"
+      },
+      {
+        "name": "kadmin",
+        "path": "/usr/sbin/kadmin"
+      },
+      {
+        "name": "kadmin.local",
+        "path": "/usr/sbin/kadmin.local"
+      },
+      {
+        "name": "kcditto",
+        "path": "/usr/sbin/kcditto"
+      },
+      {
+        "name": "kdcsetup",
+        "path": "/usr/sbin/kdcsetup"
+      },
+      {
+        "name": "kextcache",
+        "path": "/usr/sbin/kextcache"
+      },
+      {
+        "name": "kextfind",
+        "path": "/usr/sbin/kextfind"
+      },
+      {
+        "name": "kextlibs",
+        "path": "/usr/sbin/kextlibs"
+      },
+      {
+        "name": "kextstat",
+        "path": "/usr/sbin/kextstat"
+      },
+      {
+        "name": "klist_cdhashes",
+        "path": "/usr/sbin/klist_cdhashes"
+      },
+      {
+        "name": "krbservicesetup",
+        "path": "/usr/sbin/krbservicesetup"
+      },
+      {
+        "name": "ktutil",
+        "path": "/usr/sbin/ktutil"
+      },
+      {
+        "name": "languagesetup",
+        "path": "/usr/sbin/languagesetup"
+      },
+      {
+        "name": "localemanager",
+        "path": "/usr/sbin/localemanager"
+      },
+      {
+        "name": "logresolve",
+        "path": "/usr/sbin/logresolve"
+      },
+      {
+        "name": "lpadmin",
+        "path": "/usr/sbin/lpadmin"
+      },
+      {
+        "name": "lpc",
+        "path": "/usr/sbin/lpc"
+      },
+      {
+        "name": "lpinfo",
+        "path": "/usr/sbin/lpinfo"
+      },
+      {
+        "name": "lpmove",
+        "path": "/usr/sbin/lpmove"
+      },
+      {
+        "name": "lsof",
+        "path": "/usr/sbin/lsof"
+      },
+      {
+        "name": "mDNSResponder",
+        "path": "/usr/sbin/mDNSResponder"
+      },
+      {
+        "name": "mDNSResponderHelper",
+        "path": "/usr/sbin/mDNSResponderHelper"
+      },
+      {
+        "name": "mkextunpack",
+        "path": "/usr/sbin/mkextunpack"
+      },
+      {
+        "name": "mkfile",
+        "path": "/usr/sbin/mkfile"
+      },
+      {
+        "name": "mkpassdb",
+        "path": "/usr/sbin/mkpassdb"
+      },
+      {
+        "name": "mtree",
+        "path": "/usr/sbin/mtree"
+      },
+      {
+        "name": "ndp",
+        "path": "/usr/sbin/ndp"
+      },
+      {
+        "name": "netbiosd",
+        "path": "/usr/sbin/netbiosd"
+      },
+      {
+        "name": "netstat",
+        "path": "/usr/sbin/netstat"
+      },
+      {
+        "name": "networksetup",
+        "path": "/usr/sbin/networksetup"
+      },
+      {
+        "name": "newsyslog",
+        "path": "/usr/sbin/newsyslog"
+      },
+      {
+        "name": "nfs4mapid",
+        "path": "/usr/sbin/nfs4mapid"
+      },
+      {
+        "name": "nlcontrol",
+        "path": "/usr/sbin/nlcontrol"
+      },
+      {
+        "name": "notifyd",
+        "path": "/usr/sbin/notifyd"
+      },
+      {
+        "name": "nvram",
+        "path": "/usr/sbin/nvram"
+      },
+      {
+        "name": "ocspd",
+        "path": "/usr/sbin/ocspd"
+      },
+      {
+        "name": "otctl",
+        "path": "/usr/sbin/otctl"
+      },
+      {
+        "name": "pdisk",
+        "path": "/usr/sbin/pdisk"
+      },
+      {
+        "name": "pkgutil",
+        "path": "/usr/sbin/pkgutil"
+      },
+      {
+        "name": "postalias",
+        "path": "/usr/sbin/postalias"
+      },
+      {
+        "name": "postcat",
+        "path": "/usr/sbin/postcat"
+      },
+      {
+        "name": "postconf",
+        "path": "/usr/sbin/postconf"
+      },
+      {
+        "name": "postdrop",
+        "path": "/usr/sbin/postdrop"
+      },
+      {
+        "name": "postfix",
+        "path": "/usr/sbin/postfix"
+      },
+      {
+        "name": "postkick",
+        "path": "/usr/sbin/postkick"
+      },
+      {
+        "name": "postlock",
+        "path": "/usr/sbin/postlock"
+      },
+      {
+        "name": "postlog",
+        "path": "/usr/sbin/postlog"
+      },
+      {
+        "name": "postmap",
+        "path": "/usr/sbin/postmap"
+      },
+      {
+        "name": "postmulti",
+        "path": "/usr/sbin/postmulti"
+      },
+      {
+        "name": "postqueue",
+        "path": "/usr/sbin/postqueue"
+      },
+      {
+        "name": "postsuper",
+        "path": "/usr/sbin/postsuper"
+      },
+      {
+        "name": "pppd",
+        "path": "/usr/sbin/pppd"
+      },
+      {
+        "name": "praudit",
+        "path": "/usr/sbin/praudit"
+      },
+      {
+        "name": "purge",
+        "path": "/usr/sbin/purge"
+      },
+      {
+        "name": "pwd_mkdb",
+        "path": "/usr/sbin/pwd_mkdb"
+      },
+      {
+        "name": "quotaoff",
+        "path": "/usr/sbin/quotaoff"
+      },
+      {
+        "name": "quotaon",
+        "path": "/usr/sbin/quotaon"
+      },
+      {
+        "name": "racoon",
+        "path": "/usr/sbin/racoon"
+      },
+      {
+        "name": "rarpd",
+        "path": "/usr/sbin/rarpd"
+      },
+      {
+        "name": "repairHomePermissions",
+        "path": "/usr/sbin/repairHomePermissions"
+      },
+      {
+        "name": "repquota",
+        "path": "/usr/sbin/repquota"
+      },
+      {
+        "name": "rotatelogs",
+        "path": "/usr/sbin/rotatelogs"
+      },
+      {
+        "name": "rpc.lockd",
+        "path": "/usr/sbin/rpc.lockd"
+      },
+      {
+        "name": "rpc.statd",
+        "path": "/usr/sbin/rpc.statd"
+      },
+      {
+        "name": "rpcbind",
+        "path": "/usr/sbin/rpcbind"
+      },
+      {
+        "name": "rpcinfo",
+        "path": "/usr/sbin/rpcinfo"
+      },
+      {
+        "name": "rtadvd",
+        "path": "/usr/sbin/rtadvd"
+      },
+      {
+        "name": "sa",
+        "path": "/usr/sbin/sa"
+      },
+      {
+        "name": "sc_auth",
+        "path": "/usr/sbin/sc_auth"
+      },
+      {
+        "name": "screencapture",
+        "path": "/usr/sbin/screencapture"
+      },
+      {
+        "name": "scselect",
+        "path": "/usr/sbin/scselect"
+      },
+      {
+        "name": "scutil",
+        "path": "/usr/sbin/scutil"
+      },
+      {
+        "name": "securityd",
+        "path": "/usr/sbin/securityd"
+      },
+      {
+        "name": "sendmail",
+        "path": "/usr/sbin/sendmail"
+      },
+      {
+        "name": "serverinfo",
+        "path": "/usr/sbin/serverinfo"
+      },
+      {
+        "name": "setkey",
+        "path": "/usr/sbin/setkey"
+      },
+      {
+        "name": "setquota",
+        "path": "/usr/sbin/setquota"
+      },
+      {
+        "name": "sharing",
+        "path": "/usr/sbin/sharing"
+      },
+      {
+        "name": "skywalkctl",
+        "path": "/usr/sbin/skywalkctl"
+      },
+      {
+        "name": "slapacl",
+        "path": "/usr/sbin/slapacl"
+      },
+      {
+        "name": "slapadd",
+        "path": "/usr/sbin/slapadd"
+      },
+      {
+        "name": "slapauth",
+        "path": "/usr/sbin/slapauth"
+      },
+      {
+        "name": "slapcat",
+        "path": "/usr/sbin/slapcat"
+      },
+      {
+        "name": "slapconfig",
+        "path": "/usr/sbin/slapconfig"
+      },
+      {
+        "name": "slapdn",
+        "path": "/usr/sbin/slapdn"
+      },
+      {
+        "name": "slapindex",
+        "path": "/usr/sbin/slapindex"
+      },
+      {
+        "name": "slappasswd",
+        "path": "/usr/sbin/slappasswd"
+      },
+      {
+        "name": "slapschema",
+        "path": "/usr/sbin/slapschema"
+      },
+      {
+        "name": "slaptest",
+        "path": "/usr/sbin/slaptest"
+      },
+      {
+        "name": "smbd",
+        "path": "/usr/sbin/smbd"
+      },
+      {
+        "name": "smbdiagnose",
+        "path": "/usr/sbin/smbdiagnose"
+      },
+      {
+        "name": "sndiskmove",
+        "path": "/usr/sbin/sndiskmove"
+      },
+      {
+        "name": "snmpd",
+        "path": "/usr/sbin/snmpd"
+      },
+      {
+        "name": "snmptrapd",
+        "path": "/usr/sbin/snmptrapd"
+      },
+      {
+        "name": "snquota",
+        "path": "/usr/sbin/snquota"
+      },
+      {
+        "name": "sntpd",
+        "path": "/usr/sbin/sntpd"
+      },
+      {
+        "name": "softwareupdate",
+        "path": "/usr/sbin/softwareupdate"
+      },
+      {
+        "name": "spctl",
+        "path": "/usr/sbin/spctl"
+      },
+      {
+        "name": "spindump",
+        "path": "/usr/sbin/spindump"
+      },
+      {
+        "name": "spray",
+        "path": "/usr/sbin/spray"
+      },
+      {
+        "name": "sshd",
+        "path": "/usr/sbin/sshd"
+      },
+      {
+        "name": "sso_util",
+        "path": "/usr/sbin/sso_util"
+      },
+      {
+        "name": "sysadminctl",
+        "path": "/usr/sbin/sysadminctl"
+      },
+      {
+        "name": "sysctl",
+        "path": "/usr/sbin/sysctl"
+      },
+      {
+        "name": "syslogd",
+        "path": "/usr/sbin/syslogd"
+      },
+      {
+        "name": "system_profiler",
+        "path": "/usr/sbin/system_profiler"
+      },
+      {
+        "name": "systemkeychain",
+        "path": "/usr/sbin/systemkeychain"
+      },
+      {
+        "name": "systemsetup",
+        "path": "/usr/sbin/systemsetup"
+      },
+      {
+        "name": "systemsoundserverd",
+        "path": "/usr/sbin/systemsoundserverd"
+      },
+      {
+        "name": "systemstats",
+        "path": "/usr/sbin/systemstats"
+      },
+      {
+        "name": "taskpolicy",
+        "path": "/usr/sbin/taskpolicy"
+      },
+      {
+        "name": "tcpdump",
+        "path": "/usr/sbin/tcpdump"
+      },
+      {
+        "name": "traceroute",
+        "path": "/usr/sbin/traceroute"
+      },
+      {
+        "name": "traceroute6",
+        "path": "/usr/sbin/traceroute6"
+      },
+      {
+        "name": "tsig-keygen",
+        "path": "/usr/sbin/tsig-keygen"
+      },
+      {
+        "name": "uasysdiagnose",
+        "path": "/usr/sbin/uasysdiagnose"
+      },
+      {
+        "name": "universalaccessd",
+        "path": "/usr/sbin/universalaccessd"
+      },
+      {
+        "name": "unsetpassword",
+        "path": "/usr/sbin/unsetpassword"
+      },
+      {
+        "name": "usernoted",
+        "path": "/usr/sbin/usernoted"
+      },
+      {
+        "name": "uuchk",
+        "path": "/usr/sbin/uuchk"
+      },
+      {
+        "name": "uucico",
+        "path": "/usr/sbin/uucico"
+      },
+      {
+        "name": "uuconv",
+        "path": "/usr/sbin/uuconv"
+      },
+      {
+        "name": "uusched",
+        "path": "/usr/sbin/uusched"
+      },
+      {
+        "name": "uuxqt",
+        "path": "/usr/sbin/uuxqt"
+      },
+      {
+        "name": "vifs",
+        "path": "/usr/sbin/vifs"
+      },
+      {
+        "name": "vipw",
+        "path": "/usr/sbin/vipw"
+      },
+      {
+        "name": "visudo",
+        "path": "/usr/sbin/visudo"
+      },
+      {
+        "name": "vpnd",
+        "path": "/usr/sbin/vpnd"
+      },
+      {
+        "name": "vsdbutil",
+        "path": "/usr/sbin/vsdbutil"
+      },
+      {
+        "metadata_error": "PermissionError",
+        "name": "weakpass_edit",
+        "path": "/usr/sbin/weakpass_edit"
+      },
+      {
+        "name": "wfsctl",
+        "path": "/usr/sbin/wfsctl"
+      },
+      {
+        "name": "xartutil",
+        "path": "/usr/sbin/xartutil"
+      },
+      {
+        "name": "xsanctl",
+        "path": "/usr/sbin/xsanctl"
+      },
+      {
+        "name": "xscertadmin",
+        "path": "/usr/sbin/xscertadmin"
+      },
+      {
+        "name": "zdump",
+        "path": "/usr/sbin/zdump"
+      },
+      {
+        "name": "zic",
+        "path": "/usr/sbin/zic"
+      }
+    ],
+    "errors": [
+      {
+        "error": "PermissionError",
+        "path": "/usr/sbin/weakpass_edit"
+      }
+    ],
+    "limits": "Executable-mode regular files, following kernel stat. Names and metadata only; no body reads or execution.",
+    "platform": "Darwin 27.0.0 arm64",
+    "prior_alias_snapshot_sha256": "2e791271b24e0cf5a3720920cc2152326a99ae43a350bbb969da78c7aef98e40",
+    "roots": [
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin"
+    ],
+    "source": ".scripts/scan_mcp_base_commands.py"
+  },
+  "schema_version": 1
+}

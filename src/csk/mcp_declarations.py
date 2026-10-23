@@ -10,6 +10,7 @@ from typing import Literal
 
 from csk import protocol_json
 from csk.audit import redaction
+from csk.mcp_base_commands import EXEC_CAPABLE_BASE_COMMANDS, is_base_command, is_mcpbridge
 from csk.mcp_command_aliases import EVALUATOR_ALIASES
 from csk.mcp_configs import known_agents
 from csk.skillspec import McpServerRequirement
@@ -73,7 +74,7 @@ _COMMAND_KINDS = {
     # macros/SQL/remote clients: expose system(), .shell or proxy programs;
     # native compilers/loaders and OS package tools: load code or execute hooks;
     # Windows launchers: execute script, DLL or registered handler code.
-    # jq is deliberately omitted: its filter language has no process execution.
+    # This evaluator table is separate from the base-system command inventory.
     # Unknown bare programs remain opaque; this inventory is not a sandbox.
     **dict.fromkeys((
         "awk", "gawk", "mawk", "nawk", "sed", "gsed", "node", "nodejs", "deno", "bun",
@@ -609,7 +610,8 @@ def is_recognized_runner(command: str) -> bool:
 def _check_argument_launchers(args: tuple[str, ...], path: str) -> None:
     for index, arg in enumerate(args):
         for word in _ARGUMENT_WORD_RE.findall(arg):
-            if _command_kind(_normalize_command(word)) is not None:
+            normalized = _normalize_command(word)
+            if _command_kind(normalized) is not None or normalized in EXEC_CAPABLE_BASE_COMMANDS:
                 raise _fail(
                     "mcp_command_invalid", f"{path}.args.{index}",
                     f"runner/evaluator token {word!r} is refused in args; use a direct command",
@@ -622,11 +624,14 @@ def _check_stdio(server: ServerSpec, path: str) -> None:
     if not _COMMAND_RE.fullmatch(command):
         raise _fail("mcp_command_invalid", f"{path}.command", "command must be a bare executable name")
     base = _normalize_command(command)
-    if base in _SHELL_COMMANDS or base in _INDIRECTION_COMMANDS:
+    bridge = is_mcpbridge(command, server.args)
+    if is_base_command(base) and not bridge:
+        raise _fail("mcp_command_invalid", f"{path}.command", "base-system programs cannot be MCP servers; only xcrun mcpbridge is allowed")
+    if not bridge and (base in _SHELL_COMMANDS or base in _INDIRECTION_COMMANDS):
         raise _fail("mcp_command_invalid", f"{path}.command", "shells and indirection commands are refused")
-    if base in _EVALUATOR_LAUNCHERS:
+    if not bridge and base in _EVALUATOR_LAUNCHERS:
         raise _fail("mcp_command_invalid", f"{path}.command", "evaluator launchers are refused")
-    if _command_kind(base) == "evaluator":
+    if not bridge and _command_kind(base) == "evaluator":
         raise _fail("mcp_command_invalid", f"{path}.command", "evaluator commands are refused")
     args = server.args
     if len(args) > _MAX_ARGS:
