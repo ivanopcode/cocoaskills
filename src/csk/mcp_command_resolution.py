@@ -163,8 +163,15 @@ def _native_header(head: bytes) -> bool:
         return True
     if head.startswith(b"MZ"):
         return True
-    fat_order = {b"\xca\xfe\xba\xbe": "big", b"\xbe\xba\xfe\xca": "little"}.get(head[:4])
-    return fat_order is not None and len(head) >= 8 and 1 <= int.from_bytes(head[4:8], fat_order) <= 16
+    if len(head) < 8:
+        return False
+    if head[:4] == b"\xca\xfe\xba\xbe":
+        count = int.from_bytes(head[4:8], "big")
+    elif head[:4] == b"\xbe\xba\xfe\xca":
+        count = int.from_bytes(head[4:8], "little")
+    else:
+        return False
+    return 1 <= count <= 16
 
 
 def _resolved_evaluator(command: str, *, path: str, cwd: Path, runner: bool = False) -> bool:
