@@ -490,9 +490,11 @@ MCP authentication and connectivity: not checked.
 **GitLab** (GitLab 18.6 или новее, администратор включает MCP server). Вход через OAuth в агенте, consent не нужен:
 
 ```json
-"gitlab": {
-  "server": { "transport": "http", "url": "https://gitlab.example.com/api/v4/mcp" },
-  "install": { "auth": { "kind": "oauth", "help_url": "https://docs.gitlab.com/user/model_context_protocol/mcp_server/" } }
+{
+  "gitlab": {
+    "server": { "transport": "http", "url": "https://gitlab.example.com/api/v4/mcp" },
+    "install": { "auth": { "kind": "oauth", "help_url": "https://docs.gitlab.com/user/model_context_protocol/mcp_server/" } }
+  }
 }
 ```
 
@@ -501,11 +503,13 @@ MCP authentication and connectivity: not checked.
 **Allure TestOps** (MCP endpoint `/api/mcp`). TestOps ждёт заголовок `Authorization: api-token <токен>`, а `prefix` пока поддерживает только `bearer`. Поэтому слово `api-token` входит в значение переменной:
 
 ```json
-"allure": {
-  "server": { "transport": "http", "url": "https://testops.example.com/api/mcp" },
-  "install": {
-    "headers": { "Authorization": { "env": "ALLURE_TESTOPS_AUTH" } },
-    "auth": { "kind": "env", "help_url": "https://docs.qameta.io/allure-testops/howto/mcp/" }
+{
+  "allure": {
+    "server": { "transport": "http", "url": "https://testops.example.com/api/mcp" },
+    "install": {
+      "headers": { "Authorization": { "env": "ALLURE_TESTOPS_AUTH" } },
+      "auth": { "kind": "env", "help_url": "https://docs.qameta.io/allure-testops/howto/mcp/" }
+    }
   }
 }
 ```
