@@ -35,7 +35,7 @@ def test_script_divergences_refuse(tmp_path, monkeypatch, kind):
     assert str(tmp_path) not in str(caught.value)
 
 
-@pytest.mark.parametrize('kind', ['comment', 'line-511', 'line-512'])
+@pytest.mark.parametrize('kind', ['comment', 'line-255', 'line-256'])
 def test_script_boundary_positive(tmp_path, monkeypatch, kind):
     interpreter = executable(tmp_path / 'opaque')
     line = b'#!' + os.fsencode(interpreter) + b' '

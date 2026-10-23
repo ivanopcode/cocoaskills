@@ -63,22 +63,29 @@ without normalizing PATH components. On POSIX, any selected inode also present
 in `/usr/bin`, `/bin`, `/usr/sbin` or `/sbin` refuses, including symlink and
 hardlink aliases. On Windows, the selected candidate's final kernel path is
 compared against the resolved `%SystemRoot%`, ignoring case and normalizing
-separators with a component boundary; SystemRoot is never traversed. Known
+separators with a component boundary; SystemRoot is never traversed. An unset
+or unresolvable SystemRoot refuses stdio commands, including pinned runners and
+missing PATH candidates. Known
 evaluator identities in other PATH/default directories also refuse. A searchable
 PATH directory that cannot be enumerated fails closed rather than guessing
 incomplete versioned or case-sensitive spellings. No command is executed.
-Only the selected candidate's first 1024 bytes may be read. A script line must
-end with newline within the first 512 bytes. The interpreter word uses strict
-UTF-8, splits at horizontal whitespace without shell quoting or stripping CR,
+Only the selected candidate's first 1024 bytes may be read. An unreadable
+selected header refuses. A readable header must start with `#!` or recognized
+native magic: Mach-O, ELF or PE (`MZ`). Universal Mach-O headers require an
+architecture count of 1 through 16 in the matching byte order; larger counts,
+including usual Java class headers, refuse. This recognizes magic, not full
+loader validity. Empty files and text without `#!` refuse. A script line must
+end with newline within the first 256 bytes, including the newline. The
+interpreter word uses strict UTF-8, splits at horizontal whitespace without shell quoting or stripping CR,
 and refuses if it contains `#`. A separate `# comment` argument is permitted.
 An invalid/non-executable interpreter refuses. For an otherwise opaque
 interpreter, only its first two bytes are read: `#!` refuses as a nested script;
 an unreadable interpreter header also refuses. No nested chain is followed.
 These conservative refusals do not emulate every OS's script parsing.
 Errors use `mcp_command_invalid` and name the bare candidate; selection never
-continues to a later PATH entry. Missing/unreadable non-base candidates retain
-the portable result; supported exact-pin runners retain their interpreter
-substrate after the base-system check.
+continues to a later PATH entry. A missing non-base candidate retains the
+portable result. Supported exact-pin runners retain their interpreter substrate
+after the base-system and selected-header checks.
 This is a point-in-time host check: concurrent directory/executable replacement
 or another agent's later PATH can differ, and filesystem identities are not
 frozen. A same-user attacker who can write PATH directories already controls the

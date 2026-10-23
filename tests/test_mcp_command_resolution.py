@@ -79,7 +79,7 @@ def test_alias_scanner_mechanisms(tmp_path, monkeypatch):
     assert "my-server" not in observed and not result["errors"]
 
 
-def executable(path, body=b"opaque binary fixture\n"):
+def executable(path, body=b"\x7fELFopaque binary fixture\n"):
     path.write_bytes(body)
     path.chmod(0o700)
     return path
@@ -205,7 +205,7 @@ def test_selected_candidate_body_bound(tmp_path, monkeypatch, target_name, sheba
     bin_dir, outside = tmp_path / "bin", tmp_path / "outside"
     bin_dir.mkdir()
     outside.mkdir()
-    body = (b"#!/bin/sh\n" if shebang else b"opaque binary\n") + b"x" * 512
+    body = (b"#!/bin/sh\n" if shebang else b"\x7fELFopaque binary\n") + b"x" * 512
     executable(outside / target_name, body)
     candidate = bin_dir / "myedit"
     candidate.symlink_to(outside / target_name)
@@ -287,7 +287,7 @@ def test_parent_component_positive_control(tmp_path, monkeypatch, kind):
     search, selected = parent_component_fixture(tmp_path, kind, evaluator=False)
     monkeypatch.setenv("PATH", search)
     resolution.validate_host_commands(parse("myedit", ["--port", "1"]), cwd=tmp_path)
-    assert selected.read_bytes() == b"opaque binary fixture\n"
+    assert selected.read_bytes() == b"\x7fELFopaque binary fixture\n"
 
 
 # Kernel PATH selection must skip non-program paths and recognize a case alias
@@ -367,7 +367,7 @@ def test_kernel_identity_interpreter_refuses(tmp_path, monkeypatch):
 # Bytes beyond the selected 1024-byte header do not participate in admission;
 # this is a bounded header observation, never a scan of arbitrary binary bodies.
 def test_selected_header_bound_positive_control(tmp_path, monkeypatch):
-    executable(tmp_path / "my-server", b"x" * 1024 + b"\n#!/bin/sh\n")
+    executable(tmp_path / "my-server", b"\x7fELF" + b"x" * 1020 + b"\n#!/bin/sh\n")
     monkeypatch.setenv("PATH", str(tmp_path))
     resolution.validate_host_commands(parse("my-server", ["--port", "1"]), cwd=tmp_path)
 
@@ -410,8 +410,8 @@ def test_parent_component_selected_body_refuses(tmp_path, monkeypatch, name):
     assert opened == [a / "myedit"]
 
 
-# A bounded long chain retains table-only policy. An unreadable selected file
-# also retains it, without substituting the later known-interpreter executable.
+# A bounded unresolved chain retains table-only policy. An unreadable selected
+# file refuses, without substituting the later known-interpreter executable.
 @pytest.mark.skipif(os.name == "nt", reason="POSIX links and permissions")
 @pytest.mark.parametrize("kind", ["long-chain", "unreadable"])
 def test_resolution_bounded_neighbors(tmp_path, monkeypatch, kind):
@@ -429,7 +429,11 @@ def test_resolution_bounded_neighbors(tmp_path, monkeypatch, kind):
         executable(first / "myedit", b"#!/bin/sh\n").chmod(0o111)
         monkeypatch.setenv("PATH", str(first) + os.pathsep + str(later))
     try:
-        resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
+        if kind == "unreadable":
+            with pytest.raises(mcp.McpDeclarationError, match="header cannot be observed"):
+                resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
+        else:
+            resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
     finally:
         if kind == "unreadable":
             (first / "myedit").chmod(0o700)

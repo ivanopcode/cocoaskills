@@ -46,7 +46,7 @@ def terminal(root):
     return rc,replied,output.decode(errors='replace')
 
 
-def executable(path, data=b"opaque binary fixture\n"):
+def executable(path, data=b"\x7fELFopaque binary fixture\n"):
     path.write_bytes(data); path.chmod(0o700); return path
 
 

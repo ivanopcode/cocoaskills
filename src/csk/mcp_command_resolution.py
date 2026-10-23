@@ -48,7 +48,7 @@ def _is_windows() -> bool:
 def _windows_final_path(path: str) -> str:
     # Windows realpath uses the kernel's final-path API. Resolve before lexical
     # normalization to retain symlink and parent-component semantics.
-    return os.path.realpath(path)
+    return os.path.realpath(path, strict=True)
 
 
 def _windows_path_key(path: str) -> str:
@@ -60,12 +60,19 @@ def _windows_path_key(path: str) -> str:
     return ntpath.normcase(ntpath.normpath(path))
 
 
-def _windows_base_candidate(candidate: str) -> bool:
-    root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
+def _windows_root_key() -> str:
+    root = os.environ.get("SystemRoot")
     if not root:
-        return False
+        raise _ObservationRefused("Windows SystemRoot is unset")
     try:
-        root_key = _windows_path_key(_windows_final_path(root)).rstrip("\\")
+        return _windows_path_key(_windows_final_path(root)).rstrip("\\")
+    except (OSError, ValueError) as exc:
+        raise _ObservationRefused("Windows SystemRoot cannot be resolved") from exc
+
+
+def _windows_base_candidate(candidate: str) -> bool:
+    root_key = _windows_root_key()
+    try:
         selected_key = _windows_path_key(_windows_final_path(candidate))
     except (OSError, ValueError) as exc:
         raise _ObservationRefused("base-system final path cannot be resolved") from exc
@@ -149,6 +156,17 @@ def _selected_candidate(command: str, directories: tuple[str, ...]) -> tuple[str
     return None
 
 
+def _native_header(head: bytes) -> bool:
+    # Recognition only, not a full loader/architecture validity check. Universal
+    # headers share Java's magic; permit only a conservative 1..16 arch count.
+    if head[:4] in {b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe", b"\x7fELF"}:
+        return True
+    if head.startswith(b"MZ"):
+        return True
+    fat_order = {b"\xca\xfe\xba\xbe": "big", b"\xbe\xba\xfe\xca": "little"}.get(head[:4])
+    return fat_order is not None and len(head) >= 8 and 1 <= int.from_bytes(head[4:8], fat_order) <= 16
+
+
 def _resolved_evaluator(command: str, *, path: str, cwd: Path, runner: bool = False) -> bool:
     directories = _path_directories(path, cwd)
     selected = _selected_candidate(command, directories)
@@ -157,9 +175,7 @@ def _resolved_evaluator(command: str, *, path: str, cwd: Path, runner: bool = Fa
     candidate, info = selected
     if (_windows_base_candidate(candidate) if _is_windows() else _identity(info) in _base_system_inodes()):
         return True
-    if runner:
-        return False
-    identities = _evaluator_inodes(directories)
+    identities = set() if runner else _evaluator_inodes(directories)
     if _identity(info) in identities:
         return True
     try:
@@ -168,18 +184,19 @@ def _resolved_evaluator(command: str, *, path: str, cwd: Path, runner: bool = Fa
         descriptor = os.open(candidate, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
         try:
             if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-                return False
+                raise _ObservationRefused("selected executable is not a regular file")
             head = os.read(descriptor, 1024)
         finally:
             os.close(descriptor)
-    except OSError:
-        # An unreadable selected file must not substitute a later executable.
-        return False
+    except OSError as exc:
+        raise _ObservationRefused("selected executable header cannot be observed") from exc
     if not head.startswith(b"#!"):
+        if not _native_header(head):
+            raise _ObservationRefused("selected executable header is not a recognized native format or shebang")
         return False
     newline = head.find(b"\n")
-    if newline < 0 or newline >= 512:
-        raise _ObservationRefused("script header has no newline within 512 bytes")
+    if newline < 0 or newline >= 256:
+        raise _ObservationRefused("script header has no newline within 256 bytes")
     # Parse horizontal whitespace conservatively, without shell quoting.
     # In particular, CR is part of the interpreter path, not whitespace to strip.
     raw = head.split(b"\n", 1)[0][2:].lstrip(b" \t")
@@ -201,7 +218,7 @@ def _resolved_evaluator(command: str, *, path: str, cwd: Path, runner: bool = Fa
     if not executable:
         raise _ObservationRefused("script interpreter is not an executable regular file")
     if _known_evaluator(interpreter) or _identity(interpreter_info) in identities:
-        return True
+        return not runner
     try:
         descriptor = os.open(interpreter_path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
         try:
@@ -229,6 +246,14 @@ def validate_host_commands(
         command = declaration.server.command
         if declaration.server.transport != "stdio" or command is None:
             continue
+        try:
+            if _is_windows():
+                _windows_root_key()
+        except _ObservationRefused as exc:
+            raise declarations.McpDeclarationError(
+                "mcp_command_invalid", f"mcp_servers.{name}.server.command",
+                f"command {command!r} is unresolvable: {exc}",
+            ) from exc
         if is_base_recipe(command, declaration.server.args):
             if not _base_recipe_identity(command, _path_directories(path, cwd)):
                 raise declarations.McpDeclarationError(

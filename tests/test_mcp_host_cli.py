@@ -74,17 +74,19 @@ def test_hash_terminated_shebang(project_cli, tmp_path, monkeypatch, kind):
     _oracles(root, ["myedit", *VIM_ARGS], marker)          # execvp, Python, libuv all reach the stub
     _admission(root, home, declare, "myedit", VIM_ARGS, marker, kind)   # refusal preserves native configs and the complete snapshot
 
-# 513/600-byte lines and a nested script interpreter refuse before consent or
-# writes. Nearby 511-byte and separate-comment controls still pass real CLI.
-@pytest.mark.parametrize("kind", ["line-600", "line-513", "nested-interpreter", "line-511-control", "comment-control"])
-def test_shebang_line_between_512_and_1024(project_cli, tmp_path, monkeypatch, kind):
+# 257/513/600-byte lines and a nested script interpreter refuse before consent or
+# writes. Nearby 255/256-byte and separate-comment controls still pass real CLI.
+@pytest.mark.parametrize("kind", ["line-600", "line-513", "line-257", "nested-interpreter", "line-255-control", "line-256-control", "comment-control"])
+def test_shebang_256_limit_cli(project_cli, tmp_path, monkeypatch, kind):
     root, home, declare = project_cli
     a = tmp_path / "bin"; a.mkdir(); b = tmp_path / "later"; b.mkdir(); opq = tmp_path / "opq"; opq.mkdir()
     shutil.copyfile("/usr/bin/true", opq / "opaque"); (opq / "opaque").chmod(0o700); (b / "myedit").symlink_to("/usr/bin/vim")
     head = b"#!" + str(opq / "opaque").encode() + b" "
     if kind == "line-600": line = head + b"x" * 600 + b"\n"
     elif kind == "line-513": line = head + b"x" * (512 - len(head)) + b"\n"
-    elif kind == "line-511-control": line = head + b"x" * (510 - len(head)) + b"\n"
+    elif kind == "line-257": line = head + b"x" * (256 - len(head)) + b"\n"
+    elif kind == "line-255-control": line = head + b"x" * (254 - len(head)) + b"\n"
+    elif kind == "line-256-control": line = head + b"x" * (255 - len(head)) + b"\n"
     elif kind == "comment-control": line = head + b"# comment\n"
     else: executable(opq / "inner", b"#!/usr/bin/true\n"); line = b"#!" + str(opq / "inner").encode() + b"\n"
     executable(a / "myedit", line)
@@ -104,3 +106,31 @@ def test_bridge_host_alias(project_cli, tmp_path, monkeypatch, command):
     a = tmp_path / "bin"; a.mkdir(); (a / command).symlink_to("/usr/bin/python3")
     _stub(tmp_path, monkeypatch, str(a)); declare(stdio(command, ["mcpbridge"] if command == "xcrun" else ["--mcp"]))
     assert cli(root, "check", "app").returncode == 1      # evaluator aliases cannot receive an Apple recipe exception
+
+
+# The kernel reads an execute-only script that csk cannot open. Both the Vim
+# interpreter and missing-interpreter/later-Vim paths reach only owned runner
+# stubs at dispatch, while check/dry-run/install must refuse before consent.
+@pytest.mark.parametrize("kind", ["vim-interpreter", "missing-interpreter-path-continues"])
+def test_execute_only_selected_cli_refuses(project_cli, tmp_path, monkeypatch, kind):
+    root, home, declare = project_cli
+    a = tmp_path / "bin"; a.mkdir(); b = tmp_path / "later"; b.mkdir()
+    if kind == "vim-interpreter":
+        line = b"#!/usr/bin/vim\n"; search = str(a)
+    else:
+        line = b"#!" + os.fsencode(tmp_path / "missing") + b"\n"
+        (b / "myedit").symlink_to("/usr/bin/vim"); search = str(a) + os.pathsep + str(b)
+    candidate = executable(a / "myedit", line); candidate.chmod(0o111)
+    try:
+        with pytest.raises(PermissionError): candidate.read_bytes()
+        marker = _stub(tmp_path, monkeypatch, search)
+        _oracles(root, ["myedit", *VIM_ARGS], marker)
+        # Rust/Codex-style posix_spawnp also reaches just the owned stub.
+        child = subprocess.run([os.sys.executable, "-I", "-c",
+            "import os,sys; p=os.posix_spawnp(sys.argv[1],sys.argv[1:],dict(os.environ)); sys.exit(os.waitstatus_to_exitcode(os.waitpid(p,0)[1]))",
+            "myedit", *VIM_ARGS], cwd=root, capture_output=True, timeout=10)
+        assert child.returncode == 0 and marker.read_text() == "pkg\n"
+        marker.unlink()
+        _admission(root, home, declare, "myedit", VIM_ARGS, marker, kind)
+    finally:
+        candidate.chmod(0o700)
