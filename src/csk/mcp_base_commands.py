@@ -2,7 +2,7 @@
 
 Provenance: tests/fixtures/mcp/base-system-commands.json. The inventory combines
 name/stat-only OS observation and package-documented families. It is not a
-universal OS census. Only the exact xcrun mcpbridge recipe is excepted.
+universal OS census. Only the two exact Apple MCP recipes are excepted.
 """
 
 BASE_SYSTEM_COMMANDS = frozenset({
@@ -223,61 +223,63 @@ BASE_SYSTEM_COMMANDS = frozenset({
 EXEC_CAPABLE_BASE_COMMANDS = frozenset({
     'alias', 'apachectl', 'apply', 'apropos', 'ar', 'arch', 'as', 'asa', 'ash', 'at', 'atq', 'atrm',
     'automator', 'awk', 'bash', 'bashbug', 'batch', 'bc', 'bg', 'binhex.pl', 'binhex5.34.pl',
-    'bison', 'bm4', 'bsdtar', 'bundle', 'bundler', 'bzcmp', 'bzdiff', 'bzless', 'bzmore', 'c++',
-    'c++filt', 'c89', 'c99', 'caffeinate', 'cc', 'cd', 'chfn', 'chpass', 'chpst', 'chroot', 'chrt',
-    'chsh', 'clang', 'clang++', 'clangd', 'cmd', 'cmpdylib', 'codesign_allocate', 'command',
+    'bison', 'bm4', 'bsdtar', 'bundle', 'bundler', 'bwrap', 'bzcmp', 'bzdiff', 'bzless', 'bzmore',
+    'c++', 'c++filt', 'c89', 'c99', 'caffeinate', 'cc', 'cd', 'chfn', 'chpass', 'chpst', 'chroot',
+    'chrt', 'chsh', 'clang', 'clang++', 'clangd', 'cmd', 'cmpdylib', 'codesign_allocate', 'command',
     'config_data', 'config_data5.34', 'corelist', 'corelist5.34', 'cpan', 'cpan5.34', 'cpio', 'cpp',
     'cpu_profiler.d', 'crc32', 'crc325.34', 'crond', 'crontab', 'cscript', 'csh', 'ctags',
     'ctf_insert', 'cups-config', 'curl-config', 'cvadmin', 'cvaffinity', 'cvcp', 'cvdb', 'cvdbset',
     'cvfsck', 'cvfsdb', 'cvfsid', 'cvgather', 'cvlabel', 'cvmkdir', 'cvmkfile', 'cvmkfs',
     'cvupdatefs', 'cvversions', 'dappprof', 'dapptrace', 'dash', 'dbicadmin', 'dbicadmin5.34',
     'dbilogstrip', 'dbilogstrip5.34', 'dbiprof', 'dbiprof5.34', 'dbiproxy', 'dbiproxy5.34',
-    'dbmmanage', 'dc', 'debinhex.pl', 'debinhex5.34.pl', 'derez', 'dpkg', 'dsymutil', 'dtruss',
-    'dwarfdump', 'dyld_info', 'ed', 'enc2xs', 'enc2xs5.34', 'encguess', 'encguess5.34', 'env',
-    'envdir', 'envuidgid', 'erb', 'errinfo', 'ex', 'exec', 'execsnoop', 'expect', 'eyapp',
-    'eyapp5.34', 'fc', 'fcgistarter', 'fddist', 'fg', 'find', 'findrule', 'findrule5.34', 'fixproc',
-    'flex', 'flex++', 'forfiles', 'ftpd', 'fuser', 'g++', 'gatherheaderdoc', 'gawk', 'gcc', 'gcov',
-    'gem', 'gen_bridge_metadata', 'getfileinfo', 'getopts', 'getty', 'git', 'git-receive-pack',
-    'git-shell', 'git-upload-archive', 'git-upload-pack', 'gm4', 'gnumake', 'gperf', 'gzexe',
-    'h2ph', 'h2ph5.34', 'h2xs', 'h2xs5.34', 'hash', 'hdxml2manxml', 'headerdoc2html', 'heap',
-    'htmltree', 'htmltree5.34', 'httpd', 'httpd-wrapper', 'hush', 'ifdown', 'ifup', 'imptrace',
-    'indent', 'inetd', 'init', 'insmod', 'install_name_tool', 'instmodsh', 'instmodsh5.34',
-    'ionice', 'iopattern', 'iopending', 'iosnoop', 'iotop', 'ip2cc', 'ip2cc5.34', 'ipcount',
-    'ipcount5.34', 'iptab', 'iptab5.34', 'irb', 'java', 'jobs', 'jrunscript', 'jshell', 'json_pp',
-    'json_pp5.34', 'json_xs', 'json_xs5.34', 'kadmin.local', 'keychain-access', 'klist_cdhashes',
-    'krb5-config', 'ksh', 'lastwords', 'launchctl', 'ld', 'leaks', 'less', 'lex', 'libnetcfg',
+    'dbmmanage', 'dbus-run-session', 'dc', 'debinhex.pl', 'debinhex5.34.pl', 'derez', 'dpkg',
+    'dsymutil', 'dtrace', 'dtruss', 'dwarfdump', 'dyld_info', 'ed', 'enc2xs', 'enc2xs5.34',
+    'encguess', 'encguess5.34', 'env', 'envdir', 'envuidgid', 'erb', 'errinfo', 'ex', 'exec',
+    'execsnoop', 'expect', 'eyapp', 'eyapp5.34', 'faketime', 'fc', 'fcgistarter', 'fddist', 'fg',
+    'find', 'findrule', 'findrule5.34', 'firejail', 'fixproc', 'flex', 'flex++', 'forfiles', 'ftpd',
+    'fuser', 'g++', 'gatherheaderdoc', 'gawk', 'gcc', 'gcov', 'gem', 'gen_bridge_metadata',
+    'getfileinfo', 'getopts', 'getty', 'git', 'git-receive-pack', 'git-shell', 'git-upload-archive',
+    'git-upload-pack', 'gm4', 'gnumake', 'gperf', 'gzexe', 'h2ph', 'h2ph5.34', 'h2xs', 'h2xs5.34',
+    'hash', 'hdxml2manxml', 'headerdoc2html', 'heap', 'htmltree', 'htmltree5.34', 'httpd',
+    'httpd-wrapper', 'hush', 'ifdown', 'ifup', 'imptrace', 'indent', 'inetd', 'init', 'insmod',
+    'install_name_tool', 'instmodsh', 'instmodsh5.34', 'ionice', 'iopattern', 'iopending',
+    'iosnoop', 'iotop', 'ip2cc', 'ip2cc5.34', 'ipcount', 'ipcount5.34', 'iptab', 'iptab5.34', 'irb',
+    'java', 'javac', 'jdb', 'jjs', 'jobs', 'jrunscript', 'jshell', 'json_pp', 'json_pp5.34',
+    'json_xs', 'json_xs5.34', 'kadmin.local', 'keychain-access', 'klist_cdhashes', 'krb5-config',
+    'ksh', 'ktrace', 'lastwords', 'launchctl', 'ld', 'leaks', 'less', 'lex', 'libnetcfg',
     'libnetcfg5.34', 'libtool', 'linux32', 'linux64', 'lipo', 'lldb', 'llvm-g++', 'llvm-gcc',
-    'lockf', 'login', 'lorder', 'lwp-download', 'lwp-download5.34', 'lwp-dump', 'lwp-dump5.34',
-    'lwp-mirror', 'lwp-mirror5.34', 'lwp-request', 'lwp-request5.34', 'm4', 'macerror',
-    'macerror5.34', 'machine', 'make', 'malloc_history', 'man', 'manpath', 'mdev', 'mib2c',
-    'mib2c-update', 'mig', 'modprobe', 'moose-outdated', 'moose-outdated5.34', 'more', 'mount_acfs',
-    'mp2bug', 'ncurses5.4-config', 'net-server', 'net-server5.34', 'net-snmp-cert',
+    'lockf', 'lockstat', 'login', 'lorder', 'ltrace', 'lwp-download', 'lwp-download5.34',
+    'lwp-dump', 'lwp-dump5.34', 'lwp-mirror', 'lwp-mirror5.34', 'lwp-request', 'lwp-request5.34',
+    'm4', 'macerror', 'macerror5.34', 'machine', 'make', 'malloc_history', 'man', 'manpath', 'mdev',
+    'mib2c', 'mib2c-update', 'mig', 'modprobe', 'moose-outdated', 'moose-outdated5.34', 'more',
+    'mount_acfs', 'mp2bug', 'ncurses5.4-config', 'net-server', 'net-server5.34', 'net-snmp-cert',
     'net-snmp-config', 'net-snmp-create-v3-user', 'newgrp', 'nice', 'nm', 'nmedit', 'nohup',
     'objdump', 'open', 'opensnoop', 'openssl', 'openvt', 'osascript', 'otool',
     'package-stash-conflicts', 'package-stash-conflicts5.34', 'pagesize', 'pagestuff', 'par.pl',
-    'par5.34.pl', 'pcap-config', 'perl', 'perlbug', 'perlbug5.34', 'perldoc', 'perldoc5.34',
+    'par5.34.pl', 'parl', 'pcap-config', 'perl', 'perlbug', 'perlbug5.34', 'perldoc', 'perldoc5.34',
     'perlivp', 'perlivp5.34', 'perlthanks', 'perlthanks5.34', 'piconv', 'piconv5.34', 'pip3',
-    'pl2pm', 'pl2pm5.34', 'pod2html', 'pod2html5.34', 'pod2man', 'pod2man5.34', 'pod2readme',
-    'pod2readme5.34', 'pod2text', 'pod2text5.34', 'pod2usage', 'pod2usage5.34', 'podchecker',
-    'podchecker5.34', 'power_report.sh', 'powershell', 'pp', 'pp5.34', 'procsystime', 'prove',
-    'prove5.34', 'ptar', 'ptar5.34', 'ptardiff', 'ptardiff5.34', 'ptargrep', 'ptargrep5.34',
-    'python3', 'rails', 'rake', 'ranlib', 'rdoc', 'read', 'regsvr32', 'resmerger', 'resolvelinks',
-    'rez', 'ri', 'rotatelogs', 'rpcgen', 'rpm', 'rsync', 'ruby', 'run-parts', 'rundll32', 'runsv',
-    'runsvdir', 'rview', 'rvim', 'rwsnoop', 'sampleproc', 'sandbox-exec', 'sc_auth', 'scandeps.pl',
-    'scandeps5.34.pl', 'schtasks', 'scp', 'screen', 'script', 'sdiff', 'sdx', 'sed', 'segedit',
-    'setarch', 'setfile', 'setsid', 'setuidgid', 'sftp', 'sh', 'shar', 'shasum', 'shasum5.34',
-    'shortcuts', 'size', 'slogin', 'smbdiagnose', 'sndiskmove', 'snfsdefrag', 'snmp-bridge-mib',
-    'snmpconf', 'snmpd', 'snquota', 'softlimit', 'sort', 'sourcekit-lsp', 'spfd', 'spfd5.34',
-    'spfquery', 'spfquery5.34', 'splain', 'splain5.34', 'split', 'splitforks', 'sqlite3', 'ssh',
-    'ssh-agent', 'ssh-copy-id', 'start', 'start-stop-daemon', 'stdbuf', 'streamzip',
-    'streamzip5.34', 'strings', 'strip', 'su', 'sudo', 'sulogin', 'swift', 'swiftc', 'switch_root',
-    'tar', 'taskpolicy', 'taskset', 'tclsh', 'tclsh8.5', 'tcpdump', 'tcpsvd', 'tcsh', 'test-yaml',
-    'test-yaml5.34', 'tidy_changelog', 'tidy_changelog5.34', 'time', 'timeout', 'timer_analyser.d',
-    'timerfires', 'tkcon', 'tkmib', 'tkpp', 'tkpp5.34', 'tmux', 'topsyscall', 'topsysproc',
-    'traptoemail', 'treereg', 'treereg5.34', 'type', 'udhcpc', 'udpsvd', 'ulimit', 'umask',
-    'unalias', 'unifdef', 'unifdefall', 'uusched', 'uuto', 'uux', 'vi', 'view', 'vim', 'vimdiff',
-    'vimtutor', 'vmmap', 'vtool', 'wait', 'watch', 'whatis', 'wish', 'wish8.5', 'wmic', 'wscript',
-    'xargs', 'xcrun', 'xctrace', 'xgettext.pl', 'xgettext5.34.pl', 'xml2-config', 'xml2man',
+    'pkexec', 'pl2pm', 'pl2pm5.34', 'plockstat', 'pod2html', 'pod2html5.34', 'pod2man',
+    'pod2man5.34', 'pod2readme', 'pod2readme5.34', 'pod2text', 'pod2text5.34', 'pod2usage',
+    'pod2usage5.34', 'podchecker', 'podchecker5.34', 'power_report.sh', 'powershell', 'pp',
+    'pp5.34', 'procsystime', 'prove', 'prove5.34', 'ptar', 'ptar5.34', 'ptardiff', 'ptardiff5.34',
+    'ptargrep', 'ptargrep5.34', 'python3', 'rails', 'rake', 'ranlib', 'rdoc', 'read', 'regsvr32',
+    'resmerger', 'resolvelinks', 'rez', 'ri', 'rotatelogs', 'rpcgen', 'rpm', 'rsync', 'ruby',
+    'run-parts', 'rundll32', 'runsv', 'runsvdir', 'rview', 'rvim', 'rwsnoop', 'sampleproc',
+    'sandbox-exec', 'sc_auth', 'sc_usage', 'scandeps.pl', 'scandeps5.34.pl', 'schtasks', 'scp',
+    'screen', 'script', 'sdiff', 'sdx', 'sed', 'segedit', 'setarch', 'setfile', 'setsid',
+    'setuidgid', 'sftp', 'sg', 'sh', 'shar', 'shasum', 'shasum5.34', 'shortcuts', 'size', 'slogin',
+    'smbdiagnose', 'sndiskmove', 'snfsdefrag', 'snmp-bridge-mib', 'snmpconf', 'snmpd', 'snquota',
+    'softlimit', 'sort', 'sourcekit-lsp', 'spfd', 'spfd5.34', 'spfquery', 'spfquery5.34', 'splain',
+    'splain5.34', 'split', 'splitforks', 'sqlite3', 'ssh', 'ssh-agent', 'ssh-copy-id', 'ssh-keygen',
+    'start', 'start-stop-daemon', 'stdbuf', 'strace', 'streamzip', 'streamzip5.34', 'strings',
+    'strip', 'su', 'sudo', 'sulogin', 'swift', 'swiftc', 'switch_root', 'tar', 'taskpolicy',
+    'taskset', 'tclsh', 'tclsh8.5', 'tcpdump', 'tcpsvd', 'tcsh', 'test-yaml', 'test-yaml5.34',
+    'tidy_changelog', 'tidy_changelog5.34', 'time', 'timeout', 'timer_analyser.d', 'timerfires',
+    'tkcon', 'tkmib', 'tkpp', 'tkpp5.34', 'tmux', 'topsyscall', 'topsysproc', 'traptoemail',
+    'treereg', 'treereg5.34', 'type', 'udhcpc', 'udpsvd', 'ulimit', 'umask', 'unalias', 'unifdef',
+    'unifdefall', 'uusched', 'uuto', 'uux', 'valgrind', 'vi', 'view', 'vim', 'vimdiff', 'vimtutor',
+    'vmmap', 'vtool', 'wait', 'watch', 'whatis', 'wish', 'wish8.5', 'wmic', 'wscript', 'xargs',
+    'xcodebuild', 'xcrun', 'xctrace', 'xgettext.pl', 'xgettext5.34.pl', 'xml2-config', 'xml2man',
     'xpath', 'xpath5.34', 'xsanctl', 'xslt-config', 'xsubpp', 'xsubpp5.34', 'yacc', 'yamlpp-events',
     'yamlpp-events5.34', 'yamlpp-highlight', 'yamlpp-highlight5.34', 'yamlpp-load',
     'yamlpp-load-dump', 'yamlpp-load-dump5.34', 'yamlpp-load5.34', 'yamlpp-parse-emit',
@@ -285,9 +287,16 @@ EXEC_CAPABLE_BASE_COMMANDS = frozenset({
     'zipdetails5.34', 'zipgrep', 'zless', 'zmore', 'znew', 'zsh',
 })
 
+
 def is_base_command(normalized: str) -> bool:
     return normalized in BASE_SYSTEM_COMMANDS
 
 
-def is_mcpbridge(command: str, args: tuple[str, ...]) -> bool:
-    return command == "xcrun" and args == ("mcpbridge",)
+BASE_MCP_RECIPES = frozenset({
+    ("xcrun", ("mcpbridge",)),
+    ("safaridriver", ("--mcp",)),
+})
+
+
+def is_base_recipe(command: str, args: tuple[str, ...]) -> bool:
+    return (command, args) in BASE_MCP_RECIPES

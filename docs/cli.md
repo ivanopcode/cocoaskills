@@ -334,39 +334,50 @@ on characters outside `[A-Za-z0-9_.+-]`, ignores case, strips path prefixes and
 Thus `a=npx pkg`, `system("npx pkg")`, `--exec=npx` and data containing the word
 `node` refuse; `--node-id` and `my-server --port 1` remain valid. This intentionally
 fails closed on false positives. Direct supported pinned `npx`/`uvx` remain valid.
-Системные программы ОС не могут быть MCP-сервером, кроме `xcrun mcpbridge`.
-The exception requires command `xcrun` and args exactly `["mcpbridge"]`; extra
-arguments, other tools and alternate executable spellings refuse. Every
-normalized name in the committed base-system inventory refuses as command,
-regardless of PATH. That inventory combines the dated macOS system-directory
-snapshot with documented Linux base and Windows System32/Git for Windows
-families. Thus `jq` is refused too: it is in the macOS base inventory, even if
-another installation is first in PATH. The evaluator/runner table remains in
-force, and exec-capable base wrappers such as `apply`, `lockf`, `xcrun`,
-`sandbox-exec`, `ssh-agent`, `screen` and `tmux` also refuse as argument words.
+Base-system OS programs cannot be MCP servers, except for two exact Apple
+recipes: command `xcrun` with args `["mcpbridge"]`, and command `safaridriver`
+with args `["--mcp"]`. Both require the selected executable's kernel-resolved
+inode to match a regular base-directory file of that exact command name.
+Missing candidates, opaque copies, evaluator aliases, extra arguments and
+alternate executable spellings refuse; the exception never skips host identity.
+Every other normalized name in the committed base-system inventory refuses as
+command regardless of PATH. That inventory combines the dated macOS snapshot
+with documented Linux base and Windows System32/Git for Windows families.
+Thus `jq` is refused even if another installation is first in PATH. The existing
+evaluator/runner table remains in force. Exec-capable base names, including
+`apply`, `lockf`, `xcrun`, `dtrace`, `lockstat`, `sc_usage`, `parl`, `jjs`,
+`ssh-keygen` and `xcodebuild`, also refuse as argument words and interpreters.
 `check` and install use kernel stat/access to select the first regular executable
-without normalizing PATH components. Any selected inode present in `/usr/bin`,
-`/bin`, `/usr/sbin` or `/sbin` (macOS/Linux), or under `%SystemRoot%` (Windows),
-refuses, including an opaque symlink or hardlink alias. Known evaluator inode
-identities in other PATH/default directories also refuse. A searchable directory
-that cannot be enumerated fails closed instead of guessing incomplete versioned
-or case-sensitive spellings. No command is executed.
-Only the selected candidate's first 1024 bytes may be read. For a shebang,
-interpreter text uses strict UTF-8 and kernel-style horizontal whitespace,
-without shell quoting or stripping CR. An invalid/non-executable interpreter or
-no newline within that window refuses with `mcp_command_invalid`, naming the
-bare candidate; selection does not continue to a later PATH entry. Interpreter
-bodies and nested interpreter chains are not read. `env` already refuses as a
-wrapper. Missing or unreadable non-base candidates retain the portable result;
-supported exact-pin runners retain their expected interpreter substrate after
-the base-inode check.
+without normalizing PATH components. On POSIX, any selected inode also present
+in `/usr/bin`, `/bin`, `/usr/sbin` or `/sbin` refuses, including symlink and
+hardlink aliases. On Windows, the selected candidate's final kernel path is
+compared against the resolved `%SystemRoot%`, ignoring case and normalizing
+separators with a component boundary; SystemRoot is never traversed. Known
+evaluator identities in other PATH/default directories also refuse. A searchable
+PATH directory that cannot be enumerated fails closed rather than guessing
+incomplete versioned or case-sensitive spellings. No command is executed.
+Only the selected candidate's first 1024 bytes may be read. A script line must
+end with newline within the first 512 bytes. The interpreter word uses strict
+UTF-8, splits at horizontal whitespace without shell quoting or stripping CR,
+and refuses if it contains `#`. A separate `# comment` argument is permitted.
+An invalid/non-executable interpreter refuses. For an otherwise opaque
+interpreter, only its first two bytes are read: `#!` refuses as a nested script;
+an unreadable interpreter header also refuses. No nested chain is followed.
+These conservative refusals do not emulate every OS's script parsing.
+Errors use `mcp_command_invalid` and name the bare candidate; selection never
+continues to a later PATH entry. Missing/unreadable non-base candidates retain
+the portable result; supported exact-pin runners retain their interpreter
+substrate after the base-system check.
 This is a point-in-time host check: concurrent directory/executable replacement
 or another agent's later PATH can differ, and filesystem identities are not
 frozen. A same-user attacker who can write PATH directories already controls the
 agent and is outside this boundary. A third-party evaluator outside base dirs
 remains opaque unless its name or inode matches the evaluator inventory; a copy
 outside those dirs need not share an inventoried inode. This is no sandbox or
-proof of what an opaque program runs.
+proof of what an opaque program runs. On a CLT-only host, `xcrun` can fall back to PATH
+when its developer directory lacks `mcpbridge`; that downstream tool selection
+is not checked. The exception verifies the base `xcrun` identity and exact argv,
+not the executable it may subsequently choose.
 
 Any remaining bare program runs as is: csk cannot verify what it runs. Consent shows
 its exact command and argument array and states this limit. This is no sandbox or

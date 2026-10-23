@@ -30,7 +30,7 @@ def test_base_inventory_commands_refuse(name):
 
 
 # Exec-capable inventory words stay refused inside an opaque command's args;
-# ordinary protocol arguments and the sole exact bridge exception remain valid.
+# ordinary protocol arguments and the two exact Apple recipes remain valid.
 @pytest.mark.parametrize('name', FIXTURE['exec_capable'])
 def test_base_exec_words_refuse(name):
     with pytest.raises(mcp.McpDeclarationError) as caught:
@@ -39,10 +39,14 @@ def test_base_exec_words_refuse(name):
     assert caught.value.field == 'mcp_servers.bad.server.args.0'
 
 
-@pytest.mark.parametrize('command,args', [('xcrun', ['mcpbridge']), ('npx', ['pkg@1.2.3']),
+@pytest.mark.parametrize('command,args', [('xcrun', ['mcpbridge']), ('safaridriver', ['--mcp']), ('npx', ['pkg@1.2.3']),
                                         ('uvx', ['pkg==1.2.3']), ('my-server', ['--port', '1'])])
 def test_base_positive_controls(tmp_path, monkeypatch, command, args):
     monkeypatch.setenv('PATH', str(tmp_path))
+    if command in {'xcrun', 'safaridriver'}:
+        monkeypatch.setattr(resolution, '_is_windows', lambda: False)
+        executable(tmp_path / command)
+        monkeypatch.setattr(resolution, '_BASE_DIRECTORIES', (str(tmp_path),))
     resolution.validate_host_commands(parse(command, args), cwd=tmp_path)
 
 
@@ -87,7 +91,7 @@ def test_distinct_non_base_copy_positive(tmp_path, monkeypatch):
 
 
 # jq is a portable inventory-name refusal even for a separately installed
-# non-base copy; the only exception remains the exact xcrun bridge recipe.
+# non-base copy; only the two exact Apple recipes receive a base-file exception.
 def test_jq_inventory_name_refuses(tmp_path, monkeypatch):
     executable(tmp_path / 'jq')
     monkeypatch.setenv('PATH', str(tmp_path))

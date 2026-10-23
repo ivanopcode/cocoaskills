@@ -10,7 +10,7 @@ from typing import Literal
 
 from csk import protocol_json
 from csk.audit import redaction
-from csk.mcp_base_commands import EXEC_CAPABLE_BASE_COMMANDS, is_base_command, is_mcpbridge
+from csk.mcp_base_commands import EXEC_CAPABLE_BASE_COMMANDS, is_base_command, is_base_recipe
 from csk.mcp_command_aliases import EVALUATOR_ALIASES
 from csk.mcp_configs import known_agents
 from csk.skillspec import McpServerRequirement
@@ -624,14 +624,14 @@ def _check_stdio(server: ServerSpec, path: str) -> None:
     if not _COMMAND_RE.fullmatch(command):
         raise _fail("mcp_command_invalid", f"{path}.command", "command must be a bare executable name")
     base = _normalize_command(command)
-    bridge = is_mcpbridge(command, server.args)
-    if is_base_command(base) and not bridge:
-        raise _fail("mcp_command_invalid", f"{path}.command", "base-system programs cannot be MCP servers; only xcrun mcpbridge is allowed")
-    if not bridge and (base in _SHELL_COMMANDS or base in _INDIRECTION_COMMANDS):
+    recipe = is_base_recipe(command, server.args)
+    if is_base_command(base) and not recipe:
+        raise _fail("mcp_command_invalid", f"{path}.command", "base-system programs cannot be MCP servers; only verified exact Apple MCP recipes are allowed")
+    if not recipe and (base in _SHELL_COMMANDS or base in _INDIRECTION_COMMANDS):
         raise _fail("mcp_command_invalid", f"{path}.command", "shells and indirection commands are refused")
-    if not bridge and base in _EVALUATOR_LAUNCHERS:
+    if not recipe and base in _EVALUATOR_LAUNCHERS:
         raise _fail("mcp_command_invalid", f"{path}.command", "evaluator launchers are refused")
-    if not bridge and _command_kind(base) == "evaluator":
+    if not recipe and _command_kind(base) == "evaluator":
         raise _fail("mcp_command_invalid", f"{path}.command", "evaluator commands are refused")
     args = server.args
     if len(args) > _MAX_ARGS:

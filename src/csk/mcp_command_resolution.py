@@ -1,6 +1,7 @@
 """Read-only, point-in-time kernel PATH and evaluator-identity observations.
 
-Only the selected executable's first 1024 bytes are read. No command is executed.
+Only the selected executable's first 1024 bytes and an opaque interpreter's
+first 2 bytes are read. No command is executed.
 Concurrent replacement and a same-user attacker who can write PATH directories
 are outside this boundary; the check does not freeze filesystem identities.
 """
@@ -8,12 +9,13 @@ are outside this boundary; the check does not freeze filesystem identities.
 from __future__ import annotations
 
 import os
+import ntpath
 import stat
 from collections.abc import Mapping
 from pathlib import Path
 
 from . import mcp_declarations as declarations
-from .mcp_base_commands import EXEC_CAPABLE_BASE_COMMANDS, is_mcpbridge
+from .mcp_base_commands import EXEC_CAPABLE_BASE_COMMANDS, is_base_recipe
 
 _BASE_DIRECTORIES = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 _SYSTEM_DIRECTORIES = ("/usr/bin", "/bin", "/usr/sbin", "/sbin", "/usr/local/bin", "/opt/homebrew/bin")
@@ -39,33 +41,48 @@ def _identity(info: os.stat_result) -> _Identity:
     return info.st_dev, info.st_ino
 
 
-def _base_system_roots() -> tuple[str, ...]:
-    if os.name == "nt":
-        root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
-        return (root,) if root else ()
-    return _BASE_DIRECTORIES
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _windows_final_path(path: str) -> str:
+    # Windows realpath uses the kernel's final-path API. Resolve before lexical
+    # normalization to retain symlink and parent-component semantics.
+    return os.path.realpath(path)
+
+
+def _windows_path_key(path: str) -> str:
+    path = path.replace("/", "\\")
+    if path[:8].upper() == "\\\\?\\UNC\\":
+        path = "\\\\" + path[8:]
+    elif path.startswith("\\\\?\\"):
+        path = path[4:]
+    return ntpath.normcase(ntpath.normpath(path))
+
+
+def _windows_base_candidate(candidate: str) -> bool:
+    root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
+    if not root:
+        return False
+    try:
+        root_key = _windows_path_key(_windows_final_path(root)).rstrip("\\")
+        selected_key = _windows_path_key(_windows_final_path(candidate))
+    except (OSError, ValueError) as exc:
+        raise _ObservationRefused("base-system final path cannot be resolved") from exc
+    return selected_key == root_key or selected_key.startswith(root_key + "\\")
 
 
 def _base_system_inodes() -> set[_Identity]:
     identities: set[_Identity] = set()
-    visited: set[_Identity] = set()
-    pending = list(_base_system_roots())
-    while pending:
-        directory = pending.pop()
+    # Flat POSIX roots only; never traverse SystemRoot on Windows.
+    for directory in _BASE_DIRECTORIES:
         try:
-            info = os.stat(directory)
-            identity = _identity(info)
-            if not stat.S_ISDIR(info.st_mode) or identity in visited:
-                continue
-            visited.add(identity)
             with os.scandir(directory) as entries:
                 for entry in entries:
                     try:
                         info = entry.stat()
                         if stat.S_ISREG(info.st_mode):
                             identities.add(_identity(info))
-                        elif os.name == "nt" and entry.is_dir(follow_symlinks=False):
-                            pending.append(entry.path)
                     except OSError:
                         continue
         except FileNotFoundError:
@@ -73,6 +90,20 @@ def _base_system_inodes() -> set[_Identity]:
         except OSError as exc:
             raise _ObservationRefused("base-system identities cannot be enumerated") from exc
     return identities
+
+
+def _base_recipe_identity(command: str, directories: tuple[str, ...]) -> bool:
+    selected = _selected_candidate(command, directories)
+    if selected is None or _is_windows():
+        return False
+    for directory in _BASE_DIRECTORIES:
+        try:
+            info = os.stat(os.path.join(directory, command))
+            if stat.S_ISREG(info.st_mode) and _identity(info) == _identity(selected[1]):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def _evaluator_inodes(directories: tuple[str, ...]) -> set[_Identity]:
@@ -104,7 +135,7 @@ def _evaluator_inodes(directories: tuple[str, ...]) -> set[_Identity]:
 
 def _selected_candidate(command: str, directories: tuple[str, ...]) -> tuple[str, os.stat_result] | None:
     suffixes = [""]
-    if os.name == "nt":
+    if _is_windows():
         suffixes += [s for s in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if s]
     for directory in directories:
         for suffix in suffixes:
@@ -124,7 +155,7 @@ def _resolved_evaluator(command: str, *, path: str, cwd: Path, runner: bool = Fa
     if selected is None:
         return False
     candidate, info = selected
-    if _identity(info) in _base_system_inodes():
+    if (_windows_base_candidate(candidate) if _is_windows() else _identity(info) in _base_system_inodes()):
         return True
     if runner:
         return False
@@ -133,7 +164,7 @@ def _resolved_evaluator(command: str, *, path: str, cwd: Path, runner: bool = Fa
         return True
     try:
         # Follow the original candidate path through the kernel, including its
-        # symlinks and directory requirements. Never open an interpreter body.
+        # symlinks and directory requirements. Opaque interpreter reads are separately limited to two bytes.
         descriptor = os.open(candidate, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
         try:
             if not stat.S_ISREG(os.fstat(descriptor).st_mode):
@@ -146,12 +177,15 @@ def _resolved_evaluator(command: str, *, path: str, cwd: Path, runner: bool = Fa
         return False
     if not head.startswith(b"#!"):
         return False
-    if b"\n" not in head:
-        raise _ObservationRefused("script header has no newline within 1024 bytes")
-    # Kernels split at horizontal whitespace; shell quoting does not apply.
+    newline = head.find(b"\n")
+    if newline < 0 or newline >= 512:
+        raise _ObservationRefused("script header has no newline within 512 bytes")
+    # Parse horizontal whitespace conservatively, without shell quoting.
     # In particular, CR is part of the interpreter path, not whitespace to strip.
     raw = head.split(b"\n", 1)[0][2:].lstrip(b" \t")
     interpreter_bytes = raw.split(b" ", 1)[0].split(b"\t", 1)[0]
+    if b"#" in interpreter_bytes:
+        raise _ObservationRefused("script interpreter word contains #")
     try:
         interpreter = interpreter_bytes.decode("utf-8", errors="strict")
     except UnicodeDecodeError as exc:
@@ -166,9 +200,21 @@ def _resolved_evaluator(command: str, *, path: str, cwd: Path, runner: bool = Fa
         executable = False
     if not executable:
         raise _ObservationRefused("script interpreter is not an executable regular file")
-    # env is already a recognized wrapper; no unreachable second-stage env X
-    # search and no interpreter-body or nested-interpreter traversal is needed.
-    return _known_evaluator(interpreter) or _identity(interpreter_info) in identities
+    if _known_evaluator(interpreter) or _identity(interpreter_info) in identities:
+        return True
+    try:
+        descriptor = os.open(interpreter_path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise _ObservationRefused("script interpreter is not a regular file")
+            prefix = os.read(descriptor, 2)
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise _ObservationRefused("script interpreter header cannot be observed") from exc
+    if prefix == b"#!":
+        raise _ObservationRefused("nested script interpreter is refused")
+    return False
 
 
 def validate_host_commands(
@@ -183,7 +229,12 @@ def validate_host_commands(
         command = declaration.server.command
         if declaration.server.transport != "stdio" or command is None:
             continue
-        if is_mcpbridge(command, declaration.server.args):
+        if is_base_recipe(command, declaration.server.args):
+            if not _base_recipe_identity(command, _path_directories(path, cwd)):
+                raise declarations.McpDeclarationError(
+                    "mcp_command_invalid", f"mcp_servers.{name}.server.command",
+                    "exact Apple MCP recipe requires the named base-file identity",
+                )
             continue
         runner = declarations._normalize_command(command) in {"npx", "uvx", "uv"}
         try:
