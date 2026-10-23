@@ -160,11 +160,17 @@ def test_additional_ignore_sources(project_cli, tmp_path, kind):
 # unverifiable-program disclosure to non-runner commands, with no execution.
 @pytest.mark.parametrize("command,args,opaque", [
     ("my-server", ["a b", '\"quoted\"', "--node-id"], True),
-    ("npx", ["pkg@1.2.3"], False), ("uvx", ["pkg==1.2.3"], False),
+    pytest.param("npx", ["pkg@1.2.3"], False, marks=pytest.mark.skipif(os.name == "nt", reason="Windows npx batch refusal is covered before consent")),
+    ("uvx", ["pkg==1.2.3"], False),
 ])
-def test_consent_exact_argv_and_scope(project_cli, monkeypatch, capsys, command, args, opaque):
+def test_consent_exact_argv_and_scope(project_cli, monkeypatch, capsys, tmp_path, command, args, opaque):
     from csk import cli
     root, home, declare = project_cli
+    if os.name == "nt":
+        # Native PE admission fixtures; consent never dispatches them.
+        native = tmp_path / "native"; native.mkdir()
+        (native / (command + ".exe")).write_bytes(b"MZfixture")
+        monkeypatch.setenv("PATH", str(native) + os.pathsep + os.environ["PATH"])
     declare(stdio(command, args))
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
