@@ -329,6 +329,7 @@ def _read_declarations(
         parsed = declarations.parse_mcp_servers(
             raw, invocation_scope="project", target_agents=target_agents
         )
+        mcp_command_resolution.validate_windows_batch_commands(parsed, windows=sys.platform == "win32")
         mcp_command_resolution.validate_host_commands(parsed, cwd=root)
     except declarations.McpDeclarationError as exc:
         raise refusal(exc.code, str(exc)) from exc
@@ -407,20 +408,6 @@ def _plan_project(
         # Keep verified owned pairs even when declaration validation or native edits fail.
         owned.extend(entry.address for entry in ledger.entries)
     manifest_sha256, parsed = _read_declarations(root, target_agents, raw)
-    if sys.platform == "win32":
-        for decl in parsed.values():
-            if decl.agents and decl.server.transport == "stdio":
-                command = decl.server.command or ""
-                resolved = shutil.which(command)
-                if (
-                    command.lower() in ("npx", "npm", "pnpm", "yarn")
-                    or command.lower().endswith((".cmd", ".bat"))
-                    or (resolved and resolved.lower().endswith((".cmd", ".bat")))
-                ):
-                    raise refusal(
-                        "mcp_windows_batch_unsupported",
-                        f"{decl.name} uses a batch launcher",
-                    )
     entry_read = _read_entries(root, target_agents, parsed, consumer, ledger)
     consumer, ledger = entry_read.consumer, entry_read.ledger
     desired, values = entry_read.desired, entry_read.values

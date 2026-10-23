@@ -102,6 +102,7 @@ def test_jq_inventory_name_refuses(tmp_path, monkeypatch):
 # Broken interpreter variants fail closed at the selected script rather than
 # falling through, and invalid path bytes are never silently substituted.
 @pytest.mark.parametrize('kind', ['missing', 'crlf', 'directory', 'not-executable', 'invalid-utf8', 'empty', 'quoted'])
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable-mode and shebang contract")
 def test_selected_interpreter_refuses(tmp_path, monkeypatch, kind):
     opaque = executable(tmp_path / 'opaque')
     raw = os.fsencode(opaque)
@@ -125,6 +126,7 @@ def test_selected_interpreter_refuses(tmp_path, monkeypatch, kind):
 # A runnable opaque interpreter wins over a later evaluator; spaces after #!
 # and interpreter arguments do not change the raw interpreter's identity.
 @pytest.mark.parametrize('prefix,tail', [(b'', b''), (b' \t', b' --flag')])
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable-mode and shebang contract")
 def test_runnable_interpreter_positive(tmp_path, monkeypatch, prefix, tail):
     executable(tmp_path / 'my-server', b'#!' + prefix + b'/usr/bin/true' + tail + b'\n')
     later = tmp_path / 'later'; later.mkdir()
@@ -136,6 +138,7 @@ def test_runnable_interpreter_positive(tmp_path, monkeypatch, prefix, tail):
 # The selected header is limited to 1024 bytes. Missing newline refuses; a
 # known interpreter beyond the old 256-byte window also refuses.
 @pytest.mark.parametrize('header', [b'#!' + b' ' * 1022, b'#!' + b' ' * 300 + b'/usr/bin/vim\n'], ids=['unterminated', 'padded'])
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable-mode and shebang contract")
 def test_selected_long_header_refuses(tmp_path, monkeypatch, header):
     executable(tmp_path / 'my-server', header)
     monkeypatch.setenv('PATH', str(tmp_path))
@@ -145,6 +148,7 @@ def test_selected_long_header_refuses(tmp_path, monkeypatch, header):
 
 # Searchable but non-enumerable PATH directories cannot silently drop versioned
 # or mixed-case evaluator identities: refuse the incomplete observation.
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable-mode and shebang contract")
 def test_non_enumerable_versioned_identity_refuses(tmp_path, monkeypatch):
     executable(tmp_path / 'PyThOn3.12')
     os.link(tmp_path / 'PyThOn3.12', tmp_path / 'my-server')
@@ -160,6 +164,7 @@ def test_non_enumerable_versioned_identity_refuses(tmp_path, monkeypatch):
 
 # Provenance is committed independently of runtime data; a planted owned scan
 # includes all executable names, excludes directories, and never reads bodies.
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable-mode and shebang contract")
 def test_base_inventory_provenance_and_scanner(tmp_path, monkeypatch):
     from csk.mcp_base_commands import BASE_SYSTEM_COMMANDS, EXEC_CAPABLE_BASE_COMMANDS
     assert set(NAMES) == BASE_SYSTEM_COMMANDS

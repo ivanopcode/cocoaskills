@@ -5,9 +5,12 @@ import subprocess
 import pytest
 
 from csk import mcp_command_resolution as resolution, mcp_declarations as mcp
-from test_mcp_command_resolution import executable, parse
+from test_mcp_command_resolution import executable as posix_executable, parse
 
 pytestmark = pytest.mark.usefixtures('stable_env')
+
+def executable(path, body):
+    return posix_executable(path.with_name(path.name + ".exe") if os.name == "nt" else path, body)
 
 # Open and read failures refuse the selected candidate (including a runner),
 # name only the bare command, and never fall through to a later PATH executable.
@@ -37,7 +40,8 @@ def test_selected_io_failure_refuses(tmp_path, monkeypatch, stage, command, args
 
 # This recognizes only magic, not full executable validity. Fat counts 1..16
 # are admitted in the matching byte order; Java-style/high/zero/truncated counts
-# and all unrecognized headers refuse. No fixture executable is dispatched.
+# and all unrecognized headers refuse. On Windows, only PE passes; the other
+# platform magics refuse. No fixture executable is dispatched.
 MAGICS = [bytes.fromhex(x) for x in ['FEEDFACE', 'FEEDFACF', 'CEFAEDFE', 'CFFAEDFE', '7F454C46', '4D5A']]
 FAT = [(bytes.fromhex('CAFEBABE'), 'big'), (bytes.fromhex('BEBAFECA'), 'little')]
 @pytest.mark.parametrize('header', MAGICS + [magic + count.to_bytes(4, order) for magic, order in FAT for count in [1, 16]])
@@ -45,7 +49,11 @@ def test_native_magic_positive(tmp_path, monkeypatch, header):
     executable(tmp_path / 'my-server', header + b'x' * 2048)
     monkeypatch.setenv('PATH', str(tmp_path))
     monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('no execution'))
-    resolution.validate_host_commands(parse('my-server'), cwd=tmp_path)
+    if os.name == 'nt' and not header.startswith(b'MZ'):
+        with pytest.raises(mcp.McpDeclarationError, match='not PE'):
+            resolution.validate_host_commands(parse('my-server'), cwd=tmp_path)
+    else:
+        resolution.validate_host_commands(parse('my-server'), cwd=tmp_path)
 
 
 @pytest.mark.parametrize('header', [b'', b'opaque text\n', b'\x7fEL', b'M', b'\0' * 16] +
@@ -58,9 +66,10 @@ def test_unknown_or_java_header_refuses(tmp_path, monkeypatch, header):
         resolution.validate_host_commands(parse('my-server'), cwd=tmp_path)
 
 
-# 255 and 256 include the newline and pass; 257 refuses. All platforms apply
-# the same conservative limit, and no candidate body is inspected past 1024.
+# On POSIX, 255 and 256 include the newline and pass; 257 refuses.
+# No candidate body is inspected past 1024.
 @pytest.mark.parametrize('length', [255, 256, 257])
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shebang semantics")
 def test_shebang_256_boundary(tmp_path, monkeypatch, length):
     interpreter = executable(tmp_path / 'opaque', b'\x7fELFfixture')
     head = b'#!' + os.fsencode(interpreter) + b' '

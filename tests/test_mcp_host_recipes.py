@@ -16,6 +16,7 @@ MISSED_EXEC = 'dtrace lockstat plockstat sc_usage ktrace parl jjs javac jdb ssh-
 # A # inside the interpreter word refuses, even if the full literal path exists;
 # a separate comment argument remains accepted, without emulating a host kernel.
 @pytest.mark.parametrize('kind', ['hash-existing', 'hash-truncated-missing', 'nested', 'line-513', 'line-600'])
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shebang semantics")
 def test_script_divergences_refuse(tmp_path, monkeypatch, kind):
     opq = tmp_path / 'opq'; opq.mkdir()
     interpreter = executable(opq / 'opaque')
@@ -36,6 +37,7 @@ def test_script_divergences_refuse(tmp_path, monkeypatch, kind):
 
 
 @pytest.mark.parametrize('kind', ['comment', 'line-255', 'line-256'])
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shebang semantics")
 def test_script_boundary_positive(tmp_path, monkeypatch, kind):
     interpreter = executable(tmp_path / 'opaque')
     line = b'#!' + os.fsencode(interpreter) + b' '
@@ -89,6 +91,7 @@ def test_safari_recipe_variants_refuse(command, args):
 # These independently specified review omissions must refuse as argument words
 # and as otherwise opaque script interpreters, without relying on base inodes.
 @pytest.mark.parametrize('name', MISSED_EXEC)
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shebang semantics")
 def test_review_exec_words_refuse(tmp_path, monkeypatch, name):
     with pytest.raises(mcp.McpDeclarationError, match='mcp_command_invalid'):
         parse('my-server', ['--exec=' + name])
@@ -106,7 +109,7 @@ def test_review_exec_words_refuse(tmp_path, monkeypatch, name):
     (r'C:\WindowsExtra\tool.exe', False), (r'D:\Windows\tool.exe', False),
     (r'C:\tools\tool.exe', False)])
 def test_windows_final_path_containment(tmp_path, monkeypatch, final, refuse):
-    executable(tmp_path / 'my-server')
+    executable(tmp_path / 'my-server.exe', b'MZfixture')
     monkeypatch.setenv('PATH', str(tmp_path)); monkeypatch.setenv('SystemRoot', r'C:\Windows')
     monkeypatch.setattr(resolution, '_is_windows', lambda: True)
     monkeypatch.setattr(resolution, '_windows_final_path', lambda p: r'C:\Windows' if p == r'C:\Windows' else final)
@@ -120,7 +123,7 @@ def test_windows_final_path_containment(tmp_path, monkeypatch, final, refuse):
 def test_windows_unlistable_descendants_do_not_block(tmp_path, monkeypatch, command, args):
     system = tmp_path / 'Windows'; system.mkdir()
     forbidden = system / 'ServiceProfiles'; forbidden.mkdir()
-    own = tmp_path / 'bin'; own.mkdir(); executable(own / command)
+    own = tmp_path / 'bin'; own.mkdir(); executable(own / (command + '.exe'), b'MZfixture')
     scan = os.scandir; visited = []
     def guarded(path):
         visited.append(os.fspath(path))
@@ -137,6 +140,7 @@ def test_windows_unlistable_descendants_do_not_block(tmp_path, monkeypatch, comm
 # A nested interpreter is inspected once for exactly two bytes, and an unreadable
 # header refuses rather than treating the interpreter as an opaque binary.
 @pytest.mark.parametrize('kind', ['nested', 'unreadable'])
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shebang semantics")
 def test_interpreter_header_read_bound(tmp_path, monkeypatch, kind):
     interpreter = executable(tmp_path / 'opaque', b'#!/do-not-follow\n' + b'x' * 2000)
     candidate = executable(tmp_path / 'my-server', b'#!' + os.fsencode(interpreter) + b'\n')

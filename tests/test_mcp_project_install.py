@@ -530,8 +530,11 @@ def test_no_server_or_auth_process(project_cli, monkeypatch, tmp_path, capsys, c
     traps.mkdir()
     marker = tmp_path / "executed"
     for trap_command in ("npx", "uvx", "my-server", "codex"):
-        target = traps / trap_command
+        target = traps / (trap_command + ".exe" if sys.platform == "win32" else trap_command)
         target.write_text(f'#!/bin/sh\necho forbidden >> "{marker}"\nexit 99\n')
+        if sys.platform == "win32" and trap_command == "uvx":
+            # PE-magic admission fixture, never dispatched by install.
+            target.write_bytes(b"MZfixture")
         target.chmod(0o755)
     monkeypatch.setenv("PATH", str(traps) + os.pathsep + os.environ["PATH"])
     declare(

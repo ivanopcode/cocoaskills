@@ -12,19 +12,20 @@ pytestmark = [pytest.mark.usefixtures("stable_env"), pytest.mark.skipif(os.sys.p
 def parse(command, args=()):
     return mcp.parse_mcp_servers(stdio(command, list(args)), invocation_scope="project", target_agents=["claude_code"])
 
-# Every executable regular file in the four macOS base roots refuses as command.
-def test_host_base_roots_all_refused():
-    accepted = []
+# The portable snapshot is best-effort across OS versions. Host admission must
+# refuse every currently selected base executable, including uninventoried names.
+def test_host_base_roots_all_refused(tmp_path, monkeypatch):
+    from csk import mcp_command_resolution as resolution
     for root in ("/usr/bin", "/bin", "/usr/sbin", "/sbin"):
+        monkeypatch.setenv("PATH", root)
         for name in os.listdir(root):
             p = os.path.join(root, name)
             try: st = os.stat(p)
             except OSError: continue
             if not stat.S_ISREG(st.st_mode) or not os.access(p, os.X_OK) or not mcp._COMMAND_RE.fullmatch(name): continue
-            for token in (name, name.upper(), name + ".exe"):
-                try: parse(token, ["--port", "1"]); accepted.append((root, token))
-                except mcp.McpDeclarationError as exc: assert exc.code == "mcp_command_invalid"
-    assert accepted == []
+            with pytest.raises(mcp.McpDeclarationError) as caught:
+                resolution.validate_host_commands(parse(name, ["--port", "1"]), cwd=tmp_path)
+            assert caught.value.code == "mcp_command_invalid", (root, name)
 
 # Bridge exception is exact (20 widening variants refuse).
 @pytest.mark.parametrize("command,args", [

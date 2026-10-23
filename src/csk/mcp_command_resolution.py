@@ -8,8 +8,9 @@ are outside this boundary; the check does not freeze filesystem identities.
 
 from __future__ import annotations
 
-import os
 import ntpath
+import os
+import shutil
 import stat
 from collections.abc import Mapping
 from pathlib import Path
@@ -141,15 +142,23 @@ def _evaluator_inodes(directories: tuple[str, ...]) -> set[_Identity]:
 
 
 def _selected_candidate(command: str, directories: tuple[str, ...]) -> tuple[str, os.stat_result] | None:
-    suffixes = [""]
-    if _is_windows():
-        suffixes += [s for s in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if s]
+    windows = _is_windows()
+    # PATH admission uses libuv's native suffix priority (PATHEXT is ignored):
+    # https://github.com/libuv/libuv/blob/v1.x/src/win/process.c
+    # path_search_walk_ext: extended name first, then .com, then .exe.
+    # Rust std differs: extensionless names search .exe only, extended names
+    # are exact. This shared PATH policy uses .com before .exe; it does not
+    # claim to reproduce Rust's distinct search directories/order.
+    # https://github.com/rust-lang/rust/blob/master/library/std/src/sys/process/windows.rs
+    # resolve_exe/search_paths. Cwd/application/system implicit searches are
+    # outside this PATH observation; later agent environments may differ.
+    suffixes = ([""] if ntpath.splitext(command)[1] else [".com", ".exe"]) if windows else [""]
     for directory in directories:
         for suffix in suffixes:
             candidate = os.path.join(directory, command + suffix)
             try:
                 info = os.stat(candidate)
-                if stat.S_ISREG(info.st_mode) and os.access(candidate, os.X_OK):
+                if stat.S_ISREG(info.st_mode) and (windows or os.access(candidate, os.X_OK)):
                     return candidate, info
             except (OSError, ValueError):
                 continue
@@ -197,6 +206,10 @@ def _resolved_evaluator(command: str, *, path: str, cwd: Path, runner: bool = Fa
             os.close(descriptor)
     except OSError as exc:
         raise _ObservationRefused("selected executable header cannot be observed") from exc
+    if _is_windows():
+        if not head.startswith(b"MZ"):
+            raise _ObservationRefused("selected Windows executable header is not PE (MZ)")
+        return False
     if not head.startswith(b"#!"):
         if not _native_header(head):
             raise _ObservationRefused("selected executable header is not a recognized native format or shebang")
@@ -239,6 +252,28 @@ def _resolved_evaluator(command: str, *, path: str, cwd: Path, runner: bool = Fa
     if prefix == b"#!":
         raise _ObservationRefused("nested script interpreter is refused")
     return False
+
+
+def validate_windows_batch_commands(
+    parsed: Mapping[str, declarations.McpDeclaration], *, windows: bool
+) -> None:
+    """Preserve the native-launcher error before observing host executable headers."""
+    if not windows:
+        return
+    for name, declaration in parsed.items():
+        command = declaration.server.command
+        if not declaration.agents or declaration.server.transport != "stdio" or command is None:
+            continue
+        resolved = shutil.which(command)
+        if (
+            command.lower() in ("npx", "npm", "pnpm", "yarn")
+            or command.lower().endswith((".cmd", ".bat"))
+            or (resolved and resolved.lower().endswith((".cmd", ".bat")))
+        ):
+            raise declarations.McpDeclarationError(
+                "mcp_windows_batch_unsupported", f"mcp_servers.{name}.server.command",
+                f"{name} uses a batch launcher",
+            )
 
 
 def validate_host_commands(

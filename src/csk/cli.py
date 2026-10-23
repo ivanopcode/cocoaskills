@@ -1640,6 +1640,7 @@ def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
                     invocation_scope="project",
                     target_agents=loaded.agents or project.agents or cfg.default_agents,
                 )
+                mcp_command_resolution.validate_windows_batch_commands(parsed_mcp, windows=sys.platform == "win32")
                 mcp_command_resolution.validate_host_commands(parsed_mcp, cwd=project.path)
         except (
             source_errors.SourceError,

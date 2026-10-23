@@ -156,7 +156,9 @@ def test_cli_resolved_evaluator_refuses(project_cli, tmp_path, monkeypatch, caps
 def test_resolution_positive_controls(tmp_path, monkeypatch, command, args):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    if command in {"npx", "uvx"}:
+    if os.name == "nt" and command != "missing-server":
+        executable(bin_dir / (command + ".exe"), b"MZfixture")
+    elif command in {"npx", "uvx"}:
         executable(bin_dir / command, b"#!/usr/bin/env node\n")
     elif command != "missing-server":
         executable(bin_dir / command)
@@ -367,7 +369,8 @@ def test_kernel_identity_interpreter_refuses(tmp_path, monkeypatch):
 # Bytes beyond the selected 1024-byte header do not participate in admission;
 # this is a bounded header observation, never a scan of arbitrary binary bodies.
 def test_selected_header_bound_positive_control(tmp_path, monkeypatch):
-    executable(tmp_path / "my-server", b"\x7fELF" + b"x" * 1020 + b"\n#!/bin/sh\n")
+    executable(tmp_path / ("my-server.exe" if os.name == "nt" else "my-server"),
+               (b"MZxx" if os.name == "nt" else b"\x7fELF") + b"x" * 1020 + b"\n#!/bin/sh\n")
     monkeypatch.setenv("PATH", str(tmp_path))
     resolution.validate_host_commands(parse("my-server", ["--port", "1"]), cwd=tmp_path)
 

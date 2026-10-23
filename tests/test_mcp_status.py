@@ -270,6 +270,10 @@ def test_status_never_starts_stdio_or_auth_commands(tmp_path):
         control = subprocess.run(command, env=case.env, capture_output=True)
         assert control.returncode == 91 and marker.read_bytes().strip() == b'invoked'
         marker.unlink()
+    if os.name == 'nt':
+        # Native PE admission control; the batch traps above test the marker only.
+        # Status must inspect this selected file without attempting to dispatch it.
+        (traps / 'uvx.exe').write_bytes(b'MZfixture')
     case.declare({'docs': {'server': {'transport': 'stdio', 'command': 'uvx', 'args': ['pkg==1.0.0']}}})
     _assert_status(case, _expected(['unapproved'] * 3), skills_current=False)
     assert not marker.exists()

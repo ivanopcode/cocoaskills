@@ -317,14 +317,24 @@ alternate executable spellings refuse; the exception never skips host identity.
 Every other normalized name in the committed base-system inventory refuses as
 command regardless of PATH. That inventory combines the dated macOS snapshot
 with documented Linux base and Windows System32/Git for Windows families.
+This portable name layer is best-effort across OS versions; the current POSIX
+host base-directory inode check remains authoritative for unlisted names.
 Thus `jq` is refused even if another installation is first in PATH. The existing
 evaluator/runner table remains in force. Exec-capable base names, including
 `apply`, `lockf`, `xcrun`, `dtrace`, `lockstat`, `sc_usage`, `parl`, `jjs`,
 `ssh-keygen` and `xcodebuild`, also refuse as argument words and interpreters.
-`check` and install use kernel stat/access to select the first regular executable
-without normalizing PATH components. On POSIX, any selected inode also present
+`check` and install observe PATH without normalizing its components. On POSIX,
+kernel stat/access select the first regular executable. Any selected inode also present
 in `/usr/bin`, `/bin`, `/usr/sbin` or `/sbin` refuses, including symlink and
-hardlink aliases. On Windows, the selected candidate's final kernel path is
+hardlink aliases. On Windows, each PATH directory tries the exact name if it
+already has an extension, otherwise `.com` then `.exe`, without PATHEXT or
+POSIX execute-mode checks. This is the shared PATH policy, not an exact model
+of every agent's search: libuv also has implicit cwd search and extended-name
+suffix fallback; Rust std uses `.exe` only for extensionless names and has
+additional application/system searches. Those implicit searches and later
+agent environments remain outside this PATH observation.
+Batch launchers refuse with `mcp_windows_batch_unsupported` before host header
+admission when a supported native write target is selected. The selected candidate's final kernel path is
 compared against the resolved `%SystemRoot%`, ignoring case and normalizing
 separators with a component boundary; SystemRoot is never traversed. An unset
 or unresolvable SystemRoot refuses stdio commands, including pinned runners and
@@ -333,8 +343,9 @@ evaluator identities in other PATH/default directories also refuse. A searchable
 PATH directory that cannot be enumerated fails closed rather than guessing
 incomplete versioned or case-sensitive spellings. No command is executed.
 Only the selected candidate's first 1024 bytes may be read. An unreadable
-selected header refuses. A readable header must start with `#!` or recognized
-native magic: Mach-O, ELF or PE (`MZ`). Universal Mach-O headers require an
+selected header refuses. Windows requires PE (`MZ`) magic and never interprets
+a shebang; all other selected headers refuse. On POSIX, a readable header must
+start with `#!` or recognized native magic: Mach-O, ELF or PE (`MZ`). Universal Mach-O headers require an
 architecture count of 1 through 16 in the matching byte order; larger counts,
 including usual Java class headers, refuse. This recognizes magic, not full
 loader validity. Empty files and text without `#!` refuse. A script line must
@@ -348,7 +359,8 @@ These conservative refusals do not emulate every OS's script parsing.
 Errors use `mcp_command_invalid` and name the bare candidate; selection never
 continues to a later PATH entry. A missing non-base candidate retains the
 portable result. Supported exact-pin runners retain their interpreter substrate
-after the base-system and selected-header checks.
+after the base-system and selected-header checks on POSIX; Windows runners
+require PE magic like other Windows candidates.
 This is a point-in-time host check: concurrent directory/executable replacement
 or another agent's later PATH can differ, and filesystem identities are not
 frozen. A same-user attacker who can write PATH directories already controls the
