@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-10-23
+
 ### Изменено
 
 - Windows MCP admission использует native PATH candidates (.com/.exe) и PE `MZ`, без POSIX X_OK/shebang; batch launchers сохраняют ранний `mcp_windows_batch_unsupported`. Различия libuv/Rust search описаны явно. POSIX host-проверка base inode запрещает и имена вне датированного inventory; tests не предполагают полный inventory для всех OS versions.
