@@ -270,6 +270,8 @@ Schema 3 добавляет к schema 2 поле `mcp_servers`. MCP-сервер
 - **На Windows `.cmd` и `.bat` не поддерживаются.** Нужна обычная программа `.exe` или `.com`.
 - **Остальные программы запускаются как есть.** csk показывает их точную команду, но не может проверить, что они делают внутри.
 
+Примеры для GitLab и Allure TestOps и то, чего пока нельзя: [примеры и ограничения](docs/skill-authoring.md#project-mcp-recipes).
+
 Все поля, проверки и коды ошибок: [MCP в project Skillfile](docs/skill-authoring.md#project-mcp-schema-3) и [Troubleshooting](docs/troubleshooting.md#mcp-first-run-check-ignore-и-consent).
 
 ### Глобальный режим

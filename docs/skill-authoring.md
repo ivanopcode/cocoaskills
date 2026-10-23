@@ -481,6 +481,56 @@ MCP authentication and connectivity: not checked.
 
 `status` только читает состояние: не меняет native configs, ledger или consent, не запрашивает согласие и не запускает серверы или auth-команды. `current` подтверждает состояние конфигурации; аутентификация и доступность сервера не проверены. Для project schema 1/2 и global status MCP-строки и JSON-поле `mcp` не добавляются.
 
+<a id="project-mcp-recipes"></a>
+
+#### Примеры для реальных серверов и текущие ограничения
+
+Ниже фрагменты поля `mcp_servers` для распространённых серверов. Адреса условные, подставьте свои.
+
+**GitLab** (GitLab 18.6 или новее, администратор включает MCP server). Вход через OAuth в агенте, consent не нужен:
+
+```json
+"gitlab": {
+  "server": { "transport": "http", "url": "https://gitlab.example.com/api/v4/mcp" },
+  "install": { "auth": { "kind": "oauth", "help_url": "https://docs.gitlab.com/user/model_context_protocol/mcp_server/" } }
+}
+```
+
+Если инстанс не поддерживает автоматическую регистрацию OAuth-клиента, используйте fine-grained personal access token с доступом к MCP и env header: `"headers": { "Authorization": { "env": "GITLAB_MCP_TOKEN", "prefix": "bearer" } }` и `"auth": { "kind": "env" }`.
+
+**Allure TestOps** (MCP endpoint `/api/mcp`). TestOps ждёт заголовок `Authorization: api-token <токен>`, а `prefix` пока поддерживает только `bearer`. Поэтому слово `api-token` входит в значение переменной:
+
+```json
+"allure": {
+  "server": { "transport": "http", "url": "https://testops.example.com/api/mcp" },
+  "install": {
+    "headers": { "Authorization": { "env": "ALLURE_TESTOPS_AUTH" } },
+    "auth": { "kind": "env", "help_url": "https://docs.qameta.io/allure-testops/howto/mcp/" }
+  }
+}
+```
+
+```bash
+export ALLURE_TESTOPS_AUTH="api-token <токен>"
+```
+
+Инструкция Qameta подключает тот же сервер через мост `npx mcp-remote` с токеном в аргументах. Закреплённый мост без токена csk примет (`"command": "npx"`, `"args": ["mcp-remote@<версия>", "https://testops.example.com/api/mcp"]`, с consent), но передать ему токен нельзя: подстановка `${VAR}` в `args` отклоняется с `mcp_declaration_invalid`, а токен прямо в `args` был бы секретом в конфиге. На Windows `npx` отклоняется с `mcp_windows_batch_unsupported`. Используйте прямое HTTP-подключение выше.
+
+**Программа внутри приложения** (например, MCP server в macOS `.app`). Объявить её нельзя: `command` принимает только имя без пути. Подключите такой сервер вручную средствами агента (`claude mcp add`, `codex mcp add`, `Cursor Settings > MCP`).
+
+Чего пока нет в schema 3:
+
+| Ограничение | Что из-за него нельзя |
+| --- | --- |
+| `command` только без пути | Сервер, который поставляется внутри приложения. |
+| `${VAR}` запрещён в `args` | Передать токен stdio-мосту, например `mcp-remote --header`. |
+| `prefix` только `bearer` | Префиксы вроде `api-token` или `Token`; сейчас их пишут в значение переменной. |
+| Заголовки только из переменных | Обычный заголовок с фиксированным несекретным значением. |
+| `auth.kind: "oauth"` без env references | OAuth вместе с дополнительным заголовком из переменной. |
+| OAuth только для HTTP | Пометить stdio-мост, который сам проходит OAuth. |
+
+Эти случаи планируется закрыть так, чтобы секрет по-прежнему не попадал ни в Skillfile, ни в аргументы команды.
+
 #### Границы slice 1
 
 Записанные project configs предназначены для native agent sessions. Managed sessions других environment managers пока не видят эти конфигурации. Codex CLI также требует доверия к проекту для загрузки project config. Другие environment managers без поддержки schema 3 отклоняют такой Skillfile с ошибкой обновления версии.
