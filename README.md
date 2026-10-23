@@ -241,7 +241,9 @@ csk config build-https add gitlab.example.com/portals/infra --token-source git-c
 }
 ```
 
-Schema 3 добавляет `mcp_servers` к schema 2. Для URL-only сервера задайте project Skillfile:
+#### Как добавить MCP-сервер
+
+Schema 3 добавляет к schema 2 поле `mcp_servers`. MCP-сервер даёт агенту (Claude Code, Codex CLI, Cursor) доступ к внешней системе. Сервер описывается в project Skillfile со `"schema_version": 3`, а `csk install` записывает его в конфиги агентов в проекте.
 
 ```json
 {
@@ -252,89 +254,23 @@ Schema 3 добавляет `mcp_servers` к schema 2. Для URL-only серв�
 }
 ```
 
-`csk check` проверяет schema 3 и MCP declarations без записи и сети. После `csk init` обычный `csk install` запишет native configs трёх агентов и покажет каждую запись; точные ignore entries для создаваемых MCP configs добавляются автоматически, без deprecated флага. Consent запрашивается после preflight и сохраняется вместе с успешной публикацией. URL без env reference не требует consent. Объектная форма содержит `server` и необязательный `install` с локальными параметрами записи и аутентификации устанавливающего менеджера. Без `server.environments` используются resolved agents проекта; явный writable id записывается даже вне этого набора. Известные unsupported ids дают строку `skipped: unsupported` без пути, а в status — `unsupported`, не влияющий на `--check`. Неизвестные ids, пустые списки и дубликаты запрещены. Добавление writable агента требует нового consent; unsupported ids в consent subject не входят. Managed sessions других environment managers пока не видят эти configs. Подробности: [MCP в project Skillfile](docs/skill-authoring.md#project-mcp-schema-3).
+1. Добавьте сервер в `mcp_servers`: строку с URL или объект `server`/`install`, если нужен токен или локальная программа.
+2. Запустите `csk check`: он проверяет объявления без записи и без сети.
+3. Запустите `csk install` в терминале. Если сервер запускает программу на вашей машине или передаёт токен, csk покажет точную команду и спросит согласие `[y/N]`. Без терминала согласие дать нельзя.
+4. `csk status` покажет `current` для каждой записи.
+5. Войдите в сервис в самом агенте. csk не запускает серверы, не выполняет вход и не хранит токены: в Skillfile указывается только имя переменной окружения.
 
-MCP install verifies effective Git ignore rules and output-parent readiness before consent. Conflicting nested ignore rules refuse without publication. Runner/evaluator tokens in `args` also refuse, including aliases and data such as `--tool node`; see the linked MCP declaration rules.
+Конфиги агентов остаются локальными: csk сам добавляет их в `.gitignore`. В git коммитятся `Skillfile.json` и изменения `.gitignore`.
 
-Staged ignore checks preserve the live `core.excludesFile` source (including relative paths), `.git/info/exclude` and default global excludes.
+Для stdio-серверов действуют ограничения:
 
-Pin and no-eval rules cover recognized runners/evaluators. Known evaluator-capable
-commands (including awk/sed, interpreters, editors, debuggers and command-launching
-OS tools) refuse even with plain script arguments. Within each argument, csk splits
-on characters outside `[A-Za-z0-9_.+-]`, ignores case, strips path prefixes and
-`.exe`/`.cmd`/`.bat`/`.ps1`/`.com`, and refuses recognized names as words.
-Thus `a=npx pkg`, `system("npx pkg")`, `--exec=npx` and data containing the word
-`node` refuse; `--node-id` and `my-server --port 1` remain valid. This intentionally
-fails closed on false positives. Direct supported pinned `npx`/`uvx` remain valid.
-Base-system OS programs cannot be MCP servers, except for two exact Apple
-recipes: command `xcrun` with args `["mcpbridge"]`, and command `safaridriver`
-with args `["--mcp"]`. Both require the selected executable's kernel-resolved
-inode to match a regular base-directory file of that exact command name.
-Missing candidates, opaque copies, evaluator aliases, extra arguments and
-alternate executable spellings refuse; the exception never skips host identity.
-Every other normalized name in the committed base-system inventory refuses as
-command regardless of PATH. That inventory combines the dated macOS snapshot
-with documented Linux base and Windows System32/Git for Windows families.
-This portable name layer is best-effort across OS versions; the current POSIX
-host base-directory inode check remains authoritative for unlisted names.
-Thus `jq` is refused even if another installation is first in PATH. The existing
-evaluator/runner table remains in force. Exec-capable base names, including
-`apply`, `lockf`, `xcrun`, `dtrace`, `lockstat`, `sc_usage`, `parl`, `jjs`,
-`ssh-keygen` and `xcodebuild`, also refuse as argument words and interpreters.
-`check` and install observe PATH without normalizing its components. On POSIX,
-kernel stat/access select the first regular executable. Any selected inode also present
-in `/usr/bin`, `/bin`, `/usr/sbin` or `/sbin` refuses, including symlink and
-hardlink aliases. On Windows, each PATH directory tries the exact name if it
-already has an extension, otherwise `.com` then `.exe`, without PATHEXT or
-POSIX execute-mode checks. This is the shared PATH policy, not an exact model
-of every agent's search: libuv also has implicit cwd search and extended-name
-suffix fallback; Rust std uses `.exe` only for extensionless names and has
-additional application/system searches. Those implicit searches and later
-agent environments remain outside this PATH observation.
-Batch launchers refuse with `mcp_windows_batch_unsupported` before host header
-admission when a supported native write target is selected. The selected candidate's final kernel path is
-compared against the resolved `%SystemRoot%`, ignoring case and normalizing
-separators with a component boundary; SystemRoot is never traversed. An unset
-or unresolvable SystemRoot refuses stdio commands, including pinned runners and
-missing PATH candidates. Known
-evaluator identities in other PATH/default directories also refuse. A searchable
-PATH directory that cannot be enumerated fails closed rather than guessing
-incomplete versioned or case-sensitive spellings. No command is executed.
-Only the selected candidate's first 1024 bytes may be read. An unreadable
-selected header refuses. Windows requires PE (`MZ`) magic and never interprets
-a shebang; all other selected headers refuse. On POSIX, a readable header must
-start with `#!` or recognized native magic: Mach-O, ELF or PE (`MZ`). Universal Mach-O headers require an
-architecture count of 1 through 16 in the matching byte order; larger counts,
-including usual Java class headers, refuse. This recognizes magic, not full
-loader validity. Empty files and text without `#!` refuse. A script line must
-end with newline within the first 256 bytes, including the newline. The
-interpreter word uses strict UTF-8, splits at horizontal whitespace without shell quoting or stripping CR,
-and refuses if it contains `#`. A separate `# comment` argument is permitted.
-An invalid/non-executable interpreter refuses. For an otherwise opaque
-interpreter, only its first two bytes are read: `#!` refuses as a nested script;
-an unreadable interpreter header also refuses. No nested chain is followed.
-These conservative refusals do not emulate every OS's script parsing.
-Errors use `mcp_command_invalid` and name the bare candidate; selection never
-continues to a later PATH entry. A missing non-base candidate retains the
-portable result. Supported exact-pin runners retain their interpreter substrate
-after the base-system and selected-header checks on POSIX; Windows runners
-require PE magic like other Windows candidates.
-This is a point-in-time host check: concurrent directory/executable replacement
-or another agent's later PATH can differ, and filesystem identities are not
-frozen. A same-user attacker who can write PATH directories already controls the
-agent and is outside this boundary. A third-party evaluator outside base dirs
-remains opaque unless its name or inode matches the evaluator inventory; a copy
-outside those dirs need not share an inventoried inode. This is no sandbox or
-proof of what an opaque program runs. On a CLT-only host, `xcrun` can fall back to PATH
-when its developer directory lacks `mcpbridge`; that downstream tool selection
-is not checked. The exception verifies the base `xcrun` identity and exact argv,
-not the executable it may subsequently choose.
+- **Точная версия пакета.** `npx` принимает только `пакет@1.2.3`, `uvx` только `пакет==1.2.3`.
+- **Менеджеры пакетов и интерпретаторы только как сама команда.** `npx`, `node`, `python`, `sh` и подобные не могут стоять в аргументах. Поэтому обёртки вроде `find -exec npx pkg` отклоняются.
+- **Системные программы ОС не могут быть MCP-сервером.** Исключения: `xcrun mcpbridge` и `safaridriver --mcp`.
+- **На Windows `.cmd` и `.bat` не поддерживаются.** Нужна обычная программа `.exe` или `.com`.
+- **Остальные программы запускаются как есть.** csk показывает их точную команду, но не может проверить, что они делают внутри.
 
-Any remaining bare program runs as is: csk cannot verify what it runs. Consent shows
-its exact command and argument array and states this limit. This is no sandbox or
-proof about arbitrary programs; non-default evaluators outside the recognized
-inventory and hidden execution semantics remain the documented limit.
-
+Все поля, проверки и коды ошибок: [MCP в project Skillfile](docs/skill-authoring.md#project-mcp-schema-3) и [Troubleshooting](docs/troubleshooting.md#mcp-first-run-check-ignore-и-consent).
 
 ### Глобальный режим
 
