@@ -1089,6 +1089,17 @@ def _probe_cache_rejection(
     raise AssertionError(f"unbound cache rejection fixture {name!r}")
 
 
+def _write_goroot_release_evidence(goroot: Path, version_stdout: bytes) -> None:
+    """Write the GOROOT/VERSION a real distribution ships for the probed release.
+
+    The Go release gate requires this file to agree with ``go version``; the
+    fixture models a trusted root, so it carries matching evidence.
+    """
+
+    release = version_stdout.split()[2]
+    (goroot / "VERSION").write_bytes(release + b"\n")
+
+
 @contextmanager
 def _projected_darwin_toolchain(
     tmp_path: Path,
@@ -1110,6 +1121,7 @@ def _projected_darwin_toolchain(
     executable.parent.mkdir(parents=True)
     executable.write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 12)
     executable.chmod(0o755)
+    _write_goroot_release_evidence(goroot, version_stdout)
     runner = _RecordingProbeRunner(
         goroot.resolve(),
         version_stdout=version_stdout,
@@ -2344,6 +2356,7 @@ def _assert_fixed_environment_and_argv(
     executable.write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 12)
     executable.chmod(0o755)
     runner = _RecordingProbeRunner(goroot.resolve())
+    _write_goroot_release_evidence(goroot, runner.version_stdout)
     host = toolchain._Host(goos="darwin", goarch="arm64", windows=False)
     native_path_type = type(executable)
     real_lstat = native_path_type.lstat
