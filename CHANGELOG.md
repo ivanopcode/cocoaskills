@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Добавлено
+
+- HTTP MCP headers поддерживают `prefix: "api-token"` и `"token"` для Claude Code и Cursor без чтения или записи значений секретов. Codex отклоняет эти префиксы с `mcp_header_prefix_unsupported`; `none` и `bearer` сохранены.
+- Несекретные literal headers задаются объектом `{ "value": "issues,merge_requests" }` и не требуют consent. Запрещены секретные имена и значения, `$`, управляющие символы, смешение с `env`/`prefix` и значения длиннее 1024 UTF-8 bytes.
+
+### Изменено
+
+- `auth.kind: "oauth"` для HTTP совместим с env и literal headers: consent нужен только при env reference. `csk check` проверяет те же правила без записи. Обновлены recipes Allure TestOps и GitLab.
+
 ## [0.20.1] - 2026-10-23
 
 ### Изменено

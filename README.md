@@ -262,6 +262,22 @@ Schema 3 добавляет к schema 2 поле `mcp_servers`. MCP-сервер
 
 Конфиги агентов остаются локальными: csk сам добавляет их в `.gitignore`. В git коммитятся `Skillfile.json` и изменения `.gitignore`.
 
+HTTP headers belong in `install.headers`. Use an env reference for a token and a literal for non-secret configuration:
+
+```json
+{
+  "install": {
+    "headers": {
+      "Authorization": { "env": "API_TOKEN", "prefix": "bearer" },
+      "X-Scope": { "value": "issues,merge_requests" }
+    },
+    "auth": { "kind": "oauth" }
+  }
+}
+```
+
+OAuth may coexist with headers. An env reference requires consent; literals alone do not. Literal values are limited to 1024 UTF-8 bytes, with secret names/scanner hits, `$` and control characters refused. Prefixes are `none`, `bearer` (Authorization only), `api-token` and `token`. Codex refuses the latter two with `mcp_header_prefix_unsupported`; select Claude Code/Cursor explicitly for them. See the [Allure and GitLab recipes and full limits](docs/skill-authoring.md#project-mcp-recipes).
+
 Для stdio-серверов действуют ограничения:
 
 - **Точная версия пакета.** `npx` принимает только `пакет@1.2.3`, `uvx` только `пакет==1.2.3`.
