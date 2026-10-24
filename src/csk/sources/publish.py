@@ -19,6 +19,7 @@ reaches a public entry point of this module is a structured
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import os
 import shutil
@@ -88,6 +89,8 @@ from ..transactions import (
     TransactionError,
     TransactionPlan,
     digest_target,
+    shared_block_digest,
+    _target_digest,
 )
 from . import boundaries, consumers, modes, skillfile_v2, snapshot, source_audit, store
 from . import transport as source_transport
@@ -2327,8 +2330,18 @@ def build_recheck_payloads(
             if spec.live_path != common / "info/exclude":
                 raise SourceError(CODE_OUTPUT_OVERLAP, "Git common directory changed during planning")
             common_stat = _stat_identity(str(common), subject=subject)
+            block_key = gitignore_gate.project_key(project_path)
+            original = gitignore_gate._exclude_bytes(spec.live_path)
+            old_block = gitignore_gate.project_block(original, block_key)
             payloads[key] = {
-                "kind": _RECHECK_GIT_EXCLUDE,
+                "kind": "git-common-exclude-block",
+                "block_key": block_key,
+                "old_block": (
+                    base64.b64encode(old_block).decode("ascii")
+                    if old_block is not None else None
+                ),
+                "file_existed": spec.live_path.exists(),
+                "original_sha256": hashlib.sha256(original).hexdigest(),
                 "project": root_spelling,
                 "root": str(common),
                 "root_identity": _identity_pairs_to_json([(common_stat.st_dev, common_stat.st_ino)]),
@@ -2471,7 +2484,7 @@ def _hook_live_digest(target: JournalTarget, *, subject: str) -> str:
     """Digest the live destination, mapping every failure to the boundary."""
 
     try:
-        return digest_target(Path(target.live_path), kind=target.kind)
+        return _target_digest(target, Path(target.live_path))
     except _FS_ERRORS as exc:
         raise SourceError(
             CODE_OUTPUT_OVERLAP,
@@ -2726,7 +2739,7 @@ def make_publication_hook() -> PreWriteHook:
                 _hook_root_file(target, payload, subject=subject)
             elif kind == _RECHECK_ROOT_FILE:
                 _hook_root_file(target, payload, subject=subject)
-            elif kind == _RECHECK_GIT_EXCLUDE:
+            elif kind in {_RECHECK_GIT_EXCLUDE, "git-common-exclude-block"}:
                 root = _payload_str(payload, "root", subject=subject)
                 project = _payload_str(payload, "project", subject=subject)
                 if gitignore_gate.ignore_path(Path(project), "exclude") != Path(root) / "info/exclude":
@@ -2736,11 +2749,20 @@ def make_publication_hook() -> PreWriteHook:
                     raise SourceError(CODE_OUTPUT_OVERLAP, "Git common directory identity changed during publication")
                 _hook_verify_ancestors(root, ["info"], _payload_identities(payload, "ancestors", subject=subject), subject=subject)
                 gitignore_gate._exclude_bytes(Path(root) / "info/exclude")
-                _hook_require_recognized_state(
-                    target, _hook_live_digest(target, subject=subject),
-                    _payload_str(payload, "expected_live", subject=subject),
-                    subject=subject, allow_pending_backup=True,
-                )
+                if kind == "git-common-exclude-block":
+                    if gitignore_gate.project_key(Path(project)) != payload["block_key"]:
+                        raise SourceError(CODE_OUTPUT_OVERLAP, "Git exclude project identity changed")
+                    current = _hook_live_digest(target, subject=subject)
+                    expected = _payload_str(payload, "expected_live", subject=subject)
+                    recognized = {expected} if target.state in {"pending", "rolled_back"} else {expected, target.desired_digest}
+                    if current not in recognized:
+                        raise SourceError(CODE_OUTPUT_OVERLAP, f"{subject} project block changed since planning")
+                else:
+                    _hook_require_recognized_state(
+                        target, _hook_live_digest(target, subject=subject),
+                        _payload_str(payload, "expected_live", subject=subject),
+                        subject=subject, allow_pending_backup=True,
+                    )
             elif kind == _RECHECK_HOME_ENTRY:
                 _hook_home_entry(target, payload, subject=subject)
             else:
@@ -4687,9 +4709,18 @@ def _plan_and_publish_schema2(
             )
             if isinstance(mode, modes.ResolvingSources):
                 stage_schema2_store(home, captured_members)
-        with locking.ManagerHomeLock(home) as home_lock:
+        with locking.ManagerHomeLock(home) as home_lock, ExitStack() as ignore_stack:
             engine = TransactionEngine(home, pre_write_hook=make_publication_hook())
             engine.recover(home_lock)
+            ignore_stack.enter_context(gitignore_gate.exclude_lock(project_path, ignore_mode))
+            if ignore_mode == "exclude":
+                # The earlier plan was read-only preflight. Re-plan against the
+                # latest shared file under its OS lock, through commit/rollback.
+                key = gitignore_gate.project_key(project_path)
+                ignore_preimage = shared_block_digest(gitignore_gate.project_block(
+                    gitignore_gate._exclude_bytes(ignore_target), key
+                ))
+                ignore_bytes = gitignore_gate.plan_ignored(project_path, ignores, fix=True, mode=ignore_mode)
             try:
                 current = digest_live_targets(planned)
             except TransactionError as exc:
@@ -4799,7 +4830,12 @@ def _plan_and_publish_schema2(
                     )
                 if ignore_bytes is not None:
                     ignore_staged = staging_root / "mcp-gitignore"
-                    ignore_staged.write_bytes(ignore_bytes)
+                    if ignore_mode == "exclude":
+                        block = gitignore_gate.project_block(ignore_bytes, gitignore_gate.project_key(project_path))
+                        assert block is not None
+                        ignore_staged.write_bytes(block)
+                    else:
+                        ignore_staged.write_bytes(ignore_bytes)
                     extra_targets += (
                         MutableTarget(
                             "mcp-gitignore",

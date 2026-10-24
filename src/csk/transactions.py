@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import ctypes
 import errno
 import hashlib
@@ -14,7 +15,7 @@ import threading
 import unicodedata
 import uuid
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass
 from functools import partial
 from pathlib import Path, PurePosixPath
@@ -496,6 +497,26 @@ class TransactionEngine:
             return tuple(groups)
 
     def _resume(self, journal: Journal) -> None:
+        # A home can contain journals for several repositories. Acquire shared
+        # file locks only after the home lock, in a stable order, also on replay.
+        from . import gitignore_gate
+        with ExitStack() as stack:
+            for path in sorted({
+                t.live_path for t in journal.targets
+                if t.publication_recheck is not None
+                and t.publication_recheck.get("kind") in {"git-common-exclude", "git-common-exclude-block"}
+            }):
+                # A journal cannot grant authority to create a lock beside an
+                # arbitrary path. Resolve its project through real Git first.
+                for target in journal.targets:
+                    if target.live_path == path and target.publication_recheck is not None:
+                        project = target.publication_recheck.get("project")
+                        if not isinstance(project, str) or gitignore_gate.ignore_path(Path(project), "exclude") != Path(path):
+                            raise TransactionCorruptionError("Shared exclude journal destination changed")
+                stack.enter_context(gitignore_gate.exclude_file_lock(Path(path)))
+            self._resume_locked(journal)
+
+    def _resume_locked(self, journal: Journal) -> None:
         if journal.phase == "preparing":
             self._discard_prepared(journal)
         elif journal.phase in {"prepared", "committing"}:
@@ -571,6 +592,9 @@ class TransactionEngine:
 
     def _commit_target(self, journal: Journal, target: JournalTarget) -> None:
         self._assert_mutation_witness()
+        if _shared_key(target) is not None:
+            self._commit_shared_block(journal, target)
+            return
         live = Path(target.live_path)
         backup = Path(target.backup_path)
         staged = Path(target.staged_path) if target.staged_path is not None else None
@@ -647,6 +671,85 @@ class TransactionEngine:
             f"invalid commit state {target.state}: {target.target_class}/{target.identifier}"
         )
 
+    def _commit_shared_block(self, journal: Journal, target: JournalTarget) -> None:
+        """Journal a project slice, never a snapshot of another writer's bytes."""
+        from . import gitignore_gate
+        key = _shared_key(target)
+        assert key is not None
+        live = Path(target.live_path)
+        staged = Path(target.staged_path) if target.staged_path else None
+        self._run_pre_write_hook(target)
+        if target.state == "pending":
+            self._verify_expected_at(target, live)
+            # The preimage slice is already durably carried by the journal.
+            target.backup_digest = ABSENT_DIGEST
+            self._emit("after_backup", target)
+            target.state = "backed_up"
+            self._save_journal(journal)
+        if target.state == "backed_up":
+            current = _target_digest(target, live)
+            if current != target.desired_digest:
+                if current != target.expected_preimage_digest:
+                    raise TransactionCorruptionError("Shared project block changed before install")
+                if staged is None or _target_digest(target, staged) != target.desired_digest:
+                    raise TransactionCorruptionError("Staged project block changed")
+                block = staged.read_bytes()
+                self._assert_mutation_witness()
+                self._run_pre_write_hook(target)
+                gitignore_gate.write_exclude(live, gitignore_gate.replace_project_block(
+                    gitignore_gate._exclude_bytes(live), key, block,
+                ))
+                _sync_tree(live)
+                self._assert_mutation_witness()
+            # A crash after replacement may leave staging; replay consumes it.
+            if staged is not None and staged.exists():
+                if _target_digest(target, staged) != target.desired_digest:
+                    raise TransactionCorruptionError("Staged project block changed")
+                staged.unlink()
+                _sync_directory(staged.parent)
+            self._emit("after_install", target)
+            target.state = "committed"
+            self._save_journal(journal)
+            self._emit("target_committed", target)
+        if target.state != "committed" or _target_digest(target, live) != target.desired_digest:
+            raise TransactionCorruptionError("Committed project block changed")
+
+    def _rollback_shared_block(self, journal: Journal, target: JournalTarget) -> None:
+        from . import gitignore_gate
+        key = _shared_key(target)
+        assert key is not None
+        if target.state in {"pending", "rolled_back"}:
+            return
+        self._run_pre_write_hook(target)
+        payload = target.publication_recheck
+        assert payload is not None
+        encoded = payload["old_block"]
+        old = None if encoded is None else base64.b64decode(encoded, validate=True)
+        if shared_block_digest(old) != target.expected_preimage_digest:
+            raise TransactionCorruptionError("Journaled project block preimage changed")
+        live = Path(target.live_path)
+        current = _target_digest(target, live)
+        if current not in {target.expected_preimage_digest, target.desired_digest}:
+            raise TransactionCorruptionError("Shared project block changed before rollback")
+        if current != target.expected_preimage_digest:
+            data = gitignore_gate.replace_project_block(gitignore_gate._exclude_bytes(live), key, old)
+            # Undo our joining newline only if the entire original file remains;
+            # a subsequent writer's separator is never removed.
+            if data.endswith(b"\n") and hashlib.sha256(data[:-1]).hexdigest() == payload["original_sha256"]:
+                data = data[:-1]
+            self._assert_mutation_witness()
+            self._run_pre_write_hook(target)
+            if not data and not payload["file_existed"]:
+                live.unlink(missing_ok=True)
+                _sync_directory(live.parent)
+            else:
+                gitignore_gate.write_exclude(live, data)
+                _sync_tree(live)
+            self._assert_mutation_witness()
+        self._emit("after_restore", target)
+        target.state = "rolled_back"
+        self._save_journal(journal)
+
     def _rollback(self, journal: Journal) -> None:
         journal.phase = "rolling_back"
         self._save_journal(journal)
@@ -656,6 +759,9 @@ class TransactionEngine:
 
     def _rollback_target(self, journal: Journal, target: JournalTarget) -> None:
         self._assert_mutation_witness()
+        if _shared_key(target) is not None:
+            self._rollback_shared_block(journal, target)
+            return
         live = Path(target.live_path)
         backup = Path(target.backup_path)
         rollback = Path(target.rollback_path)
@@ -875,11 +981,11 @@ class TransactionEngine:
                 )
                 if source == live:
                     raise TransactionError(f"target stages from its live path: {live}")
-                desired_digest = digest_target(source, kind=target.kind)
+                desired_digest = _target_digest(target, source)
                 if desired_digest == ABSENT_DIGEST:
                     raise TransactionError(f"desired target is absent: {source}")
                 staging_entries = _staging_manifest(source, kind=target.kind)
-                if digest_target(source, kind=target.kind) != desired_digest:
+                if _target_digest(target, source) != desired_digest:
                     raise TransactionCorruptionError(
                         f"desired target changed while planning: {source}"
                     )
@@ -1816,7 +1922,62 @@ def digest_target(path: Path, *, kind: TargetKind = "bytes") -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def _target_digest(target: JournalTarget, path: Path) -> str:
+def _shared_key(target: JournalTarget | MutableTarget) -> str | None:
+    payload = target.publication_recheck
+    if payload is None or payload.get("kind") != "git-common-exclude-block":
+        return None
+    key = payload.get("block_key")
+    if not isinstance(key, str) or re.fullmatch(r"[0-9a-f]{64}", key) is None:
+        raise TransactionCorruptionError("Invalid shared project block key")
+    if target.kind != "bytes" or target.target_class != "mcp-gitignore":
+        raise TransactionCorruptionError("Invalid shared project block target")
+    from . import gitignore_gate
+    try:
+        encoded = payload["old_block"]
+        if encoded is not None and not isinstance(encoded, str):
+            raise ValueError("invalid preimage encoding")
+        old = None if encoded is None else base64.b64decode(encoded, validate=True)
+        if old is not None and gitignore_gate.project_block(old, key) != old:
+            raise ValueError("invalid preimage block")
+        if shared_block_digest(old) != target.expected_preimage_digest:
+            raise ValueError("invalid preimage digest")
+        if type(payload["file_existed"]) is not bool:
+            raise ValueError("invalid file presence")
+        original = payload["original_sha256"]
+        if not isinstance(original, str) or re.fullmatch(r"[0-9a-f]{64}", original) is None:
+            raise ValueError("invalid original file digest")
+    except (ValueError, KeyError, gitignore_gate.ExcludeError) as exc:
+        raise TransactionCorruptionError("Invalid shared project block preimage") from exc
+    return key
+
+
+def shared_block_digest(data: bytes | None) -> str:
+    return ABSENT_DIGEST if data is None else "sha256:" + hashlib.sha256(
+        b"csk-git-exclude-project-v1\0" + data
+    ).hexdigest()
+
+
+def _target_digest(target: JournalTarget | MutableTarget, path: Path) -> str:
+    key = _shared_key(target)
+    if key is not None:
+        from . import gitignore_gate
+        if path == Path(target.live_path):
+            return shared_block_digest(gitignore_gate.project_block(gitignore_gate._exclude_bytes(path), key))
+        if not _path_exists(path):
+            return ABSENT_DIGEST
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            raise TransactionCorruptionError("Unsafe shared block sidecar")
+        with path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if not os.path.samestat(info, opened):
+                raise TransactionCorruptionError("Shared block sidecar changed while opening")
+            data = stream.read()
+            after = os.fstat(stream.fileno())
+        if (not os.path.samestat(after, path.lstat()) or after.st_size != info.st_size
+                or after.st_mtime_ns != info.st_mtime_ns or after.st_ctime_ns != info.st_ctime_ns):
+            raise TransactionCorruptionError("Shared block sidecar changed while reading")
+        return shared_block_digest(data)
     return digest_target(path, kind=target.kind)
 
 

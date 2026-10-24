@@ -116,8 +116,8 @@ def test_exclude_lifecycle(project_cli, content, capsys):
     output = capsys.readouterr()
     assert "no-op in exclude mode" in output.out
     assert target.read_bytes().startswith(user)
-    assert target.read_bytes().count(b"# CocoaSkill\n") == 1
-    assert target.read_bytes().count(b"# End CocoaSkill\n") == 1
+    assert target.read_bytes().count(b"# CocoaSkill project ") == 1
+    assert target.read_bytes().count(b"# End CocoaSkill project ") == 1
     for path in [".agents/probe", "Skillfile.dev.json", *PATHS]:
         assert run(["git", "check-ignore", "-q", "--", path], root, check=False).returncode == 0
     declare({})
@@ -126,7 +126,7 @@ def test_exclude_lifecycle(project_cli, content, capsys):
     assert (ignore.read_bytes() if ignore.exists() else None) == content
 
 
-# Worktrees share common info/exclude; repeated writes preserve user bytes and one managed block.
+# Worktrees share common info/exclude but own separate idempotent project blocks.
 def test_common_exclude(tmp_path):
     root = make_project(tmp_path, gitignore=False)
     run(["git", "commit", "--allow-empty", "-m", "fixture"], root)
@@ -139,7 +139,7 @@ def test_common_exclude(tmp_path):
     gitignore_gate.ensure_ignored(linked, [".agents/"], mode="exclude")
     gitignore_gate.ensure_ignored(root, [".agents/"], mode="exclude")
     assert target.read_bytes().startswith(user)
-    assert target.read_bytes().count(b"# CocoaSkill\n") == 1
+    assert target.read_bytes().count(b"# CocoaSkill project ") == 2
     assert (linked / ".git").is_file()
     assert not (linked / ".gitignore").exists()
     assert run(["git", "check-ignore", "-q", ".agents/probe"], linked).returncode == 0
@@ -177,15 +177,16 @@ def test_explicit_exclude_dry_run(project_cli):
 
 # Publication faults restore exclude, native configs and lock, including schema 2 without MCP.
 @pytest.mark.parametrize("schema", [2, 3])
-def test_exclude_transaction_rollback(project_cli, monkeypatch, schema):
+@pytest.mark.parametrize("before", [None, b"# user\r\n*.private\r\n", b"# user without final newline"])
+def test_exclude_transaction_rollback(project_cli, monkeypatch, schema, before):
     root, _, declare = project_cli
     if schema == 2:
         declare(None, schema=2)
     (root / ".gitignore").unlink()
     target = root / ".git/info/exclude"
     target.parent.mkdir(exist_ok=True)
-    before = b"# user\r\n*.private\r\n"
-    target.write_bytes(before)
+    if before is not None:
+        target.write_bytes(before)
     original = publish.TransactionEngine
     reached = []
 
@@ -200,7 +201,7 @@ def test_exclude_transaction_rollback(project_cli, monkeypatch, schema):
     monkeypatch.setattr(publish, "TransactionEngine", factory)
     assert cli.main(["install", "app"]) == 1
     assert reached == ["target_committed"]
-    assert target.read_bytes() == before
+    assert (target.read_bytes() if target.exists() else None) == before
     assert all(not (root / path).exists() for path in PATHS)
     assert not (root / "Skillfile.lock.json").exists()
     assert not (root / ".gitignore").exists()
@@ -212,11 +213,12 @@ def test_block_in_place(tmp_path):
     target = root / ".git/info/exclude"
     target.parent.mkdir(exist_ok=True)
     before, after = b"# user \xff\r\n", b"# tail\r\n/private\r\n"
-    target.write_bytes(before + b"# CocoaSkill\r\n/old-owned/\r\n# End CocoaSkill\r\n" + after)
+    key = gitignore_gate.project_key(root)
+    target.write_bytes(before + f"# CocoaSkill project {key}\r\n/old-owned/\r\n# End CocoaSkill project {key}\r\n".encode() + after)
     gitignore_gate.ensure_ignored(root, [".agents/"], mode="exclude")
     assert target.read_bytes().startswith(before)
     assert target.read_bytes().endswith(after)
-    assert b"/old-owned/\n" in target.read_bytes()
+    assert b"/old-owned/" not in target.read_bytes()
     once = target.read_bytes()
     gitignore_gate.ensure_ignored(root, [".agents/"], mode="exclude")
     assert target.read_bytes() == once
@@ -227,7 +229,8 @@ def test_exclude_user_negation(tmp_path):
     root = make_project(tmp_path, gitignore=False)
     target = root / ".git/info/exclude"
     target.parent.mkdir(exist_ok=True)
-    original = b"# CocoaSkill\n/.mcp.json\n# End CocoaSkill\n!/.mcp.json\n"
+    key = gitignore_gate.project_key(root)
+    original = f"# CocoaSkill project {key}\n/.mcp.json\n# End CocoaSkill project {key}\n!/.mcp.json\n".encode()
     target.write_bytes(original)
     with pytest.raises(gitignore_gate.GitignoreError, match="does not effectively ignore"):
         gitignore_gate.ensure_ignored(root, ["/.mcp.json"], mode="exclude")
