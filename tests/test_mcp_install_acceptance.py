@@ -81,6 +81,8 @@ def _case(root: Path, *, schema: int = 3) -> InstallCase:
         "skills": [],
     }
     if schema != 1:
+        # These acceptance cases pin the opt-in gitignore transaction behavior.
+        skillfile["ignore_mode"] = "gitignore"
         # A real local skill makes partial skill publication observable on MCP refusal.
         write_files(project, {"source/seed/SKILL.md": "---\nname: seed\ndescription: Local seed.\n---\n\n# Seed\n"})
         skillfile.update(

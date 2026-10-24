@@ -29,7 +29,7 @@ brew install ca-certificates
 
 ## MCP first run: check, ignore и consent
 
-Начните с `csk init`, затем `csk check` и `csk install`. Schema 3 проходит тот же MCP-валидатор, что install; `check` ничего не записывает и не проверяет auth/connectivity. Install сам добавляет точные ignore entries для создаваемых им MCP configs с локальной git policy. Deprecated `--fix-gitignore` для них не нужен; для остальных generated paths используйте `csk init`.
+Начните с `csk init`, затем `csk check` и `csk install`. Schema 3 проходит тот же MCP-валидатор, что install; `check` ничего не записывает и не проверяет auth/connectivity. Install сам добавляет точные ignore entries для создаваемых им MCP configs с локальной git policy. Deprecated `--fix-gitignore` для них не нужен; в режиме `exclude` обычные generated paths также добавляются автоматически. Для режима `gitignore` используйте `csk init`.
 
 `gitignore_required` в MCP-строке указывает на общий ignore preflight, а `blocked by project_preflight_failed` — на общую ошибку без отдельного кода: смотрите следующую диагностику проекта. Это не ошибка MCP declaration. Если согласия требует соседний сервер, сервер без такой потребности получает `blocked by mcp_plan_unapproved`.
 
@@ -115,7 +115,7 @@ proof about arbitrary programs; non-default evaluators outside the recognized
 inventory and hidden execution semantics remain the documented limit.
 
 
-`gitignore_required` can mean a nested rule defeats the proposed automatic MCP ignore repair. Repair that conflicting rule and retry; the refusal leaves native configs and the live `.gitignore` unchanged. Git evaluates the proposed hierarchy before consent. `source_output_overlap` can identify an unwritable output parent; restore write/search access and retry. These readiness checks precede the prompt and do not replace publication-time checks.
+`gitignore_required` can mean a nested rule defeats the proposed automatic MCP ignore repair. Repair that conflicting rule and retry; the refusal leaves native configs and the live ignore file unchanged (`info/exclude` by default, `.gitignore` in opt-in or legacy mode). Git evaluates the proposed hierarchy before consent. `source_output_overlap` can identify an unwritable output parent; restore write/search access and retry. These readiness checks precede the prompt and do not replace publication-time checks.
 
 ## mcp_entry_conflict
 
@@ -315,3 +315,9 @@ csk shell-init --install
 ```
 
 Команда запишет хук в директорию CocoaSkills и выведет команду для добавления в профиль шелла.
+
+### Локальный ignore без изменений .gitignore
+
+По умолчанию csk пишет `$GIT_COMMON_DIR/info/exclude`; linked worktrees делят этот файл. User lines вне блока сохраняются побайтово. Symlink, каталог или недоступный для записи exclude дают `git_exclude_invalid` до записи. Исправьте тип/права файла; csk не заменяет небезопасный файл. `gitignore_required` означает, что Git всё ещё видит собственный путь как tracked или не ignored: проверьте `git ls-files` и конфликтующие вложенные `.gitignore`. Проверка staged policy сохраняется в обоих режимах.
+
+Для прежнего режима задайте верхнеуровневое `"ignore_mode": "gitignore"` в проектном Skillfile schema 2/3. Если поля нет и уже есть блок `# CocoaSkill` в `.gitignore`, он продолжает работать; status предлагает явную настройку. Чтобы перейти на exclude, удалите старый блок сами. Автоматической миграции нет. Global/hybrid modes не меняются.

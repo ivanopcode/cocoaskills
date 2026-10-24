@@ -43,6 +43,9 @@ def project_cli(tmp_path, csk_home, skills_root, monkeypatch):
             "agents": agents or AGENTS,
             "skills": skills or [],
         }
+        # Existing MCP repair tests exercise the explicitly selected legacy policy.
+        if schema in (2, 3):
+            data["ignore_mode"] = "gitignore"
         if servers is not None:
             data["mcp_servers"] = servers
         if skills:
