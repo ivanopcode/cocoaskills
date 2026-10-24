@@ -624,7 +624,9 @@ def review_consent(
             if server.transport == "stdio"
             else server.url
         )
-        env = sorted(set(server.env_names) | {header.env for header in server.headers})
+        env = sorted(set(server.env_names) | {
+            header.env for header in server.headers if isinstance(header, declarations.HeaderRef)
+        })
         print(
             f"MCP plan {name}: {server.transport} {intent}; agents={','.join(decl.agents)}; env={','.join(env) or 'none'}; auth={decl.auth.kind}"
         )
