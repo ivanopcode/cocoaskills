@@ -893,21 +893,34 @@ def _install_project_once(
 
         agents = project_manifest.agents or project.agents or config.default_agents
         expected_ignore = adapters.required_gitignore_entries(agents)
+        ignore_mode = gitignore_gate.effective_mode(project.path, project_manifest.ignore_mode)
+        if ignore_mode == "exclude":
+            expected_ignore.append(dev_substitutions.DEV_MANIFEST_NAME)
+        if options.fix_gitignore and ignore_mode == "exclude":
+            result.messages.append("--fix-gitignore: no-op in exclude mode; .gitignore is unchanged")
         try:
             if project_manifest.schema_version != 3:
-                gitignore_gate.ensure_ignored(
-                    project.path,
-                    expected_ignore,
-                    fix=options.fix_gitignore and not options.dry_run,
-                )
+                if options.dry_run and ignore_mode == "exclude":
+                    proposed = gitignore_gate.plan_ignored(project.path, expected_ignore, fix=True, mode=ignore_mode)
+                    with tempfile.TemporaryDirectory(prefix=".csk-ignore-") as temporary:
+                        gitignore_gate.verify_planned_ignored(project.path, expected_ignore, proposed, Path(temporary), mode=ignore_mode)
+                else:
+                    gitignore_gate.ensure_ignored(
+                        project.path, expected_ignore,
+                        fix=options.fix_gitignore and not options.dry_run, mode=ignore_mode,
+                    )
         except gitignore_gate.GitignoreError as exc:
+            if ignore_mode == "exclude":
+                result.status = "failed"
+                result.errors.append(f"{project.alias}: {exc.code}: {exc}")
+                return result
             result.status = "skipped"
-            result.messages.append(f"{project.alias}: {exc}; skipped")
+            result.messages.append(f"{project.alias}: {exc.code}: {exc}; skipped")
             _publish_empty_dispatch_scope(config, project, options, result)
             return result
 
         if project_manifest.schema_version in (2, 3):
-            return _install_schema2_once(
+            schema2_result = _install_schema2_once(
                 config,
                 project,
                 options,
@@ -916,6 +929,8 @@ def _install_project_once(
                 operator_ssh_credentials=operator_ssh_credentials,
                 operator_https_token=operator_https_token,
             )
+            schema2_result.messages[:0] = result.messages
+            return schema2_result
 
         dev_manifest = dev_substitutions.load_manifest(project.path)
         substitutions = dev_manifest.substitutions
@@ -930,6 +945,7 @@ def _install_project_once(
                     project.path,
                     [dev_substitutions.DEV_MANIFEST_NAME],
                     fix=options.fix_gitignore and not options.dry_run,
+                    mode=ignore_mode,
                 )
             except gitignore_gate.GitignoreError as exc:
                 result.status = "skipped"

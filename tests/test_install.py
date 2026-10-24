@@ -2156,8 +2156,10 @@ def test_missing_skill_md_error_matches_skill_check(tmp_path, skills_root, csk_h
     assert check_issues[0].message in result.errors[0]
 
 
+# A legacy managed block with missing rules retains the skip gate until explicitly repaired.
 def test_gitignore_gate_skips_project_without_failure(tmp_path, skills_root, csk_home):
     project = make_project(tmp_path, gitignore=False)
+    (project / ".gitignore").write_text("# CocoaSkill\n")
     make_skill_repo(skills_root, "skill-a", tag="v1")
     write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
     cfg = make_config(csk_home, skills_root, project)
@@ -2169,8 +2171,10 @@ def test_gitignore_gate_skips_project_without_failure(tmp_path, skills_root, csk
     assert not (project / ".agents").exists()
 
 
+# The deprecated flag still repairs a legacy managed gitignore block and permits installation.
 def test_gitignore_fix_allows_install(tmp_path, skills_root, csk_home):
     project = make_project(tmp_path, gitignore=False)
+    (project / ".gitignore").write_text("# CocoaSkill\n")
     make_skill_repo(skills_root, "skill-a", tag="v1")
     write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
     cfg = make_config(csk_home, skills_root, project)

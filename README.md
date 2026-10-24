@@ -143,7 +143,7 @@
    csk init
    ```
 
-   Результат: команда создаёт манифест `Skillfile.json` с начальной конфигурацией проекта и записывает блок директорий `.agents/`, `.claude/skills/`, `.codex/skills/`, `.cursor/rules/`, `.gemini/skills/` и файла `Skillfile.dev.json` в `.gitignore`.
+   Результат: команда создаёт манифест `Skillfile.json` с начальной конфигурацией проекта и записывает блок директорий `.agents/`, `.claude/skills/`, `.codex/skills/`, `.cursor/rules/`, `.gemini/skills/` и файла `Skillfile.dev.json` в локальный `$GIT_COMMON_DIR/info/exclude`. `.gitignore` не меняется. Linked worktrees используют общий exclude-файл.
 
 3. Добавьте объявление скилла в проект:
 
@@ -260,7 +260,7 @@ Schema 3 добавляет к schema 2 поле `mcp_servers`. MCP-сервер
 4. `csk status` покажет `current` для каждой записи.
 5. Войдите в сервис в самом агенте. csk не запускает серверы, не выполняет вход и не хранит токены: в Skillfile указывается только имя переменной окружения.
 
-Конфиги агентов остаются локальными: csk сам добавляет их в `.gitignore`. В git коммитятся `Skillfile.json` и изменения `.gitignore`.
+Конфиги агентов остаются локальными: csk добавляет только собственные пути в `$GIT_COMMON_DIR/info/exclude`. В git коммитится `Skillfile.json`. Для командного `.gitignore` укажите верхнеуровневое поле `"ignore_mode": "gitignore"` в проектном Skillfile schema 2 или 3. Допустимы только `exclude` и `gitignore`; schema 1 это поле не принимает. Если поля нет, но старый блок `# CocoaSkill` уже есть в `.gitignore`, csk сохраняет прежний режим и status подсказывает явную настройку. Автоматического переноса нет: чтобы перейти на exclude, удалите старый блок и запустите install. Вне Git-репозитория init/install отказывают.
 
 HTTP headers belong in `install.headers`. Use an env reference for a token and a literal for non-secret configuration:
 
@@ -326,7 +326,7 @@ csk hybrid add workflow-lint --git git@gitlab.example.com:skills/workflow-lint.g
 <summary>Проект</summary>
 
 ```bash
-csk init [path]                     # Инициализирует Skillfile.json и .gitignore в проекте
+csk init [path]                     # Инициализирует Skillfile.json и локальные Git excludes
 csk add <name>                      # Добавляет или обновляет объявление скилла в Skillfile.json
 csk remove <name>                   # Удаляет объявление скилла из Skillfile.json
 csk status [target]                 # Показывает статус установленных скиллов и манифеста

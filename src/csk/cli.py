@@ -180,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         audit_runner.AuditError,
         AuditBackendError,
         git_ops.GitError,
+        gitignore_gate.GitignoreError,
         FileNotFoundError,
         ValueError,
     ) as exc:
@@ -213,7 +214,7 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
     epilog = (
         "Local documentation index:\n"
         "  csk bootstrap          create ~/.cocoaskills/config.json\n"
-        "  csk init [path]        create project Skillfile.json and gitignore block\n"
+        "  csk init [path]        create project Skillfile.json and local exclude block\n"
         "  csk install [target]   apply Skillfile.json; clone missing URL sources\n"
         "  csk update             fetch local skill repositories\n"
         "  csk upgrade [target]   fetch the target dependency closure, then install\n"
@@ -548,11 +549,11 @@ def _add_bootstrap(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> 
 def _add_init(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
         "init",
-        help="Create project Skillfile.json and CocoaSkill gitignore block.",
+        help="Create project Skillfile.json and local Git exclude block.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Initializes CocoaSkill files in one project without installing skills.",
         epilog=(
-            "Files written:\n  <project>/Skillfile.json and <project>/.gitignore.\n\n"
+            "Files written:\n  <project>/Skillfile.json and Git common info/exclude.\n\n"
             "Examples:\n"
             "  csk init\n"
             "  csk init --alias demo-ios --agents codex_cli,cursor\n"
@@ -1312,19 +1313,16 @@ def _cmd_init(args: argparse.Namespace) -> int:
     if not alias:
         raise manifest.ManifestError("--alias must contain at least one alphanumeric character")
 
-    manifest.ensure_project_manifest(root, alias=alias, agents=agents)
-    gitignore_gate.append_entries(
-        root / ".gitignore",
-        adapters.all_gitignore_entries() + [dev_substitutions.DEV_MANIFEST_NAME],
-    )
     if not _is_inside_git_worktree(root):
-        print(
-            "csk init: WARNING - target is not inside a git repository\n"
-            "  Skillfile.json and .gitignore have been written.\n"
-            "  The .gitignore block has no effect until this directory becomes a git repository.\n"
-            "  Run 'git init' here if you intend to track it.",
-            file=sys.stderr,
-        )
+        raise manifest.ManifestError("A git repository is required for csk init")
+    loaded = manifest.load_manifest(root)
+    ignore_mode = gitignore_gate.effective_mode(root, loaded.ignore_mode if loaded else None)
+    entries = adapters.all_gitignore_entries() + [dev_substitutions.DEV_MANIFEST_NAME]
+    if ignore_mode == "gitignore":
+        gitignore_gate.append_entries(root / ".gitignore", entries)
+    else:
+        gitignore_gate.ensure_ignored(root, entries, mode=ignore_mode)
+    manifest.ensure_project_manifest(root, alias=alias, agents=agents)
     print(f"Initialized CocoaSkill project at {root}")
     return EXIT_OK
 

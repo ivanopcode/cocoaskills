@@ -14,6 +14,7 @@ from . import (
     config as config_module,
     dev_substitutions,
     git_ops,
+    gitignore_gate,
     hashing,
     hybrid,
     install_marker,
@@ -1313,6 +1314,10 @@ def _render_project_status(
     if not project.skillfile_present:
         lines.append("  Skillfile.json missing")
         return "\n".join(lines)
+    if not global_scope:
+        loaded = manifest.load_manifest(project.path)
+        if loaded is not None and loaded.ignore_mode is None and gitignore_gate.legacy_block(project.path):
+            lines.append('  Legacy ignore block: set "ignore_mode": "gitignore", or remove the block to use local exclude.')
     if not project.skills:
         lines.append("  no skills declared")
     for skill in project.skills:
