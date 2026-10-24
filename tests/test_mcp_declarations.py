@@ -1160,6 +1160,9 @@ def test_declaration_digest_uses_its_domain():
     decl = parse_one(http())
     normalized = json.loads(json.dumps(asdict(decl)))
     normalized.pop("unsupported_agents")
+    # Optional launcher fields do not change the pre-launcher digest contract.
+    normalized["server"].pop("launcher")
+    normalized["server"].pop("resolved_launcher")
     canonical = protocol_json.canonical_bytes(normalized)
     assert declaration_digest(decl) == hashlib.sha256(b"csk-mcp-declaration-v1\0" + canonical).hexdigest()
     assert declaration_digest(decl) != hashlib.sha256(canonical).hexdigest()

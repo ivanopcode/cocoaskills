@@ -1642,6 +1642,7 @@ def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
                 )
                 mcp_command_resolution.validate_windows_batch_commands(parsed_mcp, windows=sys.platform == "win32")
                 mcp_command_resolution.validate_host_commands(parsed_mcp, cwd=project.path)
+                mcp_declarations.resolve_launchers(parsed_mcp)
         except (
             source_errors.SourceError,
             manifest.ManifestError,

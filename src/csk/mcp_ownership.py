@@ -24,7 +24,7 @@ import re
 import stat
 import tempfile
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Final, Literal
 
@@ -131,6 +131,7 @@ class LedgerEntry:
     capability: str
     transaction_id: str
     created_file: bool
+    launcher_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -217,6 +218,7 @@ def _validated_ledger(ledger: Ledger) -> Ledger:
                 capability=_text(entry.capability, "capability"),
                 transaction_id=_text(entry.transaction_id, "transaction_id"),
                 created_file=entry.created_file,
+                launcher_sha256=_digest(entry.launcher_sha256, "launcher_sha256") if entry.launcher_sha256 is not None else None,
             )
         )
     entries.sort(key=lambda item: _address_key(item.address))
@@ -248,6 +250,7 @@ def encode_ledger(ledger: Ledger) -> bytes:
                 "capability": entry.capability,
                 "transaction_id": entry.transaction_id,
                 "created_file": entry.created_file,
+                **({"launcher_sha256": entry.launcher_sha256} if entry.launcher_sha256 is not None else {}),
             }
             for entry in checked.entries
         ],
@@ -271,7 +274,7 @@ def parse_ledger(data: bytes, *, expected_consumer: str) -> Ledger:
         raise _unknown("ledger entries must be a list")
     entries: list[LedgerEntry] = []
     for raw in raw_entries:
-        if type(raw) is not dict or set(raw) != _ENTRY_FIELDS:
+        if type(raw) is not dict or not _ENTRY_FIELDS <= set(raw) or set(raw) - (_ENTRY_FIELDS | {"launcher_sha256"}):
             raise _unknown("ledger entry has missing or unknown fields")
         raw_address = raw["address"]
         if type(raw_address) is not dict or set(raw_address) != _ADDRESS_FIELDS:
@@ -292,6 +295,7 @@ def parse_ledger(data: bytes, *, expected_consumer: str) -> Ledger:
                 capability=raw["capability"],
                 transaction_id=raw["transaction_id"],
                 created_file=created,
+                launcher_sha256=raw.get("launcher_sha256"),
             )
         )
     scope = document["scope"]
@@ -325,6 +329,7 @@ class Desired:
     entry_sha256: str
     declaration_sha256: str
     capability: str
+    launcher_sha256: str | None = None
 
 
 ObservedState = Literal["absent", "present", "surface_absent", "unreadable", "malformed"]
@@ -490,10 +495,13 @@ def next_ledger(
                 transaction_id=transaction_id,
                 created_file=(address.agent, address.relpath) in created
                 or (old is not None and old.created_file),
+                launcher_sha256=want.launcher_sha256,
             )
         elif action.kind in ("keep", "skip_drift"):
             if old is None:
                 raise _unknown("plan keeps an entry the ledger does not own")
+            if action.kind == "keep" and address in wanted:
+                entries[address] = replace(old, launcher_sha256=wanted[address].launcher_sha256)
         else:
             if old is None:
                 raise _unknown("plan drops an entry the ledger does not own")
@@ -511,6 +519,9 @@ class ConsentSubject:
     scope: str
     declaration_sha256: str
     capabilities: tuple[str, ...]
+    resolved_path: str | None = None
+    trust_level: str | None = None
+    publisher: str | None = None
 
 
 def consent_key(consumer: str, subject: ConsentSubject) -> str:
@@ -522,7 +533,7 @@ def consent_key(consumer: str, subject: ConsentSubject) -> str:
     not matter.
     """
     _require_consumer(consumer)
-    document = {
+    document: dict[str, object] = {
         "consumer": consumer,
         "name": subject.name,
         "agents": sorted(set(subject.agents)),
@@ -530,6 +541,12 @@ def consent_key(consumer: str, subject: ConsentSubject) -> str:
         "declaration_sha256": _caller_digest(subject.declaration_sha256, "declaration digest"),
         "capabilities": sorted(set(subject.capabilities)),
     }
+    launcher = (subject.resolved_path, subject.trust_level, subject.publisher)
+    if any(value is not None for value in launcher):
+        if (not all(isinstance(value, str) and value for value in launcher)
+                or subject.trust_level not in {"verified", "signed-user-writable", "unverified"}):
+            raise McpOwnershipError(CODE_DECLARATION_INVALID, "launcher consent identity is incomplete")
+        document["launcher"] = {"path": subject.resolved_path, "trust": subject.trust_level, "publisher": subject.publisher}
     try:
         payload = protocol_json.canonical_bytes(document)
     except protocol_json.ProtocolJSONError as exc:
@@ -615,7 +632,20 @@ def record_consent(csk_home: Path, consumer: str, keys: Iterable[str]) -> None:
 def unapproved(
     consumer: str, subjects: Iterable[ConsentSubject], approved: frozenset[str]
 ) -> tuple[ConsentSubject, ...]:
-    return tuple(subject for subject in subjects if consent_key(consumer, subject) not in approved)
+    def has_approval(subject: ConsentSubject) -> bool:
+        if consent_key(consumer, subject) in approved:
+            return True
+        levels = ("unverified", "signed-user-writable", "verified")
+        if subject.trust_level not in levels:
+            return False
+        # A trust upgrade cannot broaden the approved path/publisher authority.
+        # The inverse is forbidden: a downgrade always needs its own approval.
+        for lower in levels[:levels.index(subject.trust_level)]:
+            if consent_key(consumer, replace(subject, trust_level=lower)) in approved:
+                return True
+        return False
+
+    return tuple(subject for subject in subjects if not has_approval(subject))
 
 
 # --- store plumbing -----------------------------------------------------
