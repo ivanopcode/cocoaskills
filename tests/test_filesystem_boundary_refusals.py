@@ -1452,8 +1452,7 @@ def test_sweep_parent_manifest_stat_reached(monkeypatch, tmp_path, capsys):
 
     def setup(tag: str):
         root = tmp_path / f"pm{tag}"
-        target = root / "project"
-        target.mkdir(parents=True, exist_ok=True)
+        target = make_project(root, gitignore=False)
         probed = root / manifest.MANIFEST_NAME
         return probed, ["init", str(target)]
 
@@ -1515,21 +1514,13 @@ def test_sweep_bootstrap_create_each_ordinal_refuses(monkeypatch, tmp_path, caps
 
 
 def test_sweep_init_target_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
-    """The init target marker: resolve, guard stat, manifest chain, gitignore.
+    """Legacy init sweeps every measured touch; named manifest/CLI guards refuse.
 
-    Windows ``Path.resolve()`` is instrument-blind: ``ntpath`` keeps its own
-    ``_getfinalpathname`` binding, and the discovered ``nt`` wrapper never
-    intercepts it. Fixed POSIX pins retain the measured resolve ordinals;
-    Windows maps only touches visible to the injector. On POSIX 3.11/3.12,
-    ordinal 2 with ELOOP is the errno-sensitive exception (``realpath``
-    raises ``RuntimeError`` for a loop, which the guard maps to a refusal).
-    The guard stat and the manifest chain refuse. The trailing ordinals
-    land in non-named ``gitignore_gate.append_entries`` (unguarded
-    ``exists`` + write) and escape raw: declared, out of contract per AC
-    (a). The ``resolve()`` call shape differs by interpreter (lstat+stat
-    on 3.11/3.12, one lstat on 3.13/3.14). POSIX keeps those sequences pinned;
-    Windows derives its sequence from the unfaulted run and maps each
-    observed ordinal to its matching call-site outcome.
+    A real Git fixture selects legacy behavior explicitly via its managed block.
+    Mode discovery adds a guarded manifest read and two non-named policy reads.
+    Non-named legacy ignore reads/writes retain their declared raw-error bound.
+    Default exclude rejection and byte preservation have separate real-Git tests.
+    Fixed POSIX pins and the existing Windows ordinal mapping remain enforced.
     """
     import sys
 
@@ -1537,52 +1528,43 @@ def test_sweep_init_target_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
 
     def setup(tag: str):
-        target = tmp_path / f"initt{tag}" / "project"
-        target.mkdir(parents=True)
+        target = make_project(tmp_path / f"initt{tag}", gitignore=False)
+        (target / ".gitignore").write_text("# CocoaSkill\n")
         return target, ["init", str(target)]
 
-    if sys.version_info >= (3, 13):
-        sites = [
-            ("os.lstat", "csk.cli", "_cmd_init"),
-            ("os.stat", "csk.cli", "_cmd_init"),
-            ("os.stat", "csk.manifest", "_require_project_dir"),
-            ("os.stat", "csk.manifest", "_skillfile_present"),
-            ("io.open", "csk.manifest", "_write_skillfile_text"),
-            ("Path.exists", "csk.gitignore_gate", "append_entries"),
-            ("io.open", "csk.gitignore_gate", "append_entries"),
-        ]
-        expect = {
-            1: ("ok", "Initialized"),
-            2: ("refuse", "cannot access target path"),
-            3: ("refuse", "Cannot access project path"),
-            4: ("refuse", "Cannot read Skillfile at"),
-            5: ("refuse", "Cannot write Skillfile at"),
-            6: ("raw-oserror", ""),
-            7: ("raw-oserror", ""),
-        }
-        overrides: dict[tuple[int, int], tuple[str, str]] = {}
-    else:
-        sites = [
-            ("os.lstat", "csk.cli", "_cmd_init"),
-            ("os.stat", "csk.cli", "_cmd_init"),
-            ("os.stat", "csk.cli", "_cmd_init"),
-            ("os.stat", "csk.manifest", "_require_project_dir"),
-            ("os.stat", "csk.manifest", "_skillfile_present"),
-            ("io.open", "csk.manifest", "_write_skillfile_text"),
-            ("Path.exists", "csk.gitignore_gate", "append_entries"),
-            ("io.open", "csk.gitignore_gate", "append_entries"),
-        ]
-        expect = {
-            1: ("ok", "Initialized"),
-            2: ("ok", "Initialized"),
-            3: ("refuse", "cannot access target path"),
-            4: ("refuse", "Cannot access project path"),
-            5: ("refuse", "Cannot read Skillfile at"),
-            6: ("refuse", "Cannot write Skillfile at"),
-            7: ("raw-oserror", ""),
-            8: ("raw-oserror", ""),
-        }
-        overrides = {(2, errno.ELOOP): ("refuse", "cannot access target path")}
+    sites = [
+        ("os.lstat", "csk.cli", "_cmd_init"),
+        ("os.stat", "csk.cli", "_cmd_init"),
+    ]
+    if sys.version_info < (3, 13):
+        sites.append(("os.stat", "csk.cli", "_cmd_init"))
+    prefix_count = len(sites)
+    sites.extend([
+        ("io.open", "csk.manifest", "load_manifest"),
+        ("Path.is_file", "csk.gitignore_gate", "legacy_block"),
+        ("io.open", "csk.gitignore_gate", "legacy_block"),
+        ("Path.exists", "csk.gitignore_gate", "append_entries"),
+        ("io.open", "csk.gitignore_gate", "append_entries"),
+        ("io.open", "csk.gitignore_gate", "append_entries"),
+        ("os.stat", "csk.manifest", "_require_project_dir"),
+        ("os.stat", "csk.manifest", "_skillfile_present"),
+        ("io.open", "csk.manifest", "_write_skillfile_text"),
+    ])
+    expect = {index: ("ok", "Initialized") for index in range(1, prefix_count)}
+    expect[prefix_count] = ("refuse", "cannot access target path")
+    tail = [
+        ("refuse", "Cannot read Skillfile at"),
+        ("raw-oserror", ""),
+        ("raw-oserror", ""),
+        ("raw-oserror", ""),
+        ("raw-oserror", ""),
+        ("raw-oserror", ""),
+        ("refuse", "Cannot access project path"),
+        ("refuse", "Cannot read Skillfile at"),
+        ("refuse", "Cannot write Skillfile at"),
+    ]
+    expect.update({prefix_count + index: outcome for index, outcome in enumerate(tail, 1)})
+    overrides = {(2, errno.ELOOP): ("refuse", "cannot access target path")} if prefix_count == 3 else {}
 
     _sweep_cli(
         monkeypatch, capsys,

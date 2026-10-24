@@ -170,6 +170,9 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_OK
     try:
         return _dispatch(args)
+    except gitignore_gate.GitignoreError as exc:
+        print(f"error: {exc.code}: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
     except (
         config.ConfigError,
         manifest.ManifestError,
@@ -180,7 +183,6 @@ def main(argv: list[str] | None = None) -> int:
         audit_runner.AuditError,
         AuditBackendError,
         git_ops.GitError,
-        gitignore_gate.GitignoreError,
         FileNotFoundError,
         ValueError,
     ) as exc:

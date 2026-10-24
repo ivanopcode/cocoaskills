@@ -581,6 +581,7 @@ def test_stage_boundaries_are_pinned() -> None:
         "commit-30-shim-canonical",
         "commit-60-adapter-ledger",
         "commit-80-removal",
+        "commit-mcp-gitignore",
         "cleanup",
     )
 
@@ -1230,6 +1231,7 @@ _COMMIT_FRESH_CLASSES = (
     publish.CLASS_CONTEXT,
     publish.CLASS_RUNTIME,
     publish.CLASS_ADAPTER_LEDGER,
+    "mcp-gitignore",
 )
 
 
@@ -1242,7 +1244,7 @@ def test_engine_fault_while_committing_target_class_rolls_back(
 ) -> None:
     """A fault during any class commit rolls back to byte-identical state.
 
-    Each commit-stage boundary (commit-05 through commit-60) is faulted
+    Each listed commit-stage boundary is faulted
     while its own class is being written: earlier classes committed and
     are restored, later classes never start.
     """
