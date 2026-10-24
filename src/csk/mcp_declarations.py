@@ -33,6 +33,7 @@ _MAX_ARG_LENGTH = 4096
 _MAX_ENV_NAMES = 32
 _MAX_HEADERS = 16
 _MAX_HEADER_NAME = 128
+_MAX_LITERAL_HEADER_BYTES = 1024
 _MAX_URL = 2048
 
 _NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
@@ -47,7 +48,7 @@ _DECLARATION_FIELDS = frozenset({"server", "reference", "agents", "scope", "auth
 _STDIO_FIELDS = frozenset({"transport", "command", "args", "env_names"})
 _HTTP_FIELDS = frozenset({"transport", "url", "headers", "env_names"})
 _AUTH_FIELDS = frozenset({"kind", "help_url"})
-_HEADER_REF_FIELDS = frozenset({"env", "prefix"})
+_HEADER_REF_FIELDS = frozenset({"env", "prefix", "value"})
 
 _COMMAND_KINDS = {
     **dict.fromkeys(
@@ -158,7 +159,10 @@ _FORBIDDEN_HEADER_NAMES = frozenset(
 )  # fmt: skip
 
 _Transport = Literal["stdio", "http"]
-_Prefix = Literal["none", "bearer"]
+_Prefix = Literal["none", "bearer", "api-token", "token"]
+_HEADER_PREFIXES: dict[_Prefix, str] = {
+    "none": "", "bearer": "Bearer ", "api-token": "Api-Token ", "token": "Token ",
+}
 _AuthKind = Literal["none", "env", "oauth"]
 
 
@@ -184,13 +188,19 @@ class HeaderRef:
 
 
 @dataclass(frozen=True)
+class LiteralHeader:
+    name: str
+    value: str
+
+
+@dataclass(frozen=True)
 class ServerSpec:
     transport: _Transport
     command: str | None = None
     args: tuple[str, ...] = ()
     env_names: tuple[str, ...] = ()
     url: str | None = None
-    headers: tuple[HeaderRef, ...] = ()
+    headers: tuple[HeaderRef | LiteralHeader, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -311,7 +321,7 @@ def _parse_mcp_servers(
     _step2_rules(drafts, invocation_scope)
     selected = {draft.name: _step3_agents(draft, target_agents) for draft in drafts}
     for draft in drafts:
-        _step4_capability(draft, invocation_scope)
+        _step4_capability(draft, invocation_scope, selected[draft.name])
     declarations: dict[str, McpDeclaration] = {}
     for draft in drafts:
         assert draft.server is not None
@@ -433,9 +443,13 @@ def _shape_declaration(name: str, body: object, index: int) -> _Draft:
     if "environments" in server:
         normalized["agents"] = server["environments"]
     if "auth" not in normalized:
+        headers = extensions.get("headers")
+        has_header_env = isinstance(headers, dict) and any(
+            isinstance(value, dict) and "env" in value for value in headers.values()
+        )
         normalized["auth"] = {
             "kind": "env"
-            if server.get("env_names") or extensions.get("headers")
+            if server.get("env_names") or has_header_env
             else "none"
         }
     return _shape_normalized(name, normalized, index)
@@ -535,23 +549,31 @@ def _shape_server(body: object, path: str, index: int) -> tuple[str, ServerSpec]
     headers_raw = body.get("headers", {})
     if not isinstance(headers_raw, dict):
         raise _invalid(f"{path}.headers", "must be an object")
-    headers: list[HeaderRef] = []
+    headers: list[HeaderRef | LiteralHeader] = []
     for header_name, value in headers_raw.items():
         header_path = f"{path}.headers.{_path_name(header_name, index)}"
         if not isinstance(header_name, str):
             raise _invalid(header_path, "header names must be strings")
         if not isinstance(value, dict):
-            raise _invalid(header_path, "header value must be an env reference object")
+            raise _invalid(header_path, "header must be an env reference or literal value object")
         for key in value:
             if key not in _HEADER_REF_FIELDS:
                 raise _invalid(f"{header_path}.{_path_name(key, index)}", "unknown field")
+        if "value" in value:
+            if len(value) != 1:
+                raise _invalid(header_path, "value is mutually exclusive with env and prefix")
+            literal = value["value"]
+            if not isinstance(literal, str):
+                raise _invalid(f"{header_path}.value", "value must be a string")
+            headers.append(LiteralHeader(name=header_name, value=literal))
+            continue
         env = value.get("env")
         if not isinstance(env, str):
             raise _invalid(f"{header_path}.env", "env is required and must be a string")
         prefix = value.get("prefix", "none")
-        if prefix not in ("none", "bearer") or not isinstance(prefix, str):
-            raise _invalid(f"{header_path}.prefix", "must be none or bearer")
-        headers.append(HeaderRef(name=header_name, env=env, prefix=prefix))  # type: ignore[arg-type]
+        if not isinstance(prefix, str) or prefix not in _HEADER_PREFIXES:
+            raise _invalid(f"{header_path}.prefix", "must be none, bearer, api-token or token")
+        headers.append(HeaderRef(name=header_name, env=env, prefix=prefix))
     env_names = _string_list(body.get("env_names", []), f"{path}.env_names")
     return transport, ServerSpec(
         transport="http", url=url, headers=tuple(headers), env_names=tuple(env_names)
@@ -813,9 +835,28 @@ def _check_http(server: ServerSpec, path: str, index: int) -> None:
         if folded in seen:
             raise _invalid(header_path, "header names must be unique ignoring case")
         seen.add(folded)
-        if header.prefix == "bearer" and folded != "authorization":
-            raise _invalid(f"{header_path}.prefix", "bearer is allowed only on Authorization")
-        _check_env_name(header.env, f"{header_path}.env")
+        if isinstance(header, HeaderRef):
+            if header.prefix == "bearer" and folded != "authorization":
+                raise _invalid(f"{header_path}.prefix", "bearer is allowed only on Authorization")
+            _check_env_name(header.env, f"{header_path}.env")
+        else:
+            if _literal_header_name_is_secret(folded):
+                raise _invalid(header_path, "literal values are refused for secret header names")
+            if "$" in header.value or _has_forbidden_char(header.value):
+                raise _invalid(f"{header_path}.value", "literal header expansions and control characters are refused")
+            if len(header.value.encode("utf-8")) > _MAX_LITERAL_HEADER_BYTES:
+                raise _invalid(f"{header_path}.value", "literal header must be at most 1024 UTF-8 bytes")
+            _check_secret_material(header.value, f"{header_path}.value")
+
+
+def _literal_header_name_is_secret(folded: str) -> bool:
+    return folded in {"authorization", "cookie", "proxy-authorization"} or any(
+        word in folded for word in ("token", "key", "secret", "auth")
+    )
+
+
+def _routes_secret(server: ServerSpec) -> bool:
+    return bool(server.env_names) or any(isinstance(header, HeaderRef) for header in server.headers)
 
 
 def _check_auth(draft: _Draft, server: ServerSpec | None) -> None:
@@ -828,10 +869,10 @@ def _check_auth(draft: _Draft, server: ServerSpec | None) -> None:
     if server is None:
         # A reference payload is not interpreted, so its environment references are unknown.
         return
-    has_reference = bool(server.env_names) or bool(server.headers)
+    has_reference = _routes_secret(server)
     if auth.kind == "env" and not has_reference:
         raise _invalid(f"{path}.kind", "kind env needs at least one environment reference")
-    if auth.kind in ("none", "oauth") and has_reference:
+    if auth.kind == "none" and has_reference:
         raise _invalid(f"{path}.kind", f"kind {auth.kind} must not have environment references")
     if auth.kind == "oauth" and server.transport != "http":
         raise _invalid(f"{path}.kind", "kind oauth is http-only")
@@ -858,7 +899,7 @@ def _step3_agents(draft: _Draft, target_agents: Sequence[str]) -> tuple[str, ...
     return tuple(sorted(draft.agents))
 
 
-def _step4_capability(draft: _Draft, invocation_scope: str) -> None:
+def _step4_capability(draft: _Draft, invocation_scope: str, agents: Sequence[str]) -> None:
     if draft.is_reference:
         raise _fail("mcp_capability_unsupported", f"{draft.path}.reference", "references are not supported yet")
     if draft.transport == "sse":
@@ -867,6 +908,21 @@ def _step4_capability(draft: _Draft, invocation_scope: str) -> None:
         raise _fail("mcp_capability_unsupported", f"{draft.path}.git_policy", "shared git policy is not supported yet")
     if invocation_scope != "project":
         raise _fail("mcp_capability_unsupported", f"{draft.path}.scope", "only project scope is supported")
+    if draft.server is not None:
+        _check_header_prefix_capability(draft.server, agents, f"{draft.path}.server")
+
+
+def _check_header_prefix_capability(server: ServerSpec, agents: Sequence[str], path: str) -> None:
+    # Codex's native env_http_headers maps to variable names, not templates;
+    # bearer_token_env_var supplies only Authorization: Bearer. No helper/shim.
+    # https://developers.openai.com/codex/mcp/
+    if "codex_cli" in agents:
+        for header in server.headers:
+            if isinstance(header, HeaderRef) and header.prefix in ("api-token", "token"):
+                raise _fail(
+                    "mcp_header_prefix_unsupported", f"{path}.headers.{header.name}.prefix",
+                    "Codex cannot express this prefix with a native environment reference",
+                )
 
 
 # --- classification and digests ---------------------------------------------
@@ -877,7 +933,7 @@ def authority(decl: McpDeclaration) -> Authority:
     server = decl.server
     return Authority(
         executes_code=server.transport == "stdio",
-        routes_secret=bool(server.env_names) or bool(server.headers),
+        routes_secret=_routes_secret(server),
     )
 
 
@@ -892,7 +948,9 @@ def declaration_digest(decl: McpDeclaration) -> str:
             "env_names": list(server.env_names),
             "url": server.url,
             "headers": [
-                {"name": header.name, "env": header.env, "prefix": header.prefix} for header in server.headers
+                {"name": header.name, "env": header.env, "prefix": header.prefix}
+                if isinstance(header, HeaderRef) else {"name": header.name, "value": header.value}
+                for header in server.headers
             ],
         },
         "auth": {"kind": decl.auth.kind, "help_url": decl.auth.help_url},
@@ -920,6 +978,7 @@ def render_native_entry(agent: str, decl: McpDeclaration) -> dict[str, object]:
     if agent not in SLICE1_AGENTS:
         raise McpDeclarationError("mcp_capability_unsupported", "agent", "agent is not supported by this slice")
     server = decl.server
+    _check_header_prefix_capability(server, (agent,), f"mcp_servers.{decl.name}.install")
     if agent == "codex_cli":
         return _render_codex(server)
     reference = "${%s}" if agent == "claude_code" else "${env:%s}"
@@ -932,7 +991,8 @@ def render_native_entry(agent: str, decl: McpDeclaration) -> dict[str, object]:
     entry = {"type": "http", "url": server.url} if agent == "claude_code" else {"url": server.url}
     if server.headers:
         entry["headers"] = {
-            header.name: ("Bearer " if header.prefix == "bearer" else "") + reference % header.env
+            header.name: _HEADER_PREFIXES[header.prefix] + reference % header.env
+            if isinstance(header, HeaderRef) else header.value
             for header in server.headers
         }
     return entry
@@ -947,13 +1007,18 @@ def _render_codex(server: ServerSpec) -> dict[str, object]:
         return entry
     entry = {"url": server.url}
     env_headers: dict[str, str] = {}
+    literal_headers: dict[str, str] = {}
     for header in server.headers:
-        if header.prefix == "bearer":
+        if isinstance(header, LiteralHeader):
+            literal_headers[header.name] = header.value
+        elif header.prefix == "bearer":
             entry["bearer_token_env_var"] = header.env
         else:
             env_headers[header.name] = header.env
     if env_headers:
         entry["env_http_headers"] = env_headers
+    if literal_headers:
+        entry["http_headers"] = literal_headers
     return entry
 
 

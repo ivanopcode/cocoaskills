@@ -922,7 +922,6 @@ AUTH_NEGATIVES = [
     ("none-kind-with-env-names", stdio(env_names=["T"], auth={"kind": "none"})),
     ("none-kind-with-header", http(bearer(), auth={"kind": "none"})),
     ("oauth-kind-with-env-names", stdio(env_names=["T"], auth={"kind": "oauth"})),
-    ("oauth-kind-with-header", http(bearer(), auth={"kind": "oauth"})),
     ("oauth-kind-on-stdio", stdio(auth={"kind": "oauth"})),
     ("help-url-http-scheme", http(auth={"kind": "none", "help_url": "http://example.invalid/help"})),
     ("help-url-userinfo", http(auth={"kind": "none", "help_url": "https://u:p@example.invalid/help"})),
