@@ -288,7 +288,7 @@ URL shorthand равен объекту `server` с `transport: "http"` и те�
 
 Оба объявления требуют consent. `tools` ограничивает запись агентами Claude Code и Cursor. `api` использует поддерживаемые агенты, выбранные проектом.
 
-Набор полей `server` закрыт: `transport`, `url`, `command`, `args`, `env_names`, `environments`. HTTP использует `url`; stdio использует `command` и массив `args`. `command` содержит имя executable без пути или shell-команды. Для `npx` и `uvx` нужна точная версия пакета, например `example-mcp==1.2.3` для `uvx`. Секреты в `args` запрещены. `env_names` перечисляет имена переменных, а не значения; управляющие переменные вроде `PATH` запрещены. Нативный клиент может передать серверу больше переменных, чем перечисляет `env_names`; csk не гарантирует изоляцию окружения.
+Набор полей `server` закрыт: `transport`, `url`, `command`, `launcher`, `args`, `env_names`, `environments`. HTTP использует `url`; stdio использует ровно одно из `command` и `launcher`, а также массив `args`. `command` содержит имя executable без пути или shell-команды. Для `npx` и `uvx` нужна точная версия пакета, например `example-mcp==1.2.3` для `uvx`. Секреты в `args` запрещены. `env_names` перечисляет имена переменных, а не значения; управляющие переменные вроде `PATH` запрещены. Нативный клиент может передать серверу больше переменных, чем перечисляет `env_names`; csk не гарантирует изоляцию окружения.
 
 `server.environments` перечисляет известные environment ids: `claude_code`, `codex_cli`, `cursor`, `gemini`, `windsurf`, `opencode`. Без поля используются resolved agents проекта: csk пишет для `claude_code`, `codex_cli`, `cursor`, а для остальных известных ids показывает `skipped: unsupported` без пути. Явно перечисленный writable агент получает запись, даже если его нет среди agents проекта. Неизвестный id, пустой список или дубликат вызывает `mcp_agent_selection_invalid`.
 
@@ -461,6 +461,8 @@ MCP authentication and connectivity: not checked.
 | --- | --- |
 | `unsupported` | Известное окружение без поддержки записи; конфигурация не меняется. |
 | `current` | Owned entry соответствует объявлению и последней записи csk. |
+| `updated (informational)` | Verified launcher content changed with the same consent subject; `--check` remains successful. |
+| `untrusted` | macOS launcher signature, seal, notarization or identity verification failed; `--check` returns 1. |
 | `missing` | Объявленная native entry или её файл отсутствует. |
 | `outdated` | Объявление изменилось, а owned entry сохранила установленное csk содержимое; следующий install обновит её. |
 | `drift` | Пользователь изменил существующую owned entry после установки. |
@@ -469,11 +471,11 @@ MCP authentication and connectivity: not checked.
 | `unreadable` | Native config нельзя безопасно прочитать или разобрать, например из-за некорректного JSON/TOML или symlink. |
 | `orphaned` | Ledger ещё содержит owned entry, но объявление удалено или агент исключён; следующий install обработает её удаление или release. |
 
-Если одновременно подходят несколько состояний, действует приоритет: `unreadable` → `orphaned` → `conflict`/`drift` → `unapproved` → `outdated` → `missing` → `current`. Поэтому повреждённый native config остаётся `unreadable` даже после удаления объявления, а чужая запись остаётся `conflict` при отсутствии consent.
+Launcher signature failures take precedence as `untrusted`. For other entries, the state priority is: `unreadable` → `orphaned` → `conflict`/`drift` → `unapproved` → `outdated` → `missing` → `updated (informational)` → `current`. Поэтому повреждённый native config остаётся `unreadable` даже после удаления объявления, а чужая запись остаётся `conflict` при отсутствии consent.
 
 Например, замените URL в Skillfile на `https://mcp.example.com/mcp-v2`, оставив native configs без изменений: строки станут `outdated`, а `csk status --check` вернёт 1. После `csk install` они снова станут `current`. Ручное изменение самой owned entry вместо Skillfile даст `drift`.
 
-Обычный `csk status` возвращает 0 и при неактуальных строках: это отчёт, а не проверочный gate. С `--check` код 0 означает, что все MCP-строки `current` или `unsupported` (или строк нет) и остальные проверки проекта тоже успешны. Любое другое MCP-состояние, ошибка проекта или неактуальный скилл дают 1. Ошибки конфигурации или использования команды дают 2.
+Обычный `csk status` возвращает 0 и при неактуальных строках: это отчёт, а не проверочный gate. С `--check` код 0 означает, что все MCP-строки `current`, `unsupported` или `updated (informational)` (или строк нет) и остальные проверки проекта тоже успешны. Любое другое MCP-состояние, ошибка проекта или неактуальный скилл дают 1. Ошибки конфигурации или использования команды дают 2.
 
 Если приватный ledger или consent store нельзя проверить, csk выводит `ERROR mcp_ownership_unknown`, а не считает хранилище пустым. MCP-строк для такого проекта нет; `--check` возвращает 1. В JSON ошибка находится в `errors`, а `mcp` остаётся пустым массивом.
 
@@ -520,13 +522,90 @@ export ALLURE_TESTOPS_AUTH="api-token <токен>"
 
 Инструкция Qameta подключает тот же сервер через мост `npx mcp-remote` с токеном в аргументах. Закреплённый мост без токена csk примет (`"command": "npx"`, `"args": ["mcp-remote@<версия>", "https://testops.example.com/api/mcp"]`, с consent), но передать ему токен нельзя: подстановка `${VAR}` в `args` отклоняется с `mcp_declaration_invalid`, а токен прямо в `args` был бы секретом в конфиге. На Windows `npx` отклоняется с `mcp_windows_batch_unsupported`. Используйте прямое HTTP-подключение выше.
 
-**Программа внутри приложения** (например, MCP server в macOS `.app`). Объявить её нельзя: `command` принимает только имя без пути. Подключите такой сервер вручную средствами агента (`claude mcp add`, `codex mcp add`, `Cursor Settings > MCP`).
+#### App-bundled launchers (macOS)
+
+Use `server.launcher` instead of `server.command` for a signed application helper.
+The following object is the value of `mcp_servers` for Proxyman:
+
+```json
+{
+  "proxyman": {
+    "server": {
+      "transport": "stdio",
+      "launcher": {
+        "macos": {
+          "bundle_id": "com.proxyman.NSProxy",
+          "team_id": "3X57WP8E8V",
+          "executable": "Contents/MacOS/mcp-server"
+        }
+      },
+      "args": []
+    }
+  }
+}
+```
+
+Install the application first, then run `csk check`, `csk install` in a terminal,
+and `csk status --check`. csk finds the bundle by its declared ID in
+`/Applications`, `~/Applications`, `/Applications/Setapp` or `~/Applications/Setapp`.
+Multiple distinct bundles with the same ID refuse with `mcp_launcher_ambiguous`;
+no match gives `mcp_launcher_not_found`. The executable must be a relative
+`Contents/...` path without empty, `.` or `..` components or backslashes. Its
+realpath must remain inside the bundle and name an executable regular file;
+otherwise csk refuses with `mcp_launcher_path_invalid`.
+
+csk uses the macOS system `/usr/bin/codesign`, without Xcode CLT, to perform
+strict, deep, all-architecture validation of the bundle and verify the helper.
+Both requirements pin notarization, `anchor apple generic` and the declared
+Team ID. The bundle signing identifier must equal `bundle_id`; the helper signing
+identifier must equal the final component of `executable` (`mcp-server` here).
+That leaf must be a portable executable name. Any signature, seal, notarization or
+requirement failure gives `mcp_launcher_untrusted`; there is no unsigned fallback.
+
+`check` verifies without writing manager or project state. `install` verifies
+before consent and writes the resolved absolute executable path directly into
+Claude Code, Codex CLI and Cursor configs; there is no shim. The consent plan names
+the verified publisher, path and trust level in plain words. The subject binds
+those identities as well as the declaration, project and writable agent set.
+An unchanged subject reuses consent. A different path or publisher, or a trust
+downgrade, needs consent again; an upgrade can retain approval for the same
+path/publisher. A helper content change with the same subject is informational.
+
+`status` re-verifies without writing anything. A valid content-only change reports
+`updated (informational)` and keeps `--check` successful; install acknowledges the
+new content fingerprint without another prompt. A changed consent subject reports
+`unapproved`. A failed macOS signature reports `untrusted`, and `--check` returns 1.
+Authentication and connectivity remain unchecked. Verification is point-in-time:
+the native agent executes later, and csk does not freeze the application until then.
+No vendor checksum is assumed for Proxyman.
+
+All platform objects have closed field sets. The portable grammar is validated
+on every host, even though Windows/Linux resolution is deferred:
+
+| Platform | Fields and allowed locations | Trust in this slice |
+| --- | --- | --- |
+| `macos` | Required `bundle_id`, ten-character uppercase/digit `team_id`, relative `executable` under `Contents/`. | Notarized signature and identity required; no `trust` override. |
+| `windows` | Required `install_dir`, relative `.exe` `executable`, nonempty `publisher`. Install dir must be below `%LOCALAPPDATA%\Programs\`, `%PROGRAMFILES%\` or `%PROGRAMFILES(X86)%\` (root spelling ignores case). No other expansions, absolute executable, traversal, reserved device names or invalid Windows path characters. | Optional `trust: "allow-unverified"`; resolution follows in the Windows slice. |
+| `linux` | Required `path` below `/usr/bin/`, `/usr/local/bin/`, `/opt/`, `~/.local/bin/`, `~/.config/`, `${XDG_CONFIG_HOME:-~/.config}/` or `${XDG_DATA_HOME:-~/.local/share}/`. No further expansions, empty components or traversal. | Optional `trust: "allow-unverified"`; resolution follows in the Linux slice. |
+
+At least one platform entry is required. On Windows/Linux a declaration with a
+current-platform entry gives `mcp_launcher_platform_unsupported`; any missing
+current-platform entry gives `mcp_launcher_platform_missing`. `trust` accepts only
+`allow-unverified`, and only in Windows/Linux entries; it does not make those hosts
+supported yet. The trust vocabulary is `verified`, `signed-user-writable`,
+`unverified`; this macOS verifier produces only `verified`. Same-user replacement
+of a Windows/Linux per-user installation is outside the future trust boundary.
+
+App lookup and codesign never launch the application or helper. The native test
+uses an installed Proxyman as a positive control and a copied bundle with tampered
+helper bytes as the negative control.
 
 Чего пока нет в schema 3:
 
 | Ограничение | Что из-за него нельзя |
 | --- | --- |
-| `command` только без пути | Сервер, который поставляется внутри приложения. |
+| App launchers on Windows/Linux | Grammar is validated, but resolution refuses until those platform slices ship. |
+| Point-in-time app verification | No guarantee about a later agent execution after the application changes. |
 | `${VAR}` запрещён в `args` | Передать токен stdio-мосту, например `mcp-remote --header`. |
 | `prefix` только `bearer` | Префиксы вроде `api-token` или `Token`; сейчас их пишут в значение переменной. |
 | Заголовки только из переменных | Обычный заголовок с фиксированным несекретным значением. |

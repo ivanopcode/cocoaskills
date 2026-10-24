@@ -270,6 +270,36 @@ Schema 3 добавляет к schema 2 поле `mcp_servers`. MCP-сервер
 - **На Windows `.cmd` и `.bat` не поддерживаются.** Нужна обычная программа `.exe` или `.com`.
 - **Остальные программы запускаются как есть.** csk показывает их точную команду, но не может проверить, что они делают внутри.
 
+For an app-bundled macOS MCP server, declare its publisher identity instead of
+committing an absolute path. For example, add this entry to `mcp_servers`:
+
+```json
+{
+  "proxyman": {
+    "server": {
+      "transport": "stdio",
+      "launcher": {
+        "macos": {
+          "bundle_id": "com.proxyman.NSProxy",
+          "team_id": "3X57WP8E8V",
+          "executable": "Contents/MacOS/mcp-server"
+        }
+      }
+    }
+  }
+}
+```
+
+Install Proxyman first, then run `csk check`, `csk install` in a terminal and
+`csk status --check`. csk verifies the bundle and helper with the system
+`/usr/bin/codesign`, shows the path/publisher/trust before consent, and writes
+the absolute path directly into the native configs. It never launches the app.
+Valid binary updates with unchanged path, trust and publisher are informational;
+path/publisher changes or trust downgrades require approval. Failed macOS signature
+verification refuses installation and reports `untrusted` in status. Windows/Linux
+launcher grammar is accepted, but resolution on those hosts is not supported yet.
+See [launcher grammar and limits](docs/skill-authoring.md#app-bundled-launchers-macos).
+
 Примеры для GitLab и Allure TestOps и то, чего пока нельзя: [примеры и ограничения](docs/skill-authoring.md#project-mcp-recipes).
 
 Все поля, проверки и коды ошибок: [MCP в project Skillfile](docs/skill-authoring.md#project-mcp-schema-3) и [Troubleshooting](docs/troubleshooting.md#mcp-first-run-check-ignore-и-consent).
@@ -437,6 +467,12 @@ csk shell-init                      # Генерирует или устанав
   independence, shim exclusion, symlink chains, refusal before publication,
   suffix order, and legitimate dependency launch. Save validation logs under
   `.temp/`.
+- `/usr/bin/codesign` is the macOS system trust verifier for app-bundled MCP
+  launchers; Xcode CLT is not required. Run `uv run pytest -q
+  tests/test_mcp_launchers.py tests/test_mcp_launcher_lifecycle.py` for grammar,
+  trust and consent controls. The `csk_e2e_native` macOS test verifies an installed
+  Proxyman and tampers only with a disposable copy. Save test logs under `.temp/`;
+  application discovery and signature verification write no project state.
 - `PyYAML` используется только в dev extra как независимый oracle для
   дифференциальных тестов frontmatter. Запускайте
   `uv run pytest -q tests/test_frontmatter_differential.py`; постоянные

@@ -312,7 +312,7 @@ def _read_ledger(
 
 
 def _read_declarations(
-    root: Path, target_agents: Sequence[str], raw: object
+    root: Path, target_agents: Sequence[str], raw: object, *, resolve_launchers: bool = True
 ) -> tuple[str, dict[str, declarations.McpDeclaration]]:
     manifest_bytes = (root / "Skillfile.json").read_bytes()
     current = protocol_json.loads(manifest_bytes)
@@ -331,6 +331,8 @@ def _read_declarations(
         )
         mcp_command_resolution.validate_windows_batch_commands(parsed, windows=sys.platform == "win32")
         mcp_command_resolution.validate_host_commands(parsed, cwd=root)
+        if resolve_launchers:
+            parsed = declarations.resolve_launchers(parsed)
     except declarations.McpDeclarationError as exc:
         raise refusal(exc.code, str(exc)) from exc
     return manifest_sha256, parsed
@@ -361,6 +363,7 @@ def _read_entries(
                     entry_sha,
                     declarations.declaration_digest(decl),
                     surface.capability,
+                    decl.server.resolved_launcher.content_sha256 if decl.server.resolved_launcher else None,
                 )
             )
     addresses = set(values)
@@ -485,9 +488,11 @@ def _plan_project(
             edits[agent] = None
     subjects = []
     for decl in parsed.values():
-        if declarations.authority(decl).consent_required and any(
-            a.address.name == decl.name and a.kind in ("add", "restore", "replace")
-            for a in reconciliation.actions
+        if decl.agents and declarations.authority(decl).consent_required and (
+            decl.server.launcher is not None or any(
+                a.address.name == decl.name and a.kind in ("add", "restore", "replace")
+                for a in reconciliation.actions
+            )
         ):
             subjects.append(
                 _consent_subject(decl)
@@ -535,12 +540,16 @@ def _plan_project(
 
 
 def _consent_subject(decl: declarations.McpDeclaration) -> ownership.ConsentSubject:
+    launcher = decl.server.resolved_launcher
     return ownership.ConsentSubject(
         decl.name,
         decl.agents,
         "project",
         declarations.declaration_digest(decl),
         tuple(native.project_surface(agent).capability for agent in decl.agents),
+        launcher.path if launcher else None,
+        launcher.trust if launcher else None,
+        launcher.publisher if launcher else None,
     )
 
 
@@ -549,7 +558,17 @@ def status_project(
 ) -> tuple[ReportRow, ...]:
     """Observe every desired/owned pair without planning edits or recording consent."""
     root, home, consumer, ledger = _read_ledger(root, home)
-    _, parsed = _read_declarations(root, target_agents, raw)
+    _, parsed = _read_declarations(root, target_agents, raw, resolve_launchers=False)
+    untrusted: list[ReportRow] = []
+    unsupported = _unsupported_rows(parsed, status=True)
+    for name, decl in list(parsed.items()):
+        try:
+            parsed[name] = declarations.resolve_launchers({name: decl})[name]
+        except declarations.McpDeclarationError as exc:
+            if exc.code != "mcp_launcher_untrusted":
+                raise refusal(exc.code, str(exc)) from exc
+            untrusted.extend(ReportRow(name, agent, native.project_surface(agent).relpath, "untrusted") for agent in decl.agents)
+            del parsed[name]
     read = _read_entries(root, target_agents, parsed, consumer, ledger)
     reconciliation = ownership.reconcile(read.desired, read.observed, read.ledger)
     wanted = {item.address for item in read.desired}
@@ -593,10 +612,27 @@ def status_project(
             state = "outdated"
         elif seen.state != "present":
             state = "missing"
+        elif _launcher_updated(address, parsed, ledger):
+            state = "updated (informational)"
         else:
             state = "current"
         rows.append(ReportRow(address.name, address.agent, address.relpath, state))
-    return _ordered_rows([*rows, *_unsupported_rows(parsed, status=True)])
+    failed_pairs = {(row.server, row.agent) for row in untrusted}
+    return _ordered_rows([
+        *[row for row in rows if (row.server, row.agent) not in failed_pairs],
+        *untrusted, *unsupported,
+    ])
+
+
+def _launcher_updated(
+    address: ownership.EntryAddress, parsed: Mapping[str, declarations.McpDeclaration],
+    ledger: ownership.Ledger | ownership.LedgerAbsent,
+) -> bool:
+    launcher = parsed[address.name].server.resolved_launcher
+    if launcher is None or not isinstance(ledger, ownership.Ledger):
+        return False
+    return any(entry.address == address and entry.launcher_sha256 is not None
+               and entry.launcher_sha256 != launcher.content_sha256 for entry in ledger.entries)
 
 
 def planned_consent(plan: ProjectPlan) -> bytes | None:
@@ -620,7 +656,7 @@ def review_consent(
     for name, decl in sorted(plan.declarations.items()):
         server = decl.server
         intent = (
-            json.dumps([server.command, *server.args], ensure_ascii=True)
+            json.dumps([declarations.effective_command(server), *server.args], ensure_ascii=True)
             if server.transport == "stdio"
             else server.url
         )
@@ -628,7 +664,11 @@ def review_consent(
         print(
             f"MCP plan {name}: {server.transport} {intent}; agents={','.join(decl.agents)}; env={','.join(env) or 'none'}; auth={decl.auth.kind}"
         )
-        if server.transport == "stdio" and not declarations.is_recognized_runner(server.command or ""):
+        if server.resolved_launcher is not None:
+            launcher = server.resolved_launcher
+            label = {"verified": "verified publisher and notarized application", "signed-user-writable": "signed by the publisher, in a user-writable directory", "unverified": "unverified: csk cannot tell an update from a replacement"}[launcher.trust]
+            print(f"MCP plan {name}: {label}; publisher={launcher.publisher}; path={launcher.path}")
+        elif server.transport == "stdio" and not declarations.is_recognized_runner(server.command or ""):
             print(f"MCP plan {name}: csk cannot verify what this program runs.")
     if not plan.pending:
         return
@@ -651,6 +691,13 @@ def assert_current(plan: ProjectPlan) -> None:
         != plan.manifest_sha256
     ):
         raise refusal("mcp_declaration_invalid", "Skillfile changed since MCP planning")
+    try:
+        refreshed = declarations.resolve_launchers(plan.declarations)
+    except declarations.McpDeclarationError as exc:
+        raise refusal(exc.code, str(exc)) from exc
+    if any(refreshed[name].server.resolved_launcher != decl.server.resolved_launcher
+           for name, decl in plan.declarations.items()):
+        raise refusal("mcp_launcher_changed", "application changed since MCP planning; retry installation")
     for agent in plan.edits:
         snapshot = plan.surfaces[agent]
         current, _ = native.read_surface(plan.root, snapshot.surface)

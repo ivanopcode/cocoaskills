@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Добавлено
+
+- `server.launcher` объявляет app-bundled MCP helper по идентичности издателя вместо абсолютного пути. macOS ищет bundle в каталогах Applications и Setapp, проверяет весь bundle и helper системным codesign: strict seal, notarization, Apple anchor, Team ID и identifiers. Любой отказ проверки блокирует установку; Windows/Linux grammar проверяется, но resolution пока отклоняется отдельным кодом.
+- MCP consent связывает resolved path, trust level и publisher. Повторное согласие не нужно для изменения только содержимого при той же идентичности; path/publisher change и trust downgrade требуют согласия. `status` повторно проверяет helper: `updated (informational)` сохраняет успешный `--check`, а `untrusted` при отказе macOS signature даёт 1. Native configs получают абсолютный путь без shim; приложение и helper не запускаются.
+
 ## [0.20.1] - 2026-10-23
 
 ### Изменено
