@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Изменено
+
+- Проектный ignore по умолчанию хранится в `$GIT_COMMON_DIR/info/exclude`, общем для linked worktrees: `.gitignore` не создаётся и не меняется. Управляемый блок сохраняет пользовательские байты; небезопасный exclude отказывает с `git_exclude_invalid`. Staged Git-проверка не допускает неэффективных правил и tracked собственных путей.
+- Верхнеуровневое поле `ignore_mode` в Skillfile schema 2/3 принимает `exclude` или `gitignore`; неверная декларация даёт `ignore_mode_invalid`. Существующий блок `.gitignore` без поля сохраняет legacy-режим, status советует явную настройку. Init использует локальный exclude и требует Git; `--fix-gitignore` в exclude-режиме сообщает no-op. Global/hybrid без изменений.
+
 ## [0.20.1] - 2026-10-23
 
 ### Изменено
