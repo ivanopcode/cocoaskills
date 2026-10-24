@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import stat
 import tempfile
+import threading
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
-from . import git_ops
+from . import git_ops, locking
 from .tool_paths import resolve_tool
 
 
@@ -15,6 +20,131 @@ class GitignoreError(Exception):
 
 class ExcludeError(GitignoreError):
     code = "git_exclude_invalid"
+
+
+_held = threading.local()
+
+
+@contextmanager
+def exclude_file_lock(path: Path) -> Iterator[None]:
+    """Serialize shared exclude updates, including replay after process death."""
+    lock_path = path.parent.parent / "csk-exclude.lock"
+    held = getattr(_held, "paths", None)
+    if held is None:
+        held = _held.paths = set()
+    if lock_path in held:
+        yield
+        return
+    # No PID/owner record is written: a crash even during lock acquisition
+    # cannot leave a partial record that would strand the next OS-lock holder.
+    # Acquire after the home lock (or alone for init/schema 1); never unlink.
+    fd: int | None = None
+    acquired = False
+    try:
+        try:
+            flags = os.O_CREAT | os.O_RDWR
+            for flag in ("O_CLOEXEC", "O_NOFOLLOW", "O_BINARY", "O_NONBLOCK"):
+                flags |= getattr(os, flag, 0)
+            fd = os.open(lock_path, flags, 0o600)
+            if not locking._path_matches_fd(lock_path, fd):
+                raise ExcludeError("Git exclude lock must be a stable regular file")
+            deadline = time.monotonic() + locking._timeout_from_env()
+            while not (acquired := locking._try_file_lock(fd)):
+                if time.monotonic() >= deadline:
+                    raise ExcludeError("Timed out waiting for the Git exclude lock")
+                time.sleep(0.05)
+            if not locking._path_matches_fd(lock_path, fd):
+                raise ExcludeError("Git exclude lock identity changed while acquiring")
+        except OSError as exc:
+            raise ExcludeError(f"Cannot lock Git info/exclude: {exc}") from exc
+        held.add(lock_path)
+        try:
+            yield
+        finally:
+            held.remove(lock_path)
+    finally:
+        if fd is not None:
+            try:
+                if acquired:
+                    locking._unlock_file(fd)
+            finally:
+                os.close(fd)
+
+
+@contextmanager
+def exclude_lock(project_root: Path, mode: str) -> Iterator[None]:
+    if mode == "exclude":
+        with exclude_file_lock(ignore_path(project_root, mode)):
+            yield
+    else:
+        yield
+
+
+def project_key(project_root: Path) -> str:
+    discovery = git_ops.run_git(
+        [resolve_tool("git"), "-C", str(project_root), "rev-parse", "--show-toplevel", "--absolute-git-dir"],
+        text=True, capture_output=True,
+    )
+    if discovery.returncode:
+        raise ExcludeError("Cannot resolve Git worktree")
+    roots = discovery.stdout.removesuffix("\n").split("\n")
+    if len(roots) != 2:
+        raise ExcludeError("Cannot resolve Git worktree identity")
+    relative = _project_relative(project_root, Path(roots[0]))
+    common = ignore_path(project_root, "exclude").parent.parent
+    metadata = Path(roots[1]).resolve().relative_to(common)
+    identity = metadata.as_posix() + "\0" + relative.as_posix()
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _block_range(data: bytes, key: str) -> tuple[int, int] | None:
+    start_marker = f"# CocoaSkill project {key}".encode()
+    end_marker = f"# End CocoaSkill project {key}".encode()
+    lines = data.splitlines(keepends=True)
+    starts = [i for i, line in enumerate(lines) if line.rstrip(b"\r\n") == start_marker]
+    ends = [i for i, line in enumerate(lines) if line.rstrip(b"\r\n") == end_marker]
+    if not starts and not ends:
+        return None
+    if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
+        raise ExcludeError("Git info/exclude has an incomplete or duplicate project block")
+    start, end = starts[0], ends[0]
+    if any(line.startswith((b"# CocoaSkill", b"# End CocoaSkill")) for line in lines[start + 1:end]):
+        raise ExcludeError("Git info/exclude has nested project blocks")
+    return sum(map(len, lines[:start])), sum(map(len, lines[:end + 1]))
+
+
+def project_block(data: bytes, key: str) -> bytes | None:
+    span = _block_range(data, key)
+    return None if span is None else data[span[0]:span[1]]
+
+
+def replace_project_block(data: bytes, key: str, block: bytes | None) -> bytes:
+    """Replace only this project's slice; all other bytes remain opaque."""
+    if block is not None and project_block(block, key) != block:
+        raise ExcludeError("Invalid staged Git exclude project block")
+    span = _block_range(data, key)
+    if span is not None:
+        return data[:span[0]] + (block or b"") + data[span[1]:]
+    if block is None:
+        return data
+    return data + (b"\n" if data and not data.endswith(b"\n") else b"") + block
+
+
+def write_exclude(path: Path, data: bytes) -> None:
+    """Atomically publish under the common lock, preserving target mode."""
+    _exclude_bytes(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".csk-exclude-", delete=False) as stream:
+        temporary_path = Path(stream.name)
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    try:
+        temporary_path.chmod(mode)
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def legacy_block(project_root: Path) -> bool:
@@ -28,7 +158,7 @@ def effective_mode(project_root: Path, declared: str | None) -> str:
 
 def _project_relative(project_root: Path, worktree: Path) -> Path:
     """Find the worktree prefix by identity, including case/Unicode aliases."""
-    current = project_root.resolve()
+    current = Path(locking.canonical_project_identity(project_root))
     parts: list[str] = []
     try:
         while not current.samefile(worktree):
@@ -97,21 +227,11 @@ def _plan_exclude(project_root: Path, entries: list[str]) -> bytes | None:
                        for char in prefix + entry.lstrip("/"))).encode("utf-8")
         for entry in entries
     }
-    lines = existing.splitlines(keepends=True)
-    starts = [i for i, line in enumerate(lines) if line.rstrip(b"\r\n") == b"# CocoaSkill"]
-    ends = [i for i, line in enumerate(lines) if line.rstrip(b"\r\n") == b"# End CocoaSkill"]
-    if starts or ends:
-        if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
-            raise ExcludeError("Git info/exclude has an incomplete or duplicate CocoaSkill block")
-        start, end = starts[0], ends[0]
-        # Keep entries for other projects/worktrees sharing this common file.
-        patterns.update(line.rstrip(b"\r\n") for line in lines[start + 1:end])
-        before, after = b"".join(lines[:start]), b"".join(lines[end + 1:])
-    else:
-        before = existing + (b"\n" if existing and not existing.endswith(b"\n") else b"")
-        after = b""
-    block = b"# CocoaSkill\n" + b"\n".join(sorted(patterns)) + b"\n# End CocoaSkill\n"
-    desired = before + block + after
+    key = project_key(project_root)
+    block = (f"# CocoaSkill project {key}\n".encode()
+             + b"\n".join(sorted(patterns)) + b"\n"
+             + f"# End CocoaSkill project {key}\n".encode()) if patterns else None
+    desired = replace_project_block(existing, key, block)
     return desired if desired != existing else None
 
 
@@ -134,23 +254,16 @@ def missing_entries(project_root: Path, entries: list[str]) -> list[str]:
 
 def ensure_ignored(project_root: Path, entries: list[str], *, fix: bool = False, mode: str = "gitignore") -> None:
     if mode == "exclude":
-        path = ignore_path(project_root, mode)
-        original = _exclude_bytes(path)
-        proposed = plan_ignored(project_root, entries, fix=True, mode=mode)
-        with tempfile.TemporaryDirectory(prefix=".csk-ignore-") as temporary:
-            verify_planned_ignored(project_root, entries, proposed, Path(temporary), mode=mode)
-        if proposed is not None:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            # Refuse changed/unsafe targets before publishing the private bytes.
-            with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".csk-exclude-", delete=False) as stream:
-                temporary_path = Path(stream.name)
-                stream.write(proposed)
-            try:
+        with exclude_lock(project_root, mode):
+            path = ignore_path(project_root, mode)
+            original = _exclude_bytes(path)
+            proposed = plan_ignored(project_root, entries, fix=True, mode=mode)
+            with tempfile.TemporaryDirectory(prefix=".csk-ignore-") as temporary:
+                verify_planned_ignored(project_root, entries, proposed, Path(temporary), mode=mode)
+            if proposed is not None:
                 if _exclude_bytes(path) != original:
                     raise ExcludeError("Git info/exclude changed during planning")
-                os.replace(temporary_path, path)
-            finally:
-                temporary_path.unlink(missing_ok=True)
+                write_exclude(path, proposed)
         return
     missing = missing_entries(project_root, entries)
     if not missing:
