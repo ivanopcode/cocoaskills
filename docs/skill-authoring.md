@@ -182,7 +182,7 @@ agent-skill.json
 - Поле `mode` выбирает передаваемые потребителю компоненты провайдера: `full` (по умолчанию) активирует контекст промпта и все экспортируемые команды, `runtime` активирует только команды, `context` активирует только контекст промпта. Необязательный список `commands` ограничивает требование `runtime` указанными экспортами.
 - В рамках одного замыкания установки имя скилла разрешается в один commit и один канонический источник. Несогласованные требования прерывают установку.
 - Workflow представляет собой скилл с объявленными требованиями без экспорта команд. Потребители устанавливают workflow одной записью в `Skillfile.json`.
-- Для разработки файл `Skillfile.dev.json` рядом с проектным `Skillfile.json` подменяет провайдеров локально (указывает `path` к рабочей копии или `git` с любым типом ref, включая ветки). Файл входит в управляемый блок `.gitignore`. Строгий аудит завершается ошибкой при активных подменах.
+- Для разработки файл `Skillfile.dev.json` рядом с проектным `Skillfile.json` подменяет провайдеров локально (указывает `path` к рабочей копии или `git` с любым типом ref, включая ветки). Файл входит в локальный управляемый блок `$GIT_COMMON_DIR/info/exclude` (или `.gitignore` при явном/legacy режиме `gitignore`). Строгий аудит завершается ошибкой при активных подменах.
 - Организации ограничивают источники скачивания скиллов с помощью `allowed_sources` в `~/.cocoaskills/config.json`: списка канонических префиксов `host/path`, проверяемого перед операциями clone или fetch.
 
 ### Схема v5
@@ -396,7 +396,7 @@ For MCP files csk creates or its ownership ledger records as created, install ve
 | Codex CLI (`codex_cli`) | `.codex/config.toml` |
 | Cursor (`cursor`) | `.cursor/mcp.json` |
 
-Для созданного MCP-файла с `git_policy: "local"` csk автоматически добавляет точный путь в `.gitignore`: `/.mcp.json`, `/.codex/config.toml` или `/.cursor/mcp.json`, и сообщает добавленные entries. Ignore публикуется до native config в одной транзакции. Обычный `csk init` + `csk install` не требует deprecated `--fix-gitignore`; dry-run только показывает план. Для остальных generated paths по-прежнему требуется предварительный `csk init`. Уже отслеживаемый git файл csk меняет на месте и не добавляет в ignore. csk сохраняет байты вне изменяемых записей. JSON-файлы должны быть строгим UTF-8 JSON без BOM, comments и trailing commas.
+Для созданного MCP-файла с `git_policy: "local"` csk автоматически добавляет точный путь в `$GIT_COMMON_DIR/info/exclude` (или в `.gitignore` при режиме `gitignore`): `/.mcp.json`, `/.codex/config.toml` или `/.cursor/mcp.json`, и сообщает добавленные entries. Ignore публикуется до native config в одной транзакции. Обычный `csk init` + `csk install` не требует deprecated `--fix-gitignore`; dry-run только показывает план. В режиме `exclude` install также поддерживает обычные generated paths; в режиме `gitignore` для них используйте предварительный `csk init`. Уже отслеживаемый git файл csk меняет на месте и не добавляет в ignore. csk сохраняет байты вне изменяемых записей. JSON-файлы должны быть строгим UTF-8 JSON без BOM, comments и trailing commas.
 
 Consent разрешает публикацию исполняемого кода или env reference. Он нужен для stdio и для любой ссылки на переменную в `env_names` или `install.headers`. HTTP без env reference, включая `auth.kind: "oauth"`, consent не требует. csk никогда не запускает сервер, package runner или команду аутентификации.
 

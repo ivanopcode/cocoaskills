@@ -150,7 +150,8 @@ def test_cli_skill_check_json_output(tmp_path, capsys):
     assert data[0]["code"] == "skill.missing_skill_md"
 
 
-def test_cli_init_creates_skillfile_and_gitignore_in_git_repo(monkeypatch, tmp_path, csk_home, skills_root, capsys):
+# Init creates a manifest and effective local excludes without creating .gitignore.
+def test_cli_init_creates_skillfile_and_exclude_in_git_repo(monkeypatch, tmp_path, csk_home, skills_root, capsys):
     project = make_project(tmp_path, gitignore=False)
     cfg_path = csk_home / "config.json"
     cfg_path.write_text(
@@ -178,12 +179,14 @@ def test_cli_init_creates_skillfile_and_gitignore_in_git_repo(monkeypatch, tmp_p
         "agents": ["codex_cli", "cursor"],
         "skills": [],
     }
-    gitignore = (project / ".gitignore").read_text(encoding="utf-8")
+    assert not (project / ".gitignore").exists()
+    gitignore = (project / ".git/info/exclude").read_text(encoding="utf-8")
     for entry in [".agents/", ".claude/skills/", ".codex/skills/", ".cursor/rules/", ".gemini/skills/"]:
         assert entry in gitignore
 
 
-def test_cli_init_non_git_warns_but_creates_project(monkeypatch, tmp_path, capsys):
+# Outside Git, init refuses without a partial manifest or ignore file.
+def test_cli_init_non_git_refuses_without_writes(monkeypatch, tmp_path, capsys):
     project = tmp_path / "plain-project"
     project.mkdir()
     monkeypatch.setenv("CSK_CONFIG", str(tmp_path / "missing-config.json"))
@@ -192,14 +195,13 @@ def test_cli_init_non_git_warns_but_creates_project(monkeypatch, tmp_path, capsy
     code = cli.main(["init"])
     captured = capsys.readouterr()
 
-    assert code == 0
-    assert "not inside a git repository" in captured.err
-    data = json.loads((project / "Skillfile.json").read_text(encoding="utf-8"))
-    assert data["project"]["alias"] == "plain-project"
-    assert data["agents"] == ["codex_cli"]
-    assert ".agents/" in (project / ".gitignore").read_text(encoding="utf-8")
+    assert code == cli.EXIT_CONFIG
+    assert "git repository is required" in captured.err
+    assert not (project / "Skillfile.json").exists()
+    assert not (project / ".gitignore").exists()
 
 
+# Reinitialization preserves the manifest and emits exactly one local managed block.
 def test_cli_init_is_idempotent_and_does_not_overwrite_skillfile(monkeypatch, tmp_path, csk_home, skills_root):
     project = make_project(tmp_path, gitignore=False)
     write_skillfile(project, {"schema_version": 1, "project": {"alias": "custom"}, "agents": ["gemini"], "skills": []})
@@ -209,7 +211,8 @@ def test_cli_init_is_idempotent_and_does_not_overwrite_skillfile(monkeypatch, tm
     assert cli.main(["init", str(project), "--alias", "other"]) == 0
 
     assert (project / "Skillfile.json").read_text(encoding="utf-8") == original
-    gitignore = (project / ".gitignore").read_text(encoding="utf-8")
+    assert not (project / ".gitignore").exists()
+    gitignore = (project / ".git/info/exclude").read_text(encoding="utf-8")
     assert gitignore.count("# CocoaSkill") == 1
 
 
@@ -222,16 +225,18 @@ def test_cli_init_rejects_nested_project(tmp_path):
     assert cli.main(["init", str(nested)]) == cli.EXIT_CONFIG
 
 
+# Initializing Git after the refusal lets init produce an installable empty project.
 def test_cli_init_non_git_then_git_init_leaves_installable_empty_project(monkeypatch, tmp_path, csk_home, skills_root):
     make_skill_repo(skills_root, "unused", tag="v1")
     project = tmp_path / "plain-project"
     project.mkdir()
-    assert cli.main(["init", str(project)]) == 0
+    assert cli.main(["init", str(project)]) == cli.EXIT_CONFIG
     run(["git", "init"], project)
     run(["git", "branch", "-M", "main"], project)
     assert_own_git_repo(project)
     run(["git", "config", "user.name", "Test User"], project)
     run(["git", "config", "user.email", "test@example.com"], project)
+    assert cli.main(["init", str(project)]) == 0
     cfg_path = csk_home / "config.json"
     cfg_path.write_text(
         json.dumps({"schema_version": 1, "skills_root": str(skills_root), "projects": {}}),

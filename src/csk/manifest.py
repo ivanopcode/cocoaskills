@@ -53,6 +53,7 @@ class ProjectManifest:
     selectors: list[skillfile_v2.SkillSelector] = field(default_factory=list)
     manifest_sha256: str | None = None
     mcp_servers: object = field(default_factory=dict)
+    ignore_mode: str | None = None
 
 
 def manifest_path(project_root: Path) -> Path:
@@ -238,6 +239,15 @@ def parse_manifest(
     if not isinstance(data, dict):
         raise ManifestError(f"{path} must contain a JSON object")
     schema = data.get("schema_version")
+    if "ignore_mode" in data and (
+        resolved_scope != "project" or schema not in (2, 3)
+        or not isinstance(data["ignore_mode"], str)
+        or data["ignore_mode"] not in ("exclude", "gitignore")
+    ):
+        raise SourceError(
+            "ignore_mode_invalid",
+            "ignore_mode requires a project Skillfile schema 2 or 3 and either 'exclude' or 'gitignore'",
+        )
     if (
         isinstance(schema, int)
         and not isinstance(schema, bool)
@@ -308,7 +318,7 @@ def _parse_v2(
     scope: skillfile_v2.SkillfileScope,
     schema_version: int = SCHEMA_VERSION_2,
 ) -> ProjectManifest:
-    allowed = {"schema_version", "project", "agents", "locale", "skills", "sources"}
+    allowed = {"schema_version", "project", "agents", "locale", "skills", "sources", "ignore_mode"}
     if schema_version == SCHEMA_VERSION_3:
         allowed.add("mcp_servers")
     unknown_top = sorted(set(data) - allowed)
@@ -366,6 +376,7 @@ def _parse_v2(
         selectors=selectors,
         manifest_sha256=skillfile_v2.manifest_sha256(data),
         mcp_servers=data.get("mcp_servers", {}),
+        ignore_mode=data.get("ignore_mode"),
     )
 
 

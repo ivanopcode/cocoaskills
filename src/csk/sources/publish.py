@@ -54,6 +54,7 @@ from .. import (
     mcp_project,
     mcp_ownership,
     gitignore_gate,
+    dev_substitutions,
 )
 from ..command_names import require_unreserved_command_name
 from ..tool_paths import resolve_tool
@@ -221,6 +222,7 @@ _RECHECK_MANAGED: Final = "managed-output"
 _RECHECK_ROOT_FILE: Final = "project-root-file"
 _RECHECK_HOME_ENTRY: Final = "home-store-entry"
 _RECHECK_MCP_NATIVE: Final = "mcp-project-file"
+_RECHECK_GIT_EXCLUDE: Final = "git-common-exclude"
 
 
 @dataclass(frozen=True)
@@ -2319,6 +2321,22 @@ def build_recheck_payloads(
         key = (spec.target_class, spec.identifier)
         subject = f"Publication destination {spec.live_path}"
         expected_live = live_digests[key]
+        if spec.target_class == "mcp-gitignore" and spec.live_path.name == "exclude":
+            common = gitignore_gate.ignore_path(project_path, "exclude").parent.parent
+            if spec.live_path != common / "info/exclude":
+                raise SourceError(CODE_OUTPUT_OVERLAP, "Git common directory changed during planning")
+            common_stat = _stat_identity(str(common), subject=subject)
+            payloads[key] = {
+                "kind": _RECHECK_GIT_EXCLUDE,
+                "project": root_spelling,
+                "root": str(common),
+                "root_identity": _identity_pairs_to_json([(common_stat.st_dev, common_stat.st_ino)]),
+                "ancestors": _identity_pairs_to_json(
+                    _freeze_home_ancestors(str(common), ["info"], subject=subject)
+                ),
+                "expected_live": expected_live,
+            }
+            continue
         try:
             relative = spec.live_path.relative_to(project_path)
         except ValueError:
@@ -2707,6 +2725,21 @@ def make_publication_hook() -> PreWriteHook:
                 _hook_root_file(target, payload, subject=subject)
             elif kind == _RECHECK_ROOT_FILE:
                 _hook_root_file(target, payload, subject=subject)
+            elif kind == _RECHECK_GIT_EXCLUDE:
+                root = _payload_str(payload, "root", subject=subject)
+                project = _payload_str(payload, "project", subject=subject)
+                if gitignore_gate.ignore_path(Path(project), "exclude") != Path(root) / "info/exclude":
+                    raise SourceError(CODE_OUTPUT_OVERLAP, "Git common directory changed during publication")
+                common_stat = _stat_identity(root, subject=subject)
+                if [(common_stat.st_dev, common_stat.st_ino)] != _payload_identities(payload, "root_identity", subject=subject):
+                    raise SourceError(CODE_OUTPUT_OVERLAP, "Git common directory identity changed during publication")
+                _hook_verify_ancestors(root, ["info"], _payload_identities(payload, "ancestors", subject=subject), subject=subject)
+                gitignore_gate._exclude_bytes(Path(root) / "info/exclude")
+                _hook_require_recognized_state(
+                    target, _hook_live_digest(target, subject=subject),
+                    _payload_str(payload, "expected_live", subject=subject),
+                    subject=subject, allow_pending_backup=True,
+                )
             elif kind == _RECHECK_HOME_ENTRY:
                 _hook_home_entry(target, payload, subject=subject)
             else:
@@ -4410,6 +4443,9 @@ def _plan_and_publish_schema2(
         mcp_warnings: list[str] = []
         ignore_bytes: bytes | None = None
         ignore_preimage: str | None = None
+        _, ignore_manifest = _read_fresh_manifest(project_path)
+        ignore_mode = gitignore_gate.effective_mode(project_path, ignore_manifest.ignore_mode)
+        ignore_target = gitignore_gate.ignore_path(project_path, ignore_mode)
         if mcp_plan is not None:
             report = mcp_project.check_requirements(
                 mcp_plan,
@@ -4420,8 +4456,10 @@ def _plan_and_publish_schema2(
                 raise mcp_project.McpProjectError("; ".join(report.errors))
             mcp_warnings.extend(report.warnings)
             ignores = adapters.required_gitignore_entries(agents)
-            # Preserve the non-MCP gate. Only MCP-owned files are repaired automatically.
-            gitignore_gate.plan_ignored(project_path, ignores, fix=fix_gitignore)
+            # Preserve the opt-in gitignore gate; exclude manages all owned paths.
+            gitignore_gate.plan_ignored(project_path, ignores, fix=fix_gitignore, mode=ignore_mode)
+            if ignore_mode == "exclude":
+                ignores.append(dev_substitutions.DEV_MANIFEST_NAME)
             owned_files = set(mcp_plan.created_files)
             if isinstance(mcp_plan.ledger, mcp_ownership.Ledger):
                 owned_files.update(
@@ -4430,14 +4468,14 @@ def _plan_and_publish_schema2(
                 )
             mcp_ignores = [
                 "/" + path for _agent, path in sorted(owned_files)
-                if not gitignore_gate.is_tracked(project_path, path)
+                if ignore_mode == "exclude" or not gitignore_gate.is_tracked(project_path, path)
             ]
             added_mcp_ignores = gitignore_gate.missing_entries(project_path, mcp_ignores)
             ignores.extend(mcp_ignores)
-            ignore_preimage = digest_target(project_path / ".gitignore")
-            ignore_bytes = gitignore_gate.plan_ignored(project_path, ignores, fix=True)
+            ignore_preimage = digest_target(ignore_target)
+            ignore_bytes = gitignore_gate.plan_ignored(project_path, ignores, fix=True, mode=ignore_mode)
             gitignore_gate.verify_planned_ignored(
-                project_path, mcp_ignores, ignore_bytes, staging_root
+                project_path, ignores, ignore_bytes, staging_root, mode=ignore_mode
             )
             mcp_project.planned_consent(mcp_plan)
         check_schema2_requirement_commands(specs_map)
@@ -4743,7 +4781,7 @@ def _plan_and_publish_schema2(
             extra_targets: tuple[MutableTarget, ...] = ()
             if mcp_plan is not None:
                 gitignore_gate.verify_planned_ignored(
-                    project_path, mcp_ignores, ignore_bytes, staging_root
+                    project_path, ignores, ignore_bytes, staging_root, mode=ignore_mode
                 )
                 extra_targets = mcp_project.stage_targets(
                     mcp_plan, staging_root, transaction_id
@@ -4755,7 +4793,7 @@ def _plan_and_publish_schema2(
                         MutableTarget(
                             "mcp-gitignore",
                             ".gitignore",
-                            project_path / ".gitignore",
+                            ignore_target,
                             ignore_staged,
                             expected_preimage_digest=ignore_preimage,
                         ),

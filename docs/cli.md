@@ -38,7 +38,7 @@ csk --version
 
 ### csk init
 
-Создает манифест `Skillfile.json` и записывает управляемый блок директорий в `.gitignore`.
+Создает манифест `Skillfile.json` и записывает управляемый блок собственных путей в `$GIT_COMMON_DIR/info/exclude`. `.gitignore` по умолчанию не создаётся и не меняется. Linked worktrees используют общий exclude-файл. Вне Git-репозитория команда отказывает без записи.
 
 **Синопсис:**
 
@@ -61,7 +61,7 @@ usage: csk init [-h] [--alias ALIAS] [--agents AGENTS] [--no-interactive]
 csk init --alias demo-app --agents codex_cli,claude_code
 ```
 
-Команда создает `Skillfile.json` с указанными настройками и обновляет `.gitignore`.
+Команда создает `Skillfile.json` с указанными настройками и обновляет локальный exclude. В проектном Skillfile schema 2/3 верхнеуровневое поле `"ignore_mode": "gitignore"` включает прежний режим `.gitignore`; `"ignore_mode": "exclude"` явно выбирает локальный exclude. Иные значения, неверные типы и поле в schema 1 дают `ignore_mode_invalid`. Без поля существующий блок `# CocoaSkill` сохраняет прежний режим, а `csk status` показывает совет; автоматического переноса нет.
 
 ### csk add
 
@@ -301,7 +301,7 @@ usage: csk install [-h] [--all] [--dry-run] [--verbose] [--fix-gitignore]
 * `--all`: выполняет установку для всех зарегистрированных проектов.
 * `--dry-run`: рассчитывает план действий без изменения файлов на диске.
 * `--verbose`: выводит подробный ход выполнения.
-* `--fix-gitignore`: устаревший флаг; рекомендуем использовать `csk init`.
+* `--fix-gitignore`: устаревший флаг; в режиме `gitignore` дописывает недостающие правила как раньше. В режиме `exclude` ничего не меняет и сообщает `no-op in exclude mode`; `.gitignore` не записывается.
 * `--strict-tags`: завершает работу ошибкой, если тег локально указывает на другой коммит.
 * `--audit [{advisory,strict}]`: запускает проверку аудита перед установкой (по умолчанию: `advisory`).
 * `--build-ssh-identity PATH`: файл идентичности SSH для приватных репозиториев сборки; приватный ключ или соответствующий публичный ключ в сочетании с `--build-ssh-agent` (переменная: `CSK_BUILD_SSH_IDENTITY`).
@@ -320,7 +320,7 @@ csk install --verbose
 
 Для schema 3 `csk check` также проверяет MCP declarations тем же валидатором и с теми же кодами, что install, и печатает `schema_version 3 valid` только после успешной проверки. Команда ничего не записывает и не обращается к сети.
 
-`csk init` настраивает ignore для обычных generated paths. При установке MCP с `git_policy: "local"` install автоматически добавляет и сообщает точные ignore entries для создаваемых им MCP configs; deprecated `--fix-gitignore` не нужен. Dry-run показывает эти изменения без записи. Consent запрашивается после неинтерактивных preflight-проверок и сохраняется только вместе с успешной публикацией. Отказ проекта передаёт свой код в MCP-строки; если собственного кода нет, строки показывают `blocked by project_preflight_failed`.
+`csk init` настраивает ignore для обычных generated paths. В режиме `exclude` install автоматически поддерживает локальный блок всех собственных путей. При установке MCP с `git_policy: "local"` install автоматически добавляет и сообщает точные ignore entries для создаваемых им MCP configs; deprecated `--fix-gitignore` не нужен. Dry-run показывает эти изменения без записи. Consent запрашивается после неинтерактивных preflight-проверок и сохраняется только вместе с успешной публикацией. Отказ проекта передаёт свой код в MCP-строки; если собственного кода нет, строки показывают `blocked by project_preflight_failed`.
 
 Before consent, install checks existing output-parent readiness and asks Git to evaluate the proposed ignore hierarchy. A root negation is repaired effectively; a conflicting nested rule refuses with `gitignore_required` and unchanged native/ignore state. Runner/evaluator names in any `args` position refuse with `mcp_command_invalid`, including path/case/suffix aliases and tokens intended as data such as `--tool node`.
 
@@ -449,7 +449,7 @@ usage: csk upgrade [-h] [--all] [--dry-run] [--verbose] [--fix-gitignore]
 * `--all`: подтягивает обновления и обновляет все зарегистрированные проекты.
 * `--dry-run`: рассчитывает план действий без изменения файлов на диске.
 * `--verbose`: выводит подробный ход выполнения.
-* `--fix-gitignore`: устаревший флаг; рекомендуем использовать `csk init`.
+* `--fix-gitignore`: устаревший флаг; в режиме `gitignore` дописывает недостающие правила как раньше. В режиме `exclude` ничего не меняет и сообщает `no-op in exclude mode`; `.gitignore` не записывается.
 * `--strict-tags`: завершает работу ошибкой, если тег локально указывает на другой коммит.
 * `--audit [{advisory,strict}]`: запускает проверку аудита перед установкой (по умолчанию: `advisory`).
 * `--build-ssh-identity PATH`: файл идентичности SSH для приватных репозиториев сборки; приватный ключ или соответствующий публичный ключ в сочетании с `--build-ssh-agent` (переменная: `CSK_BUILD_SSH_IDENTITY`).
