@@ -5,10 +5,10 @@ import ipaddress
 import re
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Literal
 
-from csk import protocol_json
+from csk import protocol_json, mcp_launchers
 from csk.audit import redaction
 from csk.mcp_base_commands import EXEC_CAPABLE_BASE_COMMANDS, is_base_command, is_base_recipe
 from csk.mcp_command_aliases import EVALUATOR_ALIASES
@@ -45,7 +45,7 @@ _HOST_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]*")
 _PORT_RE = re.compile(r"[0-9]{1,5}")
 
 _DECLARATION_FIELDS = frozenset({"server", "reference", "agents", "scope", "auth", "git_policy"})
-_STDIO_FIELDS = frozenset({"transport", "command", "args", "env_names"})
+_STDIO_FIELDS = frozenset({"transport", "command", "launcher", "args", "env_names"})
 _HTTP_FIELDS = frozenset({"transport", "url", "headers", "env_names"})
 _AUTH_FIELDS = frozenset({"kind", "help_url"})
 _HEADER_REF_FIELDS = frozenset({"env", "prefix", "value"})
@@ -201,6 +201,8 @@ class ServerSpec:
     env_names: tuple[str, ...] = ()
     url: str | None = None
     headers: tuple[HeaderRef | LiteralHeader, ...] = ()
+    launcher: mcp_launchers.LauncherSpec | None = None
+    resolved_launcher: mcp_launchers.ResolvedLauncher | None = None
 
 
 @dataclass(frozen=True)
@@ -344,6 +346,8 @@ def _normalized(server: ServerSpec) -> ServerSpec:
         env_names=tuple(sorted(server.env_names, key=lambda name: (name.upper(), name))),
         url=server.url,
         headers=tuple(sorted(server.headers, key=lambda header: (header.name.lower(), header.name))),
+        launcher=server.launcher,
+        resolved_launcher=server.resolved_launcher,
     )
 
 
@@ -416,6 +420,7 @@ def _shape_declaration(name: str, body: object, index: int) -> _Draft:
             "transport",
             "url",
             "command",
+            "launcher",
             "args",
             "env_names",
             "environments",
@@ -536,12 +541,22 @@ def _shape_server(body: object, path: str, index: int) -> tuple[str, ServerSpec]
             raise _invalid(f"{path}.{_path_name(key, index)}", "unknown field")
     if transport == "stdio":
         command = body.get("command")
-        if not isinstance(command, str):
-            raise _invalid(f"{path}.command", "command is required and must be a string")
+        if ("command" in body) == ("launcher" in body):
+            field = "launcher" if "launcher" in body else "command"
+            raise _invalid(f"{path}.{field}", "exactly one of command and launcher is required")
+        launcher = None
+        if "launcher" in body:
+            try:
+                launcher = mcp_launchers.parse_launcher(body["launcher"])
+            except mcp_launchers.McpLauncherError as exc:
+                suffix = "." + exc.field if exc.field else ""
+                raise _invalid(f"{path}.launcher{suffix}", str(exc)) from exc
+        elif not isinstance(command, str):
+            raise _invalid(f"{path}.command", "command must be a string")
         args = _string_list(body.get("args", []), f"{path}.args")
         env_names = _string_list(body.get("env_names", []), f"{path}.env_names")
         return transport, ServerSpec(
-            transport="stdio", command=command, args=tuple(args), env_names=tuple(env_names)
+            transport="stdio", command=command, args=tuple(args), env_names=tuple(env_names), launcher=launcher
         )
     url = body.get("url")
     if not isinstance(url, str):
@@ -642,6 +657,9 @@ def _check_argument_launchers(args: tuple[str, ...], path: str) -> None:
 
 def _check_stdio(server: ServerSpec, path: str) -> None:
     command = server.command
+    if server.launcher is not None:
+        _check_stdio_arguments(server, path)
+        return
     assert command is not None
     if not _COMMAND_RE.fullmatch(command):
         raise _fail("mcp_command_invalid", f"{path}.command", "command must be a bare executable name")
@@ -655,6 +673,11 @@ def _check_stdio(server: ServerSpec, path: str) -> None:
         raise _fail("mcp_command_invalid", f"{path}.command", "evaluator launchers are refused")
     if not recipe and _command_kind(base) == "evaluator":
         raise _fail("mcp_command_invalid", f"{path}.command", "evaluator commands are refused")
+    _check_runtime_pin(base, server.args, path)
+    _check_stdio_arguments(server, path)
+
+
+def _check_stdio_arguments(server: ServerSpec, path: str) -> None:
     args = server.args
     if len(args) > _MAX_ARGS:
         raise _invalid(f"{path}.args", f"at most {_MAX_ARGS} arguments are allowed")
@@ -668,8 +691,7 @@ def _check_stdio(server: ServerSpec, path: str) -> None:
             raise _invalid(arg_path, "variable expansion syntax is refused")
     for index, arg in enumerate(args):
         _check_secret_material(arg, f"{path}.args.{index}")
-    _check_runtime_pin(base, args, path)
-    _check_argument_launchers(args, path)
+    _check_argument_launchers(server.args, path)
     _check_env_names(server.env_names, f"{path}.env_names")
 
 
@@ -958,6 +980,10 @@ def declaration_digest(decl: McpDeclaration) -> str:
         "scope": decl.scope,
         "git_policy": decl.git_policy,
     }
+    if server.launcher is not None:
+        normalized["server"]["launcher"] = {  # type: ignore[index]
+            key: value for key, value in asdict(server.launcher).items() if value is not None
+        }
     return hashlib.sha256(_DECLARATION_DOMAIN + protocol_json.canonical_bytes(normalized)).hexdigest()
 
 
@@ -973,6 +999,28 @@ def entry_digest(value: object) -> str | None:
 # --- rendering ----------------------------------------------------------------
 
 
+def effective_command(server: ServerSpec) -> str | None:
+    if server.launcher is None:
+        return server.command
+    if server.resolved_launcher is None:
+        raise McpDeclarationError("mcp_launcher_unresolved", "server.launcher", "launcher must be verified before rendering")
+    return server.resolved_launcher.path
+
+
+def resolve_launchers(parsed: Mapping[str, McpDeclaration]) -> dict[str, McpDeclaration]:
+    """Resolve app identities after portable validation and before publication/consent."""
+    resolved = {}
+    for name, decl in parsed.items():
+        if decl.server.launcher is not None:
+            try:
+                launcher = mcp_launchers.resolve_launcher(decl.server.launcher)
+            except mcp_launchers.McpLauncherError as exc:
+                raise McpDeclarationError(exc.code, f"mcp_servers.{name}.server.launcher", str(exc)) from exc
+            decl = replace(decl, server=replace(decl.server, resolved_launcher=launcher))
+        resolved[name] = decl
+    return resolved
+
+
 def render_native_entry(agent: str, decl: McpDeclaration) -> dict[str, object]:
     """Render the entry that goes under the agent's native server key."""
     if agent not in SLICE1_AGENTS:
@@ -984,7 +1032,7 @@ def render_native_entry(agent: str, decl: McpDeclaration) -> dict[str, object]:
     reference = "${%s}" if agent == "claude_code" else "${env:%s}"
     entry: dict[str, object]
     if server.transport == "stdio":
-        entry = {"type": "stdio", "command": server.command, "args": list(server.args)}
+        entry = {"type": "stdio", "command": effective_command(server), "args": list(server.args)}
         if server.env_names:
             entry["env"] = {name: reference % name for name in server.env_names}
         return entry
@@ -1001,7 +1049,7 @@ def render_native_entry(agent: str, decl: McpDeclaration) -> dict[str, object]:
 def _render_codex(server: ServerSpec) -> dict[str, object]:
     entry: dict[str, object]
     if server.transport == "stdio":
-        entry = {"command": server.command, "args": list(server.args)}
+        entry = {"command": effective_command(server), "args": list(server.args)}
         if server.env_names:
             entry["env_vars"] = list(server.env_names)
         return entry
