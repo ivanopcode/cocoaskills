@@ -227,6 +227,31 @@ def test_malformed_neighbor_does_not_break_discovery(tmp_path):
     assert launchers.resolve_launcher(spec, platform="macos", roots=(tmp_path,), verifier=lambda *a: good_verification()).path == str(helper.resolve())
 
 
+# Direct and indirect helper loops refuse with the path error and preserve links; repairing the path permits verification.
+@pytest.mark.parametrize("indirect", [False, True])
+def test_helper_symlink_loop_refuses_before_verification(tmp_path, indirect):
+    from csk import mcp_launchers as launchers
+    _, helper = bundle(tmp_path)
+    helper.unlink()
+    target = "other" if indirect else helper.name
+    helper.symlink_to(target)
+    other = helper.parent / "other"
+    if indirect:
+        other.symlink_to(helper.name)
+    spec = parse(declaration())["app"].server.launcher
+    with pytest.raises(launchers.McpLauncherError) as caught:
+        launchers.resolve_launcher(spec, platform="macos", roots=(tmp_path,), verifier=lambda *a: pytest.fail("loop reached verifier"))
+    assert caught.value.code == "mcp_launcher_path_invalid"
+    assert helper.readlink() == Path(target)
+    helper.unlink()
+    if indirect:
+        assert other.readlink() == Path(helper.name)
+        other.unlink()
+    helper.write_bytes(b"repaired fixture")
+    helper.chmod(0o755)
+    assert launchers.resolve_launcher(spec, platform="macos", roots=(tmp_path,), verifier=lambda *a: good_verification()).path == str(helper.resolve())
+
+
 # On real Windows/Linux CI the default platform dispatch refuses before any app lookup or verification.
 @pytest.mark.skipif(sys.platform == "darwin", reason="non-macOS host dispatch")
 def test_host_dispatch_is_not_supported_yet():
