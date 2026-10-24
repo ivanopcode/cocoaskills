@@ -292,7 +292,13 @@ URL shorthand равен объекту `server` с `transport: "http"` и те�
 
 `server.environments` перечисляет известные environment ids: `claude_code`, `codex_cli`, `cursor`, `gemini`, `windsurf`, `opencode`. Без поля используются resolved agents проекта: csk пишет для `claude_code`, `codex_cli`, `cursor`, а для остальных известных ids показывает `skipped: unsupported` без пути. Явно перечисленный writable агент получает запись, даже если его нет среди agents проекта. Неизвестный id, пустой список или дубликат вызывает `mcp_agent_selection_invalid`.
 
-`install` задаёт локальные параметры установки: как устанавливающий менеджер пишет и аутентифицирует сервер в native configs. Набор полей `install` тоже закрыт. Поле `csk` не является alias и отклоняется с `mcp_declaration_invalid`. `headers` допустим только для HTTP: имя заголовка сопоставляется объекту с обязательным `env` и необязательным `prefix: "bearer"`. Значения секретов в объявлении не хранятся. `auth` содержит `kind` (`none`, `env` или `oauth`) и необязательный `help_url`. Без `auth` csk выбирает `env` при любой env reference, иначе `none`. `scope` поддерживает только `project`, `git_policy` только `local`. Значения `user` и `shared` отклоняются с `mcp_capability_unsupported`. Полный [справочник полей и кодов отказа](reference.md#project-mcp-reference) перечисляет ограничения.
+`install` задаёт локальные параметры установки: как устанавливающий менеджер пишет и аутентифицирует сервер в native configs. Набор полей `install` тоже закрыт. Поле `csk` не является alias и отклоняется с `mcp_declaration_invalid`. HTTP `headers` map each name to either `{ "env": "VARIABLE", "prefix": "none" }` or a value-only `{ "value": "issues,merge_requests" }` object. The forms are mutually exclusive. Env values are never read or persisted by csk. Prefixes are the closed set `none` (default), `bearer`, `api-token` and `token`; native text is respectively empty, `Bearer `, `Api-Token ` and `Token `. `bearer` is restricted to `Authorization` (case-insensitive); the other prefixes accept any otherwise permitted header name.
+
+Claude Code expands `${VARIABLE}` and Cursor expands `${env:VARIABLE}` in headers. Codex uses `env_http_headers` for `none`, `bearer_token_env_var` for `bearer`, and `http_headers` for literals. Its native env fields cannot express `api-token` or `token`: selecting Codex with either prefix refuses the whole plan with `mcp_header_prefix_unsupported`, before any writes. Select only Claude Code and Cursor for those prefixes. csk does not generate an executable helper.
+
+Literal values must be at most 1024 UTF-8 bytes and contain no `$`, control, format or surrogate characters. The existing secret scanner must accept the value. Literal names cannot be `Authorization`, `Cookie`, `Proxy-Authorization` or contain `token`, `key`, `secret` or `auth`, ignoring case; existing forbidden HTTP names still apply. A literal alone requires no consent. OAuth may coexist with both forms; only actual env references require consent for HTTP.
+
+`auth` содержит `kind` (`none`, `env` или `oauth`) и необязательный `help_url`. Без `auth` csk выбирает `env` при любой env reference, иначе `none`. `scope` поддерживает только `project`, `git_policy` только `local`. Значения `user` и `shared` отклоняются с `mcp_capability_unsupported`. Полный [справочник полей и кодов отказа](reference.md#project-mcp-reference) перечисляет ограничения.
 
 `csk check` validates schema 3 and MCP declarations with the install parser, without writes or network access. Stdio `command` must be a bare executable. Known shells/wrappers and evaluator-capable commands such as `awk`, `python`, `osascript` and `open` are refused. Use direct `npx` with an exact `package@1.2.3` or `uvx` with `package==1.2.3`.
 
@@ -487,27 +493,30 @@ MCP authentication and connectivity: not checked.
 
 Ниже фрагменты поля `mcp_servers` для распространённых серверов. Адреса условные, подставьте свои.
 
-**GitLab** (GitLab 18.6 или новее, администратор включает MCP server). Вход через OAuth в агенте, consent не нужен:
+**GitLab**: OAuth runs in the agent. This recipe selects toolsets using a non-secret literal header and needs no consent. Toolset selection requires GitLab 19.5 or later with MCP enabled; see the [supported toolsets](https://docs.gitlab.com/user/model_context_protocol/mcp_server/#select-tool-groups-toolsets). `work_items` and `merge_requests` are supported toolsets; `issues` is not a toolset name.
 
 ```json
 {
   "gitlab": {
     "server": { "transport": "http", "url": "https://gitlab.example.com/api/v4/mcp" },
-    "install": { "auth": { "kind": "oauth", "help_url": "https://docs.gitlab.com/user/model_context_protocol/mcp_server/" } }
+    "install": {
+      "headers": { "X-Gitlab-Enabled-Mcp-Server-Toolsets": { "value": "work_items,merge_requests" } },
+      "auth": { "kind": "oauth", "help_url": "https://docs.gitlab.com/user/model_context_protocol/mcp_server/" }
+    }
   }
 }
 ```
 
 Если инстанс не поддерживает автоматическую регистрацию OAuth-клиента, используйте fine-grained personal access token с доступом к MCP и env header: `"headers": { "Authorization": { "env": "GITLAB_MCP_TOKEN", "prefix": "bearer" } }` и `"auth": { "kind": "env" }`.
 
-**Allure TestOps** (MCP endpoint `/api/mcp`). TestOps ждёт заголовок `Authorization: api-token <токен>`, а `prefix` пока поддерживает только `bearer`. Поэтому слово `api-token` входит в значение переменной:
+**Allure TestOps** (MCP endpoint `/api/mcp`): use `prefix: "api-token"` for `Authorization: Api-Token <token>`. Keep only the token in the variable. This recipe explicitly selects Claude Code and Cursor because Codex cannot express this prefixed env reference natively:
 
 ```json
 {
   "allure": {
-    "server": { "transport": "http", "url": "https://testops.example.com/api/mcp" },
+    "server": { "transport": "http", "url": "https://testops.example.com/api/mcp", "environments": ["claude_code", "cursor"] },
     "install": {
-      "headers": { "Authorization": { "env": "ALLURE_TESTOPS_AUTH" } },
+      "headers": { "Authorization": { "env": "ALLURE_TESTOPS_TOKEN", "prefix": "api-token" } },
       "auth": { "kind": "env", "help_url": "https://docs.qameta.io/allure-testops/howto/mcp/" }
     }
   }
@@ -515,25 +524,25 @@ MCP authentication and connectivity: not checked.
 ```
 
 ```bash
-export ALLURE_TESTOPS_AUTH="api-token <токен>"
+export ALLURE_TESTOPS_TOKEN="<token>"
 ```
 
 Инструкция Qameta подключает тот же сервер через мост `npx mcp-remote` с токеном в аргументах. Закреплённый мост без токена csk примет (`"command": "npx"`, `"args": ["mcp-remote@<версия>", "https://testops.example.com/api/mcp"]`, с consent), но передать ему токен нельзя: подстановка `${VAR}` в `args` отклоняется с `mcp_declaration_invalid`, а токен прямо в `args` был бы секретом в конфиге. На Windows `npx` отклоняется с `mcp_windows_batch_unsupported`. Используйте прямое HTTP-подключение выше.
 
 **Программа внутри приложения** (например, MCP server в macOS `.app`). Объявить её нельзя: `command` принимает только имя без пути. Подключите такой сервер вручную средствами агента (`claude mcp add`, `codex mcp add`, `Cursor Settings > MCP`).
 
-Чего пока нет в schema 3:
+Current schema 3 limits:
 
 | Ограничение | Что из-за него нельзя |
 | --- | --- |
 | `command` только без пути | Сервер, который поставляется внутри приложения. |
 | `${VAR}` запрещён в `args` | Передать токен stdio-мосту, например `mcp-remote --header`. |
-| `prefix` только `bearer` | Префиксы вроде `api-token` или `Token`; сейчас их пишут в значение переменной. |
-| Заголовки только из переменных | Обычный заголовок с фиксированным несекретным значением. |
-| `auth.kind: "oauth"` без env references | OAuth вместе с дополнительным заголовком из переменной. |
+| Codex supports only `none`/`bearer` env prefixes | `api-token`/`token` refuse with `mcp_header_prefix_unsupported`; use an explicit Claude Code/Cursor selection. |
+| Literals are non-secret, at most 1024 UTF-8 bytes | Secret names/scanner hits, `$`, controls and mixed value/env/prefix objects refuse. |
+| HTTP consent follows env references | OAuth plus literals needs no consent; OAuth plus env headers does. |
 | OAuth только для HTTP | Пометить stdio-мост, который сам проходит OAuth. |
 
-Эти случаи планируется закрыть так, чтобы секрет по-прежнему не попадал ни в Skillfile, ни в аргументы команды.
+Use native HTTP support where available; csk never embeds a secret in a Skillfile or command argument.
 
 #### Границы slice 1
 
