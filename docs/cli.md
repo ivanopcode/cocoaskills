@@ -40,6 +40,8 @@ csk --version
 
 Создает манифест `Skillfile.json` и записывает управляемый блок собственных путей в `$GIT_COMMON_DIR/info/exclude`. `.gitignore` по умолчанию не создаётся и не меняется. Linked worktrees используют общий exclude-файл. Вне Git-репозитория команда отказывает без записи.
 
+CocoaSkill keeps one block per project/worktree, delimited by `# CocoaSkill project <key>` and `# End CocoaSkill project <key>`. The opaque key identifies the worktree metadata and the project's repository-relative root. Each update replaces only its own block; other blocks and user bytes remain unchanged. Writers serialize through the persistent `$GIT_COMMON_DIR/csk-exclude.lock` OS lock. Process death releases the lock; transaction replay and rollback merge only the recorded project block into the current file. Do not delete the lock file while csk is running. Older unkeyed exclude blocks are preserved as existing policy; remove obsolete entries manually.
+
 **Синопсис:**
 
 ```bash
