@@ -201,7 +201,7 @@ def _find_bundle(spec: MacOSLauncher, roots: Sequence[Path]) -> Path:
                 info = plistlib.loads(payload)
                 if isinstance(info, dict) and info.get("CFBundleIdentifier") == spec.bundle_id:
                     found.add(candidate.resolve(strict=True))
-            except (OSError, ValueError, plistlib.InvalidFileException, ExpatError):
+            except (OSError, ValueError, RuntimeError, plistlib.InvalidFileException, ExpatError):
                 continue
     if not found:
         raise McpLauncherError("mcp_launcher_not_found", "no application has the declared bundle_id in the application roots")
@@ -267,7 +267,7 @@ def resolve_launcher(
         if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
                 after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
             raise McpLauncherError("mcp_launcher_untrusted", "executable changed during verification")
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         if isinstance(exc, McpLauncherError):
             raise
         raise McpLauncherError("mcp_launcher_path_invalid", "application executable cannot be resolved or read") from exc
