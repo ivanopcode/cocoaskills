@@ -57,6 +57,9 @@ def _write_dev_manifest(project, payload: dict) -> None:
 
 def _setup(tmp_path, skills_root, csk_home):
     project = make_project(tmp_path)
+    # Existing substitution-policy tests keep the legacy managed gitignore contract.
+    ignore = project / ".gitignore"
+    ignore.write_text("# CocoaSkill\n" + ignore.read_text())
     provider_repo, provider_commit = make_skill_repo(skills_root, "provider", _provider_files(), tag="v1")
     make_skill_repo(skills_root, "consumer", _consumer_files(provider_repo), tag="v1")
     write_skillfile(
@@ -153,13 +156,15 @@ def test_status_prints_active_substitutions(tmp_path, skills_root, csk_home):
     assert "SUBSTITUTION provider" in rendered
 
 
+# Default init ignores the dev manifest locally while leaving .gitignore absent.
 def test_init_ignores_the_dev_manifest(tmp_path, monkeypatch):
     root = tmp_path / "fresh"
     root.mkdir()
     run(["git", "init"], root)
     code = cli.main(["init", str(root), "--alias", "fresh"])
     assert code == 0
-    assert "Skillfile.dev.json" in (root / ".gitignore").read_text(encoding="utf-8")
+    assert not (root / ".gitignore").exists()
+    assert run(["git", "check-ignore", "-q", "Skillfile.dev.json"], root).returncode == 0
 
 
 def test_malformed_dev_manifest_fails_install(tmp_path, skills_root, csk_home):

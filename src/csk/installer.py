@@ -900,7 +900,7 @@ def _install_project_once(
             result.messages.append("--fix-gitignore: no-op in exclude mode; .gitignore is unchanged")
         try:
             if project_manifest.schema_version != 3:
-                if options.dry_run and ignore_mode == "exclude":
+                if ignore_mode == "exclude" and (options.dry_run or project_manifest.schema_version == 2):
                     proposed = gitignore_gate.plan_ignored(project.path, expected_ignore, fix=True, mode=ignore_mode)
                     with tempfile.TemporaryDirectory(prefix=".csk-ignore-") as temporary:
                         gitignore_gate.verify_planned_ignored(project.path, expected_ignore, proposed, Path(temporary), mode=ignore_mode)

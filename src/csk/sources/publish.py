@@ -200,6 +200,7 @@ STAGE_BOUNDARIES: Final[tuple[str, ...]] = (
     "commit-30-shim-canonical",
     "commit-60-adapter-ledger",
     "commit-80-removal",
+    "commit-mcp-gitignore",
     "cleanup",
 )
 
@@ -3871,6 +3872,7 @@ class _Schema2Capture:
     manifest_sha: str
     selectors: list[skillfile_v2.SkillSelector]
     git_aliases: frozenset[str]
+    ignore_mode: str
 
 
 def _read_planning_inputs(
@@ -4192,6 +4194,7 @@ def _install_schema2_frozen(
         manifest_sha=manifest_sha,
         selectors=selectors,
         git_aliases=git_aliases,
+        ignore_mode=gitignore_gate.effective_mode(project_path, fresh.ignore_mode),
     )
     return _plan_and_publish_schema2(
         mode=mode,
@@ -4350,6 +4353,7 @@ def _install_schema2_resolving(
         manifest_sha=manifest_sha,
         selectors=selectors,
         git_aliases=git_aliases,
+        ignore_mode=gitignore_gate.effective_mode(project_path, fresh.ignore_mode),
     )
     return _plan_and_publish_schema2(
         mode=mode,
@@ -4443,9 +4447,11 @@ def _plan_and_publish_schema2(
         mcp_warnings: list[str] = []
         ignore_bytes: bytes | None = None
         ignore_preimage: str | None = None
-        _, ignore_manifest = _read_fresh_manifest(project_path)
-        ignore_mode = gitignore_gate.effective_mode(project_path, ignore_manifest.ignore_mode)
-        ignore_target = gitignore_gate.ignore_path(project_path, ignore_mode)
+        ignore_mode = capture.ignore_mode
+        manage_ignore = mcp_plan is not None or ignore_mode == "exclude"
+        ignore_target = project_path / ".gitignore"
+        ignores: list[str] = []
+        added_mcp_ignores: list[str] = []
         if mcp_plan is not None:
             report = mcp_project.check_requirements(
                 mcp_plan,
@@ -4455,29 +4461,33 @@ def _plan_and_publish_schema2(
             if report.errors:
                 raise mcp_project.McpProjectError("; ".join(report.errors))
             mcp_warnings.extend(report.warnings)
+        if manage_ignore:
+            ignore_target = gitignore_gate.ignore_path(project_path, ignore_mode)
             ignores = adapters.required_gitignore_entries(agents)
             # Preserve the opt-in gitignore gate; exclude manages all owned paths.
             gitignore_gate.plan_ignored(project_path, ignores, fix=fix_gitignore, mode=ignore_mode)
             if ignore_mode == "exclude":
                 ignores.append(dev_substitutions.DEV_MANIFEST_NAME)
-            owned_files = set(mcp_plan.created_files)
-            if isinstance(mcp_plan.ledger, mcp_ownership.Ledger):
-                owned_files.update(
-                    (e.address.agent, e.address.relpath)
-                    for e in mcp_plan.ledger.entries if e.created_file
-                )
-            mcp_ignores = [
-                "/" + path for _agent, path in sorted(owned_files)
-                if ignore_mode == "exclude" or not gitignore_gate.is_tracked(project_path, path)
-            ]
-            added_mcp_ignores = gitignore_gate.missing_entries(project_path, mcp_ignores)
-            ignores.extend(mcp_ignores)
+            if mcp_plan is not None:
+                owned_files = set(mcp_plan.created_files)
+                if isinstance(mcp_plan.ledger, mcp_ownership.Ledger):
+                    owned_files.update(
+                        (e.address.agent, e.address.relpath)
+                        for e in mcp_plan.ledger.entries if e.created_file
+                    )
+                mcp_ignores = [
+                    "/" + path for _agent, path in sorted(owned_files)
+                    if ignore_mode == "exclude" or not gitignore_gate.is_tracked(project_path, path)
+                ]
+                added_mcp_ignores = gitignore_gate.missing_entries(project_path, mcp_ignores)
+                ignores.extend(mcp_ignores)
             ignore_preimage = digest_target(ignore_target)
             ignore_bytes = gitignore_gate.plan_ignored(project_path, ignores, fix=True, mode=ignore_mode)
             gitignore_gate.verify_planned_ignored(
                 project_path, ignores, ignore_bytes, staging_root, mode=ignore_mode
             )
-            mcp_project.planned_consent(mcp_plan)
+            if mcp_plan is not None:
+                mcp_project.planned_consent(mcp_plan)
         check_schema2_requirement_commands(specs_map)
         if isinstance(mode, modes.FrozenSources):
             # The frozen lane has no resolution step: the lock membership is
@@ -4606,7 +4616,7 @@ def _plan_and_publish_schema2(
                 for agent in mcp_plan.edits
             )
             if ignore_bytes is not None:
-                readiness_paths.append(project_path / ".gitignore")
+                readiness_paths.append(ignore_target)
             if mcp_plan.pending:
                 readiness_paths.append(mcp_ownership.consent_path(home, mcp_plan.consumer))
             if mcp_plan.edits:
@@ -4779,13 +4789,14 @@ def _plan_and_publish_schema2(
                 )
             transaction_id = f"{TRANSACTION_PREFIX}-{slug}-{uuid.uuid4().hex}"
             extra_targets: tuple[MutableTarget, ...] = ()
-            if mcp_plan is not None:
+            if manage_ignore:
                 gitignore_gate.verify_planned_ignored(
                     project_path, ignores, ignore_bytes, staging_root, mode=ignore_mode
                 )
-                extra_targets = mcp_project.stage_targets(
-                    mcp_plan, staging_root, transaction_id
-                )
+                if mcp_plan is not None:
+                    extra_targets = mcp_project.stage_targets(
+                        mcp_plan, staging_root, transaction_id
+                    )
                 if ignore_bytes is not None:
                     ignore_staged = staging_root / "mcp-gitignore"
                     ignore_staged.write_bytes(ignore_bytes)

@@ -26,6 +26,21 @@ def effective_mode(project_root: Path, declared: str | None) -> str:
     return declared or ("gitignore" if legacy_block(project_root) else "exclude")
 
 
+def _project_relative(project_root: Path, worktree: Path) -> Path:
+    """Find the worktree prefix by identity, including case/Unicode aliases."""
+    current = project_root.resolve()
+    parts: list[str] = []
+    try:
+        while not current.samefile(worktree):
+            if current.parent == current:
+                raise GitignoreError("Project is outside the Git worktree")
+            parts.append(current.name)
+            current = current.parent
+    except OSError as exc:
+        raise GitignoreError("Cannot locate project in the Git worktree") from exc
+    return Path(*reversed(parts))
+
+
 def ignore_path(project_root: Path, mode: str) -> Path:
     if mode == "gitignore":
         return project_root / ".gitignore"
@@ -74,7 +89,7 @@ def _plan_exclude(project_root: Path, entries: list[str]) -> bytes | None:
     )
     if discovery.returncode:
         raise ExcludeError("Cannot resolve Git worktree")
-    relative = project_root.resolve().relative_to(Path(discovery.stdout.removesuffix("\n")).resolve())
+    relative = _project_relative(project_root, Path(discovery.stdout.removesuffix("\n")))
     prefix = "" if relative == Path(".") else relative.as_posix() + "/"
     # info/exclude is rooted at the worktree, including for nested projects.
     patterns = {
@@ -214,8 +229,9 @@ def verify_planned_ignored(
 ) -> None:
     """Ask Git to evaluate a private copy of the proposed ignore hierarchy.
 
-    Reuse repository metadata read-only, without creating a repository or
-    changing the index/worktree. Include ancestor and nested ignore files:
+    Reuse live metadata read-only for gitignore; exclude uses private metadata
+    containing the proposed info/exclude. Never change the live index/worktree.
+    Include ancestor and nested ignore files:
     a child negation can defeat an exact root rule and must refuse publication.
     """
     if not entries:
@@ -294,7 +310,7 @@ def verify_planned_ignored(
     # info/exclude remains in the reused metadata. Absolute implicit global
     # excludes and config includes retain their environment and source paths.
     try:
-        project_rel = project_root.resolve().relative_to(worktree.resolve())
+        project_rel = _project_relative(project_root, worktree)
         staged = staging_root / "ignore-worktree"
         staged.mkdir(exist_ok=True)
         probes = [project_rel / (

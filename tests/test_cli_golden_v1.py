@@ -4,7 +4,7 @@ The committed files in ``tests/fixtures/cli-golden-v1/`` preserve the original
 capture from released commit ``ac840828d947d0559b9dd18dcc783bc422a4b341``.
 The active gate renders that released source and the candidate under the same
 Python interpreter because argparse help wrapping changed after Python 3.12.
-Audit help permits only the explicit security token-input difference below.
+Audit and init help permit only the explicit policy differences below.
 Both runs use the terminal width from ``base_run_env`` and capture through
 ``StringIO(newline="\\n")``; line endings remain byte-exact and only path
 separators are normalized.
@@ -145,6 +145,54 @@ def test_cli_v1_golden_byte_identical(
             terminal_width=released.terminal_width,
         )
 
+    if slug in {"bare", "help", "init-help"}:
+        # Only the declared init policy changes; all other help bytes remain
+        # compared to the immutable release under the same interpreter.
+        old = (
+            b"    init                Create project Skillfile.json and CocoaSkill gitignore\n"
+            b"                        block.\n"
+            if slug in {"bare", "help"} else
+            b"  <project>/Skillfile.json and <project>/.gitignore.\n"
+        )
+        new = (
+            b"    init                Create project Skillfile.json and local Git exclude\n"
+            b"                        block.\n"
+            if slug in {"bare", "help"} else
+            b"  <project>/Skillfile.json and Git common info/exclude.\n"
+        )
+        assert released.stdout.count(old) == 1
+        expected_stdout = released.stdout.replace(old, new)
+        if slug in {"bare", "help"}:
+            old_index = b"  csk init [path]        create project Skillfile.json and gitignore block\n"
+            new_index = b"  csk init [path]        create project Skillfile.json and local exclude block\n"
+            assert expected_stdout.count(old_index) == 1
+            expected_stdout = expected_stdout.replace(old_index, new_index)
+        released = CLIOutput(
+            exit_code=released.exit_code, stdout=expected_stdout,
+            stderr=released.stderr, version=released.version,
+            terminal_width=released.terminal_width,
+        )
+    if slug == "init-empty":
+        # Outside-Git init now refuses without writing either policy or manifest;
+        # assert the old baseline too so the exception cannot hide other drift.
+        assert released.exit_code == 0
+        assert tokenize_output(released.stdout, root=str(released_root), version=released.version) == (
+            b"Initialized CocoaSkill project at {{GOLDEN_ROOT}}/emptydir\n"
+        )
+        assert released.stderr == (
+            b"csk init: WARNING - target is not inside a git repository\n"
+            b"  Skillfile.json and .gitignore have been written.\n"
+            b"  The .gitignore block has no effect until this directory becomes a git repository.\n"
+            b"  Run 'git init' here if you intend to track it.\n"
+        )
+        assert not (candidate_root / "emptydir" / "Skillfile.json").exists()
+        assert not (candidate_root / "emptydir" / ".gitignore").exists()
+        released = CLIOutput(
+            exit_code=2, stdout=b"",
+            stderr=b"error: A git repository is required for csk init\n",
+            version=released.version, terminal_width=released.terminal_width,
+        )
+
     assert candidate.exit_code == released.exit_code
     assert _normalize(
         tokenize_output(
@@ -193,6 +241,22 @@ def test_audit_help_comparison_rejects_unrelated_drift(tmp_path, released_v1_sou
     with pytest.raises(AssertionError):
         test_cli_v1_golden_byte_identical(
             "audit-help", _audit_help_fixture(tmp_path), released_v1_source, tmp_path,
+        )
+
+
+# The narrow init-help exception must still detect an unrelated changed option.
+def test_init_help_comparison_rejects_unrelated_drift(tmp_path, released_v1_source, monkeypatch) -> None:
+    mutant_root = tmp_path / "mutant-project"
+    shutil.copytree(PROJECT_ROOT / "src", mutant_root / "src")
+    source = mutant_root / "src" / "csk" / "cli.py"
+    text = source.read_text(encoding="utf-8")
+    before = 'help="project.alias to write into Skillfile.json"'
+    assert text.count(before) == 1
+    source.write_text(text.replace(before, 'help="different alias help"'), encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "PROJECT_ROOT", mutant_root)
+    with pytest.raises(AssertionError):
+        test_cli_v1_golden_byte_identical(
+            "init-help", _audit_help_fixture(tmp_path), released_v1_source, tmp_path,
         )
 
 

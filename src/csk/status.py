@@ -60,6 +60,7 @@ class ProjectStatus:
     capability_evidence: Mapping[str, object] | None = None
     capability_evidence_error: str | None = None
     mcp: tuple[mcp_project.ReportRow, ...] | None = None
+    legacy_ignore: bool = False
 
     @property
     def clean(self) -> bool:
@@ -218,6 +219,7 @@ def _collect_project_status(
             [],
             substitution_lines,
         )
+    legacy_ignore = project_manifest.ignore_mode is None and gitignore_gate.legacy_block(project.path)
     if project_manifest.schema_version in (2, 3):
         result = _collect_schema2_project_status(
             config, project, project_manifest, substitution_lines
@@ -233,7 +235,7 @@ def _collect_project_status(
                 result = replace(result, mcp=rows)
             except (mcp_project.McpProjectError, OSError) as exc:
                 result = replace(result, mcp=(), errors=(*result.errors, str(exc)))
-        return result
+        return replace(result, legacy_ignore=legacy_ignore)
 
     errors: list[str] = []
     csk_home = config.path.parent
@@ -300,7 +302,7 @@ def _collect_project_status(
     )
     if errors:
         result = replace(result, errors=(*result.errors, *errors))
-    return result
+    return replace(result, legacy_ignore=legacy_ignore)
 
 
 def _collect_scope(
@@ -1314,10 +1316,8 @@ def _render_project_status(
     if not project.skillfile_present:
         lines.append("  Skillfile.json missing")
         return "\n".join(lines)
-    if not global_scope:
-        loaded = manifest.load_manifest(project.path)
-        if loaded is not None and loaded.ignore_mode is None and gitignore_gate.legacy_block(project.path):
-            lines.append('  Legacy ignore block: set "ignore_mode": "gitignore", or remove the block to use local exclude.')
+    if project.legacy_ignore and not global_scope:
+        lines.append('  Legacy ignore block: set "ignore_mode": "gitignore", or remove the block to use local exclude.')
     if not project.skills:
         lines.append("  no skills declared")
     for skill in project.skills:

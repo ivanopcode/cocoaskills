@@ -175,9 +175,12 @@ def test_explicit_exclude_dry_run(project_cli):
     assert (root / ".gitignore").read_bytes() == before
 
 
-# A post-ignore publication fault restores user exclude bytes, native configs and the lock.
-def test_exclude_transaction_rollback(project_cli, monkeypatch):
-    root, _, _ = project_cli
+# Publication faults restore exclude, native configs and lock, including schema 2 without MCP.
+@pytest.mark.parametrize("schema", [2, 3])
+def test_exclude_transaction_rollback(project_cli, monkeypatch, schema):
+    root, _, declare = project_cli
+    if schema == 2:
+        declare(None, schema=2)
     (root / ".gitignore").unlink()
     target = root / ".git/info/exclude"
     target.parent.mkdir(exist_ok=True)
@@ -188,7 +191,8 @@ def test_exclude_transaction_rollback(project_cli, monkeypatch):
 
     def factory(home, **kwargs):
         def fault(point, item):
-            if point == "target_committed" and item is not None and item.target_class == "mcp-native" and not reached:
+            target_class = "mcp-gitignore" if schema == 2 else "mcp-native"
+            if point == "target_committed" and item is not None and item.target_class == target_class and not reached:
                 reached.append(point)
                 raise OSError("injected native publication failure")
         return original(home, fault_hook=fault, **kwargs)
@@ -288,3 +292,24 @@ def test_conditional_ignore_case(tmp_path):
     with pytest.raises(gitignore_gate.GitignoreError, match="does not effectively ignore"):
         gitignore_gate.ensure_ignored(root, ["/.mcp.json"], mode="exclude")
     assert not (root / ".git/info/exclude").exists()
+
+
+# Init rejects unsafe exclude before creating a Skillfile; a regular target permits initialization.
+@pytest.mark.parametrize("unsafe", [True, False])
+def test_init_exclude_refusal(tmp_path, capsys, unsafe):
+    root = make_project(tmp_path, gitignore=False)
+    target = root / ".git/info/exclude"
+    target.parent.mkdir(exist_ok=True)
+    if unsafe:
+        target.mkdir()
+    else:
+        target.write_bytes(b"# user\r\n")
+    assert cli.main(["init", str(root), "--no-interactive"]) == (cli.EXIT_CONFIG if unsafe else 0)
+    if unsafe:
+        assert "git_exclude_invalid" in capsys.readouterr().err
+        assert not (root / "Skillfile.json").exists()
+        assert target.is_dir()
+    else:
+        assert (root / "Skillfile.json").is_file()
+        assert target.read_bytes().startswith(b"# user\r\n")
+    assert not (root / ".gitignore").exists()
