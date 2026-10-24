@@ -11,7 +11,7 @@ import pytest
 from csk import closure, git_ops, installer, manifest, skillspec
 from csk.builds import planner, source, toolchain
 from csk.sources import publish
-from conftest import make_config
+from conftest import init_git_repo, make_config
 
 
 # Independent copy of the decided set: omitting a policy entry must fail.
@@ -225,9 +225,9 @@ def test_schema2_install_refuses_before_publication(
         "sources": {"local": {"path": "sources"}},
         "skills": [{"name": "provider", "from": "local", "directory": "provider"}],
     }), encoding="utf-8")
-    # The fixture has no Git repository. Bypass only the unrelated ignore
-    # check so the production path stays offline and creates no commits.
-    monkeypatch.setattr(installer.gitignore_gate, "ensure_ignored", lambda *a, **kw: None)
+    # Real Git admission succeeds; the reserved command still refuses before
+    # audit or publication, in both live and dry-run installs.
+    init_git_repo(project)
 
     def forbidden(*args, **kwargs):
         pytest.fail("reserved command reached audit or publication")
