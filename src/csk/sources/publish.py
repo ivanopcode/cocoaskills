@@ -27,13 +27,13 @@ import sys
 import tempfile
 import uuid
 from collections.abc import Callable, Mapping
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import dataclasses
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Iterator, Literal
 
 from .. import (
     adapters,
@@ -3993,6 +3993,98 @@ def _serve_resolving_publication_files(
     return frozen_files
 
 
+def _stage_mcp_store(
+    staging_root: Path,
+    captured: dict[str, CapturedMember],
+    mode: modes.ResolvingSources | modes.FrozenSources,
+) -> tuple[Path, dict[str, store.StoredSnapshot]]:
+    """Verify source records in private staging, never in the live store."""
+    private_home = staging_root / "source-store"
+    private_home.mkdir(mode=0o700)
+    candidates = {
+        name: item for name, item in captured.items()
+        if isinstance(mode, modes.ResolvingSources) or item.store_missing
+    }
+    return private_home, stage_schema2_store(private_home, candidates)
+
+
+def _mcp_store_targets(
+    home: Path,
+    private_home: Path,
+    stored: dict[str, store.StoredSnapshot],
+    mode: modes.ResolvingSources | modes.FrozenSources,
+) -> tuple[MutableTarget, ...]:
+    """Journal record/tree replacements with the rest of the install.
+
+    Old digest trees remain available. Frozen recovery never replaces an entry
+    that appeared under the home lock; it must already serve the locked bytes.
+    """
+    targets = []
+    for name, item in sorted(stored.items()):
+        if isinstance(mode, modes.FrozenSources):
+            existing = store.lookup_snapshot_if_present(home, name, item.package)
+            if existing is not None:
+                if existing.snapshot != item.snapshot:
+                    raise SourceError(CODE_SNAPSHOT_UNAVAILABLE,
+                                      f"Skill {name!r} locked snapshot appeared with different stored bytes")
+                continue
+        entry = store.entry_dir(private_home, name, item.package)
+        for target_class, staged in (
+            ("03-source-tree", entry / "trees" / item.snapshot.removeprefix("sha256:")),
+            ("04-source-record", entry / "record.json"),
+        ):
+            relative = staged.relative_to(private_home)
+            live = home / relative
+            validate_live_managed_tree(live, subject=f"Source snapshot {name!r}")
+            expected = digest_target(live)
+            if expected == digest_target(staged):
+                continue
+            targets.append(MutableTarget(
+                target_class, relative.as_posix(), live, staged,
+                expected_preimage_digest=expected,
+            ))
+    return tuple(targets)
+
+
+@contextmanager
+def _mcp_publication_scope(home: Path) -> Iterator[list[Path]]:
+    """Undo newly created parents and MCP permission narrowing on refusal.
+
+    Payloads and sidecars are owned by the transaction engine. Empty scaffolding
+    has no journal target; track it separately without removing pre-existing or
+    nonempty directories (including recovery evidence after a rollback fault).
+    """
+    directories = (home / "state", home / "state/transactions",
+                   home / "state/transactions/v1", home / "state/mcp",
+                   home / "state/mcp/consent", home / "state/mcp/ledger")
+    before: dict[Path, os.stat_result | None] = {}
+    for path in directories:
+        try:
+            before[path] = path.lstat()
+        except FileNotFoundError:
+            before[path] = None
+    created: list[Path] = []
+    try:
+        yield created
+    except BaseException:
+        remove_created_parents(created)
+        for path in reversed(directories):
+            prior = before[path]
+            if prior is None:
+                try:
+                    path.rmdir()
+                except OSError:
+                    pass
+            elif path in directories[3:] and stat.S_ISDIR(prior.st_mode):
+                try:
+                    current = path.lstat()
+                except FileNotFoundError:
+                    continue
+                if stat.S_ISDIR(current.st_mode) and (current.st_dev, current.st_ino) == (prior.st_dev, prior.st_ino):
+                    path.chmod(stat.S_IMODE(prior.st_mode))
+        raise
+
+
 def install_schema2(
     *,
     mode: modes.ResolvingSources | modes.FrozenSources,
@@ -4410,6 +4502,7 @@ def _plan_and_publish_schema2(
         mcp_warnings: list[str] = []
         ignore_bytes: bytes | None = None
         ignore_preimage: str | None = None
+        private_store: tuple[Path, dict[str, store.StoredSnapshot]] | None = None
         if mcp_plan is not None:
             report = mcp_project.check_requirements(
                 mcp_plan,
@@ -4637,9 +4730,16 @@ def _plan_and_publish_schema2(
             mcp_project.review_consent(
                 mcp_plan, interactive=interactive, dry_run=False, project=alias
             )
-            if isinstance(mode, modes.ResolvingSources):
-                stage_schema2_store(home, captured_members)
-        with locking.ManagerHomeLock(home) as home_lock:
+            mcp_project.assert_current(mcp_plan)
+            private_store = _stage_mcp_store(staging_root, captured_members, mode)
+        with (
+            locking.ManagerHomeLock(home) as home_lock,
+            ExitStack() as publication_scope,
+        ):
+            publication_parents = (
+                publication_scope.enter_context(_mcp_publication_scope(home))
+                if mcp_plan is not None else []
+            )
             engine = TransactionEngine(home, pre_write_hook=make_publication_hook())
             engine.recover(home_lock)
             try:
@@ -4680,7 +4780,9 @@ def _plan_and_publish_schema2(
             # Publication consumes verified stored bytes, or the captured
             # candidate for a missing frozen entry. Recovered candidates
             # remain unstaged until the rebuilt lock matches below.
-            if isinstance(mode, modes.FrozenSources):
+            if private_store is not None and isinstance(mode, modes.ResolvingSources):
+                frozen_files = {name: item.files for name, item in private_store[1].items()}
+            elif isinstance(mode, modes.FrozenSources):
                 frozen_files = _serve_frozen_publication_files(
                     captured_members, home=home
                 )
@@ -4734,11 +4836,12 @@ def _plan_and_publish_schema2(
                     staged.new_lock,
                     recovered_names=recovered_names,
                 )
-                _stage_recovered_locked_snapshots(
-                    captured_members,
-                    home=home,
-                    home_lock=home_lock,
-                )
+                if private_store is None:
+                    _stage_recovered_locked_snapshots(
+                        captured_members,
+                        home=home,
+                        home_lock=home_lock,
+                    )
             transaction_id = f"{TRANSACTION_PREFIX}-{slug}-{uuid.uuid4().hex}"
             extra_targets: tuple[MutableTarget, ...] = ()
             if mcp_plan is not None:
@@ -4748,6 +4851,8 @@ def _plan_and_publish_schema2(
                 extra_targets = mcp_project.stage_targets(
                     mcp_plan, staging_root, transaction_id
                 )
+                assert private_store is not None
+                extra_targets += _mcp_store_targets(home, *private_store, mode)
                 if ignore_bytes is not None:
                     ignore_staged = staging_root / "mcp-gitignore"
                     ignore_staged.write_bytes(ignore_bytes)
@@ -4772,16 +4877,17 @@ def _plan_and_publish_schema2(
                 )
 
             created_parents = ensure_live_parents(planned, staged=staged.desired)
+            publication_parents.extend(created_parents)
             if extra_targets:
-                created_parents.extend(
-                    ensure_live_parents(
-                        extra_specs,
-                        staged={
-                            (t.target_class, t.identifier): t.desired_path
-                            for t in extra_targets
-                        },
-                    )
+                extra_parents = ensure_live_parents(
+                    extra_specs,
+                    staged={
+                        (t.target_class, t.identifier): t.desired_path
+                        for t in extra_targets
+                    },
                 )
+                created_parents.extend(extra_parents)
+                publication_parents.extend(extra_parents)
             # The record freezes after our own parents exist, so the
             # frozen managed bindings already include them; anything
             # that changes afterwards refuses at write time.
