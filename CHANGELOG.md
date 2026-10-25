@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Исправлено
 
 - Старые command/HTTP MCP journals из 0.20.1 восстанавливаются по сохранённым ledger targets без выдуманной launcher observation и без чтения текущего Skillfile для классификации. Launcher без observation и неклассифицируемый journal сохраняют fail-closed отказ; `csk recover --rollback TRANSACTION_ID` явно откатывает незавершённую публикацию перед новой установкой, сохраняя lock и publication-boundary checks.
+- Launcher recovery checks also cover ledger-only and consent/ledger journals whose native configuration stays unchanged. Explicit rollback restores recorded files/symlinks but may leave empty directories and more restrictive directory modes; the documentation and command output now state this limitation. Directory permissions are not widened.
 - Отказ проверки MCP launcher после consent не оставляет новый source snapshot: source-v1 trees и records публикуются в одной transaction с native configs, consent, ledger и ignore entries. Отказ до commit откатывает эти изменения и созданные каталоги, сохраняя существующие snapshots.
 - Crash recovery повторно проверяет сохранённую launcher observation до публикации любых targets. Invalid signature, изменившийся path/publisher или trust downgrade останавливают replay с сохранением journal для доверенного retry; валидный content-only update сохраняет approval. Ошибка cleanup после durable commit и незавершённый rollback получают отдельные коды, точное состояние targets и recovery hint вместо обычного отказа.
 

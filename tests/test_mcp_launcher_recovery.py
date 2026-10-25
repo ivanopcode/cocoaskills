@@ -283,6 +283,86 @@ def test_missing_saved_observation_pauses_recovery(tmp_path, point, target, prev
     assert not _journals(case)
 
 
+@pytest.fixture(scope='module')
+def earlier_launcher_source(tmp_path_factory):
+    from cli_golden_v1_support import extract_release_source
+
+    return extract_release_source(
+        '20a158c2bfa927dcbe8988971c810bf6d1446a43',
+        tmp_path_factory.mktemp('earlier-launcher-cli'),
+        cwd=Path(__file__).resolve().parents[1],
+    )
+
+
+# The actual earlier CLI saves guardless ledger-only or consent/ledger plans
+# when native bytes do not change. Both must pause unchanged even after trust
+# is restored; explicit rollback then a fresh plan succeeds. Matching current
+# writers save a guard, refuse invalid trust unchanged and recover valid trust.
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX process-death control')
+@pytest.mark.parametrize('writer', ['earlier', 'current'])
+@pytest.mark.parametrize('publisher_change', [False, True])
+def test_metadata_only_launcher_recovery(tmp_path, earlier_launcher_source, writer, publisher_change):
+    current = Path(__file__).resolve().parents[1] / 'src'
+    source = earlier_launcher_source if writer == 'earlier' else current
+    case, apps, _ = _setup(tmp_path)
+    script = "from csk import cli\nprint('WRITER_IMPLEMENTATION', cli.__file__, flush=True)\n" + CHILD.replace(
+        "signature_valid=not request.get('untrusted')",
+        "signature_valid=not request.get('untrusted'), team_id=a[2].team_id",
+    )
+
+    def invoke(implementation, **request):
+        environment = dict(case.env, PYTHONPATH=str(implementation) + os.pathsep + str(Path(__file__).resolve().parent))
+        payload = {'apps': str(apps), 'argv': ['install', 'app', '--fix-gitignore'], **request}
+        result = subprocess.run(
+            [sys.executable, '-c', script, json.dumps(payload)],
+            cwd=case.project, env=environment, capture_output=True, text=True, timeout=180,
+        )
+        assert str(implementation / 'csk/cli.py') in result.stdout, result.stdout + result.stderr
+        return result
+
+    installed = invoke(source)
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    native = {path: (case.project / path).read_bytes() for _, path in SURFACES}
+    helper = apps / 'Example.app/Contents/MacOS/mcp-server'
+    helper.write_bytes(helper.read_bytes() + b'\nVerified helper update.\n')
+    if publisher_change:
+        changed = declaration()
+        changed['app']['server']['launcher']['macos']['team_id'] = 'OTHER12345'
+        case.declare(changed)
+    killed = invoke(source, point='prepared', kill=True)
+    assert killed.returncode == -signal.SIGKILL, killed.stdout + killed.stderr
+    path, = _journals(case)
+    raw = json.loads(path.read_bytes())
+    assert [target['target_class'] for target in raw['targets']] == (
+        ['mcp-consent', 'mcp-ledger'] if publisher_change else ['mcp-ledger']
+    )
+    guards = [target['publication_recheck']['commit_guard'] for target in raw['targets']
+              if 'commit_guard' in (target.get('publication_recheck') or {})]
+    assert len(guards) == (0 if writer == 'earlier' else 1)
+    ledger = next(target for target in raw['targets'] if target['target_class'] == 'mcp-ledger')
+    saved = json.loads(Path(ledger['staged_path']).read_bytes())
+    assert saved['entries'] and all(entry['launcher_sha256'] for entry in saved['entries'])
+    interrupted = _snapshot(case.project, case.home)
+    refused = invoke(current, untrusted=True)
+    text = refused.stdout + refused.stderr
+    code = 'mcp_recovery_observation_missing' if writer == 'earlier' else 'mcp_launcher_untrusted'
+    assert refused.returncode == 1 and code in text, text
+    assert _snapshot(case.project, case.home) == interrupted and _journals(case) == [path]
+    assert native == {name: (case.project / name).read_bytes() for _, name in SURFACES}
+    if writer == 'earlier':
+        assert f'csk recover --rollback {raw["transaction_id"]}' in text
+        paused = invoke(current)
+        assert paused.returncode == 1 and code in paused.stdout + paused.stderr
+        assert _snapshot(case.project, case.home) == interrupted and _journals(case) == [path]
+        rollback = invoke(current, argv=['recover', '--rollback', raw['transaction_id']])
+        assert rollback.returncode == 0 and not _journals(case), rollback.stdout + rollback.stderr
+        assert 'Empty directories may remain' in rollback.stdout
+        assert 'previous directory modes are not restored' in rollback.stdout
+    valid = invoke(current)
+    assert valid.returncode == 0 and not _journals(case), valid.stdout + valid.stderr
+    assert native == {name: (case.project / name).read_bytes() for _, name in SURFACES}
+
+
 # The reviewer's real codesign interleaving: verify original and copy, kill
 # after the source record, tamper only the copy, refuse replay, restore and
 # recover. Neither the original app nor its helper is modified or executed.
