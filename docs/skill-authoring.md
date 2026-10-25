@@ -592,9 +592,27 @@ signature, path/publisher change or trust downgrade pauses replay with
 `mcp_launcher_untrusted` or `mcp_launcher_changed`;
 the interrupted state and journal remain for a retry after restoring the recorded
 trusted application. Existing native entries and consent are not advanced during
-that rejected replay. An older interrupted MCP journal without a saved observation
-stops with `mcp_recovery_observation_missing`; inspect its saved state before repair
-instead of treating a new declaration as the old approval.
+that rejected replay. Ordinary command/HTTP journals written by 0.20.1 recover
+without inventing a launcher observation. Classification uses the journal's
+pinned desired and previous ownership ledgers, including launcher fingerprints;
+it does not use the current Skillfile. A recorded launcher without an observation,
+or a journal whose saved targets cannot establish that no launcher was involved,
+stops with `mcp_recovery_observation_missing` and leaves interrupted state intact.
+To abandon such an unfinished publication, copy its transaction ID from the
+diagnostic and run:
+
+```sh
+csk recover --rollback TRANSACTION_ID
+csk install
+```
+
+Use the same manager home (`CSK_CONFIG`, if set) as the interrupted install.
+Rollback restores recorded preimages under the manager lock and existing
+publication-boundary checks; it does not approve or launch a helper. Keep all
+journal sidecars until it succeeds. Restore moved publication boundaries before
+retrying a refused rollback. The next install reviews the current declaration
+as a fresh plan. A committed transaction awaiting cleanup cannot be rolled back
+with this command; rerun `csk install` to finish cleanup instead.
 Valid content-only updates and trust upgrades retain approval; the next ordinary
 install plan records the current helper fingerprint without another prompt.
 
