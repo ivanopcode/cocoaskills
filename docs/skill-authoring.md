@@ -686,7 +686,16 @@ refuses. The inherited `~/.config/` spelling remains accepted for compatibility
 with existing declarations: it denotes the same fixed fallback location without
 adding another expansion mechanism. Realpath must stay inside the expanded root.
 The regular executable and every parent through that root must belong to root or
-the current user and have no group/world write bits. Root-owned helpers are
+the current user. World write always refuses. Group write is allowed only when
+the element belongs to the current non-root uid, its gid equals that account's
+primary gid, and the group's explicit `gr_mem` list is empty or exactly the
+current account name. User/group database lookup failure refuses group write;
+ordinary strict modes do not require those lookups. Root-owned elements always
+retain the strict no-group/world-write rule, even when csk runs as root. This
+private-primary-group exception supports user-group umask `002` setups and
+requires `allow-unverified` plus local consent. Any group-writable element in
+the checked chain prevents `verified` trust, including for a root-owned helper.
+Root-owned helpers with a strict-mode chain are
 checked using trusted root-owned system `/usr/bin/dpkg -S -- PATH` or
 `/usr/bin/rpm -qf -- PATH`, with fixed argv, a minimal environment, five-second
 timeout and no shell. Probe errors never establish trust. Package ownership is a
@@ -697,6 +706,8 @@ App lookup and verification never launch the application or helper. Native
 controls use installed Proxyman on macOS, a Microsoft-signed binary and tampered
 copy on Windows, and a package-owned executable plus user-owned and writable-parent
 fixtures on Linux. These controls require their respective native platforms.
+The Linux umask `002` positive control additionally requires a non-root account
+with a private primary group; it uses real account/group facts.
 
 Чего пока нет в schema 3:
 

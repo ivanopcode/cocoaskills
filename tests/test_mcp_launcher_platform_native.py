@@ -63,6 +63,8 @@ def test_native_linux_package_user_and_unsafe_parent(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
     file = tmp_path / '.local/bin/server'
     file.parent.mkdir(parents=True)
+    (tmp_path / '.local').chmod(0o755)
+    file.parent.chmod(0o755)
     file.write_bytes(b'#!/bin/sh\nexit 0\n')
     file.chmod(0o755)
     declaration = {'path': '~/.local/bin/server'}
@@ -72,8 +74,37 @@ def test_native_linux_package_user_and_unsafe_parent(tmp_path, monkeypatch):
     declaration['trust'] = 'allow-unverified'
     allowed = gate.parse_launcher({'linux': declaration})
     assert gate.resolve_launcher(allowed, platform='linux').trust == 'unverified'
-    file.parent.chmod(0o775)
+    file.parent.chmod(0o777)
     with pytest.raises(gate.McpLauncherError) as caught: gate.resolve_launcher(allowed, platform='linux')
     assert caught.value.code == 'mcp_launcher_path_invalid'
     file.parent.chmod(0o755)
     assert gate.resolve_launcher(allowed, platform='linux').trust == 'unverified'
+
+
+# Real umask 002 creates group-writable private-group paths on a default
+# unprivileged Ubuntu account. This native positive control requires that host
+# account setup; it never injects ownership/group facts or weakens root rules.
+@pytest.mark.csk_e2e_native
+@pytest.mark.skipif(sys.platform != 'linux', reason='native Linux private primary group')
+def test_native_linux_umask_002_private_group(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    file = tmp_path / '.local/bin/server'
+    previous = os.umask(0o002)
+    try:
+        file.parent.mkdir(parents=True)
+        file.write_bytes(b'#!/bin/sh\nexit 0\n')
+    finally:
+        os.umask(previous)
+    file.chmod(0o775)  # Supply execute permission; preserve the group-write bit.
+    for element in (file, file.parent):
+        info = element.stat()
+        facts = gate.linux_group_facts(info.st_gid)
+        assert (info.st_uid == os.getuid() != 0 and info.st_gid == facts.primary_gid
+                and facts.members in ((), (facts.user_name,))), 'positive control requires a non-root private primary group'
+        assert info.st_mode & 0o777 == 0o775
+    raw = {'linux': {'path': '~/.local/bin/server'}}
+    with pytest.raises(gate.McpLauncherError) as caught:
+        gate.resolve_launcher(gate.parse_launcher(raw), platform='linux')
+    assert caught.value.code == 'mcp_launcher_untrusted'
+    raw['linux']['trust'] = 'allow-unverified'
+    assert gate.resolve_launcher(gate.parse_launcher(raw), platform='linux').trust == 'unverified'
