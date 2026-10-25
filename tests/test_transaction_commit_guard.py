@@ -119,3 +119,32 @@ def test_explicit_rollback_does_not_undo_committed_install(tmp_path, committed):
         else:
             rejecting.rollback(lock, 'explicit-rollback')
             assert live.read_text() == 'old' and not journal_path.exists()
+
+
+# Interrupted rollback can already have restored all preimages and tombed its
+# journal. Retrying the explicit rollback command must finish that removal,
+# rather than report that this rolled-back installation committed.
+def test_explicit_rollback_finishes_rollback_tomb(tmp_path):
+    home = tmp_path / 'home'
+    live = _write(tmp_path / 'live', 'old')
+    desired = _write(tmp_path / 'desired', 'new')
+    target = _target('mcp-native', 'native', live, desired)
+    def interrupt_commit(event, target):
+        if event == 'after_install':
+            raise KeyboardInterrupt('simulated interruption')
+    def interrupt_removal(event, target):
+        if event == 'before_journal_unlink':
+            raise OSError('injected rollback journal removal failure')
+    engine = TransactionEngine(home, fault_hook=interrupt_commit)
+    with ManagerHomeLock(home) as lock:
+        engine.prepare(lock, _plan('rollback-tomb', tmp_path / 'project', target))
+        with pytest.raises(KeyboardInterrupt):
+            engine.commit(lock, 'rollback-tomb')
+        with pytest.raises(TransactionIncompleteError) as failure:
+            TransactionEngine(home, fault_hook=interrupt_removal).rollback(lock, 'rollback-tomb')
+        assert failure.value.code == 'transaction_rollback_deferred'
+        assert live.read_text() == 'old'
+        tomb = engine.journal_root / 'rollback-tomb.json.delete'
+        assert tomb.exists()
+        TransactionEngine(home).rollback(lock, 'rollback-tomb')
+        assert live.read_text() == 'old' and not tomb.exists()
