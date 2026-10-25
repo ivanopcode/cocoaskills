@@ -92,8 +92,8 @@ def _invoke(case, apps, argv=None, **fault):
     )
 
 
-def _setup(root, existing=False):
-    case = _case(root / 'case')
+def _setup(root, existing=False, *, ignore_mode='gitignore'):
+    case = _case(root / 'case', ignore_mode=ignore_mode)
     case.declare(declaration())
     apps = root / 'Applications'
     bundle(apps)
@@ -319,7 +319,7 @@ def earlier_launcher_source(tmp_path_factory):
 def test_metadata_only_launcher_recovery(tmp_path, earlier_launcher_source, writer, publisher_change):
     current = Path(__file__).resolve().parents[1] / 'src'
     source = earlier_launcher_source if writer == 'earlier' else current
-    case, apps, _ = _setup(tmp_path)
+    case, apps, _ = _setup(tmp_path, ignore_mode=None if writer == 'earlier' else 'gitignore')
     script = "from csk import cli\nprint('WRITER_IMPLEMENTATION', cli.__file__, flush=True)\n" + CHILD.replace(
         "signature_valid=not request.get('untrusted')",
         "signature_valid=not request.get('untrusted'), team_id=a[2].team_id",
