@@ -288,8 +288,8 @@ OAuth may coexist with headers. An env reference requires consent; literals alon
 - **На Windows `.cmd` и `.bat` не поддерживаются.** Нужна обычная программа `.exe` или `.com`.
 - **Остальные программы запускаются как есть.** csk показывает их точную команду, но не может проверить, что они делают внутри.
 
-For an app-bundled macOS MCP server, declare its publisher identity instead of
-committing an absolute path. For example, add this entry to `mcp_servers`:
+Для MCP helper внутри приложения укажите идентичность издателя и расположение
+для каждой платформы вместо абсолютного пути. Например, добавьте в `mcp_servers`:
 
 ```json
 {
@@ -301,6 +301,16 @@ committing an absolute path. For example, add this entry to `mcp_servers`:
           "bundle_id": "com.proxyman.NSProxy",
           "team_id": "3X57WP8E8V",
           "executable": "Contents/MacOS/mcp-server"
+        },
+        "windows": {
+          "install_dir": "%LOCALAPPDATA%\\Programs\\Proxyman",
+          "executable": "mcp-server.exe",
+          "publisher": "TablePlus Inc",
+          "trust": "allow-unverified"
+        },
+        "linux": {
+          "path": "${XDG_CONFIG_HOME:-~/.config}/Proxyman/bin/mcp-server",
+          "trust": "allow-unverified"
         }
       }
     }
@@ -308,14 +318,23 @@ committing an absolute path. For example, add this entry to `mcp_servers`:
 }
 ```
 
-Install Proxyman first, then run `csk check`, `csk install` in a terminal and
-`csk status --check`. csk verifies the bundle and helper with the system
-`/usr/bin/codesign`, shows the path/publisher/trust before consent, and writes
-the absolute path directly into the native configs. It never launches the app.
-Valid binary updates with unchanged path, trust and publisher are informational;
-path/publisher changes or trust downgrades require approval. Failed macOS signature
-verification refuses installation and reports `untrusted` in status. Windows/Linux
-launcher grammar is accepted, but resolution on those hosts is not supported yet.
+Сначала установите Proxyman, затем выполните `csk check`, `csk install` в терминале
+и `csk status --check`. csk показывает path/publisher/trust перед consent и пишет
+абсолютный путь прямо в native configs, без запуска приложения. Windows recipe —
+шаблон: проверьте точный Subject CN установленного helper. Другая подпись не
+разрешается через `allow-unverified`.
+
+| Платформа | Что проверяется | Предел проверки |
+| --- | --- | --- |
+| macOS | Системный codesign: bundle, helper, notarization и идентичность издателя. | Проверка на момент установки; нет гарантии для последующего запуска. |
+| Windows | WinVerifyTrust: валидная подпись и точное совпадение первого Subject CN с `publisher`. Program Files → `verified`, LocalAppData → `signed-user-writable`. | Cached-only, без дополнительных revocation checks; нет гарантии актуального online revocation. Владелец per-user установки может заменить helper после проверки. |
+| Linux | Realpath, executable, owner и отсутствие group/world write у файла и родителей до разрешённого root. Root-owned helper с подтверждённой package ownership → `verified`. | Package ownership не проверяет checksum содержимого. |
+| Unverified Windows/Linux | Нужны `trust: allow-unverified` и local consent. | csk не отличает обновление от подмены; same-user attacker в per-user установке вне границы проверки. Vendor checksum для Proxyman не предполагается. |
+
+Изменение только содержимого при прежних path/trust/publisher информационное,
+включая разрешённый unverified helper. Изменение path/publisher или trust downgrade
+требует согласия. Невалидная подпись macOS/Windows блокирует установку и даёт
+`untrusted` в status, `--check` возвращает 1; bad signature нельзя понизить до unsigned.
 Crash recovery re-verifies the saved launcher observation before publishing.
 Old command/HTTP journals recover from their recorded ledger targets without
 inventing launcher approval. A missing launcher observation or unclassifiable
@@ -505,6 +524,14 @@ csk shell-init                      # Генерирует или устанав
   trust and consent controls. The `csk_e2e_native` macOS test verifies an installed
   Proxyman and tampers only with a disposable copy. Save test logs under `.temp/`;
   application discovery and signature verification write no project state.
+- Windows uses system `wintrust.dll`/`crypt32.dll` through ctypes for Authenticode;
+  Linux uses absolute `/usr/bin/dpkg` or `/usr/bin/rpm` for package ownership.
+  Run `uv run pytest -q tests/test_mcp_authenticode.py
+  tests/test_mcp_launcher_platforms.py tests/test_mcp_launcher_platform_lifecycle.py`
+  for portable controls, and `uv run pytest -q -m csk_e2e_native
+  tests/test_mcp_launcher_platform_native.py` on Windows/Linux for actual system
+  verification. Native tests skip only on a different host platform; keep logs
+  under `.temp/` and record unavailable platforms explicitly.
 - `csk recover --rollback TRANSACTION_ID` restores an unfinished transaction's
   recorded preimages under the manager lock; it refuses already committed
   transactions. Empty installation directories may remain, and prior directory
