@@ -483,7 +483,8 @@ def _install_project(
 
 def _transaction_engine(csk_home: Path) -> transactions.TransactionEngine:
     return transactions.TransactionEngine(
-        csk_home, pre_write_hook=source_publish.make_publication_hook()
+        csk_home, pre_write_hook=source_publish.make_publication_hook(),
+        pre_commit_hook=mcp_project.recheck_commit,
     )
 
 

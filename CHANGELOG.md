@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `server.launcher` объявляет app-bundled MCP helper по идентичности издателя вместо абсолютного пути. macOS ищет bundle в каталогах Applications и Setapp, проверяет весь bundle и helper системным codesign: strict seal, notarization, Apple anchor, Team ID и identifiers. Любой отказ проверки блокирует установку; Windows/Linux grammar проверяется, но resolution пока отклоняется отдельным кодом.
 - MCP consent связывает resolved path, trust level и publisher. Повторное согласие не нужно для изменения только содержимого при той же идентичности; path/publisher change и trust downgrade требуют согласия. `status` повторно проверяет helper: `updated (informational)` сохраняет успешный `--check`, а `untrusted` при отказе macOS signature даёт 1. Native configs получают абсолютный путь без shim; приложение и helper не запускаются.
 
+### Исправлено
+
+- Отказ проверки MCP launcher после consent не оставляет новый source snapshot: source-v1 trees и records публикуются в одной transaction с native configs, consent, ledger и ignore entries. Отказ до commit откатывает эти изменения и созданные каталоги, сохраняя существующие snapshots.
+- Crash recovery повторно проверяет сохранённую launcher observation до публикации любых targets. Invalid signature, изменившийся path/publisher или trust downgrade останавливают replay с сохранением journal для доверенного retry; валидный content-only update сохраняет approval. Ошибка cleanup после durable commit и незавершённый rollback получают отдельные коды, точное состояние targets и recovery hint вместо обычного отказа.
+
 ## [0.20.1] - 2026-10-23
 
 ### Изменено
@@ -41,7 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Исправлено
 
-- Отказ проверки MCP launcher после consent не оставляет новый source snapshot: source-v1 trees и records публикуются в одной transaction с native configs, consent, ledger и ignore entries. Поздний отказ откатывает эти изменения и созданные каталоги, сохраняя существующие snapshots.
 - На Windows отказ Git HTTPS с записью OpenSSL о результате проверки сертификата распознаётся как TLS-отказ. Текст от сервера и искажённые записи по-прежнему не классифицируются.
 - Перед каждым запуском git из выбранного CA bundle удаляются CA из встроенного списка отказа и закрепляется приватная копия оставшихся исходных PEM-блоков; `git_trust_anchor_distrusted` один раз за процесс предупреждает об удалённых CA и исходном пути. Пустой после фильтрации bundle и мусор вне PEM вызывают `git_trust_anchor_invalid`; Windows без явного файла использует Schannel. URL rewrites, подмена исходного файла и лишние байты DER не обходят проверку. Невалидный `git.https_ca_bundle` или `CSK_GIT_CA_BUNDLE` останавливает также SSH и локальные команды. Сохраняются native Git include-файлы и boolean-синтаксис.
 - `csk check` проверяет schema 3 и MCP declarations с кодами install, без записи и сети. Установка автоматически добавляет ignore entries для собственных MCP configs, сообщает изменения и не дублирует заголовок `.gitignore`; политика остальных generated paths сохранена.
