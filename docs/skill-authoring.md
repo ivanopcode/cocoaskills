@@ -581,6 +581,10 @@ those identities as well as the declaration, project and writable agent set.
 An unchanged subject reuses consent. A different path or publisher, or a trust
 downgrade, needs consent again; an upgrade can retain approval for the same
 path/publisher. A helper content change with the same subject is informational.
+Install re-verifies after consent before publishing. Source snapshot trees and
+records join the transaction for skills, native configs, consent, ledger and
+ignore entries; a publication refusal rolls them back and removes new empty
+parent directories while preserving pre-existing snapshots.
 
 `status` re-verifies without writing anything. A valid content-only change reports
 `updated (informational)` and keeps `--check` successful; install acknowledges the
