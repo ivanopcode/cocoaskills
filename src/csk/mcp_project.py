@@ -48,6 +48,7 @@ def refusal(code: str, detail: str) -> McpProjectError:
         "mcp_native_config_unsupported_syntax": "repair the native config syntax before retrying.",
         "mcp_native_config_too_large": "reduce the native config below 4 MiB before retrying.",
         "mcp_windows_batch_unsupported": "select a native executable instead of a batch launcher.",
+        "mcp_recovery_observation_missing": "keep the journal and sidecars; use the rollback command shown here, then rerun csk install to review a fresh plan.",
     }
     detail = detail.removeprefix(code + ": ")
     return McpProjectError(
@@ -716,11 +717,12 @@ def recheck_commit(journal: transactions.Journal) -> None:
               and "commit_guard" in target.publication_recheck]
     if not guards:
         if any(target.target_class == "mcp-native" for target in journal.targets):
-            # An older interrupted transaction cannot supply its approved
-            # observation. Never infer approval from a changed live manifest.
-            raise refusal("mcp_recovery_observation_missing",
-                          "older MCP journal lacks its approved launcher observation; "
-                          "keep the journal and inspect its saved state before repair")
+            if not _legacy_without_launchers(journal):
+                # Never reconstruct an approval from the current manifest.
+                raise refusal("mcp_recovery_observation_missing",
+                              "saved MCP targets record a launcher or cannot establish "
+                              "that no launcher was involved. To abandon this unfinished "
+                              f"publication: csk recover --rollback {journal.transaction_id}")
         return
     if len(guards) != 1:
         raise transactions.TransactionCorruptionError("ambiguous MCP commit guard")
@@ -763,6 +765,37 @@ def recheck_commit(journal: transactions.Journal) -> None:
             raise refusal("mcp_launcher_changed", "application changed since the interrupted installation")
         # A newly verified content fingerprint does not invalidate approval.
         # The next ordinary plan records it as an informational update.
+
+
+def _legacy_without_launchers(journal: transactions.Journal) -> bool:
+    """Classify old command/HTTP plans using only their pinned ledger versions.
+
+    Released journals predate launcher grammar. Launcher-aware ledger entries
+    always carry a fingerprint, even when their native command looks ordinary.
+    Both generations matter: removing a launcher also involved a launcher.
+    """
+    from .sources.publish import make_publication_hook
+
+    ledgers = [target for target in journal.targets if target.target_class == "mcp-ledger"]
+    if not ledgers:
+        return False
+    agents: set[str] = set()
+    try:
+        for target in ledgers:
+            make_publication_hook()(target)
+            for desired in (False, True):
+                data = transactions.read_journal_target_version(target, desired=desired, limit=4 * 1024 * 1024)
+                if data is None:
+                    continue
+                ledger = ownership.parse_ledger(data, expected_consumer=target.identifier)
+                for entry in ledger.entries:
+                    if entry.launcher_sha256 is not None:
+                        return False
+                    agents.add(entry.address.agent)
+    except (OSError, transactions.TransactionError, ownership.McpOwnershipError, ValueError):
+        return False
+    return all(target.identifier in agents for target in journal.targets
+               if target.target_class == "mcp-native")
 
 
 def assert_current(plan: ProjectPlan) -> None:

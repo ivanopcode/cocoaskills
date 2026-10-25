@@ -88,3 +88,34 @@ def test_malformed_launcher_guard_refuses_before_publication(tmp_path, guard):
         engine.recover(lock)
         assert live.read_text() == 'new'
         assert not (engine.journal_root / 'bad-guard.json').exists()
+
+
+# Explicit rollback restores an interrupted target even when its forward
+# guard rejects. It must refuse a committed/cleanup journal without changing
+# either the desired live bytes or the cleanup journal.
+@pytest.mark.parametrize('committed', [False, True])
+def test_explicit_rollback_does_not_undo_committed_install(tmp_path, committed):
+    home = tmp_path / 'home'
+    live = _write(tmp_path / 'live', 'old')
+    desired = _write(tmp_path / 'desired', 'new')
+    target = _target('mcp-native', 'native', live, desired)
+    def stop(event, target):
+        if event == ('before_cleanup' if committed else 'after_install'):
+            raise KeyboardInterrupt('simulated process interruption')
+    engine = TransactionEngine(home, fault_hook=stop)
+    with ManagerHomeLock(home) as lock:
+        engine.prepare(lock, _plan('explicit-rollback', tmp_path / 'project', target))
+        with pytest.raises(KeyboardInterrupt):
+            engine.commit(lock, 'explicit-rollback')
+        journal_path = engine.journal_root / 'explicit-rollback.json'
+        before = journal_path.read_bytes()
+        rejecting = TransactionEngine(home, pre_commit_hook=lambda _: pytest.fail('forward guard ran during rollback'))
+        if committed:
+            with pytest.raises(transactions.TransactionError, match='already committed'):
+                rejecting.rollback(lock, 'explicit-rollback')
+            assert live.read_text() == 'new' and journal_path.read_bytes() == before
+            rejecting.recover(lock)
+            assert live.read_text() == 'new' and not journal_path.exists()
+        else:
+            rejecting.rollback(lock, 'explicit-rollback')
+            assert live.read_text() == 'old' and not journal_path.exists()
