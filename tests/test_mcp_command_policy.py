@@ -132,7 +132,9 @@ def test_additional_ignore_sources(project_cli, tmp_path, monkeypatch, kind):
     if kind == "tilde":
         excludes = Path.home() / "review-excludes"
     elif kind == "xdg":
-        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+        # The default Git ignore source must be local to this test; the
+        # session's shared XDG directory would affect unrelated later projects.
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
         excludes = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "git/ignore"
         excludes.parent.mkdir(parents=True, exist_ok=True)
     excludes.parent.mkdir(parents=True, exist_ok=True)
