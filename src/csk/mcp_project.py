@@ -670,7 +670,12 @@ def review_consent(
         )
         if server.resolved_launcher is not None:
             launcher = server.resolved_launcher
-            label = {"verified": "verified publisher and notarized application", "signed-user-writable": "signed by the publisher, in a user-writable directory", "unverified": "unverified: csk cannot tell an update from a replacement"}[launcher.trust]
+            verified = ("verified publisher and notarized application" if launcher.publisher.startswith("macos:")
+                        else "root-owned executable recorded by the system package manager" if launcher.publisher.startswith("linux:")
+                        else "verified publisher signature in a per-machine installation")
+            label = {"verified": verified,
+                     "signed-user-writable": "signed by the publisher, in a user-writable directory: its owner can replace it after this check",
+                     "unverified": "unverified: csk cannot tell an update from a replacement"}[launcher.trust]
             print(f"MCP plan {name}: {label}; publisher={launcher.publisher}; path={launcher.path}")
         elif server.transport == "stdio" and not declarations.is_recognized_runner(server.command or ""):
             print(f"MCP plan {name}: csk cannot verify what this program runs.")

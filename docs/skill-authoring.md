@@ -461,8 +461,8 @@ MCP authentication and connectivity: not checked.
 | --- | --- |
 | `unsupported` | Известное окружение без поддержки записи; конфигурация не меняется. |
 | `current` | Owned entry соответствует объявлению и последней записи csk. |
-| `updated (informational)` | Verified launcher content changed with the same consent subject; `--check` remains successful. |
-| `untrusted` | macOS launcher signature, seal, notarization or identity verification failed; `--check` returns 1. |
+| `updated (informational)` | Launcher content changed with the same consent subject, including an explicitly allowed unverified launcher; `--check` remains successful. |
+| `untrusted` | macOS signature/seal/notarization or Windows signature/publisher verification failed, or an unverified launcher lacks its explicit override; `--check` returns 1. |
 | `missing` | Объявленная native entry или её файл отсутствует. |
 | `outdated` | Объявление изменилось, а owned entry сохранила установленное csk содержимое; следующий install обновит её. |
 | `drift` | Пользователь изменил существующую owned entry после установки. |
@@ -522,7 +522,8 @@ export ALLURE_TESTOPS_AUTH="api-token <токен>"
 
 Инструкция Qameta подключает тот же сервер через мост `npx mcp-remote` с токеном в аргументах. Закреплённый мост без токена csk примет (`"command": "npx"`, `"args": ["mcp-remote@<версия>", "https://testops.example.com/api/mcp"]`, с consent), но передать ему токен нельзя: подстановка `${VAR}` в `args` отклоняется с `mcp_declaration_invalid`, а токен прямо в `args` был бы секретом в конфиге. На Windows `npx` отклоняется с `mcp_windows_batch_unsupported`. Используйте прямое HTTP-подключение выше.
 
-#### App-bundled launchers (macOS)
+<a id="app-bundled-launchers-macos"></a>
+#### App-bundled launchers (macOS, Windows and Linux)
 
 Use `server.launcher` instead of `server.command` for a signed application helper.
 The following object is the value of `mcp_servers` for Proxyman:
@@ -537,6 +538,16 @@ The following object is the value of `mcp_servers` for Proxyman:
           "bundle_id": "com.proxyman.NSProxy",
           "team_id": "3X57WP8E8V",
           "executable": "Contents/MacOS/mcp-server"
+        },
+        "windows": {
+          "install_dir": "%LOCALAPPDATA%\\Programs\\Proxyman",
+          "executable": "mcp-server.exe",
+          "publisher": "TablePlus Inc",
+          "trust": "allow-unverified"
+        },
+        "linux": {
+          "path": "${XDG_CONFIG_HOME:-~/.config}/Proxyman/bin/mcp-server",
+          "trust": "allow-unverified"
         }
       },
       "args": []
@@ -624,37 +635,68 @@ attention/recovery is needed; it does not imply that nothing was written.
 `status` re-verifies without writing anything. A valid content-only change reports
 `updated (informational)` and keeps `--check` successful; install acknowledges the
 new content fingerprint without another prompt. A changed consent subject reports
-`unapproved`. A failed macOS signature reports `untrusted`, and `--check` returns 1.
+`unapproved`. A failed macOS or Windows signature reports `untrusted`, and `--check` returns 1.
 Authentication and connectivity remain unchecked. Verification is point-in-time:
 the native agent executes later, and csk does not freeze the application until then.
 No vendor checksum is assumed for Proxyman.
 
 All platform objects have closed field sets. The portable grammar is validated
-on every host, even though Windows/Linux resolution is deferred:
+on every host; only the current platform is resolved:
 
-| Platform | Fields and allowed locations | Trust in this slice |
+| Platform | Fields and allowed locations | Trust |
 | --- | --- | --- |
 | `macos` | Required `bundle_id`, ten-character uppercase/digit `team_id`, relative `executable` under `Contents/`. | Notarized signature and identity required; no `trust` override. |
-| `windows` | Required `install_dir`, relative `.exe` `executable`, nonempty `publisher`. Install dir must be below `%LOCALAPPDATA%\Programs\`, `%PROGRAMFILES%\` or `%PROGRAMFILES(X86)%\` (root spelling ignores case). No other expansions, absolute executable, traversal, reserved device names or invalid Windows path characters. | Optional `trust: "allow-unverified"`; resolution follows in the Windows slice. |
-| `linux` | Required `path` below `/usr/bin/`, `/usr/local/bin/`, `/opt/`, `~/.local/bin/`, `~/.config/`, `${XDG_CONFIG_HOME:-~/.config}/` or `${XDG_DATA_HOME:-~/.local/share}/`. No further expansions, empty components or traversal. | Optional `trust: "allow-unverified"`; resolution follows in the Linux slice. |
+| `windows` | Required `install_dir`, relative `.exe` `executable`, nonempty `publisher`. Install dir must be below `%LOCALAPPDATA%\`, `%ProgramFiles%\` or `%ProgramFiles(x86)%\` (root spelling ignores case). No other expansions, UNC/device paths, drive-relative paths, alternate data streams, traversal, reserved device names or invalid Windows path characters. | Valid matching signature: `verified` under Program Files, `signed-user-writable` under LocalAppData. Unsigned: `unverified`, requiring `trust: "allow-unverified"`. Invalid or other-publisher signature always refuses. |
+| `linux` | Required `path` below `/usr/bin/`, `/usr/local/bin/`, `/opt/`, `~/.local/bin/`, `~/.config/`, `${XDG_CONFIG_HOME:-~/.config}/` or `${XDG_DATA_HOME:-~/.local/share}/`. No further expansions, empty components or traversal. | Root-owned file confirmed by a system package manager: `verified`. Otherwise `unverified`, requiring `trust: "allow-unverified"`. |
 
-At least one platform entry is required. On Windows/Linux a declaration with a
-current-platform entry gives `mcp_launcher_platform_unsupported`; any missing
-current-platform entry gives `mcp_launcher_platform_missing`. `trust` accepts only
-`allow-unverified`, and only in Windows/Linux entries; it does not make those hosts
-supported yet. The trust vocabulary is `verified`, `signed-user-writable`,
-`unverified`; this macOS verifier produces only `verified`. Same-user replacement
-of a Windows/Linux per-user installation is outside the future trust boundary.
+At least one platform entry is required. A missing current-platform entry gives
+`mcp_launcher_platform_missing`. `trust` accepts only `allow-unverified`, and only
+in Windows/Linux entries. It permits an unsigned/unverified helper only together
+with local consent. For an unverified helper, csk cannot tell an update from a
+replacement. `signed-user-writable` confirms a Windows signer now; the owning
+user can still replace that helper before the native agent executes it. A
+same-user attacker on Windows/Linux per-user installations is outside the trust
+boundary.
 
-App lookup and codesign never launch the application or helper. The native test
-uses an installed Proxyman as a positive control and a copied bundle with tampered
-helper bytes as the negative control.
+Windows expands only the named real environment root and resolves symlinks,
+junctions and reparse points. The resulting local executable must stay inside the
+resolved install directory, which must stay inside the expanded root.
+Authenticode uses the system `WinVerifyTrust` API through ctypes, without
+PowerShell. `publisher` must exactly equal the **first CN in the verified primary
+leaf certificate's actual Subject**, case-sensitive and without normalization;
+there is no organization (O), display-name, SAN or timestamp-signer fallback.
+Missing CN refuses. Verification has no UI, uses cached retrieval only, requests
+no additional revocation checks and rejects MD2/MD4. This keeps planning offline
+and deterministic; it does **not** establish current online revocation status.
+OS trust/signature failure and malformed signed files never receive the unsigned
+override. The Windows recipe is a declaration template: confirm the installed
+helper's actual Subject CN; `allow-unverified` cannot bypass a different signer.
+
+Linux expands only the documented XDG fallback expressions and home locations.
+An unset or empty XDG variable uses its shown fallback; a relative XDG value
+refuses. The inherited `~/.config/` spelling remains accepted for compatibility
+with existing declarations: it denotes the same fixed fallback location without
+adding another expansion mechanism. Realpath must stay inside the expanded root.
+The regular executable and every parent through that root must belong to root or
+the current user and have no group/world write bits. Root-owned helpers are
+checked using trusted root-owned system `/usr/bin/dpkg -S -- PATH` or
+`/usr/bin/rpm -qf -- PATH`, with fixed argv, a minimal environment, five-second
+timeout and no shell. Probe errors never establish trust. Package ownership is a
+database association, **not a checksum/integrity check** of the installed bytes.
+Other helpers need the explicit override and local consent.
+
+App lookup and verification never launch the application or helper. Native
+controls use installed Proxyman on macOS, a Microsoft-signed binary and tampered
+copy on Windows, and a package-owned executable plus user-owned and writable-parent
+fixtures on Linux. These controls require their respective native platforms.
 
 Чего пока нет в schema 3:
 
 | Ограничение | Что из-за него нельзя |
 | --- | --- |
-| App launchers on Windows/Linux | Grammar is validated, but resolution refuses until those platform slices ship. |
+| Unverified Windows/Linux helpers | csk cannot distinguish an update from a replacement; explicit override and local consent are required. |
+| Per-user signed Windows helper | Signature identifies the publisher at check time; the owning user can replace the file later. |
+| Offline Windows revocation / Linux package ownership | No online revocation freshness or package-file checksum guarantee. |
 | Point-in-time app verification | No guarantee about a later agent execution after the application changes. |
 | `${VAR}` запрещён в `args` | Передать токен stdio-мосту, например `mcp-remote --header`. |
 | `prefix` только `bearer` | Префиксы вроде `api-token` или `Token`; сейчас их пишут в значение переменной. |
