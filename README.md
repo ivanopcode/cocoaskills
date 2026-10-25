@@ -324,6 +324,12 @@ OAuth may coexist with headers. An env reference requires consent; literals alon
 шаблон: проверьте точный Subject CN установленного helper. Другая подпись не
 разрешается через `allow-unverified`.
 
+Windows roots come from the OS known-folder API, including relocated folders.
+Conflicting environment values refuse with `mcp_launcher_root_conflict`; an API
+failure gives `mcp_launcher_known_folder_unavailable` without an env fallback.
+Trust follows the resolved folder containing the helper; LocalAppData
+containment takes precedence over Program Files when folders overlap.
+
 | Платформа | Что проверяется | Предел проверки |
 | --- | --- | --- |
 | macOS | Системный codesign: bundle, helper, notarization и идентичность издателя. | Проверка на момент установки; нет гарантии для последующего запуска. |

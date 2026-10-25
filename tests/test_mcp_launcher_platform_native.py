@@ -11,6 +11,16 @@ import pytest
 from csk import mcp_launchers as gate
 
 
+# Matching Windows hosts execute the real allocation/free adapter for every OS
+# folder. Portable fake-DLL tests cover errors; this is a native success control.
+@pytest.mark.csk_e2e_native
+@pytest.mark.skipif(sys.platform != 'win32', reason='native Windows known folders')
+def test_native_windows_known_folders():
+    for key in gate._WINDOWS_ENV:
+        path = Path(gate.windows_known_folder(key))
+        assert path.is_absolute() and path.is_dir()
+
+
 # Real Authenticode accepts the system Microsoft binary and rejects a byte-flip
 # copy. The call-only root override keeps all fixture writes under pytest's root.
 @pytest.mark.csk_e2e_native

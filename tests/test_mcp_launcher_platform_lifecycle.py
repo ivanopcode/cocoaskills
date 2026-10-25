@@ -24,7 +24,10 @@ def platform_cli(project_cli, tmp_path, monkeypatch, request):
     apps = tmp_path / 'apps'
     path = helper(apps, 'Programs/Example/mcp-server.exe' if platform == 'windows' else 'Example/bin/server')
     monkeypatch.setattr(gate, '_platform', lambda: platform)
-    monkeypatch.setattr(gate, '_windows_root', lambda *a: apps)
+    monkeypatch.setattr(gate, '_windows_roots', lambda: {
+        '%PROGRAMFILES%': apps if level == 'verified' else tmp_path / 'machine',
+        '%PROGRAMFILES(X86)%': tmp_path / 'machine-x86',
+        '%LOCALAPPDATA%': tmp_path / 'user' if level == 'verified' else apps})
     monkeypatch.setattr(gate, '_linux_root', lambda *a: apps)
     monkeypatch.setattr(gate, 'linux_uid', lambda: 1000)
     monkeypatch.setattr(gate, 'linux_metadata', lambda p: SimpleNamespace(st_uid=0,
