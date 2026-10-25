@@ -21,6 +21,7 @@ from typing import Literal, cast
 from xml.parsers.expat import ExpatError
 
 from .mcp_authenticode import WindowsVerification, verify_windows
+from .mcp_windows_folders import windows_known_folder
 
 TrustLevel = Literal["verified", "signed-user-writable", "unverified"]
 
@@ -92,6 +93,8 @@ _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,254}", re.ASCII)
 _TEAM = re.compile(r"[A-Z0-9]{10}", re.ASCII)
 _HELPER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}", re.ASCII)
 _WINDOWS_ROOTS = ("%LOCALAPPDATA%\\", "%PROGRAMFILES%\\", "%PROGRAMFILES(X86)%\\")
+_WINDOWS_ENV = {"%LOCALAPPDATA%": "LOCALAPPDATA", "%PROGRAMFILES%": "ProgramFiles",
+                "%PROGRAMFILES(X86)%": "ProgramFiles(x86)"}
 _LINUX_ROOTS = (
     "/usr/bin/", "/usr/local/bin/", "/opt/", "~/.local/bin/", "~/.config/",
     "${XDG_CONFIG_HOME:-~/.config}/", "${XDG_DATA_HOME:-~/.local/share}/",
@@ -322,24 +325,43 @@ def _windows_root_value(raw: str) -> str:
     value = raw.replace("/", "\\")
     if (not re.match(r"^[A-Za-z]:\\", value) or any(ord(c) < 32 for c in value)
             or not _windows_relative(value[3:])):
-        raise _path_error("Windows known-root environment must contain an absolute local directory")
+        raise _path_error("Windows known root must contain an absolute local directory")
     return ntpath.normpath(value)
 
 
 def _windows_root(root: str) -> Path:
-    key = {"%LOCALAPPDATA%": "LOCALAPPDATA", "%PROGRAMFILES%": "ProgramFiles",
-           "%PROGRAMFILES(X86)%": "ProgramFiles(x86)"}[root.upper()]
-    # Both the supplied and resolved location must be local DOS paths. A local
+    key = _WINDOWS_ENV[root.upper()]
+    try:
+        known = _windows_root_value(windows_known_folder(root.upper()))
+    except (OSError, ValueError, AttributeError) as exc:
+        raise McpLauncherError("mcp_launcher_known_folder_unavailable", "Windows OS known folder cannot be read") from exc
+    supplied = os.environ.get(key)
+    if supplied is not None:
+        try:
+            matches = ntpath.normcase(_windows_root_value(supplied)) == ntpath.normcase(known)
+        except McpLauncherError:
+            matches = False
+        if not matches:
+            raise McpLauncherError("mcp_launcher_root_conflict", f"{key} disagrees with its Windows OS known folder")
+    # Both the OS location and resolved location must be local DOS paths. A local
     # root junction onto a UNC/device namespace must not admit a remote helper.
-    path = Path(_windows_root_value(os.environ.get(key, ""))).resolve(strict=True)
+    path = Path(known).resolve(strict=True)
     _windows_root_value(str(path))
     return path
+
+
+def _windows_roots() -> dict[str, Path]:
+    return {root: _windows_root(root) for root in _WINDOWS_ENV}
 
 
 def _resolve_windows(entry: WindowsLauncher, roots: Sequence[Path] | None, verifier: Verifier | None) -> ResolvedLauncher:
     try:
         root = next(r for r in _WINDOWS_ROOTS if entry.install_dir.upper().startswith(r.upper()))
-        base = _override_root(roots) or _windows_root(root[:-1])
+        selected = root[:-1].upper()
+        override = _override_root(roots)
+        # Explicit call-only fixture roots model one known-folder identity.
+        known = {selected: override} if override is not None else _windows_roots()
+        base = known[selected]
         install = base.joinpath(*entry.install_dir[len(root):].split("\\")).resolve(strict=True)
         if not install.is_relative_to(base) or not install.is_dir():
             raise _path_error("install_dir realpath escapes its Windows root")
@@ -356,7 +378,16 @@ def _resolve_windows(entry: WindowsLauncher, roots: Sequence[Path] | None, verif
             level: TrustLevel = "unverified"
             publisher = "windows:unsigned"
         elif checked.signature == "valid" and checked.publisher == entry.publisher:
-            level = "signed-user-writable" if root.upper().startswith("%LOCALAPPDATA%") else "verified"
+            # User containment wins when known folders overlap or redirect.
+            # Machine trust follows actual containment, never the placeholder.
+            user = known.get("%LOCALAPPDATA%")
+            if user is not None and path.is_relative_to(user):
+                level = "signed-user-writable"
+            elif any(path.is_relative_to(folder) for name, folder in known.items()
+                     if name in {"%PROGRAMFILES%", "%PROGRAMFILES(X86)%"}):
+                level = "verified"
+            else:
+                raise _path_error("executable is outside Windows OS known folders")
             publisher = "windows:" + checked.publisher
         else:
             raise McpLauncherError("mcp_launcher_untrusted", "Windows signature or leaf signer CN did not match")
