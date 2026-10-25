@@ -146,11 +146,16 @@ def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     is_check = bool(arguments and arguments[0] == "check")
     is_dispatch = bool(arguments and arguments[0] == "dispatch")
-    if is_dispatch:
+    is_recover = bool(arguments and arguments[0] == "recover")
+    parser: argparse.ArgumentParser
+    if is_recover:
+        parser = _CskArgumentParser(prog="csk recover", description="Roll back one unfinished installation using its recorded preimages.")
+        parser.add_argument("--rollback", required=True, metavar="TRANSACTION_ID")
+    elif is_dispatch:
         parser = _build_dispatch_parser()
     else:
         parser = _build_check_parser() if is_check else build_parser()
-    if is_check or is_dispatch:
+    if is_check or is_dispatch or is_recover:
         arguments = arguments[1:]
     try:
         args = parser.parse_args(arguments)
@@ -161,6 +166,9 @@ def main(argv: list[str] | None = None) -> int:
         args.version = False
     if is_dispatch:
         args.command = "dispatch"
+        args.version = False
+    if is_recover:
+        args.command = "recover"
         args.version = False
     if args.version:
         print(f"csk {__version__}")
@@ -900,6 +908,20 @@ def _add_audit(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
 
 
 def _dispatch(args: argparse.Namespace) -> int:
+    if args.command == "recover":
+        from . import transactions
+        from .locking import ManagerHomeLock
+
+        home = config.config_path().parent
+        try:
+            with ManagerHomeLock(home) as lock:
+                engine = transactions.TransactionEngine(home, pre_write_hook=source_publish.make_publication_hook())
+                engine.rollback(lock, args.rollback)
+        except transactions.TransactionError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_PARTIAL_FAIL
+        print("Unfinished installation rolled back; rerun csk install to review a fresh plan.")
+        return EXIT_OK
     if args.command == "bootstrap":
         return _cmd_bootstrap_refusing_eof(args)
     if args.command == "init":

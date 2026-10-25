@@ -299,6 +299,11 @@ path/publisher changes or trust downgrades require approval. Failed macOS signat
 verification refuses installation and reports `untrusted` in status. Windows/Linux
 launcher grammar is accepted, but resolution on those hosts is not supported yet.
 Crash recovery re-verifies the saved launcher observation before publishing.
+Old command/HTTP journals recover from their recorded ledger targets without
+inventing launcher approval. A missing launcher observation or unclassifiable
+saved plan pauses recovery; `csk recover --rollback TRANSACTION_ID` abandons that
+unfinished publication, then `csk install` reviews a fresh plan. Use the same
+manager home and retain the journal sidecars until rollback succeeds.
 `transaction_cleanup_deferred` means the install committed and cleanup needs a
 retry; `transaction_rollback_deferred` means rollback needs recovery. Both keep
 the journal, report the retained state and return 1; rerun `csk install` after
@@ -478,6 +483,11 @@ csk shell-init                      # Генерирует или устанав
   trust and consent controls. The `csk_e2e_native` macOS test verifies an installed
   Proxyman and tampers only with a disposable copy. Save test logs under `.temp/`;
   application discovery and signature verification write no project state.
+- `csk recover --rollback TRANSACTION_ID` restores an unfinished transaction's
+  recorded preimages under the manager lock; it refuses already committed
+  transactions. Run `uv run pytest -q tests/test_mcp_legacy_recovery.py
+  tests/test_transaction_commit_guard.py` in a normal Git checkout for released
+  CLI crash fixtures and rollback controls; save logs under `.temp/`.
 - `PyYAML` используется только в dev extra как независимый oracle для
   дифференциальных тестов frontmatter. Запускайте
   `uv run pytest -q tests/test_frontmatter_differential.py`; постоянные

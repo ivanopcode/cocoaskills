@@ -438,6 +438,25 @@ class TransactionEngine:
                 except Exception as exc:
                     raise self._incomplete_error(journal, exc) from exc
 
+    def rollback(self, lock: HomeLockWitness, transaction_id: str) -> None:
+        """Explicitly abandon one unfinished publication, retaining boundary checks.
+
+        Forward approval is unnecessary for restoring recorded preimages. A
+        committed transaction must finish cleanup instead of being undone.
+        """
+        lock.assert_held()
+        with self._mutex, self._witness_scope(lock):
+            journal, deleting = self._load_journal_record(transaction_id)
+            if deleting or journal.phase == "cleanup":
+                raise TransactionError("installation already committed; rerun csk install to finish cleanup")
+            try:
+                if journal.phase == "preparing":
+                    self._discard_prepared(journal)
+                else:
+                    self._rollback(journal)
+            except Exception as exc:
+                raise self._incomplete_error(journal, exc) from exc
+
     def pending_failure(
         self, lock: HomeLockWitness, transaction_id: str, cause: Exception,
     ) -> TransactionIncompleteError | None:
@@ -492,11 +511,17 @@ class TransactionEngine:
         tomb = self._journal_tomb_path(journal.transaction_id)
         if _path_exists(tomb):
             path = tomb
+        remedy = (
+            f"Remedy: to abandon this unfinished publication, run csk recover --rollback {journal.transaction_id}, "
+            "then rerun csk install to review a fresh plan. Keep the journal and its sidecars until rollback succeeds."
+            if code == "mcp_recovery_observation_missing" else
+            "Remedy: restore the recorded trusted launcher and publication boundaries, "
+            "then rerun csk install to recover. Keep the journal and its sidecars."
+        )
         return TransactionIncompleteError(code, journal.phase, "\n".join([
             summary, f"Recovery journal={path}; phase={journal.phase}", *rows,
             f"Cause: {cause_text(cause)}",
-            "Remedy: restore the recorded trusted launcher and publication boundaries, "
-            "then rerun csk install to recover. Keep the journal and its sidecars.",
+            remedy,
         ]))
 
     def referenced_generation_digests(self, lock: HomeLockWitness) -> dict[str, str]:
@@ -2423,6 +2448,31 @@ def _read_bounded_regular(path: Path, *, limit: int) -> bytes:
     if not os.path.samestat(after, current):
         raise TransactionCorruptionError(f"journal changed while reading: {path}")
     return payload
+
+
+def read_journal_target_version(
+    target: JournalTarget, *, desired: bool, limit: int,
+) -> bytes | None:
+    """Read pinned bytes from staging/backup or the matching live generation.
+
+    The caller must validate the journal and its publication boundary first.
+    A missing or changed generation is never interpreted as an empty document.
+    """
+    if target.kind != "bytes":
+        raise TransactionCorruptionError("journal target is not a byte document")
+    expected = target.desired_digest if desired else target.expected_preimage_digest
+    if expected == ABSENT_DIGEST:
+        return None
+    sidecar = target.staged_path if desired else target.backup_path
+    paths = ([Path(sidecar)] if sidecar is not None else []) + [Path(target.live_path)]
+    for path in paths:
+        if digest_target(path) != expected:
+            continue
+        data = _read_bounded_regular(path, limit=limit)
+        if digest_target(path) != expected:
+            raise TransactionCorruptionError("journal target changed while reading")
+        return data
+    raise TransactionCorruptionError("journal target generation is unavailable")
 
 
 def _sidecar(live: Path, transaction_id: str, index: int, suffix: str) -> Path:
