@@ -250,13 +250,17 @@ def test_recovery_preserves_optional_platform_fields(tmp_path):
     assert not _journals(case)
 
 
-# An old MCP journal without an approved observation cannot reconstruct consent
+# A launcher journal without an approved observation cannot reconstruct consent
 # from a changed live manifest. Retain it unchanged; restoring its actual saved
 # guard (rather than approving a new one) permits the valid recovery control.
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX process-death control')
-def test_missing_saved_observation_pauses_recovery(tmp_path):
-    case, apps, argv = _setup(tmp_path)
-    killed = _invoke(case, apps, argv, point='after_install', target='04-source-record', kill=True)
+@pytest.mark.parametrize('point,target', [('prepared', None), ('after_install', 'mcp-native'), ('after_install', '04-source-record')])
+@pytest.mark.parametrize('previous_launcher', [False, True])
+def test_missing_saved_observation_pauses_recovery(tmp_path, point, target, previous_launcher):
+    case, apps, argv = _setup(tmp_path, existing=previous_launcher)
+    if previous_launcher:
+        case.declare({'app': 'https://mcp.example.invalid/mcp'})
+    killed = _invoke(case, apps, argv, point=point, target=target, kill=True)
     assert killed.returncode == -signal.SIGKILL
     path, = _journals(case)
     raw = json.loads(path.read_bytes())
@@ -264,10 +268,14 @@ def test_missing_saved_observation_pauses_recovery(tmp_path):
                    if 'commit_guard' in (target['publication_recheck'] or {}))
     guard = payload.pop('commit_guard')
     path.write_text(json.dumps(raw, ensure_ascii=False, sort_keys=True, separators=(',', ':')) + '\n')
+    original = (case.project / 'Skillfile.json').read_bytes()
+    case.declare({})
     before = _snapshot(case.project, case.home)
     result = _invoke(case, apps, argv)
     assert result.returncode == 1 and 'mcp_recovery_observation_missing' in result.stdout + result.stderr
     assert _snapshot(case.project, case.home) == before
+    assert f'csk recover --rollback {raw["transaction_id"]}' in result.stdout + result.stderr
+    (case.project / 'Skillfile.json').write_bytes(original)
     payload['commit_guard'] = guard
     path.write_text(json.dumps(raw, ensure_ascii=False, sort_keys=True, separators=(',', ':')) + '\n')
     result = _invoke(case, apps, argv)
@@ -321,3 +329,31 @@ def test_native_crash_replay_revalidates_launcher(tmp_path):
     assert all((case.project / path).is_file() for _, path in SURFACES)
     _assert_seed_installed(case)
     assert launchers.resolve_launcher(spec, roots=(app.parent,)) == original
+
+
+# Explicit rollback uses frozen publication boundaries even though it skips the
+# forward launcher guard. A moved project pauses restoration; moving it back
+# permits the documented command, then a new install succeeds.
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX process-death control')
+def test_explicit_rollback_preserves_publication_boundaries(tmp_path):
+    case, apps, argv = _setup(tmp_path)
+    killed = _invoke(case, apps, argv, point='after_install', target='mcp-native', kill=True)
+    assert killed.returncode == -signal.SIGKILL
+    path, = _journals(case)
+    transaction_id = json.loads(path.read_bytes())['transaction_id']
+    moved = case.project.with_name('moved-project')
+    case.project.rename(moved)
+    before = _snapshot(moved)
+    def rollback():
+        return subprocess.run([sys.executable, '-m', 'csk', 'recover', '--rollback', transaction_id],
+                              cwd=case.home, env=case.env, text=True, capture_output=True, timeout=60)
+    refused = rollback()
+    assert refused.returncode == 1 and 'source_output_overlap' in refused.stdout + refused.stderr
+    assert _journals(case) and _snapshot(moved) == before
+    moved.rename(case.project)
+    recovered = rollback()
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert not _journals(case)
+    assert not any((case.project / native_path).exists() for _, native_path in SURFACES)
+    result = _invoke(case, apps, argv)
+    assert result.returncode == 0, result.stdout + result.stderr
