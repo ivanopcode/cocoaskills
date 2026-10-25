@@ -322,6 +322,10 @@ inventing launcher approval. A missing launcher observation or unclassifiable
 saved plan pauses recovery; `csk recover --rollback TRANSACTION_ID` abandons that
 unfinished publication, then `csk install` reviews a fresh plan. Use the same
 manager home and retain the journal sidecars until rollback succeeds.
+Rollback restores journaled file/symlink preimages. Empty installation directories
+may remain, and previous directory modes are not restored: for example, a consent
+directory narrowed from `0750` to `0700` may stay `0700`. Rollback does not widen
+directory permissions.
 `transaction_cleanup_deferred` means the install committed and cleanup needs a
 retry; `transaction_rollback_deferred` means rollback needs recovery. Both keep
 the journal, report the retained state and return 1; rerun `csk install` after
@@ -503,7 +507,8 @@ csk shell-init                      # Генерирует или устанав
   application discovery and signature verification write no project state.
 - `csk recover --rollback TRANSACTION_ID` restores an unfinished transaction's
   recorded preimages under the manager lock; it refuses already committed
-  transactions. Run `uv run pytest -q tests/test_mcp_legacy_recovery.py
+  transactions. Empty installation directories may remain, and prior directory
+  modes are not restored or widened. Run `uv run pytest -q tests/test_mcp_legacy_recovery.py
   tests/test_transaction_commit_guard.py` in a normal Git checkout for released
   CLI crash fixtures and rollback controls; save logs under `.temp/`.
 - `PyYAML` используется только в dev extra как независимый oracle для

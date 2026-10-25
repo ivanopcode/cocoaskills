@@ -598,6 +598,8 @@ pinned desired and previous ownership ledgers, including launcher fingerprints;
 it does not use the current Skillfile. A recorded launcher without an observation,
 or a journal whose saved targets cannot establish that no launcher was involved,
 stops with `mcp_recovery_observation_missing` and leaves interrupted state intact.
+This also applies to ledger-only or consent/ledger plans whose native command
+does not change. Restoring trust alone cannot supply the missing observation.
 To abandon such an unfinished publication, copy its transaction ID from the
 diagnostic and run:
 
@@ -613,6 +615,12 @@ journal sidecars until it succeeds. Restore moved publication boundaries before
 retrying a refused rollback. The next install reviews the current declaration
 as a fresh plan. A committed transaction awaiting cleanup cannot be rolled back
 with this command; rerun `csk install` to finish cleanup instead.
+Rollback restores journaled file and symlink preimages, but it does not restore
+the complete directory layout or previous directory modes. Empty directories
+created during installation may remain in the project and manager home, including
+adapter, source snapshot and state directories. Existing directories narrowed
+for protected state may remain more restrictive: a consent directory changed
+from `0750` to `0700` stays `0700`. Rollback does not widen directory permissions.
 Valid content-only updates and trust upgrades retain approval; the next ordinary
 install plan records the current helper fingerprint without another prompt.
 
