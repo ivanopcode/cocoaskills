@@ -689,8 +689,15 @@ The regular executable and every parent through that root must belong to root or
 the current user. World write always refuses. Group write is allowed only when
 the element belongs to the current non-root uid, its gid equals that account's
 primary gid, and the group's explicit `gr_mem` list is empty or exactly the
-current account name. User/group database lookup failure refuses group write;
-ordinary strict modes do not require those lookups. Root-owned elements always
+current account name. Full passwd enumeration must also show that no other
+account has that primary gid, and must include the current account. This
+exception requires readable `/etc/nsswitch.conf` entries for both `passwd:` and
+`group:` using only `files`, `systemd` or `compat` sources. Comments and NSS
+`[action]` clauses are ignored; missing, malformed or duplicate entries refuse
+the exception. Other sources, such as `sss`, `ldap`, `nis` or `winbind`, can have
+incomplete enumeration and therefore retain the strict no-group-write rule.
+Any configuration read or user/group lookup failure also refuses group write;
+ordinary strict modes do not require these lookups. Root-owned elements always
 retain the strict no-group/world-write rule, even when csk runs as root. This
 private-primary-group exception supports user-group umask `002` setups and
 requires `allow-unverified` plus local consent. Any group-writable element in
