@@ -298,6 +298,11 @@ Valid binary updates with unchanged path, trust and publisher are informational;
 path/publisher changes or trust downgrades require approval. Failed macOS signature
 verification refuses installation and reports `untrusted` in status. Windows/Linux
 launcher grammar is accepted, but resolution on those hosts is not supported yet.
+Crash recovery re-verifies the saved launcher observation before publishing.
+`transaction_cleanup_deferred` means the install committed and cleanup needs a
+retry; `transaction_rollback_deferred` means rollback needs recovery. Both keep
+the journal, report the retained state and return 1; rerun `csk install` after
+restoring any affected application or publication boundary.
 See [launcher grammar and limits](docs/skill-authoring.md#app-bundled-launchers-macos).
 
 Примеры для GitLab и Allure TestOps и то, чего пока нельзя: [примеры и ограничения](docs/skill-authoring.md#project-mcp-recipes).

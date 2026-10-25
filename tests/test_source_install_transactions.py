@@ -1084,6 +1084,9 @@ def test_engine_fault_during_cleanup_leaves_completed_installation(
     result = _install(cfg)
     assert result.status == "failed", result.messages
     assert fault.fired("before_cleanup")
+    assert result.errors[0].startswith("transaction_cleanup_deferred:")
+    assert "Installation committed" in result.errors[0]
+    assert "rerun csk install" in result.errors[0]
 
     # Everything is published; only the journal remains.
     lock = _read_lock(project)
@@ -1126,6 +1129,9 @@ def test_engine_fault_during_journal_removal_recovers_clean(
     result = _install(cfg, fetch=True)
     assert result.status == "failed", result.messages
     assert fault.fired(point), f"fault point {point} was never reached"
+    assert result.errors[0].startswith("transaction_cleanup_deferred:")
+    assert "Installation committed" in result.errors[0]
+    assert "rerun csk install" in result.errors[0]
 
     journals = _journal_texts(csk_home)
     assert len(journals) == 1
@@ -1344,9 +1350,9 @@ def test_publication_recheck_runs_between_writes(
 
     The S3 write-boundary-retarget claim end to end: bindings commit
     first, then the ``.codex`` ancestor becomes a link before any
-    adapter mirror is written. The pre-write hook refuses
-    ``source_output_overlap`` and the engine rolls back the committed
-    prefix; after the probe restores its own swap the tree is
+    adapter mirror is written. The pre-write hook rejects
+    ``source_output_overlap`` and reports a deferred rollback; after
+    the probe restores its own swap the tree is
     byte-identical to before.
     """
 
@@ -1373,8 +1379,10 @@ def test_publication_recheck_runs_between_writes(
     assert result.status == "failed", result.messages
     assert swapped == ["codex"], "retarget never ran between writes"
     assert result.errors and result.errors[0].startswith(
-        "source_output_overlap:"
+        "transaction_rollback_deferred:"
     ), result.errors
+    assert "source_output_overlap:" in result.errors[0]
+    assert "rerun csk install" in result.errors[0]
     committed_classes = {
         call[1] for call in fault.calls if call[0] == "target_committed"
     }
@@ -1596,9 +1604,13 @@ def test_unmanaged_destination_vectors_never_overwritten(
         return
 
     assert result.status == "failed", result.messages
-    assert result.errors and result.errors[0].startswith(
-        "source_output_overlap:"
-    ), result.errors
+    expected_code = "transaction_rollback_deferred" if restore is not None else "source_output_overlap"
+    assert result.errors and result.errors[0].startswith(expected_code + ":"), result.errors
+    if restore is not None:
+        # A moved parent prevents rollback; report its retained journal and
+        # original overlap cause instead of claiming an ordinary refusal.
+        assert "source_output_overlap:" in result.errors[0]
+        assert "rerun csk install" in result.errors[0]
     for check in obstacle_checks:
         check()
     if restore is not None:
@@ -2677,11 +2689,11 @@ def test_status_survives_managed_root_replaced_by_file(
 def test_boundary_move_between_writes_reports_overlap(
     tmp_path: Path, csk_home: Path, monkeypatch: pytest.MonkeyPatch, shape: str
 ) -> None:
-    """Every rollback-side boundary move still reports overlap (F-D).
+    """Every rollback-side boundary move reports its retained state (F-D).
 
     Class over the three shapes where the move also breaks the
-    rollback's own digests: the refusal reaching the operator is the
-    hook's ``source_output_overlap`` diagnostic, nothing is written
+    rollback's own digests: the operator sees a deferred rollback with
+    the hook's ``source_output_overlap`` cause, nothing is written
     through the moved boundary, and restoring the boundary replays the
     deferred rollback to a byte-identical tree.
     """
@@ -2785,12 +2797,12 @@ def test_boundary_move_between_writes_reports_overlap(
     result = _install(cfg, fetch=fetch)
     assert result.status == "failed", result.messages
     assert fired, f"mutation never ran; calls={fault.calls}"
-    assert result.errors and result.errors[0].startswith(
-        "source_output_overlap:"
-    ), result.errors
-
     journals = _journal_texts(csk_home)
+    assert len(journals) == 1
+    assert result.errors and result.errors[0].startswith("transaction_rollback_deferred:"), result.errors
+    assert "source_output_overlap:" in result.errors[0]
     if journals:
+        assert "rerun csk install" in result.errors[0]
         journal = json.loads(journals[0].read_text(encoding="utf-8"))
         assert journal["phase"] == "rolling_back", journal["phase"]
     restore()

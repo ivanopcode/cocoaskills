@@ -14,11 +14,11 @@ import shutil
 import stat
 import sys
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from . import locking, mcp_configs, mcp_command_resolution, protocol_json, mcp_declarations as declarations
+from . import locking, mcp_configs, mcp_command_resolution, mcp_launchers, protocol_json, mcp_declarations as declarations
 from . import mcp_native as native, mcp_ownership as ownership, transactions
 from .skillspec import McpServerRequirement
 
@@ -87,6 +87,9 @@ def refused_report(
         for row in rows:
             if row.path is None:
                 action = "skipped: unsupported"
+            elif isinstance(error, transactions.TransactionIncompleteError):
+                action = (f"{row.action}; transaction committed; cleanup pending" if error.phase == "cleanup"
+                          else f"recovery required: {error.code}")
             elif code == "project_preflight_failed" or (
                 code == "mcp_plan_unapproved" and row.server not in pending
             ):
@@ -682,6 +685,82 @@ def review_consent(
         answer = ""
     if answer.strip().lower() not in ("y", "yes"):
         raise refusal("mcp_plan_unapproved", "operator did not approve")
+
+
+def launcher_commit_guard(plan: ProjectPlan) -> dict[str, object]:
+    """Persist the approved declaration and exact observation for crash replay.
+
+    Only launcher identity metadata is saved; args, env, headers and native
+    configuration contents do not enter this recovery guard.
+    """
+    observations = []
+    for name, declaration in sorted(plan.declarations.items()):
+        server = declaration.server
+        if server.launcher is None or server.resolved_launcher is None:
+            continue
+        observations.append({
+            "name": name,
+            "launcher": {key: {field: entry for field, entry in value.items() if entry is not None}
+                         for key, value in asdict(server.launcher).items() if value is not None},
+            "observed": asdict(server.resolved_launcher),
+        })
+    return {"kind": "mcp-launchers-v1", "observations": observations}
+
+
+def recheck_commit(journal: transactions.Journal) -> None:
+    """Verify all journaled launchers before any forward publication/replay."""
+    guards = [target.publication_recheck["commit_guard"] for target in journal.targets
+              if target.publication_recheck is not None
+              and "commit_guard" in target.publication_recheck]
+    if not guards:
+        if any(target.target_class == "mcp-native" for target in journal.targets):
+            # An older interrupted transaction cannot supply its approved
+            # observation. Never infer approval from a changed live manifest.
+            raise refusal("mcp_recovery_observation_missing",
+                          "older MCP journal lacks its approved launcher observation; "
+                          "keep the journal and inspect its saved state before repair")
+        return
+    if len(guards) != 1:
+        raise transactions.TransactionCorruptionError("ambiguous MCP commit guard")
+    guard = guards[0]
+    if (not isinstance(guard, dict) or set(guard) != {"kind", "observations"}
+            or guard["kind"] != "mcp-launchers-v1"
+            or not isinstance(guard["observations"], list)
+            or len(guard["observations"]) > 64):
+        raise transactions.TransactionCorruptionError("invalid MCP commit guard")
+    names = set()
+    parsed = []
+    for item in guard["observations"]:
+        if (not isinstance(item, dict) or set(item) != {"name", "launcher", "observed"}
+                or not isinstance(item["name"], str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", item["name"])
+                or item["name"] in names):
+            raise transactions.TransactionCorruptionError("invalid MCP launcher observation")
+        names.add(item["name"])
+        expected = item["observed"]
+        if (not isinstance(expected, dict)
+                or set(expected) != {"path", "trust", "publisher", "content_sha256"}
+                or not all(isinstance(value, str) and value for value in expected.values())
+                or expected["trust"] not in {"verified", "signed-user-writable", "unverified"}
+                or not re.fullmatch(r"[0-9a-f]{64}", expected["content_sha256"])):
+            raise transactions.TransactionCorruptionError("invalid MCP launcher identity")
+        try:
+            spec = mcp_launchers.parse_launcher(item["launcher"])
+        except mcp_launchers.McpLauncherError as exc:
+            raise transactions.TransactionCorruptionError("invalid journaled MCP launcher declaration") from exc
+        parsed.append((spec, expected))
+    for spec, expected in parsed:
+        try:
+            current = mcp_launchers.resolve_launcher(spec)
+        except mcp_launchers.McpLauncherError as exc:
+            raise refusal(exc.code, str(exc)) from exc
+        levels = ("unverified", "signed-user-writable", "verified")
+        if (current.path != expected["path"] or current.publisher != expected["publisher"]
+                or current.trust not in levels
+                or levels.index(current.trust) < levels.index(expected["trust"])):
+            raise refusal("mcp_launcher_changed", "application changed since the interrupted installation")
+        # A newly verified content fingerprint does not invalidate approval.
+        # The next ordinary plan records it as an informational update.
 
 
 def assert_current(plan: ProjectPlan) -> None:

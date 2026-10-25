@@ -85,6 +85,7 @@ from ..transactions import (
     TransactionCorruptionError,
     TransactionEngine,
     TransactionError,
+    TransactionIncompleteError,
     TransactionPlan,
     digest_target,
 )
@@ -3516,6 +3517,7 @@ def _commit_schema2(
     payloads: dict[tuple[str, str], dict[str, Any]],
     created_parents: list[Path],
     extra_targets: tuple[MutableTarget, ...] = (),
+    commit_guard: dict[str, object] | None = None,
 ) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
     """Commit one schema-2 publication transaction, skipping identical targets.
 
@@ -3556,7 +3558,14 @@ def _commit_schema2(
         )
     if not targets:
         return (), tuple(skipped)
+    if commit_guard is not None:
+        first = targets[0]
+        assert first.publication_recheck is not None
+        targets[0] = dataclasses.replace(first, publication_recheck={
+            **first.publication_recheck, "commit_guard": commit_guard,
+        })
     committed = False
+    retained = False
     try:
         plan = TransactionPlan(
             transaction_id=transaction_id,
@@ -3566,10 +3575,19 @@ def _commit_schema2(
         engine.prepare(home_lock, plan)
         engine.commit(home_lock, transaction_id)
         committed = True
-    except ExceptionGroup as group:
-        raise _fold_engine_group(group) from group
+    except TransactionIncompleteError:
+        retained = True
+        raise
+    except Exception as exc:
+        pending = engine.pending_failure(home_lock, transaction_id, exc)
+        if pending is not None:
+            retained = True
+            raise pending from exc
+        if isinstance(exc, ExceptionGroup):
+            raise _fold_engine_group(exc) from exc
+        raise
     finally:
-        if not committed:
+        if not committed and not retained:
             remove_created_parents(created_parents)
     return tuple((target.target_class, target.identifier) for target in targets), tuple(skipped)
 
@@ -4066,6 +4084,10 @@ def _mcp_publication_scope(home: Path) -> Iterator[list[Path]]:
     created: list[Path] = []
     try:
         yield created
+    except TransactionIncompleteError:
+        # A committed or interrupted installation still owns its private state.
+        # Do not widen MCP permissions or remove parents needed by recovery.
+        raise
     except BaseException:
         remove_created_parents(created)
         for path in reversed(directories):
@@ -4740,7 +4762,8 @@ def _plan_and_publish_schema2(
                 publication_scope.enter_context(_mcp_publication_scope(home))
                 if mcp_plan is not None else []
             )
-            engine = TransactionEngine(home, pre_write_hook=make_publication_hook())
+            engine = TransactionEngine(home, pre_write_hook=make_publication_hook(),
+                                       pre_commit_hook=mcp_project.recheck_commit)
             engine.recover(home_lock)
             try:
                 current = digest_live_targets(planned)
@@ -4951,7 +4974,13 @@ def _plan_and_publish_schema2(
                     payloads=payloads,
                     created_parents=created_parents,
                     extra_targets=extra_targets,
+                    commit_guard=(mcp_project.launcher_commit_guard(mcp_plan)
+                                  if mcp_plan is not None else None),
                 )
+            except TransactionIncompleteError:
+                # Even an empty live parent remains part of the frozen
+                # boundary until the retained journal finishes removal.
+                raise
             except BaseException:
                 # _commit_schema2 already removed created parents on failure;
                 # a failure here (including payload faults injected above)

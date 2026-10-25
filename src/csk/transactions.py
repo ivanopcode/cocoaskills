@@ -63,6 +63,15 @@ class TransactionCorruptionError(TransactionError):
     pass
 
 
+class TransactionIncompleteError(TransactionError):
+    """A journal remains: committed cleanup, partial rollback or paused replay."""
+
+    def __init__(self, code: str, phase: str, detail: str) -> None:
+        self.code = code
+        self.phase = phase
+        super().__init__(f"{code}: {detail}")
+
+
 class HomeLockWitness(Protocol):
     @property
     def home_identity(self) -> str: ...
@@ -84,6 +93,8 @@ class MutableTarget:
     # pre-write hook. The engine only validates that it is a JSON-safe dict
     # carrying a string "kind" and round-trips it through the journal, so a
     # crashed commit replays with the same recheck on recovery.
+    # An optional "commit_guard" member additionally requires a journal-wide
+    # pre-commit hook before any forward target, including on crash replay.
     publication_recheck: Mapping[str, Any] | None = None
 
 
@@ -187,11 +198,13 @@ class TransactionEngine:
         *,
         fault_hook: FaultHook | None = None,
         pre_write_hook: PreWriteHook | None = None,
+        pre_commit_hook: Callable[[Journal], None] | None = None,
     ):
         self.home = csk_home.expanduser().resolve(strict=False)
         self.journal_root = self.home / "state" / "transactions" / "v1"
         self._fault_hook = fault_hook
         self._pre_write_hook = pre_write_hook
+        self._pre_commit_hook = pre_commit_hook
         self._mutex = threading.Lock()
         self._active_witness: HomeLockWitness | None = None
         self._active_home_identity: str | None = None
@@ -420,10 +433,71 @@ class TransactionEngine:
                         self._finish_journal_removal(journal)
                     else:
                         self._resume(journal)
+                except TransactionIncompleteError:
+                    raise
                 except Exception as exc:
-                    raise TransactionError(
-                        f"recover transaction {transaction_id}: {exc}"
-                    ) from exc
+                    raise self._incomplete_error(journal, exc) from exc
+
+    def pending_failure(
+        self, lock: HomeLockWitness, transaction_id: str, cause: Exception,
+    ) -> TransactionIncompleteError | None:
+        """Describe a retained journal after an install exception, under its lock."""
+        lock.assert_held()
+        with self._mutex, self._witness_scope(lock):
+            if transaction_id not in self._journal_ids():
+                return None
+            journal, _deleting = self._load_journal_record(transaction_id)
+            return self._incomplete_error(journal, cause)
+
+    def _incomplete_error(self, journal: Journal, cause: Exception) -> TransactionIncompleteError:
+        def cause_text(error: BaseException) -> str:
+            if isinstance(error, BaseExceptionGroup):
+                return "; ".join(cause_text(item) for item in error.exceptions)
+            return str(error)
+
+        if journal.phase == "cleanup":
+            code = "transaction_cleanup_deferred"
+            summary = "Installation committed; cleanup is incomplete."
+        elif journal.phase == "rolling_back":
+            code = "transaction_rollback_deferred"
+            summary = "Installation rollback is incomplete; partial state is retained."
+        elif journal.phase == "preparing":
+            code = "transaction_preparation_cleanup_deferred"
+            summary = "Preparation stopped; staged state still requires cleanup."
+        else:
+            match = re.search(r"\bmcp_[a-z_]+", str(cause))
+            candidate = getattr(cause, "code", None)
+            code = candidate if isinstance(candidate, str) else (match.group() if match else "transaction_recovery_required")
+            summary = "Publication paused; interrupted state is retained."
+        rows = []
+        for target in journal.targets:
+            try:
+                # Boundary verification precedes inspection; never follow a
+                # moved ancestor merely to enrich an error report.
+                self._run_pre_write_hook(target)
+                digest = _target_digest(target, Path(target.live_path))
+                if digest == target.desired_digest:
+                    observed = "desired"
+                elif digest == target.expected_preimage_digest or digest == target.backup_digest:
+                    observed = "preimage"
+                elif digest == ABSENT_DIGEST:
+                    observed = "absent"
+                else:
+                    observed = f"changed ({digest})"
+            except Exception:
+                observed = "unverified (publication boundary unavailable)"
+            rows.append(f"  {target.target_class}/{target.identifier} {target.live_path}: "
+                        f"journal={target.state}; live={observed}")
+        path = self._journal_path(journal.transaction_id)
+        tomb = self._journal_tomb_path(journal.transaction_id)
+        if _path_exists(tomb):
+            path = tomb
+        return TransactionIncompleteError(code, journal.phase, "\n".join([
+            summary, f"Recovery journal={path}; phase={journal.phase}", *rows,
+            f"Cause: {cause_text(cause)}",
+            "Remedy: restore the recorded trusted launcher and publication boundaries, "
+            "then rerun csk install to recover. Keep the journal and its sidecars.",
+        ]))
 
     def referenced_generation_digests(self, lock: HomeLockWitness) -> dict[str, str]:
         lock.assert_held()
@@ -510,6 +584,20 @@ class TransactionEngine:
             )
 
     def _commit_journal(self, journal: Journal) -> None:
+        # Guard the whole forward replay before even the first source target.
+        # Unlike destination hooks this never runs during rollback or cleanup.
+        guarded = any(target.publication_recheck is not None
+                      and "commit_guard" in target.publication_recheck
+                      for target in journal.targets)
+        try:
+            if guarded and self._pre_commit_hook is None:
+                raise TransactionError("commit guard required but no hook is installed")
+            if self._pre_commit_hook is not None:
+                self._pre_commit_hook(journal)
+        except Exception as exc:
+            # The saved observation must not be silently replaced by a newly
+            # planned one. Preserve staging/backups for a later trusted retry.
+            raise self._incomplete_error(journal, exc) from exc
         if journal.phase == "prepared":
             journal.phase = "committing"
             self._save_journal(journal)
