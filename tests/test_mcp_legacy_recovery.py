@@ -62,7 +62,7 @@ def journals(case):
 @pytest.mark.parametrize("changed_manifest", [False, True])
 @pytest.mark.parametrize("existing", [False, True])
 def test_nonlauncher_journals_recover(tmp_path, release_source, writer, kind, point, changed_manifest, existing):
-    case = _case(tmp_path / "case")
+    case = _case(tmp_path / "case", ignore_mode=None if writer == "release" else "gitignore")
     source = release_source if writer == "release" else CURRENT
     if existing:
         case.declare({"docs": {"server": {**STDIO["server"], "args": ["pkg==0.9.0"]}}})
@@ -104,7 +104,8 @@ def test_nonlauncher_journals_recover(tmp_path, release_source, writer, kind, po
 @pytest.mark.parametrize("writer", ["release", "current"])
 @pytest.mark.parametrize("schema", [2, 3])
 def test_non_mcp_journals_recover(tmp_path, release_source, writer, schema):
-    case = _case(tmp_path / "case", schema=schema)
+    case = _case(tmp_path / "case", schema=schema,
+                 ignore_mode=None if writer == "release" else "gitignore")
     killed = invoke(case, release_source if writer == "release" else CURRENT, kill=True, point="prepared")
     assert killed.returncode == -signal.SIGKILL
     resumed = invoke(case, CURRENT)
