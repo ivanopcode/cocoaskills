@@ -264,7 +264,7 @@ Schema 3 добавляет к schema 2 поле `mcp_servers`. MCP-сервер
 
 CocoaSkill хранит отдельный блок для каждого проекта/worktree между `# CocoaSkill project <key>` и `# End CocoaSkill project <key>`. Непрозрачный ключ определяется метаданными worktree и путём к корню проекта относительно репозитория. При обновлении меняется только собственный блок; остальные блоки и пользовательские байты остаются без изменений. Все операции записи выполняются по очереди под OS lock в постоянном файле `$GIT_COMMON_DIR/csk-exclude.lock`. При завершении процесса ОС освобождает lock; replay и rollback транзакции объединяют с текущим файлом только записанный блок проекта. Не удаляйте lock-файл, пока csk работает. Старые exclude-блоки без ключа сохраняются как существующие правила; удаляйте устаревшие записи вручную.
 
-HTTP headers belong in `install.headers`. Use an env reference for a token and a literal for non-secret configuration:
+HTTP headers задаются в `install.headers`. Для токена используйте env reference, для несекретной настройки — literal:
 
 ```json
 {
@@ -278,7 +278,7 @@ HTTP headers belong in `install.headers`. Use an env reference for a token and a
 }
 ```
 
-OAuth may coexist with headers. An env reference requires consent; literals alone do not. Literal values are limited to 1024 UTF-8 bytes, with secret names/scanner hits, `$` and control characters refused. Prefixes are `none`, `bearer` (Authorization only), `api-token` and `token`. Codex refuses the latter two with `mcp_header_prefix_unsupported`; select Claude Code/Cursor explicitly for them. See the [Allure and GitLab recipes and full limits](docs/skill-authoring.md#project-mcp-recipes).
+OAuth совместим с headers. Env reference требует consent, одни literals — нет. Literal values ограничены 1024 UTF-8 bytes; секретные имена, совпадения secret scanner, `$` и управляющие символы запрещены. Допустимые префиксы: `none`, `bearer` (только для Authorization), `api-token` и `token`. Codex отклоняет последние два с `mcp_header_prefix_unsupported`; для них явно выберите Claude Code/Cursor. См. [recipes Allure и GitLab и полные ограничения](docs/skill-authoring.md#project-mcp-recipes).
 
 Для stdio-серверов действуют ограничения:
 
@@ -324,38 +324,23 @@ OAuth may coexist with headers. An env reference requires consent; literals alon
 шаблон: проверьте точный Subject CN установленного helper. Другая подпись не
 разрешается через `allow-unverified`.
 
-Windows roots come from the OS known-folder API, including relocated folders.
-Conflicting environment values refuse with `mcp_launcher_root_conflict`; an API
-failure gives `mcp_launcher_known_folder_unavailable` without an env fallback.
-Trust follows the resolved folder containing the helper; LocalAppData
-containment takes precedence over Program Files when folders overlap.
+Windows roots определяются через OS known-folder API, включая перенесённые каталоги. Противоречащие им значения env отклоняются с `mcp_launcher_root_conflict`; ошибка API даёт `mcp_launcher_known_folder_unavailable` без env fallback. Trust определяется разрешённым каталогом, содержащим helper; при пересечении каталогов LocalAppData имеет приоритет над Program Files.
 
 | Платформа | Что проверяется | Предел проверки |
 | --- | --- | --- |
 | macOS | Системный codesign: bundle, helper, notarization и идентичность издателя. | Проверка на момент установки; нет гарантии для последующего запуска. |
 | Windows | WinVerifyTrust: валидная подпись и точное совпадение первого Subject CN с `publisher`. Program Files → `verified`, LocalAppData → `signed-user-writable`. | Cached-only, без дополнительных revocation checks; нет гарантии актуального online revocation. Владелец per-user установки может заменить helper после проверки. |
-| Linux | Realpath and executable; the file and every parent through the declared root must be owned by the current uid or root, with no group or world write. Root-owned package helpers may be `verified`. | Stock Ubuntu/Debian umask `002` may require a one-time `chmod -- g-w "$HOME/.local/bin"`. Refusals name the exact element/mode and remedy; remove `o-w` too when reported. Package ownership does not verify content checksums. |
+| Linux | Realpath и executable; файл и каждый родитель до объявленного root должны принадлежать текущему uid или root, без group/world write. Root-owned package helpers могут получить `verified`. | При стандартном Ubuntu/Debian umask `002` может потребоваться однократный `chmod -- g-w "$HOME/.local/bin"`. Отказ указывает точный элемент, mode и команду исправления; при указанном world write удалите также `o-w`. Package ownership не проверяет checksum содержимого. |
 | Unverified Windows/Linux | Нужны `trust: allow-unverified` и local consent. | csk не отличает обновление от подмены; same-user attacker в per-user установке вне границы проверки. Vendor checksum для Proxyman не предполагается. |
 
 Изменение только содержимого при прежних path/trust/publisher информационное,
 включая разрешённый unverified helper. Изменение path/publisher или trust downgrade
 требует согласия. Невалидная подпись macOS/Windows блокирует установку и даёт
 `untrusted` в status, `--check` возвращает 1; bad signature нельзя понизить до unsigned.
-Crash recovery re-verifies the saved launcher observation before publishing.
-Old command/HTTP journals recover from their recorded ledger targets without
-inventing launcher approval. A missing launcher observation or unclassifiable
-saved plan pauses recovery; `csk recover --rollback TRANSACTION_ID` abandons that
-unfinished publication, then `csk install` reviews a fresh plan. Use the same
-manager home and retain the journal sidecars until rollback succeeds.
-Rollback restores journaled file/symlink preimages. Empty installation directories
-may remain, and previous directory modes are not restored: for example, a consent
-directory narrowed from `0750` to `0700` may stay `0700`. Rollback does not widen
-directory permissions.
-`transaction_cleanup_deferred` means the install committed and cleanup needs a
-retry; `transaction_rollback_deferred` means rollback needs recovery. Both keep
-the journal, report the retained state and return 1; rerun `csk install` after
-restoring any affected application or publication boundary.
-See [launcher grammar and limits](docs/skill-authoring.md#app-bundled-launchers-macos).
+Crash recovery повторно проверяет сохранённую launcher observation до публикации. Старые command/HTTP journals восстанавливаются по записанным ledger targets без выдуманного launcher approval. Отсутствие launcher observation или неклассифицируемый сохранённый plan приостанавливает recovery; `csk recover --rollback TRANSACTION_ID` отменяет незавершённую публикацию, затем `csk install` рассматривает новый plan. Используйте тот же manager home и сохраняйте journal sidecars до успешного rollback.
+Rollback восстанавливает journaled file/symlink preimages. Пустые каталоги установки могут остаться, прежние directory modes не восстанавливаются: например, consent directory после сужения с `0750` до `0700` может остаться `0700`. Rollback не расширяет directory permissions.
+`transaction_cleanup_deferred` означает committed install и необходимость повторить cleanup; `transaction_rollback_deferred` — необходимость recovery для rollback. Оба сохраняют journal, сообщают сохранённое состояние и возвращают 1; повторите `csk install` после восстановления затронутого приложения или publication boundary.
+См. [launcher grammar и ограничения](docs/skill-authoring.md#app-bundled-launchers-macos).
 
 Примеры для GitLab и Allure TestOps и то, чего пока нельзя: [примеры и ограничения](docs/skill-authoring.md#project-mcp-recipes).
 
@@ -524,26 +509,26 @@ csk shell-init                      # Генерирует или устанав
   independence, shim exclusion, symlink chains, refusal before publication,
   suffix order, and legitimate dependency launch. Save validation logs under
   `.temp/`.
-- `/usr/bin/codesign` is the macOS system trust verifier for app-bundled MCP
-  launchers; Xcode CLT is not required. Run `uv run pytest -q
-  tests/test_mcp_launchers.py tests/test_mcp_launcher_lifecycle.py` for grammar,
-  trust and consent controls. The `csk_e2e_native` macOS test verifies an installed
-  Proxyman and tampers only with a disposable copy. Save test logs under `.temp/`;
-  application discovery and signature verification write no project state.
-- Windows uses system `wintrust.dll`/`crypt32.dll` through ctypes for Authenticode;
-  Linux uses absolute `/usr/bin/dpkg` or `/usr/bin/rpm` for package ownership.
-  Run `uv run pytest -q tests/test_mcp_authenticode.py
+- `/usr/bin/codesign` — системный macOS trust verifier для app-bundled MCP
+  launchers; Xcode CLT не требуется. Запускайте `uv run pytest -q
+  tests/test_mcp_launchers.py tests/test_mcp_launcher_lifecycle.py` для grammar,
+  trust и consent controls. macOS test с `csk_e2e_native` проверяет установленный
+  Proxyman и меняет bytes только в disposable copy. Сохраняйте logs в `.temp/`;
+  поиск приложения и проверка signature не записывают project state.
+- Windows использует системные `wintrust.dll`/`crypt32.dll` через ctypes для Authenticode;
+  Linux — абсолютные `/usr/bin/dpkg` или `/usr/bin/rpm` для package ownership.
+  Запускайте `uv run pytest -q tests/test_mcp_authenticode.py
   tests/test_mcp_launcher_platforms.py tests/test_mcp_launcher_platform_lifecycle.py`
-  for portable controls, and `uv run pytest -q -m csk_e2e_native
-  tests/test_mcp_launcher_platform_native.py` on Windows/Linux for actual system
-  verification. Native tests skip only on a different host platform; keep logs
-  under `.temp/` and record unavailable platforms explicitly.
-- `csk recover --rollback TRANSACTION_ID` restores an unfinished transaction's
-  recorded preimages under the manager lock; it refuses already committed
-  transactions. Empty installation directories may remain, and prior directory
-  modes are not restored or widened. Run `uv run pytest -q tests/test_mcp_legacy_recovery.py
-  tests/test_transaction_commit_guard.py` in a normal Git checkout for released
-  CLI crash fixtures and rollback controls; save logs under `.temp/`.
+  для переносимых controls, а `uv run pytest -q -m csk_e2e_native
+  tests/test_mcp_launcher_platform_native.py` на Windows/Linux — для проверки
+  реальных системных механизмов. Native tests пропускаются только на другой
+  платформе; храните logs в `.temp/` и явно отмечайте недоступные платформы.
+- `csk recover --rollback TRANSACTION_ID` восстанавливает записанные preimages
+  незавершённой transaction под manager lock; committed transactions отклоняются.
+  Пустые каталоги установки могут остаться, прежние directory modes не
+  восстанавливаются и не расширяются. Запускайте `uv run pytest -q tests/test_mcp_legacy_recovery.py
+  tests/test_transaction_commit_guard.py` в обычном Git checkout для crash fixtures
+  released CLI и rollback controls; сохраняйте logs в `.temp/`.
 - `PyYAML` используется только в dev extra как независимый oracle для
   дифференциальных тестов frontmatter. Запускайте
   `uv run pytest -q tests/test_frontmatter_differential.py`; постоянные
