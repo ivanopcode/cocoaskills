@@ -66,7 +66,7 @@ class InstallCase:
         return subprocess.CompletedProcess(result.args, result.returncode, result.stdout, "")
 
 
-def _case(root: Path, *, schema: int = 3) -> InstallCase:
+def _case(root: Path, *, schema: int = 3, ignore_mode: str | None = "gitignore") -> InstallCase:
     root.mkdir(parents=True)
     project = make_project(root)
     home = root / "manager"
@@ -82,7 +82,10 @@ def _case(root: Path, *, schema: int = 3) -> InstallCase:
     }
     if schema != 1:
         # These acceptance cases pin the opt-in gitignore transaction behavior.
-        skillfile["ignore_mode"] = "gitignore"
+        # Historical CLI writers require a manifest from their own grammar;
+        # omitting the newer policy field keeps their crash controls executable.
+        if ignore_mode is not None:
+            skillfile["ignore_mode"] = ignore_mode
         # A real local skill makes partial skill publication observable on MCP refusal.
         write_files(project, {"source/seed/SKILL.md": "---\nname: seed\ndescription: Local seed.\n---\n\n# Seed\n"})
         skillfile.update(
