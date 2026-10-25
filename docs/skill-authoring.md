@@ -583,8 +583,28 @@ downgrade, needs consent again; an upgrade can retain approval for the same
 path/publisher. A helper content change with the same subject is informational.
 Install re-verifies after consent before publishing. Source snapshot trees and
 records join the transaction for skills, native configs, consent, ledger and
-ignore entries; a publication refusal rolls them back and removes new empty
-parent directories while preserving pre-existing snapshots.
+ignore entries; a refusal during target publication rolls them back and removes
+new empty parent directories while preserving pre-existing snapshots.
+
+Recovery re-verifies the journaled launcher declaration and checks the approved
+path, publisher and trust level before replaying any forward target. An invalid
+signature, path/publisher change or trust downgrade pauses replay with
+`mcp_launcher_untrusted` or `mcp_launcher_changed`;
+the interrupted state and journal remain for a retry after restoring the recorded
+trusted application. Existing native entries and consent are not advanced during
+that rejected replay. An older interrupted MCP journal without a saved observation
+stops with `mcp_recovery_observation_missing`; inspect its saved state before repair
+instead of treating a new declaration as the old approval.
+Valid content-only updates and trust upgrades retain approval; the next ordinary
+install plan records the current helper fingerprint without another prompt.
+
+If all targets committed but cleanup fails, `transaction_cleanup_deferred`
+reports **Installation committed**, the journal path and each target's journaled
+and observed live state. It does not report a refused install. An incomplete
+rollback similarly reports `transaction_rollback_deferred` and the retained state.
+Keep the journal and sidecars, restore any moved publication boundaries, then
+rerun `csk install` to finish recovery. Exit 1 in these cases means operator
+attention/recovery is needed; it does not imply that nothing was written.
 
 `status` re-verifies without writing anything. A valid content-only change reports
 `updated (informational)` and keeps `--check` successful; install acknowledges the
