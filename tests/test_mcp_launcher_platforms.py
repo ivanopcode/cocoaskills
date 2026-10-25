@@ -38,6 +38,10 @@ def linux(allow=True):
 def helper(root, relative):
     path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Admission fixtures require explicit modes through their own root, even
+    # under umask 002 or when injected metadata makes the owner root.
+    for directory in path.parents:
+        if directory.is_relative_to(root): directory.chmod(0o755)
     path.write_bytes(b"launcher fixture")
     path.chmod(0o755)
     return path
@@ -188,23 +192,33 @@ def test_xdg_expansion(tmp_path, monkeypatch, variable, prefix, fallback):
 
 
 # Fixed package argv/environment reject failed probes and dpkg pattern matches
-# for a different pathname; both package tools have successful nearby controls.
+# for a different pathname; explicit tool-presence facts give both tools nearby
+# success controls independently of the host's tools or pathlib implementation.
+@pytest.mark.parametrize("available", [pytest.param(("dpkg", "rpm"), id="both"),
+    pytest.param(("dpkg",), id="dpkg-only"), pytest.param(("rpm",), id="rpm-only"),
+    pytest.param((), id="neither")])
 @pytest.mark.parametrize("answer", ["dpkg", "rpm", "no", "neighbor", "error", "timeout"])
-def test_package_probe_contract(tmp_path, monkeypatch, answer):
+def test_package_probe_contract(tmp_path, monkeypatch, answer, available):
     import subprocess
     from pathlib import Path
     path = tmp_path / "literal[abc]"
     programs = {Path("/usr/bin/dpkg"), Path("/usr/bin/rpm")}
     known = {p for tool in programs for p in (tool, *tool.parents)}
-    original_stat, original_resolve = Path.stat, Path.resolve
-    monkeypatch.setattr(Path, "resolve", lambda p, **kw: p if p in programs else original_resolve(p, **kw))
+    original_stat, original_resolve, original_is_file = Path.stat, Path.resolve, Path.is_file
+    def resolve(p, **kwargs):
+        if p not in programs: return original_resolve(p, **kwargs)
+        if p.name not in available: raise FileNotFoundError(p)
+        return p
+    monkeypatch.setattr(Path, "resolve", resolve)
     monkeypatch.setattr(Path, "stat", lambda p, **kw: SimpleNamespace(st_uid=0, st_mode=(stat.S_IFREG if p in programs else stat.S_IFDIR) | 0o755) if p in known else original_stat(p, **kw))
-    monkeypatch.setattr(gate.os, "access", lambda p, mode: Path(p) in programs)
+    # Python 3.14 is_file() does not delegate to the patched Path.stat().
+    monkeypatch.setattr(Path, "is_file", lambda p, **kw: p.name in available if p in programs else original_is_file(p, **kw))
+    monkeypatch.setattr(gate.os, "access", lambda p, mode: Path(p) in programs and Path(p).name in available)
     monkeypatch.setenv("DPKG_ROOT", str(tmp_path / "hostile-database"))
     calls = []
     def run(argv, **kwargs):
         calls.append(argv)
-        assert Path(argv[0]) in programs
+        assert Path(argv[0]) in programs and Path(argv[0]).name in available
         assert kwargs == dict(capture_output=True, text=True, timeout=5, check=False,
                               env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
         assert argv[1:] == (["-S", "--", str(path)] if Path(argv[0]).name == "dpkg" else ["-qf", "--", str(path)])
@@ -214,16 +228,24 @@ def test_package_probe_contract(tmp_path, monkeypatch, answer):
         output = "pkg: " + str(path) if success else "pkg: " + str(tmp_path / "other")
         return SimpleNamespace(returncode=0 if success or answer == "neighbor" and Path(argv[0]).name == "dpkg" else 1, stdout=output)
     monkeypatch.setattr(gate.subprocess, "run", run)
-    assert gate.linux_package_owned(path) is (answer in {"dpkg", "rpm"})
-    assert calls
+    assert gate.linux_package_owned(path) is (answer in available)
+    expected = [name for name in ("dpkg", "rpm") if name in available]
+    if answer in expected: expected = expected[:expected.index(answer) + 1]
+    assert [Path(argv[0]).name for argv in calls] == expected
 
 
 # A verifier that replaces bytes during its observation cannot publish a digest
-# for a different file; unchanged bytes are the positive control in the matrix.
+# for a different file; the same path/verifier first passes unchanged and must
+# reach the verifier again before refusing the replacement with the trust error.
 @pytest.mark.parametrize("platform", ["windows", "linux"])
 def test_content_race_refuses(tmp_path, platform):
     path = helper(tmp_path, "Programs/Example/mcp-server.exe" if platform == "windows" else "Example/bin/server")
+    calls = []
+    def unchanged(*args):
+        calls.append("unchanged")
+        return SimpleNamespace(signature="valid", publisher="Example Inc", package_owned=True)
     def changed(*args):
+        calls.append("changed")
         path.write_bytes(b"different bytes during verification")
         return SimpleNamespace(signature="valid", publisher="Example Inc", package_owned=True)
     if platform == "linux":
@@ -233,12 +255,15 @@ def test_content_race_refuses(tmp_path, platform):
         from unittest.mock import patch
         metadata = gate.linux_metadata
         with patch.object(gate, "linux_metadata", lambda p: SimpleNamespace(st_mode=metadata(p).st_mode, st_uid=0)):
+            assert gate.resolve_launcher(linux(), platform=platform, roots=(tmp_path,), verifier=unchanged).trust == "verified"
             with pytest.raises(gate.McpLauncherError) as caught:
                 gate.resolve_launcher(linux(), platform=platform, roots=(tmp_path,), verifier=changed)
     else:
+        assert gate.resolve_launcher(windows(), platform=platform, roots=(tmp_path,), verifier=unchanged).trust == "signed-user-writable"
         with pytest.raises(gate.McpLauncherError) as caught:
             gate.resolve_launcher(windows(), platform=platform, roots=(tmp_path,), verifier=changed)
     assert caught.value.code == "mcp_launcher_untrusted"
+    assert calls == ["unchanged", "changed"]
 
 
 # Real environment values cannot introduce UNC/device/drive-relative roots,
