@@ -334,7 +334,7 @@ containment takes precedence over Program Files when folders overlap.
 | --- | --- | --- |
 | macOS | Системный codesign: bundle, helper, notarization и идентичность издателя. | Проверка на момент установки; нет гарантии для последующего запуска. |
 | Windows | WinVerifyTrust: валидная подпись и точное совпадение первого Subject CN с `publisher`. Program Files → `verified`, LocalAppData → `signed-user-writable`. | Cached-only, без дополнительных revocation checks; нет гарантии актуального online revocation. Владелец per-user установки может заменить helper после проверки. |
-| Linux | Realpath and executable; the file and every parent through the declared root must be owned by the current uid or root, with no group or world write. Root-owned package helpers may be `verified`. | Stock Ubuntu/Debian umask `002` may require a one-time `chmod g-w -- "$HOME/.local/bin"`. Refusals name the exact element/mode and remedy; remove `o-w` too when reported. Package ownership does not verify content checksums. |
+| Linux | Realpath and executable; the file and every parent through the declared root must be owned by the current uid or root, with no group or world write. Root-owned package helpers may be `verified`. | Stock Ubuntu/Debian umask `002` may require a one-time `chmod -- g-w "$HOME/.local/bin"`. Refusals name the exact element/mode and remedy; remove `o-w` too when reported. Package ownership does not verify content checksums. |
 | Unverified Windows/Linux | Нужны `trust: allow-unverified` и local consent. | csk не отличает обновление от подмены; same-user attacker в per-user установке вне границы проверки. Vendor checksum для Proxyman не предполагается. |
 
 Изменение только содержимого при прежних path/trust/publisher информационное,

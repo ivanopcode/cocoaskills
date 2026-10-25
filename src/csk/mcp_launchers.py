@@ -409,17 +409,18 @@ def linux_metadata(path: Path) -> os.stat_result:
 
 def _linux_mode_error(path: PurePath, mode: int) -> McpLauncherError:
     text = str(path)
+    remove = ",".join(flag for bit, flag in ((0o020, "g-w"), (0o002, "o-w")) if mode & bit)
     if text.isprintable():
         argument = shlex.quote(text)
-    else:
-        # ANSI-C byte quoting preserves the actual filename while keeping
-        # terminal controls out of both the diagnostic and suggested command.
-        escaped = "".join(chr(byte) if 32 <= byte < 127 and byte not in {39, 92}
-                          else f"\\x{byte:02x}" for byte in os.fsencode(text))
-        argument = "$'" + escaped + "'"
-    remove = ",".join(flag for bit, flag in ((0o020, "g-w"), (0o002, "o-w")) if mode & bit)
-    return _path_error(f"Linux launcher element {argument} has mode {mode:04o}; "
-                       f"group/world write is forbidden; run chmod {remove} -- {argument}")
+        return _path_error(f"Linux launcher element {argument} has mode {mode:04o}; "
+                           f"group/world write is forbidden; run chmod -- {remove} {argument}")
+    # Escaped bytes identify the element without terminal controls. This is a
+    # display name, not a shell operand: POSIX sh cannot portably decode it.
+    escaped = "".join(chr(byte) if 32 <= byte < 127 and byte not in {39, 92}
+                      else f"\\x{byte:02x}" for byte in os.fsencode(text))
+    return _path_error(f"Linux launcher element {escaped} has mode {mode:04o}; "
+                       f"group/world write is forbidden; remove {remove}; "
+                       "no shell command is suggested because the name contains control characters")
 
 
 def _linux_root(root: str) -> Path:
