@@ -122,15 +122,17 @@ def test_embedded_real_publish(project_cli,tmp_path):
 
 
 # A subdirectory invocation and a config include must retain the root-relative
-# excludes source. XDG/default and info/exclude controls reuse live sources.
+# excludes source. XDG/default and info/exclude controls reuse live sources;
+# the XDG writer stays test-local so later installs retain their ignore policy.
 @pytest.mark.parametrize("kind", ["included-relative", "tilde", "xdg", "subdirectory"])
-def test_additional_ignore_sources(project_cli, tmp_path, kind):
+def test_additional_ignore_sources(project_cli, tmp_path, monkeypatch, kind):
     from csk import gitignore_gate
     root, home, _ = project_cli
     excludes = root / "review-excludes"
     if kind == "tilde":
         excludes = Path.home() / "review-excludes"
     elif kind == "xdg":
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
         excludes = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "git/ignore"
         excludes.parent.mkdir(parents=True, exist_ok=True)
     excludes.parent.mkdir(parents=True, exist_ok=True)
