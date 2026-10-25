@@ -89,6 +89,7 @@ def test_printable_linux_remedy_executes_in_posix_sh(tmp_path, name, mode, remov
     ('tab\tname', 'tab\\x09name'),
     ('c1\x85', 'c1\\xc2\\x85'),
     ('escape\x1b', 'escape\\x1b'),
+    ("run chmod\n$'", 'run\\x20chmod\\x0a$\\x27'),
 ])
 @pytest.mark.parametrize('mode,bits', [(0o777, 'g-w,o-w'), (0o775, 'g-w'), (0o757, 'o-w')])
 def test_linux_control_name_diagnostic_has_no_shell_command(name, escaped, mode, bits):
