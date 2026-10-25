@@ -195,4 +195,6 @@ def _subject_cn(crypt: object, certificate: int) -> str:
     result = ctypes.create_unicode_buffer(length)
     if value(attribute.contents.kind, ctypes.byref(attribute.contents.value), result, length) != length:
         return ""
-    return result.value
+    # .value truncates at an embedded NUL, which could turn a longer CN into a
+    # matching prefix. Preserve every returned character for caller rejection.
+    return "".join(result[:length - 1])

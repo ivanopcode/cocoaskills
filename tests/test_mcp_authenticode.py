@@ -55,7 +55,8 @@ def test_api_failure_is_not_unsigned(tmp_path, monkeypatch):
 # state; NOSIGNATURE is unsigned only when the PE has no certificate table.
 @pytest.mark.parametrize('result,signed,subject,expected', [
     (0, True, 'Example Inc', 'valid'), (0, True, '', 'invalid'),
-    (0, True, None, 'invalid'), (1, False, 'Example Inc', 'invalid'),
+    (0, True, None, 'invalid'), (0, True, 'Example Inc\0suffix', 'invalid'),
+    (1, False, 'Example Inc', 'invalid'),
     (0x800b0100, False, '', 'unsigned'), (0x800b0100, True, '', 'invalid'),
     (0x80096010, True, '', 'invalid'), (0x800b0003, False, '', 'invalid')])
 def test_wintrust_binding_contract(tmp_path, monkeypatch, result, signed, subject, expected):
@@ -111,9 +112,10 @@ def test_wintrust_binding_contract(tmp_path, monkeypatch, result, signed, subjec
 
 
 # Subject extraction passes only the leaf's actual Subject DER to the decoder,
-# requests CN specifically, preserves its exact text and refuses absent/failed CN.
+# requests CN specifically, preserves its exact text (including an embedded NUL
+# so the caller can refuse it) and refuses absent/failed CN.
 # Fake system functions check this binding contract, not native trust validity.
-@pytest.mark.parametrize('failure', [None, 'no-subject', 'decode', 'no-cn', 'value'])
+@pytest.mark.parametrize('failure', [None, 'embedded-nul', 'no-subject', 'decode', 'no-cn', 'value'])
 def test_subject_cn_has_no_display_or_san_fallback(monkeypatch, failure):
     import ctypes as c
     from types import SimpleNamespace
@@ -154,7 +156,7 @@ def test_subject_cn_has_no_display_or_san_fallback(monkeypatch, failure):
         attribute.kind = 12
         keep.append(attribute)
         return c.pointer(attribute)
-    expected = 'Example Inc, Exact Case'
+    expected = 'Example Inc\0suffix' if failure == 'embedded-nul' else 'Example Inc, Exact Case'
     def value(kind, blob, output, length):
         calls.append('value')
         assert kind == 12
@@ -165,7 +167,7 @@ def test_subject_cn_has_no_display_or_san_fallback(monkeypatch, failure):
         return len(expected) + 1
     api = SimpleNamespace(CryptDecodeObjectEx=Function(decode),
         CertFindRDNAttr=Function(find), CertRDNValueToStrW=Function(value))
-    assert trust._subject_cn(api, c.addressof(cert)) == (expected if failure is None else '')
+    assert trust._subject_cn(api, c.addressof(cert)) == (expected if failure in {None, 'embedded-nul'} else '')
     assert calls == ([] if failure == 'no-subject' else ['decode'] if failure == 'decode'
                      else ['decode', 'decode', 'cn'] + ([] if failure == 'no-cn'
                           else ['value'] if failure == 'value' else ['value', 'value']))
