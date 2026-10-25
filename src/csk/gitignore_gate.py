@@ -92,7 +92,7 @@ def project_key(project_root: Path) -> str:
         raise ExcludeError("Cannot resolve Git worktree identity")
     relative = _project_relative(project_root, Path(roots[0]))
     common = ignore_path(project_root, "exclude").parent.parent
-    metadata = Path(roots[1]).resolve().relative_to(common)
+    metadata = _project_relative(Path(roots[1]), common)
     identity = metadata.as_posix() + "\0" + relative.as_posix()
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
