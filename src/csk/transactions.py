@@ -437,7 +437,11 @@ class TransactionEngine:
                 except TransactionIncompleteError:
                     raise
                 except Exception as exc:
-                    raise self._incomplete_error(journal, exc) from exc
+                    # Preserve recovery's operation context alongside the
+                    # retained-state diagnostic and its underlying cause.
+                    raise self._incomplete_error(
+                        journal, exc, operation=f"recover transaction {transaction_id}",
+                    ) from exc
 
     def rollback(self, lock: HomeLockWitness, transaction_id: str) -> None:
         """Explicitly abandon one unfinished publication, retaining boundary checks.
@@ -471,7 +475,9 @@ class TransactionEngine:
             journal, _deleting = self._load_journal_record(transaction_id)
             return self._incomplete_error(journal, cause)
 
-    def _incomplete_error(self, journal: Journal, cause: Exception) -> TransactionIncompleteError:
+    def _incomplete_error(
+        self, journal: Journal, cause: Exception, *, operation: str | None = None,
+    ) -> TransactionIncompleteError:
         def cause_text(error: BaseException) -> str:
             if isinstance(error, BaseExceptionGroup):
                 return "; ".join(cause_text(item) for item in error.exceptions)
@@ -523,7 +529,7 @@ class TransactionEngine:
         )
         return TransactionIncompleteError(code, journal.phase, "\n".join([
             summary, f"Recovery journal={path}; phase={journal.phase}", *rows,
-            f"Cause: {cause_text(cause)}",
+            f"Cause: {operation + ': ' if operation else ''}{cause_text(cause)}",
             remedy,
         ]))
 
