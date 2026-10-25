@@ -104,6 +104,6 @@ def test_native_linux_umask_002_strict_modes(tmp_path, monkeypatch):
     import shlex
     assert caught.value.code == 'mcp_launcher_path_invalid'
     assert str(file.parent) in str(caught.value) and '0775' in str(caught.value)
-    assert shlex.split(str(caught.value).split('run ', 1)[1]) == ['chmod', 'g-w', '--', str(file.parent)]
+    assert shlex.split(str(caught.value).split('run ', 1)[1]) == ['chmod', '--', 'g-w', str(file.parent)]
     file.parent.chmod(file.parent.stat().st_mode & ~0o020)
     assert gate.resolve_launcher(declaration, platform='linux').trust == 'unverified'
