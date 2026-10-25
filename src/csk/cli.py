@@ -921,6 +921,8 @@ def _dispatch(args: argparse.Namespace) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return EXIT_PARTIAL_FAIL
         print("Unfinished installation rolled back; rerun csk install to review a fresh plan.")
+        print("Empty directories may remain; previous directory modes are not restored "
+              "and may remain more restrictive. Rollback does not widen directory permissions.")
         return EXIT_OK
     if args.command == "bootstrap":
         return _cmd_bootstrap_refusing_eof(args)

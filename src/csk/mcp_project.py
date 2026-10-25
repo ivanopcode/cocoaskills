@@ -714,7 +714,8 @@ def recheck_commit(journal: transactions.Journal) -> None:
               if target.publication_recheck is not None
               and "commit_guard" in target.publication_recheck]
     if not guards:
-        if any(target.target_class == "mcp-native" for target in journal.targets):
+        if any(target.target_class in {"mcp-native", "mcp-ledger", "mcp-consent"}
+               for target in journal.targets):
             if not _legacy_without_launchers(journal):
                 # Never reconstruct an approval from the current manifest.
                 raise refusal("mcp_recovery_observation_missing",
