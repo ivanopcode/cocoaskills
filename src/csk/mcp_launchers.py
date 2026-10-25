@@ -416,7 +416,8 @@ def _linux_mode_error(path: PurePath, mode: int) -> McpLauncherError:
                            f"group/world write is forbidden; run chmod -- {remove} {argument}")
     # Escaped bytes identify the element without terminal controls. This is a
     # display name, not a shell operand: POSIX sh cannot portably decode it.
-    escaped = "".join(chr(byte) if 32 <= byte < 127 and byte not in {39, 92}
+    # Escape spaces too so a name cannot echo the command cue "run chmod".
+    escaped = "".join(chr(byte) if 33 <= byte < 127 and byte not in {39, 92}
                       else f"\\x{byte:02x}" for byte in os.fsencode(text))
     return _path_error(f"Linux launcher element {escaped} has mode {mode:04o}; "
                        f"group/world write is forbidden; remove {remove}; "
