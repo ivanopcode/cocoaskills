@@ -1,4 +1,4 @@
-"""Portable app launcher declarations and read-only macOS identity checks.
+"""Portable app launcher declarations and read-only platform identity checks.
 
 No app is executed. Trust is a point-in-time observation, not a guarantee about
 what a native agent will execute later. No shim or developer-tool dependency.
@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import ntpath
 import plistlib
 import re
 import stat
@@ -16,8 +17,10 @@ import unicodedata
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from xml.parsers.expat import ExpatError
+
+from .mcp_authenticode import WindowsVerification, verify_windows
 
 TrustLevel = Literal["verified", "signed-user-writable", "unverified"]
 
@@ -79,11 +82,16 @@ class MacOSVerification:
     identifier: str
 
 
-Verifier = Callable[[Path, Path, MacOSLauncher], MacOSVerification]
+@dataclass(frozen=True)
+class LinuxVerification:
+    package_owned: bool
+
+
+Verifier = Callable[..., MacOSVerification | WindowsVerification | LinuxVerification]
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,254}", re.ASCII)
 _TEAM = re.compile(r"[A-Z0-9]{10}", re.ASCII)
 _HELPER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}", re.ASCII)
-_WINDOWS_ROOTS = ("%LOCALAPPDATA%\\Programs\\", "%PROGRAMFILES%\\", "%PROGRAMFILES(X86)%\\")
+_WINDOWS_ROOTS = ("%LOCALAPPDATA%\\", "%PROGRAMFILES%\\", "%PROGRAMFILES(X86)%\\")
 _LINUX_ROOTS = (
     "/usr/bin/", "/usr/local/bin/", "/opt/", "~/.local/bin/", "~/.config/",
     "${XDG_CONFIG_HOME:-~/.config}/", "${XDG_DATA_HOME:-~/.local/share}/",
@@ -243,8 +251,12 @@ def resolve_launcher(
     entry = {"macos": spec.macos, "windows": spec.windows, "linux": spec.linux}.get(selected)
     if entry is None:
         raise McpLauncherError("mcp_launcher_platform_missing", "launcher has no entry for the current platform")
-    if selected != "macos":
-        raise McpLauncherError("mcp_launcher_platform_unsupported", "app launcher resolution is not supported on this platform yet")
+    if selected == "windows":
+        assert spec.windows is not None
+        return _resolve_windows(spec.windows, roots, verifier)
+    if selected == "linux":
+        assert spec.linux is not None
+        return _resolve_linux(spec.linux, roots, verifier)
     assert spec.macos is not None
     macos = spec.macos
     bundle = _find_bundle(macos, roots if roots is not None else macos_roots())
@@ -255,7 +267,7 @@ def resolve_launcher(
         before = helper.stat()
         if not stat.S_ISREG(before.st_mode) or not os.access(helper, os.X_OK):
             raise McpLauncherError("mcp_launcher_path_invalid", "executable is not an executable regular file")
-        checked = (verifier if verifier is not None else verify_macos)(bundle, helper, macos)
+        checked = cast(MacOSVerification, (verifier if verifier is not None else verify_macos)(bundle, helper, macos))
         if (not checked.signature_valid or not checked.notarized or checked.team_id != macos.team_id
                 or checked.bundle_id != macos.bundle_id or checked.identifier != macos.identifier):
             raise McpLauncherError("mcp_launcher_untrusted", "macOS signature or publisher identity did not match")
@@ -272,3 +284,177 @@ def resolve_launcher(
             raise
         raise McpLauncherError("mcp_launcher_path_invalid", "application executable cannot be resolved or read") from exc
     return ResolvedLauncher(str(helper), "verified", f"macos:{checked.team_id}:{checked.bundle_id}:{checked.identifier}", digest.hexdigest())
+
+
+def _path_error(detail: str) -> McpLauncherError:
+    return McpLauncherError("mcp_launcher_path_invalid", detail)
+
+
+def _digest_stable(path: Path, before: os.stat_result) -> str:
+    digest = hashlib.sha256()
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0)
+                         | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(descriptor, "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode):
+            raise _path_error("executable changed to a non-regular file")
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+        closed = os.fstat(stream.fileno())
+    after = path.stat()
+    def identity(s: os.stat_result) -> tuple[int, int, int, int, int]:
+        return s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns
+    if not identity(before) == identity(opened) == identity(closed) == identity(after):
+        raise McpLauncherError("mcp_launcher_untrusted", "executable changed during verification")
+    return digest.hexdigest()
+
+
+def _override_root(roots: Sequence[Path] | None) -> Path | None:
+    # Call-argument-only seam for native/pure tests. No environment/config bypass.
+    if roots is None:
+        return None
+    if len(roots) != 1:
+        raise _path_error("exactly one platform root is required")
+    return roots[0].resolve(strict=True)
+
+
+def _windows_root_value(raw: str) -> str:
+    value = raw.replace("/", "\\")
+    if (not re.match(r"^[A-Za-z]:\\", value) or any(ord(c) < 32 for c in value)
+            or not _windows_relative(value[3:])):
+        raise _path_error("Windows known-root environment must contain an absolute local directory")
+    return ntpath.normpath(value)
+
+
+def _windows_root(root: str) -> Path:
+    key = {"%LOCALAPPDATA%": "LOCALAPPDATA", "%PROGRAMFILES%": "ProgramFiles",
+           "%PROGRAMFILES(X86)%": "ProgramFiles(x86)"}[root.upper()]
+    # Both the supplied and resolved location must be local DOS paths. A local
+    # root junction onto a UNC/device namespace must not admit a remote helper.
+    path = Path(_windows_root_value(os.environ.get(key, ""))).resolve(strict=True)
+    _windows_root_value(str(path))
+    return path
+
+
+def _resolve_windows(entry: WindowsLauncher, roots: Sequence[Path] | None, verifier: Verifier | None) -> ResolvedLauncher:
+    try:
+        root = next(r for r in _WINDOWS_ROOTS if entry.install_dir.upper().startswith(r.upper()))
+        base = _override_root(roots) or _windows_root(root[:-1])
+        install = base.joinpath(*entry.install_dir[len(root):].split("\\")).resolve(strict=True)
+        if not install.is_relative_to(base) or not install.is_dir():
+            raise _path_error("install_dir realpath escapes its Windows root")
+        path = install.joinpath(*entry.executable.split("\\")).resolve(strict=True)
+        if not path.is_relative_to(install):
+            raise _path_error("executable realpath escapes install_dir")
+        before = path.stat()
+        if not stat.S_ISREG(before.st_mode):
+            raise _path_error("Windows executable must be a regular file")
+        checked = cast(WindowsVerification, verifier(install, path, entry) if verifier else verify_windows(path))
+        if checked.signature == "unsigned":
+            if entry.trust != "allow-unverified":
+                raise McpLauncherError("mcp_launcher_untrusted", "unsigned launcher requires trust: allow-unverified and local consent")
+            level: TrustLevel = "unverified"
+            publisher = "windows:unsigned"
+        elif checked.signature == "valid" and checked.publisher == entry.publisher:
+            level = "signed-user-writable" if root.upper().startswith("%LOCALAPPDATA%") else "verified"
+            publisher = "windows:" + checked.publisher
+        else:
+            raise McpLauncherError("mcp_launcher_untrusted", "Windows signature or leaf signer CN did not match")
+        return ResolvedLauncher(str(path), level, publisher, _digest_stable(path, before))
+    except McpLauncherError:
+        raise
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise _path_error("Windows application executable cannot be resolved or read") from exc
+
+
+def linux_uid() -> int:
+    return os.getuid()
+
+
+def linux_metadata(path: Path) -> os.stat_result:
+    return path.stat()
+
+
+def _linux_root(root: str) -> Path:
+    if root.startswith("${XDG_CONFIG_HOME"):
+        value = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    elif root.startswith("${XDG_DATA_HOME"):
+        value = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local/share")
+    elif root.startswith("~/"):
+        value = str(Path.home() / root[2:].rstrip("/"))
+    else:
+        value = root.rstrip("/")
+    path = Path(value)
+    if not path.is_absolute():
+        raise _path_error("XDG launcher root must be absolute")
+    return path.resolve(strict=True)
+
+
+def _check_linux_chain(path: Path, root: Path) -> os.stat_result:
+    current = path
+    uid = linux_uid()
+    file_info = linux_metadata(path)
+    while True:
+        info = linux_metadata(current)
+        expected = stat.S_ISREG(info.st_mode) if current == path else stat.S_ISDIR(info.st_mode)
+        if not expected or info.st_uid not in {0, uid} or info.st_mode & 0o022:
+            raise _path_error("Linux launcher and parents must have trusted owners and no group/world write permission")
+        if current == root:
+            break
+        if current.parent == current:
+            raise _path_error("Linux launcher root is not an ancestor")
+        current = current.parent
+    if not file_info.st_mode & 0o111 or not os.access(path, os.X_OK):
+        raise _path_error("Linux launcher must be executable")
+    return file_info
+
+
+def linux_package_owned(path: Path) -> bool:
+    """Ask trusted system package tools about the exact realpath, no shell.
+
+    Fixed absolute tools, bounded runtime, and a minimal environment prevent
+    relocation of the package database through inherited tool-specific options.
+    dpkg -S treats its argument as a pattern: require an exact returned pathname.
+    """
+    for program, args in (("/usr/bin/dpkg", ["-S", "--", str(path)]),
+                          ("/usr/bin/rpm", ["-qf", "--", str(path)])):
+        try:
+            tool = Path(program).resolve(strict=True)
+            for candidate in (tool, *tool.parents):
+                info = candidate.stat()
+                if info.st_uid != 0 or info.st_mode & 0o022:
+                    raise OSError("untrusted package tool")
+            if not tool.is_file() or not os.access(tool, os.X_OK):
+                continue
+            result = subprocess.run([str(tool), *args], capture_output=True, text=True, timeout=5,
+                                    check=False, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+            if result.returncode == 0:
+                if program.endswith("rpm") or any(line.partition(": ")[2] == str(path) for line in result.stdout.splitlines()):
+                    return True
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            continue
+    return False
+
+
+def _resolve_linux(entry: LinuxLauncher, roots: Sequence[Path] | None, verifier: Verifier | None) -> ResolvedLauncher:
+    try:
+        root = next(r for r in _LINUX_ROOTS if entry.path.startswith(r))
+        base = _override_root(roots) or _linux_root(root)
+        path = (base / entry.path[len(root):]).resolve(strict=True)
+        if not path.is_relative_to(base):
+            raise _path_error("Linux executable realpath escapes its declared root")
+        before = path.stat()
+        info = _check_linux_chain(path, base)
+        try:
+            owned = (cast(LinuxVerification, verifier(base, path, entry)).package_owned
+                     if verifier else linux_package_owned(path)) if info.st_uid == 0 else False
+        except (OSError, subprocess.TimeoutExpired):
+            owned = False
+        level: TrustLevel = "verified" if owned else "unverified"
+        if level == "unverified" and entry.trust != "allow-unverified":
+            raise McpLauncherError("mcp_launcher_untrusted", "unverified Linux launcher requires trust: allow-unverified and local consent")
+        return ResolvedLauncher(str(path), level, "linux:package-manager", _digest_stable(path, before))
+    except McpLauncherError:
+        raise
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise _path_error("Linux application executable cannot be resolved or read") from exc

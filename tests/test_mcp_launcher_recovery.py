@@ -38,6 +38,8 @@ def factory(home, **kwargs):
             and event not in reached):
             reached.add(event)
             print('RECOVERY_BOUNDARY', event, flush=True)
+            if request.get('exit'):
+                os._exit(86)
             if request.get('kill'):
                 os.kill(os.getpid(), signal.SIGKILL)
             raise OSError('injected cleanup failure')
@@ -53,11 +55,21 @@ def approve(prompt):
     return 'yes'
 
 with patch.object(launchers, 'macos_roots', lambda: (Path(request['apps']),)), \
-     patch.object(launchers, '_platform', lambda: 'macos'), \
+     patch.object(launchers, '_platform', lambda: request.get('platform', 'macos')), \
      patch.object(publish, 'TransactionEngine', factory), \
      patch('builtins.input', approve), \
      patch.object(sys.stdin, 'isatty', lambda: True), \
      patch.object(sys.stdout, 'isatty', lambda: True):
+    if request.get('platform') in {'windows', 'linux'}:
+        from types import SimpleNamespace
+        launchers._windows_root = lambda *a: Path(request['apps'])
+        launchers._linux_root = lambda *a: Path(request['apps'])
+        launchers.linux_uid = lambda: 1000
+        launchers.linux_metadata = lambda path: SimpleNamespace(st_uid=0,
+            st_mode=0o040755 if path.is_dir() else 0o100755)
+        launchers.verify_windows = lambda *a: launchers.WindowsVerification(
+            'invalid' if request.get('untrusted') else 'valid', 'Example Inc')
+        launchers.linux_package_owned = lambda *a: not request.get('untrusted')
     if not request.get('native'):
         launchers.verify_macos = lambda *a: replace(good_verification(), signature_valid=not request.get('untrusted'))
     if request.get('changed'):
@@ -437,3 +449,39 @@ def test_explicit_rollback_preserves_publication_boundaries(tmp_path):
     assert not any((case.project / native_path).exists() for _, native_path in SURFACES)
     result = _invoke(case, apps, argv)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# Portable process death after the source record retains real journals. Saved
+# Windows/Linux observations are reverified before any replay publication; a
+# changed verdict leaves every interrupted byte untouched, while a valid retry
+# (or an informational content update) completes without asking consent again.
+@pytest.mark.parametrize('platform', ['windows', 'linux'])
+@pytest.mark.parametrize('change', ['verdict', 'content', 'unchanged'])
+def test_platform_observation_replay(tmp_path, platform, change):
+    from dataclasses import asdict
+    from test_mcp_launcher_platforms import helper, windows, linux
+    case = _case(tmp_path / 'case')
+    apps = tmp_path / 'apps'
+    path = helper(apps, 'Programs/Example/mcp-server.exe' if platform == 'windows' else 'Example/bin/server')
+    spec = windows('%ProgramFiles%') if platform == 'windows' else linux()
+    entry = {k: v for k,v in asdict(getattr(spec, platform)).items() if v is not None}
+    case.declare({'app': {'server': {'transport': 'stdio', 'launcher': {platform: entry}, 'args': []}}})
+    native_before = {rel: (case.project / rel).read_bytes() if (case.project / rel).exists() else None
+                     for _, rel in SURFACES}
+    killed = _invoke(case, apps, platform=platform, point='after_install', target='04-source-record', exit=True)
+    assert killed.returncode == 86 and 'RECOVERY_BOUNDARY' in killed.stdout, killed.stdout + killed.stderr
+    assert _journals(case)
+    interrupted = _snapshot(case.project, case.home)
+    if change == 'content': path.write_bytes(path.read_bytes() + b'\nInformational update.\n')
+    result = _invoke(case, apps, platform=platform, untrusted=change == 'verdict')
+    if change == 'verdict':
+        expected = 'mcp_launcher_untrusted' if platform == 'windows' else 'mcp_launcher_changed'
+        assert result.returncode == 1 and expected in result.stdout + result.stderr
+        assert _snapshot(case.project, case.home) == interrupted
+        assert {rel: (case.project / rel).read_bytes() if (case.project / rel).exists() else None
+                for _, rel in SURFACES} == native_before
+        result = _invoke(case, apps, platform=platform)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'RECOVERY_APPROVAL' not in result.stdout
+    assert not _journals(case)
+    _assert_seed_installed(case)
