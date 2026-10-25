@@ -62,7 +62,10 @@ with patch.object(launchers, 'macos_roots', lambda: (Path(request['apps']),)), \
      patch.object(sys.stdout, 'isatty', lambda: True):
     if request.get('platform') in {'windows', 'linux'}:
         from types import SimpleNamespace
-        launchers._windows_root = lambda *a: Path(request['apps'])
+        launchers._windows_roots = lambda: {
+            '%PROGRAMFILES%': Path(request['apps']),
+            '%PROGRAMFILES(X86)%': Path(request['apps']) / 'unused-x86',
+            '%LOCALAPPDATA%': Path(request['apps']) / 'unused-user'}
         launchers._linux_root = lambda *a: Path(request['apps'])
         launchers.linux_uid = lambda: 1000
         launchers.linux_metadata = lambda path: SimpleNamespace(st_uid=0,

@@ -658,9 +658,17 @@ user can still replace that helper before the native agent executes it. A
 same-user attacker on Windows/Linux per-user installations is outside the trust
 boundary.
 
-Windows expands only the named real environment root and resolves symlinks,
-junctions and reparse points. The resulting local executable must stay inside the
-resolved install directory, which must stay inside the expanded root.
+Windows resolves each named root through `SHGetKnownFolderPath`, using
+`FOLDERID_ProgramFiles`, `FOLDERID_ProgramFilesX86` and `FOLDERID_LocalAppData`
+for the current user. OS relocation is supported without assuming a drive.
+An environment value that disagrees with its OS folder refuses with
+`mcp_launcher_root_conflict`; a missing environment value uses the OS result.
+An API failure refuses with `mcp_launcher_known_folder_unavailable`, without
+environment fallback. Symlinks, junctions and reparse points are resolved.
+The local executable must stay inside the resolved install directory, which
+must stay inside the resolved OS root. Trust follows actual executable
+containment: LocalAppData takes precedence when known folders overlap, so a
+Program Files placeholder cannot promote a per-user location to `verified`.
 Authenticode uses the system `WinVerifyTrust` API through ctypes, without
 PowerShell. `publisher` must exactly equal the **first CN in the verified primary
 leaf certificate's actual Subject**, case-sensitive and without normalization;
