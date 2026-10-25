@@ -197,8 +197,8 @@ Schema 3 сохраняет schema 2 и добавляет необязател�
 | `server.args` | Массив строк для stdio; секреты запрещены, `npx` и `uvx` требуют точной версии пакета. |
 | `server.env_names` | Список имён переменных без значений; управляющие имена вроде `PATH` запрещены. Env reference требует consent. |
 | `server.environments` | Список известных environment ids. Без поля используются resolved agents проекта. Явно указанные writable ids пишутся даже вне agents проекта; известные unsupported ids дают строку без пути. Пустой список, дубликаты и неизвестные ids запрещены. |
-| `install.headers` | HTTP only: each name maps to `{env, prefix?}` or value-only `{value}`. Prefixes: `none` (default), `bearer` (Authorization only), `api-token`, `token`. Codex refuses the latter two. Literals: at most 1024 UTF-8 bytes; no secret names/scanner hits, `$`, control/format/surrogate characters. See [header rules](skill-authoring.md#project-mcp-schema-3). |
-| `install.auth` | `kind: "none"`, `"env"` or `"oauth"`, with optional `help_url`. Default: `env` with env references, otherwise `none`. HTTP OAuth permits env/literal headers; only actual env references require consent. csk does not authenticate. |
+| `install.headers` | Только HTTP: каждому имени соответствует `{env, prefix?}` или объект только с `{value}`. Префиксы: `none` (по умолчанию), `bearer` (только для Authorization), `api-token`, `token`. Codex отклоняет последние два. Literals: не более 1024 UTF-8 bytes; секретные имена, совпадения secret scanner, `$`, управляющие, format и surrogate characters запрещены. См. [правила headers](skill-authoring.md#project-mcp-schema-3). |
+| `install.auth` | `kind: "none"`, `"env"` или `"oauth"` и необязательный `help_url`. По умолчанию `env` при env references, иначе `none`. HTTP OAuth допускает env/literal headers; consent нужен только для фактических env references. csk не выполняет аутентификацию. |
 | `install.scope` | Только `project`, это значение по умолчанию. `user` пока не поддерживается. |
 | `install.git_policy` | Только `local`, это значение по умолчанию. `shared` пока не поддерживается. |
 
@@ -213,7 +213,7 @@ Schema 3 сохраняет schema 2 и добавляет необязател�
 | Код | Значение |
 | --- | --- |
 | `mcp_declaration_invalid` | Неверный тип, имя или неизвестное поле объявления. |
-| `mcp_header_prefix_unsupported` | Selected Codex target cannot express `api-token`/`token` from an env reference; the whole plan refuses before writing. |
+| `mcp_header_prefix_unsupported` | Выбранный Codex target не может выразить `api-token`/`token` из env reference; весь план отклоняется до записи. |
 | `mcp_scope_mismatch` | Область объявления не совпадает с областью вызова. |
 | `mcp_agent_selection_invalid` | Пустой список, дубликаты или неизвестный environment id. |
 | `mcp_env_name_reserved` | Объявление ссылается на управляющую или зарезервированную env variable. |
