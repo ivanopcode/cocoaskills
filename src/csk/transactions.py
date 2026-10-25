@@ -448,10 +448,12 @@ class TransactionEngine:
         lock.assert_held()
         with self._mutex, self._witness_scope(lock):
             journal, deleting = self._load_journal_record(transaction_id)
-            if deleting or journal.phase == "cleanup":
+            if journal.phase == "cleanup":
                 raise TransactionError("installation already committed; rerun csk install to finish cleanup")
             try:
-                if journal.phase == "preparing":
+                if deleting:
+                    self._finish_journal_removal(journal)
+                elif journal.phase == "preparing":
                     self._discard_prepared(journal)
                 else:
                     self._rollback(journal)
