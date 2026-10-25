@@ -36,7 +36,7 @@ def test_private_group_table(tmp_path, monkeypatch, element, case):
         if case == 'lookup-failure': raise KeyError(gid)
         members = {'empty': (), 'self': ('alice',), 'shared': ('alice', 'bob'),
                    'other': ('bob',), 'duplicate': ('alice', 'alice')}.get(case, ())
-        return SimpleNamespace(primary_gid=1000, user_name='alice', members=members)
+        return SimpleNamespace(primary_gid=1000, user_name='alice', members=members, exclusive=True)
     monkeypatch.setattr(gate, 'linux_metadata', metadata)
     monkeypatch.setattr(gate, 'linux_group_facts', groups, raising=False)
     call = lambda: gate.resolve_launcher(linux(), platform='linux', roots=(tmp_path,),
@@ -62,7 +62,7 @@ def test_private_group_cannot_verify_package(tmp_path, monkeypatch, element):
     probes = []
     monkeypatch.setattr(gate, 'linux_uid', lambda: 1000)
     monkeypatch.setattr(gate, 'linux_group_facts', lambda gid:
-        SimpleNamespace(primary_gid=1000, user_name='alice', members=()), raising=False)
+        SimpleNamespace(primary_gid=1000, user_name='alice', members=(), exclusive=True), raising=False)
     def metadata(p):
         mode = (stat.S_IFREG if p == path else stat.S_IFDIR) | 0o755
         if p == selected and state['writable']: mode |= 0o020
@@ -89,7 +89,7 @@ def test_root_user_keeps_strict_modes(tmp_path, monkeypatch):
     state = {'mode': 0o755}
     monkeypatch.setattr(gate, 'linux_uid', lambda: 0)
     monkeypatch.setattr(gate, 'linux_group_facts', lambda gid:
-        SimpleNamespace(primary_gid=0, user_name='root', members=()), raising=False)
+        SimpleNamespace(primary_gid=0, user_name='root', members=(), exclusive=True), raising=False)
     monkeypatch.setattr(gate, 'linux_metadata', lambda p: SimpleNamespace(st_uid=0,
         st_gid=0, st_mode=(stat.S_IFREG if p == path else stat.S_IFDIR) | state['mode']))
     call = lambda: gate.resolve_launcher(linux(), platform='linux', roots=(tmp_path,),
@@ -100,26 +100,126 @@ def test_root_user_keeps_strict_modes(tmp_path, monkeypatch):
     assert caught.value.code == 'mcp_launcher_path_invalid'
 
 
-# Unix adapters query the uid's account primary gid/name and the requested
-# group's explicit member list. Lookup failures are propagated to the admission
-# gate, whose table above requires refusal. Fake modules keep this portable.
-@pytest.mark.parametrize('failure', [None, 'user', 'group'])
+# The adapter queries the current account, explicit membership and every account's
+# primary gid. Lookup failures propagate to the gate, which refuses group write.
+@pytest.mark.parametrize('failure', [None, 'user', 'group', 'enumeration'])
 def test_group_metadata_adapter(monkeypatch, failure):
     calls = []
     monkeypatch.setattr(gate, 'linux_uid', lambda: 1000)
+    monkeypatch.setattr(gate, 'linux_nsswitch', lambda: 'passwd: files\ngroup: files\n', raising=False)
+    alice = SimpleNamespace(pw_uid=1000, pw_gid=1000, pw_name='alice')
     def user(uid):
         calls.append(('user', uid))
         if failure == 'user': raise KeyError(uid)
-        return SimpleNamespace(pw_gid=1000, pw_name='alice')
+        return alice
     def group(gid):
         calls.append(('group', gid))
         if failure == 'group': raise OSError('group database unavailable')
         return SimpleNamespace(gr_mem=['alice'])
-    monkeypatch.setitem(sys.modules, 'pwd', SimpleNamespace(getpwuid=user))
+    def users():
+        calls.append(('enumeration',))
+        if failure == 'enumeration': raise OSError('account enumeration unavailable')
+        return [alice]
+    monkeypatch.setitem(sys.modules, 'pwd', SimpleNamespace(getpwuid=user, getpwall=users))
     monkeypatch.setitem(sys.modules, 'grp', SimpleNamespace(getgrgid=group))
     if failure:
-        with pytest.raises((KeyError, OSError)): gate.linux_group_facts(1234)
+        with pytest.raises((KeyError, OSError)): gate.linux_group_facts(1000)
     else:
-        facts = gate.linux_group_facts(1234)
-        assert (facts.primary_gid, facts.user_name, facts.members) == (1000, 'alice', ('alice',))
-    assert calls == ([('user', 1000)] if failure == 'user' else [('user', 1000), ('group', 1234)])
+        facts = gate.linux_group_facts(1000)
+        assert (facts.primary_gid, facts.user_name, facts.members, facts.exclusive) == (1000, 'alice', ('alice',), True)
+    expected = [('user', 1000), ('group', 1000), ('enumeration',)]
+    end = {'user': 1, 'group': 2}.get(failure, 3)
+    assert calls == expected[:end]
+
+
+# Real parsing and the account adapter are exercised through the resolver at
+# each chain position. Strict modes remain usable without NSS; group write
+# refuses incomplete/shared identity facts and accepts the local-only controls.
+@pytest.mark.parametrize('element', ['file', 'parent', 'root'])
+@pytest.mark.parametrize('case,allowed', [
+    ('files', True), ('systemd', True), ('compat', True), ('actions-comments', True),
+    ('other-primary-gid', True), ('shared-primary-empty', False), ('shared-primary-self', False),
+    ('explicit-shared', False), ('sss-passwd', False), ('ldap-group', False),
+    ('nis', False), ('winbind', False), ('unknown', False), ('missing', False),
+    ('unreadable', False), ('empty', False), ('missing-group', False), ('empty-passwd', False),
+    ('duplicate-passwd', False), ('broken-action', False), ('enumeration-error', False),
+    ('user-error', False), ('group-error', False), ('missing-current-account', False),
+    ('same-uid-alias', False),
+])
+def test_group_exclusivity_table(tmp_path, monkeypatch, element, case, allowed):
+    path = helper(tmp_path, 'Example/bin/server')
+    selected = {'file': path, 'parent': path.parent, 'root': tmp_path}[element]
+    alice = SimpleNamespace(pw_uid=1000, pw_gid=1000, pw_name='alice')
+    bob = SimpleNamespace(pw_uid=2000, pw_gid=2000, pw_name='bob')
+    sources = {
+        'systemd': 'passwd: files systemd\ngroup: files systemd\n',
+        'compat': 'passwd: compat\ngroup: files compat\n',
+        'actions-comments': '# passwd: ldap\npasswd: files [SUCCESS=return] systemd # ldap\ngroup: files [NOTFOUND = return] systemd\n',
+        'sss-passwd': 'passwd: files sss\ngroup: files\n',
+        'ldap-group': 'passwd: files\ngroup: files ldap\n',
+        'nis': 'passwd: files nis\ngroup: files\n',
+        'winbind': 'passwd: files\ngroup: files winbind\n',
+        'unknown': 'passwd: files future-provider\ngroup: files\n',
+        'empty': '', 'missing-group': 'passwd: files\n',
+        'empty-passwd': 'passwd: [SUCCESS=return]\ngroup: files\n',
+        'duplicate-passwd': 'passwd: files\npasswd: systemd\ngroup: files\n',
+        'broken-action': 'passwd: files [SUCCESS=return\ngroup: files\n',
+    }
+    lookups = []
+    def nsswitch():
+        lookups.append('nsswitch')
+        if case == 'missing': raise FileNotFoundError('nsswitch absent')
+        if case == 'unreadable': raise PermissionError('nsswitch unreadable')
+        return sources.get(case, 'passwd: files\ngroup: files\n')
+    def user(uid):
+        lookups.append('user')
+        if case == 'user-error': raise KeyError(uid)
+        return alice
+    def group(gid):
+        lookups.append('group')
+        if case == 'group-error': raise OSError('group lookup failed')
+        members = ['alice', 'bob'] if case == 'explicit-shared' else ['alice'] if case == 'shared-primary-self' else []
+        return SimpleNamespace(gr_mem=members)
+    def users():
+        lookups.append('enumeration')
+        if case == 'enumeration-error': raise OSError('enumeration failed')
+        if case == 'missing-current-account': return [bob]
+        if case.startswith('shared-primary'): bob.pw_gid = 1000
+        if case == 'same-uid-alias': bob.pw_uid, bob.pw_gid = 1000, 1000
+        return [alice, bob] if case in {'other-primary-gid', 'shared-primary-empty', 'shared-primary-self', 'same-uid-alias'} else [alice]
+    monkeypatch.setattr(gate, 'linux_uid', lambda: 1000)
+    monkeypatch.setattr(gate, 'linux_nsswitch', nsswitch, raising=False)
+    monkeypatch.setitem(sys.modules, 'pwd', SimpleNamespace(getpwuid=user, getpwall=users))
+    monkeypatch.setitem(sys.modules, 'grp', SimpleNamespace(getgrgid=group))
+    monkeypatch.setattr(gate, 'linux_metadata', lambda p: SimpleNamespace(
+        st_uid=1000, st_gid=1000, st_mode=p.stat().st_mode))
+    call = lambda: gate.resolve_launcher(linux(), platform='linux', roots=(tmp_path,))
+    assert call().trust == 'unverified'
+    assert not lookups
+    selected.chmod(0o775)
+    if allowed:
+        assert call().trust == 'unverified'
+        assert 'enumeration' in lookups
+    else:
+        with pytest.raises(gate.McpLauncherError) as caught: call()
+        assert caught.value.code == 'mcp_launcher_path_invalid'
+    selected.chmod(0o755)
+    assert call().trust == 'unverified'
+
+
+# NSS configuration comes from the fixed system file with explicit text decoding.
+# A read failure propagates so admission can retain the strict permission rule.
+@pytest.mark.parametrize('failure', [False, True])
+def test_nsswitch_reader(monkeypatch, failure):
+    from pathlib import Path
+    seen = []
+    def read(path, *, encoding):
+        seen.append((str(path), encoding))
+        if failure: raise PermissionError('unreadable')
+        return 'passwd: files\ngroup: files\n'
+    monkeypatch.setattr(Path, 'read_text', read)
+    if failure:
+        with pytest.raises(PermissionError): gate.linux_nsswitch()
+    else:
+        assert gate.linux_nsswitch() == 'passwd: files\ngroup: files\n'
+    assert seen == [('/etc/nsswitch.conf', 'utf-8')]

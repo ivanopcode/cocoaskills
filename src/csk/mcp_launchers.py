@@ -93,6 +93,7 @@ class LinuxGroupFacts:
     primary_gid: int
     user_name: str
     members: tuple[str, ...]
+    exclusive: bool
 
 
 Verifier = Callable[..., MacOSVerification | WindowsVerification | LinuxVerification]
@@ -413,12 +414,47 @@ def linux_metadata(path: Path) -> os.stat_result:
     return path.stat()
 
 
+def linux_nsswitch() -> str:
+    return Path("/etc/nsswitch.conf").read_text(encoding="utf-8")
+
+
+def _linux_local_account_sources(text: str) -> bool:
+    sources: dict[str, list[str]] = {}
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        name, separator, values = line.partition(":")
+        name = name.strip()
+        if name not in {"passwd", "group"}:
+            continue
+        if not separator or name in sources:
+            return False
+        # NSS action clauses affect lookup results, not the provider identity.
+        # Malformed or multiline clauses must not hide an unknown provider.
+        values = re.sub(r"\[[^\[\]\r\n]*\]", " ", values)
+        if "[" in values or "]" in values:
+            return False
+        sources[name] = values.split()
+    return (sources.keys() == {"passwd", "group"}
+            and all(values and set(values) <= {"files", "systemd", "compat"}
+                    for values in sources.values()))
+
+
 def linux_group_facts(gid: int) -> LinuxGroupFacts:
     # Lazy Unix-only imports keep the metadata seam portable on Windows.
     import grp
     import pwd
     user = pwd.getpwuid(linux_uid())
-    return LinuxGroupFacts(user.pw_gid, user.pw_name, tuple(grp.getgrgid(gid).gr_mem))
+    members = tuple(grp.getgrgid(gid).gr_mem)
+    exclusive = False
+    if _linux_local_account_sources(linux_nsswitch()):
+        # gr_mem omits primary membership. Enumerate only for the supported
+        # local NSS policy; network enumeration cannot establish exclusivity.
+        accounts = pwd.getpwall()
+        exclusive = (any(account.pw_uid == user.pw_uid and account.pw_name == user.pw_name
+                         and account.pw_gid == gid for account in accounts)
+                     and all(account.pw_gid != gid or (account.pw_uid == user.pw_uid
+                             and account.pw_name == user.pw_name) for account in accounts))
+    return LinuxGroupFacts(user.pw_gid, user.pw_name, members, exclusive)
 
 
 def _linux_private_group(info: os.stat_result, uid: int) -> bool:
@@ -426,7 +462,7 @@ def _linux_private_group(info: os.stat_result, uid: int) -> bool:
         return False
     try:
         facts = linux_group_facts(info.st_gid)
-        return (info.st_gid == facts.primary_gid and bool(facts.user_name)
+        return (facts.exclusive and info.st_gid == facts.primary_gid and bool(facts.user_name)
                 and facts.members in ((), (facts.user_name,)))
     except (ImportError, KeyError, OSError, ValueError, AttributeError):
         return False
