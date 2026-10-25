@@ -292,11 +292,11 @@ URL shorthand равен объекту `server` с `transport: "http"` и те�
 
 `server.environments` перечисляет известные environment ids: `claude_code`, `codex_cli`, `cursor`, `gemini`, `windsurf`, `opencode`. Без поля используются resolved agents проекта: csk пишет для `claude_code`, `codex_cli`, `cursor`, а для остальных известных ids показывает `skipped: unsupported` без пути. Явно перечисленный writable агент получает запись, даже если его нет среди agents проекта. Неизвестный id, пустой список или дубликат вызывает `mcp_agent_selection_invalid`.
 
-`install` задаёт локальные параметры установки: как устанавливающий менеджер пишет и аутентифицирует сервер в native configs. Набор полей `install` тоже закрыт. Поле `csk` не является alias и отклоняется с `mcp_declaration_invalid`. HTTP `headers` map each name to either `{ "env": "VARIABLE", "prefix": "none" }` or a value-only `{ "value": "issues,merge_requests" }` object. The forms are mutually exclusive. Env values are never read or persisted by csk. Prefixes are the closed set `none` (default), `bearer`, `api-token` and `token`; native text is respectively empty, `Bearer `, `Api-Token ` and `Token `. `bearer` is restricted to `Authorization` (case-insensitive); the other prefixes accept any otherwise permitted header name.
+`install` задаёт локальные параметры установки: как устанавливающий менеджер пишет и аутентифицирует сервер в native configs. Набор полей `install` тоже закрыт. Поле `csk` не является alias и отклоняется с `mcp_declaration_invalid`. HTTP `headers` сопоставляет каждому имени объект `{ "env": "VARIABLE", "prefix": "none" }` либо объект только со значением `{ "value": "issues,merge_requests" }`. Формы взаимоисключающие. csk никогда не читает и не сохраняет значения env. Префиксы образуют закрытый набор: `none` (по умолчанию), `bearer`, `api-token` и `token`; native text соответственно пустой, `Bearer `, `Api-Token ` и `Token `. `bearer` допустим только для `Authorization` без учёта регистра; остальные префиксы принимают любое разрешённое имя header.
 
-Claude Code expands `${VARIABLE}` and Cursor expands `${env:VARIABLE}` in headers. Codex uses `env_http_headers` for `none`, `bearer_token_env_var` for `bearer`, and `http_headers` for literals. Its native env fields cannot express `api-token` or `token`: selecting Codex with either prefix refuses the whole plan with `mcp_header_prefix_unsupported`, before any writes. Select only Claude Code and Cursor for those prefixes. csk does not generate an executable helper.
+Claude Code раскрывает `${VARIABLE}`, а Cursor — `${env:VARIABLE}` в headers. Codex использует `env_http_headers` для `none`, `bearer_token_env_var` для `bearer` и `http_headers` для literals. Его native env fields не могут выразить `api-token` или `token`: выбор Codex с любым из этих префиксов отклоняет весь план с `mcp_header_prefix_unsupported` до любых записей. Для этих префиксов выбирайте только Claude Code и Cursor. csk не создаёт executable helper.
 
-Literal values must be at most 1024 UTF-8 bytes and contain no `$`, control, format or surrogate characters. The existing secret scanner must accept the value. Literal names cannot be `Authorization`, `Cookie`, `Proxy-Authorization` or contain `token`, `key`, `secret` or `auth`, ignoring case; existing forbidden HTTP names still apply. A literal alone requires no consent. OAuth may coexist with both forms; only actual env references require consent for HTTP.
+Literal values должны занимать не более 1024 UTF-8 bytes и не содержать `$`, управляющих, format или surrogate characters. Значение должно проходить существующий secret scanner. Literal names не могут быть `Authorization`, `Cookie`, `Proxy-Authorization` или содержать `token`, `key`, `secret` либо `auth` без учёта регистра; прежние запрещённые HTTP names также недопустимы. Один literal не требует consent. OAuth совместим с обеими формами; для HTTP consent нужен только при фактических env references.
 
 `auth` содержит `kind` (`none`, `env` или `oauth`) и необязательный `help_url`. Без `auth` csk выбирает `env` при любой env reference, иначе `none`. `scope` поддерживает только `project`, `git_policy` только `local`. Значения `user` и `shared` отклоняются с `mcp_capability_unsupported`. Полный [справочник полей и кодов отказа](reference.md#project-mcp-reference) перечисляет ограничения.
 
@@ -398,7 +398,7 @@ For MCP files csk creates or its ownership ledger records as created, install ve
 
 Для созданного MCP-файла с `git_policy: "local"` csk автоматически добавляет точный путь в `$GIT_COMMON_DIR/info/exclude` (или в `.gitignore` при режиме `gitignore`): `/.mcp.json`, `/.codex/config.toml` или `/.cursor/mcp.json`, и сообщает добавленные entries. Ignore публикуется до native config в одной транзакции. Обычный `csk init` + `csk install` не требует deprecated `--fix-gitignore`; dry-run только показывает план. В режиме `exclude` install также поддерживает обычные generated paths; в режиме `gitignore` для них используйте предварительный `csk init`. В режиме `gitignore` уже отслеживаемый git файл csk меняет на месте и не добавляет в ignore. В режиме `exclude` отслеживаемый собственный путь отказывает с `gitignore_required`; сначала уберите его из index, сохранив локальный файл. csk сохраняет байты вне изменяемых записей. JSON-файлы должны быть строгим UTF-8 JSON без BOM, comments и trailing commas.
 
-CocoaSkill keeps one block per project/worktree, delimited by `# CocoaSkill project <key>` and `# End CocoaSkill project <key>`. The opaque key identifies the worktree metadata and the project's repository-relative root. Each update replaces only its own block; other blocks and user bytes remain unchanged. Writers serialize through the persistent `$GIT_COMMON_DIR/csk-exclude.lock` OS lock. Process death releases the lock; transaction replay and rollback merge only the recorded project block into the current file. Do not delete the lock file while csk is running. Older unkeyed exclude blocks are preserved as existing policy; remove obsolete entries manually.
+CocoaSkill хранит отдельный блок для каждого проекта/worktree между `# CocoaSkill project <key>` и `# End CocoaSkill project <key>`. Непрозрачный ключ определяется метаданными worktree и путём к корню проекта относительно репозитория. При обновлении меняется только собственный блок; остальные блоки и пользовательские байты остаются без изменений. Все операции записи выполняются по очереди под OS lock в постоянном файле `$GIT_COMMON_DIR/csk-exclude.lock`. При завершении процесса ОС освобождает lock; replay и rollback транзакции объединяют с текущим файлом только записанный блок проекта. Не удаляйте lock-файл, пока csk работает. Старые exclude-блоки без ключа сохраняются как существующие правила; удаляйте устаревшие записи вручную.
 
 Consent разрешает публикацию исполняемого кода или env reference. Он нужен для stdio и для любой ссылки на переменную в `env_names` или `install.headers`. HTTP без env reference, включая `auth.kind: "oauth"`, consent не требует. csk никогда не запускает сервер, package runner или команду аутентификации.
 
@@ -469,8 +469,8 @@ MCP authentication and connectivity: not checked.
 | --- | --- |
 | `unsupported` | Известное окружение без поддержки записи; конфигурация не меняется. |
 | `current` | Owned entry соответствует объявлению и последней записи csk. |
-| `updated (informational)` | Launcher content changed with the same consent subject, including an explicitly allowed unverified launcher; `--check` remains successful. |
-| `untrusted` | macOS signature/seal/notarization or Windows signature/publisher verification failed, or an unverified launcher lacks its explicit override; `--check` returns 1. |
+| `updated (informational)` | Содержимое launcher изменилось при прежнем consent subject, включая явно разрешённый unverified launcher; `--check` сохраняет успех. |
+| `untrusted` | Проверка macOS signature/seal/notarization или Windows signature/publisher не пройдена либо для unverified launcher не задан явный override; `--check` возвращает 1. |
 | `missing` | Объявленная native entry или её файл отсутствует. |
 | `outdated` | Объявление изменилось, а owned entry сохранила установленное csk содержимое; следующий install обновит её. |
 | `drift` | Пользователь изменил существующую owned entry после установки. |
@@ -497,7 +497,7 @@ Launcher signature failures take precedence as `untrusted`. For other entries, t
 
 Ниже фрагменты поля `mcp_servers` для распространённых серверов. Адреса условные, подставьте свои.
 
-**GitLab**: OAuth runs in the agent. This recipe selects toolsets using a non-secret literal header and needs no consent. Toolset selection requires GitLab 19.5 or later with MCP enabled; see the [supported toolsets](https://docs.gitlab.com/user/model_context_protocol/mcp_server/#select-tool-groups-toolsets). `work_items` and `merge_requests` are supported toolsets; `issues` is not a toolset name.
+**GitLab**: OAuth выполняется в агенте. Этот recipe выбирает toolsets через несекретный literal header и не требует consent. Выбор toolsets требует GitLab 19.5 или новее с включённым MCP; см. [поддерживаемые toolsets](https://docs.gitlab.com/user/model_context_protocol/mcp_server/#select-tool-groups-toolsets). `work_items` и `merge_requests` поддерживаются; `issues` не является именем toolset.
 
 ```json
 {
@@ -513,7 +513,7 @@ Launcher signature failures take precedence as `untrusted`. For other entries, t
 
 Если инстанс не поддерживает автоматическую регистрацию OAuth-клиента, используйте fine-grained personal access token с доступом к MCP и env header: `"headers": { "Authorization": { "env": "GITLAB_MCP_TOKEN", "prefix": "bearer" } }` и `"auth": { "kind": "env" }`.
 
-**Allure TestOps** (MCP endpoint `/api/mcp`): use `prefix: "api-token"` for `Authorization: Api-Token <token>`. Keep only the token in the variable. This recipe explicitly selects Claude Code and Cursor because Codex cannot express this prefixed env reference natively:
+**Allure TestOps** (MCP endpoint `/api/mcp`): используйте `prefix: "api-token"` для `Authorization: Api-Token <token>`. В переменной храните только токен. Recipe явно выбирает Claude Code и Cursor, поскольку Codex не может выразить этот prefixed env reference нативно:
 
 ```json
 {
@@ -534,10 +534,10 @@ export ALLURE_TESTOPS_TOKEN="<token>"
 Инструкция Qameta подключает тот же сервер через мост `npx mcp-remote` с токеном в аргументах. Закреплённый мост без токена csk примет (`"command": "npx"`, `"args": ["mcp-remote@<версия>", "https://testops.example.com/api/mcp"]`, с consent), но передать ему токен нельзя: подстановка `${VAR}` в `args` отклоняется с `mcp_declaration_invalid`, а токен прямо в `args` был бы секретом в конфиге. На Windows `npx` отклоняется с `mcp_windows_batch_unsupported`. Используйте прямое HTTP-подключение выше.
 
 <a id="app-bundled-launchers-macos"></a>
-#### App-bundled launchers (macOS, Windows and Linux)
+#### App-bundled launchers (macOS, Windows и Linux)
 
-Use `server.launcher` instead of `server.command` for a signed application helper.
-The following object is the value of `mcp_servers` for Proxyman:
+Используйте `server.launcher` вместо `server.command` для подписанного application helper.
+Следующий объект — значение `mcp_servers` для Proxyman:
 
 ```json
 {
@@ -567,195 +567,72 @@ The following object is the value of `mcp_servers` for Proxyman:
 }
 ```
 
-On stock Ubuntu/Debian with umask `002`, newly created application directories
-may need a one-time permission repair. Follow the exact path/mode diagnostic;
-for this recipe, one possible offending directory is repaired with:
+На стандартном Ubuntu/Debian с umask `002` новым каталогам приложения может потребоваться однократное исправление permissions. Используйте точный путь и mode из диагностики; для этого recipe один из возможных каталогов исправляется так:
 
 ```sh
 chmod -- g-w "${XDG_CONFIG_HOME:-$HOME/.config}/Proxyman/bin"
 ```
 
-Apply the reported command to any other group-writable element, including the
-expanded config root. If world write is reported, also remove it with `o-w`.
+Примените указанную команду ко всем остальным элементам с group write, включая раскрытый config root. Если указан world write, удалите и его через `o-w`.
 
-Install the application first, then run `csk check`, `csk install` in a terminal,
-and `csk status --check`. csk finds the bundle by its declared ID in
-`/Applications`, `~/Applications`, `/Applications/Setapp` or `~/Applications/Setapp`.
-Multiple distinct bundles with the same ID refuse with `mcp_launcher_ambiguous`;
-no match gives `mcp_launcher_not_found`. The executable must be a relative
-`Contents/...` path without empty, `.` or `..` components or backslashes. Its
-realpath must remain inside the bundle and name an executable regular file;
-otherwise csk refuses with `mcp_launcher_path_invalid`.
+Сначала установите приложение, затем выполните `csk check`, `csk install` в терминале и `csk status --check`. csk ищет bundle по объявленному ID в `/Applications`, `~/Applications`, `/Applications/Setapp` или `~/Applications/Setapp`. Несколько разных bundles с одним ID дают `mcp_launcher_ambiguous`; отсутствие совпадений — `mcp_launcher_not_found`. Executable должен быть относительным путём `Contents/...` без пустых компонентов, `.` или `..` и обратных слешей. Его realpath должен оставаться внутри bundle и указывать на исполняемый обычный файл; иначе csk отказывает с `mcp_launcher_path_invalid`.
 
-csk uses the macOS system `/usr/bin/codesign`, without Xcode CLT, to perform
-strict, deep, all-architecture validation of the bundle and verify the helper.
-Both requirements pin notarization, `anchor apple generic` and the declared
-Team ID. The bundle signing identifier must equal `bundle_id`; the helper signing
-identifier must equal the final component of `executable` (`mcp-server` here).
-That leaf must be a portable executable name. Any signature, seal, notarization or
-requirement failure gives `mcp_launcher_untrusted`; there is no unsigned fallback.
+csk использует системный macOS `/usr/bin/codesign` без Xcode CLT для strict, deep, all-architecture проверки bundle и проверки helper. Оба requirements закрепляют notarization, `anchor apple generic` и объявленный Team ID. Signing identifier bundle должен совпадать с `bundle_id`; signing identifier helper — с последним компонентом `executable` (здесь `mcp-server`). Этот компонент должен быть переносимым именем executable. Любой отказ signature, seal, notarization или requirement даёт `mcp_launcher_untrusted`; unsigned fallback отсутствует.
 
-`check` verifies without writing manager or project state. `install` verifies
-before consent and writes the resolved absolute executable path directly into
-Claude Code, Codex CLI and Cursor configs; there is no shim. The consent plan names
-the verified publisher, path and trust level in plain words. The subject binds
-those identities as well as the declaration, project and writable agent set.
-An unchanged subject reuses consent. A different path or publisher, or a trust
-downgrade, needs consent again; an upgrade can retain approval for the same
-path/publisher. A helper content change with the same subject is informational.
-Install re-verifies after consent before publishing. Source snapshot trees and
-records join the transaction for skills, native configs, consent, ledger and
-ignore entries; a refusal during target publication rolls them back and removes
-new empty parent directories while preserving pre-existing snapshots.
+`check` проверяет без записи состояния менеджера или проекта. `install` проверяет до consent и пишет разрешённый абсолютный путь executable прямо в configs Claude Code, Codex CLI и Cursor, без shim. Consent plan явно называет проверенного publisher, path и trust level. Subject связывает эти идентичности, declaration, проект и набор writable agents. Неизменный subject повторно использует consent. Другие path или publisher либо trust downgrade требуют нового consent; upgrade может сохранить approval при прежних path/publisher. Изменение содержимого helper при том же subject информационное. Install повторяет проверку после consent до публикации. Source snapshot trees и records участвуют в общей транзакции со skills, native configs, consent, ledger и ignore entries; отказ при публикации targets откатывает их и удаляет новые пустые родительские каталоги, сохраняя прежние snapshots.
 
-Recovery re-verifies the journaled launcher declaration and checks the approved
-path, publisher and trust level before replaying any forward target. An invalid
-signature, path/publisher change or trust downgrade pauses replay with
-`mcp_launcher_untrusted` or `mcp_launcher_changed`;
-the interrupted state and journal remain for a retry after restoring the recorded
-trusted application. Existing native entries and consent are not advanced during
-that rejected replay. Ordinary command/HTTP journals written by 0.20.1 recover
-without inventing a launcher observation. Classification uses the journal's
-pinned desired and previous ownership ledgers, including launcher fingerprints;
-it does not use the current Skillfile. A recorded launcher without an observation,
-or a journal whose saved targets cannot establish that no launcher was involved,
-stops with `mcp_recovery_observation_missing` and leaves interrupted state intact.
-This also applies to ledger-only or consent/ledger plans whose native command
-does not change. Restoring trust alone cannot supply the missing observation.
-To abandon such an unfinished publication, copy its transaction ID from the
-diagnostic and run:
+Recovery повторно проверяет записанную в journal launcher declaration и одобренные path, publisher и trust level перед replay любого forward target. Невалидная signature, изменение path/publisher или trust downgrade приостанавливают replay с `mcp_launcher_untrusted` или `mcp_launcher_changed`; прерванное состояние и journal сохраняются для повтора после восстановления записанного доверенного приложения. При таком отказе прежние native entries и consent не продвигаются. Обычные command/HTTP journals от 0.20.1 восстанавливаются без выдуманной launcher observation. Классификация использует запиненные в journal desired и previous ownership ledgers, включая launcher fingerprints, а не текущий Skillfile. Записанный launcher без observation или journal, чьи сохранённые targets не позволяют исключить участие launcher, останавливается с `mcp_recovery_observation_missing` и сохраняет прерванное состояние. Это относится и к ledger-only либо consent/ledger plans без изменения native command. Одного восстановления trust недостаточно для отсутствующей observation. Чтобы отказаться от такой незавершённой публикации, скопируйте transaction ID из диагностики и выполните:
 
 ```sh
 csk recover --rollback TRANSACTION_ID
 csk install
 ```
 
-Use the same manager home (`CSK_CONFIG`, if set) as the interrupted install.
-Rollback restores recorded preimages under the manager lock and existing
-publication-boundary checks; it does not approve or launch a helper. Keep all
-journal sidecars until it succeeds. Restore moved publication boundaries before
-retrying a refused rollback. The next install reviews the current declaration
-as a fresh plan. A committed transaction awaiting cleanup cannot be rolled back
-with this command; rerun `csk install` to finish cleanup instead.
-Rollback restores journaled file and symlink preimages, but it does not restore
-the complete directory layout or previous directory modes. Empty directories
-created during installation may remain in the project and manager home, including
-adapter, source snapshot and state directories. Existing directories narrowed
-for protected state may remain more restrictive: a consent directory changed
-from `0750` to `0700` stays `0700`. Rollback does not widen directory permissions.
-Valid content-only updates and trust upgrades retain approval; the next ordinary
-install plan records the current helper fingerprint without another prompt.
+Используйте тот же manager home (`CSK_CONFIG`, если задан), что и при прерванной установке. Rollback восстанавливает записанные preimages под manager lock с прежними publication-boundary checks; он не одобряет и не запускает helper. Сохраняйте все journal sidecars до успеха. Перед повтором отклонённого rollback восстановите перемещённые publication boundaries. Следующий install рассматривает текущую declaration как новый plan. Этой командой нельзя откатить committed transaction, ожидающую cleanup; вместо этого повторите `csk install` для завершения cleanup. Rollback восстанавливает journaled file и symlink preimages, но не весь directory layout и прежние directory modes. Созданные при установке пустые каталоги могут остаться в проекте и manager home, включая adapter, source snapshot и state directories. Прежние каталоги, permissions которых сужены для protected state, могут остаться более строгими: consent directory после изменения с `0750` на `0700` остаётся `0700`. Rollback не расширяет directory permissions. Допустимые content-only updates и trust upgrades сохраняют approval; следующий обычный install plan записывает текущий helper fingerprint без нового prompt.
 
-If all targets committed but cleanup fails, `transaction_cleanup_deferred`
-reports **Installation committed**, the journal path and each target's journaled
-and observed live state. It does not report a refused install. An incomplete
-rollback similarly reports `transaction_rollback_deferred` and the retained state.
-Keep the journal and sidecars, restore any moved publication boundaries, then
-rerun `csk install` to finish recovery. Exit 1 in these cases means operator
-attention/recovery is needed; it does not imply that nothing was written.
+Если все targets committed, но cleanup завершился ошибкой, `transaction_cleanup_deferred` сообщает **Installation committed**, путь journal и записанное и наблюдаемое live state каждого target. Это не сообщение об отказе install. Незавершённый rollback аналогично сообщает `transaction_rollback_deferred` и сохранённое состояние. Сохраняйте journal и sidecars, восстановите перемещённые publication boundaries, затем повторите `csk install` для завершения recovery. Exit 1 в этих случаях означает необходимость operator attention/recovery; он не означает отсутствие записей.
 
-`status` re-verifies without writing anything. A valid content-only change reports
-`updated (informational)` and keeps `--check` successful; install acknowledges the
-new content fingerprint without another prompt. A changed consent subject reports
-`unapproved`. A failed macOS or Windows signature reports `untrusted`, and `--check` returns 1.
-Authentication and connectivity remain unchecked. Verification is point-in-time:
-the native agent executes later, and csk does not freeze the application until then.
-No vendor checksum is assumed for Proxyman.
+`status` повторяет проверку без записи. Допустимое content-only изменение показывает `updated (informational)` и сохраняет успешный `--check`; install принимает новый content fingerprint без нового prompt. Изменённый consent subject показывает `unapproved`. Невалидная macOS или Windows signature показывает `untrusted`, а `--check` возвращает 1. Authentication и connectivity по-прежнему не проверяются. Проверка выполняется на конкретный момент: native agent запускает helper позже, и csk не замораживает приложение до этого запуска. Vendor checksum для Proxyman не предполагается.
 
-All platform objects have closed field sets. The portable grammar is validated
-on every host; only the current platform is resolved:
+Все platform objects имеют закрытый набор полей. Переносимая grammar проверяется на каждом хосте; разрешается только текущая платформа:
 
-| Platform | Fields and allowed locations | Trust |
+| Платформа | Поля и допустимые расположения | Trust |
 | --- | --- | --- |
-| `macos` | Required `bundle_id`, ten-character uppercase/digit `team_id`, relative `executable` under `Contents/`. | Notarized signature and identity required; no `trust` override. |
-| `windows` | Required `install_dir`, relative `.exe` `executable`, nonempty `publisher`. Install dir must be below `%LOCALAPPDATA%\`, `%ProgramFiles%\` or `%ProgramFiles(x86)%\` (root spelling ignores case). No other expansions, UNC/device paths, drive-relative paths, alternate data streams, traversal, reserved device names or invalid Windows path characters. | Valid matching signature: `verified` under Program Files, `signed-user-writable` under LocalAppData. Unsigned: `unverified`, requiring `trust: "allow-unverified"`. Invalid or other-publisher signature always refuses. |
-| `linux` | Required `path` below `/usr/bin/`, `/usr/local/bin/`, `/opt/`, `~/.local/bin/`, `~/.config/`, `${XDG_CONFIG_HOME:-~/.config}/` or `${XDG_DATA_HOME:-~/.local/share}/`. No further expansions, empty components or traversal. | Root-owned file confirmed by a system package manager: `verified`. Otherwise `unverified`, requiring `trust: "allow-unverified"`. |
+| `macos` | Обязательны `bundle_id`, `team_id` из десяти заглавных букв/цифр, относительный `executable` внутри `Contents/`. | Обязательны notarized signature и identity; `trust` override отсутствует. |
+| `windows` | Обязательны `install_dir`, относительный `.exe` `executable`, непустой `publisher`. Install dir должен быть внутри `%LOCALAPPDATA%\`, `%ProgramFiles%\` или `%ProgramFiles(x86)%\` (регистр root не учитывается). Иные expansions, UNC/device paths, drive-relative paths, alternate data streams, traversal, reserved device names и недопустимые символы Windows paths запрещены. | Валидная совпадающая signature: `verified` внутри Program Files, `signed-user-writable` внутри LocalAppData. Unsigned: `unverified`, требуется `trust: "allow-unverified"`. Невалидная signature или другой publisher всегда дают отказ. |
+| `linux` | Обязателен `path` внутри `/usr/bin/`, `/usr/local/bin/`, `/opt/`, `~/.local/bin/`, `~/.config/`, `${XDG_CONFIG_HOME:-~/.config}/` или `${XDG_DATA_HOME:-~/.local/share}/`. Иные expansions, пустые компоненты и traversal запрещены. | Root-owned файл, подтверждённый системным package manager: `verified`. Иначе `unverified`, требуется `trust: "allow-unverified"`. |
 
-At least one platform entry is required. A missing current-platform entry gives
-`mcp_launcher_platform_missing`. `trust` accepts only `allow-unverified`, and only
-in Windows/Linux entries. It permits an unsigned/unverified helper only together
-with local consent. For an unverified helper, csk cannot tell an update from a
-replacement. `signed-user-writable` confirms a Windows signer now; the owning
-user can still replace that helper before the native agent executes it. A
-same-user attacker on Windows/Linux per-user installations is outside the trust
-boundary.
+Нужна хотя бы одна platform entry. Отсутствие entry для текущей платформы даёт `mcp_launcher_platform_missing`. `trust` принимает только `allow-unverified` и только в Windows/Linux entries. Он допускает unsigned/unverified helper лишь вместе с local consent. Для unverified helper csk не может отличить update от подмены. `signed-user-writable` подтверждает Windows signer на момент проверки; owning user всё ещё может заменить helper до запуска native agent. Same-user attacker при Windows/Linux per-user установке находится вне trust boundary.
 
-Windows resolves each named root through `SHGetKnownFolderPath`, using
-`FOLDERID_ProgramFiles`, `FOLDERID_ProgramFilesX86` and `FOLDERID_LocalAppData`
-for the current user. OS relocation is supported without assuming a drive.
-An environment value that disagrees with its OS folder refuses with
-`mcp_launcher_root_conflict`; a missing environment value uses the OS result.
-An API failure refuses with `mcp_launcher_known_folder_unavailable`, without
-environment fallback. Symlinks, junctions and reparse points are resolved.
-The local executable must stay inside the resolved install directory, which
-must stay inside the resolved OS root. Trust follows actual executable
-containment: LocalAppData takes precedence when known folders overlap, so a
-Program Files placeholder cannot promote a per-user location to `verified`.
-Authenticode uses the system `WinVerifyTrust` API through ctypes, without
-PowerShell. `publisher` must exactly equal the **first CN in the verified primary
-leaf certificate's actual Subject**, case-sensitive and without normalization;
-there is no organization (O), display-name, SAN or timestamp-signer fallback.
-Missing CN refuses. Verification has no UI, uses cached retrieval only, requests
-no additional revocation checks and rejects MD2/MD4. This keeps planning offline
-and deterministic; it does **not** establish current online revocation status.
-OS trust/signature failure and malformed signed files never receive the unsigned
-override. The Windows recipe is a declaration template: confirm the installed
-helper's actual Subject CN; `allow-unverified` cannot bypass a different signer.
+Windows разрешает каждый именованный root через `SHGetKnownFolderPath`, используя `FOLDERID_ProgramFiles`, `FOLDERID_ProgramFilesX86` и `FOLDERID_LocalAppData` текущего пользователя. Поддерживается OS relocation без предположений о диске. Значение env, не совпадающее с OS folder, отклоняется с `mcp_launcher_root_conflict`; при отсутствии env используется результат ОС. Ошибка API даёт `mcp_launcher_known_folder_unavailable` без environment fallback. Symlinks, junctions и reparse points разрешаются. Локальный executable должен оставаться внутри разрешённого install directory, а тот — внутри разрешённого OS root. Trust определяется фактическим расположением executable: при пересечении known folders приоритет у LocalAppData, поэтому Program Files placeholder не повышает per-user location до `verified`. Authenticode использует системный `WinVerifyTrust` API через ctypes, без PowerShell. `publisher` должен точно совпадать с **первым CN фактического Subject проверенного primary leaf certificate**, с учётом регистра и без нормализации; fallback на organization (O), display name, SAN или timestamp signer отсутствует. Отсутствие CN даёт отказ. Проверка не показывает UI, использует только cached retrieval, не запрашивает дополнительные revocation checks и отклоняет MD2/MD4. Это сохраняет offline и детерминированное планирование, но **не подтверждает актуальный online revocation status**. Ошибка OS trust/signature и malformed signed files никогда не получают unsigned override. Windows recipe — declaration template: подтвердите фактический Subject CN установленного helper; `allow-unverified` не обходит другого signer.
 
-Linux expands only the documented XDG fallback expressions and home locations.
-An unset or empty XDG variable uses its shown fallback; a relative XDG value
-refuses. The inherited `~/.config/` spelling remains accepted for compatibility
-with existing declarations: it denotes the same fixed fallback location without
-adding another expansion mechanism. Realpath must stay inside the expanded root.
-The regular executable and every parent through that root must belong to root or
-the current user and have neither group nor world write permission. This applies
-to root-owned elements and to `allow-unverified` declarations as well. A refusal
-names the offending element, its octal mode and a shell-quoted remedy such as
-`chmod -- g-w ~/.local/bin` (also `o-w` for world write).
+Linux раскрывает только документированные XDG fallback expressions и home locations. Незаданная или пустая XDG variable использует указанный fallback; относительное значение XDG отклоняется. Унаследованное написание `~/.config/` сохранено для совместимости с прежними declarations: оно обозначает тот же фиксированный fallback location без нового механизма expansion. Realpath должен оставаться внутри раскрытого root. Обычный executable и каждый родитель до root должны принадлежать root или текущему пользователю, без group/world write. Это относится и к root-owned элементам, и к declarations с `allow-unverified`. Отказ называет проблемный элемент, его octal mode и shell-quoted команду исправления, например `chmod -- g-w ~/.local/bin` (также `o-w` при world write).
 
-Stock Ubuntu/Debian umask `002` makes user-created directories group-writable,
-so a one-time repair may be needed before admission:
+Стандартный Ubuntu/Debian umask `002` делает созданные пользователем каталоги group-writable, поэтому перед допуском может потребоваться однократное исправление:
 
 ```sh
 chmod -- g-w "$HOME/.local/bin"
 ```
 
-For an application under the XDG config root, repair each element named by the
-refusal, for example `chmod -- g-w "${XDG_CONFIG_HOME:-$HOME/.config}/Proxyman/bin"`.
-Remove world write too when reported, using `chmod -- g-w,o-w "PATH"` with the
-reported path. csk reports these commands; it never changes launcher permissions.
-For non-printable names, csk displays escaped bytes, the octal mode and the
-required permission bits, but suggests no shell command.
-No group-membership or account-database exception is used.
-Root-owned helpers with a strict-mode chain are
-checked using trusted root-owned system `/usr/bin/dpkg -S -- PATH` or
-`/usr/bin/rpm -qf -- PATH`, with fixed argv, a minimal environment, five-second
-timeout and no shell. Probe errors never establish trust. Package ownership is a
-database association, **not a checksum/integrity check** of the installed bytes.
-Other helpers need the explicit override and local consent.
+Для приложения внутри XDG config root исправьте каждый указанный в отказе элемент, например `chmod -- g-w "${XDG_CONFIG_HOME:-$HOME/.config}/Proxyman/bin"`. При указанном world write удалите и его через `chmod -- g-w,o-w "PATH"` с указанным путём. csk только сообщает команды и никогда не меняет launcher permissions. Для непечатаемых имён csk показывает escaped bytes, octal mode и необходимые permission bits, но не предлагает shell command. Исключений по group membership или account database нет. Root-owned helpers со strict-mode chain проверяются доверенными root-owned системными `/usr/bin/dpkg -S -- PATH` или `/usr/bin/rpm -qf -- PATH`, с фиксированным argv, минимальным environment, timeout пять секунд и без shell. Ошибки probe никогда не устанавливают trust. Package ownership — связь в database, **не checksum/integrity check** установленных bytes. Остальным helpers нужны явный override и local consent.
 
-App lookup and verification never launch the application or helper. Native
-controls use installed Proxyman on macOS, a Microsoft-signed binary and tampered
-copy on Windows, and a package-owned executable plus user-owned and writable-parent
-fixtures on Linux. These controls require their respective native platforms.
-The Linux umask `002` control refuses the group-writable `~/.local/bin`, then
-accepts the same unverified helper after removing group write from that directory.
+Поиск и проверка приложения никогда не запускают приложение или helper. Native controls используют установленный Proxyman на macOS, Microsoft-signed binary и tampered copy на Windows, package-owned executable и fixtures с user-owned helper и writable parent на Linux. Этим controls нужны соответствующие native platforms. Linux control с umask `002` отклоняет group-writable `~/.local/bin`, затем принимает тот же unverified helper после удаления group write у каталога.
 
-Current schema 3 limits:
+Текущие ограничения schema 3:
 
 | Ограничение | Что из-за него нельзя |
 | --- | --- |
-| Unverified Windows/Linux helpers | csk cannot distinguish an update from a replacement; explicit override and local consent are required. |
-| Per-user signed Windows helper | Signature identifies the publisher at check time; the owning user can replace the file later. |
-| Offline Windows revocation / Linux package ownership | No online revocation freshness or package-file checksum guarantee. |
-| Point-in-time app verification | No guarantee about a later agent execution after the application changes. |
+| Unverified Windows/Linux helpers | csk не отличает update от подмены; нужны явный override и local consent. |
+| Per-user signed Windows helper | Signature определяет publisher на момент проверки; owning user может заменить файл позже. |
+| Offline Windows revocation / Linux package ownership | Нет гарантии актуального online revocation или package-file checksum. |
+| Проверка приложения на конкретный момент | Нет гарантии для последующего запуска агентом после изменения приложения. |
 | `${VAR}` запрещён в `args` | Передать токен stdio-мосту, например `mcp-remote --header`. |
-| Codex supports only `none`/`bearer` env prefixes | `api-token`/`token` refuse with `mcp_header_prefix_unsupported`; use an explicit Claude Code/Cursor selection. |
-| Literals are non-secret, at most 1024 UTF-8 bytes | Secret names/scanner hits, `$`, controls and mixed value/env/prefix objects refuse. |
-| HTTP consent follows env references | OAuth plus literals needs no consent; OAuth plus env headers does. |
+| Codex поддерживает только env prefixes `none`/`bearer` | `api-token`/`token` отклоняются с `mcp_header_prefix_unsupported`; явно выберите Claude Code/Cursor. |
+| Literals несекретны, не более 1024 UTF-8 bytes | Секретные имена, совпадения secret scanner, `$`, управляющие символы и смешанные объекты value/env/prefix отклоняются. |
+| HTTP consent зависит от env references | OAuth с literals не требует consent; OAuth с env headers — требует. |
 | OAuth только для HTTP | Пометить stdio-мост, который сам проходит OAuth. |
 
-Use native HTTP support where available; csk never embeds a secret in a Skillfile or command argument.
+Используйте native HTTP support, где он доступен; csk никогда не встраивает секрет в Skillfile или аргумент команды.
 
 #### Границы slice 1
 
