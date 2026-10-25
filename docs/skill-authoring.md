@@ -567,6 +567,17 @@ The following object is the value of `mcp_servers` for Proxyman:
 }
 ```
 
+On stock Ubuntu/Debian with umask `002`, newly created application directories
+may need a one-time permission repair. Follow the exact path/mode diagnostic;
+for this recipe, one possible offending directory is repaired with:
+
+```sh
+chmod g-w -- "${XDG_CONFIG_HOME:-$HOME/.config}/Proxyman/bin"
+```
+
+Apply the reported command to any other group-writable element, including the
+expanded config root. If world write is reported, also remove it with `o-w`.
+
 Install the application first, then run `csk check`, `csk install` in a terminal,
 and `csk status --check`. csk finds the bundle by its declared ID in
 `/Applications`, `~/Applications`, `/Applications/Setapp` or `~/Applications/Setapp`.
@@ -697,22 +708,23 @@ refuses. The inherited `~/.config/` spelling remains accepted for compatibility
 with existing declarations: it denotes the same fixed fallback location without
 adding another expansion mechanism. Realpath must stay inside the expanded root.
 The regular executable and every parent through that root must belong to root or
-the current user. World write always refuses. Group write is allowed only when
-the element belongs to the current non-root uid, its gid equals that account's
-primary gid, and the group's explicit `gr_mem` list is empty or exactly the
-current account name. Full passwd enumeration must also show that no other
-account has that primary gid, and must include the current account. This
-exception requires readable `/etc/nsswitch.conf` entries for both `passwd:` and
-`group:` using only `files`, `systemd` or `compat` sources. Comments and NSS
-`[action]` clauses are ignored; missing, malformed or duplicate entries refuse
-the exception. Other sources, such as `sss`, `ldap`, `nis` or `winbind`, can have
-incomplete enumeration and therefore retain the strict no-group-write rule.
-Any configuration read or user/group lookup failure also refuses group write;
-ordinary strict modes do not require these lookups. Root-owned elements always
-retain the strict no-group/world-write rule, even when csk runs as root. This
-private-primary-group exception supports user-group umask `002` setups and
-requires `allow-unverified` plus local consent. Any group-writable element in
-the checked chain prevents `verified` trust, including for a root-owned helper.
+the current user and have neither group nor world write permission. This applies
+to root-owned elements and to `allow-unverified` declarations as well. A refusal
+names the offending element, its octal mode and a shell-quoted remedy such as
+`chmod g-w -- ~/.local/bin` (also `o-w` for world write).
+
+Stock Ubuntu/Debian umask `002` makes user-created directories group-writable,
+so a one-time repair may be needed before admission:
+
+```sh
+chmod g-w -- "$HOME/.local/bin"
+```
+
+For an application under the XDG config root, repair each element named by the
+refusal, for example `chmod g-w -- "${XDG_CONFIG_HOME:-$HOME/.config}/Proxyman/bin"`.
+Remove world write too when reported, using `chmod g-w,o-w -- "PATH"` with the
+reported path. csk reports these commands; it never changes launcher permissions.
+No group-membership or account-database exception is used.
 Root-owned helpers with a strict-mode chain are
 checked using trusted root-owned system `/usr/bin/dpkg -S -- PATH` or
 `/usr/bin/rpm -qf -- PATH`, with fixed argv, a minimal environment, five-second
@@ -724,8 +736,8 @@ App lookup and verification never launch the application or helper. Native
 controls use installed Proxyman on macOS, a Microsoft-signed binary and tampered
 copy on Windows, and a package-owned executable plus user-owned and writable-parent
 fixtures on Linux. These controls require their respective native platforms.
-The Linux umask `002` positive control additionally requires a non-root account
-with a private primary group; it uses real account/group facts.
+The Linux umask `002` control refuses the group-writable `~/.local/bin`, then
+accepts the same unverified helper after removing group write from that directory.
 
 Current schema 3 limits:
 
