@@ -10,13 +10,14 @@ import os
 import ntpath
 import plistlib
 import re
+import shlex
 import stat
 import subprocess
 import sys
 import unicodedata
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Literal, cast
 from xml.parsers.expat import ExpatError
 
@@ -86,14 +87,6 @@ class MacOSVerification:
 @dataclass(frozen=True)
 class LinuxVerification:
     package_owned: bool
-
-
-@dataclass(frozen=True)
-class LinuxGroupFacts:
-    primary_gid: int
-    user_name: str
-    members: tuple[str, ...]
-    exclusive: bool
 
 
 Verifier = Callable[..., MacOSVerification | WindowsVerification | LinuxVerification]
@@ -414,58 +407,19 @@ def linux_metadata(path: Path) -> os.stat_result:
     return path.stat()
 
 
-def linux_nsswitch() -> str:
-    return Path("/etc/nsswitch.conf").read_text(encoding="utf-8")
-
-
-def _linux_local_account_sources(text: str) -> bool:
-    sources: dict[str, list[str]] = {}
-    for raw in text.splitlines():
-        line = raw.split("#", 1)[0].strip()
-        name, separator, values = line.partition(":")
-        name = name.strip()
-        if name not in {"passwd", "group"}:
-            continue
-        if not separator or name in sources:
-            return False
-        # NSS action clauses affect lookup results, not the provider identity.
-        # Malformed or multiline clauses must not hide an unknown provider.
-        values = re.sub(r"\[[^\[\]\r\n]*\]", " ", values)
-        if "[" in values or "]" in values:
-            return False
-        sources[name] = values.split()
-    return (sources.keys() == {"passwd", "group"}
-            and all(values and set(values) <= {"files", "systemd", "compat"}
-                    for values in sources.values()))
-
-
-def linux_group_facts(gid: int) -> LinuxGroupFacts:
-    # Lazy Unix-only imports keep the metadata seam portable on Windows.
-    import grp
-    import pwd
-    user = pwd.getpwuid(linux_uid())
-    members = tuple(grp.getgrgid(gid).gr_mem)
-    exclusive = False
-    if _linux_local_account_sources(linux_nsswitch()):
-        # gr_mem omits primary membership. Enumerate only for the supported
-        # local NSS policy; network enumeration cannot establish exclusivity.
-        accounts = pwd.getpwall()
-        exclusive = (any(account.pw_uid == user.pw_uid and account.pw_name == user.pw_name
-                         and account.pw_gid == gid for account in accounts)
-                     and all(account.pw_gid != gid or (account.pw_uid == user.pw_uid
-                             and account.pw_name == user.pw_name) for account in accounts))
-    return LinuxGroupFacts(user.pw_gid, user.pw_name, members, exclusive)
-
-
-def _linux_private_group(info: os.stat_result, uid: int) -> bool:
-    if info.st_uid == 0 or info.st_uid != uid:
-        return False
-    try:
-        facts = linux_group_facts(info.st_gid)
-        return (facts.exclusive and info.st_gid == facts.primary_gid and bool(facts.user_name)
-                and facts.members in ((), (facts.user_name,)))
-    except (ImportError, KeyError, OSError, ValueError, AttributeError):
-        return False
+def _linux_mode_error(path: PurePath, mode: int) -> McpLauncherError:
+    text = str(path)
+    if text.isprintable():
+        argument = shlex.quote(text)
+    else:
+        # ANSI-C byte quoting preserves the actual filename while keeping
+        # terminal controls out of both the diagnostic and suggested command.
+        escaped = "".join(chr(byte) if 32 <= byte < 127 and byte not in {39, 92}
+                          else f"\\x{byte:02x}" for byte in os.fsencode(text))
+        argument = "$'" + escaped + "'"
+    remove = ",".join(flag for bit, flag in ((0o020, "g-w"), (0o002, "o-w")) if mode & bit)
+    return _path_error(f"Linux launcher element {argument} has mode {mode:04o}; "
+                       f"group/world write is forbidden; run chmod {remove} -- {argument}")
 
 
 def _linux_root(root: str) -> Path:
@@ -483,19 +437,17 @@ def _linux_root(root: str) -> Path:
     return path.resolve(strict=True)
 
 
-def _check_linux_chain(path: Path, root: Path) -> tuple[os.stat_result, bool]:
+def _check_linux_chain(path: Path, root: Path) -> os.stat_result:
     current = path
     uid = linux_uid()
     file_info = linux_metadata(path)
-    strict_modes = True
     while True:
         info = linux_metadata(current)
         expected = stat.S_ISREG(info.st_mode) if current == path else stat.S_ISDIR(info.st_mode)
-        group_write = bool(info.st_mode & 0o020)
-        if (not expected or info.st_uid not in {0, uid} or info.st_mode & 0o002
-                or group_write and not _linux_private_group(info, uid)):
-            raise _path_error("Linux launcher and parents require trusted owners, no world write and only private primary-group write")
-        strict_modes = strict_modes and not group_write
+        if info.st_mode & 0o022:
+            raise _linux_mode_error(current, stat.S_IMODE(info.st_mode))
+        if not expected or info.st_uid not in {0, uid}:
+            raise _path_error("Linux launcher and parents require regular files/directories owned by root or the current user")
         if current == root:
             break
         if current.parent == current:
@@ -503,7 +455,7 @@ def _check_linux_chain(path: Path, root: Path) -> tuple[os.stat_result, bool]:
         current = current.parent
     if not file_info.st_mode & 0o111 or not os.access(path, os.X_OK):
         raise _path_error("Linux launcher must be executable")
-    return file_info, strict_modes
+    return file_info
 
 
 def linux_package_owned(path: Path) -> bool:
@@ -541,10 +493,10 @@ def _resolve_linux(entry: LinuxLauncher, roots: Sequence[Path] | None, verifier:
         if not path.is_relative_to(base):
             raise _path_error("Linux executable realpath escapes its declared root")
         before = path.stat()
-        info, strict_modes = _check_linux_chain(path, base)
+        info = _check_linux_chain(path, base)
         try:
             owned = (cast(LinuxVerification, verifier(base, path, entry)).package_owned
-                     if verifier else linux_package_owned(path)) if info.st_uid == 0 and strict_modes else False
+                     if verifier else linux_package_owned(path)) if info.st_uid == 0 else False
         except (OSError, subprocess.TimeoutExpired):
             owned = False
         level: TrustLevel = "verified" if owned else "unverified"

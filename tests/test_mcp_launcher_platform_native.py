@@ -81,12 +81,12 @@ def test_native_linux_package_user_and_unsafe_parent(tmp_path, monkeypatch):
     assert gate.resolve_launcher(allowed, platform='linux').trust == 'unverified'
 
 
-# Real umask 002 creates group-writable private-group paths on a default
-# unprivileged Ubuntu account. This native positive control requires that host
-# account setup; it never injects ownership/group facts or weakens root rules.
+# Real umask 002 makes ~/.local/bin group-writable. Strict admission must name
+# that directory and its remedy; removing group write admits the same helper.
+# Ownership, modes and package lookup remain native, without group/NSS fixtures.
 @pytest.mark.csk_e2e_native
-@pytest.mark.skipif(sys.platform != 'linux', reason='native Linux private primary group')
-def test_native_linux_umask_002_private_group(tmp_path, monkeypatch):
+@pytest.mark.skipif(sys.platform != 'linux', reason='native Linux umask 002')
+def test_native_linux_umask_002_strict_modes(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
     file = tmp_path / '.local/bin/server'
     previous = os.umask(0o002)
@@ -95,16 +95,15 @@ def test_native_linux_umask_002_private_group(tmp_path, monkeypatch):
         file.write_bytes(b'#!/bin/sh\nexit 0\n')
     finally:
         os.umask(previous)
-    file.chmod(0o775)  # Supply execute permission; preserve the group-write bit.
-    for element in (file, file.parent):
-        info = element.stat()
-        facts = gate.linux_group_facts(info.st_gid)
-        assert (info.st_uid == os.getuid() != 0 and info.st_gid == facts.primary_gid
-                and facts.members in ((), (facts.user_name,))), 'positive control requires a non-root private primary group'
-        assert info.st_mode & 0o777 == 0o775
-    raw = {'linux': {'path': '~/.local/bin/server'}}
+    file.chmod(0o755)  # Ordinary executable; isolate the directory's umask mode.
+    assert file.parent.stat().st_mode & 0o777 == 0o775
+    raw = {'linux': {'path': '~/.local/bin/server', 'trust': 'allow-unverified'}}
+    declaration = gate.parse_launcher(raw)
     with pytest.raises(gate.McpLauncherError) as caught:
-        gate.resolve_launcher(gate.parse_launcher(raw), platform='linux')
-    assert caught.value.code == 'mcp_launcher_untrusted'
-    raw['linux']['trust'] = 'allow-unverified'
-    assert gate.resolve_launcher(gate.parse_launcher(raw), platform='linux').trust == 'unverified'
+        gate.resolve_launcher(declaration, platform='linux')
+    import shlex
+    assert caught.value.code == 'mcp_launcher_path_invalid'
+    assert str(file.parent) in str(caught.value) and '0775' in str(caught.value)
+    assert shlex.split(str(caught.value).split('run ', 1)[1]) == ['chmod', 'g-w', '--', str(file.parent)]
+    file.parent.chmod(file.parent.stat().st_mode & ~0o020)
+    assert gate.resolve_launcher(declaration, platform='linux').trust == 'unverified'
