@@ -130,18 +130,18 @@ def test_resolution_verdict_table(tmp_path, found, escape, signature, team, iden
     assert (tmp_path / "outside").read_bytes() == b"outside" if escape else helper.read_bytes() == b"native fixture"
 
 
-# Unsupported hosts and missing current-platform entries have distinct refusals without invoking a verifier.
+# Missing executables and absent current-platform entries have distinct refusals before invoking a verifier.
 @pytest.mark.parametrize("platform,entries,code", [
-    ("windows", {"windows": WINDOWS}, "mcp_launcher_platform_unsupported"),
-    ("linux", {"linux": LINUX}, "mcp_launcher_platform_unsupported"),
+    ("windows", {"windows": WINDOWS}, "mcp_launcher_path_invalid"),
+    ("linux", {"linux": LINUX}, "mcp_launcher_path_invalid"),
     ("macos", {"linux": LINUX}, "mcp_launcher_platform_missing"),
     ("windows", {"macos": MAC}, "mcp_launcher_platform_missing"),
 ])
-def test_platform_refusal(platform, entries, code):
+def test_platform_refusal(tmp_path, platform, entries, code):
     from csk import mcp_launchers as launchers
     spec = parse(declaration(entries))["app"].server.launcher
     with pytest.raises(launchers.McpLauncherError) as caught:
-        launchers.resolve_launcher(spec, platform=platform, verifier=lambda *args: pytest.fail("verification must not run"))
+        launchers.resolve_launcher(spec, platform=platform, roots=(tmp_path,), verifier=lambda *args: pytest.fail("verification must not run"))
     assert caught.value.code == code
 
 
@@ -252,14 +252,14 @@ def test_helper_symlink_loop_refuses_before_verification(tmp_path, indirect):
     assert launchers.resolve_launcher(spec, platform="macos", roots=(tmp_path,), verifier=lambda *a: good_verification()).path == str(helper.resolve())
 
 
-# On real Windows/Linux CI the default platform dispatch refuses before any app lookup or verification.
+# On Windows/Linux the host dispatcher uses that platform and rejects an absent helper before any macOS verifier call.
 @pytest.mark.skipif(sys.platform == "darwin", reason="non-macOS host dispatch")
-def test_host_dispatch_is_not_supported_yet():
+def test_host_dispatch_resolves_current_platform(tmp_path):
     from csk import mcp_launchers as launchers
     spec = parse(declaration({"macos": MAC, "windows": WINDOWS, "linux": LINUX}))["app"].server.launcher
     with pytest.raises(launchers.McpLauncherError) as caught:
-        launchers.resolve_launcher(spec, verifier=lambda *a: pytest.fail("non-macOS verification"))
-    assert caught.value.code == "mcp_launcher_platform_unsupported"
+        launchers.resolve_launcher(spec, roots=(tmp_path,), verifier=lambda *a: pytest.fail("missing helper reached verification"))
+    assert caught.value.code == "mcp_launcher_path_invalid"
 
 
 # Local path/content observations never enter the portable declaration digest, while portable publisher edits do change it.
