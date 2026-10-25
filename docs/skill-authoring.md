@@ -561,7 +561,7 @@ may need a one-time permission repair. Follow the exact path/mode diagnostic;
 for this recipe, one possible offending directory is repaired with:
 
 ```sh
-chmod g-w -- "${XDG_CONFIG_HOME:-$HOME/.config}/Proxyman/bin"
+chmod -- g-w "${XDG_CONFIG_HOME:-$HOME/.config}/Proxyman/bin"
 ```
 
 Apply the reported command to any other group-writable element, including the
@@ -700,19 +700,21 @@ The regular executable and every parent through that root must belong to root or
 the current user and have neither group nor world write permission. This applies
 to root-owned elements and to `allow-unverified` declarations as well. A refusal
 names the offending element, its octal mode and a shell-quoted remedy such as
-`chmod g-w -- ~/.local/bin` (also `o-w` for world write).
+`chmod -- g-w ~/.local/bin` (also `o-w` for world write).
 
 Stock Ubuntu/Debian umask `002` makes user-created directories group-writable,
 so a one-time repair may be needed before admission:
 
 ```sh
-chmod g-w -- "$HOME/.local/bin"
+chmod -- g-w "$HOME/.local/bin"
 ```
 
 For an application under the XDG config root, repair each element named by the
-refusal, for example `chmod g-w -- "${XDG_CONFIG_HOME:-$HOME/.config}/Proxyman/bin"`.
-Remove world write too when reported, using `chmod g-w,o-w -- "PATH"` with the
+refusal, for example `chmod -- g-w "${XDG_CONFIG_HOME:-$HOME/.config}/Proxyman/bin"`.
+Remove world write too when reported, using `chmod -- g-w,o-w "PATH"` with the
 reported path. csk reports these commands; it never changes launcher permissions.
+For non-printable names, csk displays escaped bytes, the octal mode and the
+required permission bits, but suggests no shell command.
 No group-membership or account-database exception is used.
 Root-owned helpers with a strict-mode chain are
 checked using trusted root-owned system `/usr/bin/dpkg -S -- PATH` or
