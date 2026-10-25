@@ -88,6 +88,13 @@ class LinuxVerification:
     package_owned: bool
 
 
+@dataclass(frozen=True)
+class LinuxGroupFacts:
+    primary_gid: int
+    user_name: str
+    members: tuple[str, ...]
+
+
 Verifier = Callable[..., MacOSVerification | WindowsVerification | LinuxVerification]
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,254}", re.ASCII)
 _TEAM = re.compile(r"[A-Z0-9]{10}", re.ASCII)
@@ -406,6 +413,25 @@ def linux_metadata(path: Path) -> os.stat_result:
     return path.stat()
 
 
+def linux_group_facts(gid: int) -> LinuxGroupFacts:
+    # Lazy Unix-only imports keep the metadata seam portable on Windows.
+    import grp
+    import pwd
+    user = pwd.getpwuid(linux_uid())
+    return LinuxGroupFacts(user.pw_gid, user.pw_name, tuple(grp.getgrgid(gid).gr_mem))
+
+
+def _linux_private_group(info: os.stat_result, uid: int) -> bool:
+    if info.st_uid == 0 or info.st_uid != uid:
+        return False
+    try:
+        facts = linux_group_facts(info.st_gid)
+        return (info.st_gid == facts.primary_gid and bool(facts.user_name)
+                and facts.members in ((), (facts.user_name,)))
+    except (ImportError, KeyError, OSError, ValueError, AttributeError):
+        return False
+
+
 def _linux_root(root: str) -> Path:
     if root.startswith("${XDG_CONFIG_HOME"):
         value = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
@@ -421,15 +447,19 @@ def _linux_root(root: str) -> Path:
     return path.resolve(strict=True)
 
 
-def _check_linux_chain(path: Path, root: Path) -> os.stat_result:
+def _check_linux_chain(path: Path, root: Path) -> tuple[os.stat_result, bool]:
     current = path
     uid = linux_uid()
     file_info = linux_metadata(path)
+    strict_modes = True
     while True:
         info = linux_metadata(current)
         expected = stat.S_ISREG(info.st_mode) if current == path else stat.S_ISDIR(info.st_mode)
-        if not expected or info.st_uid not in {0, uid} or info.st_mode & 0o022:
-            raise _path_error("Linux launcher and parents must have trusted owners and no group/world write permission")
+        group_write = bool(info.st_mode & 0o020)
+        if (not expected or info.st_uid not in {0, uid} or info.st_mode & 0o002
+                or group_write and not _linux_private_group(info, uid)):
+            raise _path_error("Linux launcher and parents require trusted owners, no world write and only private primary-group write")
+        strict_modes = strict_modes and not group_write
         if current == root:
             break
         if current.parent == current:
@@ -437,7 +467,7 @@ def _check_linux_chain(path: Path, root: Path) -> os.stat_result:
         current = current.parent
     if not file_info.st_mode & 0o111 or not os.access(path, os.X_OK):
         raise _path_error("Linux launcher must be executable")
-    return file_info
+    return file_info, strict_modes
 
 
 def linux_package_owned(path: Path) -> bool:
@@ -475,10 +505,10 @@ def _resolve_linux(entry: LinuxLauncher, roots: Sequence[Path] | None, verifier:
         if not path.is_relative_to(base):
             raise _path_error("Linux executable realpath escapes its declared root")
         before = path.stat()
-        info = _check_linux_chain(path, base)
+        info, strict_modes = _check_linux_chain(path, base)
         try:
             owned = (cast(LinuxVerification, verifier(base, path, entry)).package_owned
-                     if verifier else linux_package_owned(path)) if info.st_uid == 0 else False
+                     if verifier else linux_package_owned(path)) if info.st_uid == 0 and strict_modes else False
         except (OSError, subprocess.TimeoutExpired):
             owned = False
         level: TrustLevel = "verified" if owned else "unverified"
