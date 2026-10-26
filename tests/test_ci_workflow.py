@@ -349,10 +349,11 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
     assert "if: github.event_name == 'pull_request'" in ordinary
     assert "os: [ubuntu-latest, macos-latest, windows-latest]" in ordinary
     assert 'python-version: "3.14"' in ordinary
-    assert ordinary.count("--ignore=") == 8
+    assert ordinary.count("--ignore=") == 9
     assert "--ignore=tests/test_protocol_conformance.py" in ordinary
     assert "--ignore=tests/test_go_build_e2e.py" in ordinary
     assert "--ignore=tests/test_mcp_launcher_recovery.py" in ordinary
+    assert "--ignore=tests/test_mcp_launcher_publication.py" in ordinary
     assert "--ignore=tests/test_source_install_transactions.py" in ordinary
     command_files = ["tests/test_cli.py", "tests/test_mcp_project_install.py",
                      "tests/test_ignore_mode_concurrency.py", "tests/test_mcp_status.py"]
@@ -369,12 +370,15 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
     assert job["strategy"]["matrix"]["partition"] == ["core", "commands", "launcher-recovery", "source-transactions"]
     steps = {step["name"]: step for step in job["steps"]}
     core = steps["Run fast ordinary tests"]
-    recovery = steps["Run complete launcher recovery partition"]
+    recovery = steps["Run complete launcher recovery and publication partition"]
     assert core["if"] == "matrix.partition == 'core'"
     assert recovery["if"] == "matrix.partition == 'launcher-recovery'"
     assert "python -m pytest -v tests/test_mcp_launcher_recovery.py" in recovery["run"]
     command = shlex.split(recovery["run"])
     arguments = command[command.index("pytest") + 1:]
+    assert [arg for arg in arguments if arg.startswith("tests/")] == [
+        "tests/test_mcp_launcher_recovery.py", "tests/test_mcp_launcher_publication.py",
+    ]
     assert not any(arg.partition("=")[0] in {"--ignore", "--ignore-glob", "--deselect", "-k", "-m"}
                    for arg in arguments)
 
@@ -410,6 +414,7 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
     ("if: matrix.partition == 'source-transactions'", "if: matrix.partition == 'absent'"),
     ("python -m pytest -v tests/test_mcp_launcher_recovery.py",
      "python -m pytest -v tests/test_mcp_launcher_recovery.py -k omitted"),
+    ("          tests/test_mcp_launcher_publication.py\n", ""),
     ("python -m pytest -v tests/test_source_install_transactions.py",
      "python -m pytest -v tests/test_source_install_transactions.py -k omitted"),
     ("python -m pytest -v tests/test_cli.py", "python -m pytest -v tests/test_cli.py -k omitted"),

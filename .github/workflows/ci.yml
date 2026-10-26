@@ -187,6 +187,7 @@ jobs:
           --ignore=tests/test_protocol_conformance.py
           --ignore=tests/test_go_build_e2e.py
           --ignore=tests/test_mcp_launcher_recovery.py
+          --ignore=tests/test_mcp_launcher_publication.py
           --ignore=tests/test_source_install_transactions.py
           --ignore=tests/test_cli.py
           --ignore=tests/test_mcp_project_install.py
@@ -207,10 +208,11 @@ jobs:
           --basetemp="${{ runner.temp }}/csk-commands"
           -o cache_dir="${{ runner.temp }}/csk-pytest-cache"
 
-      - name: Run complete launcher recovery partition
+      - name: Run complete launcher recovery and publication partition
         if: matrix.partition == 'launcher-recovery'
         run: >-
           python -m pytest -v tests/test_mcp_launcher_recovery.py
+          tests/test_mcp_launcher_publication.py
           -n 4 --dist=loadfile
           --basetemp="${{ runner.temp }}/csk-launcher-recovery"
           -o cache_dir="${{ runner.temp }}/csk-pytest-cache"
