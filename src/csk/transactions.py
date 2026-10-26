@@ -431,7 +431,8 @@ class TransactionEngine:
                 journal, deleting = self._load_journal_record(transaction_id)
                 try:
                     if deleting:
-                        self._finish_journal_removal(journal)
+                        with self._shared_exclude_locks(journal):
+                            self._finish_journal_removal(journal)
                     else:
                         self._resume(journal)
                 except TransactionIncompleteError:
@@ -455,12 +456,13 @@ class TransactionEngine:
             if journal.phase == "cleanup":
                 raise TransactionError("installation already committed; rerun csk install to finish cleanup")
             try:
-                if deleting:
-                    self._finish_journal_removal(journal)
-                elif journal.phase == "preparing":
-                    self._discard_prepared(journal)
-                else:
-                    self._rollback(journal)
+                with self._shared_exclude_locks(journal):
+                    if deleting:
+                        self._finish_journal_removal(journal)
+                    elif journal.phase == "preparing":
+                        self._discard_prepared(journal)
+                    else:
+                        self._rollback(journal)
             except Exception as exc:
                 raise self._incomplete_error(journal, exc) from exc
 
@@ -603,9 +605,11 @@ class TransactionEngine:
                     )
             return tuple(groups)
 
-    def _resume(self, journal: Journal) -> None:
-        # A home can contain journals for several repositories. Acquire shared
-        # file locks only after the home lock, in a stable order, also on replay.
+    @contextmanager
+    def _shared_exclude_locks(self, journal: Journal) -> Iterator[None]:
+        # All publication paths, including explicit rollback and cleanup,
+        # acquire the same validated locks after the home lock, in stable order.
+        self._assert_mutation_witness()
         from . import gitignore_gate
         with ExitStack() as stack:
             for path in sorted({
@@ -621,6 +625,10 @@ class TransactionEngine:
                         if not isinstance(project, str) or gitignore_gate.ignore_path(Path(project), "exclude") != Path(path):
                             raise TransactionCorruptionError("Shared exclude journal destination changed")
                 stack.enter_context(gitignore_gate.exclude_file_lock(Path(path)))
+            yield
+
+    def _resume(self, journal: Journal) -> None:
+        with self._shared_exclude_locks(journal):
             self._resume_locked(journal)
 
     def _resume_locked(self, journal: Journal) -> None:
