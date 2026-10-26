@@ -11,23 +11,40 @@ import pytest
 from csk import mcp_launchers as gate
 
 
+# Capture before stable_env replaces the profile with a nonexistent test home.
+# The native shell API expands the registered LocalAppData path using it.
+_NATIVE_USERPROFILE = os.environ.get('USERPROFILE')
+
+
+@pytest.fixture
+def native_windows_profile(stable_env, monkeypatch):
+    assert _NATIVE_USERPROFILE, 'native Windows control requires a real profile'
+    monkeypatch.setenv('USERPROFILE', _NATIVE_USERPROFILE)
+
+
 # Matching Windows hosts execute the real allocation/free adapter for every OS
 # folder. Portable fake-DLL tests cover errors; this is a native success control.
 @pytest.mark.csk_e2e_native
 @pytest.mark.skipif(sys.platform != 'win32', reason='native Windows known folders')
-def test_native_windows_known_folders():
+def test_native_windows_known_folders(native_windows_profile):
     for key in gate._WINDOWS_ENV:
         path = Path(gate.windows_known_folder(key))
         assert path.is_absolute() and path.is_dir()
 
 
-# Real Authenticode accepts the system Microsoft binary and rejects a byte-flip
+# Real Authenticode accepts an embedded-signed Microsoft binary and rejects a byte-flip
 # copy. The call-only root override keeps all fixture writes under pytest's root.
 @pytest.mark.csk_e2e_native
 @pytest.mark.skipif(sys.platform != 'win32', reason='native Windows Authenticode')
 def test_native_windows_signature_and_tamper(tmp_path):
-    source = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
-    assert source.is_file(), 'native positive control requires Windows PowerShell'
+    from csk.mcp_authenticode import _has_certificate
+
+    # Windows PowerShell can be catalog-only signed. PowerShell 7 carries the
+    # embedded certificate required by this adapter, including after copying.
+    executable = shutil.which('pwsh')
+    assert executable, 'native positive control requires PowerShell 7'
+    source = Path(executable)
+    assert _has_certificate(source), 'positive control requires an embedded signature'
     identity = gate.verify_windows(source)
     assert identity.signature == 'valid' and identity.publisher in {'Microsoft Windows', 'Microsoft Corporation'}
     target = tmp_path / 'Example/server.exe'
