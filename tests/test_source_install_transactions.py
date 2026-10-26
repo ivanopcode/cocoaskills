@@ -2582,6 +2582,20 @@ def test_managed_file_parent_with_missing_child_stat(
     assert masked, "missing-child stat control was not exercised"
 
 
+# A stable directory alias above the project (such as a system temp alias)
+# remains valid for fresh and locked installs with genuinely absent outputs.
+def test_missing_outputs_beneath_stable_directory_alias(tmp_path: Path, csk_home: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    project, cfg, _members = _basic_fixture(alias, csk_home)
+    assert _install_ok(cfg)
+    assert _collect(cfg).clean
+    assert _install_ok(cfg)
+    assert _collect(cfg).clean
+
+
 def _digest_fault(error: str, victim: Path) -> OSError:
     """Build one catalog filesystem error naming the digest victim."""
 
