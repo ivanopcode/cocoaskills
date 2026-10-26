@@ -1,6 +1,7 @@
 """Cross-process publication and crash witnesses for shared Git excludes."""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -10,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from conftest import make_config, make_project, run, write_skillfile
-from csk import config, gitignore_gate, locking
+from csk import config, gitignore_gate, locking, transactions
 
 
 @pytest.fixture
@@ -160,6 +161,158 @@ publish.TransactionEngine = factory
 transactions.TransactionEngine = factory
 raise SystemExit(cli.main(['install', 'app']))
 '''
+
+
+_EXPLICIT_ROLLBACK = '''
+import sys, time
+from pathlib import Path
+from csk import cli, gitignore_gate, transactions
+barrier, transaction, point = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+def pause():
+    (barrier / 'rollback-paused').touch()
+    deadline = time.monotonic() + 30
+    while not (barrier / 'release').exists():
+        if time.monotonic() > deadline:
+            raise RuntimeError('rollback barrier timed out')
+        time.sleep(.01)
+original_write = gitignore_gate.write_exclude
+def write(path, data):
+    if point == 'write':
+        pause()
+    return original_write(path, data)
+gitignore_gate.write_exclude = write
+original_engine = transactions.TransactionEngine
+def engine(home, **kwargs):
+    def fault(event, target):
+        if point == 'cleanup' and event == 'before_journal_unlink':
+            pause()
+    return original_engine(home, fault_hook=fault, **kwargs)
+transactions.TransactionEngine = engine
+raise SystemExit(cli.main(['recover', '--rollback', transaction]))
+'''
+
+
+def _unfinished_install(project, config_path):
+    result = subprocess.run(
+        [sys.executable, '-c', _CRASH, 'after_install'], cwd=project,
+        env=_env(config_path), text=True, capture_output=True, timeout=90,
+    )
+    assert result.returncode == 86, (result.stdout, result.stderr)
+    journal, = (config_path.parent / 'state/transactions/v1').glob('*.json')
+    return journal, json.loads(journal.read_text())['transaction_id']
+
+
+# Real CLI rollback must serialize a second home's install from its aggregate
+# read through journal cleanup. Serial controls use the same retained-block and
+# real-Git oracles; the concurrent write case detects the stale-replace defect.
+@pytest.mark.parametrize('concurrent', [False, True])
+@pytest.mark.parametrize('point', ['write', 'cleanup'])
+def test_explicit_rollback_preserves_concurrent_install(consumers, tmp_path, concurrent, point):
+    repository, projects, configs = consumers(3)
+    for project in projects:
+        write_skillfile(project, {
+            'schema_version': 3, 'agents': ['codex_cli'], 'skills': [],
+            'mcp_servers': {'docs': {
+                'server': {'transport': 'http', 'url': 'https://example.invalid/mcp'},
+                'install': {'headers': {'X-Toolsets': {'value': 'work_items'}}},
+            }},
+        })
+    target = repository / '.git/info/exclude'
+    target.parent.mkdir(exist_ok=True)
+    user = b'# original user policy\n'
+    target.write_bytes(user)
+    journal, transaction = _unfinished_install(projects[0], configs[0])
+    barrier = tmp_path / 'barrier'
+    barrier.mkdir()
+    if not concurrent:
+        (barrier / 'release').touch()
+    children = []
+    try:
+        rollback = subprocess.Popen(
+            [sys.executable, '-c', _EXPLICIT_ROLLBACK, str(barrier), transaction, point],
+            cwd=projects[0], env=_env(configs[0]), text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        children.append(rollback)
+        _wait(barrier / 'rollback-paused', rollback)
+        if not concurrent:
+            output = rollback.communicate(timeout=60)
+            assert rollback.returncode == 0, output
+        second = subprocess.Popen(
+            [sys.executable, '-c', _BOOTSTRAP, str(barrier), '1', 'False', 'install'],
+            cwd=projects[1], env=_env(configs[1]), text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        children.append(second)
+        _wait(barrier / 'attempt-1', second)
+        if concurrent:
+            deadline = time.monotonic() + 8
+            while second.poll() is None and time.monotonic() < deadline:
+                time.sleep(.01)
+        finished_before_release = concurrent and second.poll() is not None
+        (barrier / 'release').touch()
+        for child in children:
+            output = child.communicate(timeout=60)
+            assert child.returncode == 0, output
+    finally:
+        (barrier / 'release').touch()
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+    data = target.read_bytes()
+    assert gitignore_gate.project_block(data, gitignore_gate.project_key(projects[1])) is not None, \
+        'successful neighboring install lost its exclude block during explicit rollback'
+    assert not finished_before_release, 'neighbor published before rollback cleanup released the shared lock'
+    assert data.startswith(user)
+    assert gitignore_gate.project_block(data, gitignore_gate.project_key(projects[0])) is None
+    assert not journal.exists()
+    assert not list(journal.parent.iterdir())
+    native = projects[1] / '.codex/config.toml'
+    assert native.is_file()
+    assert _ignored(repository, projects[1], '.codex/config.toml')
+    assert _ignored(repository, projects[1], '.agents/probe')
+
+
+# Explicit rollback still refuses an edited own block and a journal whose
+# project resolves to another Git destination. Refusals preserve exclude bytes
+# and retain the journal; the unchanged control restores just this project.
+@pytest.mark.parametrize('change', [None, 'own-block', 'destination'])
+def test_explicit_rollback_validates_shared_destination(consumers, tmp_path, change):
+    repository, projects, configs = consumers(3)
+    journal, transaction = _unfinished_install(projects[0], configs[0])
+    target = repository / '.git/info/exclude'
+    key = gitignore_gate.project_key(projects[0])
+    other = make_project(tmp_path / 'other', gitignore=False)
+    if change == 'own-block':
+        block = gitignore_gate.project_block(target.read_bytes(), key)
+        assert block is not None
+        target.write_bytes(gitignore_gate.replace_project_block(
+            target.read_bytes(), key, block.replace(b'/.agents/', b'/user-edited/'),
+        ))
+    elif change == 'destination':
+        raw = json.loads(journal.read_text())
+        for item in raw['targets']:
+            if item['target_class'] == 'mcp-gitignore':
+                item['publication_recheck']['project'] = str(other)
+        journal.write_bytes(transactions._journal_bytes(transactions._journal_from_dict(raw)))
+    before = target.read_bytes()
+    result = subprocess.run(
+        [sys.executable, '-m', 'csk', 'recover', '--rollback', transaction],
+        cwd=projects[0], env=_env(configs[0]), text=True, capture_output=True, timeout=60,
+    )
+    if change is None:
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert not target.exists()
+        assert not journal.exists()
+    else:
+        assert result.returncode == 1, (result.stdout, result.stderr)
+        expected = 'source_output_overlap' if change == 'own-block' else 'Shared exclude journal destination changed'
+        assert expected in result.stdout + result.stderr
+        assert target.read_bytes() == before
+        assert journal.exists()
+    assert not (other / '.git/csk-exclude.lock').exists()
+    assert not (other / '.git/info/exclude').exists()
 
 
 # Process death releases the OS lock. A different home can publish before the
