@@ -2867,6 +2867,24 @@ def digest_live_targets(
         key = (spec.target_class, spec.identifier)
         try:
             digests[key] = digest_target(spec.live_path, kind=spec.kind)
+            if digests[key] == ABSENT_DIGEST:
+                # Windows can report ENOENT beneath an existing file. Absence
+                # is only usable when the nearest existing parent is a directory.
+                parent = spec.live_path.parent
+                while True:
+                    try:
+                        info = parent.lstat()
+                    except FileNotFoundError:
+                        if parent == parent.parent:
+                            raise
+                        parent = parent.parent
+                        continue
+                    if not stat.S_ISDIR(info.st_mode):
+                        raise SourceError(
+                            CODE_OUTPUT_OVERLAP,
+                            f"Publication parent {parent} must be a directory without links",
+                        )
+                    break
         except _FS_ERRORS as exc:
             raise SourceError(
                 CODE_OUTPUT_OVERLAP,
@@ -4746,8 +4764,8 @@ def _plan_and_publish_schema2(
                 "shared install state changed before the atomic commit"
             ) from exc
 
-        readiness_paths = [spec.live_path for spec in planned]
         if mcp_plan is not None:
+            readiness_paths = [spec.live_path for spec in planned]
             readiness_paths.extend(
                 project_path / mcp_plan.surfaces[agent].surface.relpath
                 for agent in mcp_plan.edits
@@ -4758,9 +4776,7 @@ def _plan_and_publish_schema2(
                 readiness_paths.append(mcp_ownership.consent_path(home, mcp_plan.consumer))
             if mcp_plan.edits:
                 readiness_paths.append(mcp_ownership.ledger_path(home, mcp_plan.consumer))
-        # A missing child can hide a non-directory ancestor on Windows. Refuse
-        # it before publication creates even the persistent exclude lock.
-        preflight_live_parents(tuple(readiness_paths))
+            preflight_live_parents(tuple(readiness_paths))
 
         external_outputs, external_messages = publish_schema2_external_builds(
             config,
