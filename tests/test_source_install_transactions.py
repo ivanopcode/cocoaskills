@@ -2551,6 +2551,37 @@ def test_managed_root_as_file_refuses_structured(
     assert _collect(cfg).clean
 
 
+# Windows reports ENOENT beneath an existing file where POSIX reports ENOTDIR.
+# The original refusal/retry oracle, including whole-tree equality, must hold
+# under either stat behavior; no lock may be created before this refusal.
+@pytest.mark.parametrize("root", ["codex-skills", "agents-skills"])
+def test_managed_file_parent_with_missing_child_stat(
+    tmp_path: Path, csk_home: Path, monkeypatch: pytest.MonkeyPatch, root: str,
+) -> None:
+    target = tmp_path / "project" / (".codex" if root == "codex-skills" else ".agents") / "skills"
+    real_lstat, real_stat = Path.lstat, Path.stat
+    masked: list[Path] = []
+
+    def windows_missing(original: Any) -> Any:
+        def inspect(path: Path, *args: Any, **kwargs: Any) -> Any:
+            if path != target and path.is_relative_to(target):
+                try:
+                    info = real_lstat(target)
+                except FileNotFoundError:
+                    pass
+                else:
+                    if stat.S_ISREG(info.st_mode):
+                        masked.append(path)
+                        raise FileNotFoundError(2, "No such file or directory", str(path))
+            return original(path, *args, **kwargs)
+        return inspect
+
+    monkeypatch.setattr(Path, "lstat", windows_missing(real_lstat))
+    monkeypatch.setattr(Path, "stat", windows_missing(real_stat))
+    test_managed_root_as_file_refuses_structured(tmp_path, csk_home, root, "source_output_overlap")
+    assert masked, "missing-child stat control was not exercised"
+
+
 def _digest_fault(error: str, victim: Path) -> OSError:
     """Build one catalog filesystem error naming the digest victim."""
 

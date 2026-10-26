@@ -4746,8 +4746,8 @@ def _plan_and_publish_schema2(
                 "shared install state changed before the atomic commit"
             ) from exc
 
+        readiness_paths = [spec.live_path for spec in planned]
         if mcp_plan is not None:
-            readiness_paths = [spec.live_path for spec in planned]
             readiness_paths.extend(
                 project_path / mcp_plan.surfaces[agent].surface.relpath
                 for agent in mcp_plan.edits
@@ -4758,7 +4758,9 @@ def _plan_and_publish_schema2(
                 readiness_paths.append(mcp_ownership.consent_path(home, mcp_plan.consumer))
             if mcp_plan.edits:
                 readiness_paths.append(mcp_ownership.ledger_path(home, mcp_plan.consumer))
-            preflight_live_parents(tuple(readiness_paths))
+        # A missing child can hide a non-directory ancestor on Windows. Refuse
+        # it before publication creates even the persistent exclude lock.
+        preflight_live_parents(tuple(readiness_paths))
 
         external_outputs, external_messages = publish_schema2_external_builds(
             config,
