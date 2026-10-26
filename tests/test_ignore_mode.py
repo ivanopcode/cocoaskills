@@ -285,16 +285,21 @@ def test_install_ignore_refusal(project_cli, capsys, kind, code):
 
 
 # Conditional live gitdir settings retain case-insensitive negations in staged exclude verification.
-def test_conditional_ignore_case(tmp_path):
+@pytest.mark.parametrize("ignore_case", [True, False])
+def test_conditional_ignore_case(tmp_path, ignore_case):
     root = make_project(tmp_path, gitignore=False)
     policy = tmp_path / "case-policy"
-    policy.write_text("[core]\nignoreCase = true\n")
-    run(["git", "config", "includeIf.gitdir:" + (root / ".git").as_posix() + "/.path", str(policy)], root)
-    assert run(["git", "config", "--bool", "--get", "core.ignoreCase"], root).stdout.strip() == "true"
+    policy.write_text(f"[core]\nignoreCase = {str(ignore_case).lower()}\n")
+    run(["git", "config", "includeIf.gitdir:" + (root / ".git").resolve().as_posix() + ".path", str(policy)], root)
+    assert run(["git", "config", "--bool", "--get", "core.ignoreCase"], root).stdout.strip() == str(ignore_case).lower()
     (root / ".gitignore").write_text("!/.MCP.JSON\n")
-    with pytest.raises(gitignore_gate.GitignoreError, match="does not effectively ignore"):
+    if ignore_case:
+        with pytest.raises(gitignore_gate.GitignoreError, match="does not effectively ignore"):
+            gitignore_gate.ensure_ignored(root, ["/.mcp.json"], mode="exclude")
+        assert not (root / ".git/info/exclude").exists()
+    else:
         gitignore_gate.ensure_ignored(root, ["/.mcp.json"], mode="exclude")
-    assert not (root / ".git/info/exclude").exists()
+        assert run(["git", "check-ignore", "-q", "--", ".mcp.json"], root).returncode == 0
 
 
 # Init rejects unsafe exclude before creating a Skillfile; a regular target permits initialization.
