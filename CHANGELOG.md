@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-26
+
 ### Добавлено
 
 - HTTP MCP headers поддерживают `prefix: "api-token"` и `"token"` для Claude Code и Cursor без чтения или записи значений секретов. Codex отклоняет эти префиксы с `mcp_header_prefix_unsupported`; `none` и `bearer` сохранены.
