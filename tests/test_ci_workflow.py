@@ -349,20 +349,52 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
     assert "if: github.event_name == 'pull_request'" in ordinary
     assert "os: [ubuntu-latest, macos-latest, windows-latest]" in ordinary
     assert 'python-version: "3.14"' in ordinary
-    assert ordinary.count("--ignore=") == 2
+    assert ordinary.count("--ignore=") == 3
     assert "--ignore=tests/test_protocol_conformance.py" in ordinary
     assert "--ignore=tests/test_go_build_e2e.py" in ordinary
+    assert "--ignore=tests/test_mcp_launcher_recovery.py" in ordinary
     assert "-n 4 --dist=loadfile" in ordinary
     assert '${{ runner.temp }}/csk-ordinary' in ordinary
     assert '${{ runner.temp }}/csk-pytest-cache' in ordinary
     # Pin the 45-minute ordinary budget chosen from measured Windows p95.
     assert "timeout-minutes: 45" in ordinary
 
+    # Both mandatory matrix partitions are complementary: core omits exactly
+    # the complete recovery file, which the other partition runs unfiltered.
+    job = yaml.safe_load(workflow)["jobs"]["fast_ordinary"]
+    assert job["strategy"]["matrix"]["partition"] == ["core", "launcher-recovery"]
+    steps = {step["name"]: step for step in job["steps"]}
+    core = steps["Run fast ordinary tests"]
+    recovery = steps["Run complete launcher recovery partition"]
+    assert core["if"] == "matrix.partition == 'core'"
+    assert recovery["if"] == "matrix.partition == 'launcher-recovery'"
+    assert "python -m pytest -v tests/test_mcp_launcher_recovery.py" in recovery["run"]
+    command = shlex.split(recovery["run"])
+    arguments = command[command.index("pytest") + 1:]
+    assert not any(arg.partition("=")[0] in {"--ignore", "--ignore-glob", "--deselect", "-k", "-m"}
+                   for arg in arguments)
+
     for job_id in ("fast_protocol", "fast_go_e2e"):
         job = _job(workflow, job_id)
         assert "github.event_name == 'pull_request'" in job
         assert "refs/heads/main" not in job
         assert "timeout-minutes: 20" in job
+
+
+# The workflow checker must reject a missing partition, a skipped recovery
+# step, and a filtered recovery command, rather than accepting reduced coverage.
+@pytest.mark.parametrize("before,after", [
+    ("partition: [core, launcher-recovery]", "partition: [core]"),
+    ("if: matrix.partition == 'launcher-recovery'", "if: matrix.partition == 'absent'"),
+    ("python -m pytest -v tests/test_mcp_launcher_recovery.py",
+     "python -m pytest -v tests/test_mcp_launcher_recovery.py -k omitted"),
+])
+def test_ordinary_partition_checker_rejects_coverage_loss(monkeypatch, before, after) -> None:
+    workflow = _workflow()
+    assert workflow.count(before) == 1
+    monkeypatch.setattr(sys.modules[__name__], "_workflow", lambda: workflow.replace(before, after))
+    with pytest.raises(AssertionError):
+        test_pull_request_lane_is_event_separated_and_bounded()
 
 
 def test_external_build_repeat_is_manual_windows_only() -> None:

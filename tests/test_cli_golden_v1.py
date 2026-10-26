@@ -176,7 +176,7 @@ def test_cli_v1_golden_byte_identical(
         # Outside-Git init now refuses without writing either policy or manifest;
         # assert the old baseline too so the exception cannot hide other drift.
         assert released.exit_code == 0
-        assert tokenize_output(released.stdout, root=str(released_root), version=released.version) == (
+        assert _normalize(tokenize_output(released.stdout, root=str(released_root), version=released.version)) == (
             b"Initialized CocoaSkill project at {{GOLDEN_ROOT}}/emptydir\n"
         )
         assert released.stderr == (
@@ -257,6 +257,32 @@ def test_init_help_comparison_rejects_unrelated_drift(tmp_path, released_v1_sour
     with pytest.raises(AssertionError):
         test_cli_v1_golden_byte_identical(
             "init-help", _audit_help_fixture(tmp_path), released_v1_source, tmp_path,
+        )
+
+
+# Separator normalization of the released init baseline permits Windows paths,
+# while an unrelated changed message must still fail that exact comparison.
+def test_init_empty_baseline_rejects_unrelated_drift(
+    tmp_path, pristine_root, released_v1_source, monkeypatch,
+) -> None:
+    original = _run_command_copy
+
+    def changed_message(source_root, command_slug, **kwargs):
+        output, root = original(source_root, command_slug, **kwargs)
+        if kwargs["label"] == "released":
+            assert output.stdout.count(b"Initialized") == 1
+            output = CLIOutput(
+                exit_code=output.exit_code,
+                stdout=output.stdout.replace(b"Initialized", b"Changed"),
+                stderr=output.stderr, version=output.version,
+                terminal_width=output.terminal_width,
+            )
+        return output, root
+
+    monkeypatch.setattr(sys.modules[__name__], "_run_command_copy", changed_message)
+    with pytest.raises(AssertionError):
+        test_cli_v1_golden_byte_identical(
+            "init-empty", pristine_root, released_v1_source, tmp_path,
         )
 
 
