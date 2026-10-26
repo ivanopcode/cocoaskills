@@ -349,20 +349,21 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
     assert "if: github.event_name == 'pull_request'" in ordinary
     assert "os: [ubuntu-latest, macos-latest, windows-latest]" in ordinary
     assert 'python-version: "3.14"' in ordinary
-    assert ordinary.count("--ignore=") == 3
+    assert ordinary.count("--ignore=") == 4
     assert "--ignore=tests/test_protocol_conformance.py" in ordinary
     assert "--ignore=tests/test_go_build_e2e.py" in ordinary
     assert "--ignore=tests/test_mcp_launcher_recovery.py" in ordinary
+    assert "--ignore=tests/test_source_install_transactions.py" in ordinary
     assert "-n 4 --dist=loadfile" in ordinary
     assert '${{ runner.temp }}/csk-ordinary' in ordinary
     assert '${{ runner.temp }}/csk-pytest-cache' in ordinary
     # Pin the 45-minute ordinary budget chosen from measured Windows p95.
     assert "timeout-minutes: 45" in ordinary
 
-    # Both mandatory matrix partitions are complementary: core omits exactly
-    # the complete recovery file, which the other partition runs unfiltered.
+    # All mandatory matrix partitions are complementary: core omits exactly
+    # the two complete files which their dedicated partitions run unfiltered.
     job = yaml.safe_load(workflow)["jobs"]["fast_ordinary"]
-    assert job["strategy"]["matrix"]["partition"] == ["core", "launcher-recovery"]
+    assert job["strategy"]["matrix"]["partition"] == ["core", "launcher-recovery", "source-transactions"]
     steps = {step["name"]: step for step in job["steps"]}
     core = steps["Run fast ordinary tests"]
     recovery = steps["Run complete launcher recovery partition"]
@@ -370,6 +371,14 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
     assert recovery["if"] == "matrix.partition == 'launcher-recovery'"
     assert "python -m pytest -v tests/test_mcp_launcher_recovery.py" in recovery["run"]
     command = shlex.split(recovery["run"])
+    arguments = command[command.index("pytest") + 1:]
+    assert not any(arg.partition("=")[0] in {"--ignore", "--ignore-glob", "--deselect", "-k", "-m"}
+                   for arg in arguments)
+
+    source = steps["Run complete source transaction partition"]
+    assert source["if"] == "matrix.partition == 'source-transactions'"
+    assert "python -m pytest -v tests/test_source_install_transactions.py" in source["run"]
+    command = shlex.split(source["run"])
     arguments = command[command.index("pytest") + 1:]
     assert not any(arg.partition("=")[0] in {"--ignore", "--ignore-glob", "--deselect", "-k", "-m"}
                    for arg in arguments)
@@ -384,8 +393,9 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
 # The workflow checker must reject a missing partition, a skipped recovery
 # step, and a filtered recovery command, rather than accepting reduced coverage.
 @pytest.mark.parametrize("before,after", [
-    ("partition: [core, launcher-recovery]", "partition: [core]"),
+    ("partition: [core, launcher-recovery, source-transactions]", "partition: [core]"),
     ("if: matrix.partition == 'launcher-recovery'", "if: matrix.partition == 'absent'"),
+    ("if: matrix.partition == 'source-transactions'", "if: matrix.partition == 'absent'"),
     ("python -m pytest -v tests/test_mcp_launcher_recovery.py",
      "python -m pytest -v tests/test_mcp_launcher_recovery.py -k omitted"),
 ])
