@@ -83,7 +83,7 @@ def exclude_lock(project_root: Path, mode: str) -> Iterator[None]:
 def project_key(project_root: Path) -> str:
     discovery = git_ops.run_git(
         [resolve_tool("git"), "-C", str(project_root), "rev-parse", "--show-toplevel", "--absolute-git-dir"],
-        text=True, capture_output=True,
+        text=True, encoding="utf-8", capture_output=True,
     )
     if discovery.returncode:
         raise ExcludeError("Cannot resolve Git worktree")
@@ -176,7 +176,7 @@ def ignore_path(project_root: Path, mode: str) -> Path:
         return project_root / ".gitignore"
     result = git_ops.run_git(
         [resolve_tool("git"), "-C", str(project_root), "rev-parse", "--git-common-dir"],
-        text=True, capture_output=True,
+        text=True, encoding="utf-8", capture_output=True,
     )
     if result.returncode:
         raise ExcludeError("Cannot resolve Git common directory; a git repository is required")
@@ -215,7 +215,7 @@ def _plan_exclude(project_root: Path, entries: list[str]) -> bytes | None:
     existing = _exclude_bytes(path)
     discovery = git_ops.run_git(
         [resolve_tool("git"), "-C", str(project_root), "rev-parse", "--show-toplevel"],
-        text=True, capture_output=True,
+        text=True, encoding="utf-8", capture_output=True,
     )
     if discovery.returncode:
         raise ExcludeError("Cannot resolve Git worktree")
@@ -244,7 +244,7 @@ def missing_entries(project_root: Path, entries: list[str]) -> list[str]:
         )
         proc = git_ops.run_git(
             [resolve_tool("git"), "-C", str(project_root), "check-ignore", "-q", probe],
-            text=True,
+            text=True, encoding="utf-8",
             capture_output=True,
         )
         if proc.returncode != 0:
@@ -352,7 +352,7 @@ def verify_planned_ignored(
     executable = resolve_tool("git")
     discovery = git_ops.run_git(
         [executable, "-C", str(project_root), "rev-parse", "--show-toplevel", "--absolute-git-dir"],
-        text=True, capture_output=True,
+        text=True, encoding="utf-8", capture_output=True,
     )
     roots = discovery.stdout.removesuffix("\n").split("\n")
     if discovery.returncode or len(roots) != 2:
@@ -377,7 +377,7 @@ def verify_planned_ignored(
         worktree_config = metadata / "config.worktree"
         worktree_enabled = git_ops.run_git(
             [executable, "-C", str(project_root), "config", "--bool", "--get", "extensions.worktreeConfig"],
-            text=True, capture_output=True,
+            text=True, encoding="utf-8", capture_output=True,
         )
         if worktree_enabled.returncode not in (0, 1):
             raise GitignoreError("Cannot resolve Git worktree configuration")
@@ -385,7 +385,7 @@ def verify_planned_ignored(
             metadata_args += ["-c", "include.path=" + str(worktree_config)]
         ignore_case = git_ops.run_git(
             [executable, "-C", str(project_root), "config", "--bool", "--get", "core.ignoreCase"],
-            text=True, capture_output=True,
+            text=True, encoding="utf-8", capture_output=True,
         )
         if ignore_case.returncode not in (0, 1):
             raise GitignoreError("Cannot resolve Git ignore matching configuration")
@@ -397,7 +397,7 @@ def verify_planned_ignored(
     # before changing worktrees. --path also applies Git's own ~/ expansion.
     excludes = git_ops.run_git(
         [executable, "-C", str(worktree), "config", "--path", "--get", "core.excludesFile"],
-        text=True, capture_output=True,
+        text=True, encoding="utf-8", capture_output=True,
     )
     if excludes.returncode not in (0, 1):
         raise GitignoreError("Cannot resolve the live Git excludes source")
@@ -450,7 +450,7 @@ def verify_planned_ignored(
             result = git_ops.run_git(
                 [executable, *metadata_args, *config_args, "--git-dir=" + str(metadata), "--work-tree=" + str(staged),
                  "-C", str(staged), "check-ignore", "--no-index", "-q", "--", probe.as_posix()],
-                text=True, capture_output=True,
+                text=True, encoding="utf-8", capture_output=True,
             )
             if result.returncode:
                 raise GitignoreError(

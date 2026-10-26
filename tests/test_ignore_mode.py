@@ -302,6 +302,32 @@ def test_conditional_ignore_case(tmp_path, ignore_case):
         assert run(["git", "check-ignore", "-q", "--", ".mcp.json"], root).returncode == 0
 
 
+# Git emits UTF-8 paths even when Python's Windows locale defaults to cp1252.
+# Real discovery and exclusion must retain Unicode path bytes; a conflicting
+# negation still refuses without changing the previously published block.
+@pytest.mark.parametrize("suffix", ["\u2028dir", "\u00e9\u4e2d"])
+def test_exclude_discovery_uses_git_path_encoding(tmp_path, monkeypatch, suffix):
+    from csk import git_ops
+
+    root = make_project(tmp_path, "project-" + suffix, gitignore=False)
+    original = git_ops.run_git
+
+    def windows_locale(command, **kwargs):
+        if kwargs.get("text"):
+            kwargs.setdefault("encoding", "cp1252")
+        return original(command, **kwargs)
+
+    monkeypatch.setattr(git_ops, "run_git", windows_locale)
+    gitignore_gate.ensure_ignored(root, ["/.mcp.json"], mode="exclude")
+    assert run(["git", "check-ignore", "-q", "--", ".mcp.json"], root).returncode == 0
+    exclude = root / ".git/info/exclude"
+    before = exclude.read_bytes()
+    (root / ".gitignore").write_bytes(b"!/.mcp.json\n")
+    with pytest.raises(gitignore_gate.GitignoreError, match="does not effectively ignore"):
+        gitignore_gate.ensure_ignored(root, ["/.mcp.json"], mode="exclude")
+    assert exclude.read_bytes() == before
+
+
 # Init rejects unsafe exclude before creating a Skillfile; a regular target permits initialization.
 @pytest.mark.parametrize("unsafe", [True, False])
 def test_init_exclude_refusal(tmp_path, capsys, unsafe):

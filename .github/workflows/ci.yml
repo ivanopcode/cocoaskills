@@ -110,16 +110,19 @@ jobs:
           if-no-files-found: error
 
   fast_ordinary:
-    name: Fast ordinary / Python 3.14 on ${{ matrix.os }}
+    name: Fast ordinary / ${{ matrix.partition }} / Python 3.14 on ${{ matrix.os }}
     if: github.event_name == 'pull_request'
     runs-on: ${{ matrix.os }}
-    # Recent five green Windows jobs: 13m23s-29m11s (wall time).
-    # 45 minutes keeps at least 1.5x headroom over the observed p95.
+    # Keep the existing per-partition budget; heavy recovery coverage is
+    # scheduled independently rather than extending the ordinary timeout.
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        # Recovery alone adds about 23 worker-minutes on Windows. Keep its
+        # complete file in a mandatory parallel partition, within the same budget.
+        partition: [core, launcher-recovery]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -167,15 +170,32 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ".[dev]"
 
+      - name: Run portability regression controls
+        if: matrix.partition == 'core'
+        run: >-
+          python -m pytest -v
+          "tests/test_install.py::test_real_gitfile_supported_layout[unicode-line-separator]"
+          "tests/test_cli_golden_v1.py::test_cli_v1_golden_byte_identical[init-empty]"
+
       - name: Run fast ordinary tests
+        if: matrix.partition == 'core'
         env:
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec/conformance/v1
         run: >-
           python -m pytest -v
           --ignore=tests/test_protocol_conformance.py
           --ignore=tests/test_go_build_e2e.py
+          --ignore=tests/test_mcp_launcher_recovery.py
           -n 4 --dist=loadfile
           --basetemp="${{ runner.temp }}/csk-ordinary"
+          -o cache_dir="${{ runner.temp }}/csk-pytest-cache"
+
+      - name: Run complete launcher recovery partition
+        if: matrix.partition == 'launcher-recovery'
+        run: >-
+          python -m pytest -v tests/test_mcp_launcher_recovery.py
+          -n 4 --dist=loadfile
+          --basetemp="${{ runner.temp }}/csk-launcher-recovery"
           -o cache_dir="${{ runner.temp }}/csk-pytest-cache"
 
   fast_protocol:
