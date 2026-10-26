@@ -275,19 +275,12 @@ def resolve_launcher(
         if (not checked.signature_valid or not checked.notarized or checked.team_id != macos.team_id
                 or checked.bundle_id != macos.bundle_id or checked.identifier != macos.identifier):
             raise McpLauncherError("mcp_launcher_untrusted", "macOS signature or publisher identity did not match")
-        digest = hashlib.sha256()
-        with helper.open("rb") as stream:
-            while chunk := stream.read(1024 * 1024):
-                digest.update(chunk)
-        after = helper.stat()
-        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
-                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
-            raise McpLauncherError("mcp_launcher_untrusted", "executable changed during verification")
+        digest = _digest_stable(helper, before)
     except (OSError, ValueError, RuntimeError) as exc:
         if isinstance(exc, McpLauncherError):
             raise
         raise McpLauncherError("mcp_launcher_path_invalid", "application executable cannot be resolved or read") from exc
-    return ResolvedLauncher(str(helper), "verified", f"macos:{checked.team_id}:{checked.bundle_id}:{checked.identifier}", digest.hexdigest())
+    return ResolvedLauncher(str(helper), "verified", f"macos:{checked.team_id}:{checked.bundle_id}:{checked.identifier}", digest)
 
 
 def _path_error(detail: str) -> McpLauncherError:
@@ -306,9 +299,15 @@ def _digest_stable(path: Path, before: os.stat_result) -> str:
             digest.update(chunk)
         closed = os.fstat(stream.fileno())
     after = path.stat()
-    def identity(s: os.stat_result) -> tuple[int, int, int, int, int]:
-        return s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns
-    if not identity(before) == identity(opened) == identity(closed) == identity(after):
+    # Compare timestamps only within one stat source. Windows path and handle
+    # metadata disagree, including creation/change-time semantics on Python 3.14.
+    def unchanged(first: os.stat_result, last: os.stat_result) -> bool:
+        return (os.path.samestat(first, last)
+                and first.st_size == last.st_size
+                and first.st_mtime_ns == last.st_mtime_ns
+                and (os.name == "nt" or first.st_ctime_ns == last.st_ctime_ns))
+    if (not os.path.samestat(before, opened) or not os.path.samestat(closed, after)
+            or not unchanged(opened, closed) or not unchanged(before, after)):
         raise McpLauncherError("mcp_launcher_untrusted", "executable changed during verification")
     return digest.hexdigest()
 

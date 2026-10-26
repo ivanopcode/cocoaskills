@@ -2103,8 +2103,13 @@ def _target_digest(target: JournalTarget | MutableTarget, path: Path) -> str:
                 raise TransactionCorruptionError("Shared block sidecar changed while opening")
             data = stream.read()
             after = os.fstat(stream.fileno())
-        if (not os.path.samestat(after, path.lstat()) or after.st_size != info.st_size
-                or after.st_mtime_ns != info.st_mtime_ns or after.st_ctime_ns != info.st_ctime_ns):
+        # Path and handle timestamps have different semantics on Windows.
+        # Compare read stability using handle metadata; the path pins identity.
+        if (not os.path.samestat(opened, after)
+                or not os.path.samestat(after, path.lstat())
+                or after.st_size != opened.st_size
+                or after.st_mtime_ns != opened.st_mtime_ns
+                or (os.name != "nt" and after.st_ctime_ns != opened.st_ctime_ns)):
             raise TransactionCorruptionError("Shared block sidecar changed while reading")
         return shared_block_digest(data)
     return digest_target(path, kind=target.kind)
