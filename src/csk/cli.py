@@ -142,11 +142,16 @@ def main(argv: list[str] | None = None) -> int:
             return go_v1.run_worker(_launch_context=launch_context)
     from .builds import toolchain as build_toolchain
 
+    from . import skillfile_compat
+    skillfile_compat.reset_warnings()
     build_toolchain.reset_go_future_warning_state()
     arguments = list(sys.argv[1:] if argv is None else argv)
     is_check = bool(arguments and arguments[0] == "check")
     is_dispatch = bool(arguments and arguments[0] == "dispatch")
     is_recover = bool(arguments and arguments[0] == "recover")
+    if arguments and arguments[0] == "mcp":
+        from . import mcp_settings
+        return mcp_settings.main(arguments[1:])
     parser: argparse.ArgumentParser
     if is_recover:
         parser = _CskArgumentParser(prog="csk recover", description="Roll back one unfinished installation using its recorded preimages.")
@@ -918,6 +923,7 @@ def _add_audit(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
 
 
 def _dispatch(args: argparse.Namespace) -> int:
+    from . import skillfile_compat
     if args.command == "recover":
         from . import transactions
         from .locking import ManagerHomeLock
@@ -994,6 +1000,11 @@ def _dispatch(args: argparse.Namespace) -> int:
         return _cmd_skill_check(args)
 
     cfg = config.load_config()
+    if args.command in {"update", "upgrade"}:
+        roots = ([p.path for p in cfg.projects.values()] if args.command == "update" or getattr(args, "all", False)
+                 else [_resolve_project_root(cfg, getattr(args, "target", None))])
+        for root in roots:
+            skillfile_compat.check_path(root / "Skillfile.json")
     if args.command == "list":
         print(_render_list(cfg, show_paths=args.paths))
         return EXIT_OK
@@ -1339,6 +1350,7 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
+    from . import skillfile_compat
     target = Path(args.path).expanduser()
     if not target.is_absolute():
         target = Path.cwd() / target
@@ -1370,9 +1382,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
     if not _is_inside_git_worktree(root):
         raise manifest.ManifestError("A git repository is required for csk init")
     loaded = manifest.load_manifest(root)
-    if loaded is not None:
-        from .skillfile_deprecations import require_writable
-        require_writable(manifest._read_payload(root / manifest.MANIFEST_NAME))
+    skillfile_compat.check_path(root / "Skillfile.json")
     ignore_mode = gitignore_gate.effective_mode(root, loaded.ignore_mode if loaded else None)
     entries = adapters.all_gitignore_entries() + [dev_substitutions.DEV_MANIFEST_NAME]
     if ignore_mode == "gitignore":
@@ -1693,6 +1703,7 @@ def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
                 parsed_mcp = mcp_declarations.parse_mcp_servers(
                     loaded.mcp_servers,
                     invocation_scope="project",
+                    allow_deprecated=True,
                     target_agents=loaded.agents or project.agents or cfg.default_agents,
                 )
                 mcp_command_resolution.validate_windows_batch_commands(parsed_mcp, windows=sys.platform == "win32")

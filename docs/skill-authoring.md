@@ -268,7 +268,7 @@ URL shorthand равен объекту `server` с `transport: "http"` и те�
       "command": "uvx",
       "args": ["example-mcp==1.2.3"],
       "env_names": ["TOOLS_TOKEN"],
-      "environments": ["claude_code", "cursor"]
+      "environments": ["claude_code"]
     },
     "install": {
       "auth": { "kind": "env", "help_url": "https://example.com/tokens" },
@@ -286,11 +286,15 @@ URL shorthand равен объекту `server` с `transport: "http"` и те�
 }
 ```
 
-Оба объявления требуют consent. `tools` ограничивает запись агентами Claude Code и Cursor. `api` использует поддерживаемые агенты, выбранные проектом.
+Both declarations require consent. `tools` selects only Claude Code; `api` has no selector, so it selects all three writers independently of skill agents. To add a separately approved local Cursor destination for `tools`, run `csk mcp local-target add cursor --server tools` and then `csk install`.
 
 Набор полей `server` закрыт: `transport`, `url`, `command`, `launcher`, `args`, `env_names`, `environments`. HTTP использует `url`; stdio использует ровно одно из `command` и `launcher`, а также массив `args`. `command` содержит имя executable без пути или shell-команды. Для `npx` и `uvx` нужна точная версия пакета, например `example-mcp==1.2.3` для `uvx`. Секреты в `args` запрещены. `env_names` перечисляет имена переменных, а не значения; управляющие переменные вроде `PATH` запрещены. Нативный клиент может передать серверу больше переменных, чем перечисляет `env_names`; csk не гарантирует изоляцию окружения.
 
-`server.environments` перечисляет известные environment ids: `claude_code`, `codex_cli`, `cursor`, `gemini`, `windsurf`, `opencode`. Без поля используются resolved agents проекта: csk пишет для `claude_code`, `codex_cli`, `cursor`, а для остальных известных ids показывает `skipped: unsupported` без пути. Явно перечисленный writable агент получает запись, даже если его нет среди agents проекта. Неизвестный id, пустой список или дубликат вызывает `mcp_agent_selection_invalid`.
+`server.environments` accepts exactly `claude_code`, `codex_cli`, `opencode`, `pi`, `muse`. The first two have native writers; explicitly selected remaining ids produce `skipped: unsupported`, with path unavailable, without failing the operation by themselves. An absent selector selects Claude Code, Codex CLI and csk-local Cursor independently of skill `agents`; absence is preserved in normalized identity. To narrow this set, use `"environments": ["claude_code"]`. Empty, duplicate and unknown ids are `mcp_declaration_invalid`.
+
+Cursor is not a canonical id. The 0.21.x private reader still accepts legacy Cursor input and warns once on stderr; normal Skillfile writers refuse with `skillfile_deprecated_form`. Migrate mixed selections with `csk mcp migrate`: only Cursor is removed, canonical members retain their exact bytes, and a local target is recorded atomically. Cursor-only selections require `csk mcp migrate --targets claude_code` (or another explicit canonical choice); they never become absent or empty. The migration requires separate local approval; installation reviews changed canonical selections. `ignore_mode`, if also present, is preserved for its own `csk ignore-mode set` migration. Either migration order is supported when both command slices are installed. Both forms must be removed before the Skillfile is portable; 0.22 stops accepting them. Clean shared syntax does not imply another manager supports csk's inline admission, launcher or install-option behavior.
+
+`csk mcp local-target add|remove|list cursor [--server NAME] [--project PATH]` manages project-bound local configuration under the user config directory. Without `--server`, it applies to servers with explicit selectors. Every project/server target has its own approval; one server's grant cannot approve another, and removal revokes only that target. New local targets require a terminal and write nothing when approval is unavailable. Installation, ownership, no-start and rollback gates still apply. Status identifies additional destinations as `local: cursor`; the shared selector and canonical targets are unchanged. Local values other than Cursor refuse with `mcp_local_target_invalid`. `install.environments` is not added.
 
 `install` задаёт локальные параметры установки: как устанавливающий менеджер пишет и аутентифицирует сервер в native configs. Набор полей `install` тоже закрыт. Поле `csk` не является alias и отклоняется с `mcp_declaration_invalid`. HTTP `headers` сопоставляет каждому имени объект `{ "env": "VARIABLE", "prefix": "none" }` либо объект только со значением `{ "value": "issues,merge_requests" }`. Формы взаимоисключающие. csk никогда не читает и не сохраняет значения env. Префиксы образуют закрытый набор: `none` (по умолчанию), `bearer`, `api-token` и `token`; native text соответственно пустой, `Bearer `, `Api-Token ` и `Token `. `bearer` допустим только для `Authorization` без учёта регистра; остальные префиксы принимают любое разрешённое имя header.
 
@@ -518,7 +522,7 @@ Launcher signature failures take precedence as `untrusted`. For other entries, t
 ```json
 {
   "allure": {
-    "server": { "transport": "http", "url": "https://testops.example.com/api/mcp", "environments": ["claude_code", "cursor"] },
+    "server": { "transport": "http", "url": "https://testops.example.com/api/mcp", "environments": ["claude_code"] },
     "install": {
       "headers": { "Authorization": { "env": "ALLURE_TESTOPS_TOKEN", "prefix": "api-token" } },
       "auth": { "kind": "env", "help_url": "https://docs.qameta.io/allure-testops/howto/mcp/" }

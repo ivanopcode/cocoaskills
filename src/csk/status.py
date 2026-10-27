@@ -69,7 +69,7 @@ class ProjectStatus:
             and not self.errors
             and all(skill.label == "up-to-date" for skill in self.skills)
             and all(build.current for build in self.builds)
-            and all(row.action in {"current", "unsupported", "updated (informational)"} for row in self.mcp or ())
+            and all(row.action in {"current", "skipped: unsupported", "updated (informational)"} for row in self.mcp or ())
         )
 
 
@@ -235,7 +235,10 @@ def _collect_project_status(
                 )
                 result = replace(result, mcp=rows)
             except (mcp_project.McpProjectError, OSError) as exc:
-                result = replace(result, mcp=(), errors=(*result.errors, str(exc)))
+                unsupported = tuple(row for row in mcp_project.declaration_refusal_rows(
+                    project_manifest.mcp_servers, (), "mcp_declaration_invalid"
+                ) if row.path is None)
+                result = replace(result, mcp=unsupported, errors=(*result.errors, str(exc)))
         return replace(result, legacy_ignore=legacy_ignore)
 
     errors: list[str] = []
@@ -1280,7 +1283,7 @@ def _project_to_payload(project: ProjectStatus) -> dict[str, Any]:
     }
     if project.mcp is not None:
         payload["mcp"] = [
-            {"server": row.server, "agent": row.agent, "path": row.path, "state": row.action}
+            {"server": row.server, "agent": row.agent, "path": row.path, "state": row.action, **({"local": True} if row.local else {}), **({"outcome": row.action, "code": None} if row.path is None else {})}
             for row in project.mcp
         ]
     return payload
