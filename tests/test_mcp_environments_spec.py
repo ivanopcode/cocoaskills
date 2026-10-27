@@ -586,3 +586,39 @@ def test_local_consent_discloses_effective_plan(project_cli, monkeypatch, capsys
     output = capsys.readouterr()
     assert '["example-helper", "--serve"]' in output.out
     assert "fixture-secret-must-not-be-disclosed" not in output.out + output.err
+
+
+# Reporting-only ids do not invalidate writable authority, but adding a writer does; absence remains a distinct selector.
+def test_unsupported_metadata_does_not_widen_authority():
+    def parsed(targets):
+        return d.parse_mcp_servers(
+            declaration(targets), invocation_scope="project", target_agents=[]
+        )["docs"]
+
+    base = parsed(["claude_code"])
+    reporting = parsed(["claude_code", "pi"])
+    assert reporting.environments == ("claude_code", "pi")
+    assert d.declaration_digest(base) == d.declaration_digest(reporting)
+    assert d.declaration_digest(base) != d.declaration_digest(
+        parsed(["claude_code", "codex_cli"])
+    )
+    assert d.declaration_digest(base) != d.declaration_digest(parsed(None))
+
+
+# Refresh preflight converts an injected read failure into the public manifest error; a readable clean file passes unchanged.
+def test_preflight_read_failure_is_normalized(tmp_path, monkeypatch):
+    from csk import skillfile_compat
+
+    path = tmp_path / "Skillfile.json"
+    original = b'{"schema_version": 3, "skills": []}'
+    path.write_bytes(original)
+    with monkeypatch.context() as patch:
+
+        def fail(self):
+            raise PermissionError("injected read refusal")
+
+        patch.setattr(Path, "read_bytes", fail)
+        with pytest.raises(manifest.ManifestError, match="Cannot read Skillfile at"):
+            skillfile_compat.check_path(path)
+    skillfile_compat.check_path(path)
+    assert path.read_bytes() == original

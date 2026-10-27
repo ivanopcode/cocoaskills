@@ -62,8 +62,15 @@ def refuse_write(data: object, *, exempt: tuple[str, ...] = ()) -> None:
 
 
 def check_path(path: Path) -> None:
-    if path.exists():
-        refuse_write(protocol_json.loads(path.read_bytes()))
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        from .manifest import ManifestError
+
+        raise ManifestError(f"Cannot read Skillfile at {path}: {exc}") from exc
+    refuse_write(protocol_json.loads(raw))
 
 
 def value_spans(text: str) -> dict[tuple[str | int, ...], tuple[int, int]]:

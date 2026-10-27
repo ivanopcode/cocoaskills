@@ -1,4 +1,4 @@
-"""Neutral install options and environment selection through real CLI entry points."""
+"""Neutral install options, canonical selectors and private legacy rendering through real CLI entry points."""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ def test_install_member_rejects_old_name_and_remaps_errors():
 
 
 def test_install_member_preserves_normalized_digest():
-    # An independently specified pre-rename normalized model fixes the digest; the new spelling cannot alter it.
+    # An independently specified normalized model preserves an absent selector while install options retain their shape.
     model = {
         "name": "docs",
         "server": {
@@ -70,7 +70,7 @@ def test_install_member_preserves_normalized_digest():
             "headers": [],
         },
         "auth": {"kind": "none", "help_url": None},
-        "agents": ["cursor"],
+        "agents": None,
         "scope": "project",
         "git_policy": "local",
     }
@@ -88,11 +88,11 @@ def test_install_member_preserves_normalized_digest():
 @pytest.mark.parametrize(
     "environments,writable,unsupported",
     [
-        (None, ["claude_code"], ["gemini", "windsurf"]),
+        (None, ["claude_code", "codex_cli", "cursor"], []),
         (
-            ["windsurf", "cursor", "opencode", "codex_cli"],
+            ["muse", "cursor", "opencode", "codex_cli"],
             ["codex_cli", "cursor"],
-            ["opencode", "windsurf"],
+            ["muse", "opencode"],
         ),
     ],
 )
@@ -100,7 +100,7 @@ def test_install_member_preserves_normalized_digest():
 def test_environment_selection_reports_every_known_pair(
     tmp_path, environments, writable, unsupported, dry_run
 ):
-    # Defaults use resolved agents; explicit writable agents outside them install, while unsupported native bytes stay intact.
+    # Absence selects all writers independently of skill agents; explicit legacy Cursor remains input-only and foreign native bytes stay intact.
     case = _case(tmp_path / "selection")
     case.skillfile["agents"] = ["claude_code", "gemini", "windsurf"]
     case.declare({"docs": _http(environments)})
@@ -119,7 +119,8 @@ def test_environment_selection_reports_every_known_pair(
         if agent in writable
     ]
     expected += [
-        f"{prefix}mcp docs -> {agent} (skipped: unsupported)" for agent in unsupported
+        f"{prefix}mcp docs -> {agent} path: unavailable (skipped: unsupported)"
+        for agent in unsupported
     ]
     assert _rows(result, dry_run=dry_run) == expected
     assert "mcp_capability_unsupported" not in result.stdout
@@ -149,7 +150,7 @@ def test_unsupported_only_has_no_writes_or_consent(tmp_path, dry_run):
                     "transport": "stdio",
                     "command": "npx",
                     "args": ["pkg@1.0.0"],
-                    "environments": ["windsurf", "opencode", "gemini"],
+                    "environments": ["muse", "opencode", "pi"],
                 }
             }
         }
@@ -159,16 +160,23 @@ def test_unsupported_only_has_no_writes_or_consent(tmp_path, dry_run):
     assert result.returncode == 0, result.stdout
     prefix = "would: " if dry_run else ""
     assert _rows(result, dry_run=dry_run) == [
-        f"{prefix}mcp docs -> {agent} (skipped: unsupported)"
-        for agent in ["gemini", "opencode", "windsurf"]
+        f"{prefix}mcp docs -> {agent} path: unavailable (skipped: unsupported)"
+        for agent in ["muse", "opencode", "pi"]
     ]
     assert "mcp_plan_unapproved" not in result.stdout
     assert _snapshot(case.project, case.home, Path(case.env["HOME"])) == before
     status = _status(case, "--check", "--json")
     assert status.returncode == 0, status.stdout + status.stderr
     assert json.loads(status.stdout)[0]["mcp"] == [
-        {"server": "docs", "agent": agent, "path": None, "state": "unsupported"}
-        for agent in ["gemini", "opencode", "windsurf"]
+        {
+            "server": "docs",
+            "agent": agent,
+            "path": None,
+            "state": "skipped: unsupported",
+            "outcome": "skipped: unsupported",
+            "code": None,
+        }
+        for agent in ["muse", "opencode", "pi"]
     ]
     assert _snapshot(case.project, case.home, Path(case.env["HOME"])) == before
 
@@ -178,7 +186,7 @@ def test_status_unsupported_is_neutral_to_check(tmp_path, missing):
     # Unsupported rows do not dirty current state or conceal a missing writable entry; all status forms remain read-only.
     case = _case(tmp_path / "status")
     case.skillfile["agents"] = ["claude_code"]
-    case.declare({"docs": _http(["gemini", "cursor"])})
+    case.declare({"docs": _http(["pi", "cursor"])})
     assert case.run("--fix-gitignore").returncode == 0
     if missing:
         (case.project / ".cursor/mcp.json").unlink()
@@ -200,9 +208,11 @@ def test_status_unsupported_is_neutral_to_check(tmp_path, missing):
                 },
                 {
                     "server": "docs",
-                    "agent": "gemini",
+                    "agent": "pi",
                     "path": None,
-                    "state": "unsupported",
+                    "state": "skipped: unsupported",
+                    "outcome": "skipped: unsupported",
+                    "code": None,
                 },
             ]
             assert payload["clean"] is not missing
@@ -211,7 +221,7 @@ def test_status_unsupported_is_neutral_to_check(tmp_path, missing):
                 line for line in result.stdout.splitlines() if line.startswith("mcp ")
             ] == [
                 f"mcp docs -> cursor .cursor/mcp.json ({state})",
-                "mcp docs -> gemini (unsupported)",
+                "mcp docs -> pi path: unavailable (skipped: unsupported)",
             ]
     assert _snapshot(case.project, case.home, Path(case.env["HOME"])) == before
 
@@ -221,7 +231,7 @@ def test_status_unsupported_is_neutral_to_check(tmp_path, missing):
 def test_refused_install_retains_unsupported_pairs(tmp_path, failure, dry_run):
     # Early, reconcile, codec and consent refusals retain sorted owned/desired/unsupported rows and publish nothing.
     case = _case(tmp_path / "refusal")
-    declaration = _http(["cursor", "gemini"])
+    declaration = _http(["cursor", "pi"])
     expected = [("cursor", ".cursor/mcp.json")]
     if failure == "codec":
         case.declare({"docs": URL})
@@ -238,7 +248,7 @@ def test_refused_install_retains_unsupported_pairs(tmp_path, failure, dry_run):
         code = "mcp_entry_conflict"
     elif failure == "consent":
         declaration = json.loads(json.dumps(ENV_HEADER))
-        declaration["server"]["environments"] = ["cursor", "gemini"]
+        declaration["server"]["environments"] = ["cursor", "pi"]
         code = "mcp_plan_unapproved"
     else:
         declaration["server"]["url"] = "http://example.invalid"
@@ -247,21 +257,19 @@ def test_refused_install_retains_unsupported_pairs(tmp_path, failure, dry_run):
     before = _snapshot(case.project, case.home, Path(case.env["HOME"]))
     result = case.run("--fix-gitignore", *(["--dry-run"] if dry_run else []))
     # Dry-run consent gaps are permitted, but must still show the unsupported pair.
-    assert result.returncode == (0 if failure == "consent" and dry_run else 1), (
-        result.stdout
-    )
+    assert result.returncode == (
+        0 if failure == "consent" and dry_run else 1
+    ), result.stdout
     prefix = "would: " if dry_run else ""
     action = (
         "added"
         if failure == "consent" and dry_run
-        else "conflict: foreign entry"
-        if failure == "foreign"
-        else f"refused: {code}"
+        else "conflict: foreign entry" if failure == "foreign" else f"refused: {code}"
     )
     rows = [
         f"{prefix}mcp docs -> {agent} {path} ({action})" for agent, path in expected
     ]
-    rows.append(f"{prefix}mcp docs -> gemini (skipped: unsupported)")
+    rows.append(f"{prefix}mcp docs -> pi path: unavailable (skipped: unsupported)")
     assert _rows(result, dry_run=dry_run) == rows, result.stdout
     if not (failure == "consent" and dry_run):
         lines = result.stdout.splitlines()
@@ -290,10 +298,14 @@ def test_consent_binds_new_writable_agents_and_excludes_unsupported(
     monkeypatch.setattr("builtins.input", lambda _: "yes")
     assert install() == 0
     capsys.readouterr()
-    server["environments"].append("gemini")
+    server["environments"].append("pi")
     declare({"tools": {"server": server}}, agents=["claude_code"])
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    (
+        root / ".mcp.json"
+    ).unlink()  # Restoration still relies on the unchanged writable-pair grant.
     assert install() == 0
+    assert (root / ".mcp.json").exists()
     assert "mcp_plan_unapproved" not in capsys.readouterr().err
     server["environments"].append("cursor")
     raw = {"tools": {"server": server}}
@@ -328,7 +340,7 @@ def test_unsupported_batch_launcher_has_no_windows_write_capability(
         "transport": "stdio",
         "command": "npx",
         "args": ["pkg@1.0.0"],
-        "environments": ["gemini"],
+        "environments": ["pi"],
     }
     raw = {"tools": {"server": server}}
     declare(raw)
@@ -336,7 +348,7 @@ def test_unsupported_batch_launcher_has_no_windows_write_capability(
     plan = mcp_project.plan_project(root, [agent for agent, _ in SURFACES], raw, home)
     assert not plan.desired and not plan.edits and not plan.subjects
     assert [row.render() for row in plan.rows] == [
-        "mcp tools -> gemini (skipped: unsupported)"
+        "mcp tools -> pi path: unavailable (skipped: unsupported)"
     ]
     assert _snapshot(root, home) == before
     server["environments"].append("cursor")
@@ -353,18 +365,18 @@ def test_unsupported_rows_sort_with_each_server(project_cli):
     # Each server's writable rows precede its alphabetic unsupported rows, including explicit writers outside project targets.
     root, home, declare = project_cli
     raw = {
-        "docs": _http(["windsurf", "codex_cli", "opencode"]),
-        "api": _http(["gemini", "cursor"]),
+        "docs": _http(["muse", "codex_cli", "opencode"]),
+        "api": _http(["pi", "cursor"]),
     }
     declare(raw, agents=["claude_code"])
     before = _snapshot(root, home)
     plan = mcp_project.plan_project(root, ["claude_code"], raw, home)
     assert [row.render() for row in plan.rows] == [
         "mcp api -> cursor .cursor/mcp.json (added)",
-        "mcp api -> gemini (skipped: unsupported)",
+        "mcp api -> pi path: unavailable (skipped: unsupported)",
         "mcp docs -> codex_cli .codex/config.toml (added)",
-        "mcp docs -> opencode (skipped: unsupported)",
-        "mcp docs -> windsurf (skipped: unsupported)",
+        "mcp docs -> muse path: unavailable (skipped: unsupported)",
+        "mcp docs -> opencode path: unavailable (skipped: unsupported)",
     ]
     assert _snapshot(root, home) == before
 
@@ -377,14 +389,14 @@ def test_consent_refusal_retains_absent_owned_pairs(tmp_path):
     for _, path in SURFACES:
         (case.project / path).unlink()
     declaration = json.loads(json.dumps(ENV_HEADER))
-    declaration["server"]["environments"] = ["cursor", "gemini"]
+    declaration["server"]["environments"] = ["cursor", "pi"]
     case.declare({"api": declaration})
     before = _snapshot(case.project, case.home, Path(case.env["HOME"]))
     result = case.run("--fix-gitignore")
     assert result.returncode == 1, result.stdout
     assert _rows(result) == [
         "mcp api -> cursor .cursor/mcp.json (refused: mcp_plan_unapproved)",
-        "mcp api -> gemini (skipped: unsupported)",
+        "mcp api -> pi path: unavailable (skipped: unsupported)",
         *[
             f"mcp old -> {agent} {path} (blocked by mcp_plan_unapproved)"
             for agent, path in SURFACES
