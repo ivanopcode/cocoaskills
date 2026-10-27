@@ -5945,6 +5945,7 @@ def _status_copy_build_root_to_runtime(
     del project, marker_path, monkeypatch
     runtime = csk_home / "runtime" / "build-skill" / marker["commit"] / "build"
     # Plant owner-bypassed corruption while preserving the published parent mode.
+    runtime.parent.mkdir(parents=True, exist_ok=True)
     original_mode = stat.S_IMODE(runtime.parent.stat().st_mode)
     if os.name == "posix":
         runtime.parent.chmod(original_mode | stat.S_IWUSR)
