@@ -33,8 +33,46 @@ skill-example/
 ### Чего пакет скилла не делает
 
 - **Не коммитьте собранные бинарники** ни в скилл, ни в билд-репозиторий: они обходят trust-модель целиком (нет идентичности тулчейна, receipt, защищённого кеша). Тип команды `binary` не существует, манифест с ним не установится.
-- **Не пишите в runtime-дерево установленного скилла.** Скрипт, который бутстрапит `.venv` рядом с собой в `~/.cocoaskills/runtime/...`, оставляет симлинки в защищённом дереве, и следующая установка падает с `unsafe transaction tree entry`. Кеши и окружения держите в директориях пользователя (XDG, `~/.cache`), не в runtime.
+- **Keep the installed runtime immutable.** Put virtual environments, caches, generated files and mutable state in user-owned directories such as the XDG cache/state directories, outside every csk-published skill tree. See the runtime contract below.
 - **Не держите `agents/runtime.json`.** Это легаси-фоллбэк: старые csk читают его вместо манифеста и превращают "нужен csk новее" в бессмысленный `source file not found`.
+
+### Installed runtime is immutable
+
+On POSIX, csk publishes runtime directories and regular files with all write
+bits removed, preserving execute bits. An ordinary skill process therefore
+gets `EACCES` when it writes there; Python imports still work and silently skip
+unwritable `__pycache__` output. Existing installations acquire these modes on
+their next successful install or upgrade. These permissions prevent accidental
+writes; they are not a sandbox against an owner who deliberately changes modes.
+
+Install, replacement, upgrade, removal and GC use the transaction engine.
+Construction copies are private and writable; recorded final modes are applied
+before publication. Old generations are renamed out of the live namespace
+before journaled cleanup restores owner write on the private backup. Recovery
+resumes an interrupted mode change, and rollback preserves the old tree and its
+recorded modes. Never recursively chmod the live runtime as a repair step.
+
+On Windows csk does not change permissions or ACLs. Foreign-entry detection and
+the refusal described below still apply.
+
+If a skill has already created `.venv`, an extra file/directory, a symlink or a
+special file in its installed runtime (or another csk-owned published skill
+tree), `install` and `upgrade` refuse with `runtime_tree_modified`. Runtime
+inventories come from the retained source snapshot; context inventories come
+from the install marker. The diagnostic names the skill and member, shows the
+offending path relative to `$CSK_HOME` when possible, and prints a shell-quoted
+remedy that removes only the foreign entry or its foreign enclosing directory.
+On POSIX this is `rm -rf -- '…/.venv'`; on Windows it uses PowerShell
+`Remove-Item -LiteralPath '…/.venv' -Recurse -Force`. Inspect that exact path,
+remove only that entry, and rerun the same csk command. csk never automatically
+deletes foreign entries and never recommends deleting the entire member tree.
+
+If a legacy generation has lost its retained snapshot, csk preserves it and
+reports `runtime_inventory_unavailable` rather than trusting its current files
+as an inventory. Reinstalling a selected member can restore its exact snapshot
+from the trusted source; an old unselected generation needs its corresponding
+trusted snapshot restored before collection. GC retains unsafe generations and
+their snapshot evidence, reporting the diagnostic as a warning.
 
 ## 2. Обязательные файлы
 

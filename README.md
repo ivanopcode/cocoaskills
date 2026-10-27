@@ -436,6 +436,11 @@ csk audit [target]                  # Запускает статический 
 csk gc                              # Очищает неиспользуемые runtime-записи и кэш сборок
 ```
 
+Installed runtime trees are read-only on POSIX; Windows permissions are unchanged.
+`runtime_tree_modified` identifies foreign entries and prints an explicit removal
+command. Keep skill caches and virtual environments outside installed trees; see
+the [runtime authoring contract](docs/skill-authoring.md#installed-runtime-is-immutable).
+
 </details>
 
 <details>
