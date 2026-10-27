@@ -131,13 +131,27 @@ def test_lossless_migration(project_cli, monkeypatch, capsys, targets):
     assert "docs" in capsys.readouterr().out
 
 
-# Legacy readers warn once per command on stderr; ordinary Skillfile writers refuse while a clean neighbor writes.
-def test_legacy_writer_refusal(project_cli, capsys):
+# Each deprecated form independently refuses ordinary writers with its migration command; a clean neighbor reaches normal validation.
+@pytest.mark.parametrize("legacy", ["cursor", "ignore_mode", "both"])
+def test_legacy_writer_refusal(project_cli, capsys, legacy):
     root, home, declare = project_cli
-    declare(declaration(["claude_code", "cursor"]))
+    declare(
+        declaration(
+            ["claude_code"] if legacy == "ignore_mode" else ["claude_code", "cursor"]
+        )
+    )
+    if legacy == "cursor":
+        data = json.loads((root / "Skillfile.json").read_bytes())
+        data.pop("ignore_mode")
+        (root / "Skillfile.json").write_text(json.dumps(data))
     before = _snapshot(root, home)
     assert cli.main(["remove", "missing", "--project", str(root)]) == 2
-    assert "skillfile_deprecated_form" in capsys.readouterr().err
+    error = capsys.readouterr().err
+    assert "skillfile_deprecated_form" in error
+    if legacy != "ignore_mode":
+        assert "csk mcp migrate" in error
+    if legacy != "cursor":
+        assert "csk ignore-mode set <exclude|gitignore>" in error
     assert _snapshot(root, home) == before
     declare(declaration(["claude_code"]))
     data = json.loads((root / "Skillfile.json").read_bytes())
@@ -529,3 +543,46 @@ def test_status_unsupported_survives_refusal(project_cli, capsys):
     assert install() == 0
     capsys.readouterr()
     assert cli.main(["status", "app", "--json", "--check"]) == 0
+
+
+# Local consent discloses argv and env names before headless refusal, never env values; explicit approval records only this target.
+def test_local_consent_discloses_effective_plan(project_cli, monkeypatch, capsys):
+    root, home, declare = project_cli
+    declare(
+        {
+            "docs": {
+                "server": {
+                    "transport": "stdio",
+                    "command": "example-helper",
+                    "args": ["--serve"],
+                    "env_names": ["TOOL_TOKEN"],
+                    "environments": ["claude_code"],
+                }
+            }
+        }
+    )
+    monkeypatch.setenv("TOOL_TOKEN", "fixture-secret-must-not-be-disclosed")
+    args = [
+        "mcp",
+        "local-target",
+        "add",
+        "cursor",
+        "--server",
+        "docs",
+        "--project",
+        str(root),
+    ]
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    before = _snapshot(root, home)
+    assert cli.main(args) == 1
+    output = capsys.readouterr()
+    assert '["example-helper", "--serve"]' in output.out
+    assert "agents=cursor; env=TOOL_TOKEN" in output.out
+    assert "fixture-secret-must-not-be-disclosed" not in output.out + output.err
+    assert _snapshot(root, home) == before
+    prompts = approve(monkeypatch)
+    assert cli.main(args) == 0
+    assert len(prompts) == 1
+    output = capsys.readouterr()
+    assert '["example-helper", "--serve"]' in output.out
+    assert "fixture-secret-must-not-be-disclosed" not in output.out + output.err

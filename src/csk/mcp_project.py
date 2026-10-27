@@ -705,13 +705,9 @@ def planned_consent(plan: ProjectPlan) -> bytes | None:
         raise refusal(exc.code, "protected consent store cannot be verified") from exc
 
 
-def review_consent(
-    plan: ProjectPlan, *, interactive: bool, dry_run: bool, project: str
-) -> None:
-    """Review consent in memory; publication persists it with the native entries."""
-    if dry_run:
-        return
-    for name, decl in sorted(plan.declarations.items()):
+def print_plan(parsed: Mapping[str, declarations.McpDeclaration]) -> None:
+    """Disclose the effective destinations, commands and env names without resolving secrets."""
+    for name, decl in sorted(parsed.items()):
         server = decl.server
         intent = (
             json.dumps([declarations.effective_command(server), *server.args], ensure_ascii=True)
@@ -735,6 +731,15 @@ def review_consent(
             print(f"MCP plan {name}: {label}; publisher={launcher.publisher}; path={launcher.path}")
         elif server.transport == "stdio" and not declarations.is_recognized_runner(server.command or ""):
             print(f"MCP plan {name}: csk cannot verify what this program runs.")
+
+
+def review_consent(
+    plan: ProjectPlan, *, interactive: bool, dry_run: bool, project: str
+) -> None:
+    """Review consent in memory; publication persists it with the native entries."""
+    if dry_run:
+        return
+    print_plan(plan.declarations)
     if not plan.pending:
         return
     # Initial server plans can be approved together. Added destinations and
