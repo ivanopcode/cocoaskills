@@ -1,6 +1,7 @@
 """Local ignore placement, explicit migration and deprecated writer boundaries."""
 from __future__ import annotations
 
+import errno
 import json
 from pathlib import Path
 
@@ -360,3 +361,23 @@ def test_shared_block_roundtrip_preserves_user_bytes(user):
     added = gitignore_gate.replace_project_block(user, key, block)
     assert gitignore_gate.project_block(added, key) == block
     assert gitignore_gate.replace_project_block(added, key, None) == user
+
+
+# Policy input I/O faults are typed refusals; restoring access returns the same untouched bytes.
+@pytest.mark.parametrize('operation', ['lstat', 'read_bytes'])
+@pytest.mark.parametrize('number', [errno.EACCES, errno.EIO, errno.ENAMETOOLONG, errno.ELOOP])
+def test_policy_input_io_fault_is_typed(tmp_path, monkeypatch, operation, number):
+    from csk.ignore_policy import _regular_bytes
+    path = tmp_path / 'Skillfile.json'
+    original_bytes = b'{"schema_version":2,"skills":[]}'
+    path.write_bytes(original_bytes)
+    original = getattr(Path, operation)
+    def fail(self, *args, **kwargs):
+        if self == path:
+            raise OSError(number, 'injected input I/O failure')
+        return original(self, *args, **kwargs)
+    with monkeypatch.context() as fault:
+        fault.setattr(Path, operation, fail)
+        with pytest.raises(gitignore_gate.GitignoreError, match='Cannot read ignore policy file'):
+            _regular_bytes(path)
+    assert _regular_bytes(path) == original_bytes

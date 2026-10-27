@@ -23,9 +23,14 @@ def _regular_bytes(path: Path) -> bytes | None:
         mode = path.lstat().st_mode
     except FileNotFoundError:
         return None
+    except OSError as exc:
+        raise gate.GitignoreError(f'Cannot read ignore policy file: {path.name}') from exc
     if not stat.S_ISREG(mode) or not mode & 0o222:
         raise gate.GitignoreError(f'Ignore policy requires a writable regular file, never a symlink: {path.name}')
-    return path.read_bytes()
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise gate.GitignoreError(f'Cannot read ignore policy file: {path.name}') from exc
 
 
 def remove_ignore_member(raw: bytes) -> bytes:
