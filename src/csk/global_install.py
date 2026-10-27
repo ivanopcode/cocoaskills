@@ -28,6 +28,7 @@ from . import (
     manifest,
     mcp_project,
     protocol_json,
+    published_trees,
     shims,
     skillfile_deprecations,
     status,
@@ -583,7 +584,7 @@ def _install_once(
                 retained=retained,
             )
             target_preimages = installer._capture_target_preimages(
-                materialization_targets
+                materialization_targets, home=config.path.parent
             )
             private_builds = installer._build_private_misses(
                 config,
@@ -1002,6 +1003,7 @@ def _stage_global_materialization(
         csk_home / "runtime",
         staged_home / "runtime",
     )
+    published_trees.make_private_writable(staged_home / "runtime")
     staged_skills = global_skills_root(staged_home)
     final_skills = global_skills_root(csk_home)
     final_bin = global_bin_dir(csk_home)

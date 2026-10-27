@@ -180,17 +180,22 @@ are reported as fetch failures, not as moved tags.
 
 Маркер установки записан версией csk до 0.12.0 включительно в микросекундном формате; начиная с 0.12.1 csk пишет метку с точностью до секунды. Запустите `csk install` для проекта или `csk global install` для глобальных скиллов. Инсталлятор переустановит скилл и перепишет маркер в формате UTC-секунд без ручного удаления файлов.
 
-## unsafe transaction tree entry: `.../runtime/<skill>/<commit>/.venv/...`
+## runtime_tree_modified
 
-Скилл ранней версии забутстрапил виртуальное окружение прямо в runtime-дерево. Транзакция установки отказывается работать поверх symlink.
+A skill wrote into its installed runtime or another csk-owned published skill
+tree. Older versions could report `unsafe transaction tree entry` for a `.venv`
+symlink; regular extra files and directories are also refused now.
 
-Очистите устаревшие виртуальные окружения перед повторным запуском:
+Inspect the skill/member and offending path in the diagnostic. Run only the
+exact quoted removal command it prints, which names the foreign entry or its
+foreign enclosing directory, and then rerun the same install or upgrade. Do not
+delete the entire runtime tree or use a wildcard over other members. csk does
+not remove foreign entries automatically.
 
-```bash
-rm -rf ~/.cocoaskills/runtime/*/*/.venv
-```
-
-После удаления каталогов venv следующая команда скилла автоматически пересоздаст изолированное окружение.
+Update the skill so it stores environments, caches and mutable state outside
+installed trees. On POSIX, successful publication removes all runtime write
+bits while preserving execute bits; Windows permissions and ACLs are unchanged.
+See the [runtime authoring contract](skill-authoring.md#installed-runtime-is-immutable).
 
 ## go-v1 toolchain_shim_unresolved
 

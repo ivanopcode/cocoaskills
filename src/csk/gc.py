@@ -6,12 +6,13 @@ import re
 import shutil
 import stat
 import time
+import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from . import consumers, install_marker, locking, protocol_json, transactions
+from . import consumers, install_marker, locking, protocol_json, published_trees, transactions
 from .build_repository_pipeline import (
     EXTERNAL_ARTIFACT_NAMESPACES,
     EXTERNAL_SNAPSHOT_NAMESPACES,
@@ -206,16 +207,18 @@ def _collect_locked(
         if alive != known:
             consumers.replace_consumers(csk_home, alive)
 
-    stats.snapshots_removed = _collect_snapshots(
-        csk_home,
-        references.snapshots,
-    )
     runtime_removed, runtime_warnings = _collect_runtime_entries(
         csk_home,
         references.runtime,
+        guard=guard,
     )
     stats.runtime_removed = runtime_removed
     stats.warnings.extend(runtime_warnings)
+    if not runtime_warnings:
+        stats.snapshots_removed = _collect_snapshots(
+            csk_home,
+            references.snapshots,
+        )
 
     try:
         collected = build_cache.cache_for_manager_home(csk_home).collect(
@@ -563,6 +566,7 @@ def _collect_snapshots(
 def _collect_runtime_entries(
     csk_home: Path,
     referenced: set[tuple[str, str]],
+    *, guard: _GcLockWitness,
 ) -> tuple[int, list[str]]:
     runtime_root = csk_home / "runtime"
     try:
@@ -601,7 +605,25 @@ def _collect_runtime_entries(
                 )
                 continue
             if (skill_dir.name, commit_dir.name) not in referenced:
-                shutil.rmtree(commit_dir)
+                try:
+                    published_trees.validate_legacy_runtime(commit_dir, home=csk_home)
+                except (published_trees.RuntimeTreeModified, published_trees.RuntimeInventoryUnavailable) as exc:
+                    warnings.append(str(exc))
+                    continue
+                # Rename the live generation first. The engine journals owner-write
+                # restoration on its private tomb, including interrupted cleanup.
+                engine = transactions.TransactionEngine(csk_home)
+                plan = transactions.TransactionPlan(
+                    transaction_id=f"runtime-gc-{uuid.uuid4().hex}",
+                    project_identity="runtime-gc",
+                    targets=(transactions.MutableTarget(
+                        target_class="80-removal", identifier=f"{skill_dir.name}/{commit_dir.name}",
+                        live_path=commit_dir, desired_path=None, kind="entry",
+                        expected_preimage_digest=transactions.digest_target(commit_dir, kind="entry"),
+                    ),),
+                )
+                engine.prepare(guard, plan)
+                engine.commit(guard, plan.transaction_id)
                 removed += 1
     return removed, warnings
 

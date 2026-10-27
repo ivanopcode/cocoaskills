@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import platform as platform_module
+import shutil
 import stat
 import subprocess
 import sys
@@ -1578,6 +1579,7 @@ def test_project_dry_run_reports_repeated_concurrent_state_change(
     ]
 
 
+# Unrecorded residue refuses without writes; marker-recorded legacy residue migrates and stays idempotent.
 @pytest.mark.parametrize(
     ("stale_physical_root", "stale_marker_entry"),
     [
@@ -1587,7 +1589,7 @@ def test_project_dry_run_reports_repeated_concurrent_state_change(
     ],
     ids=["physical-root", "marker-entry", "pre-exclusion-tree"],
 )
-def test_schema_v6_stale_build_root_forces_context_reinstall(
+def test_schema_v6_stale_build_root_requires_recorded_ownership(
     monkeypatch,
     tmp_path,
     skills_root,
@@ -1645,7 +1647,13 @@ def test_schema_v6_stale_build_root_forces_context_reinstall(
         encoding="utf-8",
     )
 
+    before = _filesystem_state((installed,))
     migrated = installer.install(cfg)[0]
+    if stale_physical_root and not stale_marker_entry:
+        assert migrated.errors and migrated.errors[0].startswith("runtime_tree_modified:")
+        assert _filesystem_state((installed,)) == before
+        shutil.rmtree(stale_root)
+        migrated = installer.install(cfg)[0]
 
     assert not migrated.errors
     assert not any("up-to-date" in message for message in migrated.messages)
