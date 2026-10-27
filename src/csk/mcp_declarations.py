@@ -974,7 +974,7 @@ def declaration_digest(decl: McpDeclaration) -> str:
             ],
         },
         "auth": {"kind": decl.auth.kind, "help_url": decl.auth.help_url},
-        "agents": list(decl.environments) if decl.environments is not None else None,
+        "agents": [a for a in decl.environments if a in SLICE1_AGENTS] if decl.environments is not None else None,
         "scope": decl.scope,
         "git_policy": decl.git_policy,
     }
