@@ -127,6 +127,8 @@ class _CheckoutReadTracer:
         self.records: set[str] = set()
         self._originals: dict = {}
         self._fd_paths: dict[int, str] = {}
+        self._active = False
+        self._hook_installed = False
 
     def _record(self, file: object, *, dir_fd: int | None = None) -> None:
         self.records.add(
@@ -136,7 +138,7 @@ class _CheckoutReadTracer:
         )
 
     def _audit_hook(self, event: str, args: tuple) -> None:
-        if event in ("open", "os.listdir", "os.scandir") and args:
+        if self._active and event in ("open", "os.listdir", "os.scandir") and args:
             self._record(args[0])
 
     def __enter__(self) -> "_CheckoutReadTracer":
@@ -185,7 +187,10 @@ class _CheckoutReadTracer:
         os.open = tracked_os_open  # type: ignore[assignment]
         os.listdir = tracked_listdir  # type: ignore[assignment]
         os.scandir = tracked_scandir  # type: ignore[assignment]
-        sys.addaudithook(self._audit_hook)
+        if not self._hook_installed:
+            sys.addaudithook(self._audit_hook)
+            self._hook_installed = True
+        self._active = True
         self._restore = (
             original_open,
             original_io_open,
@@ -199,6 +204,7 @@ class _CheckoutReadTracer:
         import builtins
         import io
 
+        self._active = False
         (
             original_open,
             original_io_open,
@@ -211,9 +217,8 @@ class _CheckoutReadTracer:
         os.open = original_os_open
         os.listdir = original_listdir
         os.scandir = original_scandir
-        # The audit hook cannot be removed; it appends to this dead
-        # tracer's set for the rest of the process (harmless: the set
-        # is never read again and later tests use fresh tracers).
+        # Audit hooks cannot be removed. Dormant hooks must not normalize
+        # paths or add stat/lstat calls to later filesystem fault sweeps.
 
     def violations(self) -> list[str]:
         """Return every record under the checkout plus unresolved markers."""
@@ -2585,6 +2590,40 @@ def test_r14_read_tracer_catches_evasive_checkout_reads(tmp_path, shape):
         "Skillfile.json" in hit or hit == os.path.realpath(project)
         for hit in tracer.violations()
     ), (shape, tracer.violations())
+
+
+# Active tracers detect planted checkout reads; closed tracers never probe later glob fixtures.
+def test_closed_read_tracer_does_not_probe_later_paths(tmp_path, monkeypatch):
+    project = tmp_path / "checkout"
+    project.mkdir()
+    first = project / "first.txt"
+    second = project / "second.txt"
+    first.write_text("first")
+    second.write_text("second")
+    later = tmp_path / "later"
+    later.mkdir()
+    child = later / "child.txt"
+    child.write_text("child")
+    tracer = _CheckoutReadTracer(project)
+    with tracer:
+        assert first.read_text() == "first"
+    assert str(first.resolve()) in tracer.violations()
+    before = set(tracer.records)
+    probes = []
+    original = tracer._record
+
+    def record(*args, **kwargs):
+        probes.append(args[0])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(tracer, "_record", record)
+    assert list(later.glob("*")) == [child]
+    assert probes == []
+    assert tracer.records == before
+    with tracer:
+        assert second.read_text() == "second"
+    assert probes
+    assert str(second.resolve()) in tracer.violations()
 
 
 def _percentile(samples: list[float], fraction: float) -> float:
