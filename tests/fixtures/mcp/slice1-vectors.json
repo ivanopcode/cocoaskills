@@ -92,7 +92,7 @@
           "transport": "http",
           "url": "https://example.invalid/mcp",
           "environments": [
-            "windsurf"
+            "pi"
           ]
         },
         "install": {

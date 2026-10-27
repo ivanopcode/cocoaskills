@@ -67,6 +67,7 @@ def parse_one(declaration: dict, *, name: str = "docs", scope: str = "project", 
         {name: declaration},
         invocation_scope=scope,
         target_agents=TARGETS if targets is None else targets,
+        allow_deprecated=True,  # Historical fixtures exercise the private legacy reader.
     )[name]
 
 
@@ -113,6 +114,7 @@ def test_vector_table_covers_v01_to_v13():
 
 @pytest.mark.parametrize("vector", VECTORS["vectors"], ids=lambda vector: vector["id"])
 def test_slice1_vector(vector):
+    # The vector table pairs known unsupported selection with grammar/capability refusals.
     kwargs = {"invocation_scope": VECTORS["invocation_scope"], "target_agents": VECTORS["targets"]}
     raw = {vector["name"]: vector["declaration"]}
     expect = vector["expect"]
@@ -246,7 +248,7 @@ def test_declaration_negatives(declaration, code, field):
 
 def test_omitted_agents_resolve_to_slice1_targets_sorted():
     decl = parse_one(http(), targets=["cursor", "gemini", "claude_code"])
-    assert decl.agents == ("claude_code", "cursor")
+    assert decl.agents == mcp.SLICE1_AGENTS
 
 
 def test_explicit_agents_are_sorted():
@@ -257,20 +259,19 @@ def test_explicit_agents_are_sorted():
 @pytest.mark.parametrize(("canonical", "aliases"), [
     ("claude_code", ["claude", "claude-code", "Claude_Code"]),
     ("codex_cli", ["codex", "codex-cli", "Codex_Cli"]),
-    ("cursor", ["cursor_ai", "cursor-cli", "Cursor"]),
+    ("cursor", ["cursor_ai", "cursor-cli", "Cursor"]),  # Input-only legacy lane in parse_one.
 ])
 def test_environment_ids_have_no_aliases(canonical, aliases):
     assert parse_one(http(environments=[canonical]), targets=[canonical]).agents == (canonical,)
     for alias in aliases:
-        refused(http(environments=[alias]), "mcp_agent_selection_invalid",
+        refused(http(environments=[alias]), "mcp_declaration_invalid",
                 "mcp_servers.docs.server.environments.0", targets=[canonical, alias])
 
 
 AGENT_NEGATIVES = [
-    ("omitted-no-targets", http(), [], "mcp_agent_selection_invalid"),
-    ("empty-list", http(environments=[]), TARGETS, "mcp_agent_selection_invalid"),
-    ("duplicate", http(environments=["cursor", "cursor"]), TARGETS, "mcp_agent_selection_invalid"),
-    ("unknown-agent", http(environments=["nonesuch"]), TARGETS + ["nonesuch"], "mcp_agent_selection_invalid"),
+    ("empty-list", http(environments=[]), TARGETS, "mcp_declaration_invalid"),
+    ("duplicate", http(environments=["cursor", "cursor"]), TARGETS, "mcp_declaration_invalid"),
+    ("unknown-agent", http(environments=["nonesuch"]), TARGETS + ["nonesuch"], "mcp_declaration_invalid"),
 ]
 
 
@@ -286,7 +287,7 @@ def test_agents_must_be_a_list_of_strings(agents):
 
 
 def test_unknown_agent_is_selection_error_not_capability():
-    error = refused(http(environments=["nonesuch"]), "mcp_agent_selection_invalid", targets=TARGETS + ["nonesuch"])
+    error = refused(http(environments=["nonesuch"]), "mcp_declaration_invalid", targets=TARGETS + ["nonesuch"])
     assert error.field == "mcp_servers.docs.server.environments.0"
 
 
@@ -322,7 +323,7 @@ def test_scope_mismatch_precedes_capability_and_agent_errors():
 
 
 def test_agent_selection_precedes_capability():
-    refused(http(git_policy="shared", environments=["nonesuch"]), "mcp_agent_selection_invalid", targets=["claude_code"])
+    refused(http(git_policy="shared", environments=["nonesuch"]), "mcp_declaration_invalid", targets=["claude_code"])
 
 
 def test_syntax_precedes_everything():
@@ -333,7 +334,7 @@ def test_every_declaration_passes_each_step_before_the_next_step_runs():
     raw = {"a": http(git_policy="shared"), "b": http(environments=["nonesuch"])}
     with pytest.raises(McpDeclarationError) as info:
         parse_mcp_servers(raw, invocation_scope="project", target_agents=TARGETS)
-    assert info.value.code == "mcp_agent_selection_invalid"
+    assert info.value.code == "mcp_declaration_invalid"
 
 
 # --- stdio command, evaluators, runtime pins ---------------------------------
@@ -1148,18 +1149,20 @@ def test_declaration_digest_is_independent_of_input_order_of_unordered_fields():
     assert _digest(c) == _digest(d)
 
 
-def test_declaration_digest_changes_with_target_agent_resolution():
+def test_declaration_digest_preserves_absence_independent_of_agent_resolution():
     narrow = parse_one(http(), targets=["claude_code"])
     wide = parse_one(http(), targets=TARGETS)
-    assert declaration_digest(narrow) != declaration_digest(wide)
+    assert declaration_digest(narrow) == declaration_digest(wide)
 
 
 def test_declaration_digest_uses_its_domain():
     from csk import protocol_json
 
-    decl = parse_one(http())
+    decl = parse_one(http(environments=TARGETS))
     normalized = json.loads(json.dumps(asdict(decl)))
     normalized.pop("unsupported_agents")
+    normalized.pop("environments")
+    normalized.pop("local_agents")
     # Optional launcher fields do not change the pre-launcher digest contract.
     normalized["server"].pop("launcher")
     normalized["server"].pop("resolved_launcher")
@@ -1407,7 +1410,7 @@ def test_module_remains_pure_when_install_is_wired():
                and path.name != "mcp_declarations.py"]
     # Read-only check and installation share the pure grammar; host resolution
     # composes it separately without introducing I/O into the grammar module.
-    assert sorted(callers) == ["cli.py", "mcp_command_resolution.py", "mcp_project.py"]
+    assert sorted(callers) == ["cli.py", "mcp_command_resolution.py", "mcp_local_targets.py", "mcp_project.py", "mcp_settings.py", "skillfile_compat.py"]
 
 
 def test_public_api_touches_no_ambient_state(monkeypatch):
@@ -1535,7 +1538,7 @@ def test_sse_steps_one_and_two_precede_the_capability_and_agent_steps():
     refused(object_decl({"transport": "sse", "url": URL, "cwd": "x"}, environments=["windsurf"], git_policy="shared"), "mcp_declaration_invalid",
             "mcp_servers.docs.server.cwd")
     refused(object_decl({"transport": "sse", "url": "http://x.invalid"}, environments=["windsurf"], git_policy="shared"), "mcp_url_invalid")
-    refused(object_decl({"transport": "sse", "url": URL}, environments=["nonesuch"]), "mcp_agent_selection_invalid", targets=TARGETS)
+    refused(object_decl({"transport": "sse", "url": URL}, environments=["nonesuch"]), "mcp_declaration_invalid", targets=TARGETS)
 
 
 def test_sse_with_oauth_and_headerless_auth_is_still_only_a_capability_refusal():
@@ -1661,8 +1664,8 @@ def test_invalid_name_index_is_declared_insertion_index_not_sorted_index():
     assert info.value.field == "mcp_servers.<invalid name #1>"
 
 
-@pytest.mark.parametrize("agents", [["cursor", "opencode", "claude_code"], ["opencode", "claude_code"],
-                                  ["cursor", "gemini", "opencode", "claude_code"]])
+@pytest.mark.parametrize("agents", [["pi", "opencode", "claude_code"], ["opencode", "claude_code"],
+                                  ["muse", "pi", "opencode", "claude_code"]])
 def test_known_agents_are_partitioned_for_writing_and_reporting(agents):
     # Explicit known ids outside project targets remain writable or reporting-only, never refused.
     declaration = parse_one(http(environments=agents), targets=["codex_cli"])

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Изменено
+
+- `server.environments` приведён к общему vocabulary: `claude_code`, `codex_cli`, `opencode`, `pi`, `muse`. Известные цели без writer дают `skipped: unsupported` с недоступным путём, в том числе при отдельном отказе; неизвестные, пустые и повторяющиеся selectors отклоняются с `mcp_declaration_invalid`.
+- Отсутствующий selector теперь выбирает все writable targets независимо от skill `agents`: Claude Code, Codex CLI и csk-local Cursor. Для ограничения укажите `"environments": ["claude_code"]`. Cursor не является canonical adapter; новый destination не получает полномочия из старого узкого grant.
+- Legacy `cursor` в selector читается только как deprecated input с warning в stderr. Обычные writers Skillfile отказывают с `skillfile_deprecated_form`; `csk mcp migrate` атомарно удаляет Cursor и сохраняет его как отдельно одобренную local target. Cursor-only требует явного `--targets`; отсутствие или пустой selector не подставляется. Deprecated forms нужно мигрировать для portable Skillfile; в 0.22 их чтение прекращается.
+
+### Добавлено
+
+- `csk mcp local-target add|remove|list cursor [--server NAME] [--project PATH]`: operator-local выбор Cursor без изменения shared selector, с отдельным consent для каждого project/server target и отзывом только собственного grant. Неверный local id даёт `mcp_local_target_invalid`. Install и status показывают `local: cursor`; native writes проходят обычные ownership, no-start и rollback gates.
+
+
 ## [0.21.0] - 2026-10-26
 
 ### Добавлено

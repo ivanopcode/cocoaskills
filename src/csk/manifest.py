@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import protocol_json
+from . import protocol_json, skillfile_compat
 from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_locale, is_valid_portable_path
 from .sources import skillfile_v2
 from .sources.errors import (
@@ -96,6 +96,8 @@ def _skillfile_present(path: Path) -> bool:
 
 
 def _write_skillfile_text(path: Path, text: str) -> None:
+    skillfile_compat.check_path(path)
+    skillfile_compat.refuse_write(protocol_json.loads(text.encode()))
     try:
         path.write_text(text, encoding="utf-8")
     except OSError as exc:
@@ -144,6 +146,7 @@ def add_skill_decl(
 ) -> Path:
     path = manifest_path(project_root)
     data = _read_payload(path)
+    skillfile_compat.refuse_write(data)
     skills = data.setdefault("skills", [])
     if not isinstance(skills, list):
         raise ManifestError("Skillfile field 'skills' must be a list")
@@ -168,6 +171,7 @@ def add_skill_decl(
 def remove_skill_decl(project_root: Path, name: str) -> Path:
     path = manifest_path(project_root)
     data = _read_payload(path)
+    skillfile_compat.refuse_write(data)
     skills = data.get("skills")
     if not isinstance(skills, list):
         raise ManifestError("Skillfile field 'skills' must be a list")
@@ -238,6 +242,7 @@ def parse_manifest(
     resolved_scope = skillfile_v2.check_scope(scope)
     if not isinstance(data, dict):
         raise ManifestError(f"{path} must contain a JSON object")
+    skillfile_compat.warn(data)
     schema = data.get("schema_version")
     if "ignore_mode" in data and (
         resolved_scope != "project" or schema not in (2, 3)
