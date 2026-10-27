@@ -661,6 +661,12 @@ def test_corrupt_pinned_target_refuses_without_global_fallback(
     entry = next(iter(registry["projects"].values()))
     target = Path(entry["commands"]["ctool"]["target"])
 
+    # Owner-bypassed corruption still refuses the project pin; a valid pin serves first.
+    before = _bare("ctool", cwd=project, csk_home=csk_home)
+    assert before.returncode == 0 and before.stdout.splitlines()[0] == "PROJECT-C"
+    assert target.stat().st_mode & 0o222 == 0
+    target.parent.chmod(stat.S_IMODE(target.parent.stat().st_mode) | stat.S_IWUSR)
+    target.chmod(stat.S_IMODE(target.stat().st_mode) | stat.S_IWUSR)
     if damage == "missing":
         target.unlink()
     elif damage == "not-regular":
@@ -1805,7 +1811,11 @@ def _replace_preserving_identity_metadata(target: Path, recorded: dict) -> None:
     content = target.read_bytes()
     evil = content.replace(b"PROJECT-C", b"PROJECT-X")
     assert evil != content and len(evil) == len(content)
+    # Deliberately bypass owner write protection, then restore the identity's mode.
+    original_mode = stat.S_IMODE(target.stat().st_mode)
+    target.chmod(original_mode | stat.S_IWUSR)
     target.write_bytes(evil)
+    target.chmod(original_mode)
     info = target.stat()
     assert info.st_ino == int(recorded["st_ino"])
     assert info.st_size == int(recorded["size"])
@@ -3940,6 +3950,10 @@ def test_n1_inode_change_with_same_size_mtime_refuses(
         replacement, ns=(info.st_atime_ns, int(recorded["mtime_ns"]))
     )
     replacement.chmod(0o755)
+    # A valid pin serves; deliberate owner bypass permits the inode attack plant.
+    before = _bare("n1tool", cwd=project, csk_home=csk_home)
+    assert before.returncode == 0 and before.stdout.splitlines()[0] == "PROJECT-N1"
+    target.parent.chmod(stat.S_IMODE(target.parent.stat().st_mode) | stat.S_IWUSR)
     replacement.replace(target)
 
     proc = _bare("n1tool", cwd=project, csk_home=csk_home)
@@ -6821,6 +6835,10 @@ def test_r6_metadata_preserving_hardlink_is_declared_bound(
     assert replacement != original and len(replacement) == len(original)
     spare = tmp_path / "spare"
     spare.write_bytes(replacement)
+    # A valid pin serves; deliberate owner bypass permits the hardlink attack plant.
+    before = _bare("hltool", cwd=project, csk_home=csk_home)
+    assert before.returncode == 0 and before.stdout.splitlines()[0] == "HL-OK"
+    target.parent.chmod(stat.S_IMODE(target.parent.stat().st_mode) | stat.S_IWUSR)
     os.unlink(target)
     os.link(spare, target)
     info = target.stat()
