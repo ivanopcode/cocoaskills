@@ -63,7 +63,7 @@ usage: csk init [-h] [--alias ALIAS] [--agents AGENTS] [--no-interactive]
 csk init --alias demo-app --agents codex_cli,claude_code
 ```
 
-Ignore placement is project-local: a managed CocoaSkill block in `.gitignore` selects `gitignore`; otherwise csk uses `$GIT_COMMON_DIR/info/exclude`. Run `csk ignore-mode show` to inspect it, or `csk ignore-mode set exclude` / `csk ignore-mode set gitignore` to move the managed rules. User rules are preserved. The legacy top-level `ignore_mode` is input-only in schema 2/3: every load warns that other managers reject it, and ordinary Skillfile writers refuse with `skillfile_deprecated_form`. An explicit mode switch removes only that member without reformatting the Skillfile. Invalid legacy values still report `ignore_mode_invalid`; schema 1 cannot contain the field. A Skillfile is portable only after its deprecated forms have been migrated; 0.22 stops reading them. Outside a Git worktree, a switch refuses.
+Ignore placement is project-local. In 0.21.x, a legacy top-level `ignore_mode` field continues to determine the effective mode until explicit migration removes it. Without that field, a managed CocoaSkill block in `.gitignore` selects `gitignore`; otherwise csk uses `$GIT_COMMON_DIR/info/exclude`. `show` names the source as a deprecated field, a managed block, or the default. Run `csk ignore-mode show` to inspect it, or `csk ignore-mode set exclude` / `csk ignore-mode set gitignore` to move the managed rules. User rules are preserved. The legacy top-level `ignore_mode` is input-only in schema 2/3: every load warns that other managers reject it, and ordinary Skillfile writers refuse with `skillfile_deprecated_form`. An explicit mode switch removes only that member without reformatting the Skillfile. Invalid legacy values still report `ignore_mode_invalid`; schema 1 cannot contain the field. A Skillfile is portable only after its deprecated forms have been migrated; 0.22 stops reading them. Outside a Git worktree, a switch refuses.
 
 ### csk ignore-mode
 
@@ -73,8 +73,12 @@ csk ignore-mode set exclude [--project PATH]
 csk ignore-mode set gitignore [--project PATH]
 ```
 
-The default project is the current directory. `show` reports the block-derived
-mode alongside any deprecated `ignore_mode` value. Each `set` holds the project
+The default project is the current directory. `show` reports the effective mode
+and its source, for example `Ignore mode: gitignore (deprecated field)`. In JSON,
+`source` is `deprecated_field`, `block`, or `default`; `deprecated_ignore_mode`
+retains the legacy value when present. Install, status, init and the ignore gates
+use the same effective-mode function. Each `set` removes the legacy override and
+sets the requested local policy; a fresh reload sees that policy. It holds the project
 lock and shared-exclude OS lock, verifies the proposed rules with Git, and
 publishes `.gitignore`, this project's exclude block, and any Skillfile migration
 as one transaction. It refuses symlinked policy files, tracked owned paths,

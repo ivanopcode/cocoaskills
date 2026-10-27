@@ -156,6 +156,7 @@ def legacy_block(project_root: Path) -> bool:
 
 
 def effective_mode(project_root: Path, declared: str | None) -> str:
+    """Keep the 0.21.x legacy override until explicit migration removes it."""
     return declared or ("gitignore" if legacy_block(project_root) else "exclude")
 
 
@@ -189,14 +190,15 @@ def ignore_path(project_root: Path, mode: str) -> Path:
     return common.resolve() / "info/exclude"
 
 
-def _exclude_bytes(path: Path) -> bytes:
+def _exclude_bytes(path: Path, *, writable: bool = True) -> bytes:
     parent = path.parent
     while not parent.exists() and not parent.is_symlink():
         parent = parent.parent
     try:
         parent_mode = parent.lstat().st_mode
-        if not stat.S_ISDIR(parent_mode) or not parent_mode & 0o222 or not os.access(parent, os.W_OK):
-            raise ExcludeError("Git info/exclude parent must be a writable directory, never a symlink")
+        if not stat.S_ISDIR(parent_mode) or (writable and (not parent_mode & 0o222 or not os.access(parent, os.W_OK))):
+            access = "writable " if writable else ""
+            raise ExcludeError(f"Git info/exclude parent must be a {access}directory, never a symlink")
     except OSError as exc:
         raise ExcludeError("Cannot access Git info/exclude parent") from exc
     try:
@@ -205,8 +207,9 @@ def _exclude_bytes(path: Path) -> bytes:
         return b""
     except OSError as exc:
         raise ExcludeError("Cannot read Git info/exclude") from exc
-    if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o222 or not os.access(path, os.W_OK):
-        raise ExcludeError("Git info/exclude must be a writable regular file, never a symlink")
+    if not stat.S_ISREG(info.st_mode) or (writable and (not info.st_mode & 0o222 or not os.access(path, os.W_OK))):
+        access = "writable " if writable else ""
+        raise ExcludeError(f"Git info/exclude must be a {access}regular file, never a symlink")
     try:
         return path.read_bytes()
     except OSError as exc:

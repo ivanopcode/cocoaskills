@@ -124,10 +124,26 @@ def recheck_file(target: transactions.JournalTarget) -> None:
     _regular_bytes(path)
 
 
+def _mode_source(root: Path, mode: str, declared: str | None) -> str:
+    if declared is not None:
+        return 'deprecated_field'
+    if mode == 'gitignore':
+        return 'block'
+    try:
+        exclude = gate.ignore_path(root, 'exclude')
+    except gate.ExcludeError:
+        # A read-only show outside Git can still describe the default.
+        return 'default'
+    data = gate._exclude_bytes(exclude, writable=False)
+    return 'block' if data and gate.project_block(data, gate.project_key(root)) is not None else 'default'
+
+
 def show(root: Path) -> dict[str, Any]:
     loaded = manifest.load_manifest(root)
-    return {'mode': gate.effective_mode(root, None),
-            'deprecated_ignore_mode': loaded.ignore_mode if loaded else None}
+    declared = loaded.ignore_mode if loaded else None
+    mode = gate.effective_mode(root, declared)
+    return {'mode': mode, 'source': _mode_source(root, mode, declared),
+            'deprecated_ignore_mode': declared}
 
 
 def set_mode(root: Path, home: Path, mode: str, *, fault_hook: transactions.FaultHook | None = None) -> None:

@@ -219,7 +219,8 @@ def _collect_project_status(
             [],
             substitution_lines,
         )
-    legacy_ignore = project_manifest.ignore_mode is None and gitignore_gate.legacy_block(project.path)
+    ignore_mode = gitignore_gate.effective_mode(project.path, project_manifest.ignore_mode)
+    legacy_ignore = project_manifest.ignore_mode is None and ignore_mode == "gitignore"
     if project_manifest.schema_version in (2, 3):
         result = _collect_schema2_project_status(
             config, project, project_manifest, substitution_lines

@@ -163,7 +163,7 @@ def test_show_warning_and_json(policy, monkeypatch, capsys):
     for _ in range(2):
         assert cli.main(['ignore-mode', 'show', '--json']) == 0
         output = capsys.readouterr()
-        assert json.loads(output.out) == {'mode': 'exclude', 'deprecated_ignore_mode': 'exclude'}
+        assert json.loads(output.out) == {'mode': 'exclude', 'source': 'deprecated_field', 'deprecated_ignore_mode': 'exclude'}
         assert output.err.count('not portable') == 1
         assert 'csk ignore-mode set' in output.err
     assert cli.main(['ignore-mode', 'set', 'gitignore']) == 0

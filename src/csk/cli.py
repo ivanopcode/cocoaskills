@@ -951,7 +951,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps(result))
         else:
-            print("Ignore mode: " + result["mode"])
+            print("Ignore mode: " + result["mode"] + " (" + result["source"].replace("_", " ") + ")")
             if result["deprecated_ignore_mode"] is not None:
                 print("Deprecated ignore_mode: " + result["deprecated_ignore_mode"])
         return EXIT_OK

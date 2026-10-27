@@ -510,10 +510,12 @@ twine check dist/*
 
 ### Local ignore policy and legacy Skillfiles
 
-Ignore placement is local policy, not a portable Skillfile member. A managed
-CocoaSkill block in the project `.gitignore` selects that mode; without one,
-`$GIT_COMMON_DIR/info/exclude` is used. Inspect both the block-derived mode and any
-legacy field with `csk ignore-mode show`. Use `csk ignore-mode set exclude` or
+Ignore placement is local policy, not a portable Skillfile member. In 0.21.x,
+a legacy top-level `ignore_mode` field still determines the effective mode while
+it is present. Once absent, a managed CocoaSkill block in the project `.gitignore`
+selects `gitignore`; otherwise `$GIT_COMMON_DIR/info/exclude` is used. Inspect the
+effective mode and its source with `csk ignore-mode show`: deprecated field,
+managed block, or the default when neither block exists. Use `csk ignore-mode set exclude` or
 `csk ignore-mode set gitignore` to switch explicitly. These commands preserve
 user bytes outside the managed blocks and remove only the legacy top-level
 `ignore_mode` member, in the same recoverable transaction. No schema version
