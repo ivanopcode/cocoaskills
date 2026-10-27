@@ -2644,8 +2644,9 @@ def test_boundary_ignore_mode_refuses(monkeypatch, tmp_path, capsys, err):
     path = project / manifest.MANIFEST_NAME
     before = path.read_bytes()
     args = ["ignore-mode", "show", "--project", str(project)]
-    with broad_fault(monkeypatch, target=path, err=err) as firings:
-        assert cli.main(args) == cli.EXIT_CONFIG
+    with monkeypatch.context() as fault:
+        with broad_fault(fault, target=path, err=err) as firings:
+            assert cli.main(args) == cli.EXIT_CONFIG
     assert firings
     assert "Cannot read Skillfile at" in capsys.readouterr().err
     assert path.read_bytes() == before
