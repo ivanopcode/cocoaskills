@@ -5944,8 +5944,16 @@ def _status_copy_build_root_to_runtime(
 ) -> None:
     del project, marker_path, monkeypatch
     runtime = csk_home / "runtime" / "build-skill" / marker["commit"] / "build"
-    runtime.mkdir(parents=True)
-    _write_text(runtime / "leak.go", "package main\n")
+    # Plant owner-bypassed corruption while preserving the published parent mode.
+    original_mode = stat.S_IMODE(runtime.parent.stat().st_mode)
+    if os.name == "posix":
+        runtime.parent.chmod(original_mode | stat.S_IWUSR)
+    try:
+        runtime.mkdir(parents=True)
+        _write_text(runtime / "leak.go", "package main\n")
+    finally:
+        if os.name == "posix":
+            runtime.parent.chmod(original_mode)
 
 
 def _status_untrust_cache(
