@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from collections.abc import Mapping
 import re
+import stat
 
 from . import locking, protocol_json, mcp_declarations as d, mcp_ownership as o
 
@@ -19,10 +20,54 @@ def consumer(root: Path) -> str:
 
 
 def path(root: Path, home: Path) -> Path:
+    validate_location(root, home)
     return home / "state" / "mcp" / "local-targets" / (consumer(root) + ".json")
 
 
+def validate_location(root: Path, home: Path) -> None:
+    """Keep manager configuration and local authority outside all repositories.
+
+    Inspect physical ancestors, including Git files used by linked worktrees
+    and submodules. Discovery does not inherit GIT_DIR/GIT_WORK_TREE and never
+    reads Git configuration or executes a declared server.
+    """
+    from .mcp_project import refusal
+
+    try:
+        physical_home = home.expanduser().resolve()
+        if physical_home.is_relative_to(root.expanduser().resolve()):
+            raise ValueError()
+        for location in (physical_home, physical_home / "state/mcp/local-targets"):
+            location = location.resolve()
+            for ancestor in (location, *location.parents):
+                try:
+                    (ancestor / ".git").lstat()
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise ValueError()
+                # Bare repositories have no .git entry of their own.
+                try:
+                    head = (ancestor / "HEAD").lstat()
+                    objects = (ancestor / "objects").lstat()
+                    refs = (ancestor / "refs").lstat()
+                except FileNotFoundError:
+                    continue
+                if (
+                    stat.S_ISREG(head.st_mode)
+                    and stat.S_ISDIR(objects.st_mode)
+                    and stat.S_ISDIR(refs.st_mode)
+                ):
+                    raise ValueError()
+    except (OSError, ValueError, RuntimeError):
+        raise refusal(
+            "mcp_local_target_invalid",
+            "user configuration and local-target storage must be outside every repository",
+        ) from None
+
+
 def read(root: Path, home: Path) -> dict[str, dict[str, str]]:
+    validate_location(root, home)
     try:
         raw = o._read_store(home, "local-targets", consumer(root))
         if raw is None:

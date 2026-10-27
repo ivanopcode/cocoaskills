@@ -50,6 +50,12 @@ def warn(data: object) -> None:
 
 
 def refuse_write(data: object, *, exempt: tuple[str, ...] = ()) -> None:
+    from . import mcp_declarations
+
+    if isinstance(data, dict):
+        mcp_declarations.validate_environment_selectors(
+            data.get("mcp_servers", {}), allow_deprecated=True
+        )
     pending = [f for f in forms(data) if f not in exempt]
     if pending:
         from .sources.errors import SourceError

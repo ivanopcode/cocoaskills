@@ -906,17 +906,40 @@ def _check_auth(draft: _Draft, server: ServerSpec | None) -> None:
         raise _invalid(f"{path}.kind", "kind oauth is http-only")
 
 
+def validate_environment_selectors(
+    raw: object, *, allow_deprecated: bool = False
+) -> None:
+    """Check selectors for every Skillfile writer without interpreting servers."""
+    if not isinstance(raw, dict):
+        return  # The declaration parser owns other grammar errors.
+    for index, (name, body) in enumerate(raw.items()):
+        if not isinstance(body, dict) or not isinstance(body.get("server"), dict):
+            continue
+        server = body["server"]
+        if "environments" in server:
+            field = f"mcp_servers.{_path_name(name, index)}.server.environments"
+            selected = _string_list(server["environments"], field)
+            _selected_environments(selected, field, allow_deprecated=allow_deprecated)
+
+
 def _step3_agents(draft: _Draft, *, allow_deprecated: bool = False) -> tuple[str, ...]:
-    path = f"{draft.path}.agents"
-    if draft.agents is None:
+    return _selected_environments(
+        draft.agents, f"{draft.path}.agents", allow_deprecated=allow_deprecated
+    )
+
+
+def _selected_environments(
+    selected: Sequence[str] | None, path: str, *, allow_deprecated: bool
+) -> tuple[str, ...]:
+    if selected is None:
         return SLICE1_AGENTS
-    if not draft.agents or len(set(draft.agents)) != len(draft.agents):
+    if not selected or len(set(selected)) != len(selected):
         raise _invalid(path, "environment list must be nonempty and unique")
     known = (*CANONICAL_ENVIRONMENTS, "cursor") if allow_deprecated else CANONICAL_ENVIRONMENTS
-    for index, agent in enumerate(draft.agents):
+    for index, agent in enumerate(selected):
         if agent not in known:
             raise _invalid(f"{path}.{index}", "unknown canonical environment")
-    return tuple(sorted(draft.agents))
+    return tuple(sorted(selected))
 
 
 def _step4_capability(draft: _Draft, invocation_scope: str, agents: Sequence[str]) -> None:
