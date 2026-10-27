@@ -96,8 +96,8 @@ def _skillfile_present(path: Path) -> bool:
 
 
 def _write_skillfile_text(path: Path, text: str) -> None:
-    if path.exists():
-        skillfile_deprecations.require_writable(protocol_json.loads(path.read_bytes()))
+    if _skillfile_present(path):
+        skillfile_deprecations.require_writable(_read_payload(path))
     skillfile_deprecations.require_writable(protocol_json.loads(text))
     try:
         path.write_text(text, encoding="utf-8")

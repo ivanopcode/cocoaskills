@@ -121,6 +121,7 @@ EXPECTED_CLI_DEFAULT: set[tuple[str, ...]] = {
     ("hybrid", "list"),
     ("hybrid", "remove"),
     ("hybrid", "status"),
+    ("ignore-mode",),
     ("init",),
     ("install",),
     ("list",),
@@ -144,6 +145,7 @@ COVERED_CLI_LEAVES: set[tuple[str, ...]] = {
     ("bootstrap",),
     ("config", "show"),
     ("hybrid", "status"),
+    ("ignore-mode",),
     ("init",),
     ("list",),
     ("project", "add"),
@@ -286,6 +288,10 @@ CLI_FAULT_DRIVERS: dict[tuple[str, ...], tuple[str, ...]] = {
         "test_boundary_hybrid_status_degrades",
         "test_sweep_hybrid_status_each_ordinal_degrades",
     ),
+    ("ignore-mode",): (
+        "test_boundary_ignore_mode_refuses",
+        "test_sweep_ignore_mode_each_ordinal_refuses",
+    ),
     ("init",): (
         "test_boundary_init_refuses",
         "test_sweep_parent_manifest_stat_reached",
@@ -411,6 +417,7 @@ def test_linkage_covered_entries_have_drivers():
 #: name. The owner is the CLI leaf tuple or the dotted API function, and
 #: must equal the registry key that lists the driver.
 BREADTH_PAIRS: dict[str, tuple[object, str]] = {
+    "test_boundary_ignore_mode_refuses": (("ignore-mode",), "Skillfile"),
     "test_boundary_add_refuses": (("add",), "Skillfile"),
     "test_boundary_audit_publish_refuses": (("audit",), "record file"),
     "test_boundary_audit_trust_refuses": (("audit",), "audit dir"),
@@ -441,6 +448,7 @@ BREADTH_PAIRS: dict[str, tuple[object, str]] = {
 #: second marker under their entry point); the rest share their pair
 #: with the breadth driver on the same marker.
 SWEEP_PAIRS: dict[str, tuple[object, str]] = {
+    "test_sweep_ignore_mode_each_ordinal_refuses": (("ignore-mode",), "Skillfile"),
     "test_sweep_add_each_ordinal_refuses": (("add",), "Skillfile"),
     "test_sweep_audit_publish_each_ordinal_refuses": (("audit",), "record file"),
     "test_sweep_audit_trust_each_ordinal_refuses": (("audit",), "audit dir"),
@@ -1397,7 +1405,7 @@ def test_sweep_pin_each_ordinal_refuses(monkeypatch, tmp_path):
 
 
 def test_sweep_ensure_empty_each_ordinal_refuses(monkeypatch, tmp_path):
-    """The require/present/write chain refuses at every ordinal with its own message."""
+    """The require/present/recheck/write chain refuses at every ordinal with its own message."""
     def setup(tag: str):
         project = tmp_path / f"ee{tag}"
         project.mkdir(parents=True, exist_ok=True)
@@ -1410,18 +1418,20 @@ def test_sweep_ensure_empty_each_ordinal_refuses(monkeypatch, tmp_path):
         sites=[
             ("os.stat", "csk.manifest", "_require_project_dir"),
             ("os.stat", "csk.manifest", "_skillfile_present"),
+            ("os.stat", "csk.manifest", "_skillfile_present"),
             ("io.open", "csk.manifest", "_write_skillfile_text"),
         ],
         expect={
             1: (manifest.ManifestError, "Cannot access project path"),
             2: (manifest.ManifestError, "Cannot read Skillfile at"),
-            3: (manifest.ManifestError, "Cannot write Skillfile at"),
+            3: (manifest.ManifestError, "Cannot read Skillfile at"),
+            4: (manifest.ManifestError, "Cannot write Skillfile at"),
         },
     )
 
 
 def test_sweep_add_decl_each_ordinal_refuses(monkeypatch, tmp_path):
-    """The read/write pair under add_skill_decl refuses at every ordinal."""
+    """The read/presence/re-read/write chain under add_skill_decl refuses at every ordinal."""
     def setup(tag: str):
         project = tmp_path / f"add{tag}"
         project.mkdir(parents=True, exist_ok=True)
@@ -1437,11 +1447,15 @@ def test_sweep_add_decl_each_ordinal_refuses(monkeypatch, tmp_path):
         setup=setup,
         sites=[
             ("io.open", "csk.manifest", "_read_payload"),
+            ("os.stat", "csk.manifest", "_skillfile_present"),
+            ("io.open", "csk.manifest", "_read_payload"),
             ("io.open", "csk.manifest", "_write_skillfile_text"),
         ],
         expect={
             1: (manifest.ManifestError, "Cannot read Skillfile at"),
-            2: (manifest.ManifestError, "Cannot write Skillfile at"),
+            2: (manifest.ManifestError, "Cannot read Skillfile at"),
+            3: (manifest.ManifestError, "Cannot read Skillfile at"),
+            4: (manifest.ManifestError, "Cannot write Skillfile at"),
         },
     )
 
@@ -1548,6 +1562,7 @@ def test_sweep_init_target_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         ("io.open", "csk.gitignore_gate", "append_entries"),
         ("os.stat", "csk.manifest", "_require_project_dir"),
         ("os.stat", "csk.manifest", "_skillfile_present"),
+        ("os.stat", "csk.manifest", "_skillfile_present"),
         ("io.open", "csk.manifest", "_write_skillfile_text"),
     ])
     expect = {index: ("ok", "Initialized") for index in range(1, prefix_count)}
@@ -1560,6 +1575,7 @@ def test_sweep_init_target_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         ("raw-oserror", ""),
         ("raw-oserror", ""),
         ("refuse", "Cannot access project path"),
+        ("refuse", "Cannot read Skillfile at"),
         ("refuse", "Cannot read Skillfile at"),
         ("refuse", "Cannot write Skillfile at"),
     ]
@@ -1821,17 +1837,10 @@ def test_sweep_project_resolve_each_ordinal_refuses(monkeypatch, tmp_path, capsy
 
 
 def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
-    """The project-add fresh dir: require/present/write/scope chain refuses.
+    """Project add faults every measured call, including the pre-write recheck.
 
-    Ordinals 1, 2 and 6 still succeed on a single transient fault:
-    the separation pre-check stat (1) is re-verified at publication
-    (ordinal 7), realpath swallows one faulted lstat (2 and 6) while
-    the root is stated again (ordinals 7 and 8) before recording
-    anything. Ordinals 9 and 10 (the volume case-oracle and
-    normalization-oracle probes) fail closed to exact matching, and
-    ordinals 11 and 12 (staging/prune liveness classification of the
-    just-recorded empty scope) skip the record on a faulted read, so
-    the add still succeeds. Every other dispatch-scope fault refuses.
+    Scope probes that intentionally degrade retain their declared successful
+    outcomes; the new manifest presence recheck must refuse on I/O failure.
     """
     monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
@@ -1857,6 +1866,7 @@ def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
             ("os.lstat", "csk.dispatch", "manager_home_inside_root"),
             ("os.stat", "csk.manifest", "_require_project_dir"),
             ("os.stat", "csk.manifest", "_skillfile_present"),
+            ("os.stat", "csk.manifest", "_skillfile_present"),
             ("io.open", "csk.manifest", "_write_skillfile_text"),
             ("os.lstat", "csk.dispatch", "canonical_root_for_project"),
             ("os.stat", "csk.dispatch", "_refuse_manager_inside_checkout"),
@@ -1875,14 +1885,15 @@ def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
             2: ("ok", "Added project"),
             3: ("refuse", "Cannot access project path"),
             4: ("refuse", "Cannot read Skillfile at"),
-            5: ("refuse", "Cannot write Skillfile at"),
-            6: ("ok", "Added project"),
-            7: ("refuse", "dispatch scope failed"),
+            5: ("refuse", "Cannot read Skillfile at"),
+            6: ("refuse", "Cannot write Skillfile at"),
+            7: ("ok", "Added project"),
             8: ("refuse", "dispatch scope failed"),
-            9: ("ok", "Added project"),
+            9: ("refuse", "dispatch scope failed"),
             10: ("ok", "Added project"),
             11: ("ok", "Added project"),
             12: ("ok", "Added project"),
+            13: ("ok", "Added project"),
         },
         dry=(cli.EXIT_OK, "Added project", ""),
         kp1=(cli.EXIT_OK, "Added project", ""),
@@ -1890,7 +1901,7 @@ def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
 
 
 def test_sweep_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
-    """The add Skillfile: read/write pair refuses at each ordinal."""
+    """The add Skillfile: read/presence/re-read/write chain refuses at each ordinal."""
     monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
 
@@ -1914,11 +1925,15 @@ def test_sweep_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         setup=setup,
         sites=[
             ("io.open", "csk.manifest", "_read_payload"),
+            ("os.stat", "csk.manifest", "_skillfile_present"),
+            ("io.open", "csk.manifest", "_read_payload"),
             ("io.open", "csk.manifest", "_write_skillfile_text"),
         ],
         expect={
             1: ("refuse", "Cannot read Skillfile at"),
-            2: ("refuse", "Cannot write Skillfile at"),
+            2: ("refuse", "Cannot read Skillfile at"),
+            3: ("refuse", "Cannot read Skillfile at"),
+            4: ("refuse", "Cannot write Skillfile at"),
         },
         dry=(cli.EXIT_OK, "Added skill", ""),
         kp1=(cli.EXIT_OK, "Added skill", ""),
@@ -1926,7 +1941,7 @@ def test_sweep_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
 
 
 def test_sweep_remove_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
-    """The remove Skillfile: read/write pair refuses at each ordinal."""
+    """The remove Skillfile: read/presence/re-read/write chain refuses at each ordinal."""
     monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
 
@@ -1950,11 +1965,15 @@ def test_sweep_remove_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         setup=setup,
         sites=[
             ("io.open", "csk.manifest", "_read_payload"),
+            ("os.stat", "csk.manifest", "_skillfile_present"),
+            ("io.open", "csk.manifest", "_read_payload"),
             ("io.open", "csk.manifest", "_write_skillfile_text"),
         ],
         expect={
             1: ("refuse", "Cannot read Skillfile at"),
-            2: ("refuse", "Cannot write Skillfile at"),
+            2: ("refuse", "Cannot read Skillfile at"),
+            3: ("refuse", "Cannot read Skillfile at"),
+            4: ("refuse", "Cannot write Skillfile at"),
         },
         dry=(cli.EXIT_OK, "Removed skill", ""),
         kp1=(cli.EXIT_OK, "Removed skill", ""),
@@ -2141,7 +2160,7 @@ def test_sweep_load_manifest_each_ordinal_refuses(monkeypatch, tmp_path):
 
 
 def test_sweep_remove_decl_each_ordinal_refuses(monkeypatch, tmp_path):
-    """The read/write pair under remove_skill_decl refuses at every ordinal."""
+    """The read/presence/re-read/write chain under remove_skill_decl refuses at every ordinal."""
     def setup(tag: str):
         project = tmp_path / f"rd{tag}"
         project.mkdir(parents=True, exist_ok=True)
@@ -2158,17 +2177,21 @@ def test_sweep_remove_decl_each_ordinal_refuses(monkeypatch, tmp_path):
         setup=setup,
         sites=[
             ("io.open", "csk.manifest", "_read_payload"),
+            ("os.stat", "csk.manifest", "_skillfile_present"),
+            ("io.open", "csk.manifest", "_read_payload"),
             ("io.open", "csk.manifest", "_write_skillfile_text"),
         ],
         expect={
             1: (manifest.ManifestError, "Cannot read Skillfile at"),
-            2: (manifest.ManifestError, "Cannot write Skillfile at"),
+            2: (manifest.ManifestError, "Cannot read Skillfile at"),
+            3: (manifest.ManifestError, "Cannot read Skillfile at"),
+            4: (manifest.ManifestError, "Cannot write Skillfile at"),
         },
     )
 
 
 def test_sweep_ensure_project_each_ordinal_refuses(monkeypatch, tmp_path):
-    """The require/present/write chain under ensure_project_manifest refuses."""
+    """The require/present/recheck/write chain under ensure_project_manifest refuses."""
     def setup(tag: str):
         project = tmp_path / f"ep{tag}"
         project.mkdir(parents=True, exist_ok=True)
@@ -2182,12 +2205,14 @@ def test_sweep_ensure_project_each_ordinal_refuses(monkeypatch, tmp_path):
         sites=[
             ("os.stat", "csk.manifest", "_require_project_dir"),
             ("os.stat", "csk.manifest", "_skillfile_present"),
+            ("os.stat", "csk.manifest", "_skillfile_present"),
             ("io.open", "csk.manifest", "_write_skillfile_text"),
         ],
         expect={
             1: (manifest.ManifestError, "Cannot access project path"),
             2: (manifest.ManifestError, "Cannot read Skillfile at"),
-            3: (manifest.ManifestError, "Cannot write Skillfile at"),
+            3: (manifest.ManifestError, "Cannot read Skillfile at"),
+            4: (manifest.ManifestError, "Cannot write Skillfile at"),
         },
     )
 
@@ -2609,3 +2634,35 @@ def test_boundary_chmod0_skillfile_refuses_list(
     captured = capsys.readouterr()
     assert code == cli.EXIT_CONFIG
     assert "Cannot read Skillfile at" in captured.err
+
+
+# The new read-only leaf refuses a Skillfile I/O fault and succeeds after restoring access.
+@pytest.mark.parametrize("err", ERRNO_CASES)
+def test_boundary_ignore_mode_refuses(monkeypatch, tmp_path, capsys, err):
+    project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 2, "skills": []})
+    path = project / manifest.MANIFEST_NAME
+    before = path.read_bytes()
+    args = ["ignore-mode", "show", "--project", str(project)]
+    with broad_fault(monkeypatch, target=path, err=err) as firings:
+        assert cli.main(args) == cli.EXIT_CONFIG
+    assert firings
+    assert "Cannot read Skillfile at" in capsys.readouterr().err
+    assert path.read_bytes() == before
+    assert cli.main(args) == cli.EXIT_OK
+    assert "Ignore mode:" in capsys.readouterr().out
+
+
+# Every show/read ordinal refuses the injected errno; dry and K+1 controls still succeed.
+def test_sweep_ignore_mode_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
+    def setup(tag: str):
+        project = make_project(tmp_path / f"im{tag}")
+        write_skillfile(project, {"schema_version": 2, "skills": []})
+        return project / manifest.MANIFEST_NAME, ["ignore-mode", "show", "--project", str(project)]
+    _sweep_cli(
+        monkeypatch, capsys, label="ignore-mode show", setup=setup,
+        sites=[("io.open", "csk.manifest", "load_manifest")],
+        expect={1: ("refuse", "Cannot read Skillfile at")},
+        dry=(cli.EXIT_OK, "Ignore mode:", ""),
+        kp1=(cli.EXIT_OK, "Ignore mode:", ""),
+    )
