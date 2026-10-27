@@ -100,11 +100,14 @@ def test_local_invalid_target(project_cli, capsys):
     assert _snapshot(root, home) == before
 
 
-# Cursor-only migration needs a canonical decision; mixed migration edits only the legacy array member.
+# Cursor-only migration needs a decision; mixed LF/CRLF input loses only the legacy member, preserving every other byte.
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"], ids=["lf", "crlf"])
 @pytest.mark.parametrize("targets", [["cursor"], ["claude_code", "cursor"]])
-def test_lossless_migration(project_cli, monkeypatch, capsys, targets):
+def test_lossless_migration(project_cli, monkeypatch, capsys, targets, newline):
     root, home, declare = project_cli
     declare(declaration(targets))
+    path = root / "Skillfile.json"
+    path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", newline))
     old = (root / "Skillfile.json").read_bytes()
     argv = ["mcp", "migrate", "--project", str(root)]
     before = _snapshot(root, home)
@@ -122,9 +125,9 @@ def test_lossless_migration(project_cli, monkeypatch, capsys, targets):
         data["ignore_mode"] == "gitignore"
     )  # Other deprecated form is migration-exempt.
     if targets != ["cursor"]:
-        assert (root / "Skillfile.json").read_bytes() == old.replace(
-            b',\n          "cursor"', b""
-        )
+        removed = b"," + newline + b'          "cursor"'
+        assert old.count(removed) == 1
+        assert (root / "Skillfile.json").read_bytes() == old.replace(removed, b"")
     assert (
         cli.main(["mcp", "local-target", "list", "cursor", "--project", str(root)]) == 0
     )
@@ -252,7 +255,7 @@ def test_migration_failure_rolls_back(project_cli, monkeypatch, capsys):
 # A previous narrow consent never approves newly writable destinations; unchanged old pairs retain authority.
 def test_absent_old_grant_does_not_widen(project_cli, monkeypatch, capsys):
     from dataclasses import replace
-    from csk import mcp_ownership as o, mcp_native
+    from csk import locking, mcp_ownership as o, mcp_native
 
     root, home, declare = project_cli
     raw = {"docs": {"server": {"transport": "stdio", "command": "example-helper"}}}
@@ -260,7 +263,7 @@ def test_absent_old_grant_does_not_widen(project_cli, monkeypatch, capsys):
     parsed = d.parse_mcp_servers(
         raw, invocation_scope="project", target_agents=["claude_code"]
     )["docs"]
-    consumer = o.consumer_id(str(root.resolve()), "project")
+    consumer = o.consumer_id(locking.canonical_project_identity(root), "project")
     # Reconstruct exactly the 0.21.0 declaration/subject hash, before absence was preserved.
     old = replace(parsed, agents=("claude_code",), environments=("claude_code",))
     old_subject = o.ConsentSubject(
@@ -283,6 +286,59 @@ def test_absent_old_grant_does_not_widen(project_cli, monkeypatch, capsys):
     prompts = approve(monkeypatch)
     assert install() == 0
     assert len(prompts) == 2
+
+
+# The read-only planner keeps old Windows-identity consent narrow; a raw-path consumer grants nothing (no Win32 filesystem emulation).
+@pytest.mark.parametrize(
+    "windows_path",
+    [r"d:\work\Project", r"\\files.example.invalid\share\Project"],
+    ids=["drive", "unc"],
+)
+def test_absent_old_grant_windows_identity(project_cli, monkeypatch, windows_path):
+    from dataclasses import replace
+    from csk import locking, mcp_native, mcp_ownership as o
+
+    root, home, declare = project_cli
+    canonical = locking._canonicalize_windows_identity(
+        windows_path, [], case_sensitive=lambda _: False
+    )
+    original_identity = locking.canonical_project_identity
+    monkeypatch.setattr(
+        locking, "canonical_project_identity",
+        lambda path: (
+            canonical if path.resolve() == root.resolve() else original_identity(path)
+        ),
+    )
+    raw = {"docs": {"server": {"transport": "stdio", "command": "example-helper"}}}
+    declare(raw, agents=["claude_code"])
+    parsed = d.parse_mcp_servers(
+        raw, invocation_scope="project", target_agents=["claude_code"]
+    )["docs"]
+    old = replace(parsed, agents=("claude_code",), environments=("claude_code",))
+    old_subject = o.ConsentSubject(
+        "docs",
+        ("claude_code",),
+        "project",
+        d.declaration_digest(old),
+        (mcp_native.project_surface("claude_code").capability,),
+    )
+    wrong_consumer = o.consumer_id(windows_path, "project")
+    assert wrong_consumer != o.consumer_id(canonical, "project")
+    o.record_consent(home, wrong_consumer, [o.consent_key(wrong_consumer, old_subject)])
+    before = _snapshot(root, home)
+    wrong_plan = mcp_project.plan_project(root, ["claude_code"], raw, home)
+    assert {agent for subject in wrong_plan.pending for agent in subject.agents} == {
+        "claude_code", "codex_cli", "cursor"
+    }
+    assert _snapshot(root, home) == before
+    consumer = o.consumer_id(locking.canonical_project_identity(root), "project")
+    o.record_consent(home, consumer, [o.consent_key(consumer, old_subject)])
+    before = _snapshot(root, home)
+    plan = mcp_project.plan_project(root, ["claude_code"], raw, home)
+    assert {agent for subject in plan.pending for agent in subject.agents} == {
+        "codex_cli", "cursor"
+    }
+    assert _snapshot(root, home) == before
 
 
 # A separate invalid URL keeps its independently known unsupported pair in both real and dry-run refusals.
