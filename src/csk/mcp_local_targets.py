@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 from collections.abc import Mapping
+import os
 import re
 import stat
 
@@ -28,8 +29,8 @@ def validate_location(root: Path, home: Path) -> None:
     """Keep manager configuration and local authority outside all repositories.
 
     Inspect physical ancestors, including Git files used by linked worktrees
-    and submodules. Discovery does not inherit GIT_DIR/GIT_WORK_TREE and never
-    reads Git configuration or executes a declared server.
+    and submodules. An explicit GIT_WORK_TREE also excludes markerless external
+    worktrees. No Git configuration is read or declared server executed.
     """
     from .mcp_project import refusal
 
@@ -37,8 +38,15 @@ def validate_location(root: Path, home: Path) -> None:
         physical_home = home.expanduser().resolve()
         if physical_home.is_relative_to(root.expanduser().resolve()):
             raise ValueError()
+        configured_worktree = os.environ.get("GIT_WORK_TREE")
+        external_worktree = (
+            Path(configured_worktree).expanduser().resolve()
+            if configured_worktree else None
+        )
         for location in (physical_home, physical_home / "state/mcp/local-targets"):
             location = location.resolve()
+            if external_worktree is not None and location.is_relative_to(external_worktree):
+                raise ValueError()
             for ancestor in (location, *location.parents):
                 try:
                     (ancestor / ".git").lstat()

@@ -258,3 +258,19 @@ def test_local_storage_repository_markers(project_cli, tmp_path, marker):
         local.path(root, candidate)
     assert _snapshot(root, candidate) == before
     assert local.read(root, home) == {}
+
+
+# An environment-defined worktree without a .git marker still excludes local authority; an external home remains valid.
+def test_local_storage_external_git_worktree(project_cli, monkeypatch, tmp_path):
+    root, home, _ = project_cli
+    worktree = tmp_path / "external-worktree"
+    worktree.mkdir()
+    nested = worktree / "nested"
+    nested.mkdir()
+    monkeypatch.setenv("GIT_DIR", str(root / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(worktree))
+    embedded = worktree / "manager"
+    with pytest.raises(ValueError, match="mcp_local_target_invalid"):
+        local.read(nested, embedded)
+    assert not embedded.exists()
+    assert local.read(nested, home) == {}
