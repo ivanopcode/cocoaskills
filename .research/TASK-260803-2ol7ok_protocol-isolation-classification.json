@@ -6,7 +6,7 @@
   "audited_files_sha256": {
     "tests/test_protocol_conformance.py": "06d5fa20a02ac40e075d367d056961abbef6d38b4088b368180c715046fab435",
     "tests/protocol_conformance_adapters.py": "d54d77b4c42c3addc2766c7c5ec6e43d35834589fa06e684b39cb24fa038ce69",
-    "tests/protocol_lifecycle_observations.py": "0ea911f597fc708d75f8086aae08faa4f5063422d55e3ac4e39734cb7072c284",
+    "tests/protocol_lifecycle_observations.py": "709ae5d60854a9297b24e562270d9305a7a91b99c3df785e809694e5f90a671c",
     "tests/conftest.py": "8fd4a959143f82b49ac77abc170b46b2175281c669b48aab14e94862656f63db"
   },
   "audit_revisions": [
@@ -184,6 +184,14 @@
       "change": "Explicitly bypass owner write protection when planting the runtime build-root corruption fixture, then restore the parent mode.",
       "isolation_neutral": true,
       "rationale": "Only the existing disposable runtime parent has its owner-write bit temporarily restored for the existing mutation. No node, fixture lifetime, command, cwd, process, shared root, protocol answer or shard classification changes."
+    },
+    {
+      "file": "tests/protocol_lifecycle_observations.py",
+      "previous_sha256": "0ea911f597fc708d75f8086aae08faa4f5063422d55e3ac4e39734cb7072c284",
+      "sha256": "709ae5d60854a9297b24e562270d9305a7a91b99c3df785e809694e5f90a671c",
+      "change": "Restore the build-root corruption plant for build-only installations without a preexisting runtime directory.",
+      "isolation_neutral": true,
+      "rationale": "The parent is created under the same disposable case root already used by the original recursive corruption plant. This restores its intended mutation footprint; no node, shared root, fixture lifetime, process, protocol answer or shard assignment changes. Ordinary tests now provision the actual build-only fixture and verify the real integrity gate with absent and protected runtime controls."
     }
   ],
   "method": {
