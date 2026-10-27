@@ -167,6 +167,17 @@ def test_cli_v1_golden_byte_identical(
             new_index = b"  csk init [path]        create project Skillfile.json and local exclude block\n"
             assert expected_stdout.count(old_index) == 1
             expected_stdout = expected_stdout.replace(old_index, new_index)
+            # The new ignore-mode verb is an explicit root-help delta; all
+            # surrounding released help bytes remain under this comparison.
+            old_choices = b"{bootstrap,init,skill,"
+            assert expected_stdout.count(old_choices) == 2
+            expected_stdout = expected_stdout.replace(old_choices, b"{bootstrap,init,ignore-mode,skill,")
+            skill_help = b"    skill               Inspect and validate skill repositories.\n"
+            assert expected_stdout.count(skill_help) == 1
+            expected_stdout = expected_stdout.replace(
+                skill_help,
+                b"    ignore-mode         Show or migrate project-local ignore placement.\n" + skill_help,
+            )
         released = CLIOutput(
             exit_code=released.exit_code, stdout=expected_stdout,
             stderr=released.stderr, version=released.version,

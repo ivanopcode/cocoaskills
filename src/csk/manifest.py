@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import protocol_json
+from . import protocol_json, skillfile_deprecations
 from .identifiers import IDENTIFIER_RULE, is_valid_identifier, is_valid_locale, is_valid_portable_path
 from .sources import skillfile_v2
 from .sources.errors import (
@@ -96,6 +96,9 @@ def _skillfile_present(path: Path) -> bool:
 
 
 def _write_skillfile_text(path: Path, text: str) -> None:
+    if path.exists():
+        skillfile_deprecations.require_writable(protocol_json.loads(path.read_bytes()))
+    skillfile_deprecations.require_writable(protocol_json.loads(text))
     try:
         path.write_text(text, encoding="utf-8")
     except OSError as exc:
@@ -144,6 +147,8 @@ def add_skill_decl(
 ) -> Path:
     path = manifest_path(project_root)
     data = _read_payload(path)
+    skillfile_deprecations.warn(data)
+    skillfile_deprecations.require_writable(data)
     skills = data.setdefault("skills", [])
     if not isinstance(skills, list):
         raise ManifestError("Skillfile field 'skills' must be a list")
@@ -168,6 +173,8 @@ def add_skill_decl(
 def remove_skill_decl(project_root: Path, name: str) -> Path:
     path = manifest_path(project_root)
     data = _read_payload(path)
+    skillfile_deprecations.warn(data)
+    skillfile_deprecations.require_writable(data)
     skills = data.get("skills")
     if not isinstance(skills, list):
         raise ManifestError("Skillfile field 'skills' must be a list")
@@ -257,6 +264,7 @@ def parse_manifest(
             raise ManifestError(
                 "Unsupported Skillfile schema_version 3; this Skillfile requires a newer csk"
             )
+        skillfile_deprecations.warn(data)
         # ``allow_schema_2`` remains in the signature for source compatibility.
         # Schema 2 is now supported independently of legacy opt-in settings.
         return _parse_v2(

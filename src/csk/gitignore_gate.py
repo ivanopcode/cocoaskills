@@ -338,7 +338,7 @@ def plan_ignored(project_root: Path, entries: list[str], *, fix: bool, mode: str
 
 def verify_planned_ignored(
     project_root: Path, entries: list[str], proposed: bytes | None, staging_root: Path,
-    *, mode: str = "gitignore",
+    *, mode: str = "gitignore", project_ignore: bytes | None = None,
 ) -> None:
     """Ask Git to evaluate a private copy of the proposed ignore hierarchy.
 
@@ -438,7 +438,9 @@ def verify_planned_ignored(
             destination.mkdir(parents=True, exist_ok=True)
             source = worktree / rel / ".gitignore"
             target = destination / ".gitignore"
-            if mode == "gitignore" and rel == project_rel and proposed is not None:
+            if rel == project_rel and project_ignore is not None:
+                target.write_bytes(project_ignore)
+            elif mode == "gitignore" and rel == project_rel and proposed is not None:
                 target.write_bytes(proposed)
             elif source.is_symlink():
                 raise GitignoreError("Cannot evaluate a linked ignore policy")

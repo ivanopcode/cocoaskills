@@ -1317,7 +1317,7 @@ def _render_project_status(
         lines.append("  Skillfile.json missing")
         return "\n".join(lines)
     if project.legacy_ignore and not global_scope:
-        lines.append('  Legacy ignore block: set "ignore_mode": "gitignore", or remove the block to use local exclude.')
+        lines.append('  Managed .gitignore block: use csk ignore-mode set exclude to move it to local exclude.')
     if not project.skills:
         lines.append("  no skills declared")
     for skill in project.skills:

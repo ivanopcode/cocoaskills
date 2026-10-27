@@ -63,7 +63,32 @@ usage: csk init [-h] [--alias ALIAS] [--agents AGENTS] [--no-interactive]
 csk init --alias demo-app --agents codex_cli,claude_code
 ```
 
-Команда создает `Skillfile.json` с указанными настройками и обновляет локальный exclude. В проектном Skillfile schema 2/3 верхнеуровневое поле `"ignore_mode": "gitignore"` включает прежний режим `.gitignore`; `"ignore_mode": "exclude"` явно выбирает локальный exclude. Иные значения, неверные типы и поле в schema 1 дают `ignore_mode_invalid`. Без поля существующий блок `# CocoaSkill` сохраняет прежний режим, а `csk status` показывает совет; автоматического переноса нет.
+Ignore placement is project-local: a managed CocoaSkill block in `.gitignore` selects `gitignore`; otherwise csk uses `$GIT_COMMON_DIR/info/exclude`. Run `csk ignore-mode show` to inspect it, or `csk ignore-mode set exclude` / `csk ignore-mode set gitignore` to move the managed rules. User rules are preserved. The legacy top-level `ignore_mode` is input-only in schema 2/3: every load warns that other managers reject it, and ordinary Skillfile writers refuse with `skillfile_deprecated_form`. An explicit mode switch removes only that member without reformatting the Skillfile. Invalid legacy values still report `ignore_mode_invalid`; schema 1 cannot contain the field. A Skillfile is portable only after its deprecated forms have been migrated; 0.22 stops reading them. Outside a Git worktree, a switch refuses.
+
+### csk ignore-mode
+
+```bash
+csk ignore-mode [show] [--project PATH] [--json]
+csk ignore-mode set exclude [--project PATH]
+csk ignore-mode set gitignore [--project PATH]
+```
+
+The default project is the current directory. `show` reports the block-derived
+mode alongside any deprecated `ignore_mode` value. Each `set` holds the project
+lock and shared-exclude OS lock, verifies the proposed rules with Git, and
+publishes `.gitignore`, this project's exclude block, and any Skillfile migration
+as one transaction. It refuses symlinked policy files, tracked owned paths,
+ineffective rules and ambiguous edits before publication. Interrupted switches
+restore all three preimages during recovery; keep the transaction journal until
+recovery finishes. Other projects' shared-exclude blocks remain intact.
+
+Migration deletes only the legacy member, preserving all other Skillfile bytes.
+Duplicate keys or an unsafe layout refuse with `skillfile_migration_unsafe` and
+repair guidance. No schema upgrade or new stored mode is introduced. If the
+legacy Cursor selector is present too, this migration preserves it byte-for-byte;
+run `csk mcp migrate` separately. Either migration may run first. Warnings go only
+to stderr, once per form per command, including JSON commands. A warning alone
+does not fail `status --check`.
 
 ### csk add
 

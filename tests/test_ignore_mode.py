@@ -153,7 +153,7 @@ def test_legacy_advisory(project_cli, capsys):
     assert cli.main(["install", "app"]) == 0
     before = ignore.read_bytes()
     assert cli.main(["status", "app"]) == 0
-    assert '"ignore_mode": "gitignore"' in capsys.readouterr().out
+    assert 'csk ignore-mode set exclude' in capsys.readouterr().out
     assert ignore.read_bytes() == before
 
 

@@ -433,6 +433,14 @@ class TransactionEngine:
                     if deleting:
                         with self._shared_exclude_locks(journal):
                             self._finish_journal_removal(journal)
+                    elif journal.phase in {"prepared", "committing"} and any(
+                        t.publication_recheck is not None and t.publication_recheck.get("ignore_mode_switch") is True
+                        for t in journal.targets
+                    ):
+                        # A mode migration publishes three coupled policy files.
+                        # Interrupted switches restore their preimages, never finish forward.
+                        with self._shared_exclude_locks(journal):
+                            self._rollback(journal)
                     else:
                         self._resume(journal)
                 except TransactionIncompleteError:
@@ -820,9 +828,14 @@ class TransactionEngine:
             if current != target.desired_digest:
                 if current != target.expected_preimage_digest:
                     raise TransactionCorruptionError("Shared project block changed before install")
-                if staged is None or _target_digest(target, staged) != target.desired_digest:
-                    raise TransactionCorruptionError("Staged project block changed")
-                block = staged.read_bytes()
+                if staged is None:
+                    if target.desired_digest != ABSENT_DIGEST:
+                        raise TransactionCorruptionError("Staged project block missing")
+                    block = None
+                else:
+                    if _target_digest(target, staged) != target.desired_digest:
+                        raise TransactionCorruptionError("Staged project block changed")
+                    block = staged.read_bytes()
                 self._assert_mutation_witness()
                 self._run_pre_write_hook(target)
                 gitignore_gate.write_exclude(live, gitignore_gate.replace_project_block(

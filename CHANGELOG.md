@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Изменено
+
+- Ignore policy перенесена из Skillfile в расположение managed block: `csk ignore-mode show` показывает режим, `csk ignore-mode set exclude|gitignore` перемещает правила одной транзакцией под project/shared-exclude locks. Пользовательские байты сохраняются; отказ или recovery после crash восстанавливает `.gitignore`, exclude и Skillfile.
+- Старое поле `ignore_mode` и `cursor` в `server.environments` принимаются только на входе с предупреждением в stderr. Обычная запись Skillfile отказывает с `skillfile_deprecated_form`; миграции `csk ignore-mode set` и `csk mcp migrate` удаляют только свою форму без переформатирования остальных bytes и могут идти в любом порядке. Skillfile становится переносимым только после миграции обеих форм; в 0.22 чтение deprecated forms прекращается. Предупреждение само по себе не ломает `status --check` или JSON stdout.
+
 ## [0.21.0] - 2026-10-26
 
 ### Добавлено

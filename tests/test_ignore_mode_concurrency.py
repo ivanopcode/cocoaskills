@@ -82,7 +82,8 @@ def paused_write(path, data):
             time.sleep(0.01)
     return original_write(path, data)
 gate.write_exclude = paused_write
-args = ['init', '.', '--no-interactive'] if operation == 'init' else ['install', 'app']
+args = (['init', '.', '--no-interactive'] if operation == 'init' else
+        ['ignore-mode', 'set', 'exclude'] if operation == 'ignore-mode' else ['install', 'app'])
 raise SystemExit(cli.main(args))
 '''
 
@@ -463,3 +464,9 @@ def test_crash_during_rollback_retry(consumers, schema):
         assert result.returncode == 0, (result.stdout, result.stderr)
     assert target.read_bytes().count(b'# CocoaSkill project ') == 2
     assert all(_ignored(repository, project, '.agents/probe') for project in projects)
+
+
+# Concurrent mode migrations from linked worktrees retain both project blocks.
+@pytest.mark.parametrize('schema', [2, 3])
+def test_concurrent_mode_switches(consumers, tmp_path, schema):
+    _concurrent_witness(consumers, tmp_path, schema, 'ignore-mode', True)

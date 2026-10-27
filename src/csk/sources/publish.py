@@ -2722,7 +2722,10 @@ def make_publication_hook() -> PreWriteHook:
             raise TransactionError(f"{subject} recheck payload is not an object")
         kind = payload.get("kind")
         try:
-            if kind == _RECHECK_MANAGED:
+            if kind == "ignore-mode-file":
+                from ..ignore_policy import recheck_file
+                recheck_file(target)
+            elif kind == _RECHECK_MANAGED:
                 _hook_managed(target, payload, subject=subject)
             elif kind == _RECHECK_MCP_NATIVE:
                 root = _payload_str(payload, "root", subject=subject)

@@ -177,7 +177,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return EXIT_OK
     try:
-        return _dispatch(args)
+        from .skillfile_deprecations import command_warnings
+        with command_warnings():
+            return _dispatch(args)
     except gitignore_gate.GitignoreError as exc:
         print(f"error: {exc.code}: {exc}", file=sys.stderr)
         return EXIT_CONFIG
@@ -250,6 +252,11 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
 
     _add_bootstrap(sub)
     _add_init(sub)
+    ignore_parser = sub.add_parser("ignore-mode", help="Show or migrate project-local ignore placement.")
+    ignore_parser.add_argument("action", nargs="?", choices=["show", "set"], default="show")
+    ignore_parser.add_argument("mode", nargs="?", choices=["exclude", "gitignore"])
+    ignore_parser.add_argument("--project", default=".", metavar="PATH")
+    ignore_parser.add_argument("--json", action="store_true")
     _add_skill(sub)
     _add_install(
         sub,
@@ -927,6 +934,23 @@ def _dispatch(args: argparse.Namespace) -> int:
         print("Empty directories may remain; previous directory modes are not restored "
               "and may remain more restrictive. Rollback does not widen directory permissions.")
         return EXIT_OK
+    if args.command == "ignore-mode":
+        from . import ignore_policy
+        root = Path(args.project).expanduser().resolve()
+        if args.action == "set":
+            if args.mode is None:
+                raise ValueError("csk ignore-mode set requires exclude or gitignore")
+            ignore_policy.set_mode(root, config.config_path().parent, args.mode)
+        elif args.mode is not None:
+            raise ValueError("csk ignore-mode show takes no mode")
+        result = ignore_policy.show(root)
+        if args.json:
+            print(json.dumps(result))
+        else:
+            print("Ignore mode: " + result["mode"])
+            if result["deprecated_ignore_mode"] is not None:
+                print("Deprecated ignore_mode: " + result["deprecated_ignore_mode"])
+        return EXIT_OK
     if args.command == "bootstrap":
         return _cmd_bootstrap_refusing_eof(args)
     if args.command == "init":
@@ -1342,6 +1366,9 @@ def _cmd_init(args: argparse.Namespace) -> int:
     if not _is_inside_git_worktree(root):
         raise manifest.ManifestError("A git repository is required for csk init")
     loaded = manifest.load_manifest(root)
+    if loaded is not None:
+        from .skillfile_deprecations import require_writable
+        require_writable(manifest._read_payload(root / manifest.MANIFEST_NAME))
     ignore_mode = gitignore_gate.effective_mode(root, loaded.ignore_mode if loaded else None)
     entries = adapters.all_gitignore_entries() + [dev_substitutions.DEV_MANIFEST_NAME]
     if ignore_mode == "gitignore":

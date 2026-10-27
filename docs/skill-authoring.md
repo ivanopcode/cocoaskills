@@ -1359,3 +1359,26 @@ compiled:      <csk-home>/builds/go-v1/<64-hex-key>/
 4. После проверки удалите устаревший файл `agents/runtime.json`.
 
 Файл `agents/runtime.json` читается только при отсутствии `agent-skill.json` и устаревшего `csk-skill.json`.
+
+
+### Local ignore policy and legacy Skillfiles
+
+Ignore placement is local policy, not a portable Skillfile member. A managed
+CocoaSkill block in the project `.gitignore` selects that mode; without one,
+`$GIT_COMMON_DIR/info/exclude` is used. Inspect both the block-derived mode and any
+legacy field with `csk ignore-mode show`. Use `csk ignore-mode set exclude` or
+`csk ignore-mode set gitignore` to switch explicitly. These commands preserve
+user bytes outside the managed blocks and remove only the legacy top-level
+`ignore_mode` member, in the same recoverable transaction. No schema version
+change or stored replacement setting is needed. Symlinked policy files, tracked
+owned paths, ineffective rules, duplicate keys and unsafe edits refuse unchanged.
+
+Top-level `ignore_mode` and Cursor in `server.environments` are input-only
+compatibility forms in 0.21.x. Ordinary Skillfile writers refuse either with
+`skillfile_deprecated_form`, naming `csk ignore-mode set exclude` (or `gitignore`)
+and/or `csk mcp migrate`. Each migration removes only its own form and preserves
+the other byte-for-byte, so either order works. Every load warns on stderr,
+once per form per command; JSON stdout is unaffected, and a warning alone is not
+status drift. A Skillfile is portable only after migration of both forms;
+0.22 stops reading them. This does not promise cross-manager installation of
+every declaration or implementation-local option.
