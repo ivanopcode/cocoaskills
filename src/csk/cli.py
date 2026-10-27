@@ -1354,7 +1354,11 @@ def _cmd_init(args: argparse.Namespace) -> int:
     if not _is_inside_git_worktree(root):
         raise manifest.ManifestError("A git repository is required for csk init")
     loaded = manifest.load_manifest(root)
-    skillfile_compat.check_path(root / "Skillfile.json")
+    if loaded is not None:
+        skillfile_compat.refuse_write({
+            "mcp_servers": loaded.mcp_servers,
+            **({"ignore_mode": loaded.ignore_mode} if loaded.ignore_mode is not None else {}),
+        })
     ignore_mode = gitignore_gate.effective_mode(root, loaded.ignore_mode if loaded else None)
     entries = adapters.all_gitignore_entries() + [dev_substitutions.DEV_MANIFEST_NAME]
     if ignore_mode == "gitignore":

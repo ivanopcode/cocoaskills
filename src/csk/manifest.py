@@ -96,7 +96,6 @@ def _skillfile_present(path: Path) -> bool:
 
 
 def _write_skillfile_text(path: Path, text: str) -> None:
-    skillfile_compat.check_path(path)
     skillfile_compat.refuse_write(protocol_json.loads(text.encode()))
     try:
         path.write_text(text, encoding="utf-8")
