@@ -127,7 +127,10 @@ def replace_project_block(data: bytes, key: str, block: bytes | None) -> bytes:
         return data[:span[0]] + (block or b"") + data[span[1]:]
     if block is None:
         return data
-    return data + (b"\n" if data and not data.endswith(b"\n") else b"") + block
+    # Prepending avoids inventing a separator byte that survives block removal.
+    if data and not data.endswith(b"\n"):
+        return block + data
+    return data + block
 
 
 def write_exclude(path: Path, data: bytes) -> None:

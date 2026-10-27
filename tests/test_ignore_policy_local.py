@@ -36,13 +36,17 @@ def test_switch_preserves_user_bytes(policy, before, after):
     root, home = policy
     path = root / '.gitignore'
     path.write_bytes(before + b'# CocoaSkill\r\n.agents/\r\n' + after)
+    exclude = gitignore_gate.ignore_path(root, 'exclude')
+    exclude.parent.mkdir(exist_ok=True)
+    exclude_user = b'# exclude user \xff\r\n/private'
+    exclude.write_bytes(exclude_user)
     switch(root, home, 'exclude')
     assert path.read_bytes() == before + after
     assert gitignore_gate.effective_mode(root, None) == 'exclude'
     assert run(['git', 'check-ignore', '-q', '.agents/probe'], root).returncode == 0
     switch(root, home, 'gitignore')
     assert gitignore_gate.effective_mode(root, None) == 'gitignore'
-    assert gitignore_gate.project_block(gitignore_gate.ignore_path(root, 'exclude').read_bytes(), gitignore_gate.project_key(root)) is None
+    assert exclude.read_bytes() == exclude_user
     switch(root, home, 'exclude')
     assert path.read_bytes() == before + after
 
@@ -346,3 +350,13 @@ set_mode(Path(sys.argv[1]), Path(sys.argv[2]), 'gitignore', fault_hook=crash)
     assert files(root) == before
     switch(root, home, 'gitignore')
     assert gitignore_gate.effective_mode(root, None) == 'gitignore'
+
+
+# Adding then removing a shared block retains even user bytes with no final newline.
+@pytest.mark.parametrize('user', [b'# user \xff\r\n/private', b'# user\r\n/private\r\n'])
+def test_shared_block_roundtrip_preserves_user_bytes(user):
+    key = 'a' * 64
+    block = f'# CocoaSkill project {key}\n/.agents/\n# End CocoaSkill project {key}\n'.encode()
+    added = gitignore_gate.replace_project_block(user, key, block)
+    assert gitignore_gate.project_block(added, key) == block
+    assert gitignore_gate.replace_project_block(added, key, None) == user
