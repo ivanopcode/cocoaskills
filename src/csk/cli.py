@@ -142,8 +142,6 @@ def main(argv: list[str] | None = None) -> int:
             return go_v1.run_worker(_launch_context=launch_context)
     from .builds import toolchain as build_toolchain
 
-    from . import skillfile_compat
-    skillfile_compat.reset_warnings()
     build_toolchain.reset_go_future_warning_state()
     arguments = list(sys.argv[1:] if argv is None else argv)
     is_check = bool(arguments and arguments[0] == "check")
@@ -923,7 +921,7 @@ def _add_audit(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
 
 
 def _dispatch(args: argparse.Namespace) -> int:
-    from . import skillfile_compat
+    from . import skillfile_deprecations
     if args.command == "recover":
         from . import transactions
         from .locking import ManagerHomeLock
@@ -1004,7 +1002,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         roots = ([p.path for p in cfg.projects.values()] if args.command == "update" or getattr(args, "all", False)
                  else [_resolve_project_root(cfg, getattr(args, "target", None))])
         for root in roots:
-            skillfile_compat.check_path(root / "Skillfile.json")
+            skillfile_deprecations.check_path(root / "Skillfile.json")
     if args.command == "list":
         print(_render_list(cfg, show_paths=args.paths))
         return EXIT_OK
@@ -1350,7 +1348,7 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
-    from . import skillfile_compat
+    from . import skillfile_deprecations
     target = Path(args.path).expanduser()
     if not target.is_absolute():
         target = Path.cwd() / target
@@ -1383,7 +1381,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
         raise manifest.ManifestError("A git repository is required for csk init")
     loaded = manifest.load_manifest(root)
     if loaded is not None:
-        skillfile_compat.refuse_write({
+        skillfile_deprecations.require_writable({
             "mcp_servers": loaded.mcp_servers,
             **({"ignore_mode": loaded.ignore_mode} if loaded.ignore_mode is not None else {}),
         })
@@ -1569,7 +1567,7 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
 
 
 def _cmd_project_add(alias: str, path: Path) -> int:
-    from . import skillfile_compat
+    from . import skillfile_deprecations
 
     cfg = config.load_config()
     home = cfg.path.parent
@@ -1581,7 +1579,7 @@ def _cmd_project_add(alias: str, path: Path) -> int:
             file=sys.stderr,
         )
         return EXIT_CONFIG
-    skillfile_compat.check_path(path.expanduser() / "Skillfile.json")
+    skillfile_deprecations.check_path(path.expanduser() / "Skillfile.json")
     updated = config.add_project(cfg, alias, path)
     config.save_config(updated)
     manifest.ensure_project_manifest(path.expanduser(), alias=alias, agents=cfg.default_agents)
