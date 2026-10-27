@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Изменено
 
+- Local targets теперь отклоняют manager configuration и grants внутри любого репозитория, включая общий репозиторий вложенного проекта. Повтор миграции с незавершённым journal отказывает до публикации и требует recovery; после него preimages проверяются заново. Все writers Skillfile отклоняют неизвестные, пустые и повторяющиеся selectors до записи. Добавление local target требует terminal consent, удаление собственного grant разрешено без TTY.
 - `server.environments` приведён к общему vocabulary: `claude_code`, `codex_cli`, `opencode`, `pi`, `muse`. Известные цели без writer дают `skipped: unsupported` с недоступным путём, в том числе при отдельном отказе; неизвестные, пустые и повторяющиеся selectors отклоняются с `mcp_declaration_invalid`.
 - Отсутствующий selector теперь выбирает все writable targets независимо от skill `agents`: Claude Code, Codex CLI и csk-local Cursor. Для ограничения укажите `"environments": ["claude_code"]`. Cursor не является canonical adapter; новый destination не получает полномочия из старого узкого grant.
 - Legacy `cursor` в selector читается только как deprecated input с warning в stderr. Обычные writers Skillfile отказывают с `skillfile_deprecated_form`; `csk mcp migrate` атомарно удаляет Cursor и сохраняет его как отдельно одобренную local target. Cursor-only требует явного `--targets`; отсутствие или пустой selector не подставляется. Deprecated forms нужно мигрировать для portable Skillfile; в 0.22 их чтение прекращается.

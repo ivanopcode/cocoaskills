@@ -423,6 +423,18 @@ class TransactionEngine:
             journal = self._load_journal(transaction_id)
             self._resume(journal)
 
+    def require_recovered(self, lock: HomeLockWitness) -> None:
+        """Refuse read-before-recovery callers without changing journal state."""
+        lock.assert_held()
+        with self._mutex, self._witness_scope(lock):
+            pending = self._journal_ids()
+        if pending:
+            raise TransactionError(
+                "transaction_recovery_required: unfinished publication; "
+                "finish recovery with csk install or, to abandon an uncommitted "
+                f"publication, run csk recover --rollback {pending[0]}; then retry"
+            )
+
     def recover(self, lock: HomeLockWitness) -> None:
         """Recover every home journal, regardless of the initiating project."""
         lock.assert_held()

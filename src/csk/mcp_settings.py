@@ -78,10 +78,7 @@ def run(args: argparse.Namespace) -> None:
     # Read the config path only: these commands do not need credential-bearing configuration.
     home = config.config_path().parent.resolve()
     root = args.project.expanduser().resolve()
-    if home.is_relative_to(root):
-        raise ValueError(
-            "mcp_local_target_invalid: user configuration must be outside the repository"
-        )
+    local.validate_location(root, home)
     if args.command == "local-target" and args.target != "cursor":
         raise ValueError(
             "mcp_local_target_invalid: only cursor is a local writable target"
@@ -193,13 +190,13 @@ def run(args: argparse.Namespace) -> None:
         target = subject.scope.removeprefix("project-local:")
         state[target][subject.name] = o.consent_key(local.consumer(root), subject)
     data = local.encode(root, state)
-    if desired == before and state == current:
-        print("MCP local configuration unchanged")
-        return
     with locking.ProjectLock(home, root), locking.ManagerHomeLock(home) as lock:
         engine = transactions.TransactionEngine(
             home, pre_write_hook=publish.make_publication_hook()
         )
+        # This command planned from current preimages. Never forward-publish a
+        # prior transaction and then refuse on those now-stale preimages.
+        engine.require_recovered(lock)
         engine.recover(lock)
         if (
             manifest_path.read_bytes() != before
@@ -208,6 +205,9 @@ def run(args: argparse.Namespace) -> None:
             raise ValueError(
                 "mcp_local_target_invalid: project or local configuration changed; retry"
             )
+        if desired == before and state == current:
+            print("MCP local configuration unchanged")
+            return
         local.ensure_directory(home)
         record = boundaries.freeze_boundaries(root, home)
         record_json = boundaries.boundary_record_to_json(record)
