@@ -103,6 +103,9 @@ def _setup(root, existing=False, *, ignore_mode='gitignore'):
         assert result.returncode == 0, result.stdout + result.stderr
         source = case.project / 'source/seed/SKILL.md'
         source.write_bytes(source.read_bytes() + b'\nUpdated seed.\n')
+        # Upgrade must enter the recovery transaction with writable shared syntax;
+        # the installed gitignore block retains this fixture's existing policy.
+        case.skillfile.pop('ignore_mode', None)
         raw = declaration()
         raw['app']['server']['args'] = ['--updated']
         case.declare(raw)
