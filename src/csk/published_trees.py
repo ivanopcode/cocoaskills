@@ -30,17 +30,29 @@ class RuntimeInventoryUnavailable(Exception):
     """An unverified generation cannot be adopted or silently discarded."""
 
 
-def _entries(root: Path) -> list[tuple[Path, int]]:
+def _entries(
+    root: Path, *, inventory: Mapping[str, str] | None = None,
+    unreadable_foreign: set[Path] | None = None,
+) -> list[tuple[Path, int]]:
     """Walk real directories only, without opening links or special files."""
     entries: list[tuple[Path, int]] = []
     pending = [root]
     while pending:
         directory = pending.pop()
-        for path in sorted(directory.iterdir()):
-            mode = path.lstat().st_mode
-            entries.append((path, mode))
-            if stat.S_ISDIR(mode):
-                pending.append(path)
+        try:
+            children = sorted(directory.iterdir())
+            for path in children:
+                mode = path.lstat().st_mode
+                entries.append((path, mode))
+                if stat.S_ISDIR(mode):
+                    pending.append(path)
+        except PermissionError:
+            relative = directory.relative_to(root).as_posix()
+            if inventory is None or inventory.get(relative) == "directory" or directory == root:
+                raise
+            # Its parent already proves this directory is foreign; no descent is needed.
+            if unreadable_foreign is not None:
+                unreadable_foreign.add(directory)
     return sorted(entries)
 
 
@@ -98,7 +110,8 @@ def validate_tree(
     # A substituted root is handled by the existing publication-boundary gate.
     if not stat.S_ISDIR(root_mode):
         return
-    entries = _entries(path)
+    unreadable: set[Path] = set()
+    entries = _entries(path, inventory=inventory, unreadable_foreign=unreadable)
     foreign: list[Path] = []
     special: list[Path] = []
     for entry, mode in entries:
@@ -124,7 +137,12 @@ def validate_tree(
         quoted = "'" + str(remedy).replace("'", "''") + "'"
         command = f"Remove-Item -LiteralPath {quoted} -Recurse -Force"
     else:
-        command = f"rm -rf -- {shlex.quote(str(remedy))}"
+        quoted = shlex.quote(str(remedy))
+        command = f"rm -rf -- {quoted}"
+        if any(entry == remedy or entry.is_relative_to(remedy) for entry in unreadable):
+            # Only directories need write/search permissions for unlink; never chmod files or follow links.
+            command = (f"chmod u+rwx {quoted} && find -P {quoted} -type d "
+                       f"-exec chmod u+rwx {{}} \\; && {command}")
     raise RuntimeTreeModified(
         f"{CODE_RUNTIME_TREE_MODIFIED}: skill {skill!r}, member {member!r}: "
         f"foreign entry {display!r}. Skills must not write into their installed "
@@ -213,7 +231,10 @@ def make_private_writable(path: Path) -> None:
         if stat.S_ISDIR(mode):
             entry.chmod(stat.S_IMODE(mode) | stat.S_IRWXU)
         elif stat.S_ISREG(mode):
-            entry.chmod(stat.S_IMODE(mode) | stat.S_IRUSR | stat.S_IWUSR)
+            desired = stat.S_IMODE(mode) | stat.S_IRUSR | stat.S_IWUSR
+            require_exclusive_mode_change(entry, entry.lstat(), desired)
+            if desired != stat.S_IMODE(mode):
+                entry.chmod(desired)
 
 
 def seal_private_runtime(path: Path) -> None:
@@ -223,4 +244,19 @@ def seal_private_runtime(path: Path) -> None:
     entries = [(path, path.lstat().st_mode), *_entries(path)]
     for entry, mode in reversed(entries):
         if stat.S_ISREG(mode) or stat.S_ISDIR(mode):
-            entry.chmod(stat.S_IMODE(mode) & ~0o222)
+            desired = stat.S_IMODE(mode) & ~0o222
+            require_exclusive_mode_change(entry, entry.lstat(), desired)
+            if desired != stat.S_IMODE(mode):
+                entry.chmod(desired)
+
+
+def require_exclusive_mode_change(path: Path, info: os.stat_result, mode: int) -> None:
+    """A private pathname does not imply an exclusively owned regular-file inode."""
+    if stat.S_ISREG(info.st_mode) and info.st_nlink > 1 and stat.S_IMODE(info.st_mode) != mode:
+        remedy = (f"unlink only the hard-linked entry {str(path)!r} without changing its file attributes"
+                  if os.name == "nt" else f"rm -f -- {shlex.quote(str(path))}")
+        raise RuntimeTreeModified(
+            f"{CODE_RUNTIME_TREE_MODIFIED}: non-exclusive file inode at {str(path)!r}; "
+            f"refusing to change permissions on another hardlink. See {AUTHORING_GUIDE}\n"
+            f"remediation: {remedy}; then rerun the same command"
+        )

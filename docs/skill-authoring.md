@@ -48,7 +48,10 @@ writes; they are not a sandbox against an owner who deliberately changes modes.
 Install, replacement, upgrade, removal and GC use the transaction engine.
 Construction copies are private and writable; recorded final modes are applied
 before publication. Old generations are renamed out of the live namespace
-before journaled cleanup restores owner write on the private backup. Recovery
+before journaled cleanup restores owner write on directories whose entries it
+removes. On POSIX, cleanup unlinks regular files without changing their modes:
+a hardlink outside the tree retains its permissions. Private file mode changes
+refuse multiply-linked inodes rather than changing another link. Recovery
 resumes an interrupted mode change, and rollback preserves the old tree and its
 recorded modes. Never recursively chmod the live runtime as a repair step.
 
@@ -62,7 +65,11 @@ inventories come from the retained source snapshot; context inventories come
 from the install marker. The diagnostic names the skill and member, shows the
 offending path relative to `$CSK_HOME` when possible, and prints a shell-quoted
 remedy that removes only the foreign entry or its foreign enclosing directory.
-On POSIX this is `rm -rf -- '…/.venv'`; on Windows it uses PowerShell
+On POSIX this is `rm -rf -- '…/.venv'`. If a foreign directory is unreadable,
+the diagnostic first grants owner access to that foreign directory and uses
+`find -P` to grant access to directories inside that subtree before removal.
+It never chmods regular files or follows symlinks, preserving outside hardlinks.
+On Windows it uses PowerShell
 `Remove-Item -LiteralPath '…/.venv' -Recurse -Force`. Inspect that exact path,
 remove only that entry, and rerun the same csk command. csk never automatically
 deletes foreign entries and never recommends deleting the entire member tree.

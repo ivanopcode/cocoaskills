@@ -1783,7 +1783,8 @@ class TransactionEngine:
                 {entry.mode, writable_mode},
             )
             self._emit("before_sidecar_mode_writable", target)
-            _set_entry_mode_durably(entry_path, entry, writable_mode)
+            if stat.S_IMODE(entry_path.lstat().st_mode) != writable_mode:
+                _set_entry_mode_durably(entry_path, entry, writable_mode)
             _validate_cleanup_entry_modes(
                 entry_path,
                 entry,
@@ -2841,6 +2842,8 @@ def _set_entry_mode_durably(
         sync_fd: int | None = None
         try:
             before = os.fstat(witness_fd)
+            from .published_trees import require_exclusive_mode_change
+            require_exclusive_mode_change(path, before, mode)
             try:
                 sync_fd = os.open(path, os.O_RDWR | no_follow)
             except PermissionError:
@@ -3701,6 +3704,9 @@ def _cleanup_writable_mode(entry: CleanupTreeEntry) -> int:
         return 0
     if entry.kind == "directory":
         return entry.mode | stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
+    # POSIX unlink mutates the containing directory, never the file inode.
+    if not _is_windows():
+        return entry.mode
     return entry.mode | stat.S_IRUSR | stat.S_IWUSR
 
 
