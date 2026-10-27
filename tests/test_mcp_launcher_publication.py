@@ -16,7 +16,10 @@ from test_mcp_launchers import bundle, declaration, good_verification
 
 @pytest.fixture
 def local_app(tmp_path, monkeypatch):
-    case = _case(tmp_path / "case")
+    case = _case(tmp_path / "case", ignore_mode=None)
+    # Keep gitignore publication under the documented existing-block policy,
+    # without a deprecated Skillfile field that would refuse upgrade preflight.
+    (case.project / ".gitignore").write_text("# CocoaSkill\n", encoding="utf-8")
     case.declare(declaration())
     _, helper = bundle(tmp_path / "Applications")
     for key, value in case.env.items():
