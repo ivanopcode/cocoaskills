@@ -79,6 +79,14 @@ def test_legacy_effective_mode_across_commands(tmp_path, monkeypatch, capsys, sc
         assert output.err.count('not portable') == 1
         assert policy_bytes() == before
 
+    # Check the original field/block combination before install can repair or publish anything.
+    calls.clear()
+    code, output = command('status', 'app')
+    assert code == 0, output
+    assert (root, declared) in calls
+    assert 'Managed .gitignore block:' not in output.out
+    assert policy_bytes() == before
+
     calls.clear()
     code, output = command('install', 'app')
     assert (root, declared) in calls
