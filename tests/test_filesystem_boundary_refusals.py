@@ -922,17 +922,22 @@ def test_boundary_project_resolve_refuses(
 
 @pytest.mark.parametrize("err", ERRNO_CASES)
 def test_boundary_project_add_refuses(monkeypatch, tmp_path, csk_home, skills_root, capsys, err):
+    # The new Skillfile preflight refuses I/O failures before config or project writes; the sweep below supplies unfaulted controls.
     project = make_project(tmp_path)
     cfg = make_config(csk_home, skills_root, project)
     csk_config.save_config(cfg)
     monkeypatch.setenv("CSK_CONFIG", str(cfg.path))
     fresh = tmp_path / "fresh"
     fresh.mkdir()
-    with broad_fault(monkeypatch, target=fresh, err=err) as firings:
-        code = cli.main(["project", "add", "fresh", str(fresh)])
+    before = cfg.path.read_bytes()
+    with monkeypatch.context() as patch:
+        with broad_fault(patch, target=fresh, err=err) as firings:
+            code = cli.main(["project", "add", "fresh", str(fresh)])
     assert firings, "broad fault never fired; test is vacuous"
     assert code == cli.EXIT_CONFIG
-    assert "Cannot access project path" in capsys.readouterr().err
+    assert "Cannot read Skillfile at" in capsys.readouterr().err
+    assert cfg.path.read_bytes() == before
+    assert list(fresh.iterdir()) == []
 
 
 @pytest.mark.parametrize("err", ERRNO_CASES)
@@ -1837,10 +1842,9 @@ def test_sweep_project_resolve_each_ordinal_refuses(monkeypatch, tmp_path, capsy
 
 
 def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
-    """Project add faults every measured call, including the pre-write recheck.
+    """Project add sweeps preflight, presence/recheck, write and scope probes.
 
-    Scope probes that intentionally degrade retain their declared successful
-    outcomes; the new manifest presence recheck must refuse on I/O failure.
+    Each refusing site and each intentionally degrading scope probe is pinned.
     """
     monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
@@ -1864,6 +1868,7 @@ def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         sites=[
             ("os.stat", "csk.dispatch", "manager_home_inside_root"),
             ("os.lstat", "csk.dispatch", "manager_home_inside_root"),
+            ("io.open", "csk.skillfile_compat", "check_path"),
             ("os.stat", "csk.manifest", "_require_project_dir"),
             ("os.stat", "csk.manifest", "_skillfile_present"),
             ("os.stat", "csk.manifest", "_skillfile_present"),
@@ -1883,17 +1888,18 @@ def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         expect={
             1: ("ok", "Added project"),
             2: ("ok", "Added project"),
-            3: ("refuse", "Cannot access project path"),
-            4: ("refuse", "Cannot read Skillfile at"),
+            3: ("refuse", "Cannot read Skillfile at"),
+            4: ("refuse", "Cannot access project path"),
             5: ("refuse", "Cannot read Skillfile at"),
-            6: ("refuse", "Cannot write Skillfile at"),
-            7: ("ok", "Added project"),
-            8: ("refuse", "dispatch scope failed"),
+            6: ("refuse", "Cannot read Skillfile at"),
+            7: ("refuse", "Cannot write Skillfile at"),
+            8: ("ok", "Added project"),
             9: ("refuse", "dispatch scope failed"),
-            10: ("ok", "Added project"),
+            10: ("refuse", "dispatch scope failed"),
             11: ("ok", "Added project"),
             12: ("ok", "Added project"),
             13: ("ok", "Added project"),
+            14: ("ok", "Added project"),
         },
         dry=(cli.EXIT_OK, "Added project", ""),
         kp1=(cli.EXIT_OK, "Added project", ""),

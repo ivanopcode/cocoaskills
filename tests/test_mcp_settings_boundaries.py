@@ -106,7 +106,9 @@ sys.exit(cli.main(['mcp', 'migrate', '--project', sys.argv[1]]))
 @pytest.mark.parametrize(
     "selector", [["gemini"], ["windsurf"], [], ["pi", "pi"], ["claude_code"]]
 )
-@pytest.mark.parametrize("writer", ["add", "remove", "init", "update", "upgrade"])
+@pytest.mark.parametrize(
+    "writer", ["add", "remove", "init", "update", "upgrade", "project-add"]
+)
 def test_skillfile_writers_validate_selectors(project_cli, capsys, selector, writer):
     root, home, declare = project_cli
 
@@ -128,6 +130,8 @@ def test_skillfile_writers_validate_selectors(project_cli, capsys, selector, wri
         args = ["remove", "seed", "--project", str(root)]
     elif writer == "update":
         args = [writer]
+    elif writer == "project-add":
+        args = ["project", "add", "app", str(root)]
     else:
         args = [writer, str(root)]
     setup(selector)
