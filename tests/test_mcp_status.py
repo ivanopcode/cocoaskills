@@ -311,7 +311,7 @@ def test_deselected_agent_entries_are_orphaned_and_still_reported(tmp_path):
     case.declare({'docs': URL})
     _install(case)
     case.skillfile['agents'] = ['cursor']
-    case.declare({'docs': URL})
+    case.declare({'docs': {'server': {'transport': 'http', 'url': URL, 'environments': ['cursor']}}})
     _assert_status(case, _expected(['orphaned', 'orphaned', 'current']), skills_current=False)
 
 
@@ -337,7 +337,7 @@ def test_status_and_refused_install_keep_owned_removal_pairs(tmp_path, change, s
         states = ['orphaned'] * 3
     else:
         case.skillfile['agents'] = ['claude_code', 'cursor']
-        case.declare({'docs': URL})
+        case.declare({'docs': {'server': {'transport': 'http', 'url': URL, 'environments': ['claude_code', 'cursor']}}})
         states = ['current', 'orphaned', 'current']
     if surface_state == 'unreadable':
         states[1] = 'unreadable'

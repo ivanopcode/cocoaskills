@@ -30,7 +30,7 @@ def declaration(headers, *, agent=None, auth=None):
 def parse(headers, *, agent="claude_code", auth=None):
     return mcp.parse_mcp_servers(
         {"docs": declaration(headers, agent=agent, auth=auth)},
-        invocation_scope="project", target_agents=[agent],
+        invocation_scope="project", target_agents=[agent], allow_deprecated=True,  # Cursor rendering uses legacy input.
     )["docs"]
 
 
@@ -234,14 +234,15 @@ def test_unsupported_prefix_has_no_render_bypass(prefix):
     assert caught.value.code == "mcp_header_prefix_unsupported"
 
 
-# Existing none/bearer consent digests remain byte-compatible with pre-extension declarations.
+# Explicit legacy selections retain pre-extension none/bearer consent identities.
 @pytest.mark.parametrize("prefix,digest", [
     ("none", "ac222a69d76752e7e95fb43f8dd44792d9fdea6bfb6a3bf98a59c7ba40123e0a"),
     ("bearer", "3b196640c9c73e82ee25ff1403ffd53c31ee170e7f123f220b91320613c72132"),
 ])
 def test_existing_env_declaration_digest_unchanged(prefix, digest):
     raw = declaration({"Authorization": {"env": "DOCS_TOKEN", "prefix": prefix}})
-    decl = mcp.parse_mcp_servers({"docs": raw}, invocation_scope="project", target_agents=AGENTS)["docs"]
+    raw["server"]["environments"] = list(AGENTS)
+    decl = mcp.parse_mcp_servers({"docs": raw}, invocation_scope="project", target_agents=AGENTS, allow_deprecated=True)["docs"]
     assert mcp.declaration_digest(decl) == digest
 
 

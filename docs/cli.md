@@ -164,7 +164,7 @@ usage: csk status [-h] [--all] [--check] [--attest] [--json] [target]
 * `target`: алиас проекта, `.` или путь к проекту.
 * `-h`, `--help`: выводит краткое справочное сообщение.
 * `--all`: показывает статус для всех зарегистрированных проектов.
-* `--check`: завершает выполнение с кодом 1 при неактуальном скилле, ошибке проекта или MCP-состоянии кроме `current` и `unsupported`.
+* `--check`: завершает выполнение с кодом 1 при неактуальном скилле, ошибке проекта или MCP-состоянии кроме `current`, `skipped: unsupported` и informational updates.
 * `--attest`: проверяет установленные скиллы через доверенные реестры аудита.
 * `--json`: выводит данные в формате JSON вместо таблицы.
 
@@ -180,7 +180,7 @@ csk status --check
 
 **MCP в project Skillfile schema 3:**
 
-Строки имеют формат `mcp <server> -> <agent> <project-relative path> (<state>)`. csk перечисляет объявленные и ещё owned пары server/agent: сначала по имени сервера, затем `claude_code`, `codex_cli`, `cursor` и unsupported ids по алфавиту. Строки `mcp NAME -> AGENT (unsupported)` не содержат пути. Например:
+Строки имеют формат `mcp <server> -> <agent> <project-relative path> (<state>)`. csk перечисляет объявленные и ещё owned пары server/agent: сначала по имени сервера, затем `claude_code`, `codex_cli`, `cursor` и unsupported ids по алфавиту. Skipped pairs use `mcp NAME -> AGENT path: unavailable (skipped: unsupported)`; JSON keeps path/code null. Например:
 
 ```text
 mcp docs -> claude_code .mcp.json (current)
@@ -435,7 +435,22 @@ proof about arbitrary programs; non-default evaluators outside the recognized
 inventory and hidden execution semantics remain the documented limit.
 
 
-Для schema 3 объект MCP содержит `server` и необязательный `install`: локальные параметры записи и аутентификации устанавливающего менеджера. Без `server.environments` используются resolved agents проекта; явный writable id пишется даже вне этого набора. Известные unsupported ids дают `mcp NAME -> AGENT (skipped: unsupported)` без пути и отдельного warning, включая отчёт при отказе. Dry-run добавляет `would:`. Неизвестный id, дубликат или пустой список вызывает `mcp_agent_selection_invalid`. Добавление writable агента требует нового consent; unsupported ids в consent subject не входят. [Правила MCP](skill-authoring.md#project-mcp-schema-3) перечисляют ids и поля `install`.
+For schema 3, an MCP declaration contains `server` and optional local `install` options. `server.environments` uses only `claude_code`, `codex_cli`, `opencode`, `pi`, `muse`. Absence selects every writable destination (Claude Code, Codex CLI and csk-local Cursor), independently of skill agents. Explicit selectors do not widen. Known ids without writers produce `skipped: unsupported`, `path: unavailable`, including alongside another refusal; status skips do not count as drift. Invalid selectors use `mcp_declaration_invalid`. New destinations require new authority; an old narrow grant cannot approve them.
+
+### MCP local targets and migration
+
+```bash
+csk mcp local-target add cursor --server tools --project .
+csk mcp local-target list cursor --project .
+csk mcp local-target remove cursor --server tools --project .
+csk mcp migrate --project .
+csk mcp migrate --server tools --targets claude_code --project .
+csk install
+```
+
+Local targets are keyed by canonical project identity in `<config-dir>/state/mcp/local-targets/`; the repository never stores this setting. Omitting `--server` selects all explicitly targeted servers in that project. A terminal approves each local project/server target separately; an unavailable or declined approval leaves files unchanged. Status labels the effect `local: cursor` (JSON `local: true`), outside canonical adapter semantics. Removing a target revokes only its own local grant. Invalid local ids use `mcp_local_target_invalid`.
+
+`mcp migrate` removes only legacy Cursor array members, preserving other bytes, and records local Cursor targets in the same recoverable transaction. Mixed lists retain their canonical subset. Cursor-only lists refuse unchanged without `--targets`: fully local declarations are unsupported before 0.22, so explicitly choose canonical targets. The other deprecated form, `ignore_mode`, is preserved for `csk ignore-mode set`; both migrations are exempt from the other form's writer gate. Every ordinary Skillfile writer refuses deprecated input with `skillfile_deprecated_form` and migration guidance. Warnings go once per form to stderr, including for JSON status, and do not alone fail `status --check`. Both forms must be migrated before claiming portability; 0.22 stops reading them. Existing inline, launcher and install-option interoperability limits remain.
 
 ### csk update
 

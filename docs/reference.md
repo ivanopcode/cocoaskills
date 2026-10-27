@@ -196,13 +196,15 @@ Schema 3 сохраняет schema 2 и добавляет необязател�
 | `server.command` | Обязательное для stdio: имя executable без пути и shell. На Windows нужен native executable. |
 | `server.args` | Массив строк для stdio; секреты запрещены, `npx` и `uvx` требуют точной версии пакета. |
 | `server.env_names` | Список имён переменных без значений; управляющие имена вроде `PATH` запрещены. Env reference требует consent. |
-| `server.environments` | Список известных environment ids. Без поля используются resolved agents проекта. Явно указанные writable ids пишутся даже вне agents проекта; известные unsupported ids дают строку без пути. Пустой список, дубликаты и неизвестные ids запрещены. |
+| `server.environments` | Optional nonempty, unique list: `claude_code`, `codex_cli`, `opencode`, `pi`, `muse`. Absence remains absent in declaration identity and selects every writable target, independently of skill `agents`: Claude Code, Codex CLI and csk-local Cursor. Explicit selection never adds other canonical targets. |
 | `install.headers` | Только HTTP: каждому имени соответствует `{env, prefix?}` или объект только с `{value}`. Префиксы: `none` (по умолчанию), `bearer` (только для Authorization), `api-token`, `token`. Codex отклоняет последние два. Literals: не более 1024 UTF-8 bytes; секретные имена, совпадения secret scanner, `$`, управляющие, format и surrogate characters запрещены. См. [правила headers](skill-authoring.md#project-mcp-schema-3). |
 | `install.auth` | `kind: "none"`, `"env"` или `"oauth"` и необязательный `help_url`. По умолчанию `env` при env references, иначе `none`. HTTP OAuth допускает env/literal headers; consent нужен только для фактических env references. csk не выполняет аутентификацию. |
 | `install.scope` | Только `project`, это значение по умолчанию. `user` пока не поддерживается. |
 | `install.git_policy` | Только `local`, это значение по умолчанию. `shared` пока не поддерживается. |
 
-`server` не содержит `headers`, `auth`, `scope` или `git_policy`. Выбор агентов находится в `server.environments`. Известные ids: `claude_code`, `codex_cli`, `cursor`, `gemini`, `windsurf`, `opencode`. Первые три writable; остальные дают `skipped: unsupported` при install и `unsupported` при status, без пути и без влияния на `--check`. Unsupported ids исключены из consent subject; добавление writable агента требует нового consent. `install` задаёт локальные параметры записи и аутентификации устанавливающего менеджера. Старое поле `csk` отклоняется с `mcp_declaration_invalid`. Поля `auth`, `agents`, `scope` и `git_policy` на уровне DECL запрещены. Schema 1/2 отклоняют `mcp_servers`; глобальный Skillfile отклоняет schema 3. Собственные команды записи Skillfile не повышают schema автоматически.
+`server` excludes `headers`, `auth`, `scope` and `git_policy`; these stay in csk's local `install` options. Writable canonical ids are `claude_code` and `codex_cli`; explicitly selected `opencode`, `pi` and `muse` produce one `skipped: unsupported` row with `path: unavailable` (JSON path/code null), including alongside a separate refusal. They do not fail `status --check` alone. Cursor is a csk-local writer, not a canonical adapter. Unknown ids (including `gemini` and `windsurf`), empty lists and duplicates refuse with `mcp_declaration_invalid`.
+
+Only the private compatibility reader accepts legacy `cursor` selections, with an stderr warning. Normal Skillfile writers refuse with `skillfile_deprecated_form`; run `csk mcp migrate`. Local Cursor targeting uses `csk mcp local-target add cursor --server NAME --project PATH` and manager-local configuration, never `install.environments`. Both deprecated forms must be migrated before claiming portable Skillfile syntax; 0.22 stops reading them. This does not claim equivalent native installation in another manager: inline admission, launchers and local install options retain their separate compatibility limits.
 
 Поддерживаемые пути: Claude Code `.mcp.json`, Codex CLI `.codex/config.toml`, Cursor `.cursor/mcp.json`. csk пишет только native project configs. Managed sessions других environment managers пока их не видят. [Руководство по MCP](skill-authoring.md#project-mcp-schema-3) описывает consent, ownership, drift и отчёт.
 
@@ -215,7 +217,8 @@ Schema 3 сохраняет schema 2 и добавляет необязател�
 | `mcp_declaration_invalid` | Неверный тип, имя или неизвестное поле объявления. |
 | `mcp_header_prefix_unsupported` | Выбранный Codex target не может выразить `api-token`/`token` из env reference; весь план отклоняется до записи. |
 | `mcp_scope_mismatch` | Область объявления не совпадает с областью вызова. |
-| `mcp_agent_selection_invalid` | Пустой список, дубликаты или неизвестный environment id. |
+| `mcp_local_target_invalid` | Invalid operator-local target or protected local configuration. |
+| `skillfile_deprecated_form` | A normal Skillfile writer found input-only deprecated syntax; run the named migration. |
 | `mcp_env_name_reserved` | Объявление ссылается на управляющую или зарезервированную env variable. |
 | `mcp_command_invalid` | Небезопасное имя команды, shell/eval или недопустимая форма запуска. |
 | `mcp_url_invalid` | URL нарушает правила HTTPS, host или допустимых компонентов. |

@@ -6,13 +6,12 @@ import re
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
-from typing import Literal
+from typing import Literal, Any
 
 from csk import protocol_json, mcp_launchers
 from csk.audit import redaction
 from csk.mcp_base_commands import EXEC_CAPABLE_BASE_COMMANDS, is_base_command, is_base_recipe
 from csk.mcp_command_aliases import EVALUATOR_ALIASES
-from csk.mcp_configs import known_agents
 from csk.skillspec import McpServerRequirement
 
 
@@ -21,6 +20,8 @@ from csk.skillspec import McpServerRequirement
 # a pure requirement check. Everything here is pure: no filesystem, network,
 # environment, subprocess or clock access. Project installs compose these
 # declarations with the native codecs and protected ownership planner.
+
+CANONICAL_ENVIRONMENTS = ("claude_code", "codex_cli", "opencode", "pi", "muse")
 
 SLICE1_AGENTS: tuple[str, ...] = ("claude_code", "codex_cli", "cursor")
 
@@ -221,6 +222,8 @@ class McpDeclaration:
     git_policy: Literal["local"] = "local"
     # Reporting metadata is excluded from the writable model and its consent digest.
     unsupported_agents: tuple[str, ...] = ()
+    environments: tuple[str, ...] | None = None
+    local_agents: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -269,13 +272,15 @@ class _Draft:
 
 
 def parse_mcp_servers(
-    raw: object, *, invocation_scope: str, target_agents: Sequence[str]
+    raw: object, *, invocation_scope: str, target_agents: Sequence[str],
+    allow_deprecated: bool = False,
 ) -> dict[str, McpDeclaration]:
     """Parse the closed server/install grammar and normalize URL shorthand."""
     try:
-        return _parse_mcp_servers(
-            raw, invocation_scope=invocation_scope, target_agents=target_agents
+        parsed = _parse_mcp_servers(
+            raw, invocation_scope=invocation_scope, target_agents=target_agents, allow_deprecated=allow_deprecated
         )
+        return parsed
     except McpDeclarationError as exc:
         if exc.public_field:
             raise
@@ -299,7 +304,7 @@ def parse_mcp_servers(
 
 
 def _parse_mcp_servers(
-    raw: object, *, invocation_scope: str, target_agents: Sequence[str]
+    raw: object, *, invocation_scope: str, target_agents: Sequence[str], allow_deprecated: bool = False
 ) -> dict[str, McpDeclaration]:
     """Parse and classify a Skillfile `mcp_servers` object.
 
@@ -321,7 +326,7 @@ def _parse_mcp_servers(
                 "only project scope is supported",
             )
     _step2_rules(drafts, invocation_scope)
-    selected = {draft.name: _step3_agents(draft, target_agents) for draft in drafts}
+    selected = {draft.name: _step3_agents(draft, allow_deprecated=allow_deprecated) for draft in drafts}
     for draft in drafts:
         _step4_capability(draft, invocation_scope, selected[draft.name])
     declarations: dict[str, McpDeclaration] = {}
@@ -333,6 +338,7 @@ def _parse_mcp_servers(
             auth=draft.auth,
             agents=tuple(a for a in selected[draft.name] if a in SLICE1_AGENTS),
             unsupported_agents=tuple(a for a in selected[draft.name] if a not in SLICE1_AGENTS),
+            environments=tuple(sorted(draft.agents)) if draft.agents is not None else None,
         )
     return declarations
 
@@ -900,24 +906,16 @@ def _check_auth(draft: _Draft, server: ServerSpec | None) -> None:
         raise _invalid(f"{path}.kind", "kind oauth is http-only")
 
 
-def _step3_agents(draft: _Draft, target_agents: Sequence[str]) -> tuple[str, ...]:
+def _step3_agents(draft: _Draft, *, allow_deprecated: bool = False) -> tuple[str, ...]:
     path = f"{draft.path}.agents"
-    targets = set(target_agents)
     if draft.agents is None:
-        selected = tuple(sorted(targets & set(known_agents())))
-        if not selected and not targets:
-            raise _fail("mcp_agent_selection_invalid", path, "no target agent is supported by this slice")
-        return selected
-    if not draft.agents:
-        raise _fail("mcp_agent_selection_invalid", path, "agent list must not be empty")
-    if len(set(draft.agents)) != len(draft.agents):
-        raise _fail("mcp_agent_selection_invalid", path, "agent list must be unique")
-    known = known_agents()
+        return SLICE1_AGENTS
+    if not draft.agents or len(set(draft.agents)) != len(draft.agents):
+        raise _invalid(path, "environment list must be nonempty and unique")
+    known = (*CANONICAL_ENVIRONMENTS, "cursor") if allow_deprecated else CANONICAL_ENVIRONMENTS
     for index, agent in enumerate(draft.agents):
         if agent not in known:
-            raise _fail(
-                "mcp_agent_selection_invalid", f"{path}.{index}", "agent is unknown"
-            )
+            raise _invalid(f"{path}.{index}", "unknown canonical environment")
     return tuple(sorted(draft.agents))
 
 
@@ -961,7 +959,7 @@ def authority(decl: McpDeclaration) -> Authority:
 
 def declaration_digest(decl: McpDeclaration) -> str:
     server = decl.server
-    normalized = {
+    normalized: dict[str, Any] = {
         "name": decl.name,
         "server": {
             "transport": server.transport,
@@ -976,12 +974,12 @@ def declaration_digest(decl: McpDeclaration) -> str:
             ],
         },
         "auth": {"kind": decl.auth.kind, "help_url": decl.auth.help_url},
-        "agents": list(decl.agents),
+        "agents": list(decl.environments) if decl.environments is not None else None,
         "scope": decl.scope,
         "git_policy": decl.git_policy,
     }
     if server.launcher is not None:
-        normalized["server"]["launcher"] = {  # type: ignore[index]
+        normalized["server"]["launcher"] = {
             key: value for key, value in asdict(server.launcher).items() if value is not None
         }
     return hashlib.sha256(_DECLARATION_DOMAIN + protocol_json.canonical_bytes(normalized)).hexdigest()

@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - В 0.21.x legacy `ignore_mode` сохраняет приоритет до явной миграции: install, status, init, gates и `ignore-mode show` используют единый effective mode. `show` указывает источник — deprecated field, managed block или default; `ignore-mode set` удаляет override и сохраняет выбранную локальную policy после reload.
 - Ignore policy перенесена из Skillfile в расположение managed block: `csk ignore-mode show` показывает режим, `csk ignore-mode set exclude|gitignore` перемещает правила одной транзакцией под project/shared-exclude locks. Пользовательские байты сохраняются; отказ или recovery после crash восстанавливает `.gitignore`, exclude и Skillfile.
 - Старое поле `ignore_mode` и `cursor` в `server.environments` принимаются только на входе с предупреждением в stderr. Обычная запись Skillfile отказывает с `skillfile_deprecated_form`; миграции `csk ignore-mode set` и `csk mcp migrate` удаляют только свою форму без переформатирования остальных bytes и могут идти в любом порядке. Skillfile становится переносимым только после миграции обеих форм; в 0.22 чтение deprecated forms прекращается. Предупреждение само по себе не ломает `status --check` или JSON stdout.
+- `server.environments` приведён к общему vocabulary: `claude_code`, `codex_cli`, `opencode`, `pi`, `muse`. Известные цели без writer дают `skipped: unsupported` с недоступным путём, в том числе при отдельном отказе; неизвестные, пустые и повторяющиеся selectors отклоняются с `mcp_declaration_invalid`.
+- Отсутствующий selector теперь выбирает все writable targets независимо от skill `agents`: Claude Code, Codex CLI и csk-local Cursor. Для ограничения укажите `"environments": ["claude_code"]`. Cursor не является canonical adapter; новый destination не получает полномочия из старого узкого grant.
+- Legacy `cursor` в selector читается только как deprecated input с warning в stderr. Обычные writers Skillfile отказывают с `skillfile_deprecated_form`; `csk mcp migrate` атомарно удаляет Cursor и сохраняет его как отдельно одобренную local target. Cursor-only требует явного `--targets`; отсутствие или пустой selector не подставляется. Deprecated forms нужно мигрировать для portable Skillfile; в 0.22 их чтение прекращается.
+
+### Добавлено
+
+- `csk mcp local-target add|remove|list cursor [--server NAME] [--project PATH]`: operator-local выбор Cursor без изменения shared selector, с отдельным consent для каждого project/server target и отзывом только собственного grant. Неверный local id даёт `mcp_local_target_invalid`. Install и status показывают `local: cursor`; native writes проходят обычные ownership, no-start и rollback gates.
+
 
 ## [0.21.0] - 2026-10-26
 

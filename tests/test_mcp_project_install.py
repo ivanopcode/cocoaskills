@@ -88,7 +88,7 @@ def test_owned_removal_refusal_has_total_rows(tmp_path, change, surface_state, d
         case.declare({})
     else:
         case.skillfile["agents"] = ["claude_code", "cursor"]
-        case.declare({"docs": URL})
+        case.declare({"docs": {"server": {"transport": "http", "url": URL, "environments": ["claude_code", "cursor"]}}})
     before = acceptance._snapshot(case.project, case.home)
     result = case.run(*(["--dry-run"] if dry_run else []))
     assert result.returncode != 0, result.stdout
@@ -124,7 +124,7 @@ def test_invalid_declaration_reports_owned_removal_pairs(tmp_path):
     case.declare({"docs": URL})
     acceptance._assert_success(case.run("--fix-gitignore"))
     case.skillfile["agents"] = ["cursor"]
-    case.declare({"other": "http://example.invalid"})
+    case.declare({"other": {"server": {"transport": "http", "url": "http://example.invalid", "environments": ["cursor"]}}})
     before = acceptance._snapshot(case.project, case.home)
     result = case.run()
     assert result.returncode != 0
@@ -203,7 +203,7 @@ def test_bad_shorthand_is_atomic(project_cli, capsys, value, code):
 def test_removal_and_deselection(project_cli, capsys):
     root, _, declare = project_cli
     assert install() == 0
-    declare({"docs": URL}, agents=["cursor"])
+    declare({"docs": {"server": {"transport": "http", "url": URL, "environments": ["cursor"]}}}, agents=["cursor"])
     assert install() == 0
     assert not (root / PATHS[0]).exists() and not (root / PATHS[1]).exists()
     assert (root / PATHS[2]).exists()
@@ -331,7 +331,7 @@ def test_interactive_consent(project_cli, capsys, monkeypatch, answer):
     code = install()
     assert (
         len(prompts) == 1
-        and "Approve 1 MCP server(s) for app? [y/N]" == prompts[0].strip()
+        and "Approve 1 MCP server(s) for app (claude_code,codex_cli,cursor)? [y/N]" == prompts[0].strip()
     )
     # Unknown stdio programs disclose their limit alongside the exact argv.
     output = capsys.readouterr().out
@@ -497,19 +497,19 @@ def test_native_gitignore_gate(project_cli, capsys):
     assert run(["git", "ls-files", ".mcp.json"], root).stdout.strip() == ".mcp.json"
 
 
-# Resolved and explicitly listed unsupported environments each get one skipped row without warnings or writes.
+# Absent selection does not enumerate unwritable ids; an explicit canonical unwritable id gets one skipped row.
 def test_unsupported_agent_rows(project_cli, capsys):
     root, _, declare = project_cli
     declare({"docs": URL}, agents=[*AGENTS, "gemini"])
     assert install() == 0
     output = capsys.readouterr().out
-    assert output.count("mcp docs -> gemini (skipped: unsupported)") == 1
+    assert "mcp docs -> gemini" not in output
     assert "mcp_capability_unsupported" not in output
     declare(
         {
             "docs": URL,
             "other": {
-                "server": {"transport": "http", "url": URL, "environments": ["gemini"]}
+                "server": {"transport": "http", "url": URL, "environments": ["pi"]}
             }
         },
         agents=[*AGENTS, "gemini"],
@@ -517,7 +517,7 @@ def test_unsupported_agent_rows(project_cli, capsys):
     before = native_bytes(root)
     assert install() == 0
     output = capsys.readouterr().out
-    assert output.count("mcp other -> gemini (skipped: unsupported)") == 1
+    assert output.count("mcp other -> pi path: unavailable (skipped: unsupported)") == 1
     assert "mcp_capability_unsupported" not in output
     assert native_bytes(root) == before
 

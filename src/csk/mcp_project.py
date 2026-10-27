@@ -7,6 +7,7 @@ are displayed. The installer publishes staged outputs with the skill targets.
 
 from __future__ import annotations
 
+import itertools
 import hashlib
 import json
 import re
@@ -18,6 +19,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Literal
 
+from . import mcp_local_targets as local_targets
 from . import locking, mcp_configs, mcp_command_resolution, mcp_launchers, protocol_json, mcp_declarations as declarations
 from . import mcp_native as native, mcp_ownership as ownership, transactions
 from .skillspec import McpServerRequirement
@@ -42,6 +44,7 @@ class McpProjectError(ValueError):
 def refusal(code: str, detail: str) -> McpProjectError:
     remedies = {
         "mcp_plan_unapproved": "run csk install in a terminal to review and approve.",
+        "mcp_local_target_invalid": "repair the user-local target configuration or use csk mcp local-target, then retry.",
         "mcp_entry_conflict": "remove the declaration or move the existing native entry before retrying.",
         "mcp_ownership_unknown": "repair the protected manager MCP state before retrying.",
         "mcp_native_config_unreadable": "make the native path a readable regular file without links.",
@@ -107,12 +110,13 @@ def refused_report(
     return result
 
 
-def _raw_refusal_rows(
+def declaration_refusal_rows(
     raw: object,
     agents: Sequence[str],
     code: str,
     owned: Sequence[ownership.EntryAddress] = (),
-) -> list[str]:
+) -> tuple[ReportRow, ...]:
+    """Keep independently identifiable desired and owned pairs on preflight refusal."""
     pairs: set[tuple[str, str, str | None]] = {
         (address.name, address.agent, address.relpath) for address in owned
     }
@@ -124,22 +128,29 @@ def _raw_refusal_rows(
             and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", k)
         ):
             body = raw[name]
-            selected = agents
+            selected: Sequence[str] = AGENTS
             if isinstance(body, dict) and isinstance(body.get("server"), dict):
                 environments = body["server"].get("environments")
                 if isinstance(environments, list) and all(
                     isinstance(a, str) for a in environments
                 ):
                     selected = environments
-            for agent in set(selected) & set(mcp_configs.known_agents()):
+            for agent in set(selected) & set((*declarations.CANONICAL_ENVIRONMENTS, "cursor")):
                 if agent in AGENTS:
                     pairs.add((name, agent, native.project_surface(agent).relpath))
                 else:
                     pairs.add((name, agent, None))
-    return [row.render() for row in _ordered_rows(
+    return _ordered_rows(
         ReportRow(name, agent, path, "skipped: unsupported" if path is None else f"refused: {code}")
         for name, agent, path in pairs
-    )]
+    )
+
+
+def _raw_refusal_rows(
+    raw: object, agents: Sequence[str], code: str,
+    owned: Sequence[ownership.EntryAddress] = (),
+) -> list[str]:
+    return [row.render() for row in declaration_refusal_rows(raw, agents, code, owned)]
 
 
 @dataclass(frozen=True)
@@ -157,11 +168,13 @@ class ReportRow:
     agent: str
     path: str | None
     action: str
+    local: bool = False
 
     def render(self, *, dry_run: bool = False) -> str:
         prefix = "would: " if dry_run else ""
-        path = f" {self.path}" if self.path is not None else ""
-        return f"{prefix}mcp {self.server} -> {self.agent}{path} ({self.action})"
+        path = f" {self.path}" if self.path is not None else " path: unavailable"
+        label = "local: cursor" if self.local and self.agent == "cursor" else self.agent
+        return f"{prefix}mcp {self.server} -> {label}{path} ({self.action})"
 
 
 def _ordered_rows(rows: Iterable[ReportRow]) -> tuple[ReportRow, ...]:
@@ -174,7 +187,7 @@ def _unsupported_rows(
     parsed: Mapping[str, declarations.McpDeclaration], *, status: bool = False
 ) -> list[ReportRow]:
     return [
-        ReportRow(decl.name, agent, None, "unsupported" if status else "skipped: unsupported")
+        ReportRow(decl.name, agent, None, "skipped: unsupported")
         for decl in parsed.values() for agent in decl.unsupported_agents
     ]
 
@@ -197,6 +210,7 @@ class ProjectPlan:
     edits: Mapping[str, bytes | None]
     created_files: frozenset[tuple[str, str]]
     warnings: tuple[str, ...]
+    local_digest: str = transactions.ABSENT_DIGEST
 
     def report(self, *, dry_run: bool = False) -> list[str]:
         prefix = "would: " if dry_run else ""
@@ -331,7 +345,7 @@ def _read_declarations(
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     try:
         parsed = declarations.parse_mcp_servers(
-            raw, invocation_scope="project", target_agents=target_agents
+            raw, invocation_scope="project", target_agents=target_agents, allow_deprecated=True
         )
         mcp_command_resolution.validate_windows_batch_commands(parsed, windows=sys.platform == "win32")
         mcp_command_resolution.validate_host_commands(parsed, cwd=root)
@@ -415,6 +429,7 @@ def _plan_project(
         # Keep verified owned pairs even when declaration validation or native edits fail.
         owned.extend(entry.address for entry in ledger.entries)
     manifest_sha256, parsed = _read_declarations(root, target_agents, raw)
+    parsed = local_targets.apply(root, home, parsed)
     entry_read = _read_entries(root, target_agents, parsed, consumer, ledger)
     consumer, ledger = entry_read.consumer, entry_read.ledger
     desired, values = entry_read.desired, entry_read.values
@@ -492,7 +507,7 @@ def _plan_project(
             edits[agent] = None
     subjects = []
     for decl in parsed.values():
-        if decl.agents and declarations.authority(decl).consent_required and (
+        if any(a not in decl.local_agents for a in decl.agents) and declarations.authority(decl).consent_required and (
             decl.server.launcher is not None or any(
                 a.address.name == decl.name and a.kind in ("add", "restore", "replace")
                 for a in reconciliation.actions
@@ -503,14 +518,15 @@ def _plan_project(
             )
     try:
         pending = (
-            ownership.unapproved(
-                consumer, subjects, ownership.load_consent(home, consumer)
+            _unapproved_subjects(
+                parsed, subjects, consumer, ownership.load_consent(home, consumer)
             )
             if subjects
             else ()
         )
     except ownership.McpOwnershipError as exc:
         raise refusal(exc.code, "protected consent store cannot be verified") from exc
+    pending = (*pending, *local_targets.pending(root, home, parsed))
     rows = _ordered_rows([
         *_unsupported_rows(parsed),
         *[
@@ -519,6 +535,8 @@ def _plan_project(
             if a.kind != "forget"
         ],
     ])
+    rows = tuple(replace(row, local=row.agent in parsed[row.server].local_agents)
+                 if row.server in parsed else row for row in rows)
     warnings = [
         f"{w.code}: {w.address.name} -> {w.address.agent}; {w.detail}. Remove the declaration, or delete the native entry so csk restores it."
         for w in reconciliation.warnings
@@ -540,17 +558,19 @@ def _plan_project(
         edits,
         frozenset(created),
         tuple(warnings),
+        transactions.digest_target(local_targets.path(root, home)),
     )
 
 
 def _consent_subject(decl: declarations.McpDeclaration) -> ownership.ConsentSubject:
     launcher = decl.server.resolved_launcher
+    agents = tuple(a for a in decl.agents if a not in decl.local_agents)
     return ownership.ConsentSubject(
         decl.name,
-        decl.agents,
+        agents,
         "project",
         declarations.declaration_digest(decl),
-        tuple(native.project_surface(agent).capability for agent in decl.agents),
+        tuple(native.project_surface(agent).capability for agent in agents),
         launcher.path if launcher else None,
         launcher.trust if launcher else None,
         launcher.publisher if launcher else None,
@@ -563,6 +583,7 @@ def status_project(
     """Observe every desired/owned pair without planning edits or recording consent."""
     root, home, consumer, ledger = _read_ledger(root, home)
     _, parsed = _read_declarations(root, target_agents, raw, resolve_launchers=False)
+    parsed = local_targets.apply(root, home, parsed)
     untrusted: list[ReportRow] = []
     unsupported = _unsupported_rows(parsed, status=True)
     for name, decl in list(parsed.items()):
@@ -588,10 +609,10 @@ def status_project(
     )
     try:
         pending = {
-            subject.name
-            for subject in ownership.unapproved(
-                read.consumer, subjects, ownership.load_consent(home, read.consumer)
-            )
+            (subject.name, agent)
+            for subject in (*local_targets.pending(root, home, parsed), *_unapproved_subjects(
+                parsed, subjects, read.consumer, ownership.load_consent(home, read.consumer)
+            )) for agent in subject.agents
         }
     except ownership.McpOwnershipError as exc:
         raise refusal(exc.code, "protected consent store cannot be verified") from exc
@@ -610,7 +631,7 @@ def status_project(
             state = "conflict"
         elif actions.get(address) == "skip_drift":
             state = "drift"
-        elif address.name in pending:
+        elif (address.name, address.agent) in pending:
             state = "unapproved"
         elif actions.get(address) == "replace":
             state = "outdated"
@@ -623,9 +644,40 @@ def status_project(
         rows.append(ReportRow(address.name, address.agent, address.relpath, state))
     failed_pairs = {(row.server, row.agent) for row in untrusted}
     return _ordered_rows([
-        *[row for row in rows if (row.server, row.agent) not in failed_pairs],
+        *[replace(row, local=row.agent in parsed[row.server].local_agents) if row.server in parsed else row for row in rows if (row.server, row.agent) not in failed_pairs],
         *untrusted, *unsupported,
     ])
+
+
+
+def _unapproved_subjects(
+    parsed: Mapping[str, declarations.McpDeclaration], subjects: Sequence[ownership.ConsentSubject],
+    consumer: str, approved: frozenset[str],
+) -> tuple[ownership.ConsentSubject, ...]:
+    pending: list[ownership.ConsentSubject] = []
+    for subject in subjects:
+        if not subject.agents or not ownership.unapproved(consumer, [subject], approved):
+            continue
+        decl = parsed[subject.name]
+        covered: set[str] = set()
+        # Older releases bound the resolved set in the declaration digest. Probe
+        # only subsets of this exact writable set, never any other declaration.
+        for size in range(1, len(subject.agents) + 1):
+            for agents in itertools.combinations(subject.agents, size):
+                pair = replace(subject, agents=agents, capabilities=tuple(native.project_surface(a).capability for a in agents))
+                if not ownership.unapproved(consumer, [pair], approved):
+                    covered.update(agents)
+                if decl.environments is None:
+                    legacy = replace(decl, agents=agents, environments=agents)
+                    legacy_subject = replace(pair, declaration_sha256=declarations.declaration_digest(legacy))
+                    if not ownership.unapproved(consumer, [legacy_subject], approved):
+                        covered.update(agents)
+        if covered:
+            pending.extend(replace(subject, agents=(agent,), capabilities=(native.project_surface(agent).capability,))
+                           for agent in subject.agents if agent not in covered)
+        else:
+            pending.append(subject)
+    return tuple(pending)
 
 
 def _launcher_updated(
@@ -645,7 +697,9 @@ def planned_consent(plan: ProjectPlan) -> bytes | None:
         return None
     try:
         existing = ownership.load_consent(plan.home, plan.consumer)
-        keys = {ownership.consent_key(plan.consumer, s) for s in plan.pending}
+        keys = {ownership.consent_key(plan.consumer, s) for s in plan.pending if not s.scope.startswith("project-local:")}
+        if not keys:
+            return None
         return ownership.merge_consent(plan.consumer, existing, keys)
     except ownership.McpOwnershipError as exc:
         raise refusal(exc.code, "protected consent store cannot be verified") from exc
@@ -683,16 +737,19 @@ def review_consent(
             print(f"MCP plan {name}: csk cannot verify what this program runs.")
     if not plan.pending:
         return
-    if not interactive or not sys.stdin.isatty() or not sys.stdout.isatty():
-        raise refusal("mcp_plan_unapproved", "operator approval is required")
-    try:
-        answer = input(
-            f"Approve {len(plan.pending)} MCP server(s) for {project}? [y/N] "
-        )
-    except (EOFError, KeyboardInterrupt):
-        answer = ""
-    if answer.strip().lower() not in ("y", "yes"):
-        raise refusal("mcp_plan_unapproved", "operator did not approve")
+    # Initial server plans can be approved together. Added destinations and
+    # every local server/target are reviewed individually.
+    groups = ([list(plan.pending)] if all(len(s.agents) > 1 and not s.scope.startswith("project-local:") for s in plan.pending)
+              else [[subject] for subject in plan.pending])
+    for group in groups:
+        if not interactive or not sys.stdin.isatty() or not sys.stdout.isatty():
+            raise refusal("mcp_plan_unapproved", "operator approval is required")
+        try:
+            answer = input(f"Approve {len(group)} MCP server(s) for {project} ({','.join(group[0].agents)})? [y/N] ")
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer.strip().lower() not in ("y", "yes"):
+            raise refusal("mcp_plan_unapproved", "operator did not approve")
 
 
 def launcher_commit_guard(plan: ProjectPlan) -> dict[str, object]:
@@ -811,6 +868,8 @@ def assert_current(plan: ProjectPlan) -> None:
         != plan.manifest_sha256
     ):
         raise refusal("mcp_declaration_invalid", "Skillfile changed since MCP planning")
+    if transactions.digest_target(local_targets.path(plan.root, plan.home)) != plan.local_digest:
+        raise refusal("mcp_local_target_invalid", "local configuration changed since planning")
     try:
         refreshed = declarations.resolve_launchers(plan.declarations)
     except declarations.McpDeclarationError as exc:
@@ -911,6 +970,15 @@ def stage_targets(
     """Stage configs, ledger and candidate consent; the caller gates commit on approval."""
     assert_current(plan)
     targets = []
+    local_payload = local_targets.approved_payload(plan.root, plan.home, plan.pending)
+    if local_payload is not None:
+        local_targets.ensure_directory(plan.home)
+        local_staged = staging_root / "mcp-local-targets"
+        local_staged.write_bytes(local_payload)
+        local_staged.chmod(0o600)
+        local_path = local_targets.path(plan.root, plan.home)
+        targets.append(transactions.MutableTarget("mcp-local-targets", plan.consumer, local_path, local_staged,
+                       expected_preimage_digest=transactions.digest_target(local_path)))
     consent = planned_consent(plan)
     if consent is not None:
         ownership._ensure_private_directory(plan.home)
