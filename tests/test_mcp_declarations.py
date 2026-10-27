@@ -1393,6 +1393,7 @@ def test_view_may_be_a_one_shot_iterator_and_targets_are_deduplicated():
 # --- purity ---------------------------------------------------------------------
 
 
+# The grammar stays I/O-free, and its closed caller set includes the unified legacy writer gate.
 def test_module_remains_pure_when_install_is_wired():
     import ast
 
@@ -1410,7 +1411,7 @@ def test_module_remains_pure_when_install_is_wired():
                and path.name != "mcp_declarations.py"]
     # Read-only check and installation share the pure grammar; host resolution
     # composes it separately without introducing I/O into the grammar module.
-    assert sorted(callers) == ["cli.py", "mcp_command_resolution.py", "mcp_local_targets.py", "mcp_project.py", "mcp_settings.py", "skillfile_compat.py"]
+    assert sorted(callers) == ["cli.py", "mcp_command_resolution.py", "mcp_local_targets.py", "mcp_project.py", "mcp_settings.py", "skillfile_deprecations.py"]
 
 
 def test_public_api_touches_no_ambient_state(monkeypatch):
