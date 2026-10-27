@@ -9,7 +9,7 @@ from typing import Any
 
 from .sources.errors import SourceError
 
-IGNORE_MIGRATION = 'csk ignore-mode set exclude (or csk ignore-mode set gitignore)'
+IGNORE_MIGRATION = 'csk ignore-mode set exclude'
 CURSOR_MIGRATION = 'csk mcp migrate'
 _warned: ContextVar[set[str] | None] = ContextVar('skillfile_deprecation_warnings', default=None)
 
@@ -41,6 +41,7 @@ def forms(data: Mapping[str, Any]) -> dict[str, str]:
 
 def hints(data: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(f'{name} is not portable: other managers reject this Skillfile; run `{command}`'
+                  + (' (or `csk ignore-mode set gitignore`)' if name == 'ignore_mode' else '')
                  for name, command in forms(data).items())
 
 

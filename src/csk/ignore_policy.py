@@ -4,7 +4,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
 import stat
 import tempfile
 import uuid
@@ -137,8 +136,12 @@ def set_mode(root: Path, home: Path, mode: str, *, fault_hook: transactions.Faul
         with gate.exclude_file_lock(exclude):
             ignore = root / '.gitignore'
             skillfile = root / manifest.MANIFEST_NAME
+            root_info = root.stat()
             old_ignore = _regular_bytes(ignore)
             raw = _regular_bytes(skillfile)
+            preimages = {path: transactions.digest_target(path) for path in (ignore, skillfile)}
+            if _regular_bytes(ignore) != old_ignore or _regular_bytes(skillfile) != raw:
+                raise gate.GitignoreError('Ignore policy input changed while being read')
             original = gate._exclude_bytes(exclude)
             # Validate duplicate keys before loading, and preserve malformed
             # input rather than falling back to a whole-document serializer.
@@ -172,7 +175,8 @@ def set_mode(root: Path, home: Path, mode: str, *, fault_hook: transactions.Faul
                 staging = Path(tmp)
                 gate.verify_planned_ignored(root, entries, desired_exclude, staging,
                                            mode='exclude', project_ignore=desired_ignore or b'')
-                info = root.stat()
+                if any(transactions.digest_target(path) != digest for path, digest in preimages.items()):
+                    raise gate.GitignoreError('Ignore policy input changed during planning; retry the mode switch')
                 targets = []
                 for path, before, after in [(ignore, old_ignore, desired_ignore), (skillfile, raw, edited)]:
                     if before == after:
@@ -183,9 +187,9 @@ def set_mode(root: Path, home: Path, mode: str, *, fault_hook: transactions.Faul
                         desired.write_bytes(after)
                     targets.append(transactions.MutableTarget(
                         'ignore-mode-file', path.name, path, desired,
-                        expected_preimage_digest=transactions.digest_target(path),
+                        expected_preimage_digest=preimages[path],
                         publication_recheck={'kind': 'ignore-mode-file', 'project': str(root),
-                                             'root_identity': [info.st_dev, str(info.st_ino)]}))
+                                             'root_identity': [root_info.st_dev, str(root_info.st_ino)]}))
                 # Include the shared slice even for a no-op: recovery must lock
                 # it while restoring the other policy preimages.
                 desired_block = staging / 'exclude-block' if block is not None else None

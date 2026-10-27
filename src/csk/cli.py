@@ -940,7 +940,11 @@ def _dispatch(args: argparse.Namespace) -> int:
         if args.action == "set":
             if args.mode is None:
                 raise ValueError("csk ignore-mode set requires exclude or gitignore")
-            ignore_policy.set_mode(root, config.config_path().parent, args.mode)
+            from .transactions import TransactionError
+            try:
+                ignore_policy.set_mode(root, config.config_path().parent, args.mode)
+            except TransactionError as exc:
+                raise gitignore_gate.GitignoreError(str(exc)) from exc
         elif args.mode is not None:
             raise ValueError("csk ignore-mode show takes no mode")
         result = ignore_policy.show(root)

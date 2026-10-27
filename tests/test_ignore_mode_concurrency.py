@@ -126,7 +126,8 @@ def _concurrent_witness(consumers, tmp_path, schema, operation, linked, disabled
     assert data.count(b'# CocoaSkill project ') == 2
     if schema in {2, 3}:
         for project, cfg in zip(projects, configs):
-            retry = subprocess.run([sys.executable, '-m', 'csk', 'install', 'app'], cwd=project,
+            retry_args = (['ignore-mode', 'set', 'exclude'] if operation == 'ignore-mode' else ['install', 'app'])
+            retry = subprocess.run([sys.executable, '-m', 'csk', *retry_args], cwd=project,
                                    env=_env(cfg), text=True, capture_output=True, timeout=90)
             assert retry.returncode == 0, (retry.stdout, retry.stderr)
         assert (repository / '.git/info/exclude').read_bytes() == data

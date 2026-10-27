@@ -83,7 +83,8 @@ def test_refusal_is_unchanged_then_positive(policy, bad):
     before = files(root)
     with pytest.raises((gitignore_gate.GitignoreError, manifest.ManifestError, SourceError)) as error:
         switch(root, home, 'exclude')
-    assert 'ignore' in str(error.value).lower() or 'tracked' in str(error.value).lower() or 'Skillfile' in str(error.value)
+    expected = {'duplicate': 'skillfile_migration_unsafe', 'exclude': 'git_exclude_invalid'}
+    assert error.value.code == expected.get(bad, 'gitignore_required')
     assert files(root) == before
     if path:
         assert other.read_bytes() == before[path]
@@ -265,8 +266,8 @@ def test_status_warning_not_drift(policy, skills_root, capsys):
     from conftest import make_config
     root, home = policy
     config.save_config(make_config(home, skills_root, root))
-    assert cli.main(['install', 'app']) == 0
     write_skillfile(root, {'schema_version': 2, 'ignore_mode': 'exclude', 'skills': []})
+    assert cli.main(['install', 'app']) == 0
     capsys.readouterr()
     assert cli.main(['status', 'app', '--check', '--json']) == 0
     output = capsys.readouterr()
@@ -288,3 +289,60 @@ def test_outside_worktree_refuses(tmp_path, policy):
     assert (other / 'Skillfile.json').read_bytes() == original
     assert not (other / '.gitignore').exists()
     switch(root, home, 'exclude')
+
+
+# A concurrent Skillfile edit during verification is retained, never overwritten by a stale plan.
+def test_input_edit_during_planning_refuses(policy, monkeypatch):
+    root, home = policy
+    write_skillfile(root, {'schema_version': 2, 'ignore_mode': 'exclude', 'skills': []})
+    before = files(root)
+    original = gitignore_gate.verify_planned_ignored
+    changed = b'{"schema_version":2,"ignore_mode":"exclude","locale":"en","skills":[]}'
+    def edit(*args, **kwargs):
+        original(*args, **kwargs)
+        (root / 'Skillfile.json').write_bytes(changed)
+    monkeypatch.setattr(gitignore_gate, 'verify_planned_ignored', edit)
+    with pytest.raises(gitignore_gate.GitignoreError, match='input changed during planning'):
+        switch(root, home, 'gitignore')
+    expected = dict(before)
+    expected[root / 'Skillfile.json'] = changed
+    assert files(root) == expected
+    monkeypatch.setattr(gitignore_gate, 'verify_planned_ignored', original)
+    switch(root, home, 'gitignore')
+    assert json.loads((root / 'Skillfile.json').read_bytes())['locale'] == 'en'
+
+
+# A real child-process exit after a replacement leaves a journal that restores all three files.
+def test_process_death_restores_preimages(policy):
+    import os
+    import subprocess
+    import sys
+    root, home = policy
+    switch(root, home, 'exclude')
+    write_skillfile(root, {'schema_version': 2, 'ignore_mode': 'exclude', 'skills': []})
+    (root / '.gitignore').write_bytes(b'# user\r\n')
+    before = files(root)
+    code = '''
+import os, sys
+from pathlib import Path
+from csk.ignore_policy import set_mode
+seen = 0
+def crash(event, target):
+    global seen
+    if event == 'after_install':
+        seen += 1
+        if seen == 2: os._exit(86)
+set_mode(Path(sys.argv[1]), Path(sys.argv[2]), 'gitignore', fault_hook=crash)
+'''
+    env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src')}
+    result = subprocess.run([sys.executable, '-c', code, str(root), str(home)], env=env,
+                            capture_output=True, text=True, timeout=90)
+    assert result.returncode == 86, result.stdout + result.stderr
+    assert files(root) != before
+    from csk.locking import ManagerHomeLock
+    from csk.sources.publish import make_publication_hook
+    with ManagerHomeLock(home) as lock:
+        transactions.TransactionEngine(home, pre_write_hook=make_publication_hook()).recover(lock)
+    assert files(root) == before
+    switch(root, home, 'gitignore')
+    assert gitignore_gate.effective_mode(root, None) == 'gitignore'
