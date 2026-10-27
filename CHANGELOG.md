@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Исправлено
+
+- Запись скилла в установленное runtime-дерево больше не приводит к непонятному отказу install или upgrade: `runtime_tree_modified` называет скилл, member, посторонний путь и точную shell-quoted команду удаления только этого entry. Автоматического удаления нет. На POSIX runtime публикуется без write bits у файлов и каталогов с сохранением execute; install, upgrade, удаление и GC используют журналируемые permission steps и recovery. Существующие деревья защищаются при следующей успешной установке. На Windows права не меняются, действует диагностический отказ.
+
 ### Изменено
 
 - Совместимость Skillfile в 0.21.x: `ignore_mode` и `cursor` в `server.environments` принимаются только на входе. Для каждой формы выводится одно предупреждение в stderr за команду, без загрязнения JSON stdout; обычные writers отказывают с `skillfile_deprecated_form`. `csk ignore-mode set` и `csk mcp migrate` удаляют только свою форму, сохраняя остальные bytes, и работают в любом порядке. Skillfile переносим после обеих миграций; в 0.22 чтение deprecated forms прекращается. Само предупреждение не ломает `status --check`.

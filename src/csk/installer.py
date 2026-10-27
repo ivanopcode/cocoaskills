@@ -43,6 +43,7 @@ from . import (
     manifest,
     mcp_configs,
     protocol_json,
+    published_trees,
     shims,
     skillcheck,
     skillspec,
@@ -1129,7 +1130,7 @@ def _install_project_once(
                 agents,
             )
             target_preimages = _capture_target_preimages(
-                materialization_targets
+                materialization_targets, home=config.path.parent
             )
             private_builds = _build_private_misses(
                 config,
@@ -2975,7 +2976,14 @@ def _target_key(target: _MaterializationTarget) -> tuple[str, str]:
 
 def _capture_target_preimages(
     targets: tuple[_MaterializationTarget, ...],
+    *, home: Path,
 ) -> dict[tuple[str, str], str]:
+    published_trees.validate_legacy_store(home)
+    for target in targets:
+        if target.target_class == "20-runtime" or target.identifier.startswith("runtime/"):
+            published_trees.validate_legacy_runtime(target.live_path, home=home)
+        else:
+            published_trees.validate_context(target.live_path, home=home)
     return {
         _target_key(target): transactions.digest_target(
             target.live_path,
@@ -3411,6 +3419,8 @@ def _commit_transaction_targets(
         key = _target_key(target)
         wanted = desired[key]
         expected = target_preimages[key]
+        if wanted is not None and target.target_class == "20-runtime":
+            published_trees.seal_private_runtime(wanted)
         wanted_digest = (
             transactions.ABSENT_DIGEST
             if wanted is None
@@ -3503,6 +3513,7 @@ def _stage_materialization(
         config.path.parent / "runtime",
         staged_home / "runtime",
     )
+    published_trees.make_private_writable(staged_home / "runtime")
 
     staged_hybrid_store = hybrid.hybrid_skills_root(staged_home)
     final_hybrid_store = hybrid.hybrid_skills_root(config.path.parent)

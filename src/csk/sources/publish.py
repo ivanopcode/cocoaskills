@@ -14,7 +14,8 @@ engine, extended with a per-target recheck payload and a pre-write
 hook: this module builds the payloads and the hook, never a second
 engine, journal, or staging layout. Every filesystem failure that
 reaches a public entry point of this module is a structured
-``SourceError`` naming the offending subject.
+``SourceError`` naming the offending subject. Foreign published entries carry
+the shared actionable ``RuntimeTreeModified`` diagnostic instead.
 """
 
 from __future__ import annotations
@@ -64,7 +65,7 @@ from ..build_repository import (
     GO_REPOSITORY_V1_DRIVER,
     LockedCommit as BuildLockedCommit,
 )
-from .. import protocol_json, skillspec, whitelist
+from .. import protocol_json, published_trees, skillspec, whitelist
 from ..builds import cache as build_cache
 from ..builds import currentness as build_currentness
 from ..builds import metadata as build_metadata
@@ -288,6 +289,8 @@ class TargetSpec:
     live_path: Path
     kind: TargetKind
     staged: Path | None
+    member_identity: str | None = None
+    runtime_inventory: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -1112,6 +1115,7 @@ def stage_member_runtime(
                         f"staged: {exc}",
                     ) from exc
             _grant_staged_execute(staged_file, name=name, command=command_name)
+        published_trees.seal_private_runtime(runtime_staged)
     except SourceError:
         raise
     except _FS_ERRORS as exc:
@@ -1822,6 +1826,8 @@ def plan_schema2_targets(
     new_runtime_refs: set[tuple[str, str]],
     old_runtime_refs: set[tuple[str, str]],
     git_aliases: frozenset[str] = frozenset(),
+    runtime_labels: Mapping[str, str] | None = None,
+    frozen_files: Mapping[str, Mapping[str, snapshot.FrozenFile]] | None = None,
 ) -> tuple[tuple[TargetSpec, ...], tuple[adapters.AdapterTarget, ...], list[str]]:
     """Plan every publication target for one schema-2 install.
 
@@ -1918,6 +1924,7 @@ def plan_schema2_targets(
                     CODE_OUTPUT_OVERLAP,
                     f"Skill {member.name!r} destination is not a directory",
                 )
+            published_trees.validate_context(live, home=home)
             validate_live_managed_tree(live, subject=f"Skill {member.name!r} destination")
             if not live_context_managed(live, member.name):
                 raise SourceError(
@@ -1943,6 +1950,13 @@ def plan_schema2_targets(
                     live_path=runtime_entry_path(home, member.name, package_keys[member.name]),
                     kind="entry",
                     staged=None,
+                    member_identity=(runtime_labels or {}).get(
+                        _key_hex(package_keys[member.name], kind="package identity")
+                    ),
+                    runtime_inventory=(
+                        published_trees.runtime_inventory_from_files(spec, frozen_files[member.name])
+                        if frozen_files is not None else None
+                    ),
                 )
             )
         for command_name in sorted(
@@ -1992,6 +2006,7 @@ def plan_schema2_targets(
             # with a member destination, that destination's own check
             # above already refused.
             continue
+        published_trees.validate_context(live, home=home)
         validate_live_managed_tree(live, subject=f"Stale skill {stale!r}")
         specs.append(
             TargetSpec(
@@ -2030,6 +2045,7 @@ def plan_schema2_targets(
                 live_path=entry,
                 kind="entry",
                 staged=None,
+                member_identity=(runtime_labels or {}).get(package_hex),
             )
         )
 
@@ -2109,6 +2125,7 @@ def plan_schema2_targets(
     # any live ledger bytes csk did not write before a target is
     # emitted, identically for the schema-1 and schema-2 lanes.
     for target in adapter_targets:
+        published_trees.validate_context(target.live_path, home=home)
         specs.append(
             TargetSpec(
                 target_class=target.target_class,
@@ -2855,6 +2872,41 @@ def collect_admitted_identities(
     return frozenset(admitted)
 
 
+def _validate_runtime_inventory(spec: TargetSpec) -> None:
+    """Read the old member's stored inventory even when refresh selects a new key."""
+    path = spec.live_path
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(mode):
+        return
+    home = path.parents[3]
+    if spec.runtime_inventory is not None:
+        name, package_key = spec.identifier.split("/", 1)
+        published_trees.validate_tree(
+            path, home=home, skill=name, member=spec.member_identity or package_key,
+            inventory=spec.runtime_inventory,
+        )
+        return
+    record_dir = home / "source-v1" / "snapshots" / path.parent.name / path.name
+    record_path = record_dir / "record.json"
+    if not record_path.is_file() or record_path.is_symlink():
+        raise SourceError(CODE_SNAPSHOT_UNAVAILABLE, "runtime inventory record is unavailable")
+    record = protocol_json.loads(record_path.read_bytes())
+    if not isinstance(record, dict) or not isinstance(record.get("skill"), str) or not isinstance(record.get("package"), str):
+        raise SourceError(CODE_SNAPSHOT_UNAVAILABLE, "runtime inventory record is malformed")
+    name, package_key = record["skill"], record["package"]
+    if runtime_entry_path(home, name, package_key) != path:
+        raise SourceError(CODE_SNAPSHOT_UNAVAILABLE, "runtime inventory record names a different member")
+    stored = store.lookup_snapshot(home, name, package_key)
+    frozen = record_dir / "trees" / stored.snapshot.removeprefix("sha256:")
+    published_trees.validate_tree(
+        path, home=home, skill=name, member=spec.member_identity or stored.snapshot,
+        inventory=published_trees.runtime_inventory(frozen),
+    )
+
+
 def digest_live_targets(
     specs: tuple[TargetSpec, ...],
 ) -> dict[tuple[str, str], str]:
@@ -2868,6 +2920,8 @@ def digest_live_targets(
     digests: dict[tuple[str, str], str] = {}
     for spec in specs:
         key = (spec.target_class, spec.identifier)
+        if spec.target_class == CLASS_RUNTIME or spec.identifier.startswith("runtime/"):
+            _validate_runtime_inventory(spec)
         try:
             digests[key] = digest_target(spec.live_path, kind=spec.kind)
             if digests[key] == ABSENT_DIGEST:
@@ -4746,6 +4800,14 @@ def _plan_and_publish_schema2(
         old_runtime_refs = (
             _referenced_runtime_keys(old_lock) if old_lock is not None else set()
         )
+        packages = [item.package for item in captured_members.values()]
+        if old_lock is not None:
+            packages.extend(member.package for member in old_lock.members)
+        runtime_labels = {
+            _key_hex(package_identity_sha256(package), kind="package identity"):
+            package.snapshot if isinstance(package, LocalSnapshot) else package.commit.hex
+            for package in packages
+        }
         planned, adapter_targets, plan_messages = plan_schema2_targets(
             mode=mode,
             home=home,
@@ -4759,6 +4821,8 @@ def _plan_and_publish_schema2(
             new_runtime_refs=new_runtime_refs,
             old_runtime_refs=old_runtime_refs,
             git_aliases=git_aliases,
+            runtime_labels=runtime_labels,
+            frozen_files=pred_files,
         )
         try:
             preimages = digest_live_targets(planned)
@@ -7270,6 +7334,7 @@ def _evaluate_live_outputs(
             new_runtime_refs=lock_runtime_refs,
             old_runtime_refs=lock_runtime_refs,
             git_aliases=git_aliases,
+            frozen_files=pred_files,
         )
         manifest_data, _reread = _read_fresh_manifest(project_path)
         staged = stage_schema2_desired(
@@ -7293,7 +7358,7 @@ def _evaluate_live_outputs(
             build_outputs=build_outputs,
             git_aliases=git_aliases,
         )
-    except SourceError as exc:
+    except (SourceError, published_trees.RuntimeTreeModified) as exc:
         return Schema2Status(
             members=verdicts, errors=(str(exc),), lock_sha256=lock_digest
         )
