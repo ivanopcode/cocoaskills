@@ -381,3 +381,45 @@ def test_policy_input_io_fault_is_typed(tmp_path, monkeypatch, operation, number
         with pytest.raises(gitignore_gate.GitignoreError, match='Cannot read ignore policy file'):
             _regular_bytes(path)
     assert _regular_bytes(path) == original_bytes
+
+
+# These root IDs survive journaling; a changed device refuses unchanged, then a valid retry succeeds.
+@pytest.mark.parametrize('device,inode', [
+    (7, 11),
+    (14327653724976912375, 11),
+    (7, 2**127 + 7),
+    (2**64 - 1, 2**128 - 1),
+])
+def test_wide_root_identity_refusal_and_retry(policy, monkeypatch, device, inode):
+    from types import SimpleNamespace
+    root, home = policy
+    write_skillfile(root, {'schema_version': 2, 'ignore_mode': 'exclude', 'skills': []})
+    (root / '.gitignore').write_bytes(b'# user\r\n')
+    original = Path.stat
+    identity = [device, inode]
+    def stat_with_identity(self, *args, **kwargs):
+        info = original(self, *args, **kwargs)
+        if self != root:
+            return info
+        proxy = SimpleNamespace(**{key: getattr(info, key) for key in dir(info) if key.startswith('st_')})
+        proxy.st_dev, proxy.st_ino = identity
+        return proxy
+    monkeypatch.setattr(Path, 'stat', stat_with_identity)
+    before = files(root)
+    def replace_identity(event, target):
+        if event == 'prepared':
+            identity[0] = device + 1
+    with pytest.raises(ExceptionGroup) as failure:
+        try:
+            switch(root, home, 'gitignore', fault_hook=replace_identity)
+        finally:
+            identity[0] = device
+    assert len(failure.value.exceptions) == 2
+    assert all(isinstance(error, gitignore_gate.GitignoreError) and
+               str(error) == 'Ignore policy project identity changed'
+               for error in failure.value.exceptions)
+    assert files(root) == before
+    switch(root, home, 'gitignore')
+    assert manifest.load_manifest(root).ignore_mode is None
+    assert gitignore_gate.effective_mode(root, None) == 'gitignore'
+    assert (root / '.gitignore').read_bytes().endswith(b'# End CocoaSkill\n')

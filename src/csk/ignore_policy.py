@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from . import adapters, gitignore_gate as gate, locking, manifest, protocol_json, transactions
+from .sources import boundaries
 from .sources.errors import SourceError
 
 
@@ -117,7 +118,8 @@ def recheck_file(target: transactions.JournalTarget) -> None:
     if path.parent != root or path.name not in {'.gitignore', 'Skillfile.json'}:
         raise transactions.TransactionError('Invalid ignore-mode policy destination')
     info = root.stat()
-    if [info.st_dev, str(info.st_ino)] != payload['root_identity']:
+    if (info.st_dev, info.st_ino) != boundaries._identity_from_json(
+            payload['root_identity'], subject='Ignore policy project identity'):
         raise gate.GitignoreError('Ignore policy project identity changed')
     _regular_bytes(path)
 
@@ -194,7 +196,7 @@ def set_mode(root: Path, home: Path, mode: str, *, fault_hook: transactions.Faul
                         'ignore-mode-file', path.name, path, desired,
                         expected_preimage_digest=preimages[path],
                         publication_recheck={'kind': 'ignore-mode-file', 'project': str(root),
-                                             'root_identity': [root_info.st_dev, str(root_info.st_ino)]}))
+                                             'root_identity': boundaries._identity_to_json((root_info.st_dev, root_info.st_ino))}))
                 # Include the shared slice even for a no-op: recovery must lock
                 # it while restoring the other policy preimages.
                 desired_block = staging / 'exclude-block' if block is not None else None
