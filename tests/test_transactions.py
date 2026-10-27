@@ -1275,10 +1275,11 @@ def test_recovery_rejects_foreign_mode_during_read_only_cleanup(
     entry_path = Path(active["tomb_path"])
     if entry["relative_path"]:
         entry_path = entry_path.joinpath(*Path(entry["relative_path"]).parts)
-    # The active write-ahead entry may validly have either mode. This prior
-    # file is durably writable, so restoring read-only is unambiguously foreign.
-    _assert_mode_identity(entry_path, 0o644)
-    foreign_mode = 0o444
+    # A completed file step preserves POSIX mode; changing it remains foreign.
+    # Windows alone restores the writable attribute needed for deletion.
+    completed_mode = 0o644 if transactions._is_windows() else 0o444
+    _assert_mode_identity(entry_path, completed_mode)
+    foreign_mode = 0o444 if transactions._is_windows() else 0o644
     entry_path.chmod(foreign_mode)
     _assert_mode_identity(entry_path, foreign_mode)
     before_mode = entry_path.stat().st_mode & 0o777
