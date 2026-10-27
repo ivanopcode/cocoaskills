@@ -1,13 +1,16 @@
 """First-run MCP contracts, including refusal ordering and publication failure."""
 
+import json
 import socket
 import sys
 
 import pytest
 
-from csk import cli, mcp_ownership, transactions
+from csk import cli, gitignore_gate, mcp_ownership, transactions
 from csk.sources.errors import SourceError, CODE_OUTPUT_OVERLAP
 from csk.sources import publish
+from conftest import write_skillfile
+from test_mcp_install_acceptance import _snapshot
 from test_mcp_project_install import AGENTS, PATHS, URL, native_bytes, project_cli
 
 
@@ -38,22 +41,33 @@ def test_check_schema3(project_cli, monkeypatch, capsys, value, code):
     assert not list((home / "state/mcp").rglob("*.json"))
 
 
-# Normal init/install needs no deprecated flag; dry-run predicts ignores without writing them.
+# Legacy init refuses unchanged; clean init/install repairs only local MCP excludes.
 def test_init_install_mcp_ignores(project_cli, capsys):
-    root, _, _ = project_cli
+    root, home, _ = project_cli
+    before = _snapshot(root, home)
+    command = ["init", str(root), "--alias", "app", "--agents", ",".join(AGENTS), "--no-interactive"]
+    assert cli.main(command) == 2
+    assert "skillfile_deprecated_form" in capsys.readouterr().err
+    assert _snapshot(root, home) == before
+    data = json.loads((root / "Skillfile.json").read_text())
+    data.pop("ignore_mode")
+    write_skillfile(root, data)
     assert cli.main(["init", str(root), "--alias", "app", "--agents", ",".join(AGENTS), "--no-interactive"]) == 0
+    assert "ignore_mode" not in json.loads((root / "Skillfile.json").read_text())
     before = (root / ".gitignore").read_bytes()
     assert cli.main(["install", "app", "--dry-run"]) == 0
     assert (root / ".gitignore").read_bytes() == before
     assert native_bytes(root) == {}
     assert "would: added MCP gitignore entries:" in capsys.readouterr().out
     assert cli.main(["install", "app"]) == 0
-    text = (root / ".gitignore").read_text()
-    assert text.count("# CocoaSkill") == 1
+    assert (root / ".gitignore").read_bytes() == before
+    text = gitignore_gate.ignore_path(root, "exclude").read_text()
+    assert text.count("# CocoaSkill project ") == 1
     assert all("/" + path in text.splitlines() for path in PATHS)
     assert "added MCP gitignore entries:" in capsys.readouterr().out
     assert cli.main(["install", "app"]) == 0
-    assert (root / ".gitignore").read_text() == text
+    assert (root / ".gitignore").read_bytes() == before
+    assert gitignore_gate.ignore_path(root, "exclude").read_text() == text
 
 
 # A non-MCP ignore failure precedes consent and identifies the real project cause on every row.
