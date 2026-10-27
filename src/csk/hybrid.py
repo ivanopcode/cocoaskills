@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import manifest, protocol_json, skillfile_compat
+from . import manifest, protocol_json, skillfile_deprecations
 
 
 # Hybrid-scope skills are stored once per machine under the csk home and
@@ -155,7 +155,7 @@ def _read_or_init(path: Path) -> dict[str, Any]:
 
 
 def _validate_and_write(path: Path, data: dict[str, Any]) -> None:
-    skillfile_compat.refuse_write(data)
+    skillfile_deprecations.require_writable(data)
     manifest.parse_manifest(data, path, skill_extension_fields={"targets"})
     _targets_by_name(data, path)
     path.parent.mkdir(parents=True, exist_ok=True)

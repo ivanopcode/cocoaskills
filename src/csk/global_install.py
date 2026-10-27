@@ -29,7 +29,7 @@ from . import (
     mcp_project,
     protocol_json,
     shims,
-    skillfile_compat,
+    skillfile_deprecations,
     status,
     transactions,
 )
@@ -243,7 +243,7 @@ def _check_retained_command_collisions(
 
 def init(csk_home: Path, *, default_agents: list[str] | None = None) -> Path:
     path = global_skillfile(csk_home)
-    skillfile_compat.check_path(path)
+    skillfile_deprecations.check_path(path)
     root = global_root(csk_home)
     root.mkdir(parents=True, exist_ok=True)
     global_skills_root(csk_home).mkdir(parents=True, exist_ok=True)
@@ -296,7 +296,7 @@ def remove_decl(csk_home: Path, name: str) -> None:
     if not path.exists():
         raise GlobalInstallError(f"Global Skillfile not found: {path}\n  Run 'csk global init' first.")
     data = _read_global_payload(path)
-    skillfile_compat.refuse_write(data)
+    skillfile_deprecations.require_writable(data)
     skills = data.get("skills")
     if not isinstance(skills, list):
         raise GlobalInstallError("Global Skillfile field 'skills' must be a list")
@@ -1473,6 +1473,6 @@ def _read_global_payload(path: Path) -> dict[str, Any]:
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
-    skillfile_compat.refuse_write(data)
+    skillfile_deprecations.require_writable(data)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")

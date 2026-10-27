@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from . import adapters, gitignore_gate as gate, locking, manifest, protocol_json, transactions
+from . import adapters, gitignore_gate as gate, locking, manifest, protocol_json, transactions, skillfile_deprecations
 from .sources import boundaries
 from .sources.errors import SourceError
 
@@ -169,6 +169,8 @@ def set_mode(root: Path, home: Path, mode: str, *, fault_hook: transactions.Faul
             # Validate duplicate keys before loading, and preserve malformed
             # input rather than falling back to a whole-document serializer.
             edited = remove_ignore_member(raw) if raw is not None else None
+            if raw is not None:
+                skillfile_deprecations.require_writable(protocol_json.loads(raw), migration="ignore_mode")
             loaded = manifest.load_manifest(root)
             if loaded is None:
                 raise manifest.ManifestError('Skillfile.json missing; run csk init first')

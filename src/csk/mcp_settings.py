@@ -12,7 +12,7 @@ from typing import Any
 from pathlib import Path
 from dataclasses import replace
 
-from . import config, manifest, locking, protocol_json, transactions, skillfile_compat
+from . import config, manifest, locking, protocol_json, transactions, skillfile_deprecations
 from . import mcp_command_resolution, mcp_project
 from . import mcp_declarations as d, mcp_local_targets as local, mcp_ownership as o
 from .sources import boundaries, publish
@@ -44,7 +44,8 @@ def main(argv: list[str]) -> int:
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else 1
     try:
-        run(args)
+        with skillfile_deprecations.command_warnings():
+            run(args)
         return 0
     except (
         ValueError,
@@ -85,8 +86,8 @@ def run(args: argparse.Namespace) -> None:
         )
     manifest_path = root / "Skillfile.json"
     if manifest_path.is_symlink() or not stat.S_ISREG(manifest_path.lstat().st_mode):
-        raise ValueError(
-            "skillfile_deprecated_form: Skillfile must be a regular file without links"
+        raise skillfile_deprecations.refusal(
+            "Skillfile must be a regular file without links"
         )
     before = manifest_path.read_bytes()
     loaded = manifest.parse_manifest(protocol_json.loads(before), manifest_path)
@@ -111,7 +112,7 @@ def run(args: argparse.Namespace) -> None:
     subjects = []
     if args.command == "migrate":
         targets = tuple(args.targets.split(",")) if args.targets is not None else None
-        desired, names = skillfile_compat.migrate_cursor(
+        desired, names = skillfile_deprecations.migrate_cursor(
             before, server=args.server, targets=targets
         )
         after = manifest.parse_manifest(protocol_json.loads(desired), manifest_path)

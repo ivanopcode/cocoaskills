@@ -151,7 +151,8 @@ def test_legacy_writer_refusal(project_cli, capsys, legacy):
     if legacy != "ignore_mode":
         assert "csk mcp migrate" in error
     if legacy != "cursor":
-        assert "csk ignore-mode set <exclude|gitignore>" in error
+        assert "csk ignore-mode set exclude" in error
+        assert "csk ignore-mode set gitignore" in error
     assert _snapshot(root, home) == before
     declare(declaration(["claude_code"]))
     data = json.loads((root / "Skillfile.json").read_bytes())
@@ -607,7 +608,7 @@ def test_unsupported_metadata_does_not_widen_authority():
 
 # Refresh preflight converts an injected read failure into the public manifest error; a readable clean file passes unchanged.
 def test_preflight_read_failure_is_normalized(tmp_path, monkeypatch):
-    from csk import skillfile_compat
+    from csk import skillfile_deprecations
 
     path = tmp_path / "Skillfile.json"
     original = b'{"schema_version": 3, "skills": []}'
@@ -619,6 +620,6 @@ def test_preflight_read_failure_is_normalized(tmp_path, monkeypatch):
 
         patch.setattr(Path, "read_bytes", fail)
         with pytest.raises(manifest.ManifestError, match="Cannot read Skillfile at"):
-            skillfile_compat.check_path(path)
-    skillfile_compat.check_path(path)
+            skillfile_deprecations.check_path(path)
+    skillfile_deprecations.check_path(path)
     assert path.read_bytes() == original

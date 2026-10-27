@@ -1868,7 +1868,7 @@ def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         sites=[
             ("os.stat", "csk.dispatch", "manager_home_inside_root"),
             ("os.lstat", "csk.dispatch", "manager_home_inside_root"),
-            ("io.open", "csk.skillfile_compat", "check_path"),
+            ("io.open", "csk.skillfile_deprecations", "check_path"),
             ("os.stat", "csk.manifest", "_require_project_dir"),
             ("os.stat", "csk.manifest", "_skillfile_present"),
             ("os.stat", "csk.manifest", "_skillfile_present"),
