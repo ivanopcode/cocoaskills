@@ -13,7 +13,7 @@ from pathlib import Path
 from dataclasses import replace
 
 from . import config, manifest, locking, protocol_json, transactions, skillfile_compat
-from . import mcp_command_resolution
+from . import mcp_command_resolution, mcp_project
 from . import mcp_declarations as d, mcp_local_targets as local, mcp_ownership as o
 from .sources import boundaries, publish
 
@@ -180,6 +180,14 @@ def run(args: argparse.Namespace) -> None:
         for subject in subjects
     ]
     # No lock, journal, config or native file is changed until every approval is available.
+    mcp_project.print_plan(
+        {
+            subject.name: replace(
+                parsed[subject.name], agents=("cursor",), local_agents=("cursor",)
+            )
+            for subject in subjects
+        }
+    )
     _approve(subjects)
     for subject in subjects:
         target = subject.scope.removeprefix("project-local:")
