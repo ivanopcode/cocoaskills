@@ -1793,6 +1793,9 @@ def test_status_is_read_only_and_nonzero_when_not_current(
             csk_home, "review", package_identity_sha256(package)
         )
         probe = entry / "tampered.txt"
+        # Model a legacy writable installation; ordinary writes to a new tree refuse.
+        if os.name == "posix":
+            entry.chmod(stat.S_IMODE(entry.stat().st_mode) | stat.S_IWUSR)
         probe.write_text("tampered\n", encoding="utf-8")
     else:  # pragma: no cover - parametrization is closed above
         raise AssertionError(f"unknown case {case}")

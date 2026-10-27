@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Исправлено
+
+- Запись скилла в установленное runtime-дерево больше не приводит к непонятному отказу install или upgrade: `runtime_tree_modified` называет скилл, member, посторонний путь и точную shell-quoted команду удаления только этого entry. Автоматического удаления нет. На POSIX runtime публикуется без write bits у файлов и каталогов с сохранением execute; install, upgrade, удаление и GC используют журналируемые permission steps и recovery. Существующие деревья защищаются при следующей успешной установке. На Windows права не меняются, действует диагностический отказ.
+
 ### Изменено
 
 - В 0.21.x legacy `ignore_mode` сохраняет приоритет до явной миграции: install, status, init, gates и `ignore-mode show` используют единый effective mode. `show` указывает источник — deprecated field, managed block или default; `ignore-mode set` удаляет override и сохраняет выбранную локальную policy после reload.
