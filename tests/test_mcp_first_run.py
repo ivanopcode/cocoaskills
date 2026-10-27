@@ -1,5 +1,6 @@
 """First-run MCP contracts, including refusal ordering and publication failure."""
 
+import json
 import socket
 import sys
 
@@ -38,9 +39,14 @@ def test_check_schema3(project_cli, monkeypatch, capsys, value, code):
     assert not list((home / "state/mcp").rglob("*.json"))
 
 
-# Normal init/install needs no deprecated flag; dry-run predicts ignores without writing them.
+# Init accepts clean shared syntax under the existing-block policy; dry-run predicts native ignores without writing them.
 def test_init_install_mcp_ignores(project_cli, capsys):
     root, _, _ = project_cli
+    path = root / "Skillfile.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.pop("ignore_mode", None)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    (root / ".gitignore").write_text("# CocoaSkill\n", encoding="utf-8")
     assert cli.main(["init", str(root), "--alias", "app", "--agents", ",".join(AGENTS), "--no-interactive"]) == 0
     before = (root / ".gitignore").read_bytes()
     assert cli.main(["install", "app", "--dry-run"]) == 0
