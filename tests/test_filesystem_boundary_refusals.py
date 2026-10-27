@@ -914,17 +914,22 @@ def test_boundary_project_resolve_refuses(
 
 @pytest.mark.parametrize("err", ERRNO_CASES)
 def test_boundary_project_add_refuses(monkeypatch, tmp_path, csk_home, skills_root, capsys, err):
+    # The new Skillfile preflight refuses I/O failures before config or project writes; the sweep below supplies unfaulted controls.
     project = make_project(tmp_path)
     cfg = make_config(csk_home, skills_root, project)
     csk_config.save_config(cfg)
     monkeypatch.setenv("CSK_CONFIG", str(cfg.path))
     fresh = tmp_path / "fresh"
     fresh.mkdir()
-    with broad_fault(monkeypatch, target=fresh, err=err) as firings:
-        code = cli.main(["project", "add", "fresh", str(fresh)])
+    before = cfg.path.read_bytes()
+    with monkeypatch.context() as patch:
+        with broad_fault(patch, target=fresh, err=err) as firings:
+            code = cli.main(["project", "add", "fresh", str(fresh)])
     assert firings, "broad fault never fired; test is vacuous"
     assert code == cli.EXIT_CONFIG
-    assert "Cannot access project path" in capsys.readouterr().err
+    assert "Cannot read Skillfile at" in capsys.readouterr().err
+    assert cfg.path.read_bytes() == before
+    assert list(fresh.iterdir()) == []
 
 
 @pytest.mark.parametrize("err", ERRNO_CASES)
@@ -1821,15 +1826,16 @@ def test_sweep_project_resolve_each_ordinal_refuses(monkeypatch, tmp_path, capsy
 
 
 def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
-    """The project-add fresh dir: require/present/write/scope chain refuses.
+    """The project-add fresh dir: preflight/require/present/write/scope chain refuses.
 
-    Ordinals 1, 2 and 6 still succeed on a single transient fault:
+    Ordinal 3 refuses at the new Skillfile read before manager writes.
+    Ordinals 1, 2 and 7 still succeed on a single transient fault:
     the separation pre-check stat (1) is re-verified at publication
-    (ordinal 7), realpath swallows one faulted lstat (2 and 6) while
-    the root is stated again (ordinals 7 and 8) before recording
-    anything. Ordinals 9 and 10 (the volume case-oracle and
+    (ordinal 8), realpath swallows one faulted lstat (2 and 7) while
+    the root is stated again (ordinals 8 and 9) before recording
+    anything. Ordinals 10 and 11 (the volume case-oracle and
     normalization-oracle probes) fail closed to exact matching, and
-    ordinals 11 and 12 (staging/prune liveness classification of the
+    ordinals 12 and 13 (staging/prune liveness classification of the
     just-recorded empty scope) skip the record on a faulted read, so
     the add still succeeds. Every other dispatch-scope fault refuses.
     """
@@ -1855,6 +1861,7 @@ def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         sites=[
             ("os.stat", "csk.dispatch", "manager_home_inside_root"),
             ("os.lstat", "csk.dispatch", "manager_home_inside_root"),
+            ("io.open", "csk.skillfile_compat", "check_path"),
             ("os.stat", "csk.manifest", "_require_project_dir"),
             ("os.stat", "csk.manifest", "_skillfile_present"),
             ("io.open", "csk.manifest", "_write_skillfile_text"),
@@ -1873,16 +1880,17 @@ def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         expect={
             1: ("ok", "Added project"),
             2: ("ok", "Added project"),
-            3: ("refuse", "Cannot access project path"),
-            4: ("refuse", "Cannot read Skillfile at"),
-            5: ("refuse", "Cannot write Skillfile at"),
-            6: ("ok", "Added project"),
-            7: ("refuse", "dispatch scope failed"),
+            3: ("refuse", "Cannot read Skillfile at"),
+            4: ("refuse", "Cannot access project path"),
+            5: ("refuse", "Cannot read Skillfile at"),
+            6: ("refuse", "Cannot write Skillfile at"),
+            7: ("ok", "Added project"),
             8: ("refuse", "dispatch scope failed"),
-            9: ("ok", "Added project"),
+            9: ("refuse", "dispatch scope failed"),
             10: ("ok", "Added project"),
             11: ("ok", "Added project"),
             12: ("ok", "Added project"),
+            13: ("ok", "Added project"),
         },
         dry=(cli.EXIT_OK, "Added project", ""),
         kp1=(cli.EXIT_OK, "Added project", ""),

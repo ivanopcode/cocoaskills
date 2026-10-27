@@ -1541,6 +1541,8 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
 
 
 def _cmd_project_add(alias: str, path: Path) -> int:
+    from . import skillfile_compat
+
     cfg = config.load_config()
     home = cfg.path.parent
     if dispatch.manager_home_inside_root(home, path.expanduser()):
@@ -1551,6 +1553,7 @@ def _cmd_project_add(alias: str, path: Path) -> int:
             file=sys.stderr,
         )
         return EXIT_CONFIG
+    skillfile_compat.check_path(path.expanduser() / "Skillfile.json")
     updated = config.add_project(cfg, alias, path)
     config.save_config(updated)
     manifest.ensure_project_manifest(path.expanduser(), alias=alias, agents=cfg.default_agents)
