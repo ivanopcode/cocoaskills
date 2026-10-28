@@ -119,6 +119,14 @@ def clone_repo(remote_url: str, destination: Path) -> None:
         if destination.exists():
             shutil.rmtree(destination)
         stderr = proc.stderr.strip() or proc.stdout.strip()
+        from .git_admission import _classify_git_failure_output
+
+        if _classify_git_failure_output(stderr) == "redirect":
+            raise GitError(
+                "git clone failed: HTTP redirects are refused. Verify the provider's "
+                "canonical Git clone URL in its Clone UI or API; .git is provider-specific. "
+                "Do not use an arbitrary redirect target: it may be a login or browser page."
+            )
         raise GitError(f"git clone failed for {remote_url} -> {destination}: {stderr}")
 
 

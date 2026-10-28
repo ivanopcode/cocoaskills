@@ -810,12 +810,14 @@ build/vendor/                    checked-in modules when non-standard packages a
 требует явного выбора учётных данных оператором через скоупы `build_ssh` для SSH
 и `build_https` для HTTPS. Выбор транспорта не определяет доступность установки:
 SSH требует SSH-ключ, HTTPS требует сохранённые учётные данные Git или токен.
-Адрес HTTPS в манифесте обязан содержать суффикс `.git`. Без суффикса `.git`
-сервис GitLab отвечает 301, fetch выполняется с `http.followRedirects=false`, и
-установка завершается ошибкой `build_repository_source_unavailable`. Полный
-контракт работы с внешними репозиториями описан в
-`docs/external-build-repositories.md`. `go-repository-v1` поддерживается только
-на macOS и Windows.
+Use the provider's canonical Git clone URL from its Clone UI or API. The `.git`
+suffix is provider-specific; a direct suffixless smart-HTTP endpoint is valid.
+csk refuses HTTP redirects (`http.followRedirects=false`), including redirects
+to login or browser pages. Do not infer the clone URL from an arbitrary redirect
+destination or append a suffix automatically. Static `csk check` remains offline
+and does not test endpoint routing. See `docs/external-build-repositories.md`
+for the full external-repository contract. `go-repository-v1` is supported
+only on macOS and Windows.
 
 ### Схема v8: корни first-party модулей и политика выполнения script-команд
 

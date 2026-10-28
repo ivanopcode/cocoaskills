@@ -281,9 +281,9 @@ git config --global credential.credentialStore dpapi
 
 ## build_repository_source_unavailable / fatal: ... The requested URL returned error: 301
 
-Адрес HTTPS в поле `build_repositories.*.git` не содержит обязательного суффикса `.git`. Сервис GitLab или Git-хост возвращает ответ 301 Redirect, но установщик выполняет `git fetch` с `http.followRedirects=false` и не следует перенаправлениям по соображениям безопасности. Установщик выводит ошибку `build_repository_source_unavailable: exact external source is unavailable`. Запуск команды `git -c http.followRedirects=false ls-remote <url>` вручную воспроизводит подробное сообщение `fatal: ... The requested URL returned error: 301`.
+If Git reports an HTTP 3xx response, the server returned a redirect. csk pins `http.followRedirects=false` and refuses redirects for security. Legacy cloning reports `git clone failed: HTTP redirects are refused`; external build acquisition can report `build_repository_source_unavailable`, but that code alone does not establish a redirect. A redirect alone does not identify a missing suffix, invalid credentials or a missing repository: its destination may be a canonical endpoint, a login page or a browser page.
 
-Добавьте суффикс `.git` к адресу репозитория в поле `build_repositories.*.git` манифеста `agent-skill.json`:
+Verify the provider's canonical **Git clone URL** in its Clone UI or API, then correct the declaration that failed: `skills[*].git` in a legacy Skillfile, `sources.<alias>.git` in schema 2/3, or `build_repositories.*.git` in the skill manifest. For example, if the provider reports this clone URL:
 
 ```json
 {
@@ -295,7 +295,7 @@ git config --global credential.credentialStore dpapi
 }
 ```
 
-Установщик при повторном запуске выполнит `git fetch` по прямому каноническому адресу без HTTP-редиректа.
+Use that exact URL. The `.git` suffix is provider-specific; a suffixless URL serving Git smart HTTP directly is also valid. Do not append `.git` automatically, copy an arbitrary redirect destination, or enable redirects/disable TLS verification to bypass the refusal. If the provider's clone URL itself redirects, ask its server/proxy administrator to check routing and authentication. Static `csk check` validates declarations offline; it does not prove that an endpoint serves Git without redirects.
 
 ## Cannot resolve tag '...' ... Needed a single revision
 
