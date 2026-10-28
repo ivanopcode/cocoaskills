@@ -1733,7 +1733,8 @@ def _evidence_class(record: str) -> str | None:
     if re.fullmatch(
         r"warning: redirecting to 'https://[^']+'", record
     ) or re.fullmatch(
-        r"fatal: unable to access 'https://[^']+': the requested url returned error: 3[0-9]{2}",
+        # Legacy cloning also permits HTTP; this changes diagnostics, not admission.
+        r"fatal: unable to access 'https?://[^']+': the requested url returned error: 3[0-9]{2}",
         record,
     ):
         return "redirect"

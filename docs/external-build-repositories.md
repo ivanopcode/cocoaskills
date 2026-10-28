@@ -110,6 +110,13 @@ nor divert them. The fetch goes to a single TLS-verified URL with redirects
 disabled, and the broker answers only the two prompts Git asks and only for
 the pinned host; any other prompt exits without printing a byte.
 
+Use the provider's canonical Git clone URL from its Clone UI or API. A `.git`
+suffix is provider-specific; a suffixless endpoint serving Git smart HTTP
+directly is valid. A redirect may instead lead to a login or browser page, so
+its destination does not establish the clone URL. csk neither appends a suffix
+nor follows redirects. Static `csk check` stays offline and cannot verify a
+server's routing.
+
 The config stores the token source, never a token:
 
 ```json

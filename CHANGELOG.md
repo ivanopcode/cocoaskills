@@ -44,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Исправлено
 
+- Legacy Git clone redirects now explain redirect refusal and point to the
+  provider's canonical clone URL. Documentation clarifies that `.git` is
+  provider-specific; direct suffixless smart-HTTP endpoints remain valid.
+
 - Linux MCP launchers отклоняют group/world write у каждого элемента до объявленного root, указывая точный путь, octal mode и shell-quoted команду chmod. При Ubuntu/Debian umask `002` может потребоваться однократное исправление permissions; исключений по group/account database нет.
 - Windows MCP launcher получает Program Files и LocalAppData через OS known-folder API. Несовпадение environment с OS folder блокирует установку; ошибка API не допускает fallback. Trust определяется фактическим расположением helper, поэтому placeholder не может выдать per-user каталог за per-machine.
 - Старые command/HTTP MCP journals из 0.20.1 восстанавливаются по сохранённым ledger targets без выдуманной launcher observation и без чтения текущего Skillfile для классификации. Launcher без observation и неклассифицируемый journal сохраняют fail-closed отказ; `csk recover --rollback TRANSACTION_ID` явно откатывает незавершённую публикацию перед новой установкой, сохраняя lock и publication-boundary checks.
