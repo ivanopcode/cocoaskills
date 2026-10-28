@@ -667,6 +667,12 @@ chmod -- g-w "$HOME/.local/bin"
 
 Для приложения внутри XDG config root исправьте каждый указанный в отказе элемент, например `chmod -- g-w "${XDG_CONFIG_HOME:-$HOME/.config}/Proxyman/bin"`. При указанном world write удалите и его через `chmod -- g-w,o-w "PATH"` с указанным путём. csk только сообщает команды и никогда не меняет launcher permissions. Для непечатаемых имён csk показывает escaped bytes, octal mode и необходимые permission bits, но не предлагает shell command. Исключений по group membership или account database нет. Root-owned helpers со strict-mode chain проверяются доверенными root-owned системными `/usr/bin/dpkg -S -- PATH` или `/usr/bin/rpm -qf -- PATH`, с фиксированным argv, минимальным environment, timeout пять секунд и без shell. Ошибки probe никогда не устанавливают trust. Package ownership — связь в database, **не checksum/integrity check** установленных bytes. Остальным helpers нужны явный override и local consent.
 
+Linux ownership refusals include a bounded `package ownership` summary from the
+same check: `skipped-nonroot` or fixed dpkg/rpm outcomes such as `timeout`,
+`tool-missing`, `nonzero` and `no-exact-match`. These observations do not grant
+trust or consent and do not expose package-tool output or paths. A timeout in
+a new check does not establish the cause of an earlier failure.
+
 Поиск и проверка приложения никогда не запускают приложение или helper. Native controls используют установленный Proxyman на macOS, Microsoft-signed binary и tampered copy на Windows, package-owned executable и fixtures с user-owned helper и writable parent на Linux. Этим controls нужны соответствующие native platforms. Linux control с umask `002` отклоняет group-writable `~/.local/bin`, затем принимает тот же unverified helper после удаления group write у каталога.
 
 Текущие ограничения schema 3:

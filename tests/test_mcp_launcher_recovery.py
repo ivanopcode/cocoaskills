@@ -72,7 +72,8 @@ with patch.object(launchers, 'macos_roots', lambda: (Path(request['apps']),)), \
             st_mode=0o040755 if path.is_dir() else 0o100755)
         launchers.verify_windows = lambda *a: launchers.WindowsVerification(
             'invalid' if request.get('untrusted') else 'valid', 'Example Inc')
-        launchers.linux_package_owned = lambda *a: not request.get('untrusted')
+        launchers._linux_package_observation = lambda *a: launchers._LinuxPackageObservation(
+            not request.get('untrusted'), ())
     if not request.get('native'):
         launchers.verify_macos = lambda *a: replace(good_verification(), signature_valid=not request.get('untrusted'))
     if request.get('changed'):

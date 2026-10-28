@@ -35,7 +35,8 @@ def platform_cli(project_cli, tmp_path, monkeypatch, request):
     state = {'bad': False}
     monkeypatch.setattr(gate, 'verify_windows', lambda *a: gate.WindowsVerification(
         'invalid' if state['bad'] else 'unsigned' if level == 'unverified' else 'valid', 'Example Inc'))
-    monkeypatch.setattr(gate, 'linux_package_owned', lambda *a: level == 'verified' and not state['bad'])
+    monkeypatch.setattr(gate, '_linux_package_observation', lambda *a: gate._LinuxPackageObservation(
+        level == 'verified' and not state['bad'], ()))
     spec = windows('%ProgramFiles%' if level == 'verified' else '%LOCALAPPDATA%') if platform == 'windows' else linux()
     entry = getattr(spec, platform)
     raw = {'app': {'server': {'transport': 'stdio', 'launcher': {

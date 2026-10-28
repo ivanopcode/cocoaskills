@@ -459,31 +459,69 @@ def _check_linux_chain(path: Path, root: Path) -> os.stat_result:
     return file_info
 
 
+_LinuxPackageReason = Literal[
+    "tool-missing", "tool-untrusted", "tool-not-executable", "timeout",
+    "os-error", "decode-error", "value-error", "nonzero", "no-exact-match", "owned",
+]
+
+
+@dataclass(frozen=True)
+class _LinuxPackageObservation:
+    owned: bool
+    attempts: tuple[tuple[Literal["dpkg", "rpm"], _LinuxPackageReason], ...]
+
+    def summary(self) -> str:
+        # At most two fixed backend/reason pairs; never include paths or tool output.
+        return ", ".join(f"{backend}={reason}" for backend, reason in self.attempts)
+
+
 def linux_package_owned(path: Path) -> bool:
+    """Retain the bool API for a single package-ownership observation."""
+    return _linux_package_observation(path).owned
+
+
+def _linux_package_observation(path: Path) -> _LinuxPackageObservation:
     """Ask trusted system package tools about the exact realpath, no shell.
 
     Fixed absolute tools, bounded runtime, and a minimal environment prevent
     relocation of the package database through inherited tool-specific options.
     dpkg -S treats its argument as a pattern: require an exact returned pathname.
     """
-    for program, args in (("/usr/bin/dpkg", ["-S", "--", str(path)]),
-                          ("/usr/bin/rpm", ["-qf", "--", str(path)])):
+    attempts: list[tuple[Literal["dpkg", "rpm"], _LinuxPackageReason]] = []
+    queries: tuple[tuple[Literal["dpkg", "rpm"], str, list[str]], ...] = (
+        ("dpkg", "/usr/bin/dpkg", ["-S", "--", str(path)]),
+        ("rpm", "/usr/bin/rpm", ["-qf", "--", str(path)]),
+    )
+    for backend, program, args in queries:
+        reason: _LinuxPackageReason = "os-error"
         try:
             tool = Path(program).resolve(strict=True)
             for candidate in (tool, *tool.parents):
                 info = candidate.stat()
                 if info.st_uid != 0 or info.st_mode & 0o022:
+                    reason = "tool-untrusted"
                     raise OSError("untrusted package tool")
             if not tool.is_file() or not os.access(tool, os.X_OK):
+                attempts.append((backend, "tool-not-executable"))
                 continue
             result = subprocess.run([str(tool), *args], capture_output=True, text=True, timeout=5,
                                     check=False, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
             if result.returncode == 0:
                 if program.endswith("rpm") or any(line.partition(": ")[2] == str(path) for line in result.stdout.splitlines()):
-                    return True
-        except (OSError, ValueError, subprocess.TimeoutExpired):
-            continue
-    return False
+                    return _LinuxPackageObservation(True, (*attempts, (backend, "owned")))
+            reason = "nonzero" if result.returncode != 0 else "no-exact-match"
+        except FileNotFoundError:
+            reason = "tool-missing"
+        except subprocess.TimeoutExpired:
+            reason = "timeout"
+        except UnicodeDecodeError:
+            reason = "decode-error"
+        except ValueError:
+            reason = "value-error"
+        except OSError:
+            pass
+        attempts.append((backend, reason))
+    return _LinuxPackageObservation(False, tuple(attempts))
 
 
 def _resolve_linux(entry: LinuxLauncher, roots: Sequence[Path] | None, verifier: Verifier | None) -> ResolvedLauncher:
@@ -503,14 +541,25 @@ def _resolve_linux(entry: LinuxLauncher, roots: Sequence[Path] | None, verifier:
         except UnicodeEncodeError as exc:
             raise _path_error("Linux launcher realpath must be valid UTF-8 for native configuration and consent; "
                               "move the application to a valid UTF-8 path") from exc
-        try:
-            owned = (cast(LinuxVerification, verifier(base, path, entry)).package_owned
-                     if verifier else linux_package_owned(path)) if info.st_uid == 0 else False
-        except (OSError, subprocess.TimeoutExpired):
-            owned = False
+        owned = False
+        summary = "skipped-nonroot"
+        if info.st_uid == 0:
+            try:
+                if verifier:
+                    owned = cast(LinuxVerification, verifier(base, path, entry)).package_owned
+                    summary = "verifier-owned" if owned else "verifier-unowned"
+                else:
+                    observation = _linux_package_observation(path)
+                    owned = observation.owned
+                    summary = observation.summary()
+            except subprocess.TimeoutExpired:
+                summary = "verifier-timeout"
+            except OSError:
+                summary = "verifier-os-error"
         level: TrustLevel = "verified" if owned else "unverified"
         if level == "unverified" and entry.trust != "allow-unverified":
-            raise McpLauncherError("mcp_launcher_untrusted", "unverified Linux launcher requires trust: allow-unverified and local consent")
+            raise McpLauncherError("mcp_launcher_untrusted", "unverified Linux launcher requires trust: allow-unverified and local consent; "
+                                   f"package ownership: {summary}")
         return ResolvedLauncher(realpath, level, "linux:package-manager", _digest_stable(path, before))
     except McpLauncherError:
         raise
