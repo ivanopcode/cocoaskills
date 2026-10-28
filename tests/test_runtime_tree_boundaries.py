@@ -100,54 +100,68 @@ def test_gc_preserves_external_hardlink(runtime_scope, tmp_path):
     assert outside.read_text() == 'retained\n' and stat.S_IMODE(outside.stat().st_mode) == 0o444
 
 
-# Both readable and unreadable foreign directories produce the same actionable refusal; the printed remedy alone repairs it.
+# The displayed remedy removes only the foreign subtree across unreadable/non-writable roots and nested dirs; writable controls retry too.
 @pytest.mark.skipif(os.name != 'posix' or os.geteuid() == 0, reason='Unprivileged POSIX permissions')
 @pytest.mark.parametrize('command', ['install', 'upgrade'])
-@pytest.mark.parametrize('mode', [0o000, 0o400, 0o100])
-def test_unreadable_foreign_directory_remedy(runtime_scope, tmp_path, capsys, command, mode):
+@pytest.mark.parametrize('mode,nested_mode', [
+    (0o000, 0o000), (0o400, 0o000), (0o100, 0o000),
+    (0o500, 0o500), (0o755, 0o500), (0o755, 0o755),
+], ids=['no-access', 'read-only', 'search-only', 'read-search', 'nested-read-search', 'writable'])
+def test_unreadable_foreign_directory_remedy(runtime_scope, tmp_path, capsys, command, mode, nested_mode):
     project, home, runtime, invoke, _ = runtime_scope
     runtime.chmod(stat.S_IMODE(runtime.stat().st_mode) | stat.S_IWUSR)
-    foreign = runtime / "foreign 'quoted'\nentry"
+    foreign = runtime / "--foreign 'quoted'\nentry"
     nested = foreign / 'nested'
     nested.mkdir(parents=True)
-    outside = tmp_path / 'external-foreign-data'
-    outside.write_text('outside')
-    os.link(outside, nested / 'data')
-    outside.chmod(0o444)
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'data').write_text('outside')
+    os.link(outside / 'data', nested / 'data')
+    (outside / 'data').chmod(0o444)
+    outside.chmod(0o550)
+    target = nested / 'link'
+    target.symlink_to(outside, target_is_directory=True)
+    outside_before = tree_state(outside)
+    managed_before = tree_state(runtime / 'scripts')
     assert invoke(command) == 1
     readable = capsys.readouterr()
     assert 'runtime_tree_modified' in readable.out + readable.err
-    before = tree_state(project / '.agents', home)
+    before = tree_state(project, home)
     try:
-        nested.chmod(0)
+        nested.chmod(nested_mode)
         foreign.chmod(mode)
         assert invoke(command) == 1
         output = capsys.readouterr()
         message = output.out + output.err
-        assert 'runtime_tree_modified' in message and 'writer' in message
-        assert 'member' in message and '$CSK_HOME/' in message and 'docs/skill-authoring.md' in message
         member = (runtime.name if runtime.is_relative_to(home / 'runtime') else
                   lock.read_lock((project / 'Skillfile.lock.json').read_bytes()).members[0].package.snapshot)
-        assert member in message
-        assert 'Permission denied' not in message
+        # The visible symlink is the offending entry; inaccessible foreign roots are identified without descent.
+        offending = target if mode & 0o500 == 0o500 else foreign
+        display = '$CSK_HOME/' + offending.relative_to(home).as_posix()
+        assert f"runtime_tree_modified: skill 'writer', member {member!r}: foreign entry {display!r}." in message
+        assert 'docs/skill-authoring.md' in message and 'Permission denied' not in message
         assert stat.S_IMODE(foreign.stat().st_mode) == mode
         foreign.chmod(0o755)
-        assert stat.S_IMODE(nested.stat().st_mode) == 0
+        assert stat.S_IMODE(nested.stat().st_mode) == nested_mode
         nested.chmod(0o755)
-        # Restore only fixture directory modes to inspect all preserved bytes and entries.
-        assert tree_state(project / '.agents', home) == before
-        nested.chmod(0)
+        # Restore only fixture directory modes to inspect preserved bytes, modes and namespace entries.
+        assert tree_state(project, home) == before
+        nested.chmod(nested_mode)
         foreign.chmod(mode)
-        remedy = message.split('with ', 1)[1].split('; then rerun the same command', 1)[0]
+        remedy = message.split('remediation: remove only the foreign entry with ', 1)[1].split(
+            '; then rerun the same command', 1)[0]
         quoted = shlex.quote(str(foreign))
-        expected_remedy = (f"chmod u+rwx {quoted} && find -P {quoted} -type d "
-                           f"-exec chmod u+rwx {{}} \\; && rm -rf -- {quoted}")
-        assert remedy == expected_remedy
-        result = subprocess.run(['/bin/sh', '-c', expected_remedy], capture_output=True, text=True)
+        plain = f"rm -rf -- {quoted}"
+        directory_access = (f"chmod u+rwx {quoted} && find -P {quoted} -type d "
+                            f"-exec chmod u+rwx {{}} \\; && {plain}")
+        assert remedy in (plain, directory_access)
+        result = subprocess.run(['/bin/sh', '-c', remedy], capture_output=True, text=True)
+        assert tree_state(outside) == outside_before
+        assert tree_state(runtime / 'scripts') == managed_before
         assert result.returncode == 0, result.stderr
         assert not foreign.exists() and runtime.is_dir()
-        assert outside.read_text() == 'outside' and stat.S_IMODE(outside.stat().st_mode) == 0o444
         assert invoke(command) == 0
+        assert tree_state(outside) == outside_before
     finally:
         if foreign.exists():
             foreign.chmod(0o700)

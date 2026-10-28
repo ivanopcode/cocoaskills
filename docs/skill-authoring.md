@@ -65,9 +65,11 @@ inventories come from the retained source snapshot; context inventories come
 from the install marker. The diagnostic names the skill and member, shows the
 offending path relative to `$CSK_HOME` when possible, and prints a shell-quoted
 remedy that removes only the foreign entry or its foreign enclosing directory.
-On POSIX this is `rm -rf -- '…/.venv'`. If a foreign directory is unreadable,
-the diagnostic first grants owner access to that foreign directory and uses
-`find -P` to grant access to directories inside that subtree before removal.
+On POSIX the removal step is `rm -rf -- '…/.venv'`. For a foreign directory,
+the diagnostic first grants owner access to that directory and uses `find -P`
+to grant access to directories inside that subtree before removal. This also
+handles readable directories that lack write permission and restrictive nested
+directories, even when the foreign root is writable.
 It never chmods regular files or follows symlinks, preserving outside hardlinks.
 On Windows it uses PowerShell
 `Remove-Item -LiteralPath '…/.venv' -Recurse -Force`. Inspect that exact path,

@@ -32,7 +32,6 @@ class RuntimeInventoryUnavailable(Exception):
 
 def _entries(
     root: Path, *, inventory: Mapping[str, str] | None = None,
-    unreadable_foreign: set[Path] | None = None,
 ) -> list[tuple[Path, int]]:
     """Walk real directories only, without opening links or special files."""
     entries: list[tuple[Path, int]] = []
@@ -51,8 +50,6 @@ def _entries(
             if inventory is None or inventory.get(relative) == "directory" or directory == root:
                 raise
             # Its parent already proves this directory is foreign; no descent is needed.
-            if unreadable_foreign is not None:
-                unreadable_foreign.add(directory)
     return sorted(entries)
 
 
@@ -110,8 +107,7 @@ def validate_tree(
     # A substituted root is handled by the existing publication-boundary gate.
     if not stat.S_ISDIR(root_mode):
         return
-    unreadable: set[Path] = set()
-    entries = _entries(path, inventory=inventory, unreadable_foreign=unreadable)
+    entries = _entries(path, inventory=inventory)
     foreign: list[Path] = []
     special: list[Path] = []
     for entry, mode in entries:
@@ -139,8 +135,9 @@ def validate_tree(
     else:
         quoted = shlex.quote(str(remedy))
         command = f"rm -rf -- {quoted}"
-        if any(entry == remedy or entry.is_relative_to(remedy) for entry in unreadable):
-            # Only directories need write/search permissions for unlink; never chmod files or follow links.
+        if any(entry == remedy and stat.S_ISDIR(mode) for entry, mode in entries):
+            # Traversal can succeed without unlink permission; nested directories may also be restrictive.
+            # Grant access only inside the proven foreign subtree, never to files or symlink referents.
             command = (f"chmod u+rwx {quoted} && find -P {quoted} -type d "
                        f"-exec chmod u+rwx {{}} \\; && {command}")
     raise RuntimeTreeModified(
