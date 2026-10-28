@@ -170,7 +170,12 @@ skill-go-example/
 }
 ```
 
-Адрес `git` при работе по HTTPS обязателен с суффиксом `.git`. Настройка аутентификации SSH и HTTPS описана в документе [Внешние билд-репозитории](external-build-repositories.md).
+Use the provider's canonical Git clone URL from its Clone UI or API. The `.git`
+suffix is provider-specific; a direct suffixless smart-HTTP endpoint is valid.
+csk refuses HTTP redirects, including redirects to login or browser pages. Do
+not append a suffix automatically or infer the clone URL from an arbitrary
+redirect target. For SSH and HTTPS authentication, see
+[External build repositories](external-build-repositories.md).
 
 ### 4.3. Скрипт-команда
 
