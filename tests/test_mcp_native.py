@@ -1956,26 +1956,68 @@ def test_r3_public_p2_refuses_add_rewrite(monkeypatch, surface):
         mn.edit_surface_bytes(surface, old, AddEntry("own", V_SMALL))
 
 
+# Each real read stage catches its injected I/O error without bytes, entries or writes; valid reads and unrelated descriptors remain usable.
 @pytest.mark.parametrize("stage", ["root", "parent", "file", "stat", "read"])
 @pytest.mark.parametrize("error", [errno.EIO, errno.ENOTDIR, errno.ELOOP, errno.EACCES, errno.EPERM, errno.EBUSY])
 def test_r3_read_io_failures_never_absent(tmp_path, monkeypatch, stage, error):
     target = tmp_path / CODEX.relpath
     target.parent.mkdir()
-    target.write_bytes(b'[mcp_servers]\n')
+    payload = b'[mcp_servers.docs]\ncommand = "example"\n'
+    target.write_bytes(payload)
+    entries_before = set(tmp_path.rglob("*"))
+    mode_before = target.stat().st_mode
+    def assert_valid_read():
+        read, data = mn.read_surface(tmp_path, CODEX)
+        assert read.state == "present" and read.reason is None
+        assert read.entries == {"docs": {"command": "example"}}
+        assert read.raw_sha256 == sha(payload) and data == payload
+    assert_valid_read()
+    calls = []
+    opened_files = []
     def fail(*args, **kwargs):
+        calls.append((args, kwargs))
         raise OSError(error, "synthetic failure")
     hooks = {"root": "_open_descriptor", "parent": "_open_child_directory", "file": "_open_child_file", "read": "_read_descriptor"}
-    if stage == "stat":
-        if os.name == "nt":
-            from csk.sources import _selection_fs_windows
-            monkeypatch.setattr(_selection_fs_windows, "stat_handle", fail)
+    # A shared os/backend patch must not escape into pytest capture or unrelated filesystem consumers.
+    with monkeypatch.context() as fault:
+        if stage == "stat":
+            original_open = mn._selection_fs._open_child_file
+            def open_file(*args, **kwargs):
+                assert args[1] == Path(CODEX.relpath).name
+                fd = original_open(*args, **kwargs)
+                opened_files.append(fd)
+                return fd
+            fault.setattr(mn._selection_fs, "_open_child_file", open_file)
+            if os.name == "nt":
+                from csk.sources import _selection_fs_windows
+                backend, name = _selection_fs_windows, "stat_handle"
+            else:
+                backend, name = mn.os, "fstat"
+            original_stat = getattr(backend, name)
+            def stat_file(fd, *args, **kwargs):
+                # Fail only metadata for the actual opened native file, after successful parent/file opens.
+                if fd in opened_files:
+                    return fail(fd, *args, **kwargs)
+                return original_stat(fd, *args, **kwargs)
+            fault.setattr(backend, name, stat_file)
         else:
-            monkeypatch.setattr(mn.os, "fstat", fail)
-    else:
-        monkeypatch.setattr(mn._selection_fs, hooks[stage], fail)
-    read, data = mn.read_surface(tmp_path, CODEX)
-    assert read.state == "unreadable"
+            fault.setattr(mn._selection_fs, hooks[stage], fail)
+        read, data = mn.read_surface(tmp_path, CODEX)
+    assert len(calls) == 1, "the intended product seam must actually raise"
+    if stage == "stat":
+        assert len(opened_files) == 1 and calls[0][0] == (opened_files[0],)
+    expected_reason = "io_error"
+    if stage != "read" and error in (errno.EACCES, errno.EPERM):
+        expected_reason = "permission_denied"
+    elif stage in ("parent", "file") and error == errno.ELOOP:
+        expected_reason = "link"
+    elif stage == "parent" and error == errno.ENOTDIR:
+        expected_reason = "parent_not_directory"
+    assert (read.state, read.reason) == ("unreadable", expected_reason)
     assert read.raw_sha256 is None and not read.entries and data is None
+    assert set(tmp_path.rglob("*")) == entries_before
+    assert target.read_bytes() == payload and target.stat().st_mode == mode_before
+    assert_valid_read()
 
 
 @pytest.mark.parametrize("operation", [ReplaceEntry("own", V_SMALL), RemoveEntry("own")])
