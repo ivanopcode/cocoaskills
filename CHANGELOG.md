@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Linux launcher ownership refusals now distinguish skipped non-root checks and fixed per-backend package-query outcomes from the same attempt. Trust, exact-path matching, fallback and consent policy are unchanged; diagnostics do not include tool output or paths.
 - Schema-2/3 status now reports `build-input-drift` when the selected Go toolchain or target changes, without requiring an artifact for the new input. Same-input cache failures retain their protection diagnostics; status does not build or repair.
+- MCP host admission now requires current-platform native headers: bounded Mach-O/ELF fixed-header checks and native opaque-interpreter prefixes retain the 1024/2-byte read limits. Foreign, short and observably malformed headers refuse; full kernel/architecture validity remains outside the contract.
+- Windows MCP admission checks both modeled libuv and Rust PATH choices, including quoted entries/SystemRoot and dotted-name suffix fallback. Either choice can refuse before consent; batch ordering, missing-command policy and evaluator/base-system identity checks remain unchanged. Implicit search directories remain outside the model.
 
 - Точечная remediation для foreign runtime-каталога теперь восстанавливает owner access только у каталогов внутри этого subtree перед удалением, включая читаемые каталоги без write permission и вложенные ограничения. Файлы, внешние hardlinks и symlink targets не меняют права; автоматического удаления нет.
 - Исправлены границы runtime cleanup: внешние hardlinks сохраняют права, нечитаемые чужие каталоги получают безопасную точечную remediation; protocol corruption fixture снова достигает integrity gate.

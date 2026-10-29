@@ -47,8 +47,9 @@ def terminal(root):
     return rc,replied,output.decode(errors='replace')
 
 
-def executable(path, data=b"\x7fELFopaque binary fixture\n"):
-    path.write_bytes(data); path.chmod(0o700); return path
+def executable(path, data=None):
+    from mcp_native_fixture import native_header
+    path.write_bytes(native_header() if data is None else data); path.chmod(0o700); return path
 
 
 def _stub(tmp_path, monkeypatch, search):

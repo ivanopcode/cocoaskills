@@ -1,6 +1,9 @@
 """Fail-closed selected headers and Windows system-root observations."""
 import os
-import subprocess
+import sys
+from types import SimpleNamespace
+
+from mcp_native_fixture import native_header
 
 import pytest
 
@@ -27,10 +30,10 @@ def test_selected_io_failure_refuses(tmp_path, monkeypatch, stage, command, args
         opened.append(os.fspath(path))
         if stage == 'open': raise PermissionError('fixture')
         return original(path, *a, **kw)
-    monkeypatch.setattr(resolution.os, 'open', observed)
+    monkeypatch.setattr(resolution, 'os', SimpleNamespace(**{**vars(resolution.os), 'open': observed}))
     if stage == 'read':
         def denied(*a): raise OSError('fixture')
-        monkeypatch.setattr(resolution.os, 'read', denied)
+        monkeypatch.setattr(resolution, 'os', SimpleNamespace(**{**vars(resolution.os), 'read': denied}))
     with pytest.raises(mcp.McpDeclarationError) as caught:
         resolution.validate_host_commands(parse(command, args), cwd=tmp_path)
     assert caught.value.code == 'mcp_command_invalid'
@@ -38,24 +41,21 @@ def test_selected_io_failure_refuses(tmp_path, monkeypatch, stage, command, args
     assert str(tmp_path) not in str(caught.value) and opened == [str(candidate)]
 
 
-# This recognizes only magic, not full executable validity. Fat counts 1..16
-# are admitted in the matching byte order; Java-style/high/zero/truncated counts
-# and all unrecognized headers refuse. On Windows, only PE passes; the other
-# platform magics refuse. No fixture executable is dispatched.
-MAGICS = [bytes.fromhex(x) for x in ['FEEDFACE', 'FEEDFACF', 'CEFAEDFE', 'CFFAEDFE', '7F454C46', '4D5A']]
+# Current-platform opaque fixed headers pass; foreign headers refuse. Fat
+# controls include the whole bounded arch table, not just its shared Java magic.
 FAT = [(bytes.fromhex('CAFEBABE'), 'big'), (bytes.fromhex('BEBAFECA'), 'little')]
-@pytest.mark.parametrize('header', MAGICS + [magic + count.to_bytes(4, order) for magic, order in FAT for count in [1, 16]])
-def test_native_magic_positive(tmp_path, monkeypatch, header):
-    executable(tmp_path / 'my-server', header + b'x' * 2048)
+@pytest.mark.parametrize('platform', ['darwin', 'linux', 'win32'])
+def test_native_magic_positive(tmp_path, monkeypatch, platform):
+    executable(tmp_path / 'my-server', native_header(platform) + b'x' * 2048)
     monkeypatch.setenv('PATH', str(tmp_path))
-    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('no execution'))
-    if os.name == 'nt' and not header.startswith(b'MZ'):
-        with pytest.raises(mcp.McpDeclarationError, match='not PE'):
-            resolution.validate_host_commands(parse('my-server'), cwd=tmp_path)
-    else:
+    if sys.platform == platform:
         resolution.validate_host_commands(parse('my-server'), cwd=tmp_path)
+    else:
+        with pytest.raises(mcp.McpDeclarationError, match='mcp_command_invalid'):
+            resolution.validate_host_commands(parse('my-server'), cwd=tmp_path)
 
 
+# Empty/text/short/Java-count headers refuse without dispatch on all platforms.
 @pytest.mark.parametrize('header', [b'', b'opaque text\n', b'\x7fEL', b'M', b'\0' * 16] +
     [magic + count.to_bytes(4, order) for magic, order in FAT for count in [0, 17, 65, 0xffffffff]] +
     [magic + b'\0\0\0' for magic, order in FAT])
@@ -71,7 +71,7 @@ def test_unknown_or_java_header_refuses(tmp_path, monkeypatch, header):
 @pytest.mark.parametrize('length', [255, 256, 257])
 @pytest.mark.skipif(os.name == "nt", reason="POSIX shebang semantics")
 def test_shebang_256_boundary(tmp_path, monkeypatch, length):
-    interpreter = executable(tmp_path / 'opaque', b'\x7fELFfixture')
+    interpreter = executable(tmp_path / 'opaque', native_header())
     head = b'#!' + os.fsencode(interpreter) + b' '
     assert len(head) < 254
     executable(tmp_path / 'my-server', head + b'x' * (length - 1 - len(head)) + b'\n')

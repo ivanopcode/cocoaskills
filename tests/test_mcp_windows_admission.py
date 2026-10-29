@@ -36,7 +36,7 @@ def windows_host(tmp_path, monkeypatch):
 def test_windows_candidate_order(tmp_path, monkeypatch, windows_host, files, command, winner):
     for name in files: (tmp_path / name).write_bytes(b"MZfixture")
     monkeypatch.setenv("PATHEXT", ".BAT;.CMD;.EXE;.COM")
-    monkeypatch.setattr(resolution.os, "access", lambda *a: pytest.fail("Windows never uses X_OK"))
+    monkeypatch.setattr(resolution, "os", SimpleNamespace(**{**vars(resolution.os), "access": lambda *a: pytest.fail("Windows never uses X_OK")}))
     selected = resolution._selected_candidate(command, tuple(map(str, windows_host)))
     assert (selected[0] if selected else None) == (str(tmp_path / winner) if winner else None)
 
@@ -55,7 +55,7 @@ def test_windows_pe_only(tmp_path, monkeypatch, windows_host, command, args, hea
     original = os.open; opened = []
     def observe(path, *a, **kw):
         opened.append(os.fspath(path)); return original(path, *a, **kw)
-    monkeypatch.setattr(resolution.os, "open", observe)
+    monkeypatch.setattr(resolution, "os", SimpleNamespace(**{**vars(resolution.os), "open": observe}))
     if allowed:
         resolution.validate_host_commands(parse(command, args), cwd=tmp_path)
     else:
@@ -78,7 +78,7 @@ def test_windows_batch_before_host(project_cli, monkeypatch, capsys, command, ar
     # cli uses other sys members; change its platform view without mutating sys.
     monkeypatch.setattr(cli, "sys", SimpleNamespace(**{**vars(sys), "platform": "win32"}))
     original = resolution.shutil.which
-    monkeypatch.setattr(resolution.shutil, "which", lambda cmd: "launcher.cmd" if cmd == "launcher" else original(cmd))
+    monkeypatch.setattr(resolution, "shutil", SimpleNamespace(which=lambda cmd: "launcher.cmd" if cmd == "launcher" else original(cmd)))
     monkeypatch.setattr(resolution, "validate_host_commands", lambda *a, **k: pytest.fail("batch check must run first"))
     monkeypatch.setattr("builtins.input", lambda _: pytest.fail("must refuse before consent"))
     declare(stdio(command, args)); before = _snapshot(root, home)

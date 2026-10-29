@@ -383,13 +383,15 @@ evaluator/runner table remains in force. Exec-capable base names, including
 `check` and install observe PATH without normalizing its components. On POSIX,
 kernel stat/access select the first regular executable. Any selected inode also present
 in `/usr/bin`, `/bin`, `/usr/sbin` or `/sbin` refuses, including symlink and
-hardlink aliases. On Windows, each PATH directory tries the exact name if it
-already has an extension, otherwise `.com` then `.exe`, without PATHEXT or
-POSIX execute-mode checks. This is the shared PATH policy, not an exact model
-of every agent's search: libuv also has implicit cwd search and extended-name
-suffix fallback; Rust std uses `.exe` only for extensionless names and has
-additional application/system searches. Those implicit searches and later
-agent environments remain outside this PATH observation.
+hardlink aliases. On Windows, admission checks every distinct first PATH
+candidate selected by the modeled libuv and Rust rules. In each directory,
+libuv tries an extended name exactly, then appends `.com` and `.exe`; Rust
+tries a dotted name exactly or appends only `.exe` to an extensionless name.
+PATHEXT and POSIX execute-mode checks do not apply. Each dispatcher's quoted
+PATH parsing is observed without normalizing directory components; quoted
+SystemRoot is resolved before the containment comparison. A refusal from either
+choice blocks admission. This does not reproduce implicit cwd, application or
+system searches, or later agent environments.
 Batch launchers refuse with `mcp_windows_batch_unsupported` before host header
 admission when a supported native write target is selected. The selected candidate's final kernel path is
 compared against the resolved `%SystemRoot%`, ignoring case and normalizing
@@ -399,22 +401,29 @@ missing PATH candidates. Known
 evaluator identities in other PATH/default directories also refuse. A searchable
 PATH directory that cannot be enumerated fails closed rather than guessing
 incomplete versioned or case-sensitive spellings. No command is executed.
-Only the selected candidate's first 1024 bytes may be read. An unreadable
-selected header refuses. Windows requires PE (`MZ`) magic and never interprets
-a shebang; all other selected headers refuse. On POSIX, a readable header must
-start with `#!` or recognized native magic: Mach-O, ELF or PE (`MZ`). Universal Mach-O headers require an
-architecture count of 1 through 16 in the matching byte order; larger counts,
-including usual Java class headers, refuse. This recognizes magic, not full
-loader validity. Empty files and text without `#!` refuse. A script line must
-end with newline within the first 256 bytes, including the newline. The
-interpreter word uses strict UTF-8, splits at horizontal whitespace without shell quoting or stripping CR,
+Only each selected candidate's first 1024 bytes may be read. An unreadable
+selected header refuses. Windows requires `MZ` magic and never interprets a
+shebang; this does not validate a full PE image. On macOS, native recognition
+requires a complete thin Mach-O fixed header with executable file type and
+consistent nonzero load-command counts, or a big-endian universal header with
+1 through 16 complete, nonempty architecture records and aligned offsets.
+Swapped universal headers refuse. On Linux, ELF class, byte order, version,
+executable/shared-object type and fixed-header size must be consistent.
+Other-platform formats refuse. These bounded observations do not validate
+architecture support, load commands, segments or a complete kernel-loadable
+image; they do not prove that PATH continuation is impossible. Empty files and
+text without `#!` refuse. A script line must end with newline within the first
+256 bytes, including the newline. The interpreter word uses strict UTF-8,
+splits at horizontal whitespace without shell quoting or stripping CR,
 and refuses if it contains `#`. A separate `# comment` argument is permitted.
 An invalid/non-executable interpreter refuses. For an otherwise opaque
-interpreter, only its first two bytes are read: `#!` refuses as a nested script;
-an unreadable interpreter header also refuses. No nested chain is followed.
+interpreter, only its first two bytes are read: a current-platform native prefix
+is required, and `#!`, short, text, foreign and unreadable prefixes refuse.
+Two bytes cannot distinguish all files sharing a prefix (including Java and
+universal Mach-O), establish loader validity, or inspect a nested chain.
 These conservative refusals do not emulate every OS's script parsing.
-Errors use `mcp_command_invalid` and name the bare candidate; selection never
-continues to a later PATH entry. A missing non-base candidate retains the
+Errors use `mcp_command_invalid` and name the bare candidate; admission never
+falls through a refused choice to a later PATH entry. A missing non-base candidate retains the
 portable result. Supported exact-pin runners retain their interpreter substrate
 after the base-system and selected-header checks on POSIX; Windows runners
 require PE magic like other Windows candidates.

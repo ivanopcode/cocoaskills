@@ -1,6 +1,6 @@
 """Read-only, point-in-time kernel PATH and evaluator-identity observations.
 
-Only the selected executable's first 1024 bytes and an opaque interpreter's
+Only each selected executable's first 1024 bytes and an opaque interpreter's
 first 2 bytes are read. No command is executed.
 Concurrent replacement and a same-user attacker who can write PATH directories
 are outside this boundary; the check does not freeze filesystem identities.
@@ -12,8 +12,10 @@ import ntpath
 import os
 import shutil
 import stat
+import sys
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Literal
 
 from . import mcp_declarations as declarations
 from .mcp_base_commands import EXEC_CAPABLE_BASE_COMMANDS, is_base_recipe
@@ -32,10 +34,51 @@ def _known_evaluator(name: str) -> bool:
     return declarations._command_kind(normalized) is not None or normalized in EXEC_CAPABLE_BASE_COMMANDS
 
 
-def _path_directories(path: str, cwd: Path) -> tuple[str, ...]:
+def _windows_path_entries(path: str, *, rust: bool) -> tuple[str, ...]:
+    # libuv search_path and Rust env::split_paths have different quote rules.
+    # Preserve components; neither lexical normalization nor shell parsing is safe.
+    entries: list[str] = []
+    if rust:
+        entry = ""
+        quoted = False
+        for char in path:
+            if char == '"':
+                quoted = not quoted
+            elif char == os.pathsep and not quoted:
+                if entry:
+                    entries.append(entry)
+                entry = ""
+            else:
+                entry += char
+        if entry:
+            entries.append(entry)
+    else:
+        start = 0
+        while start < len(path):
+            end = start
+            if path[start] in "\"'":
+                closing = path.find(path[start], start + 1)
+                end = len(path) if closing < 0 else closing
+            end = path.find(os.pathsep, end)
+            if end < 0:
+                end = len(path)
+            entry = path[start:end]
+            if entry[:1] in {'"', "'"}:
+                entry = entry[1:]
+            if entry[-1:] in {'"', "'"}:
+                entry = entry[:-1]
+            if entry:
+                entries.append(entry)
+            start = end + 1
+    return tuple(entries)
+
+
+def _path_directories(path: str, cwd: Path, *, rust: bool = False) -> tuple[str, ...]:
     # Keep every separator, dot and parent component for the kernel. Empty PATH
-    # entries and relative entries are relative to the agent's project cwd.
-    return tuple(os.path.join(os.fspath(cwd), entry) for entry in path.split(os.pathsep))
+    # entries on POSIX and relative entries use the agent's project cwd.
+    # Windows implicit cwd search is outside these two modeled PATH lists.
+    entries = _windows_path_entries(path, rust=rust) if _is_windows() else path.split(os.pathsep)
+    return tuple(os.path.join(os.fspath(cwd), entry) for entry in entries)
 
 
 def _identity(info: os.stat_result) -> _Identity:
@@ -63,6 +106,10 @@ def _windows_path_key(path: str) -> str:
 
 def _windows_root_key() -> str:
     root = os.environ.get("SystemRoot")
+    if not root:
+        raise _ObservationRefused("Windows SystemRoot is unset")
+    if len(root) >= 2 and root[0] == root[-1] and root[0] in "\"'":
+        root = root[1:-1]
     if not root:
         raise _ObservationRefused("Windows SystemRoot is unset")
     try:
@@ -141,20 +188,31 @@ def _evaluator_inodes(directories: tuple[str, ...]) -> set[_Identity]:
     return identities
 
 
-def _selected_candidate(command: str, directories: tuple[str, ...]) -> tuple[str, os.stat_result] | None:
+def _selected_candidate(
+    command: str, directories: tuple[str, ...], *, rust: bool = False,
+) -> tuple[str, os.stat_result] | None:
     windows = _is_windows()
     # PATH admission uses libuv's native suffix priority (PATHEXT is ignored):
     # https://github.com/libuv/libuv/blob/v1.x/src/win/process.c
     # path_search_walk_ext: extended name first, then .com, then .exe.
-    # Rust std differs: extensionless names search .exe only, extended names
-    # are exact. This shared PATH policy uses .com before .exe; it does not
-    # claim to reproduce Rust's distinct search directories/order.
+    # Rust std differs: extensionless names search .exe only, dotted names
+    # are exact. Admission observes both choices, not just their intersection.
     # https://github.com/rust-lang/rust/blob/master/library/std/src/sys/process/windows.rs
     # resolve_exe/search_paths. Cwd/application/system implicit searches are
     # outside this PATH observation; later agent environments may differ.
-    suffixes = ([""] if ntpath.splitext(command)[1] else [".com", ".exe"]) if windows else [""]
+    suffixes = [""]
+    if windows:
+        dotted = "." in command
+        if rust:
+            suffixes = [""] if dotted else [".exe"]
+        else:
+            # libuv uses the first dot and appends suffixes even for dotted
+            # names; a trailing dot supplies the suffix's separator already.
+            extended = dotted and command.index(".") < len(command) - 1
+            suffixes = ([""] if extended else []) + [".com", ".exe"]
     for directory in directories:
         for suffix in suffixes:
+            suffix = suffix.lstrip(".") if windows and command.endswith(".") else suffix
             candidate = os.path.join(directory, command + suffix)
             try:
                 info = os.stat(candidate)
@@ -166,29 +224,65 @@ def _selected_candidate(command: str, directories: tuple[str, ...]) -> tuple[str
 
 
 def _native_header(head: bytes) -> bool:
-    # Recognition only, not a full loader/architecture validity check. Universal
-    # headers share Java's magic; permit only a conservative 1..16 arch count.
-    if head[:4] in {b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe", b"\x7fELF"}:
-        return True
-    if head.startswith(b"MZ"):
-        return True
-    if len(head) < 8:
+    # Bounded format recognition, not architecture or complete loader validity.
+    if _is_windows():
+        return head.startswith(b"MZ")
+    if sys.platform == "linux":
+        if len(head) < 16 or head[:4] != b"\x7fELF" or head[4] not in (1, 2) or head[5] not in (1, 2) or head[6] != 1:
+            return False
+        order: Literal["little", "big"] = "little" if head[5] == 1 else "big"
+        size, offset = (52, 40) if head[4] == 1 else (64, 52)
+        return (len(head) >= size and int.from_bytes(head[16:18], order) in (2, 3)
+                and int.from_bytes(head[20:24], order) == 1
+                and int.from_bytes(head[offset:offset + 2], order) == size)
+    if sys.platform != "darwin":
         return False
-    if head[:4] == b"\xca\xfe\xba\xbe":
-        count = int.from_bytes(head[4:8], "big")
-    elif head[:4] == b"\xbe\xba\xfe\xca":
-        count = int.from_bytes(head[4:8], "little")
-    else:
+    thin: dict[bytes, tuple[Literal["little", "big"], int]] = {
+            b"\xfe\xed\xfa\xce": ("big", 28), b"\xfe\xed\xfa\xcf": ("big", 32),
+            b"\xce\xfa\xed\xfe": ("little", 28), b"\xcf\xfa\xed\xfe": ("little", 32)}
+    if head[:4] in thin:
+        order, size = thin[head[:4]]
+        return (len(head) >= size and int.from_bytes(head[4:8], order) != 0
+                and int.from_bytes(head[12:16], order) == 2
+                and 0 < int.from_bytes(head[16:20], order) <= int.from_bytes(head[20:24], order) // 8)
+    # XNU fat headers use big-endian FAT_MAGIC; swapped/64-bit forms refuse.
+    if len(head) < 8 or head[:4] != b"\xca\xfe\xba\xbe":
         return False
-    return 1 <= count <= 16
+    count = int.from_bytes(head[4:8], "big")
+    if not 1 <= count <= 16 or len(head) < 8 + 20 * count:
+        return False
+    for start in range(8, 8 + 20 * count, 20):
+        cpu, _, offset, size, align = (int.from_bytes(head[i:i + 4], "big") for i in range(start, start + 20, 4))
+        if not cpu or offset < 8 + 20 * count or size < 28 or align > 31 or offset % (1 << align):
+            return False
+    return True
+
+
+def _native_interpreter_prefix(prefix: bytes) -> bool:
+    if sys.platform == "darwin":
+        return prefix in {b"\xfe\xed", b"\xce\xfa", b"\xcf\xfa", b"\xca\xfe"}
+    return sys.platform == "linux" and prefix == b"\x7fE"
 
 
 def _resolved_evaluator(command: str, *, path: str, cwd: Path, runner: bool = False) -> bool:
     directories = _path_directories(path, cwd)
     selected = _selected_candidate(command, directories)
-    if selected is None:
-        return False
-    candidate, info = selected
+    choices = [selected] if selected is not None else []
+    if _is_windows():
+        rust_directories = _path_directories(path, cwd, rust=True)
+        rust_selected = _selected_candidate(command, rust_directories, rust=True)
+        if rust_selected is not None and (selected is None or rust_selected[0] != selected[0]):
+            choices.append(rust_selected)
+        directories = tuple(dict.fromkeys((*directories, *rust_directories)))
+    for candidate, info in choices:
+        if _candidate_evaluator(candidate, info, directories=directories, cwd=cwd, runner=runner):
+            return True
+    return False
+
+
+def _candidate_evaluator(
+    candidate: str, info: os.stat_result, *, directories: tuple[str, ...], cwd: Path, runner: bool,
+) -> bool:
     if (_windows_base_candidate(candidate) if _is_windows() else _identity(info) in _base_system_inodes()):
         return True
     identities = set() if runner else _evaluator_inodes(directories)
@@ -251,6 +345,8 @@ def _resolved_evaluator(command: str, *, path: str, cwd: Path, runner: bool = Fa
         raise _ObservationRefused("script interpreter header cannot be observed") from exc
     if prefix == b"#!":
         raise _ObservationRefused("nested script interpreter is refused")
+    if not _native_interpreter_prefix(prefix):
+        raise _ObservationRefused("script interpreter prefix is not a recognized current-platform native format")
     return False
 
 

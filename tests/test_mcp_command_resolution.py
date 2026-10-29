@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 
 from child_cli_environment import child_cli_environment
+from mcp_native_fixture import native_header
+from types import SimpleNamespace
 
 from csk import cli, mcp_command_resolution as resolution, mcp_declarations as mcp
 from test_mcp_install_acceptance import _snapshot
@@ -81,8 +83,8 @@ def test_alias_scanner_mechanisms(tmp_path, monkeypatch):
     assert "my-server" not in observed and not result["errors"]
 
 
-def executable(path, body=b"\x7fELFopaque binary fixture\n"):
-    path.write_bytes(body)
+def executable(path, body=None):
+    path.write_bytes(native_header() if body is None else body)
     path.chmod(0o700)
     return path
 
@@ -209,7 +211,7 @@ def test_selected_candidate_body_bound(tmp_path, monkeypatch, target_name, sheba
     bin_dir, outside = tmp_path / "bin", tmp_path / "outside"
     bin_dir.mkdir()
     outside.mkdir()
-    body = (b"#!/bin/sh\n" if shebang else b"\x7fELFopaque binary\n") + b"x" * 512
+    body = (b"#!/bin/sh\n" if shebang else native_header()) + b"x" * 512
     executable(outside / target_name, body)
     candidate = bin_dir / "myedit"
     candidate.symlink_to(outside / target_name)
@@ -223,8 +225,8 @@ def test_selected_candidate_body_bound(tmp_path, monkeypatch, target_name, sheba
         sizes.append(size)
         assert size <= 1024
         return original_read(descriptor, size)
-    monkeypatch.setattr(resolution.os, "open", selected_open)
-    monkeypatch.setattr(resolution.os, "read", bounded_read)
+    monkeypatch.setattr(resolution, "os", SimpleNamespace(**{**vars(resolution.os), "open": selected_open}))
+    monkeypatch.setattr(resolution, "os", SimpleNamespace(**{**vars(resolution.os), "read": bounded_read}))
     monkeypatch.setenv("PATH", str(bin_dir))
     if shebang:
         with pytest.raises(mcp.McpDeclarationError, match="mcp_command_invalid"):
@@ -291,7 +293,7 @@ def test_parent_component_positive_control(tmp_path, monkeypatch, kind):
     search, selected = parent_component_fixture(tmp_path, kind, evaluator=False)
     monkeypatch.setenv("PATH", search)
     resolution.validate_host_commands(parse("myedit", ["--port", "1"]), cwd=tmp_path)
-    assert selected.read_bytes() == b"\x7fELFopaque binary fixture\n"
+    assert selected.read_bytes() == native_header()
 
 
 # Kernel PATH selection must skip non-program paths and recognize a case alias
@@ -362,7 +364,7 @@ def test_kernel_identity_interpreter_refuses(tmp_path, monkeypatch):
         opened.append(Path(path))
         assert Path(path) == candidate
         return original(path, *args, **kwargs)
-    monkeypatch.setattr(resolution.os, "open", selected_open)
+    monkeypatch.setattr(resolution, "os", SimpleNamespace(**{**vars(resolution.os), "open": selected_open}))
     with pytest.raises(mcp.McpDeclarationError, match="mcp_command_invalid"):
         resolution.validate_host_commands(parse("my-server"), cwd=tmp_path)
     assert opened == [candidate]
@@ -372,7 +374,7 @@ def test_kernel_identity_interpreter_refuses(tmp_path, monkeypatch):
 # this is a bounded header observation, never a scan of arbitrary binary bodies.
 def test_selected_header_bound_positive_control(tmp_path, monkeypatch):
     executable(tmp_path / ("my-server.exe" if os.name == "nt" else "my-server"),
-               (b"MZxx" if os.name == "nt" else b"\x7fELF") + b"x" * 1020 + b"\n#!/bin/sh\n")
+               native_header().ljust(1024, b"x") + b"\n#!/bin/sh\n")
     monkeypatch.setenv("PATH", str(tmp_path))
     resolution.validate_host_commands(parse("my-server", ["--port", "1"]), cwd=tmp_path)
 
@@ -409,7 +411,7 @@ def test_parent_component_selected_body_refuses(tmp_path, monkeypatch, name):
         opened.append(Path(path))
         assert Path(path) == a / "myedit"
         return original(path, *args, **kwargs)
-    monkeypatch.setattr(resolution.os, "open", selected_open)
+    monkeypatch.setattr(resolution, "os", SimpleNamespace(**{**vars(resolution.os), "open": selected_open}))
     with pytest.raises(mcp.McpDeclarationError, match="mcp_command_invalid"):
         resolution.validate_host_commands(parse("myedit"), cwd=tmp_path)
     assert opened == [a / "myedit"]

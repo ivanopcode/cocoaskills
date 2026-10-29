@@ -260,6 +260,13 @@ Schema 3 добавляет к schema 2 поле `mcp_servers`. MCP-сервер
 4. `csk status` покажет `current` для каждой записи.
 5. Войдите в сервис в самом агенте. csk не запускает серверы, не выполняет вход и не хранит токены: в Skillfile указывается только имя переменной окружения.
 
+Stdio host admission observes bounded current-platform native headers without
+executing commands. Windows checks both modeled libuv and Rust PATH choices,
+including quoted entries and dotted-name fallback. The 1024-byte selected-file
+and 2-byte opaque-interpreter reads do not prove full loader or architecture
+validity; implicit Windows search directories remain outside the model. See the
+[command admission boundary](docs/skill-authoring.md#project-mcp-schema-3).
+
 `server.environments` accepts the canonical ids `claude_code`, `codex_cli`, `opencode`, `pi`, `muse`. Without this selector, csk writes Claude Code, Codex CLI and csk-local Cursor independently of skill `agents`. Use `"environments": ["claude_code"]` to narrow it; add a separately approved Cursor destination with `csk mcp local-target add cursor --server docs`. Legacy Cursor selectors require `csk mcp migrate` before normal Skillfile edits. See the [local-target and migration commands](docs/cli.md#mcp-local-targets-and-migration).
 
 Ignore placement is project-local. In 0.21.x, a legacy top-level `ignore_mode` field continues to determine the effective mode until explicit migration removes it. Without that field, a managed CocoaSkill block in `.gitignore` selects `gitignore`; otherwise csk uses `$GIT_COMMON_DIR/info/exclude`. `show` names the source as a deprecated field, a managed block, or the default. Run `csk ignore-mode show` to inspect it, or `csk ignore-mode set exclude` / `csk ignore-mode set gitignore` to move the managed rules. User rules are preserved. The legacy top-level `ignore_mode` is input-only in schema 2/3: every load warns that other managers reject it, and ordinary Skillfile writers refuse with `skillfile_deprecated_form`. An explicit mode switch removes only that member without reformatting the Skillfile. Invalid legacy values still report `ignore_mode_invalid`; schema 1 cannot contain the field. A Skillfile is portable only after its deprecated forms have been migrated; 0.22 stops reading them. Outside a Git worktree, a switch refuses.
