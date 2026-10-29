@@ -495,6 +495,14 @@ def _resolve_linux(entry: LinuxLauncher, roots: Sequence[Path] | None, verifier:
             raise _path_error("Linux executable realpath escapes its declared root")
         before = path.stat()
         info = _check_linux_chain(path, base)
+        # Native entries and consent identities require Unicode scalar strings.
+        # POSIX surrogateescape paths cannot be represented by either protocol.
+        realpath = str(path)
+        try:
+            realpath.encode("utf-8", errors="strict")
+        except UnicodeEncodeError as exc:
+            raise _path_error("Linux launcher realpath must be valid UTF-8 for native configuration and consent; "
+                              "move the application to a valid UTF-8 path") from exc
         try:
             owned = (cast(LinuxVerification, verifier(base, path, entry)).package_owned
                      if verifier else linux_package_owned(path)) if info.st_uid == 0 else False
@@ -503,7 +511,7 @@ def _resolve_linux(entry: LinuxLauncher, roots: Sequence[Path] | None, verifier:
         level: TrustLevel = "verified" if owned else "unverified"
         if level == "unverified" and entry.trust != "allow-unverified":
             raise McpLauncherError("mcp_launcher_untrusted", "unverified Linux launcher requires trust: allow-unverified and local consent")
-        return ResolvedLauncher(str(path), level, "linux:package-manager", _digest_stable(path, before))
+        return ResolvedLauncher(realpath, level, "linux:package-manager", _digest_stable(path, before))
     except McpLauncherError:
         raise
     except (OSError, ValueError, RuntimeError) as exc:
