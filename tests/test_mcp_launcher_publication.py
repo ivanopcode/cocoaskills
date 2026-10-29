@@ -45,7 +45,7 @@ def _publication_capture(case, tmp_path, monkeypatch):
         return original(*args, **kwargs)
 
     monkeypatch.setattr(publish, "tempfile", _View(publish.tempfile, TemporaryDirectory=workspace))
-    return PublicationCapture(tmp_path / "publication-capture", roots=(case.project, case.home))
+    return PublicationCapture(tmp_path / "publication-capture", roots=(case.project, case.home), output_anchor=tmp_path)
 
 
 @pytest.fixture

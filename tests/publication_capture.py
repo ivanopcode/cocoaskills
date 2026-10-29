@@ -75,8 +75,11 @@ def _link(info):
 
 
 class PublicationCapture:
-    def __init__(self, directory: Path, *, roots: tuple[Path, ...]):
+    def __init__(self, directory: Path, *, roots: tuple[Path, ...], output_anchor: Path):
+        # The caller supplies an existing, trusted fixture anchor. Do not resolve
+        # it or the output path through links; its ancestors are trusted inputs.
         self.directory = directory
+        self.output_anchor = output_anchor
         self.roots = tuple(root.resolve() for root in roots)
         self.rows = []
         self.errors = []
@@ -88,9 +91,30 @@ class PublicationCapture:
         self._sealed = False
 
     def _write(self, name, data):
-        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if _link(self.directory.lstat()):
-            raise ValueError("linked capture output directory")
+        # Validate all existing components before creating even one directory.
+        # These owned fixtures have one writer; this is not a race-proof walk.
+        anchor = self.output_anchor
+        if not anchor.is_absolute() or not self.directory.is_absolute():
+            raise ValueError("capture output needs an absolute fixture anchor")
+        parts = self.directory.relative_to(anchor).parts
+        if ".." in parts:
+            raise ValueError("capture output outside fixture anchor")
+        current = anchor
+        missing = []
+        for part in (None, *parts):
+            if part is not None:
+                current = current / part
+            try:
+                info = current.lstat()
+            except FileNotFoundError:
+                if part is None:
+                    raise  # Never create the trusted fixture anchor itself.
+                missing.append(current)
+            else:
+                if _link(info) or not stat.S_ISDIR(info.st_mode):
+                    raise ValueError("non-directory capture output ancestor")
+        for path in missing:
+            path.mkdir(mode=0o700)
         path = self.directory / name
         # Exclusive files: no reuse/overwrite of a pre-existing link or artifact.
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
@@ -136,6 +160,9 @@ class PublicationCapture:
                 continue
             if ".." in parts:
                 continue
+            info = root.lstat()
+            if _link(info) or not stat.S_ISDIR(info.st_mode):
+                raise ValueError("non-directory capture root")
             current = root
             for part in parts[:-1]:
                 current = current / part

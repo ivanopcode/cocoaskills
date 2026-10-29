@@ -56,7 +56,7 @@ def plan_fixture(tmp_path):
                          tx.ABSENT_DIGEST, kind="entry"),
     ))
     home = tmp_path / "manager"
-    capture = PublicationCapture(tmp_path / "publication-capture", roots=(home, project))
+    capture = PublicationCapture(tmp_path / "publication-capture", roots=(home, project), output_anchor=tmp_path)
     return home, project, canary, plan, capture
 
 
@@ -272,7 +272,7 @@ def test_missing_snapshot_control_and_per_attempt_manifests(tmp_path, monkeypatc
         with pytest.raises(AssertionError, match="snapshot omitted"):
             assert (capture.directory / "journal-001.private").exists(), "snapshot omitted"
         assert not capture.complete
-        capture = PublicationCapture(tmp_path / "publication-capture", roots=(home, project))
+        capture = PublicationCapture(tmp_path / "publication-capture", roots=(home, project), output_anchor=tmp_path)
         engine = capture.observe(tx.TransactionEngine(home, fault_hook=refuse))
         with pytest.raises(OSError, match="known preparation refusal"):
             engine.prepare(lock, plan)
@@ -313,3 +313,182 @@ def test_publication_attachment_fixture_is_local(tmp_path, monkeypatch):
     assert cli.sys.stdin.isatty() and mcp_project.input("prompt") == "yes"
     assert shared == (sys.stdin.isatty, sys.stdout.isatty, tempfile.TemporaryDirectory)
     assert capture.directory == tmp_path / "publication-capture"
+
+
+def outside_state(directory):
+    info = directory.lstat()
+    return (info.st_mode, info.st_mtime_ns, sorted(path.name for path in directory.iterdir()),
+            state(directory / "data"))
+
+
+# The matched input root must still be a directory at observation time. Replaced
+# root links/files and missing roots cannot reach the reader or complete evidence.
+# An absent leaf under a normal root remains a legitimate absent observation.
+@pytest.mark.parametrize("replacement", ["link", "file", "missing"])
+def test_stored_input_root_is_checked_before_reader(tmp_path, monkeypatch, replacement):
+    root, outside = tmp_path / "root", tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (outside / "data").write_bytes(b"outside input canary")
+    before = outside_state(outside)
+    capture = PublicationCapture(tmp_path / "publication-capture", roots=(root,), output_anchor=tmp_path)
+    root.rename(tmp_path / "old-root")
+    if replacement == "link":
+        root.symlink_to(outside, target_is_directory=True)
+    elif replacement == "file":
+        root.write_bytes(b"not a directory")
+    reads = []
+    reader = capture_module._read_regular
+
+    def read(path, **kwargs):
+        reads.append(path)
+        return reader(path, **kwargs)
+
+    monkeypatch.setattr(capture_module, "_read_regular", read)
+    capture._safe(lambda: capture._entry(root / "data", []))
+    capture.cli(1, "refused observation", "")
+    expected = "FileNotFoundError" if replacement == "missing" else "ValueError"
+    assert capture.errors[0][0]["type"] == expected
+    assert reads == [] and not capture.complete
+    assert outside_state(outside) == before
+    ordinary = PublicationCapture(tmp_path / "normal-output", roots=(outside,), output_anchor=tmp_path)
+    entries = []
+    ordinary._entry(outside / "data", entries)
+    ordinary._entry(outside / "absent", entries)
+    assert reads == [outside / "data"]
+    assert entries[0]["sha256"] == hashlib.sha256(b"outside input canary").hexdigest()
+    assert entries[1] == {"kind": "absent"}
+    ordinary.cli(0, "normal", "")
+    assert ordinary.complete
+    assert outside_state(outside) == before
+
+
+# Existing output ancestors, the output leaf and the trusted anchor itself must
+# be checked before any creation/write. Refusal preserves sibling bytes/modes/
+# mtimes/listing; an adjacent nested output gets private directories and files.
+@pytest.mark.parametrize("linked", ["ancestor", "leaf", "anchor"])
+def test_output_ancestry_precedes_creation(tmp_path, linked):
+    root, outside = tmp_path / "root", tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (outside / "data").write_bytes(b"outside output canary")
+    before = outside_state(outside)
+    anchor = root
+    if linked == "ancestor":
+        (root / "linked").symlink_to(outside, target_is_directory=True)
+        directory = root / "linked" / "nested" / "publication-capture"
+    elif linked == "leaf":
+        directory = root / "publication-capture"
+        directory.symlink_to(outside, target_is_directory=True)
+    else:
+        root.rename(tmp_path / "old-root")
+        root.symlink_to(outside, target_is_directory=True)
+        directory = root / "publication-capture"
+    capture = PublicationCapture(directory, roots=(tmp_path,), output_anchor=anchor)
+    capture.cli(0, "private stdout", "private stderr")
+    assert not capture.complete and capture.errors[0][0]["type"] == "ValueError"
+    assert outside_state(outside) == before
+    ordinary = PublicationCapture(tmp_path / "normal" / "nested" / "publication-capture",
+                                  roots=(outside,), output_anchor=tmp_path)
+    ordinary.cli(0, "complete stdout", "complete stderr")
+    assert ordinary.complete and not ordinary.errors
+    assert (ordinary.directory / "cli-001.stdout.private").read_bytes() == b"complete stdout"
+    assert (ordinary.directory / "cli-001.stderr.private").read_bytes() == b"complete stderr"
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o700 for path in (
+        tmp_path / "normal", tmp_path / "normal/nested", ordinary.directory))
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in ordinary.directory.iterdir())
+    assert outside_state(outside) == before
+
+
+# A boundary refusal in observation cannot replace an actual transaction error
+# (including its cause) or suppress unchanged prepare/commit success. The sink
+# link is the applied fault; all product calls are still the original delegates.
+@pytest.mark.parametrize("product_fails", [False, True])
+def test_output_boundary_failure_preserves_product_identity(tmp_path, product_fails):
+    home, project, canary, plan, capture = plan_fixture(tmp_path)
+    outside = tmp_path / "outside-output"
+    outside.mkdir()
+    (outside / "data").write_bytes(b"outside canary")
+    before = outside_state(outside)
+    link = tmp_path / "linked-output"
+    link.symlink_to(outside, target_is_directory=True)
+    capture.directory = link / "publication-capture"
+    failure = OSError(errno.EIO, "original refusal")
+    cause = ValueError("original cause")
+    failure.__cause__ = cause
+    calls = []
+
+    def fault(point, target):
+        if product_fails and point == "prepared":
+            raise failure
+
+    engine = counted(tx.TransactionEngine(home, fault_hook=fault), capture, calls)
+    with ManagerHomeLock(home) as lock:
+        if product_fails:
+            with pytest.raises(OSError) as caught:
+                engine.prepare(lock, plan)
+            assert caught.value is failure and failure.__cause__ is cause
+            assert failure.__context__ is None
+            assert [call[0] for call in calls] == ["prepare", "discard"]
+            assert (project / "data").read_bytes() == b"old"
+        else:
+            result = engine.prepare(lock, plan)
+            assert calls[-1][1] is result
+            engine.commit(lock, plan.transaction_id)
+            assert (project / "data").read_bytes() == b"new"
+    capture.cli(1 if product_fails else 0, "complete output", "")
+    assert not capture.complete and capture.errors
+    assert outside_state(outside) == before
+    assert not list(project.glob(".csk-txn-*"))
+    assert not list(engine.journal_root.glob("*.json"))
+
+
+# Model only the reparse metadata bit through a module-local classification seam;
+# real lstat/read/write functions stay untouched. This is not native Windows proof.
+@pytest.mark.parametrize("gate", ["input", "output"])
+def test_reparse_directory_metadata_refused_before_io(tmp_path, monkeypatch, gate):
+    from types import SimpleNamespace
+
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "data").write_bytes(b"owned input")
+    identity = root.stat().st_dev, root.stat().st_ino
+    original = capture_module._link
+
+    def reparse(info):
+        if (info.st_dev, info.st_ino) == identity:
+            return original(SimpleNamespace(st_mode=info.st_mode, st_file_attributes=0x400))
+        return original(info)
+
+    capture = PublicationCapture(root / "publication-capture", roots=(root,), output_anchor=root)
+    monkeypatch.setattr(capture_module, "_link", reparse)
+    if gate == "input":
+        with pytest.raises(ValueError, match="non-directory capture root"):
+            capture._entry(root / "data", [])
+    capture.cli(0, "private output", "")
+    assert not capture.complete and capture.errors[0][0]["type"] == "ValueError"
+    assert sorted(path.name for path in root.iterdir()) == ["data"]
+
+
+# The explicit anchor must exist and lexically contain the output. Missing
+# anchors are not created, and outside/parent-component destinations are refused.
+@pytest.mark.parametrize("invalid", ["missing", "outside", "parent"])
+def test_output_anchor_contract_refuses_before_creation(tmp_path, invalid):
+    root, outside = tmp_path / "root", tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (outside / "data").write_bytes(b"outside canary")
+    before = outside_state(outside)
+    anchor = root
+    if invalid == "missing":
+        anchor = tmp_path / "missing-anchor"
+        directory = anchor / "publication-capture"
+    elif invalid == "outside":
+        directory = outside / "publication-capture"
+    else:
+        directory = root / ".." / "outside" / "publication-capture"
+    capture = PublicationCapture(directory, roots=(root,), output_anchor=anchor)
+    capture.cli(0, "private output", "")
+    assert not capture.complete and capture.errors
+    assert not (tmp_path / "missing-anchor").exists()
+    assert outside_state(outside) == before
