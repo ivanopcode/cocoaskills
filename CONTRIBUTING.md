@@ -72,6 +72,16 @@ Acquisition CLI subprocess fixtures use `child_cli_environment()` from
 `tests/child_cli_environment.py` before applying explicit caller overrides.
 The shared autouse fixture owns those children's temp directories, including
 nested children and fault-injection processes joined before teardown. Cleanup
-restores directory access only; files and symlinks are unlinked without chmod.
+restores directory access and unlinks files and symlinks. POSIX cleanup never
+chmods files. On Windows, a refused deletion of a read-only regular file can
+clear its read-only attribute only when its link count is exactly one. Shared
+read-only files are refused without changing attributes, even if both names
+appear inside the fixture; cleanup does not infer exclusive ownership of them.
+Symlink targets are never traversed or chmodded. These rules assume fixture
+children have been joined and no other writer is changing the owned scratch.
+Cleanup errors name the retained scratch path and fail teardown. If the test
+body also failed, an exception group retains both original exception objects.
+An unsuccessful deletion retry restores the private file's original mode;
+restoration failures are reported alongside the removal failure.
 The parent retains its inherited temp environment and natural `tempfile` cache,
 so short-path fixtures such as Unix-domain sockets keep their original budget.
