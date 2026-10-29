@@ -8,12 +8,15 @@ native Linux filesystem qualification.
 from __future__ import annotations
 
 import io
+import json
 import os
+from dataclasses import replace
 from pathlib import Path
 import stat
 import subprocess
 import sys
 import tempfile
+import tomllib
 from types import SimpleNamespace
 
 import pytest
@@ -126,13 +129,36 @@ def fixture(tmp_path):
     return case, root, marker
 
 
+def lifecycle_fixture(tmp_path, consumer):
+    from csk import config
+
+    case, root, marker = fixture(tmp_path)
+    cfg = config.load_config(Path(case.env['CSK_CONFIG']))
+    config.save_config(replace(cfg, default_agents=[consumer], projects={
+        **cfg.projects, 'app': replace(cfg.projects['app'], agents=[consumer]),
+    }))
+    case.skillfile['agents'] = [consumer]
+    case.skillfile['mcp_servers']['app']['server']['environments'] = [consumer]
+    case.declare(case.skillfile['mcp_servers'])
+    return case, root, marker
+
+
+def unselected_state(case, consumer):
+    roots = {'claude_code': '.claude', 'codex_cli': '.codex', 'cursor': '.cursor'}
+    paths = [path for agent, path in SURFACES if agent != consumer]
+    paths.extend(path for agent, path in roots.items() if agent != consumer)
+    return {key: value for key, value in _snapshot(case.project).items()
+            if any(key[1] == path or key[1].startswith(path + '/') for path in paths)}
+
+
 def invoke(case, root, marker, name, *, dry=False, unsafe=None, approve=False, execution_control=False):
     env = dict(case.env, PATH_FIXTURE_ROOT=str(root), PATH_FIXTURE_HEX=name.hex(),
                PATH_FIXTURE_EXECUTED=str(marker), PATH_FIXTURE_UNSAFE=unsafe or '',
                PATH_FIXTURE_APPROVE='1' if approve else '0', PYTHONDONTWRITEBYTECODE='1')
-    before = _snapshot(case.project, case.home, root)
+    roots = (case.project, case.home, root, Path(case.env['HOME']))
+    before = _snapshot(*roots)
     with tempfile.TemporaryDirectory(prefix='cli-') as temp:
-        env['TMPDIR'] = temp
+        env.update(TMPDIR=temp, TMP=temp, TEMP=temp)
         process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), 'execution-control' if execution_control else 'child',
             'install', 'app', '--fix-gitignore', *(['--dry-run'] if dry else [])],
             cwd=case.project, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -141,10 +167,14 @@ def invoke(case, root, marker, name, *, dry=False, unsafe=None, approve=False, e
         except BaseException:
             if process.poll() is None:
                 process.kill()
-            process.communicate()
+            output, _ = process.communicate()
+            print('interrupted child PID', process.pid, 'exit', process.returncode,
+                  'snapshot before', before, 'snapshot after', _snapshot(*roots),
+                  output.decode('utf-8', 'backslashreplace'))
             raise
-    unchanged = _snapshot(case.project, case.home, root) == before
-    print('child PID', process.pid, 'exit', process.returncode, 'snapshot unchanged', unchanged,
+    unchanged = _snapshot(*roots) == before
+    print('child PID', process.pid, 'exit', process.returncode, 'reaped', process.poll() is not None,
+          'snapshot unchanged', unchanged,
           output.decode('utf-8', 'backslashreplace'))
     if execution_control:
         assert marker.read_text() == 'execution attempted'
@@ -179,26 +209,55 @@ def test_launcher_encoding_cli(tmp_path, name, unsafe, dry):
         assert code == 1 and b'mcp_plan_unapproved' in output, output
 
 
-# After an actual mode refusal/repair, valid roots reuse consent and report work;
-# invalid roots refuse while preserving existing native configs, grants and modes.
+# All eight paths/lifecycles use real consent, config/grant/seed/lock publication,
+# mode refusal, repair and consent reuse/refusal for one selected consumer each.
+# Claude/Codex alternate across the table; unselected surfaces stay unchanged.
+# This proves the launcher contract, not an all-consumer transaction cross-product.
 @pytest.mark.parametrize('name', NAMES, ids=IDS)
 @pytest.mark.parametrize('dry', [False, True], ids=['install', 'dry-run'])
 def test_permission_repair_with_existing_consent(tmp_path, name, dry):
-    case, root, marker = fixture(tmp_path)
+    consumer = ('claude_code', 'codex_cli')[(NAMES.index(name) + int(dry)) % 2]
+    case, root, marker = lifecycle_fixture(tmp_path, consumer)
+    neighbors = unselected_state(case, consumer)
     valid = name in NAMES[2:]
-    code, output, _ = invoke(case, root, marker, name if valid else b'ordinary', approve=True)
-    assert code == 0 and b'mcp app ->' in output, output
-    assert all((case.project / path).exists() for _, path in SURFACES)
-    assert (case.project / '.agents/skills/seed/SKILL.md').is_file()
-    assert list((case.home / 'state/mcp/consent').glob('*.json'))
+    consent_name = name if valid else b'ordinary'
+    code, output, _ = invoke(case, root, marker, consent_name, approve=True)
+    surface = dict(SURFACES)[consumer]
+    row = f'mcp app -> {consumer} {surface}'.encode()
+    assert code == 0 and row + b' (added)' in output, output
+    assert b'Approve 1 MCP server(s)' in output
+    assert all((case.project / path).exists() == (agent == consumer) for agent, path in SURFACES)
+    native_bytes = (case.project / surface).read_bytes()
+    native = (json.loads(native_bytes)['mcpServers'] if consumer == 'claude_code'
+              else tomllib.loads(native_bytes.decode('utf-8'))['mcp_servers'])
+    assert set(native) == {'app'}
+    assert native['app']['command'] == str(root.parent / consent_name.decode('utf-8')) + '/App/bin/server.exe'
+    seed = (case.project / 'source/seed/SKILL.md').read_bytes()
+    assert (case.project / '.agents/skills/seed/SKILL.md').read_bytes() == seed
+    adapter = '.claude' if consumer == 'claude_code' else '.codex'
+    assert (case.project / adapter / 'skills/seed/SKILL.md').read_bytes() == seed
+    assert (case.project / 'Skillfile.lock.json').is_file()
+    assert list((case.home / 'source-v1/bindings').rglob('*.json'))
+    grants = list((case.home / 'state/mcp/consent').glob('*.json'))
+    assert len(grants) == 1 and len(json.loads(grants[0].read_bytes())['approved']) == 1
+    ledgers = list((case.home / 'state/mcp/ledger').glob('*.json'))
+    assert len(ledgers) == 1
+    assert [entry['address']['agent'] for entry in json.loads(ledgers[0].read_bytes())['entries']] == [consumer]
+    assert not list((case.home / 'state/transactions').rglob('*.json'))
+    assert unselected_state(case, consumer) == neighbors
     root.chmod(0o775)
     code, output, unchanged = invoke(case, root, marker, name, dry=dry, unsafe='root')
-    assert unchanged and code == 1 and b'group/world write is forbidden' in output, output
+    assert unchanged and code == 1 and b'mcp_launcher_path_invalid' in output, output
+    assert b'group/world write is forbidden' in output, output
+    assert unselected_state(case, consumer) == neighbors
     root.chmod(0o755)
     code, output, unchanged = invoke(case, root, marker, name, dry=dry)
     assert unchanged
+    assert unselected_state(case, consumer) == neighbors
+    assert b'Approve ' not in output
     if valid:
-        assert code == 0 and b'mcp app ->' in output, output
+        assert code == 0 and row in output, output
+        assert (b'would: ' + row in output) == dry, output
         assert b'approval: required' not in output and b'mcp_plan_unapproved' not in output
     else:
         assert code == 1 and b'mcp_launcher_path_invalid' in output and b'valid UTF-8' in output, output
