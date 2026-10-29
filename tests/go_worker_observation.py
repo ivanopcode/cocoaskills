@@ -12,6 +12,7 @@ import math
 import os
 import stat
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -77,8 +78,17 @@ class Recorder:
         self.events = []
         self.dropped = 0
         self.sink_failures = 0
+        self._lock = threading.RLock()
 
     def record(self, stage, **values):
+        with self._lock:
+            self._record(stage, **values)
+
+    def drop(self):
+        with self._lock:
+            self.dropped += 1
+
+    def _record(self, stage, **values):
         # Inputs are closed before any JSON encoding. No arbitrary repr/str call.
         if type(stage) is not str or stage not in STAGES or set(values) - (NUMBERS | BOOLS | {"root", "relative", "operation", "coverage"}):
             self.dropped += 1
@@ -123,10 +133,11 @@ class Recorder:
         self.events.append(row)
 
     def _encode(self, events=None):
-        return json.dumps(dict(schema=1, events=self.events if events is None else events,
-                               dropped=min(self.dropped, 2**63 - 1),
-                               sink_failures=min(self.sink_failures, 2**63 - 1)),
-                          separators=(",", ":"), allow_nan=False).encode("ascii")
+        with self._lock:
+            return json.dumps(dict(schema=1, events=self.events if events is None else events,
+                                   dropped=min(self.dropped, 2**63 - 1),
+                                   sink_failures=min(self.sink_failures, 2**63 - 1)),
+                              separators=(",", ":"), allow_nan=False).encode("ascii")
 
     def _check_sink(self):
         if not self.anchor.is_absolute() or not self.sink.is_absolute():
@@ -150,6 +161,10 @@ class Recorder:
             raise ValueError("sink identity is not exclusive")
 
     def flush(self):
+        with self._lock:
+            return self._flush()
+
+    def _flush(self):
         try:
             self._check_sink()
             data = self._encode()
@@ -231,7 +246,7 @@ class CacheAudit:
                           for cache, modules in self.modules.items() for module in modules)
         recorder._relative_names = frozenset(self.names)
         self.enabled = False
-        self.busy = False
+        self._local = threading.local()
 
     def relative(self, raw):
         if not isinstance(raw, (str, bytes)):
@@ -277,9 +292,9 @@ class CacheAudit:
             return None
 
     def _hook(self, event, args):
-        if not self.enabled or self.busy:
+        if not self.enabled or getattr(self._local, "busy", False):
             return
-        self.busy = True
+        self._local.busy = True
         try:
             operation, paths = None, ()
             if event == "os.mkdir" and args[2] == -1:
@@ -300,9 +315,9 @@ class CacheAudit:
                                              dont_write_bytecode=bool(sys.dont_write_bytecode))
         except BaseException:
             # Diagnostic-hook failures alone cannot veto the audited operation.
-            self.recorder.dropped += 1
+            self.recorder.drop()
         finally:
-            self.busy = False
+            self._local.busy = False
 
     def install_in_owned_child(self, *, owner_pid: int):
         if os.getpid() == owner_pid or os.getppid() != owner_pid or self.recorder.role != "test-child":
@@ -323,7 +338,7 @@ class CacheAudit:
             self.recorder.record("cache-post", root="manager", relative=name,
                                  coverage="explicit-post-state", present=False)
         except OSError:
-            self.recorder.dropped += 1
+            self.recorder.drop()
         else:
             self.recorder.record("cache-post", root="manager", relative=name,
                                  coverage="explicit-post-state", present=True,
@@ -339,5 +354,5 @@ class CacheAudit:
                                      operation=operation, coverage="action-returned")
         except BaseException:
             # The action has returned; optional completion recording cannot veto it.
-            self.recorder.dropped += 1
+            self.recorder.drop()
         return result

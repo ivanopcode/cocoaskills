@@ -69,6 +69,32 @@ def test_closed_schema_caps_and_secret_exclusion(recorder, budget):
     assert b"secret-canary" not in raw
 
 
+# A bounded scheduling pause exposes two real callers crossing the final event slot.
+def test_concurrent_recorder_cap(recorder, monkeypatch):
+    for _ in range(127):
+        recorder.record("node-start")
+    barrier = threading.Barrier(2)
+    original_encode = recorder._encode
+    def paused_encode(events=None):
+        try:
+            barrier.wait(timeout=0.1)
+        except threading.BrokenBarrierError:
+            pass  # serialization makes the second caller wait outside encoding
+        return original_encode(events)
+    with monkeypatch.context() as patch:
+        patch.setattr(recorder, "_encode", paused_encode)
+        threads = [threading.Thread(target=lambda: recorder.record("node-end")) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(2)
+            assert not thread.is_alive()
+    assert len(recorder.events) == 128
+    assert recorder.dropped == 1
+    assert recorder.flush()
+    assert len(recorder.sink.read_bytes()) <= 16 * 1024
+
+
 # Static outside/linked/replaced sinks preserve bytes, modes and inode; exclusive sink works.
 @pytest.mark.parametrize("kind", ["outside", "symlink", "hardlink", "ancestor-link", "replaced", "closed"])
 def test_unsafe_sink_is_not_written(kind, recorder, tmp_path):
@@ -275,7 +301,7 @@ _AUDIT_CHILD = r'''
 import sys
 # Bootstrap dependencies must not write into the source checkout or interpreter.
 sys.dont_write_bytecode = True
-import os, json, hashlib
+import os, json, hashlib, threading
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 from go_worker_observation import Recorder, CacheAudit
@@ -312,6 +338,20 @@ with (anchor/'child.json').open('x+b') as sink:
         assert error is failures[0]
     else:
         raise AssertionError('plant did not reject')
+    before=sum(row['stage']=='cache-intent' and row.get('operation')=='write' for row in trace.events)
+    start=threading.Barrier(2)
+    def write(tag):
+        start.wait()
+        (cache/('module.cpython-312.pyc.'+tag)).write_bytes(b'fixture')
+    threads=[threading.Thread(target=write,args=(tag,)) for tag in ('1001','1002')]
+    for thread in threads: thread.start()
+    for thread in threads:
+        thread.join(2)
+        assert not thread.is_alive()
+    for tag in ('1001','1002'):
+        assert (cache/('module.cpython-312.pyc.'+tag)).read_bytes()==b'fixture'
+    after=sum(row['stage']=='cache-intent' and row.get('operation')=='write' for row in trace.events)
+    assert after-before==2
     (unrelated/'secret-canary').write_bytes(b'outside')
     assert audit.relative(str(unrelated/'secret-canary')) is None
     assert trace.flush()

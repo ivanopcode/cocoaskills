@@ -98,6 +98,8 @@ later `teardown-end` records the already-retained expiry flag; exact timer-fire
 time, native Go stacks and Windows CPU/thread data remain unavailable.
 
 Each recorder retains at most128 events and16KiB of JSON including counters.
+Updates and snapshots are serialized within that process; audit recursion is
+guarded per thread so another owned thread's event is not silently discarded.
 Schema1 uses fixed stage/role/operation/root/coverage labels, numeric timing and
 identity, booleans and configured bounded root-relative components. Unknown
 fields/labels, nonfinite numbers and unapproved names are dropped **before**
