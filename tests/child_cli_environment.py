@@ -6,9 +6,17 @@ import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 
-_owner: ContextVar[Path | None] = ContextVar("cli_temp_owner", default=None)
+
+@dataclass
+class _ScratchOwner:
+    root: Path
+    allocated: bool = False
+
+
+_owner: ContextVar[_ScratchOwner | None] = ContextVar("cli_temp_owner", default=None)
 _WINDOWS = os.name == "nt"
 
 
@@ -54,7 +62,16 @@ def _remove_tree(path: Path) -> None:
 @contextmanager
 def owned_cli_environment(root: Path) -> Iterator[None]:
     """Bound child defaults to one fixture; never initialize the tempfile cache."""
-    token = _owner.set(root)
+    # Capture explicit preallocated ownership before the body can instrument IO.
+    # Otherwise only child_cli_environment's successful mkdir acquires scratch.
+    owner = _ScratchOwner(root)
+    try:
+        root.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        owner.allocated = True
+    token = _owner.set(owner)
     body_error: BaseException | None = None
     try:
         yield
@@ -63,13 +80,10 @@ def owned_cli_environment(root: Path) -> Iterator[None]:
         raise
     finally:
         _owner.reset(token)
-        # An unused fixture does not allocate a temp directory at all.
+        # Unused owners require no teardown IO. Allocated scratch is not
+        # treated as absent if cleanup fails: retain the actual failure.
         try:
-            try:
-                root.lstat()
-            except FileNotFoundError:
-                pass
-            else:
+            if owner.allocated:
                 _remove_tree(root)
         except (OSError, ExceptionGroup) as cleanup:
             cleanup.add_note(f"Failed to remove fixture-owned CLI scratch: {root}")
@@ -87,8 +101,10 @@ def child_cli_environment() -> dict[str, str]:
     Nested children inherit it normally. Callers can still update any setting
     explicitly; parent os.environ and tempfile's natural cache stay untouched.
     """
-    root = _owner.get()
-    if root is None:
+    owner = _owner.get()
+    if owner is None:
         raise AssertionError("acquisition CLI needs an owning test fixture")
+    root = owner.root
     root.mkdir(exist_ok=True)
+    owner.allocated = True
     return {**os.environ, **{name: str(root) for name in ("TMPDIR", "TEMP", "TMP")}}

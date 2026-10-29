@@ -34,6 +34,7 @@ GITATTRIBUTES = ROOT / ".gitattributes"
 LF_RULE = "*.py text eol=lf"
 AUDITED_FILES = {
     "tests/conftest.py",
+    "tests/child_cli_environment.py",
     "tests/protocol_conformance_adapters.py",
     "tests/protocol_lifecycle_observations.py",
     "tests/test_protocol_conformance.py",
@@ -105,15 +106,16 @@ def test_audited_bytes_survive_checkout_on_every_platform() -> None:
         )
 
 
-def test_the_guard_fails_closed_on_drift(tmp_path: Path) -> None:
+@pytest.mark.parametrize("drifted", sorted(AUDITED_FILES))
+def test_the_guard_fails_closed_on_drift(tmp_path: Path, drifted: str) -> None:
     """The guard must reject a mutated audited file, not just accept a clean one."""
     verifier = load_verifier()
     for relative in sorted(AUDITED_FILES):
         target = tmp_path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((ROOT / relative).read_bytes())
-    (tmp_path / "tests" / "conftest.py").write_bytes(b"# mutated\n")
+    (tmp_path / drifted).write_bytes(b"# mutated\n")
 
     with pytest.raises(ValueError) as error:
         verifier.verify_audited_hashes(tmp_path, audited_hashes())
-    assert "audited file hash mismatch: tests/conftest.py" in str(error.value)
+    assert "audited file hash mismatch: " + drifted in str(error.value)

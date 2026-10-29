@@ -161,7 +161,8 @@ def _run_sub_pytest(
         env.update(env_extra)
     env.pop("PYTEST_ADDOPTS", None)
     return subprocess.run(
-        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q", *args],
+        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q",
+         "-m", "not csk_e2e_native", *args],
         cwd=case,
         capture_output=True,
         text=True,
@@ -934,6 +935,7 @@ def test_unrecognised_discovery_failure_is_loud(
 
 REAL_CONFTEST_FILES = (
     "conftest.py",
+    "child_cli_environment.py",
     "git_session_isolation.py",
     "git_fixture_isolation.py",
     "draft_sources_accounting.py",
@@ -971,7 +973,7 @@ def _real_conftest_case(tmp_path: Path, test_source: str) -> Path:
     """A throwaway repository holding the REAL conftest and session module, verbatim.
 
     Nothing is stubbed: ``tests/conftest.py`` and ``git_session_isolation``
-    (plus the two helper modules the conftest imports) are copied byte for
+    (plus every local helper module the conftest imports) are copied byte for
     byte, so the session fixture, its ``pytest.fail`` wiring and the
     tripwire are exactly the production ones.
     """

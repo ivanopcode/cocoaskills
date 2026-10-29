@@ -222,18 +222,20 @@ def _csk_git_session_isolation(
 
 
 @pytest.fixture(autouse=True)
-def stable_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, incidental_git_ca: Path
-) -> Iterator[None]:
-    deprecation.reset_for_tests()
-    monkeypatch.delenv("CSK_CONFIG", raising=False)
-    monkeypatch.setenv("CSK_GIT_CA_BUNDLE", str(incidental_git_ca))
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
-    # Acquisition launchers request child-only defaults. Parent tempfile caching
-    # and short-path fixtures retain the caller's original temp environment.
-    with owned_cli_environment(tmp_path / "cli-tmp"):
-        yield
+def stable_env(tmp_path: Path, incidental_git_ca: Path) -> Iterator[None]:
+    # Autouse setup precedes the body's monkeypatch fixture, whose teardown
+    # must restore filesystem probes before owned scratch is removed. Keep our
+    # environment patch separate; never undo the test's patches ourselves.
+    with pytest.MonkeyPatch.context() as environment:
+        deprecation.reset_for_tests()
+        environment.delenv("CSK_CONFIG", raising=False)
+        environment.setenv("CSK_GIT_CA_BUNDLE", str(incidental_git_ca))
+        environment.setenv("HOME", str(tmp_path / "home"))
+        environment.setenv("USERPROFILE", str(tmp_path / "home"))
+        # Child-only defaults leave parent tempfile caching and short-path
+        # fixtures on the caller's original temp environment.
+        with owned_cli_environment(tmp_path / "cli-tmp"):
+            yield
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:

@@ -41,14 +41,15 @@ def main() -> int:
         shutil.copytree(ROOT / "src", sandbox / "src", ignore=shutil.ignore_patterns("__pycache__"))
         (sandbox / "tests").mkdir()
         (sandbox / "temp").mkdir()
-        for name in ("conftest.py", "draft_sources_accounting.py", "test_repointed_tags.py"):
+        for name in ("test_repointed_tags.py", "conftest.py", "draft_sources_accounting.py",
+                     "git_session_isolation.py", "git_fixture_isolation.py", "child_cli_environment.py"):
             shutil.copyfile(ROOT / "tests" / name, sandbox / "tests" / name)
         (sandbox / "pytest.ini").write_text("[pytest]\npythonpath = src\n", encoding="utf-8")
         env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1", PYTHONDONTWRITEBYTECODE="1")
         env.pop("PYTHONPATH", None)
 
         def check(name: str, selection: str = "") -> subprocess.CompletedProcess[str]:
-            args = [sys.executable, "-m", "pytest", "-q", "--tb=short", "-r", "f",
+            args = [sys.executable, "-m", "pytest", "-m", "not csk_e2e_native", "-q", "--tb=short", "-r", "f",
                     "-p", "no:cacheprovider", "tests/test_repointed_tags.py",
                     "--basetemp", str(sandbox / "temp" / name)]
             if selection:

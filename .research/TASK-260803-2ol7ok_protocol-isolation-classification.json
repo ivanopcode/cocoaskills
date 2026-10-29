@@ -7,7 +7,8 @@
     "tests/test_protocol_conformance.py": "06d5fa20a02ac40e075d367d056961abbef6d38b4088b368180c715046fab435",
     "tests/protocol_conformance_adapters.py": "d54d77b4c42c3addc2766c7c5ec6e43d35834589fa06e684b39cb24fa038ce69",
     "tests/protocol_lifecycle_observations.py": "709ae5d60854a9297b24e562270d9305a7a91b99c3df785e809694e5f90a671c",
-    "tests/conftest.py": "8fd4a959143f82b49ac77abc170b46b2175281c669b48aab14e94862656f63db"
+    "tests/conftest.py": "cdb79830805ff831855183cbb0287bd327add2c060547fbfb4e2e2267b6fd3d9",
+    "tests/child_cli_environment.py": "d160163b0e7104581b0d8ac1d9f5623fe2e54ae322b403753bcce988a2d55e15"
   },
   "audit_revisions": [
     {
@@ -192,6 +193,17 @@
       "change": "Restore the build-root corruption plant for build-only installations without a preexisting runtime directory.",
       "isolation_neutral": true,
       "rationale": "The parent is created under the same disposable case root already used by the original recursive corruption plant. This restores its intended mutation footprint; no node, shared root, fixture lifetime, process, protocol answer or shard assignment changes. Ordinary tests now provision the actual build-only fixture and verify the real integrity gate with absent and protected runtime controls."
+    },
+    {
+      "file": "tests/conftest.py",
+      "previous_sha256": "8fd4a959143f82b49ac77abc170b46b2175281c669b48aab14e94862656f63db",
+      "sha256": "cdb79830805ff831855183cbb0287bd327add2c060547fbfb4e2e2267b6fd3d9",
+      "transitive_files_sha256": {
+        "tests/child_cli_environment.py": "d160163b0e7104581b0d8ac1d9f5623fe2e54ae322b403753bcce988a2d55e15"
+      },
+      "change": "Bound acquisition-child temp defaults to their owning fixture without changing parent temp settings/cache; restore body monkeypatches before scratch cleanup and track allocation. Add the imported child_cli_environment helper to the audited surface.",
+      "isolation_neutral": false,
+      "rationale": "This adds reachable fixture ownership and teardown state, so it is not neutral by construction. The ContextVar is per context and reset in finally, including cleanup failure; no thread, process, cwd, parent temp environment or tempfile cache is created or changed by the helper. The protocol module/adapters/lifecycle observers never call child_cli_environment: their original temporary roots and explicit child environments remain authoritative. Unused owners only inspect their own pytest tmp_path at setup and perform no teardown IO. For acquisition callers, successful child environment allocation is tracked and scratch is removed synchronously after the test monkeypatch fixture restores body probes; preallocated explicit contexts retain their cleanup duty. Cleanup still rejects failures and never traverses symlinks or chmods shared regular files. The stable environment uses its own MonkeyPatch context, retaining all prior variable values/restoration while permitting the independent body monkeypatch fixture to finish first. Protocol subprocess.run calls remain synchronous; observed lifecycle threads join before return and do not acquire this ContextVar. No protocol node, footprint category, cached lifecycle cluster or shard assignment changes. This bounded source re-audit and portable fixture controls do not qualify actual Windows execution or rerun the protocol campaign."
     }
   ],
   "method": {

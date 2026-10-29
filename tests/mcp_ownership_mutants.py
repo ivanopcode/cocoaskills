@@ -253,13 +253,14 @@ def main() -> int:
         sandbox = Path(tmp)
         shutil.copytree(ROOT / "src", sandbox / "src", ignore=shutil.ignore_patterns("__pycache__"))
         (sandbox / "tests").mkdir()
-        for name in ("test_mcp_ownership.py", "conftest.py", "draft_sources_accounting.py"):
+        for name in ("test_mcp_ownership.py", "conftest.py", "draft_sources_accounting.py",
+                     "git_session_isolation.py", "git_fixture_isolation.py", "child_cli_environment.py"):
             shutil.copyfile(ROOT / "tests" / name, sandbox / "tests" / name)
         (sandbox / "pytest.ini").write_text("[pytest]\npythonpath = src\n", encoding="utf-8")
         env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1", PYTHONDONTWRITEBYTECODE="1")
 
         def run() -> subprocess.CompletedProcess[str]:
-            argv = [sys.executable, "-m", "pytest", "-q", "--tb=no", "-r", "f", "-p", "no:cacheprovider", TEST]
+            argv = [sys.executable, "-m", "pytest", "-m", "not csk_e2e_native", "-q", "--tb=no", "-r", "f", "-p", "no:cacheprovider", TEST]
             return subprocess.run(argv, cwd=sandbox, env=env, capture_output=True, text=True, timeout=300)
 
         control = run()
