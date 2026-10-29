@@ -68,3 +68,32 @@ def test_launcher_review_legacy_encoding(monkeypatch, consumer, interactive, pat
     identity, displayed_path = lines[1].split("; publisher=", 1)[1].split("; path=", 1)
     assert json.loads(identity) == publisher and json.loads(displayed_path) == path
     assert asdict(parsed["app"]) == before
+
+
+# The Claude initial install that precedes the dry-run lifecycle must actually
+# disclose/approve/publish Unicode identity through legacy child stdout. This
+# single publication complements the separate full Codex permission lifecycle;
+# no unselected native surface, pending journal or helper execution is allowed.
+def test_unicode_launcher_legacy_cli_publication(tmp_path):
+    from test_mcp_install_acceptance import SURFACES
+    from test_mcp_launcher_path_encoding import NAMES, invoke, lifecycle_fixture, unselected_state
+
+    case, root, marker = lifecycle_fixture(tmp_path, "claude_code")
+    case.env["PYTHONIOENCODING"] = "cp1252:strict"
+    neighbors = unselected_state(case, "claude_code")
+    code, output, _ = invoke(case, root, marker, NAMES[3], approve=True)
+    assert code == 0 and b"mcp app -> claude_code .mcp.json (added)" in output, output
+    assert b"Approve 1 MCP server(s)" in output
+    assert b"project_preflight_failed" not in output
+    command = str(root.parent / NAMES[3].decode("utf-8")) + "/App/bin/server.exe"
+    assert json.loads((case.project / ".mcp.json").read_bytes())["mcpServers"]["app"]["command"] == command
+    assert all((case.project / path).exists() == (agent == "claude_code") for agent, path in SURFACES)
+    seed = (case.project / "source/seed/SKILL.md").read_bytes()
+    assert (case.project / ".agents/skills/seed/SKILL.md").read_bytes() == seed
+    assert (case.project / ".claude/skills/seed/SKILL.md").read_bytes() == seed
+    assert (case.project / "Skillfile.lock.json").is_file()
+    grants = list((case.home / "state/mcp/consent").glob("*.json"))
+    assert len(grants) == 1 and len(json.loads(grants[0].read_bytes())["approved"]) == 1
+    assert not list((case.home / "state/transactions").rglob("*.json"))
+    assert unselected_state(case, "claude_code") == neighbors
+    assert not marker.exists()
