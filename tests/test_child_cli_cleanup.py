@@ -80,6 +80,7 @@ def test_windows_private_object_cleanup(tmp_path, monkeypatch, sealed):
     obj.write_bytes(b"private acquired object")
     if sealed:
         _seal_object_store(objects)
+    original_mode = stat.S_IMODE(obj.stat().st_mode)
     assert obj.stat().st_nlink == 1
     events = []
     denied = PermissionError(13, "DeleteFileW read-only refusal", str(obj))
@@ -89,7 +90,7 @@ def test_windows_private_object_cleanup(tmp_path, monkeypatch, sealed):
             raise body
     assert caught.value is body and not root.exists()
     file_changes = [e for e in events if e[0] == "chmod" and e[1] == obj]
-    assert file_changes == ([("chmod", obj, 0o600, 1)] if sealed else [])
+    assert file_changes == ([("chmod", obj, original_mode | stat.S_IWUSR, 1)] if sealed else [])
 
 
 # Shared files never have attributes changed, even in inaccessible parents; writable links still unlink.
@@ -189,7 +190,8 @@ def test_windows_cleanup_failure_is_visible(tmp_path, monkeypatch, stage, body_f
     if stage == "restore":
         assert cleanup.exceptions == (failure, restoration)
         after = snapshot(obj)
-        assert after == (before[0], 0o600, *before[2:])
+        assert after[0] == before[0] and after[2:] == before[2:]
+        assert after[1] & stat.S_IWUSR
     else:
         assert cleanup is failure and snapshot(obj) == before
     assert root.exists() and any(str(root) in note for note in cleanup.__notes__)
