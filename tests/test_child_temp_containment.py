@@ -17,7 +17,7 @@ def selected(**kwargs):
     (workspace / 'witness').write_bytes(b'acquired')
     print(json.dumps({'workspace': str(workspace), 'pid': os.getpid(), 'implementation': installer.__file__, 'sha256': hashlib.sha256(Path(installer.__file__).read_bytes()).hexdigest(), 'temp_env': [os.environ[name] for name in ('TMPDIR', 'TEMP', 'TMP')], 'home': os.environ['HOME'], 'config': os.environ['CSK_CONFIG']}), flush=True)
     if sys.argv[1] == 'kill':
-        os.kill(os.getpid(), signal.SIGKILL)
+        os.kill(os.getpid(), signal.SIGTERM if os.name == 'nt' else signal.SIGKILL)
     if sys.argv[1] == 'crash':
         os._exit(86)
     return mode
@@ -51,7 +51,7 @@ def test_cli(tmp_path, mode):
         if process.poll() is None:
             process.kill()
             process.wait()
-    expected = -signal.SIGKILL if mode == 'kill' else 86 if mode == 'crash' else 0
+    expected = (signal.SIGTERM if os.name == 'nt' else -signal.SIGKILL) if mode == 'kill' else 86 if mode == 'crash' else 0
     assert process.returncode == expected, stdout + stderr
     record = next(json.loads(line) for line in stdout.splitlines() if line.startswith('{"workspace"'))
     implementation = Path(case.env['PYTHONPATH']) / 'csk/installer.py'
