@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from child_cli_environment import child_cli_environment
+
 from csk import cli, mcp_command_resolution as resolution, mcp_declarations as mcp
 from test_mcp_install_acceptance import _snapshot
 from test_mcp_project_install import project_cli
@@ -462,10 +464,10 @@ def test_default_vim_alias_real_cli_refuses(project_cli, tmp_path, monkeypatch, 
     assert dispatch.returncode == 0 and marker.read_text() == "pkg\n"
     before = _snapshot(root, home)
     for argv in [("check", "app"), ("install", "app", "--dry-run")]:
-        result = subprocess.run([sys.executable, "-m", "csk", *argv], cwd=root, env=os.environ.copy(), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+        result = subprocess.run([sys.executable, "-m", "csk", *argv], cwd=root, env=child_cli_environment(), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
         assert result.returncode == 1 and "mcp_command_invalid" in result.stdout + result.stderr
     master, slave = pty.openpty()
-    child = subprocess.Popen([sys.executable, "-m", "csk", "install", "app"], cwd=root, env=os.environ.copy(), stdin=slave, stdout=slave, stderr=slave)
+    child = subprocess.Popen([sys.executable, "-m", "csk", "install", "app"], cwd=root, env=child_cli_environment(), stdin=slave, stdout=slave, stderr=slave)
     os.close(slave)
     output = b""
     try:

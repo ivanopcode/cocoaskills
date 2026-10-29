@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from candidate_suite_support import load_candidate_suite
+from child_cli_environment import child_cli_environment
 from conftest import (
     commit_all,
     init_git_repo,
@@ -742,7 +743,7 @@ def test_concurrent_real_go_publishers_converge_on_one_identity(
 ) -> None:
     cfg, project, _ = _setup_scope(tmp_path, skills_root, csk_home, "project")
     config.save_config(cfg)  # type: ignore[arg-type]
-    environment = dict(os.environ)
+    environment = child_cli_environment()
     environment["CSK_CONFIG"] = str(csk_home / "config.json")
     # A native Windows build can outlive the default 30-second contention
     # budget. Keep the persistent lock invariant and let the losing public

@@ -11,7 +11,7 @@ from test_mcp_install_acceptance import _snapshot
 pytestmark = pytest.mark.usefixtures('stable_env')
 
 def run_cli(root,*args):
-    return subprocess.run([sys.executable,'-m','csk',*args],cwd=root,env=os.environ.copy(),capture_output=True,text=True,stdin=subprocess.DEVNULL,timeout=30)
+    return subprocess.run([sys.executable,'-m','csk',*args],cwd=root,env=child_cli_environment(),capture_output=True,text=True,stdin=subprocess.DEVNULL,timeout=30)
 
 def stdio(command,args,**extra):
     return {'bad':{'server':{'transport':'stdio','command':command,'args':args,**extra}}}
@@ -88,7 +88,7 @@ def test_embedded_real_publish(project_cli,tmp_path):
     declare(stdio('awk',['BEGIN {system("npx pkg")}']))
     before=_snapshot(root,home)
     master,slave=pty.openpty()
-    child=subprocess.Popen([sys.executable,'-m','csk','install','app'],cwd=root,env=os.environ.copy(),stdin=slave,stdout=slave,stderr=slave)
+    child=subprocess.Popen([sys.executable,'-m','csk','install','app'],cwd=root,env=child_cli_environment(),stdin=slave,stdout=slave,stderr=slave)
     os.close(slave)
     output=b''
     replied=False
@@ -126,7 +126,9 @@ def test_embedded_real_publish(project_cli,tmp_path):
 # the XDG writer stays test-local so later installs retain their ignore policy.
 @pytest.mark.parametrize("kind", ["included-relative", "tilde", "xdg", "subdirectory"])
 def test_additional_ignore_sources(project_cli, tmp_path, monkeypatch, kind):
-    from csk import gitignore_gate
+    from child_cli_environment import child_cli_environment
+
+from csk import gitignore_gate
     root, home, _ = project_cli
     excludes = root / "review-excludes"
     if kind == "tilde":

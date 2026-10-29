@@ -5,6 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 import pytest
+from child_cli_environment import child_cli_environment
 from test_mcp_project_install import project_cli
 from test_mcp_install_acceptance import _snapshot
 from test_mcp_command_resolution import stdio, runner_guard
@@ -18,12 +19,12 @@ VIM_ARGS = ["-Nu", "NONE", "-i", "NONE", "-n", "-es", "-c", "call system('n'.'px
 
 
 def cli(root,*args):
-    return subprocess.run([sys.executable,'-m','csk',*args],cwd=root,env=os.environ.copy(),stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=30)
+    return subprocess.run([sys.executable,'-m','csk',*args],cwd=root,env=child_cli_environment(),stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=30)
 
 def terminal(root):
     import pty
     master,slave=pty.openpty()
-    child=subprocess.Popen([sys.executable,'-m','csk','install','app'],cwd=root,env=os.environ.copy(),stdin=slave,stdout=slave,stderr=slave)
+    child=subprocess.Popen([sys.executable,'-m','csk','install','app'],cwd=root,env=child_cli_environment(),stdin=slave,stdout=slave,stderr=slave)
     os.close(slave)
     output=b''; replied=False
     try:

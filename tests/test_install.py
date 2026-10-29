@@ -12,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from child_cli_environment import child_cli_environment
 from conftest import (
     commit_all,
     make_config,
@@ -187,7 +188,7 @@ def _run_csk_install_cli(
         encoding="utf-8",
     )
     source_root = Path(__file__).resolve().parents[1] / "src"
-    env = os.environ.copy()
+    env = child_cli_environment()
     env["CSK_CONFIG"] = str(config_path)
     env["PYTHONPATH"] = os.pathsep.join(
         path for path in (str(source_root), env.get("PYTHONPATH", "")) if path

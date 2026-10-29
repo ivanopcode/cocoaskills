@@ -9,6 +9,7 @@ import pytest
 from csk import cli, gitignore_gate, mcp_ownership, transactions
 from csk.sources.errors import SourceError, CODE_OUTPUT_OVERLAP
 from csk.sources import publish
+from child_cli_environment import child_cli_environment
 from conftest import write_skillfile
 from test_mcp_install_acceptance import _snapshot
 from test_mcp_project_install import AGENTS, PATHS, URL, native_bytes, project_cli
@@ -278,7 +279,7 @@ def test_find_runner_install_refused_in_terminal(project_cli):
     before = _snapshot(root, home)
     master, slave = pty.openpty()
     proc = subprocess.Popen([sys.executable, '-m', 'csk', 'install', 'app'], cwd=root,
-                            env=os.environ.copy(), stdin=slave, stdout=slave, stderr=slave)
+                            env=child_cli_environment(), stdin=slave, stdout=slave, stderr=slave)
     os.close(slave)
     output = b''
     try:
