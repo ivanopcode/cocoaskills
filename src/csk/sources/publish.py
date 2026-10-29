@@ -5912,6 +5912,10 @@ def merge_build_outputs(
     )
 
 
+class _LocalBuildInputDrift(RuntimeError):
+    """A valid marker records a different complete input; never a cache hit."""
+
+
 def reconstruct_schema2_local_builds(
     *,
     home: Path,
@@ -5922,14 +5926,19 @@ def reconstruct_schema2_local_builds(
     package: PackageIdentity,
     source_root: Path | None,
     config: GlobalConfig | None,
+    status_marker_path: Path | None = None,
 ) -> Schema2BuildOutputs:
     """Reconstruct one member's local build bundle read-only.
 
     Re-planning runs the audit hook over the stored reports, the
     toolchain probe and the cache reads, but never compiles,
-    records or publishes: a cache miss means the install evidence
-    is gone and the member cannot be current. The marker is never
-    an input here; the plan comparison downstream decides.
+    records or publishes. For status only, compare the independently planned
+    complete key with a structurally valid marker before requiring a winner
+    at the new key. A changed input need not have been built yet. This
+    comparison can only report non-current drift; it never authorizes reuse
+    or attests the old cache. Same-key evidence still passes every existing
+    protected-cache and marker comparison. Install/repair reconstruction
+    does not take a marker input.
     """
 
     if not _local_build_command_names(spec):
@@ -5981,6 +5990,34 @@ def reconstruct_schema2_local_builds(
         identities = {
             provider.name: provider.snapshot.identity for provider in providers
         }
+    if status_marker_path is not None:
+        try:
+            recorded = install_marker.read_install_marker(status_marker_path.read_bytes())
+        except (OSError, install_marker.InstallMarkerError) as exc:
+            raise SourceError(
+                CODE_MEMBER_INVALID, f"Skill {name!r} install marker is not usable: {exc}"
+            ) from exc
+        if not isinstance(recorded, install_marker.InstallMarkerV5):
+            raise SourceError(
+                CODE_MEMBER_INVALID, f"Skill {name!r} needs a schema-5 install marker"
+            )
+        if recorded.name != name or recorded.package != package:
+            raise SourceError(
+                CODE_MEMBER_INVALID, f"Skill {name!r} install marker member identity differs"
+            )
+        for plan in plans:
+            old = recorded.builds.get(plan.command)
+            if old is None or old.driver != plan.driver:
+                raise SourceError(
+                    CODE_MEMBER_INVALID,
+                    f"Skill {name!r} command {plan.command!r} install marker build is missing or has a different driver",
+                )
+            if old.cache_key != plan.cache_key:
+                raise _LocalBuildInputDrift(
+                    f"Skill {name!r} command {plan.command!r} complete build input "
+                    "(raw source, toolchain, target and execution policy) differs: "
+                    f"recorded {old.cache_key}, expected {plan.cache_key}; run csk install"
+                )
     marker_builds: dict[str, install_marker.InstallMarkerBuildV5] = {}
     activations: dict[str, shims.BuildCommandActivation] = {}
     for plan in plans:
@@ -5998,7 +6035,8 @@ def reconstruct_schema2_local_builds(
             raise SourceError(
                 CODE_MEMBER_INVALID,
                 f"Skill {name!r} command {plan.command!r} build evidence "
-                "is missing from the cache; run csk install to repair",
+                f"is {inspection.status.value}: {inspection.reason}; "
+                "run csk install to repair",
             )
         marker = marker_build_v5_from_inspection(
             name, plan.command, plan, inspection
@@ -6528,6 +6566,7 @@ def _evaluate_member_plan(
                 package=package,
                 source_root=source_root,
                 config=config,
+                status_marker_path=marker_path,
             ),
             reconstruct_schema2_external_builds(
                 home=home,
@@ -6548,6 +6587,16 @@ def _evaluate_member_plan(
             locale_value=locale_value,
             builds=bundle.marker_builds.get(name),
             build_source=bundle.build_sources.get(name),
+        )
+    except _LocalBuildInputDrift as exc:
+        return MemberVerdict(
+            name=name,
+            current=False,
+            label="build-input-drift",
+            detail=str(exc),
+            locked_snapshot=locked_snapshot,
+            current_snapshot=current_snapshot,
+            marker_snapshot=claimed,
         )
     except SourceError as exc:
         return MemberVerdict(
