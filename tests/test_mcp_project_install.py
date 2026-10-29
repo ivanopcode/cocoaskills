@@ -10,6 +10,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from child_cli_environment import child_cli_environment
 from conftest import make_config, make_project, write_files, write_skillfile
 
 from csk import (
@@ -698,6 +699,7 @@ sys.exit(cli.main(["install", "app", "--fix-gitignore"]))
 """
     child = subprocess.run(
         [sys.executable, "-c", script, point, str(reached)],
+        env=child_cli_environment(),
         capture_output=True,
         text=True,
     )

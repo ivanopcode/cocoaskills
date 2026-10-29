@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from child_cli_environment import child_cli_environment
 from conftest import make_config, make_project, run, write_skillfile
 from csk import config, gitignore_gate, locking, transactions
 
@@ -41,7 +42,7 @@ def consumers(tmp_path, skills_root):
 
 def _env(config_path):
     # Use this checkout in the child even when the parent runs via editable uv.
-    return {**{k: v for k, v in os.environ.items() if k not in {'GIT_DIR', 'GIT_WORK_TREE'}}, 'CSK_CONFIG': str(config_path),
+    return {**{k: v for k, v in child_cli_environment().items() if k not in {'GIT_DIR', 'GIT_WORK_TREE'}}, 'CSK_CONFIG': str(config_path),
             'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src')}
 
 

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from child_cli_environment import child_cli_environment
 from conftest import make_config, make_project, write_files, write_skillfile
 
 from csk import config, locking
@@ -93,7 +94,7 @@ def _case(root: Path, *, schema: int = 3, ignore_mode: str | None = "gitignore")
             skills=[{"name": "seed", "from": "local", "directory": "seed"}],
         )
     write_skillfile(project, skillfile)
-    env = {key: value for key, value in os.environ.items() if not key.startswith("CSK_")}
+    env = {key: value for key, value in child_cli_environment().items() if not key.startswith("CSK_")}
     isolated_home = root / "home"
     isolated_home.mkdir()
     env.update(

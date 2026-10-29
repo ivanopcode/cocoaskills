@@ -65,3 +65,13 @@ version section with compare links) and pushing an annotated `v*` tag. CI
 builds the distributions, publishes to PyPI, and creates the GitHub release
 with checksums and attestations. The Homebrew formula in
 `ivanopcode/homebrew-csk` is bumped after the release.
+
+## CLI child fixtures
+
+Acquisition CLI subprocess fixtures use `child_cli_environment()` from
+`tests/child_cli_environment.py` before applying explicit caller overrides.
+The shared autouse fixture owns those children's temp directories, including
+nested children and fault-injection processes joined before teardown. Cleanup
+restores directory access only; files and symlinks are unlinked without chmod.
+The parent retains its inherited temp environment and natural `tempfile` cache,
+so short-path fixtures such as Unix-domain sockets keep their original budget.

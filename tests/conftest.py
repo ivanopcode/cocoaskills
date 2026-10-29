@@ -4,7 +4,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -14,6 +13,7 @@ from csk import deprecation, git_trust, locking
 from csk.config import GlobalConfig, ProjectConfig
 
 import git_session_isolation
+from child_cli_environment import owned_cli_environment
 from draft_sources_accounting import record as _record_draft_sources_outcome
 from git_fixture_isolation import check_own_git_dir, discover_git_dir, run_fixture_git
 
@@ -230,11 +230,9 @@ def stable_env(
     monkeypatch.setenv("CSK_GIT_CA_BUNDLE", str(incidental_git_ca))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
-    # Fresh CLI children (including nested/crashed ones) inherit test-owned temp
-    # state. Explicit dir avoids the parent's cached tempfile.gettempdir().
-    with tempfile.TemporaryDirectory(prefix="cli-tmp-", dir=tmp_path) as child_tmp:
-        for name in ("TMPDIR", "TEMP", "TMP"):
-            monkeypatch.setenv(name, child_tmp)
+    # Acquisition launchers request child-only defaults. Parent tempfile caching
+    # and short-path fixtures retain the caller's original temp environment.
+    with owned_cli_environment(tmp_path / "cli-tmp"):
         yield
 
 
