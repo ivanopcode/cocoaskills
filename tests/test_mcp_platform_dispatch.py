@@ -127,8 +127,8 @@ def test_windows_hidden_choice_refuses(tmp_path, monkeypatch, kind):
         resolution.validate_host_commands(parse(command), cwd=tmp_path)
 
 
-# Both modeled choices can be opaque; duplicates are read once. PATHEXT and
-# POSIX X_OK do not affect these choices. No Windows runtime is exercised.
+# Both distinct modeled choices can be opaque and are observed. POSIX X_OK
+# is not consulted. No Windows runtime is exercised.
 def test_windows_both_native_control(tmp_path, monkeypatch):
     host(monkeypatch, tmp_path, "win32")
     for suffix in (".com", ".exe"):

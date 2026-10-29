@@ -41,8 +41,8 @@ def test_selected_io_failure_refuses(tmp_path, monkeypatch, stage, command, args
     assert str(tmp_path) not in str(caught.value) and opened == [str(candidate)]
 
 
-# Current-platform opaque fixed headers pass; foreign headers refuse. Fat
-# controls include the whole bounded arch table, not just its shared Java magic.
+# Current-platform opaque fixed headers pass; foreign headers refuse.
+# Complete fat-table controls live in test_mcp_platform_dispatch.py.
 FAT = [(bytes.fromhex('CAFEBABE'), 'big'), (bytes.fromhex('BEBAFECA'), 'little')]
 @pytest.mark.parametrize('platform', ['darwin', 'linux', 'win32'])
 def test_native_magic_positive(tmp_path, monkeypatch, platform):
