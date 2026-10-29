@@ -42,6 +42,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
@@ -49,6 +50,48 @@ from typing import Any, BinaryIO, Final, Protocol, cast
 
 from ..identifiers import is_valid_identifier, is_valid_portable_path
 from . import module_roots, source, toolchain
+
+
+# Trusted in-process test attachment only. No worker argument, environment or
+# protocol surface enables this, and expiry termination never calls it.
+_OBSERVATION_SINK: ContextVar[Callable[..., None] | None] = ContextVar(
+    "go_worker_observation", default=None,
+)
+
+
+def _observe(
+    stage: str,
+    *,
+    process: subprocess.Popen[bytes] | None = None,
+    deadline: float | None = None,
+    path_index: int | None = None,
+    event_flags: int | None = None,
+    event_count: int | None = None,
+    expired: bool | None = None,
+) -> None:
+    sink = _OBSERVATION_SINK.get()
+    if sink is None:
+        return
+    try:
+        values: dict[str, object] = {}
+        if process is not None:
+            # Cached state only: no process poll, filesystem scan or stack read.
+            values.update(worker_pid=process.pid, exit_code=process.returncode)
+        if deadline is not None:
+            values.update(deadline=deadline, remaining=deadline - time.monotonic())
+        if path_index is not None:
+            values["path_index"] = path_index
+        if event_flags is not None:
+            values["event_flags"] = event_flags
+        if event_count is not None:
+            values["event_count"] = event_count
+        if expired is not None:
+            values["expired"] = expired
+        sink(stage, **values)
+    except BaseException:
+        # Only optional observation is isolated, including observer cancellation.
+        # It cannot replace an operation's result, primary error or cleanup.
+        return
 
 
 # Stable execution-boundary diagnostics from Protocol Core 4.2.1.
@@ -4095,6 +4138,15 @@ class _IdentityMutationGuard:
             failure.__cause__ = exc
             raise failure
         if events:
+            if _OBSERVATION_SINK.get() is not None:
+                _observe("identity-events", event_count=len(events))
+                for event in events[:128]:
+                    path = self._mac_paths.get(event.ident)
+                    _observe(
+                        "identity-event",
+                        path_index=(self.paths.index(path) if path in self.paths else -1),
+                        event_flags=int(event.fflags),
+                    )
             changed = sorted(
                 {
                     os.fspath(self._mac_paths.get(event.ident, Path("?")))
@@ -6487,12 +6539,14 @@ class _WorkerClient:
         )
         self._deadline_timer.daemon = True
         self._deadline_timer.start()
+        _observe("client-deadline", process=process, deadline=deadline)
 
     @classmethod
     def launch(
         cls,
         plan: _WorkerPlan,
     ) -> _WorkerClient:
+        _observe("launch-start")
         nonce = secrets.token_hex(32)
         secret = secrets.token_hex(32)
         plan.executable.verify()
@@ -6516,7 +6570,9 @@ class _WorkerClient:
                 plan.probes,
                 plan.limits,
             )
+            _observe("domain-launch")
             process = domain.launch(plan.executable, plan.worker_cache)
+            _observe("domain-launched", process=process)
             identity_guard.verify()
             launch_secret = domain.launch_secret
             if len(launch_secret) != _WORKER_LAUNCH_SECRET_BYTES:
@@ -6630,11 +6686,14 @@ class _WorkerClient:
                 _string_list(ready.get("applied"), "worker applied controls")
             )
             _match_applied_controls(applied, evidence)
+            _observe("ready-validation", process=process, deadline=client.deadline)
             plan.executable.verify()
             plan.process_identity.verify()
             identity_guard.verify()
+            _observe("ready", process=process, deadline=client.deadline)
             return client
         except BaseException as primary:
+            _observe("launch-failure", process=process)
             try:
                 if client is not None:
                     client.teardown()
@@ -6690,9 +6749,18 @@ class _WorkerClient:
                 "process_output_limit",
                 "worker result exceeds the manager output bound",
             )
+        _observe(kind, process=self.process, deadline=self.deadline)
         return result
 
     def _send(self, message: Mapping[str, object]) -> None:
+        if _OBSERVATION_SINK.get() is not None:
+            kind = message.get("kind")
+            stage = {
+                "request": "request-send", "list": "list-send",
+                "permit": "build-permit",
+            }.get(kind) if type(kind) is str else None
+            if stage is not None:
+                _observe(stage, process=self.process, deadline=self.deadline)
         if self._expired.is_set() or time.monotonic() >= self.deadline:
             raise GoV1Error(
                 "process_timeout",
@@ -6707,6 +6775,13 @@ class _WorkerClient:
         _write_message(cast(BinaryIO, stdin_pipe), message)
 
     def _receive(self, expected_kind: str) -> Mapping[str, object]:
+        if _OBSERVATION_SINK.get() is not None:
+            stage = {
+                "ready": "ready-wait", "list-result": "list-wait",
+                "build-result": "build-wait",
+            }.get(expected_kind)
+            if stage is not None:
+                _observe(stage, process=self.process, deadline=self.deadline)
         stdout_pipe = self.process.stdout
         if stdout_pipe is None:
             raise GoV1Error(
@@ -6791,6 +6866,18 @@ class _WorkerClient:
             return
 
     def teardown(self) -> None:
+        # Both callbacks are outside the lifecycle lock. The expiry timer has
+        # no observer dependency and may terminate while a callback is running.
+        _observe("teardown-start", process=self.process, deadline=self.deadline)
+        try:
+            self._teardown()
+        finally:
+            _observe(
+                "teardown-end", process=self.process, deadline=self.deadline,
+                expired=self._expired.is_set(),
+            )
+
+    def _teardown(self) -> None:
         with self._lifecycle_lock:
             if self.finished:
                 return
@@ -7028,6 +7115,7 @@ def build(
         list_result = client.list()
         _emit_state(_state_observer, SESSION_STATES[6])
         _check_process_result(list_result, phase="list")
+        _observe("manager-validation", process=client.process, deadline=client.deadline)
         _verify_frozen_inputs(
             request.source_snapshot,
             request.toolchain_session,
@@ -7049,6 +7137,7 @@ def build(
             replaced_modules=replaced_modules,
         )
         _scan_declared_module_roots(request, source_root)
+        _observe("manager-validated", process=client.process, deadline=client.deadline)
         _emit_state(_state_observer, SESSION_STATES[7])
 
         _emit_state(_state_observer, SESSION_STATES[8])
@@ -7089,6 +7178,7 @@ def build(
             capability_evidence=client.evidence,
         )
     except BaseException as exc:
+        _observe("failure")
         operation_error = exc
     finally:
         teardown_error: BaseException | None = None
@@ -7100,6 +7190,9 @@ def build(
                 teardown_error = exc
         if teardown_error is not None:
             operation_error = _dominant_failure(operation_error, teardown_error)
+        # A bounded harness flush can retain state here, after termination and
+        # before stage/cache removal. No source scan or expiry callback is added.
+        _observe("before-cleanup")
         if (operation_error is not None or result is None) and stage is not None:
             shutil.rmtree(stage, ignore_errors=True)
         if worker_cache is not None:
