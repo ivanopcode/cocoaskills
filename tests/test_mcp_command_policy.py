@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 import pytest
+from child_cli_environment import child_cli_environment
 from test_mcp_project_install import project_cli, PATHS
 from test_mcp_install_acceptance import _snapshot
 
@@ -126,9 +127,7 @@ def test_embedded_real_publish(project_cli,tmp_path):
 # the XDG writer stays test-local so later installs retain their ignore policy.
 @pytest.mark.parametrize("kind", ["included-relative", "tilde", "xdg", "subdirectory"])
 def test_additional_ignore_sources(project_cli, tmp_path, monkeypatch, kind):
-    from child_cli_environment import child_cli_environment
-
-from csk import gitignore_gate
+    from csk import gitignore_gate
     root, home, _ = project_cli
     excludes = root / "review-excludes"
     if kind == "tilde":
