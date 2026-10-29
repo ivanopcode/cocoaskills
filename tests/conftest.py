@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -223,12 +224,18 @@ def _csk_git_session_isolation(
 @pytest.fixture(autouse=True)
 def stable_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, incidental_git_ca: Path
-) -> None:
+) -> Iterator[None]:
     deprecation.reset_for_tests()
     monkeypatch.delenv("CSK_CONFIG", raising=False)
     monkeypatch.setenv("CSK_GIT_CA_BUNDLE", str(incidental_git_ca))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    # Fresh CLI children (including nested/crashed ones) inherit test-owned temp
+    # state. Explicit dir avoids the parent's cached tempfile.gettempdir().
+    with tempfile.TemporaryDirectory(prefix="cli-tmp-", dir=tmp_path) as child_tmp:
+        for name in ("TMPDIR", "TEMP", "TMP"):
+            monkeypatch.setenv(name, child_tmp)
+        yield
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
