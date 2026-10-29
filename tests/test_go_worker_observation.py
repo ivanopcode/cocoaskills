@@ -39,7 +39,7 @@ def recorder(tmp_path):
     anchor.mkdir(mode=0o700)
     sink = anchor / "trace.json"
     with sink.open("x+b") as stream:
-        yield Recorder(anchor, sink, stream.fileno())
+        yield Recorder(anchor, sink, stream)
 
 
 # Invalid fields/paths never reach serialization; valid rows exercise event and byte bounds.
@@ -310,7 +310,7 @@ helper=Path(go_worker_observation.__file__).resolve()
 assert helper == Path(sys.argv[1]).resolve()/'go_worker_observation.py'
 anchor, root, unrelated = map(Path, sys.argv[2:5])
 with (anchor/'child.json').open('x+b') as sink:
-    trace=Recorder(anchor, anchor/'child.json', sink.fileno(), role='test-child')
+    trace=Recorder(anchor, anchor/'child.json', sink, role='test-child')
     audit=CacheAudit(trace, root, {'sources/__pycache__': ('module',)})
     audit.install_in_owned_child(owner_pid=int(sys.argv[5]))
     sys.dont_write_bytecode = bool(sys.flags.dont_write_bytecode)
@@ -605,3 +605,242 @@ def test_build_failure_flushes_before_owned_cleanup(recorder, tmp_path, monkeypa
         assert recorder.sink_failures > 0
     else:
         assert recorder.events == []
+
+
+# A scoped real CPython callback at the unchanged encoding boundary cannot exceed
+# the cap; normal rows and the existing two-thread control remain independent.
+@pytest.mark.parametrize("entry", ["record", "snapshot", "flush"])
+def test_real_callback_reentry_bound(recorder, entry):
+    from go_worker_observation import Recorder as RecorderType
+    for _ in range(127):
+        recorder.record("node-start")
+    previous = sys.getprofile()
+    applied = []
+    target = RecorderType._encode.__code__ if entry != "snapshot" else json.dumps.__code__
+    def callback(frame, event, arg):
+        if previous:
+            previous(frame, event, arg)
+        if not applied and event == "call" and frame.f_code is target:
+            applied.append(True)
+            recorder.record("node-end")
+    sys.setprofile(callback)
+    try:
+        if entry == "record":
+            recorder.record("failure")
+        elif entry == "snapshot":
+            payload = recorder._encode()
+            assert len(payload) <= recorder.MAX_BYTES
+        else:
+            assert recorder.flush()
+    finally:
+        sys.setprofile(previous)
+    assert sys.getprofile() is previous and applied == [True]
+    assert recorder.flush()
+    data = json.loads(recorder.sink.read_bytes())
+    print("REENTRY", entry, "rows", len(data["events"]), "dropped", data["dropped"], "applied", len(applied))
+    assert recorder.dropped == 1
+    assert len(data["events"]) == (128 if entry == "record" else 127)
+    assert data["dropped"] == 1 and len(recorder.sink.read_bytes()) <= recorder.MAX_BYTES
+
+
+# Snapshot/flush callbacks have an explicit refusal, not deadlock or a successful
+# overlapping write; one subsequent ordinary snapshot/flush remains valid.
+@pytest.mark.parametrize("nested", ["snapshot", "flush"])
+def test_reentrant_snapshot_and_flush_refuse(recorder, nested):
+    recorder.record("node-start")
+    previous = sys.getprofile()
+    applied, refusals = [], []
+    def callback(frame, event, arg):
+        if previous:
+            previous(frame, event, arg)
+        if not applied and event == "call" and frame.f_code is json.dumps.__code__:
+            applied.append(True)
+            if nested == "snapshot":
+                try:
+                    recorder._encode()
+                except ValueError:
+                    refusals.append(True)
+            else:
+                refusals.append(recorder.flush() is False)
+    sys.setprofile(callback)
+    try:
+        assert recorder.flush()
+    finally:
+        sys.setprofile(previous)
+    assert sys.getprofile() is previous and applied == [True] and refusals == [True]
+    assert recorder.flush()
+    data = json.loads(recorder.sink.read_bytes())
+    assert len(data["events"]) == 1
+    assert data["dropped" if nested == "snapshot" else "sink_failures"] == 1
+    assert len(recorder._encode()) <= recorder.MAX_BYTES
+
+
+# Optional post-state failures preserve absent/present controls and exact namespace,
+# even when fallback accounting also fails; no audit hook enters pytest.
+@pytest.mark.parametrize("accounting_fault", [False, True])
+def test_post_state_optional_faults(recorder, tmp_path, monkeypatch, accounting_fault):
+    root = tmp_path / "package"; root.mkdir()
+    audit = CacheAudit(recorder, root, {"__pycache__": ("module",)})
+    cache = root / "__pycache__"
+    audit.post_state(cache)
+    assert recorder.events[-1]["present"] is False
+    cache.mkdir(); audit.post_state(cache)
+    assert recorder.events[-1]["present"] is True
+    before = cache.stat()
+    error, accounting = OSError("record fault"), RuntimeError("accounting fault")
+    def fail(*args, **kwargs): raise error
+    def fail_drop(): raise accounting
+    monkeypatch.setattr(recorder, "record", fail)
+    if accounting_fault: monkeypatch.setattr(recorder, "drop", fail_drop)
+    audit.post_state(cache)
+    after = cache.stat()
+    assert (before.st_dev, before.st_ino, before.st_mode) == (after.st_dev, after.st_ino, after.st_mode)
+    if not accounting_fault: assert recorder.dropped == 1
+
+
+# Both optional faults leave the real callable's return, exact error/cause/context,
+# cancellation and finally cleanup intact. Callable execution is never suppressed.
+@pytest.mark.parametrize("accounting_fault", [False, True])
+def test_action_optional_faults(recorder, tmp_path, monkeypatch, accounting_fault):
+    root = tmp_path / "package"; root.mkdir()
+    audit = CacheAudit(recorder, root, {"__pycache__": ("module",)})
+    cache = root / "__pycache__"
+    assert audit.action("mkdir", cache, cache.mkdir) is None
+    sentinel, effects = object(), []
+    error, accounting = OSError("record fault"), RuntimeError("accounting fault")
+    def fail(*args, **kwargs): raise error
+    def fail_drop(): raise accounting
+    monkeypatch.setattr(recorder, "record", fail)
+    if accounting_fault: monkeypatch.setattr(recorder, "drop", fail_drop)
+    def success():
+        effects.append("returned")
+        return sentinel
+    assert audit.action("write", cache, success) is sentinel
+    assert effects == ["returned"]
+    for primary in (RuntimeError("body"), KeyboardInterrupt("cancel")):
+        cause, context = LookupError("cause"), ValueError("context")
+        primary.__cause__, primary.__context__ = cause, context
+        cleaned = []
+        def body():
+            try: raise primary
+            finally: cleaned.append(True)
+        with pytest.raises(type(primary)) as caught: audit.action("write", cache, body)
+        assert caught.value is primary and primary.__cause__ is cause and primary.__context__ is context
+        assert cleaned == [True]
+
+
+AUDIT_FAULT_CHILD = r'''
+import sys
+sys.dont_write_bytecode=True
+import os,json
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from go_worker_observation import Recorder,CacheAudit
+base=Path(sys.argv[2]);root=base/'package';root.mkdir()
+for name in ('normal','single','double'): (root/name).mkdir()
+anchor=base/'trace';anchor.mkdir(mode=0o700)
+with (anchor/'data.json').open('x+b') as stream:
+ recorder=Recorder(anchor,anchor/'data.json',stream,role='test-child')
+ audit=CacheAudit(recorder,root,{name+'/__pycache__':('module',) for name in ('normal','single','double')})
+ audit.install_in_owned_child(owner_pid=int(sys.argv[3]))
+ normal=root/'normal'/'__pycache__';os.mkdir(normal)
+ assert recorder.events[-1]['stage']=='cache-intent'
+ recording=OSError('diagnostic record failure');accounting=RuntimeError('diagnostic accounting failure')
+ def bad_record(*args,**kwargs):raise recording
+ def bad_drop():raise accounting
+ recorder.record=bad_record
+ single=root/'single'/'__pycache__';os.mkdir(single)
+ assert single.is_dir() and recorder.dropped==1
+ recorder.drop=bad_drop
+ double=root/'double'/'__pycache__';caught=None
+ try:os.mkdir(double)
+ except BaseException as error:caught=error
+ sentinel=object();returned=None
+ try:returned=audit.action('write',double,lambda:sentinel)
+ except BaseException as error:
+  if caught is None:caught=error
+ # Coverage emission itself is optional after the ownership checks. This second
+ # child-only hook is installed last; all observed IO already completed above.
+ additional=CacheAudit(recorder,root,{'double/__pycache__':('module',)})
+ coverage_error=None
+ try:additional.install_in_owned_child(owner_pid=int(sys.argv[3]))
+ except BaseException as error:coverage_error=error
+ print(json.dumps(dict(pid=os.getpid(),ppid=os.getppid(),no_site=bool(sys.flags.no_site),no_bytecode=bool(sys.dont_write_bytecode),
+    normal=normal.is_dir(),single=single.is_dir(),double=double.is_dir(),
+    preserved_return=returned is sentinel,escaped=caught is not None,coverage_escaped=coverage_error is not None)))
+'''
+
+
+# A non-removable hook is confined to one owned -S -B child: actual mkdir state
+# and action return survive record+accounting faults, with healthy/single controls.
+def test_owned_child_optional_accounting_faults(tmp_path):
+    import go_worker_observation as obs
+    command = [sys.executable, "-S", "-B", "-c", AUDIT_FAULT_CHILD,
+               str(Path(obs.__file__).parent), str(tmp_path), str(os.getpid())]
+    child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        out, err = child.communicate(timeout=10)
+    finally:
+        if child.poll() is None: child.kill()
+        child.wait()
+    assert child.returncode == 0, err
+    data = json.loads(out)
+    print("AUDIT_FAULT_CHILD", json.dumps(data), "exit", child.returncode)
+    assert data['pid'] == child.pid and data['ppid'] == os.getpid()
+    assert data['no_site'] and data['no_bytecode'] and data['normal'] and data['single']
+    assert data['double'] and data['preserved_return'] and not data['escaped'] and not data['coverage_escaped']
+
+
+# Default-disabled actual finished teardown must not inspect observation-only state;
+# enabled teardown remains a nearby control with the correct cached expiry flag.
+def test_disabled_teardown_expiry_inspection(monkeypatch):
+    calls = []
+    class Flag(threading.Event):
+        def is_set(self):
+            calls.append(True)
+            return super().is_set()
+    client = object.__new__(go_v1._WorkerClient)
+    client._expired = Flag(); client.finished = True
+    client._lifecycle_lock = threading.Lock()
+    client.process = SimpleNamespace(pid=73, returncode=0); client.deadline = 10.0
+    sink = ContextVar("disabled-teardown", default=None)
+    monkeypatch.setattr(go_v1, "_OBSERVATION_SINK", sink)
+    assert client.teardown() is None and calls == []
+    rows = []; token = sink.set(lambda stage, **values: rows.append((stage, values)))
+    try: assert client.teardown() is None
+    finally: sink.reset(token)
+    assert calls == [True] and [row[0] for row in rows] == ["teardown-start", "teardown-end"]
+    assert rows[-1][1]["expired"] is False
+
+
+# Append-mode fd is unsupported: preserve prior valid JSON and outside inode/mode;
+# the documented x+b private descriptor still flushes normally afterward.
+def test_append_sink_refuses_before_write(recorder, tmp_path):
+    recorder.record("node-start"); assert recorder.flush()
+    before = recorder.sink.read_bytes()
+    canary = tmp_path / "outside"; canary.write_bytes(b"outside-canary"); canary.chmod(0o444)
+    identity = canary.stat(); original = recorder.descriptor
+    append = os.open(recorder.sink, os.O_RDWR | os.O_APPEND)
+    try:
+        recorder.descriptor = append; recorder.record("node-end")
+        assert recorder.flush() is False
+        assert recorder.sink.read_bytes() == before
+        assert canary.read_bytes() == b"outside-canary"
+        after = canary.stat()
+        assert (after.st_dev, after.st_ino, after.st_mode) == (identity.st_dev, identity.st_ino, identity.st_mode)
+    finally:
+        recorder.descriptor = original; os.close(append)
+    assert recorder.flush() and json.loads(recorder.sink.read_bytes())["events"][-1]["stage"] == "node-end"
+
+
+# Direct append-stream construction also refuses before touching prior safe bytes;
+# the fixture's original x+b stream is the portable admitted positive control.
+def test_append_stream_admission(recorder):
+    recorder.record("node-start"); assert recorder.flush()
+    before = recorder.sink.read_bytes()
+    with recorder.sink.open("a+b") as stream:
+        unsupported = Recorder(recorder.anchor, recorder.sink, stream)
+        unsupported.record("node-end")
+        assert not unsupported.flush() and unsupported.sink_failures == 1
+    assert recorder.sink.read_bytes() == before
+    recorder.record("node-end"); assert recorder.flush()

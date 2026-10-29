@@ -6872,10 +6872,11 @@ class _WorkerClient:
         try:
             self._teardown()
         finally:
-            _observe(
-                "teardown-end", process=self.process, deadline=self.deadline,
-                expired=self._expired.is_set(),
-            )
+            if _OBSERVATION_SINK.get() is not None:
+                _observe(
+                    "teardown-end", process=self.process, deadline=self.deadline,
+                    expired=self._expired.is_set(),
+                )
 
     def _teardown(self) -> None:
         with self._lifecycle_lock:

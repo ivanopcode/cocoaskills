@@ -70,19 +70,31 @@ class Recorder:
     MAX_EVENTS = 128
     MAX_BYTES = 16 * 1024
 
-    def __init__(self, anchor: Path, sink: Path, descriptor: int, *, role="manager"):
+    def __init__(self, anchor: Path, sink: Path, stream, *, role="manager"):
         if role not in {"manager", "test-child"}:
             raise ValueError("unknown role")
-        self.anchor, self.sink, self.descriptor = anchor, sink, descriptor
+        self.anchor, self.sink, self.stream = anchor, sink, stream
+        self.descriptor = stream.fileno()
         self.role = role
         self.events = []
         self.dropped = 0
         self.sink_failures = 0
         self._lock = threading.RLock()
+        self._busy = False
+        self._encoding = False
 
     def record(self, stage, **values):
         with self._lock:
-            self._record(stage, **values)
+            # Same-thread Python callbacks may reenter despite the RLock. A
+            # nested observation consumes no event slot and is counted once.
+            if self._busy:
+                self.dropped += 1
+                return
+            self._busy = True
+            try:
+                self._record(stage, **values)
+            finally:
+                self._busy = False
 
     def drop(self):
         with self._lock:
@@ -134,10 +146,22 @@ class Recorder:
 
     def _encode(self, events=None):
         with self._lock:
-            return json.dumps(dict(schema=1, events=self.events if events is None else events,
-                                   dropped=min(self.dropped, 2**63 - 1),
-                                   sink_failures=min(self.sink_failures, 2**63 - 1)),
-                              separators=(",", ":"), allow_nan=False).encode("ascii")
+            if self._encoding:
+                self.dropped += 1
+                raise ValueError("reentrant trace snapshot")
+            previous_busy = self._busy
+            self._busy = self._encoding = True
+            try:
+                # Snapshot only sanitized rows; callbacks cannot mutate this
+                # container through a nested recorder operation.
+                rows = list(self.events if events is None else events)
+                return json.dumps(dict(schema=1, events=rows,
+                                       dropped=min(self.dropped, 2**63 - 1),
+                                       sink_failures=min(self.sink_failures, 2**63 - 1)),
+                                  separators=(",", ":"), allow_nan=False).encode("ascii")
+            finally:
+                self._encoding = False
+                self._busy = previous_busy
 
     def _check_sink(self):
         if not self.anchor.is_absolute() or not self.sink.is_absolute():
@@ -154,6 +178,16 @@ class Recorder:
             parent = parent / part
             _plain(parent, directory=True)
         path_info = _plain(self.sink, directory=False)
+        if (self.stream.closed or self.stream.mode not in {"x+b", "xb+"}
+                or not self.stream.seekable() or self.stream.fileno() != self.descriptor):
+            raise ValueError("sink requires the original seekable x+b stream")
+        if os.name != "nt":
+            import fcntl
+            flags = fcntl.fcntl(self.descriptor, fcntl.F_GETFL)
+            if flags & os.O_APPEND or flags & os.O_ACCMODE != os.O_RDWR:
+                raise ValueError("sink requires a non-append read/write descriptor")
+        # Stream admission is portable; POSIX additionally checks raw fd flags.
+        # Adversarial fd reuse/rewrapping is outside the private caller contract.
         fd_info = os.fstat(self.descriptor)
         if (not stat.S_ISREG(fd_info.st_mode) or fd_info.st_nlink != 1
                 or path_info.st_nlink != 1
@@ -162,7 +196,14 @@ class Recorder:
 
     def flush(self):
         with self._lock:
-            return self._flush()
+            if self._busy:
+                self.sink_failures += 1
+                return False
+            self._busy = True
+            try:
+                return self._flush()
+            finally:
+                self._busy = False
 
     def _flush(self):
         try:
@@ -291,6 +332,20 @@ class CacheAudit:
         except (OSError, ValueError):
             return None
 
+    def _drop(self):
+        try:
+            self.recorder.drop()
+        except BaseException:
+            # Incomplete telemetry is preferable to a new operation failure.
+            # If accounting also fails, its count is explicitly unavailable.
+            pass
+
+    def _record(self, stage, **values):
+        try:
+            self.recorder.record(stage, **values)
+        except BaseException:
+            self._drop()
+
     def _hook(self, event, args):
         if not self.enabled or getattr(self._local, "busy", False):
             return
@@ -309,13 +364,13 @@ class CacheAudit:
                 for path in paths:
                     name = self.relative(path)
                     if name is not None:
-                        self.recorder.record("cache-intent", root="manager", relative=name,
+                        self._record("cache-intent", root="manager", relative=name,
                                              operation=operation, coverage="python-audit-intent-only",
                                              no_site=bool(sys.flags.no_site),
                                              dont_write_bytecode=bool(sys.dont_write_bytecode))
         except BaseException:
             # Diagnostic-hook failures alone cannot veto the audited operation.
-            self.recorder.drop()
+            self._drop()
         finally:
             self._local.busy = False
 
@@ -324,35 +379,37 @@ class CacheAudit:
             raise ValueError("audit installation requires an explicit owned child")
         sys.addaudithook(self._hook)
         self.enabled = True
-        self.recorder.record("coverage", coverage="python-audit-intent-only",
+        self._record("coverage", coverage="python-audit-intent-only",
                              no_site=bool(sys.flags.no_site),
                              dont_write_bytecode=bool(sys.dont_write_bytecode))
 
     def post_state(self, path: Path):
-        name = self.relative(os.fspath(path))
-        if name is None:
-            return
         try:
-            info = path.lstat()
-        except FileNotFoundError:
-            self.recorder.record("cache-post", root="manager", relative=name,
-                                 coverage="explicit-post-state", present=False)
-        except OSError:
-            self.recorder.drop()
-        else:
-            self.recorder.record("cache-post", root="manager", relative=name,
-                                 coverage="explicit-post-state", present=True,
-                                 dev=info.st_dev, ino=info.st_ino, mode=info.st_mode,
-                                 nlink=info.st_nlink, size=info.st_size)
+            name = self.relative(os.fspath(path))
+            if name is None:
+                return
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                self._record("cache-post", root="manager", relative=name,
+                             coverage="explicit-post-state", present=False)
+            else:
+                self._record("cache-post", root="manager", relative=name,
+                             coverage="explicit-post-state", present=True,
+                             dev=info.st_dev, ino=info.st_ino, mode=info.st_mode,
+                             nlink=info.st_nlink, size=info.st_size)
+        except BaseException:
+            # Every operation here is optional observation, not the real body.
+            self._drop()
 
     def action(self, operation, path, call):
         result = call()  # exact body exception propagates; no false completion
         try:
             name = self.relative(os.fspath(path))
             if name is not None:
-                self.recorder.record("cache-completed", root="manager", relative=name,
+                self._record("cache-completed", root="manager", relative=name,
                                      operation=operation, coverage="action-returned")
         except BaseException:
             # The action has returned; optional completion recording cannot veto it.
-            self.recorder.drop()
+            self._drop()
         return result

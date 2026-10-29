@@ -19,7 +19,7 @@ anchor = tmp_path / "worker-observation"
 anchor.mkdir(mode=0o700)
 sink = anchor / "trace.json"
 with sink.open("x+b") as stream:
-    trace = Recorder(anchor, sink, stream.fileno())
+    trace = Recorder(anchor, sink, stream)
     with trace.node():
         result = run_the_existing_test_operation()  # same selector and budgets
     # Preserve this fixture-owned file before the fixture's ordinary teardown.
@@ -120,3 +120,22 @@ the actual operation's result, primary exception/cause/context, cancellation
 and cleanup remain authoritative. POSIX portable controls are exercised;
 native Windows filesystem/control semantics and actual native Go execution
 remain unqualified here.
+
+Same-thread callbacks follow an explicit reentry policy in addition to the
+process-local RLock: nested `record` attempts consume no slot and increment the
+drop counter; nested `flush` refuses without writing and increments sink failures.
+A recursively requested `_encode` snapshot raises a diagnostic-only ValueError
+and increments drops. Normal snapshots serialize a copied sanitized row list;
+counters reflect their snapshot point, so a callback drop after that point appears
+in the next snapshot. No non-reentrant lock or deferred unbounded event queue is
+used. If both emission and diagnostic accounting fail, no complete/drop-count
+claim is possible: preserve existing evidence and the real action instead.
+All CacheAudit emission/accounting paths, including install coverage and explicit
+post-state, are optional; the actual action callable runs outside those catches.
+
+The sink recipe requires the caller-owned normal seekable read/write `x+b` stream.
+Pass that stream to Recorder; its lifetime and underlying fd stay caller-owned.
+Each flush requires the same open stream, exact `x+b` mode and descriptor binding.
+POSIX flush additionally rejects O_APPEND and other access modes before any write.
+Windows uses the same stream-mode/binding admission; POSIX descriptor-flag checks
+are not Windows qualification or protection against concurrent fd replacement.
