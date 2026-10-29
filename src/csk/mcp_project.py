@@ -728,7 +728,11 @@ def print_plan(parsed: Mapping[str, declarations.McpDeclaration]) -> None:
             label = {"verified": verified,
                      "signed-user-writable": "signed by the publisher, in a user-writable directory: its owner can replace it after this check",
                      "unverified": "unverified: csk cannot tell an update from a replacement"}[launcher.trust]
-            print(f"MCP plan {name}: {label}; publisher={launcher.publisher}; path={launcher.path}")
+            # Match command/args disclosure: reversible JSON stays writable on
+            # legacy output encodings without altering the approved identity.
+            publisher = json.dumps(launcher.publisher, ensure_ascii=True)
+            path = json.dumps(launcher.path, ensure_ascii=True)
+            print(f"MCP plan {name}: {label}; publisher={publisher}; path={path}")
         elif server.transport == "stdio" and not declarations.is_recognized_runner(server.command or ""):
             print(f"MCP plan {name}: csk cannot verify what this program runs.")
 
