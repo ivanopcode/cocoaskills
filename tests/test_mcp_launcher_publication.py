@@ -8,10 +8,44 @@ from pathlib import Path
 
 import pytest
 
-from csk import cli, mcp_launchers as launchers
+from csk import cli, mcp_launchers as launchers, mcp_project
 from csk.sources import publish
+from publication_capture import PublicationCapture
 from test_mcp_install_acceptance import _case, _snapshot, _assert_seed_installed, SURFACES
 from test_mcp_launchers import bundle, declaration, good_verification
+
+
+class _View:
+    def __init__(self, original, **values):
+        self._original = original
+        self.__dict__.update(values)
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+
+def _approve_publication(monkeypatch):
+    # Module-local stream/input views leave pytest and shared stdlib untouched.
+    streams = _View(sys, stdin=_View(sys.stdin, isatty=lambda: True),
+                    stdout=_View(sys.stdout, isatty=lambda: True))
+    monkeypatch.setattr(cli, "sys", streams)
+    monkeypatch.setattr(mcp_project, "sys", streams)
+    monkeypatch.setattr(mcp_project, "input", lambda prompt: "yes", raising=False)
+
+
+def _publication_capture(case, tmp_path, monkeypatch):
+    temporary = tmp_path / "publication-temporary"
+    temporary.mkdir()
+    for name in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(name, str(temporary))
+    original = publish.tempfile.TemporaryDirectory
+
+    def workspace(*args, **kwargs):
+        kwargs.setdefault("dir", str(temporary))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(publish, "tempfile", _View(publish.tempfile, TemporaryDirectory=workspace))
+    return PublicationCapture(tmp_path / "publication-capture", roots=(case.project, case.home))
 
 
 @pytest.fixture
@@ -73,14 +107,17 @@ def test_post_consent_verification_refusal_preserves_all_state(local_app, monkey
 @pytest.mark.parametrize("existing", [False, True])
 def test_each_publication_refusal_rolls_back_full_state(local_app, tmp_path, monkeypatch, capsys, point, existing):
     case = local_app
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
-    monkeypatch.setattr("builtins.input", lambda p: "yes")
+    capture = _publication_capture(case, tmp_path, monkeypatch)
+    _approve_publication(monkeypatch)
     monkeypatch.setattr(launchers, "verify_macos", lambda *a: good_verification())
 
     def run():
-        result = cli.main(["upgrade" if existing else "install", "app", "--fix-gitignore"])
-        output = capsys.readouterr()
+        result = None
+        try:
+            result = cli.main(["upgrade" if existing else "install", "app", "--fix-gitignore"])
+        finally:
+            output = capsys.readouterr()
+            capture.cli(result, output.out, output.err)
         return result, output.out + output.err
 
     if existing:
@@ -107,7 +144,7 @@ def test_each_publication_refusal_rolls_back_full_state(local_app, tmp_path, mon
                     observed.append(key)
             if event == "prepared":
                 raise OSError("publication table capture")
-        return engine_type(home, fault_hook=fault, **kwargs)
+        return capture.observe(engine_type(home, fault_hook=fault, **kwargs))
 
     before = _snapshot(case.project, case.home)
     with monkeypatch.context() as patch:
@@ -131,7 +168,7 @@ def test_each_publication_refusal_rolls_back_full_state(local_app, tmp_path, mon
                 if event == point and key == selected and not reached:
                     reached.append((event, key))
                     raise OSError("injected publication refusal")
-            return engine_type(home, fault_hook=fault, **kwargs)
+            return capture.observe(engine_type(home, fault_hook=fault, **kwargs))
 
         with monkeypatch.context() as patch:
             patch.setattr(publish, "TransactionEngine", factory)
@@ -146,6 +183,51 @@ def test_each_publication_refusal_rolls_back_full_state(local_app, tmp_path, mon
     assert all((case.project / path).is_file() for _, path in SURFACES)
     # The old store survives an update; the new entry is installed beside it.
     assert len(list((case.home / "source-v1").rglob("record.json"))) == (2 if existing else 1)
+
+    assert capture.complete, "publication observation incomplete; inspect private capture artifacts"
+
+
+# This smallest real CLI pair qualifies the table's recorder attachment, not the
+# full target table or native signature verification. Private output is saved
+# before any result/output assertion; the same flow then publishes unchanged.
+def test_publication_capture_cli_preparation_and_positive(local_app, tmp_path, monkeypatch, capsys):
+    case = local_app
+    _approve_publication(monkeypatch)
+    monkeypatch.setattr(launchers, "verify_macos", lambda *a: good_verification())
+    capture = _publication_capture(case, tmp_path, monkeypatch)
+    original = publish.TransactionEngine
+    applied = []
+    refusal = OSError("publication capture control")
+    fail = True
+
+    def factory(home, **kwargs):
+        def hook(point, target):
+            if fail and point == "prepared":
+                applied.append(point)
+                raise refusal
+        return capture.observe(original(home, fault_hook=hook, **kwargs))
+
+    monkeypatch.setattr(publish, "TransactionEngine", factory)
+    before = _snapshot(case.project, case.home)
+    code = cli.main(["install", "app", "--fix-gitignore"])
+    output = capsys.readouterr()
+    capture.cli(code, output.out, output.err)
+    assert (capture.directory / "cli-001.stdout.private").read_text() == output.out
+    assert (capture.directory / "cli-001.stderr.private").read_text() == output.err
+    assert code == 1 and "publication capture control" in output.out + output.err
+    assert applied == ["prepared"] and capture.complete
+    assert _snapshot(case.project, case.home) == before
+    assert any(row.get("call") == "prepare_error" for row in capture.rows)
+    assert (capture.directory / "journal-001.private").is_file()
+    fail = False
+    code = cli.main(["install", "app", "--fix-gitignore"])
+    output = capsys.readouterr()
+    capture.cli(code, output.out, output.err)
+    assert code == 0, output.out + output.err
+    assert capture.complete and not capture.errors
+    _assert_seed_installed(case)
+    assert all((case.project / path).is_file() for _, path in SURFACES)
+    assert not list((case.home / "state/transactions/v1").glob("*.json"))
 
 
 # Production codesign exercises the reviewer's real-app interleaving. Only a
