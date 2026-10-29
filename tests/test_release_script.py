@@ -234,11 +234,11 @@ def _write_gh_stub(bin_directory: Path) -> Path:
                 switches=("--required", "--watch"),
                 positions=(1, 1),
             )
-            require(("--repo",), ("--required",))
+            require(("--repo",))
             if "--watch" in parsed_switches:
                 require(("--interval",))
             elif "--json" in parsed_values:
-                require(("--json", "--jq"))
+                require(("--json",))
             else:
                 refuse("unsupported gh pr checks option set")
         elif group == "pr" and command == "review":
@@ -302,9 +302,22 @@ def _write_gh_stub(bin_directory: Path) -> Path:
         if group == "pr" and command == "create":
             print("https://github.com/ivanopcode/cocoaskills/pull/42")
         elif group == "pr" and command == "view":
-            print(os.environ.get("CSK_CUT_HEAD", ""))
+            count_file = os.environ["CSK_STUB_CALLS"] + ".views"
+            from pathlib import Path
+            counter = Path(count_file)
+            count = int(counter.read_text()) + 1 if counter.exists() else 1
+            counter.write_text(str(count))
+            print("d" * 40 if count == int(os.environ.get("CSK_MOVED_HEAD_AT", "0")) else os.environ.get("CSK_CUT_HEAD", ""))
         elif group == "pr" and command == "checks":
-            raise SystemExit(int(os.environ.get("CSK_PR_CHECKS_STATUS", "0")))
+            if "--required" in parsed_switches and os.environ.get("CSK_NO_REQUIRED") == "1":
+                print("no required checks reported on the 'release/v9.8.7' branch", file=sys.stderr)
+                raise SystemExit(1)
+            if os.environ.get("CSK_CHECK_PROVIDER_ERROR") == "1":
+                print("provider-secret-sentinel", file=sys.stderr)
+                raise SystemExit(1)
+            if "--watch" in parsed_switches:
+                raise SystemExit(int(os.environ.get("CSK_PR_CHECKS_STATUS", "0")))
+            print(os.environ.get("CSK_CHECKS_JSON", '[{"name":"ci","bucket":"pass","state":"SUCCESS"}]'))
         elif group == "run" and command == "list":
             workflow = parsed_values["--workflow"]
             fixture_name = "CSK_RELEASE_RUNS_JSON" if workflow == "release.yml" else "CSK_SMOKE_RUNS_JSON"
@@ -841,6 +854,11 @@ def test_final_version_helpers_require_the_requested_homebrew_and_mise_version()
 def _live_release(
     tmp_path: Path,
     *,
+    no_required: bool = False,
+    checks_json: str = '[{"name":"ci","bucket":"pass","state":"SUCCESS"}]',
+    checks_status: int = 0,
+    check_provider_error: bool = False,
+    moved_head_at: int = 0,
     gate_status: int = 0,
     include_delivery: bool = True,
     release_watch_status: int = 0,
@@ -1011,6 +1029,11 @@ def _live_release(
             "PATH": f"{bin_directory}:/bin:/usr/bin",
             "CSK_STUB_CALLS": str(calls_file),
             "CSK_PROJECT_ROOT": str(project),
+            "CSK_NO_REQUIRED": str(int(no_required)),
+            "CSK_CHECKS_JSON": checks_json,
+            "CSK_PR_CHECKS_STATUS": str(checks_status),
+            "CSK_CHECK_PROVIDER_ERROR": str(int(check_provider_error)),
+            "CSK_MOVED_HEAD_AT": str(moved_head_at),
             "CSK_BASE_HEAD": base_head,
             "CSK_CUT_HEAD": cut_head,
             "CSK_TAG_OBJECT": tag_object,
@@ -1895,3 +1918,99 @@ def test_narrowing_mutant_that_reintroduces_gh_api_repo_flag_is_killed_by_live_t
     assert run.returncode == 1, run.stdout + run.stderr
     assert "test_live_release_gates_the_exact_fast_forward_head_before_signing_tag" in run.stdout
     assert "1 failed" in run.stdout
+
+
+# Executable isolated provider/Git transcripts prove both selection paths reach
+# signed delivery with actual green rows; no live provider or release is invoked.
+@RUNS_POSIX_RELEASE_SCRIPT
+@pytest.mark.parametrize("no_required", [False, True])
+def test_actual_checks_green_delivery(tmp_path, no_required):
+    result, calls, _ = _live_release(tmp_path, no_required=no_required)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "gh pr review 42" in calls
+    assert "git push --no-follow-tags origin " + "b" * 40 + ":refs/heads/main" in calls
+    assert "git tag -s" in calls and "glab release create" in calls
+    if no_required:
+        assert "gh pr checks 42 --repo ivanopcode/cocoaskills --watch" in calls
+    else:
+        assert "--required --watch" in calls
+
+
+def _assert_check_refusal(result, calls, code):
+    assert result.returncode == code, result.stdout + result.stderr
+    assert "refs/heads/main" not in "\n".join(line for line in calls.splitlines() if line.startswith("git push"))
+    assert "git tag " not in calls and "glab release create" not in calls
+    assert "gh run watch" not in calls and "delivery trunk-verify" not in calls
+    assert "provider-secret-sentinel" not in result.stdout + result.stderr
+
+
+# Terminal failures (including cancelled and timed out), pending, empty/unknown/
+# malformed responses and provider errors cannot publish main, tags or mirrors.
+@RUNS_POSIX_RELEASE_SCRIPT
+@pytest.mark.parametrize("state,bucket,code", [("FAILURE","fail",1),("CANCELLED","cancel",1),
+    ("TIMED_OUT","fail",1),("IN_PROGRESS","pending",2),("UNKNOWN","pass",2),
+    ("SUCCESS","pending",2)])
+def test_actual_checks_refusal(tmp_path, state, bucket, code):
+    rows = json.dumps([dict(name="ci",state=state,bucket=bucket)])
+    result,calls,_ = _live_release(tmp_path,no_required=True,checks_json=rows,
+                                  checks_status=8 if state=="IN_PROGRESS" else 0)
+    _assert_check_refusal(result,calls,code)
+    if state == "IN_PROGRESS":
+        assert "remain pending" in result.stderr
+    assert "gh pr review" not in calls
+
+
+@RUNS_POSIX_RELEASE_SCRIPT
+@pytest.mark.parametrize("payload", ["[]", "{}", "null", "not json", '[{}]',
+    '[{"name":"ci","bucket":"pass"}]',
+    '[{"name":"ci","state":"SUCCESS","bucket":"pass","bucket":"fail"}]'])
+def test_actual_checks_empty_refuses(tmp_path, payload):
+    # Missing/incomplete/duplicate JSON is unknown, never a green empty set.
+    result,calls,_ = _live_release(tmp_path,no_required=True,checks_json=payload)
+    _assert_check_refusal(result,calls,2)
+
+
+@RUNS_POSIX_RELEASE_SCRIPT
+def test_actual_checks_provider_error(tmp_path):
+    result,calls,_ = _live_release(tmp_path,no_required=True,check_provider_error=True)
+    _assert_check_refusal(result,calls,2)
+
+
+# Head changes before checking, during checking and after review all refuse;
+# only the last case may already have emitted the exact-old-head review comment.
+@RUNS_POSIX_RELEASE_SCRIPT
+@pytest.mark.parametrize("at", [1,2,3])
+def test_actual_checks_moved_head(tmp_path, at):
+    result,calls,_ = _live_release(tmp_path,no_required=True,moved_head_at=at)
+    _assert_check_refusal(result,calls,2)
+    if at<3:
+        assert "gh pr review" not in calls
+
+
+# A planted violation accepts an empty set. The same refusal/transcript checker
+# must detect its forbidden fixture publication, not merely observe any failure.
+@RUNS_POSIX_RELEASE_SCRIPT
+def test_actual_checks_violation_control(tmp_path, monkeypatch):
+    source = SUPPORT_FILE.read_text()
+    guard = 'if not isinstance(rows, list) or not rows:'
+    assert guard in source
+    mutant = tmp_path / 'support-mutant.py'
+    mutant.write_text(source.replace(guard, 'if not isinstance(rows, list):', 1))
+    monkeypatch.setattr(sys.modules[__name__], 'SUPPORT_FILE', mutant)
+    result,calls,_ = _live_release(tmp_path,no_required=True,checks_json='[]')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'git tag -s' in calls and 'glab release create' in calls
+    with pytest.raises(AssertionError):
+        _assert_check_refusal(result,calls,2)
+
+
+# Failed required checks still block; provider/watch errors cannot select a more
+# permissive check set or be overridden by green JSON.
+@RUNS_POSIX_RELEASE_SCRIPT
+@pytest.mark.parametrize('case', ['required-red','provider','watch'])
+def test_actual_checks_required_and_watch_boundaries(tmp_path, case):
+    rows = json.dumps([dict(name='ci',state='FAILURE',bucket='fail')]) if case=='required-red' else '[{"name":"ci","state":"SUCCESS","bucket":"pass"}]'
+    result,calls,_ = _live_release(tmp_path,checks_json=rows,
+        check_provider_error=case=='provider',checks_status=1 if case=='watch' else 0)
+    _assert_check_refusal(result,calls,1 if case=='required-red' else 2)
+    assert 'gh pr checks 42 --repo ivanopcode/cocoaskills --watch' not in calls

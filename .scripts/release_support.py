@@ -194,9 +194,37 @@ def mise_output_has_version(output: str, version: str) -> bool:
     return any(token.lstrip("v").split("@")[-1] == version for token in tokens)
 
 
+def pr_checks_verdict(source: str) -> int:
+    """Validate gh's complete selected check set; 0 green, 1 red, 8 pending."""
+    rows = json.loads(source, object_pairs_hook=_unique_json_object)
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("pull-request checks must be a nonempty array")
+    states = {
+        "pass": {"SUCCESS"}, "skipping": {"SKIPPED", "NEUTRAL"},
+        "fail": {"ERROR", "FAILURE", "TIMED_OUT", "ACTION_REQUIRED"},
+        "cancel": {"CANCELLED"},
+        "pending": {"EXPECTED", "REQUESTED", "WAITING", "QUEUED", "PENDING", "IN_PROGRESS", "STALE"},
+    }
+    buckets = set()
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("name"), str) or not row["name"].strip():
+            raise ValueError("pull-request check row has no name")
+        bucket, state = row.get("bucket"), row.get("state")
+        if not isinstance(bucket, str) or not isinstance(state, str) or state not in states.get(bucket, set()):
+            raise ValueError("pull-request check state is unknown or inconsistent")
+        buckets.add(bucket)
+    if buckets & {"fail", "cancel"}:
+        return 1
+    if "pending" in buckets:
+        return 8
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="release_support.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser("pr-checks")
 
     cut = subparsers.add_parser("cut-changelog")
     cut.add_argument("file", type=Path)
@@ -229,6 +257,8 @@ def main(argv: list[str] | None = None) -> int:
             cut_changelog_file(args.file, args.version, args.date)
             return 0
         source = sys.stdin.read()
+        if args.command == "pr-checks":
+            return pr_checks_verdict(source)
         if args.command == "trunk-evidence":
             return 0 if is_green_trunk_evidence(source, args.head) else 1
         if args.command == "match-run":

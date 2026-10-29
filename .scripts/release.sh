@@ -755,7 +755,7 @@ sys.exit(1 if any(item["tag_name"] == sys.argv[1] for item in releases) else 0)
 run_release() {
   local delivery_command planning_head current_branch dirty_state base_head
   local origin_main remote_refs cut_head pr_url pr_number pr_head
-  local failed_checks check_status checked_head reviewed_head release_info
+  local check_status checked_head reviewed_head release_info
   local release_run_id release_started_at smoke_run_id status_code tag_ref smoke_status
 
   require_command git
@@ -896,24 +896,54 @@ run_release() {
   if [[ "$pr_head" != "$cut_head" ]]; then
     refuse 2 "pull-request head does not match the signed CHANGELOG cut"
   fi
-  if quiet_external gh pr checks "$pr_number" --repo "$GITHUB_REPOSITORY" \
-    --required --watch --interval 10 >/dev/null; then
-    :
-  else
-    check_status=$?
-    if failed_checks="$(quiet_external gh pr checks "$pr_number" --repo "$GITHUB_REPOSITORY" \
-      --required --json name,bucket \
-      --jq '.[] | select(.bucket == "fail" or .bucket == "cancel") | .name')"; then
+  # Only gh's explicit no-required-checks response selects the all-check set.
+  # Unknown provider failures never establish that branch protection is absent.
+  local checks_json check_verdict watch_status required_response
+  local check_filter="--required"
+  if required_response="$(gh pr checks "$pr_number" --repo "$GITHUB_REPOSITORY" \
+    --required --json name,bucket,state 2>&1)"; then
+    if python3 "$support_script" pr-checks <<<"$required_response" >/dev/null 2>&1; then
       :
     else
-      refuse 2 "cannot read required pull-request check results (watch exit $check_status)"
+      check_verdict=$?
+      if ((check_verdict != 1 && check_verdict != 8)); then
+        refuse 2 "required pull-request checks are malformed or unknown"
+      fi
     fi
-    if [[ -n "$failed_checks" ]]; then
-      printf 'Failed required checks for PR #%s:\n%s\n' "$pr_number" "$failed_checks" >&2
-      refuse 1 "required pull-request checks failed"
+  else
+    check_status=$?
+    if ((check_status == 1)) && [[ "$required_response" == "no required checks reported on the '$release_branch' branch" ]]; then
+      check_filter=""
+    else
+      refuse 2 "cannot read required pull-request check results"
     fi
-    refuse 2 "required pull-request checks are not confirmed green"
   fi
+  if quiet_external gh pr checks "$pr_number" --repo "$GITHUB_REPOSITORY" \
+    ${check_filter:+"$check_filter"} --watch --interval 10 >/dev/null; then
+    watch_status=0
+  else
+    watch_status=$?
+  fi
+  # A successful watch is not sufficient: validate a nonempty complete JSON set.
+  if checks_json="$(quiet_external gh pr checks "$pr_number" --repo "$GITHUB_REPOSITORY" \
+    ${check_filter:+"$check_filter"} --json name,bucket,state)"; then
+    :
+  else
+    refuse 2 "cannot read pull-request check results"
+  fi
+  if python3 "$support_script" pr-checks <<<"$checks_json" >/dev/null 2>&1; then
+    check_verdict=0
+  else
+    check_verdict=$?
+  fi
+  case "$check_verdict" in
+    0) if ((watch_status != 0)); then
+         refuse 2 "pull-request check watch did not confirm green"
+       fi ;;
+    1) refuse 1 "pull-request checks failed or were cancelled" ;;
+    8) refuse 2 "pull-request checks remain pending" ;;
+    *) refuse 2 "pull-request checks are empty, malformed or unknown" ;;
+  esac
   if checked_head="$(quiet_external gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" \
     --json headRefOid --jq .headRefOid)"; then
     :
@@ -923,7 +953,7 @@ run_release() {
   if [[ "$checked_head" != "$pr_head" ]]; then
     refuse 2 "pull-request head changed while checks were running"
   fi
-  review_body="Exact-head review of $pr_head: CHANGELOG-only cut for $release_tag. Required checks are green; the cut commit is signed. Verdict: accepted; landing by fast-forward."
+  review_body="Exact-head review of $pr_head: CHANGELOG-only cut for $release_tag. Selected pull-request checks are green; the cut commit is signed. Verdict: accepted; landing by fast-forward."
   if ! quiet_external gh pr review "$pr_number" --repo "$GITHUB_REPOSITORY" \
     --comment --body "$review_body" >/dev/null; then
     refuse 2 "cannot record the exact-head review comment"
