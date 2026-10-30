@@ -321,3 +321,77 @@ def test_child_capture_limits_and_cleanup_keep_original_failure(tmp_path):
             child.unlink()
         scratch.rmdir()
     assert not scratch.exists()
+
+
+def test_fresh_consent_install_ignores_parent_temp_cache_boundary(tmp_path, monkeypatch, request):
+    # The real consent child and status share fixture temp settings despite a
+    # parent-only cached-root/device model of the recorded Windows C:/D: boundary.
+    # Actual transactions and approval run; no shared tempfile cache is patched.
+    import tempfile
+    from types import SimpleNamespace
+    from csk.sources import publish
+    case = status._case(tmp_path / 'case')
+    case.declare({'docs': ENV_HEADER})
+    cached = tempfile.tempdir
+    parent_env = {k: os.environ.get(k) for k in ('TMPDIR', 'TEMP', 'TMP')}
+    prior = tmp_path / 'parent-cache'
+    prior.mkdir()
+    temporary, device = publish.tempfile.TemporaryDirectory, adapters._device_id
+    parent_allocations = []
+    def parent_temporary(*args, **kwargs):
+        kwargs.setdefault('dir', prior)
+        value = temporary(*args, **kwargs)
+        parent_allocations.append(value.name)
+        return value
+    def parent_device(path):
+        return device(path) + int(path.is_relative_to(prior))
+    scratch = tmp_path / 'observation'
+    with monkeypatch.context() as local:
+        local.setattr(publish, 'tempfile', SimpleNamespace(TemporaryDirectory=parent_temporary))
+        local.setattr(adapters, '_device_id', parent_device)
+        with observation.Observation(case, scratch, request.node.add_report_section) as observer:
+            approved = status._approve_install(case)
+            assert approved.returncode == 0, approved.stdout + approved.stderr
+            assert 'Approve 1 MCP server(s) for app (claude_code,codex_cli,cursor)? [y/N]' in approved.stdout
+            before = _snapshot(case.project, case.home, Path(case.env['HOME']))
+            checked = status._status(case, '--check', '--json')
+            payload = json.loads(checked.stdout)[0]
+            assert checked.returncode == 0 and payload['clean'] is True
+            assert payload['mcp'] == status._expected(['current'] * 3)
+            assert payload['skills'][0]['label'] == 'up-to-date' and payload['errors'] == []
+            assert _snapshot(case.project, case.home, Path(case.env['HOME'])) == before
+    assert parent_allocations == []
+    assert tempfile.tempdir is cached
+    assert {k: os.environ.get(k) for k in parent_env} == parent_env
+    assert not scratch.exists() and observation._ACTIVE.get() is None
+    grant, = (case.home / 'state/mcp/consent').glob('*.json')
+    assert len(json.loads(grant.read_bytes())['approved']) == 1
+    assert (case.project / '.agents/skills/seed/SKILL.md').read_bytes() == (case.project / 'source/seed/SKILL.md').read_bytes()
+    assert len(observer.calls) == 2
+    for call in observer.calls:
+        child = call['child']
+        startup = child['rows'][0]
+        assert startup['event'] == 'child-startup'
+        assert startup['temp_env'] == {k: case.env[k] for k in ('TMPDIR', 'TEMP', 'TMP')}
+        for row in child['rows']:
+            if row['event'] == 'link-decision':
+                assert Path(row['stage']).is_relative_to(Path(case.env['TMPDIR']))
+    install_rows, status_rows = [call['child']['rows'] for call in observer.calls]
+    install_links = [r for r in install_rows if r['event'] == 'link-decision']
+    status_links = [r for r in status_rows if r['event'] == 'link-decision']
+    assert len(install_links) == len(status_links) == 3
+    assert {r['live']: r['supported'] for r in install_links} == {
+        r['live']: r['supported'] for r in status_links}
+    install_plan = next(r for r in install_rows if r['event'] == 'planned-targets')
+    status_plan = next(r for r in status_rows if r['event'] == 'planned-targets')
+    assert install_plan['adapter_mode'] == status_plan['adapter_mode'] == 'auto'
+    def adapter_kinds(plan):
+        return {t['live']: t['wanted_entry']['kind'] for t in plan['targets']
+                if t['key'][0] == '60-adapter-ledger' and t['kind'] == 'entry'}
+    assert len(adapter_kinds(install_plan)) == 3
+    assert adapter_kinds(install_plan) == adapter_kinds(status_plan)
+    digests = {r['path']: r['digest'] for r in status_rows if r['event'] == 'digest'}
+    for target in status_plan['targets']:
+        assert digests[target['live']] == digests[target['wanted']]
+    assert observer.calls[1]['before'] == observer.calls[1]['after']
+    assert publish.tempfile is tempfile and adapters._device_id is device
