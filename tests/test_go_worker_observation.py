@@ -13,6 +13,7 @@ import time
 import pytest
 
 from csk.builds import go_v1
+import go_worker_observation as observation
 from go_worker_observation import CacheAudit, Recorder
 
 
@@ -42,31 +43,109 @@ def recorder(tmp_path):
         yield Recorder(anchor, sink, stream)
 
 
-# Invalid fields/paths never reach serialization; valid rows exercise event and byte bounds.
-@pytest.mark.parametrize("budget", [False, True])
-def test_closed_schema_caps_and_secret_exclusion(recorder, budget):
-    recorder.record("secret-canary", argv="secret-canary")
-    recorder.record("node-start", relative="secret-canary")
-    recorder.record("node-start", deadline=float("nan"))
-    recorder.record("node-start", operation=["write"])
-    recorder.record("node-start", deadline=10**1000)
-    for _ in range(200):
-        if budget:
-            recorder.record("client-deadline", deadline=123.0, remaining=-2.0)
-        else:
-            recorder.record("node-start")
-    assert recorder.flush()
-    raw = recorder.sink.read_bytes()
-    payload = json.loads(raw)
-    assert len(raw) <= 16 * 1024
-    assert 0 < len(payload["events"]) <= 128
-    assert payload["dropped"] == 205 - len(payload["events"])
-    if budget:
-        assert all(row["deadline"] == 123 for row in payload["events"])
-        assert len(payload["events"]) < 128
+def _cap_payload(row, count):
+    # Independent schema-1 wire expectation, without Recorder._encode/admission.
+    return json.dumps(dict(schema=1, events=[row] * count, dropped=205 - count,
+                           sink_failures=0), separators=(",", ":"), allow_nan=False).encode("ascii")
+
+
+# Short process/clock values can fit 128 two-field deadline rows: the event cap
+# binds there. Rich valid post-state rows hit the byte cap at 56, below 128;
+# independent wire sizes prove that row 57 exceeds 16KiB, with no headroom assumption.
+@pytest.mark.parametrize("kind,metadata,expected_count", [
+    ("events", (1638.015, 3048, 2952), 128),
+    ("deadlines", (1638.015, 3048, 2952), 128),
+    ("events", (12345678.12345679, 123456, 234567), 128),
+    ("bytes", (12345678.12345679, 123456, 234567), 56),
+], ids=["short-event-cap", "short-deadline-event-cap", "long-event-cap", "long-byte-cap"])
+def test_closed_schema_caps_and_secret_exclusion(recorder, monkeypatch, kind, metadata, expected_count):
+    monotonic, pid, ppid = metadata
+    if kind == "events":
+        stage, values = "node-start", {}
+    elif kind == "deadlines":
+        stage, values = "client-deadline", dict(deadline=123.0, remaining=-2.0)
     else:
-        assert len(payload["events"]) == 128
-    assert b"secret-canary" not in raw
+        assert kind == "bytes"
+        # Configure one trusted canonical name; no audit hook is installed.
+        CacheAudit(recorder, recorder.anchor, {"sources/__pycache__": ("module",)})
+        stage = "cache-post"
+        values = dict(root="manager", relative="sources/__pycache__/module.pyc",
+                      coverage="explicit-post-state", present=True, dev=1234567890123,
+                      ino=1234567890123456789, mode=33188, nlink=1, size=4096)
+    row = dict(stage=stage, monotonic=monotonic, pid=pid, ppid=ppid, role="manager", **values)
+    before = recorder.sink.stat()
+    original_os, original_time = observation.os, observation.time
+    shared_functions = (os.getpid, os.getppid, time.monotonic)
+
+    class ProcessView:
+        def getpid(self): return pid
+        def getppid(self): return ppid
+        def __getattr__(self, name): return getattr(os, name)
+
+    with monkeypatch.context() as patch:
+        # Substitute only helper-local references; sink I/O still delegates to real os.
+        patch.setattr(observation, "os", ProcessView())
+        patch.setattr(observation, "time", SimpleNamespace(monotonic=lambda: monotonic))
+        invalid = [
+            ("secret-canary", dict(argv="secret-canary")),
+            ("node-start", dict(relative="secret-canary")),
+            ("node-start", dict(deadline=float("nan"))),
+            ("node-start", dict(operation=["write"])),
+            ("node-start", dict(deadline=10**1000)),
+        ]
+        for dropped, (label, fields) in enumerate(invalid, 1):
+            recorder.record(label, **fields)
+            assert recorder.events == [] and recorder.dropped == dropped
+            assert recorder.sink.read_bytes() == b"" and recorder.sink_failures == 0
+        for _ in range(200):
+            recorder.record(stage, **values)
+        assert recorder.flush()
+        raw = recorder.sink.read_bytes()
+        payload = json.loads(raw)
+        assert len(raw) <= 16 * 1024, "byte cap exceeded"
+        assert 0 < len(payload["events"]) <= 128
+        assert payload["dropped"] == 205 - len(payload["events"])
+        assert len(payload["events"]) == expected_count
+        assert raw == _cap_payload(row, expected_count)
+        if kind == "bytes":
+            assert expected_count < 128
+            assert len(_cap_payload(row, expected_count + 1)) > 16 * 1024
+        else:
+            assert expected_count == 128
+            assert len(_cap_payload(row, 129)) <= 16 * 1024
+        assert b"secret-canary" not in raw and recorder.sink_failures == 0
+        after = recorder.sink.stat()
+        assert (after.st_dev, after.st_ino, after.st_mode, after.st_nlink) == (
+            before.st_dev, before.st_ino, before.st_mode, before.st_nlink)
+        assert not recorder.stream.closed
+    assert observation.os is original_os and observation.time is original_time
+    assert (os.getpid, os.getppid, time.monotonic) == shared_functions
+
+
+# Relaxing only this owned instance's byte guard produces a real oversized sink:
+# the same oracle must reject it. Restored admission refuses to rewrite those bytes;
+# a fresh ordinary sink remains a valid control under the unchanged class bounds.
+def test_byte_cap_oracle_detects_violation(recorder, monkeypatch):
+    metadata = (12345678.12345679, 123456, 234567)
+    original_os, original_time = observation.os, observation.time
+    with monkeypatch.context() as plant:
+        plant.setattr(recorder, "MAX_BYTES", 64 * 1024)
+        with pytest.raises(AssertionError, match="byte cap exceeded"):
+            test_closed_schema_caps_and_secret_exclusion(recorder, monkeypatch, "bytes", metadata, 56)
+        assert len(recorder.events) == 128 and len(recorder.sink.read_bytes()) > 16 * 1024
+    assert observation.os is original_os and observation.time is original_time
+    assert Recorder.MAX_BYTES == recorder.MAX_BYTES == 16 * 1024
+    assert Recorder.MAX_EVENTS == 128
+    before = recorder.sink.read_bytes(), recorder.sink.stat()
+    assert not recorder.flush() and recorder.sink_failures == 1
+    after = recorder.sink.stat()
+    assert recorder.sink.read_bytes() == before[0]
+    assert (after.st_dev, after.st_ino, after.st_mode, after.st_mtime_ns) == (
+        before[1].st_dev, before[1].st_ino, before[1].st_mode, before[1].st_mtime_ns)
+    valid_sink = recorder.anchor / "valid.json"
+    with valid_sink.open("x+b") as stream:
+        valid = Recorder(recorder.anchor, valid_sink, stream)
+        test_closed_schema_caps_and_secret_exclusion(valid, monkeypatch, "bytes", metadata, 56)
 
 
 # A bounded scheduling pause exposes two real callers crossing the final event slot.
