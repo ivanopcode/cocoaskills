@@ -9,17 +9,22 @@ import sys
 from pathlib import Path
 
 import pytest
+from mcp_status_observation import Observation, status_capture
 from conftest import write_skillfile
 from test_mcp_install_acceptance import ENV_HEADER, SURFACES, URL, _case, _snapshot
 
 
 def _status(case, *options, globally=False):
     command = ['global', 'status'] if globally else ['status', 'app']
-    return subprocess.run(
-        [sys.executable, '-m', 'csk', *command, *options],
-        cwd=case.project, env=case.env, stdin=subprocess.DEVNULL,
-        capture_output=True, text=True, timeout=60,
-    )
+    with status_capture(case) as capture:
+        result = subprocess.run(
+            [sys.executable, '-m', 'csk', *command, *options],
+            cwd=case.project, env=case.env if capture is None else capture.env, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=60,
+        )
+        if capture is not None:
+            capture.result(result)
+        return result
 
 
 def _install(case):
@@ -279,30 +284,31 @@ def test_status_never_starts_stdio_or_auth_commands(tmp_path):
     assert not marker.exists()
 
 
-def test_recorded_consent_is_read_and_missing_consent_is_unapproved(tmp_path, monkeypatch, capsys):
+def test_recorded_consent_is_read_and_missing_consent_is_unapproved(tmp_path, monkeypatch, capsys, request):
     # Real terminal approval makes env routing current; an approved absent entry is missing, and lost consent is unapproved even on current bytes.
     from csk import cli
 
     case = _case(tmp_path / 'case')
     case.declare({'docs': ENV_HEADER})
-    with monkeypatch.context() as patch:
-        for key in list(os.environ):
-            if key.startswith('CSK_') and key not in case.env:
-                patch.delenv(key)
-        for key, value in case.env.items():
-            patch.setenv(key, value)
-        patch.setattr(sys.stdin, 'isatty', lambda: True)
-        patch.setattr(sys.stdout, 'isatty', lambda: True)
-        patch.setattr('builtins.input', lambda _: 'yes')
-        assert cli.main(['install', 'app', '--fix-gitignore']) == 0
-    capsys.readouterr()
-    _assert_status(case, _expected(['current'] * 3))
-    (case.project / '.mcp.json').unlink()
-    _assert_status(case, _expected(['missing', 'current', 'current']))
-    _install(case)
-    _assert_status(case, _expected(['current'] * 3))
-    next((case.home / 'state/mcp/consent').glob('*.json')).unlink()
-    _assert_status(case, _expected(['unapproved'] * 3))
+    with Observation(case, tmp_path / 'status-observation', request.node.add_report_section):
+        with monkeypatch.context() as patch:
+            for key in list(os.environ):
+                if key.startswith('CSK_') and key not in case.env:
+                    patch.delenv(key)
+            for key, value in case.env.items():
+                patch.setenv(key, value)
+            patch.setattr(sys.stdin, 'isatty', lambda: True)
+            patch.setattr(sys.stdout, 'isatty', lambda: True)
+            patch.setattr('builtins.input', lambda _: 'yes')
+            assert cli.main(['install', 'app', '--fix-gitignore']) == 0
+        capsys.readouterr()
+        _assert_status(case, _expected(['current'] * 3))
+        (case.project / '.mcp.json').unlink()
+        _assert_status(case, _expected(['missing', 'current', 'current']))
+        _install(case)
+        _assert_status(case, _expected(['current'] * 3))
+        next((case.home / 'state/mcp/consent').glob('*.json')).unlink()
+        _assert_status(case, _expected(['unapproved'] * 3))
 
 
 def test_deselected_agent_entries_are_orphaned_and_still_reported(tmp_path):
