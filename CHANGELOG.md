@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-10-30
+
 ### Исправлено
 
 - Linux MCP launchers whose resolved paths contain invalid UTF-8 bytes now refuse with `mcp_launcher_path_invalid` before install or dry-run planning. Repairing permissions no longer leads to a silent exit 0 without installation; valid Unicode paths and existing consent keep their previous behavior.
@@ -882,7 +884,8 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.18.1...main
+[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.21.1...main
+[0.21.1]: https://github.com/ivanopcode/cocoaskills/compare/v0.21.0...v0.21.1
 [0.18.1]: https://github.com/ivanopcode/cocoaskills/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.16.0...v0.17.0
