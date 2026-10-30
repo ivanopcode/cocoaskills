@@ -2,6 +2,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 import os
+import pathlib
 import stat
 import subprocess
 
@@ -10,8 +11,26 @@ import pytest
 from csk import mcp_launchers as gate
 
 
+def _shared_stdlib_bindings():
+    return {
+        "pathlib.Path": pathlib.Path,
+        "Path.resolve": Path.resolve,
+        "Path.parents": Path.parents,
+        "Path.stat": Path.stat,
+        "Path.is_file": Path.is_file,
+        "os.access": os.access,
+        "subprocess.run": subprocess.run,
+        "subprocess.TimeoutExpired": subprocess.TimeoutExpired,
+    }
+
+
 @pytest.fixture
-def package_model(tmp_path, monkeypatch):
+def stdlib_before_model():
+    return _shared_stdlib_bindings()
+
+
+@pytest.fixture
+def package_model(tmp_path, monkeypatch, stdlib_before_model):
     root = tmp_path / "root"
     file = root / "bin/PATH_SECRET_CANARY"
     file.parent.mkdir(parents=True)
@@ -188,11 +207,33 @@ def test_nonroot_skip_opt_in_and_unsafe_chain(package_model):
 
 # The new test seams do not mutate shared stdlib attributes; capture is confined
 # to package calls made by this module, not pytest or unrelated subprocess users.
-def test_model_is_module_local(package_model):
+def test_model_is_module_local(package_model, stdlib_before_model):
     assert gate.Path is not Path and gate.os is not os and gate.subprocess is not subprocess
-    assert subprocess.run.__module__ == "subprocess"
-    assert Path.__module__ == "pathlib"
-    assert os.access.__module__ in {"posix", "nt"}
+    # The fixture dependency captures real bindings before installing gate-local views.
+    # Identity does not depend on a Python version's internal implementation modules.
+    current = _shared_stdlib_bindings()
+    for name, original in stdlib_before_model.items():
+        assert current[name] is original, f"shared stdlib binding changed: {name}"
+    assert package_model[3] == []
+
+
+# Real shared-binding mutations must fail the isolation oracle; each short context
+# restores the binding before any fixture/framework teardown, then the oracle passes.
+@pytest.mark.parametrize("owner,name", [
+    (pathlib, "Path"), (Path, "stat"), (os, "access"), (subprocess, "run"),
+], ids=["path-class", "path-stat", "os-access", "subprocess-run"])
+def test_model_isolation_detects_shared_mutation(
+    package_model, stdlib_before_model, monkeypatch, owner, name,
+):
+    _, file, _, _ = package_model
+    before = (file.read_bytes(), stat.S_IMODE(file.stat().st_mode))
+    test_model_is_module_local(package_model, stdlib_before_model)
+    with monkeypatch.context() as plant:
+        plant.setattr(owner, name, object())
+        with pytest.raises(AssertionError, match="shared stdlib binding changed"):
+            test_model_is_module_local(package_model, stdlib_before_model)
+    test_model_is_module_local(package_model, stdlib_before_model)
+    assert (file.read_bytes(), stat.S_IMODE(file.stat().st_mode)) == before
 
 
 # Unexpected exceptions retain their identity and stop this attempt: observation
