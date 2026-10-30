@@ -336,6 +336,39 @@ def test_windows_dispatch_choice_matrix(tmp_path, monkeypatch, command, files, e
     assert opened == [Path(path) for path in expected]
 
 
+def _assert_fixture_executable(actual, expected):
+    # Windows can return an extended path for the same symlink target.
+    assert Path(actual).samefile(expected)
+
+
+# Filesystem identity admits aliases, but never a different same-named file or
+# a missing dependency. These portable fixtures do not qualify Windows paths.
+@pytest.mark.parametrize("kind", ["symlink", "hardlink", "different", "missing"])
+def test_fixture_executable_identity(tmp_path, kind):
+    expected_dir = tmp_path / "expected"; expected_dir.mkdir()
+    actual_dir = tmp_path / "actual"; actual_dir.mkdir()
+    expected = executable(expected_dir / "git.exe", b"fixture bytes")
+    actual = actual_dir / "git.exe"
+    if kind == "symlink":
+        actual.symlink_to(expected)
+    elif kind == "hardlink":
+        os.link(expected, actual)
+    elif kind == "different":
+        executable(actual, b"fixture bytes")
+    before = (expected.read_bytes(), expected.stat().st_mode)
+    assert actual != expected.resolve()
+    if kind in {"symlink", "hardlink"}:
+        _assert_fixture_executable(actual, expected)
+    elif kind == "different":
+        with pytest.raises(AssertionError):
+            _assert_fixture_executable(actual, expected)
+    else:
+        with pytest.raises(FileNotFoundError):
+            _assert_fixture_executable(actual, expected)
+        assert not actual.exists()
+    assert (expected.read_bytes(), expected.stat().st_mode) == before
+
+
 # A neighboring opaque native declaration passes actual CLI admission and can
 # publish after explicit consent. This prevents a reject-all CLI from satisfying
 # the refusal witnesses; no fixture program is executed.
@@ -355,7 +388,7 @@ def test_cli_native_positive(project_cli, tmp_path, monkeypatch, capsys, argv):
         prompts.append(prompt); return "y"
     monkeypatch.setattr("builtins.input", approve)
     from csk.tool_paths import resolve_tool
-    assert Path(resolve_tool("git")) == Path(git).resolve()
+    _assert_fixture_executable(resolve_tool("git"), git)
     result = cli.main(list(argv))
     output = capsys.readouterr()
     assert result == 0, output
