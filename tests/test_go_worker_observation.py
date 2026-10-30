@@ -95,7 +95,10 @@ def test_concurrent_recorder_cap(recorder, monkeypatch):
     assert len(recorder.sink.read_bytes()) <= 16 * 1024
 
 
-# Static outside/linked/replaced sinks preserve bytes, modes and inode; exclusive sink works.
+# Static outside/linked/replaced sinks preserve bytes, modes and inode. Windows
+# cannot unlink this open x+b stream: plant alternate namespace entries instead;
+# the replacement case then exercises a real path/fd mismatch, not a rename race.
+# POSIX retains the actual same-name replacement; exclusive x+b is the control.
 @pytest.mark.parametrize("kind", ["outside", "symlink", "hardlink", "ancestor-link", "replaced", "closed"])
 def test_unsafe_sink_is_not_written(kind, recorder, tmp_path):
     outside = tmp_path / "outside"
@@ -108,17 +111,25 @@ def test_unsafe_sink_is_not_written(kind, recorder, tmp_path):
             recorder.sink = outside
             recorder.descriptor = os.open(outside, os.O_RDONLY)
         elif kind == "symlink":
-            recorder.sink.unlink()
+            recorder.sink = recorder.anchor / "linked.json"
             recorder.sink.symlink_to(outside)
+            assert recorder.sink.is_symlink()
         elif kind == "hardlink":
-            recorder.sink.unlink()
+            recorder.sink = recorder.anchor / "shared.json"
             os.link(outside, recorder.sink)
+            assert recorder.sink.stat().st_nlink == 2
         elif kind == "ancestor-link":
             (recorder.anchor / "link").symlink_to(tmp_path, target_is_directory=True)
             recorder.sink = recorder.anchor / "link" / "outside"
         elif kind == "replaced":
-            recorder.sink.unlink()
+            if os.name == "nt":
+                recorder.sink = recorder.anchor / "replacement.json"
+            else:
+                recorder.sink.unlink()
             recorder.sink.write_bytes(b"replacement")
+            descriptor = os.fstat(original_fd)
+            candidate = recorder.sink.stat()
+            assert (candidate.st_dev, candidate.st_ino) != (descriptor.st_dev, descriptor.st_ino)
         else:
             recorder.descriptor = os.dup(original_fd)
             os.close(recorder.descriptor)
@@ -844,3 +855,28 @@ def test_append_stream_admission(recorder):
         assert not unsupported.flush() and unsupported.sink_failures == 1
     assert recorder.sink.read_bytes() == before
     recorder.record("node-end"); assert recorder.flush()
+
+
+
+# The same unsafe-sink assertion detects a deliberately bypassed identity gate.
+# Writes stay on the owned original fd; candidate/outside bytes stay untouched.
+def test_sink_identity_control_is_sensitive(recorder, tmp_path, monkeypatch):
+    original = recorder.sink
+    replacement = recorder.anchor / "different.json"
+    replacement.write_bytes(b"replacement canary")
+    before = replacement.stat()
+    recorder.sink = replacement
+    recorder.record("node-start")
+    assert not recorder.flush()
+    with monkeypatch.context() as patch:
+        applied = []
+        def bypass(): applied.append(True)
+        patch.setattr(recorder, "_check_sink", bypass)
+        with pytest.raises(AssertionError, match="unsafe sink admitted"):
+            assert not recorder.flush(), "unsafe sink admitted"
+        assert applied == [True]
+    assert replacement.read_bytes() == b"replacement canary"
+    after = replacement.stat()
+    assert (before.st_mode, before.st_mtime_ns, before.st_ino) == (after.st_mode, after.st_mtime_ns, after.st_ino)
+    recorder.sink = original
+    assert recorder.flush() and json.loads(original.read_bytes())["events"][-1]["stage"] == "node-start"

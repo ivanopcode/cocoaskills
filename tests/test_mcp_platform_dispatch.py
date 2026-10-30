@@ -151,7 +151,7 @@ def test_cli_refuses_before_consent(project_cli, tmp_path, monkeypatch, capsys, 
     git = shutil.which("git")
     assert git
     tools = tmp_path / "tools"; tools.mkdir()
-    (tools / "git").symlink_to(git)
+    (tools / ("git.exe" if os.name == "nt" else "git")).symlink_to(git)
     if kind in {"foreign", "interpreter"}:
         host(monkeypatch, tmp_path, "darwin")
         if kind == "foreign":
@@ -330,10 +330,10 @@ def test_windows_dispatch_choice_matrix(tmp_path, monkeypatch, command, files, e
     monkeypatch.setenv("PATHEXT", ".CMD;.BAT")
     opened = []
     def observed(path, *args):
-        opened.append(str(Path(path).relative_to(tmp_path))); return os.open(path, *args)
+        opened.append(Path(path).relative_to(tmp_path)); return os.open(path, *args)
     local_os(monkeypatch, open=observed)
     resolution.validate_host_commands(parse(command), cwd=tmp_path)
-    assert opened == expected
+    assert opened == [Path(path) for path in expected]
 
 
 # A neighboring opaque native declaration passes actual CLI admission and can
@@ -343,7 +343,7 @@ def test_windows_dispatch_choice_matrix(tmp_path, monkeypatch, command, files, e
 def test_cli_native_positive(project_cli, tmp_path, monkeypatch, capsys, argv):
     root, home, declare = project_cli
     git = shutil.which("git"); assert git
-    tools = tmp_path / "tools"; tools.mkdir(); (tools / "git").symlink_to(git)
+    tools = tmp_path / "tools"; tools.mkdir(); (tools / ("git.exe" if os.name == "nt" else "git")).symlink_to(git)
     platform = "win32" if os.name == "nt" else sys.platform
     host(monkeypatch, tmp_path, platform)
     executable(tmp_path / ("my-server.exe" if platform == "win32" else "my-server"), native_header(platform))
@@ -354,8 +354,11 @@ def test_cli_native_positive(project_cli, tmp_path, monkeypatch, capsys, argv):
     def approve(prompt):
         prompts.append(prompt); return "y"
     monkeypatch.setattr("builtins.input", approve)
-    assert cli.main(list(argv)) == 0
-    capsys.readouterr()
+    from csk.tool_paths import resolve_tool
+    assert Path(resolve_tool("git")) == Path(git).resolve()
+    result = cli.main(list(argv))
+    output = capsys.readouterr()
+    assert result == 0, output
     assert bool(prompts) == (argv == ("install", "app"))
     assert (root / ".mcp.json").exists() == bool(prompts)
 
@@ -410,3 +413,19 @@ def test_elf_layout_controls(tmp_path, monkeypatch, order, encoding, bits, kind)
         head = ident + struct.pack(order + "HHIQQQIHHHHHH", kind, 183, 1, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0)
     executable(tmp_path / "my-server", head)
     resolution.validate_host_commands(parse("my-server"), cwd=tmp_path)
+
+
+# A module-local Windows suffix-lookup model: an extensionless fixture cannot
+# supply Git, whereas the adjacent .exe can. No candidate is executed and this
+# does not qualify native Windows dispatch or filesystem case behavior.
+def test_windows_fixture_git_suffix_lookup(tmp_path, monkeypatch):
+    from csk import tool_paths
+    directory = tmp_path / "tools"
+    directory.mkdir()
+    executable(directory / "git", b"opaque fixture")
+    monkeypatch.setenv("PATHEXT", ".exe")
+    monkeypatch.setattr(tool_paths, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
+    with pytest.raises(FileNotFoundError, match="git executable not found outside project and csk shims"):
+        tool_paths.resolve_tool("git", search_path=str(directory))
+    candidate = executable(directory / "git.exe", b"opaque fixture")
+    assert tool_paths.resolve_tool("git", search_path=str(directory)) == str(candidate.resolve())

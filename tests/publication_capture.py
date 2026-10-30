@@ -3,7 +3,9 @@
 The fixture owns the roots and is the sole writer. Ancestors and reparse/link
 entries are checked without traversal; this is not a hostile concurrent-writer
 filesystem guarantee. Raw journal/CLI files are private pytest artifacts; only
-numbered summary JSON is suitable for portable reporting.
+numbered summary JSON is suitable for portable reporting. Raw file persistence
+requires POSIX modes; Windows ACL admission is not implemented. Other platforms
+retain in-memory bounded observations as incomplete and create no output files.
 """
 from __future__ import annotations
 
@@ -113,6 +115,10 @@ class PublicationCapture:
             else:
                 if _link(info) or not stat.S_ISDIR(info.st_mode):
                     raise ValueError("non-directory capture output ancestor")
+        # Do not confuse Windows chmod's read-only bit with private ACLs. Until
+        # an ACL contract exists, even a plain owned Windows sink is unavailable.
+        if os.name != "posix":
+            raise ValueError("private capture output requires POSIX permissions")
         for path in missing:
             path.mkdir(mode=0o700)
         path = self.directory / name

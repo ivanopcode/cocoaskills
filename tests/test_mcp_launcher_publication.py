@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+import os
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -184,12 +185,19 @@ def test_each_publication_refusal_rolls_back_full_state(local_app, tmp_path, mon
     # The old store survives an update; the new entry is installed beside it.
     assert len(list((case.home / "source-v1").rglob("record.json"))) == (2 if existing else 1)
 
-    assert capture.complete, "publication observation incomplete; inspect private capture artifacts"
+    if os.name == "posix":
+        assert capture.complete, "publication observation incomplete; inspect private capture artifacts"
+    else:
+        # Product rollback/table assertions above still run; private raw capture
+        # has no Windows ACL admission and must not claim complete evidence.
+        assert not capture.complete and capture.errors
+        assert not capture.directory.exists()
 
 
 # This smallest real CLI pair qualifies the table's recorder attachment, not the
 # full target table or native signature verification. Private output is saved
 # before any result/output assertion; the same flow then publishes unchanged.
+@pytest.mark.skipif(os.name != "posix", reason="private journal/CLI file capture requires POSIX modes; portable unsupported-output transaction controls remain active")
 def test_publication_capture_cli_preparation_and_positive(local_app, tmp_path, monkeypatch, capsys):
     case = local_app
     _approve_publication(monkeypatch)

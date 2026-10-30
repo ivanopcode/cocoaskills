@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sys
 import tomllib
+from types import SimpleNamespace
 from dataclasses import replace
 
 import pytest
@@ -28,12 +29,34 @@ def app_cli(project_cli, tmp_path, monkeypatch):
     return root, home, helper, declare
 
 
-def approve(monkeypatch):
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+def approve(monkeypatch, before_approval=None):
+    class Terminal:
+        def __init__(self, stream): self.stream = stream
+        def isatty(self): return True
+        def __getattr__(self, name): return getattr(self.stream, name)
+    streams = SimpleNamespace(**{**vars(sys), "stdin": Terminal(sys.stdin), "stdout": Terminal(sys.stdout)})
+    monkeypatch.setattr(cli, "sys", streams)
+    monkeypatch.setattr(mcp_project, "sys", streams)
     prompts = []
-    monkeypatch.setattr("builtins.input", lambda p: prompts.append(p) or "yes")
+    def answer(prompt):
+        if before_approval is not None:
+            before_approval()
+        prompts.append(prompt)
+        return "yes"
+    monkeypatch.setattr(mcp_project, "input", answer, raising=False)
     return prompts
+
+
+def assert_disclosed_identity(output, publisher, path):
+    prefix = "MCP plan app: verified publisher and notarized application; publisher="
+    lines = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
+    assert len(lines) == 1, "exactly one verified identity disclosure required"
+    decoder = json.JSONDecoder()
+    decoded_publisher, end = decoder.raw_decode(lines[0])
+    assert lines[0][end:].startswith("; path=")
+    decoded_path, path_end = decoder.raw_decode(lines[0][end + len("; path="):])
+    assert path_end == len(lines[0][end + len("; path="):])
+    assert (decoded_publisher, decoded_path) == (publisher, path), "disclosed identity differs"
 
 
 def status(capsys, *args):
@@ -57,11 +80,17 @@ def test_verify_before_consent_and_no_partial_writes(app_cli, monkeypatch, capsy
     assert cli.main(["check", "app"]) == 0
     capsys.readouterr()
     assert _snapshot(root, home) == before
-    prompts = approve(monkeypatch)
+    disclosed = []
+    publisher = f"macos:{MAC['team_id']}:{MAC['bundle_id']}:mcp-server"
+    def before_approval():
+        output = capsys.readouterr().out
+        assert_disclosed_identity(output, publisher, str(helper.resolve()))
+        assert _snapshot(root, home) == before
+        disclosed.append(output)
+    prompts = approve(monkeypatch, before_approval)
     assert install() == 0
-    out = capsys.readouterr().out
-    assert "verified publisher and notarized application" in out
-    assert MAC["team_id"] in out and str(helper.resolve()) in out
+    out = "".join(disclosed) + capsys.readouterr().out
+    assert_disclosed_identity(out, publisher, str(helper.resolve()))
     assert len(prompts) == 1
     for path in PATHS:
         document = tomllib.loads((root / path).read_text()) if path.endswith("toml") else json.loads((root / path).read_bytes())
@@ -94,7 +123,7 @@ def test_consent_and_status_transition_table(app_cli, monkeypatch, capsys, chang
     assert _snapshot(root, home) == before
     if change in {"path", "trust", "publisher"}:
         with monkeypatch.context() as patch:
-            patch.setattr(sys.stdin, "isatty", lambda: False)
+            patch.setattr(mcp_project.sys.stdin, "isatty", lambda: False)
             assert install() == 1
             assert "mcp_plan_unapproved" in capsys.readouterr().err
             assert _snapshot(root, home) == before
@@ -159,3 +188,17 @@ def test_trust_upgrade_preserves_consent_but_downgrade_does_not():
         approved = frozenset({ownership.consent_key(consumer, replace(subject, trust_level=new))})
         lower = replace(subject, trust_level=old)
         assert ownership.unapproved(consumer, [lower], approved) == (lower,)
+
+
+# Valid reversible Windows-style identity strings decode exactly. A different
+# publisher/path containing the expected text still fails the same CLI checker.
+@pytest.mark.parametrize("wrong", ["publisher", "path"])
+def test_identity_disclosure_checker_rejects_substrings(wrong):
+    publisher, path = "macos:ABCDE12345:com.example.App:mcp-server", r"C:\Apps\Example.app\helper"
+    def line(pub, location):
+        return ("MCP plan app: verified publisher and notarized application; publisher="
+                + json.dumps(pub) + "; path=" + json.dumps(location) + "\n")
+    assert_disclosed_identity(line(publisher, path), publisher, path)
+    other = line(publisher + "-wrong", path) if wrong == "publisher" else line(publisher, path + "-wrong")
+    with pytest.raises(AssertionError, match="disclosed identity differs"):
+        assert_disclosed_identity(other, publisher, path)

@@ -132,10 +132,17 @@ def test_source_build_status_read_only(monkeypatch, tmp_path, csk_home, skills_r
         _observe(monkeypatch, changed=change == "toolchain", change_target=change == "target")
     elif change == "missing":
         # Owned fixture only; make the protected entry absent without a live repair.
-        for p in entry.rglob("*"):
-            if p.is_dir(): p.chmod(0o700)
-        entry.chmod(0o700)
+        # Windows unlink also refuses a read-only regular file, even when its
+        # directory is writable. Admit only this fixture's nonshared plain tree.
+        members = list(entry.rglob("*"))
+        for p in (entry, *members):
+            info = p.lstat()
+            assert not stat.S_ISLNK(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400
+            assert stat.S_ISDIR(info.st_mode) or (stat.S_ISREG(info.st_mode) and info.st_nlink == 1)
+        for p in (entry, *members):
+            p.chmod(0o700)
         shutil.rmtree(entry)
+        assert not entry.exists()
     elif change == "corrupt":
         artifact = entry / "bin" / ("tool.exe" if os.name == "nt" else "tool")
         artifact.chmod(0o700)

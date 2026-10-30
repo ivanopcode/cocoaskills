@@ -80,6 +80,7 @@ def counted(engine, capture, calls):
 # Actual byte/link staging reaches the planted EIO. The observer snapshots before
 # cleanup, delegates exactly once, preserves both error edges, and never reads a
 # symlink referent. A separate remove-journal EACCES retains recoverable sidecars.
+@pytest.mark.skipif(os.name != "posix", reason="raw private journal/CLI persistence requires POSIX modes; unsupported-output transaction controls run on Windows")
 @pytest.mark.parametrize("obstruct", [False, True])
 def test_prepare_identity_snapshot_before_cleanup_and_recovery(tmp_path, monkeypatch, obstruct):
     shared = (os.open, os.scandir, Path.open, tx.TransactionEngine.prepare)
@@ -249,6 +250,7 @@ def test_bounded_capture_and_exception_graph(tmp_path, monkeypatch):
 
 # Applied omission proves the checker requires same-attempt journal bytes rather
 # than accepting a correct refusal alone. The adjacent unmodified sink succeeds.
+@pytest.mark.skipif(os.name != "posix", reason="per-attempt private-file persistence requires POSIX modes; Windows explicitly refuses output")
 def test_missing_snapshot_control_and_per_attempt_manifests(tmp_path, monkeypatch):
     home, project, canary, plan, capture = plan_fixture(tmp_path)
     before, outside = state(project / "data"), state(canary)
@@ -359,7 +361,11 @@ def test_stored_input_root_is_checked_before_reader(tmp_path, monkeypatch, repla
     assert entries[0]["sha256"] == hashlib.sha256(b"outside input canary").hexdigest()
     assert entries[1] == {"kind": "absent"}
     ordinary.cli(0, "normal", "")
-    assert ordinary.complete
+    if os.name == "posix":
+        assert ordinary.complete
+    else:
+        assert not ordinary.complete and ordinary.errors
+        assert not ordinary.directory.exists()
     assert outside_state(outside) == before
 
 
@@ -391,6 +397,11 @@ def test_output_ancestry_precedes_creation(tmp_path, linked):
     ordinary = PublicationCapture(tmp_path / "normal" / "nested" / "publication-capture",
                                   roots=(outside,), output_anchor=tmp_path)
     ordinary.cli(0, "complete stdout", "complete stderr")
+    if os.name != "posix":
+        assert not ordinary.complete and ordinary.errors[0][0]["type"] == "ValueError"
+        assert not (tmp_path / "normal").exists()
+        assert outside_state(outside) == before
+        return  # Unsupported private persistence: no POSIX-mode/ACL claim.
     assert ordinary.complete and not ordinary.errors
     assert (ordinary.directory / "cli-001.stdout.private").read_bytes() == b"complete stdout"
     assert (ordinary.directory / "cli-001.stderr.private").read_bytes() == b"complete stderr"
@@ -491,4 +502,88 @@ def test_output_anchor_contract_refuses_before_creation(tmp_path, invalid):
     capture.cli(0, "private output", "")
     assert not capture.complete and capture.errors
     assert not (tmp_path / "missing-anchor").exists()
+    assert outside_state(outside) == before
+
+
+# Mode bits cannot admit private raw capture on Windows. This module-local
+# platform view models refusal, not Windows ACL support; product I/O is real.
+@pytest.mark.parametrize("outcome", ["success", "prepare-error", "cleanup-error"])
+def test_unsupported_private_output_preserves_transaction(tmp_path, monkeypatch, outcome):
+    from types import SimpleNamespace
+
+    home, project, canary, plan, capture = plan_fixture(tmp_path)
+    before, outside = state(project / "data"), state(canary)
+    failure = OSError(errno.EIO, "private original error")
+    cause, context = ValueError("cause"), LookupError("context")
+    failure.__cause__, failure.__context__ = cause, context
+    cleanup = PermissionError(errno.EACCES, "private cleanup obstruction")
+    calls, applied, removals = [], [], []
+
+    def fault(point, target):
+        if outcome != "success" and point == "staging_entry_completed" and target.identifier == "alias":
+            applied.append(True)
+            raise failure
+
+    monkeypatch.setattr(capture_module, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
+    engine = tx.TransactionEngine(home, fault_hook=fault)
+    if outcome == "cleanup-error":
+        def obstruct(journal):
+            removals.append(journal)
+            raise cleanup
+        monkeypatch.setattr(engine, "_remove_journal", obstruct)
+    counted(engine, capture, calls)
+    with ManagerHomeLock(home) as lock:
+        if outcome != "success":
+            with pytest.raises(OSError) as caught:
+                engine.prepare(lock, plan)
+            expected = cleanup if outcome == "cleanup-error" else failure
+            assert caught.value is expected
+            assert failure.__cause__ is cause and failure.__context__ is context
+            assert applied == [True] and [row[0] for row in calls] == ["prepare", "discard"]
+            assert len(calls[1][1]) == 1 and calls[1][2] == {}
+            assert state(project / "data") == before and not (project / "alias").exists()
+            pending = engine.pending_failure(lock, plan.transaction_id, expected)
+            if outcome == "cleanup-error":
+                assert cleanup.__context__ is failure and cleanup.__cause__ is None
+                assert removals == [calls[1][1][0]]
+                assert pending.code == "transaction_preparation_cleanup_deferred"
+                assert len(list(project.glob(".csk-txn-*"))) == 2
+                tx.TransactionEngine(home).recover(lock)
+            else:
+                assert pending is None and removals == []
+        else:
+            result = engine.prepare(lock, plan)
+            assert calls[-1][1] is result and applied == []
+            assert [row[0] for row in calls] == ["prepare", "result"]
+            engine.commit(lock, plan.transaction_id)
+            assert (project / "data").read_bytes() == b"new"
+            assert (project / "alias").is_symlink()
+        assert calls[0][1] == (lock, plan) and calls[0][2] == {}
+    capture.cli(0 if outcome == "success" else 1, "private raw output", "private stderr")
+    assert capture.errors and not capture.complete
+    assert capture.errors[0][0]["type"] == "ValueError"
+    assert not capture.directory.exists()
+    assert not list(project.glob(".csk-txn-*"))
+    assert not list(engine.journal_root.glob("*.json"))
+    assert state(canary) == outside
+
+
+# An existing raw-output filename cannot be overwritten or followed. On Windows
+# the unsupported private sink refuses even earlier; the outside referent and
+# the final link remain unchanged on both paths.
+def test_final_output_link_is_not_overwritten(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "data").write_bytes(b"outside final-file canary")
+    before = outside_state(outside)
+    directory = tmp_path / "publication-capture"
+    directory.mkdir(mode=0o700)
+    target = directory / "cli-001.stdout.private"
+    target.symlink_to(outside / "data")
+    link = target.lstat()
+    capture = PublicationCapture(directory, roots=(tmp_path,), output_anchor=tmp_path)
+    capture.cli(0, "never overwrite", "never create stderr")
+    assert not capture.complete and capture.errors
+    assert target.is_symlink() and target.lstat().st_ino == link.st_ino
+    assert not (directory / "cli-001.stderr.private").exists()
     assert outside_state(outside) == before
