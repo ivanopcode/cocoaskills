@@ -9,7 +9,7 @@ from dataclasses import replace
 
 import pytest
 
-from csk import cli, mcp_launchers as launchers, mcp_ownership as ownership, mcp_project
+from csk import cli, mcp_launchers as launchers, mcp_ownership as ownership, mcp_project, mcp_settings
 from test_mcp_install_acceptance import _snapshot
 from test_mcp_project_install import project_cli, install, native_bytes, PATHS
 from test_mcp_launchers import MAC, bundle, declaration, good_verification
@@ -29,14 +29,22 @@ def app_cli(project_cli, tmp_path, monkeypatch):
     return root, home, helper, declare
 
 
-def approve(monkeypatch, before_approval=None):
+def _terminal_streams(monkeypatch, interactive):
     class Terminal:
         def __init__(self, stream): self.stream = stream
-        def isatty(self): return True
+        def isatty(self): return interactive
         def __getattr__(self, name): return getattr(self.stream, name)
     streams = SimpleNamespace(**{**vars(sys), "stdin": Terminal(sys.stdin), "stdout": Terminal(sys.stdout)})
-    monkeypatch.setattr(cli, "sys", streams)
-    monkeypatch.setattr(mcp_project, "sys", streams)
+    for module in (cli, mcp_project, mcp_settings):
+        monkeypatch.setattr(module, "sys", streams)
+
+
+def headless(monkeypatch):
+    _terminal_streams(monkeypatch, False)
+
+
+def approve(monkeypatch, before_approval=None):
+    _terminal_streams(monkeypatch, True)
     prompts = []
     def answer(prompt):
         if before_approval is not None:
@@ -44,6 +52,7 @@ def approve(monkeypatch, before_approval=None):
         prompts.append(prompt)
         return "yes"
     monkeypatch.setattr(mcp_project, "input", answer, raising=False)
+    monkeypatch.setattr(mcp_settings, "input", answer, raising=False)
     return prompts
 
 

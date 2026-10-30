@@ -36,7 +36,11 @@ def test_unused_owner_performs_no_teardown_probe(tmp_path: Path) -> None:
 # The REAL autouse fixture cleans allocated scratch after body patches restore,
 # including on body failure; unused bodies allocate nothing and leave parent temp/cache intact.
 @pytest.mark.parametrize("body_fails", [False, True])
-def test_real_fixture_cleanup_outlives_body_monkeypatch(pytester, monkeypatch, body_fails):
+def test_real_fixture_cleanup_outlives_body_monkeypatch(pytester, monkeypatch, tmp_path, body_fails):
+    # A parent need not export TMPDIR; pytest's owned path anchors this sandbox.
+    monkeypatch.delenv("TMPDIR", raising=False)
+    parent_temp = {key: os.environ.get(key) for key in ("TMPDIR", "TEMP", "TMP")}
+    parent_cache = tempfile.tempdir
     body = r'''
 import os, tempfile
 from pathlib import Path
@@ -76,7 +80,7 @@ def test_after_cleanup(tmp_path):
     pytester.makepyfile("BODY_FAILS = " + repr(body_fails) + "\n" + body)
     # This child gets a fresh private temp/cache/home too; it finishes before
     # the outer context removes its scratch, even for the expected failed body.
-    with tempfile.TemporaryDirectory(prefix="lf-", dir=os.environ["TMPDIR"]) as directory:
+    with tempfile.TemporaryDirectory(prefix="lf-", dir=tmp_path) as directory:
         with monkeypatch.context() as patch:
             for name in ("TMPDIR", "TEMP", "TMP", "HOME", "USERPROFILE", "XDG_CONFIG_HOME",
                          "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "APPDATA",
@@ -84,6 +88,8 @@ def test_after_cleanup(tmp_path):
                 patch.setenv(name, directory)
             patch.setenv("PYTHONPATH", os.pathsep.join((str(tests.parent / "src"), str(tests))))
             result = pytester.runpytest_subprocess("-q", "-m", "not csk_e2e_native")
+    assert {key: os.environ.get(key) for key in parent_temp} == parent_temp
+    assert tempfile.tempdir == parent_cache
     result.assert_outcomes(passed=1 if body_fails else 2, failed=int(body_fails))
     assert result.ret == int(body_fails)
     if body_fails:

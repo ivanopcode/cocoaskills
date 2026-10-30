@@ -10,7 +10,7 @@ from csk import cli, mcp_local_targets as local, transactions
 from conftest import make_project, write_files
 from test_mcp_environments_spec import declaration
 from test_mcp_install_acceptance import _snapshot
-from test_mcp_launcher_lifecycle import approve
+from test_mcp_launcher_lifecycle import approve, headless
 from test_mcp_project_install import project_cli, install, native_bytes
 
 
@@ -162,8 +162,7 @@ def test_headless_removal_revokes_only_own_target(project_cli, monkeypatch, caps
     assert install() == 0
     grants = local.read(root, home)
     shared = (root / "Skillfile.json").read_bytes()
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
-    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    headless(monkeypatch)
     assert cli.main(target_command(root, "remove")) == 0
     assert local.read(root, home) == {"other": grants["other"]}
     assert install() == 0

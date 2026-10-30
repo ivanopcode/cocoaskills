@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from csk import cli, manifest, mcp_declarations as d, mcp_project
+from csk import cli, manifest, mcp_declarations as d, mcp_project, mcp_settings
 from test_mcp_project_install import project_cli, install, native_bytes
-from test_mcp_launcher_lifecycle import approve
+from test_mcp_launcher_lifecycle import approve, headless
 from test_mcp_install_acceptance import _snapshot
 
 URL = "https://mcp.example.invalid/mcp"
@@ -74,7 +74,7 @@ def test_local_target_is_separate_and_requires_consent(
         str(root),
     ]
     before = _snapshot(root, home)
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    headless(monkeypatch)
     assert cli.main(argv) == 1
     assert "mcp_plan_unapproved" in capsys.readouterr().err
     assert _snapshot(root, home) == before
@@ -208,7 +208,7 @@ def test_local_grants_are_independent(project_cli, monkeypatch, capsys):
     assert len(prompts) == 1
     before = _snapshot(root, home)
     with monkeypatch.context() as patch:
-        patch.setattr(sys.stdin, "isatty", lambda: False)
+        headless(patch)
         assert cli.main(command("add", "other")) == 1
         assert _snapshot(root, home) == before
     assert cli.main(command("add", "other")) == 0
@@ -216,7 +216,7 @@ def test_local_grants_are_independent(project_cli, monkeypatch, capsys):
     assert cli.main(command("remove", "docs")) == 0
     before = _snapshot(root, home)
     with monkeypatch.context() as patch:
-        patch.setattr(sys.stdin, "isatty", lambda: False)
+        headless(patch)
         assert cli.main(command("add", "docs")) == 1
         assert _snapshot(root, home) == before
     assert cli.main(command("add", "other")) == 0
@@ -231,9 +231,11 @@ def test_migration_failure_rolls_back(project_cli, monkeypatch, capsys):
     declare(declaration(["claude_code", "cursor"]))
     approve(monkeypatch)
     original = transactions.TransactionEngine
+    applied = []
 
     def fail(event, target):
         if event == "after_install" and target.identifier == "local-targets":
+            applied.append(target.identifier)
             raise OSError("injected migration failure")
 
     before = (root / "Skillfile.json").read_bytes()
@@ -244,6 +246,7 @@ def test_migration_failure_rolls_back(project_cli, monkeypatch, capsys):
             lambda *a, **kw: original(*a, **kw, fault_hook=fail),
         )
         assert cli.main(["mcp", "migrate", "--project", str(root)]) == 1
+    assert applied == ["local-targets"]
     assert (root / "Skillfile.json").read_bytes() == before
     from csk import mcp_local_targets
 
@@ -280,7 +283,7 @@ def test_absent_old_grant_does_not_widen(project_cli, monkeypatch, capsys):
         "cursor",
     }
     before = _snapshot(root, home)
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    headless(monkeypatch)
     assert install() == 1
     assert _snapshot(root, home) == before
     prompts = approve(monkeypatch)
@@ -435,7 +438,7 @@ def test_project_target_does_not_approve_future_server(
     declare(raw)
     before = _snapshot(root, home)
     with monkeypatch.context() as patch:
-        patch.setattr(sys.stdin, "isatty", lambda: False)
+        headless(patch)
         assert install() != 0
         assert _snapshot(root, home) == before
     assert install() == 0
@@ -629,7 +632,7 @@ def test_local_consent_discloses_effective_plan(project_cli, monkeypatch, capsys
         "--project",
         str(root),
     ]
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    headless(monkeypatch)
     before = _snapshot(root, home)
     assert cli.main(args) == 1
     output = capsys.readouterr()
@@ -643,6 +646,40 @@ def test_local_consent_discloses_effective_plan(project_cli, monkeypatch, capsys
     output = capsys.readouterr()
     assert '["example-helper", "--serve"]' in output.out
     assert "fixture-secret-must-not-be-disclosed" not in output.out + output.err
+
+
+# The real local-target fixture refuses each missing approval condition without
+# writes, then accepts one terminal yes. Scoped views leave shared sys/input
+# untouched; this is a consent-fixture control, not a native terminal test.
+@pytest.mark.parametrize("refusal", ["stdin", "stdout", "answer"])
+def test_local_approval_fixture_is_scoped(project_cli, monkeypatch, capsys, refusal):
+    import builtins
+
+    root, home, declare = project_cli
+    declare(declaration(["claude_code"]))
+    modules = (cli, mcp_project, mcp_settings)
+    original = tuple(module.sys for module in modules)
+    shared = (sys.stdin, sys.stdout, sys.stdin.isatty, sys.stdout.isatty, builtins.input)
+    argv = ["mcp", "local-target", "add", "cursor", "--server", "docs", "--project", str(root)]
+    before = _snapshot(root, home)
+    with monkeypatch.context() as approval:
+        prompts = approve(approval)
+        assert all(module.sys is not sys for module in modules)
+        assert mcp_settings.input is mcp_project.input
+        assert shared == (sys.stdin, sys.stdout, sys.stdin.isatty, sys.stdout.isatty, builtins.input)
+        with monkeypatch.context() as denied:
+            if refusal == "answer":
+                denied.setattr(mcp_settings, "input", lambda prompt: "no")
+            else:
+                denied.setattr(getattr(mcp_settings.sys, refusal), "isatty", lambda: False)
+            assert cli.main(argv) == 1
+            assert "mcp_plan_unapproved" in capsys.readouterr().err
+            assert _snapshot(root, home) == before and prompts == []
+        assert cli.main(argv) == 0
+        assert len(prompts) == 1
+        assert "Approve local: cursor for docs" in prompts[0]
+    assert tuple(module.sys for module in modules) == original
+    assert shared == (sys.stdin, sys.stdout, sys.stdin.isatty, sys.stdout.isatty, builtins.input)
 
 
 # Reporting-only ids do not invalidate writable authority, but adding a writer does; absence remains a distinct selector.
