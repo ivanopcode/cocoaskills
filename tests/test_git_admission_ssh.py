@@ -68,7 +68,7 @@ def _fixture_repository(root: Path) -> tuple[Path, str]:
         ).stdout
 
     run("init", "--quiet", "--object-format=sha1", "--initial-branch=main", ".")
-    (work / "README.md").write_text("external tool\n", encoding="utf-8")
+    (work / "README.md").write_bytes(b"external tool\n")
     run("add", "README.md")
     run("commit", "--quiet", "-m", "initial")
     commit = run("rev-parse", "HEAD").strip()
@@ -579,3 +579,83 @@ def test_windows_agent_argument_survives_ssh_config_parsing(tmp_path: Path) -> N
     assert "BatchMode=yes" in command
     assert "NumberOfPasswordPrompts=0" in command
     assert "IdentitiesOnly=no" in command
+
+
+@pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
+def test_clean_ssh_environment_admits_only_windows_system_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    # Windows SSH needs PROGRAMDATA at startup; HTTPS/POSIX must not acquire
+    # it, and no route may inherit PATH, home, agent, or executable overrides.
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "system-data"))
+    monkeypatch.setenv("PATH", "hostile-search-path")
+    monkeypatch.setenv("USERPROFILE", "hostile-home")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "hostile-agent")
+    monkeypatch.setenv("GIT_SSH_COMMAND", "hostile-command")
+    monkeypatch.setattr(sys, "platform", platform)
+    paths = _private_paths(tmp_path / "private")
+    tool = git_admission.GitTool(tmp_path / "git", tmp_path / "exec", ("git version",))
+    for route in ("ssh", "https"):
+        environment = git_admission._clean_git_environment(paths, tool, route)
+        assert environment.get("PROGRAMDATA") == (
+            str(tmp_path / "system-data") if platform == "win32" and route == "ssh" else None
+        )
+        assert environment["PATH"] == str(paths.empty_path)
+        assert environment["HOME"] == str(paths.home)
+        for name in ("USERPROFILE", "SSH_AUTH_SOCK", "GIT_SSH_COMMAND"):
+            assert name not in environment
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows loopback SSH")
+@pytest.mark.parametrize("selection", ["ed25519", "rsa", "ecdsa", "encrypted", "agent"])
+def test_windows_real_git_ssh_clean_environment_matrix(
+    tmp_path: Path, selection: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Opt-in disposable server kit: real Git, current guarded wrapper, native
+    # ssh and full snapshot admission. Plain keys/loaded agent must succeed;
+    # the same authorized encrypted file without its agent must fail as auth.
+    # This does not qualify interactive prompts, hardware keys or real hosts.
+    configured = os.environ.get("CSK_TEST_WINDOWS_SSH_ROOT")
+    if not configured:
+        pytest.skip("requires a disposable Windows loopback sshd kit")
+    root = Path(configured)
+    # PROGRAMDATA is a startup prerequisite, not authority to import system
+    # SSH config. If that config is read, this positive control cannot pass.
+    system_data = tmp_path / "system-data"
+    (system_data / "ssh").mkdir(parents=True)
+    (system_data / "ssh" / "ssh_config").write_text("ForbiddenTestOption yes\n")
+    monkeypatch.setenv("PROGRAMDATA", str(system_data))
+    endpoint = json.loads((root / "endpoint.json").read_text(encoding="utf-8-sig"))
+    port, user = endpoint["port"], endpoint["user"]
+    assert isinstance(port, int) and 1024 <= port <= 65535
+    assert isinstance(user, str) and user.isalnum()
+    bare, commit = _fixture_repository(tmp_path / "fixture")
+    # The kit's forced command reads this operator-controlled pointer. Neither
+    # a package nor the remote chooses a local repository or executable.
+    (root / "repository").write_text(bare.as_posix(), encoding="utf-8")
+    credentials = git_admission.capture_operator_ssh_credentials(
+        {}, identity=None if selection == "agent" else str(root / selection),
+        agent="auto" if selection == "agent" else None,
+        known_hosts=str(root / "known_hosts"),
+    )
+    ssh = Path(os.environ["SYSTEMROOT"]) / "System32" / "OpenSSH" / "ssh.exe"
+    tool = _tool(ssh, credentials)
+    url = f"ssh://{user}@127.0.0.1:{port}/repository.git"
+    source = RepositorySource(url, "127.0.0.1/repository", "ssh")
+    connection = git_admission.NetworkEndpoint(
+        url, url, source.identity, "ssh", "127.0.0.1", port,
+        f"{user}@127.0.0.1", "/repository.git", port, port,
+    )
+    def acquire() -> git_admission.Snapshot:
+        return git_admission.acquire_network(
+            source, LockedCommit("sha1", commit), tool, connection=connection
+        )
+    if selection == "encrypted":
+        with pytest.raises(git_admission.GitAdmissionError) as error:
+            acquire()
+        assert error.value.code == git_admission.SOURCE_UNAVAILABLE
+        assert error.value.failure_class == "ssh-auth-rejected"
+    else:
+        snapshot = acquire()
+        assert snapshot.commit == commit
+        assert [(f.path, f.content) for f in snapshot.files] == [("README.md", b"external tool\n")]
