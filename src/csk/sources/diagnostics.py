@@ -18,6 +18,8 @@ names its subject but never a secret.
 
 from __future__ import annotations
 
+from ..terminal import terminal_text
+
 from typing import Final
 
 from . import errors as source_errors
@@ -155,15 +157,16 @@ def transport_next_steps(
     return "\n".join(lines)
 
 
-def format_diagnostic(code: str, reason: str) -> str:
+def format_diagnostic(code: str, reason: str, *, terminal: bool = True) -> str:
     """Render one stable class as a reason and remediation line."""
 
     try:
         remediation = REMEDIATION_BY_CODE[code]
     except KeyError as exc:
         raise ValueError(f"unknown schema-2 source diagnostic code: {code}") from exc
+    display = terminal_text if terminal else str
     return (
-        f"{code}: {source_errors.sanitize_detail(reason)}\n"
+        f"{code}: {display(source_errors.sanitize_detail(reason))}\n"
         f"remediation: {remediation}"
     )
 

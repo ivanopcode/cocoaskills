@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .terminal import terminal_text
+
 import json
 import os
 import shutil
@@ -112,7 +114,7 @@ def _select_declarations(
         raise GlobalInstallError(
             "Global skill not declared: "
             + ", ".join(unknown)
-            + f"\n  Declared global skills: {available}"
+            + f"\n  Declared global skills: {terminal_text(available)}"
         )
     return [declared[name] for name in requested]
 
@@ -295,7 +297,7 @@ def add_decl(
 def remove_decl(csk_home: Path, name: str) -> None:
     path = global_skillfile(csk_home)
     if not path.exists():
-        raise GlobalInstallError(f"Global Skillfile not found: {path}\n  Run 'csk global init' first.")
+        raise GlobalInstallError(f"Global Skillfile not found: {terminal_text(path)}\n  Run 'csk global init' first.")
     data = _read_global_payload(path)
     skillfile_deprecations.require_writable(data)
     skills = data.get("skills")
@@ -303,7 +305,7 @@ def remove_decl(csk_home: Path, name: str) -> None:
         raise GlobalInstallError("Global Skillfile field 'skills' must be a list")
     kept = [entry for entry in skills if not (isinstance(entry, dict) and entry.get("name") == name)]
     if len(kept) == len(skills):
-        raise GlobalInstallError(f"Global skill not declared: {name}")
+        raise GlobalInstallError(f"Global skill not declared: {terminal_text(name)}")
     data["skills"] = kept
     manifest.parse_manifest(data, path, scope="global")
     _write_json(path, data)
@@ -312,10 +314,10 @@ def remove_decl(csk_home: Path, name: str) -> None:
 def load_manifest(csk_home: Path) -> manifest.ProjectManifest:
     path = global_skillfile(csk_home)
     if not path.exists():
-        raise GlobalInstallError(f"Global Skillfile not found: {path}\n  Run 'csk global init' first.")
+        raise GlobalInstallError(f"Global Skillfile not found: {terminal_text(path)}\n  Run 'csk global init' first.")
     loaded = manifest.load_manifest(global_root(csk_home), scope="global")
     if loaded is None:
-        raise GlobalInstallError(f"Global Skillfile not found: {path}\n  Run 'csk global init' first.")
+        raise GlobalInstallError(f"Global Skillfile not found: {terminal_text(path)}\n  Run 'csk global init' first.")
     if loaded.schema_version == 2:
         raise GlobalInstallError(
             "Global Skillfile schema_version 2 is unsupported; "
@@ -326,11 +328,11 @@ def load_manifest(csk_home: Path) -> manifest.ProjectManifest:
 
 def list_declared(csk_home: Path) -> str:
     global_manifest = load_manifest(csk_home)
-    lines = [f"Global Skillfile: {global_skillfile(csk_home)}"]
+    lines = [f"Global Skillfile: {terminal_text(global_skillfile(csk_home))}"]
     if not global_manifest.skills:
         lines.append("  no skills declared")
     for decl in global_manifest.skills:
-        lines.append(f"  {decl.name} ({decl.ref.kind} {decl.ref.value})")
+        lines.append(f"  {terminal_text(decl.name)} ({terminal_text(decl.ref.kind)} {terminal_text(decl.ref.value)})")
     return "\n".join(lines)
 
 
@@ -517,7 +519,7 @@ def _install_once(
                 installer._check_moved_tags_strict(global_skills_root(csk_home), plans)
             else:
                 for warning in installer._moved_tag_warnings(global_skills_root(csk_home), plans):
-                    result.messages.append(f"global: {warning}")
+                    result.messages.append(f"global: {terminal_text(warning)}")
 
             cache_backend = build_cache.cache_for_manager_home(csk_home)
             result.builds.extend(
@@ -564,7 +566,7 @@ def _install_once(
                         sort_keys=True,
                         separators=(",", ":"),
                     )
-                    result.messages.append(f"global: build {payload}")
+                    result.messages.append(f"global: build {terminal_text(payload)}")
                 for node in nodes:
                     result.messages.append(
                         f"global: {installer._node_summary(node)} (planned)"
@@ -1279,7 +1281,7 @@ def update(
             try:
                 repo = installer._ensure_skill_repo(config, decl, use_persistent_clone=True, stack=None)
                 git_ops.fetch_repo(repo)
-                result.messages.append(f"fetched {decl.source}")
+                result.messages.append(f"fetched {terminal_text(decl.source)}")
             except Exception as exc:  # noqa: BLE001 - report every per-source fetch failure
                 result.errors.append(f"fetch failed {decl.source}: {exc}")
         return result
@@ -1468,9 +1470,9 @@ def _read_global_payload(path: Path) -> dict[str, Any]:
     try:
         data = protocol_json.loads(path.read_bytes())
     except protocol_json.ProtocolJSONError as exc:
-        raise GlobalInstallError(f"Malformed JSON in global Skillfile {path}: {exc}") from exc
+        raise GlobalInstallError(f"Malformed JSON in global Skillfile {terminal_text(path)}: {terminal_text(exc)}") from exc
     if not isinstance(data, dict):
-        raise GlobalInstallError(f"Global Skillfile must contain a JSON object: {path}")
+        raise GlobalInstallError(f"Global Skillfile must contain a JSON object: {terminal_text(path)}")
     return data
 
 

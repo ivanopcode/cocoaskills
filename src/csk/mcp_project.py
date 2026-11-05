@@ -7,6 +7,8 @@ are displayed. The installer publishes staged outputs with the skill targets.
 
 from __future__ import annotations
 
+from .terminal import terminal_text
+
 import itertools
 import hashlib
 import json
@@ -172,9 +174,9 @@ class ReportRow:
 
     def render(self, *, dry_run: bool = False) -> str:
         prefix = "would: " if dry_run else ""
-        path = f" {self.path}" if self.path is not None else " path: unavailable"
+        path = f" {terminal_text(self.path)}" if self.path is not None else " path: unavailable"
         label = "local: cursor" if self.local and self.agent == "cursor" else self.agent
-        return f"{prefix}mcp {self.server} -> {label}{path} ({self.action})"
+        return f"{terminal_text(prefix)}mcp {terminal_text(self.server)} -> {terminal_text(label)}{terminal_text(path)} ({terminal_text(self.action)})"
 
 
 def _ordered_rows(rows: Iterable[ReportRow]) -> tuple[ReportRow, ...]:
@@ -718,7 +720,7 @@ def print_plan(parsed: Mapping[str, declarations.McpDeclaration]) -> None:
             header.env for header in server.headers if isinstance(header, declarations.HeaderRef)
         })
         print(
-            f"MCP plan {name}: {server.transport} {intent}; agents={','.join(decl.agents)}; env={','.join(env) or 'none'}; auth={decl.auth.kind}"
+            f"MCP plan {terminal_text(name)}: {terminal_text(server.transport)} {terminal_text(intent)}; agents={terminal_text(','.join(decl.agents))}; env={terminal_text(','.join(env) or 'none')}; auth={terminal_text(decl.auth.kind)}"
         )
         if server.resolved_launcher is not None:
             launcher = server.resolved_launcher
@@ -732,9 +734,9 @@ def print_plan(parsed: Mapping[str, declarations.McpDeclaration]) -> None:
             # legacy output encodings without altering the approved identity.
             publisher = json.dumps(launcher.publisher, ensure_ascii=True)
             path = json.dumps(launcher.path, ensure_ascii=True)
-            print(f"MCP plan {name}: {label}; publisher={publisher}; path={path}")
+            print(f"MCP plan {terminal_text(name)}: {terminal_text(label)}; publisher={terminal_text(publisher)}; path={terminal_text(path)}")
         elif server.transport == "stdio" and not declarations.is_recognized_runner(server.command or ""):
-            print(f"MCP plan {name}: csk cannot verify what this program runs.")
+            print(f"MCP plan {terminal_text(name)}: csk cannot verify what this program runs.")
 
 
 def review_consent(
@@ -754,7 +756,7 @@ def review_consent(
         if not interactive or not sys.stdin.isatty() or not sys.stdout.isatty():
             raise refusal("mcp_plan_unapproved", "operator approval is required")
         try:
-            answer = input(f"Approve {len(group)} MCP server(s) for {project} ({','.join(group[0].agents)})? [y/N] ")
+            answer = input(f"Approve {len(group)} MCP server(s) for {terminal_text(project)} ({terminal_text(','.join(group[0].agents))})? [y/N] ")
         except (EOFError, KeyboardInterrupt):
             answer = ""
         if answer.strip().lower() not in ("y", "yes"):

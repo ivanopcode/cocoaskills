@@ -8,6 +8,8 @@ directory, or runs a source-aware Go command.
 
 from __future__ import annotations
 
+from ..terminal import terminal_text
+
 import hashlib
 import json
 import ntpath
@@ -406,8 +408,8 @@ def _warn_untested_go_family(family: str, go_path: Path) -> None:
     tested = ", ".join(TESTED_GO_FAMILIES)
     print(
         "go-v1 untested_go_family: Go family "
-        f"{family} at {go_path} is newer than tested families "
-        f"({tested}); csk will use the full go-v1 lockdown.",
+        f"{terminal_text(family)} at {terminal_text(go_path)} is newer than tested families "
+        f"({terminal_text(tested)}); csk will use the full go-v1 lockdown.",
         file=sys.stderr,
     )
 

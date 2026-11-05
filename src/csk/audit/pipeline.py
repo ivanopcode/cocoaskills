@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ..terminal import terminal_text
+
 import fnmatch
 import json
 from dataclasses import dataclass
@@ -215,16 +217,16 @@ def render_reports(reports: tuple[AuditReport, ...]) -> str:
     lines: list[str] = []
     for report in reports:
         lines.append(
-            f"{report.scope}: {report.skill} {report.ref_kind} {report.ref} "
-            f"{report.commit[:7]} {report.decision.value} ({len(report.findings)} finding(s))"
+            f"{terminal_text(report.scope)}: {terminal_text(report.skill)} {terminal_text(report.ref_kind)} {terminal_text(report.ref)} "
+            f"{terminal_text(report.commit[:7])} {terminal_text(report.decision.value)} ({len(report.findings)} finding(s))"
         )
         for finding in report.findings:
             location = ""
             if finding.location is not None:
                 line = finding.location.span[0] if finding.location.span else 1
-                location = f" {finding.location.file}:{line}"
+                location = f" {terminal_text(finding.location.file)}:{terminal_text(line)}"
             evidence = redaction.scrub_text(finding.evidence)
-            lines.append(f"  {finding.severity.value:<8} {finding.id}{location} - {evidence}")
+            lines.append(f"  {terminal_text(finding.severity.value):<8} {terminal_text(finding.id)}{terminal_text(location)} - {terminal_text(evidence)}")
     return "\n".join(lines)
 
 

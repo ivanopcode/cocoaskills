@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .terminal import terminal_text
+
 import hashlib
 import json
 import os
@@ -75,7 +77,7 @@ def warn_unknown_agents(agents: list[str]) -> None:
     if unknown:
         print(
             "warning: unknown agent(s) ignored: "
-            + ", ".join(unknown)
+            + terminal_text(", ".join(unknown))
             + "; known agents: "
             + ", ".join(sorted(known_agents())),
             file=sys.stderr,
