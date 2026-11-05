@@ -3158,7 +3158,7 @@ def _build_private_misses(
                 }
                 if command_spec.modules:
                     command_object["modules"] = list(command_spec.modules)
-                return go_v1.build(
+                return build_repository_pipeline.build_go_v1(
                     go_v1.BuildRequest(
                         toolchain_session=session,
                         source_snapshot=frozen,
