@@ -4557,3 +4557,22 @@ def test_current_curl_unknown_relayed_and_conflicting_frames_fail_closed(stderr:
     # Nearby positive controls prevent reject-all; unknown and body text never authorize fallback.
     assert git_admission._classify_git_failure_output(stderr) == "unclassified"
     assert repository_policy.classify_failure("unclassified") == "forbidden"
+# An unusable local SSH credential opens only declared availability/auth
+# fallback; a policy forbidding fallback must preserve the refusal code.
+@pytest.mark.parametrize('fallback,expected_attempts', [('availability-auth', 2), ('none', 1)])
+def test_local_unusable_ssh_obeys_declared_fallback(fallback, expected_attempts):
+    calls = []
+    def attempt(**kwargs):
+        calls.append(kwargs['endpoint'].url)
+        if len(calls) == 1:
+            raise git_admission.GitAdmissionError(
+                git_admission.SSH_CREDENTIAL_UNUSABLE, 'local key unusable'
+            )
+        return _snapshot()
+    if fallback == 'none':
+        with pytest.raises(transport.TransportResolutionError) as error:
+            transport.acquire_plan(_v1_plan(fallback), LOCK, attempt=attempt)
+        assert error.value.attempts[0].failure_class == 'auth-unavailable'
+    else:
+        transport.acquire_plan(_v1_plan(fallback), LOCK, attempt=attempt)
+    assert len(calls) == expected_attempts

@@ -993,7 +993,7 @@ csk config show
 **Синопсис:**
 
 ```bash
-usage: csk config build-ssh [-h] {add,list,remove} ...
+usage: csk config build-ssh [-h] {add,doctor,list,remove} ...
 ```
 
 **Аргументы и флаги:**
@@ -1043,6 +1043,44 @@ usage: csk config build-ssh add [-h] [--agent [SOCKET]] [--identity PATH]
 * `--agent [SOCKET]`: использовать сокет SSH-агента оператора. Голый флаг или значение `auto` подключают `SSH_AUTH_SOCK`.
 * `--identity PATH`: путь к файлу идентичности. Указание файла `.pub` при заданном `--agent` фиксирует (пинит) предъявляемый ключ агента; без `--agent` определяет путь к приватному ключу на диске.
 * `--known-hosts PATH`: переопределение файла known_hosts для выбранного скоупа.
+
+### csk config build-ssh doctor
+
+Read-only local metadata inspection and operator setup guidance:
+
+```text
+csk config build-ssh doctor [scope-or-identity] [--identity PATH] [--agent SOCKET] [--all-os]
+```
+
+The longest matching configured scope is used; explicit options and
+`CSK_BUILD_SSH_*` take precedence. `--agent auto` selects `SSH_AUTH_SOCK`.
+Without `--all-os`, instructions fit the current OS. No network, prompts,
+signatures, token access or agent mutation occurs. Missing tools and inconclusive
+metadata report `unknown`, never an unusable-key refusal.
+
+SSH prompts remain disabled. A proven unusable selection fails locally with
+`build_repository_ssh_credential_unusable`, classified as `auth-unavailable` so
+an explicitly declared transport fallback remains eligible. Prefer a private
+identity path with an agent: SSH can use the loaded key or the file. A `.pub`
+only pins a key already available in the selected agent.
+
+The agent and its keys are managed by the person who owns the computer; csk
+does not manage them. When loading keys, use `ssh-add -t 1h <private-key>` with
+a lifetime chosen for the task and no longer than needed. Controlling that
+lifetime is a separate security matter for the operator.
+
+On macOS the system agent cannot sign with USB security keys; adding one masks
+the file route. The operator can undo this with `ssh-add -d <key>.pub`. Use
+Homebrew OpenSSH and its agent for hardware keys; a PIN-requiring key in an
+agent additionally needs owner-configured askpass/display support. Doctor
+prints the commands and caveats. Custom agents such as 1Password can be
+selected with `--agent <socket> --identity <key>.pub`.
+
+All hardware routes are unverified on a real token. Linux guidance is
+unverified here; Linux external builds remain unsupported. All Windows routes
+are unverified, and current csk agent-pipe/wrapper limitations remain. Doctor
+prints Windows preparation steps without claiming that these limitations are
+resolved.
 
 ### csk config build-ssh list
 
