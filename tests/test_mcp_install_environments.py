@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from test_mcp_install_acceptance import (
 )
 from test_mcp_project_install import project_cli, install
 from test_mcp_status import _status
+from test_mcp_command_resolution import runner_guard
 
 from csk import mcp_declarations as declarations, mcp_project, protocol_json
 
@@ -137,8 +139,10 @@ def test_environment_selection_reports_every_known_pair(
 
 
 @pytest.mark.parametrize("dry_run", [False, True])
-def test_unsupported_only_has_no_writes_or_consent(tmp_path, dry_run):
+def test_unsupported_only_has_no_writes_or_consent(tmp_path, dry_run, monkeypatch):
     # A known unsupported-only stdio declaration neither writes any tree nor prompts for code publication.
+    # Use an owned runner: system-installed npx is intentionally refused by inode policy.
+    marker = runner_guard(tmp_path, monkeypatch, "") if os.name != "nt" else None
     case = _case(tmp_path / "unsupported")
     case.skillfile["agents"] = ["claude_code"]
     case.declare({})
@@ -179,6 +183,7 @@ def test_unsupported_only_has_no_writes_or_consent(tmp_path, dry_run):
         for agent in ["muse", "opencode", "pi"]
     ]
     assert _snapshot(case.project, case.home, Path(case.env["HOME"])) == before
+    assert marker is None or not marker.exists()
 
 
 @pytest.mark.parametrize("missing", [False, True])
@@ -324,13 +329,14 @@ def test_consent_binds_new_writable_agents_and_excludes_unsupported(
 
 
 def test_unsupported_batch_launcher_has_no_windows_write_capability(
-    project_cli, monkeypatch
+    project_cli, monkeypatch, tmp_path
 ):
     # The simulated Windows capability check skips a reporting-only launcher but still refuses a writable batch target.
     import sys
     from types import SimpleNamespace
 
     root, home, declare = project_cli
+    marker = runner_guard(tmp_path, monkeypatch, "") if os.name != "nt" else None
     monkeypatch.setattr(
         mcp_project,
         "sys",
@@ -358,6 +364,7 @@ def test_unsupported_batch_launcher_has_no_windows_write_capability(
         mcp_project.McpProjectError, match="mcp_windows_batch_unsupported"
     ):
         mcp_project.plan_project(root, [agent for agent, _ in SURFACES], raw, home)
+    assert marker is None or not marker.exists()
     assert _snapshot(root, home) == before
 
 
