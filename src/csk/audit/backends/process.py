@@ -4,13 +4,15 @@ from __future__ import annotations
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 from .base import AuditBackendError
 
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 
-def run(argv, *, input, cwd, env, timeout, **_):
+def run(argv: list[str], *, input: bytes, cwd: Path, env: dict[str, str],
+        timeout: float, **_: object) -> subprocess.CompletedProcess[bytes]:
     deadline = time.monotonic() + timeout
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, cwd=cwd, env=env)
@@ -35,7 +37,10 @@ def run(argv, *, input, cwd, env, timeout, **_):
         except (BrokenPipeError, OSError):
             pass
         finally:
-            proc.stdin.close()
+            try:
+                proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
 
     workers = [threading.Thread(target=drain, args=(proc.stdout, 0, MAX_RESPONSE_BYTES), daemon=True),
                threading.Thread(target=drain, args=(proc.stderr, 1, 2001), daemon=True),
