@@ -65,7 +65,7 @@ inventories come from the retained source snapshot; context inventories come
 from the install marker. The diagnostic names the skill and member, shows the
 offending path relative to `$CSK_HOME` when possible, and prints a shell-quoted
 remedy that removes only the foreign entry or its foreign enclosing directory.
-Paths containing control characters use ANSI-C quoting (`$'...\\n...'`),
+Paths containing control characters use ANSI-C quoting (`$'...\n...'`),
 which preserves the exact path without raw terminal controls. Run these remedies
 in bash or zsh; this form is not supported as a portable POSIX `sh` or fish command.
 Paths without controls retain ordinary shell quoting.
