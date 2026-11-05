@@ -61,7 +61,7 @@ class AuditInputTooLarge(AuditBackendError):
 def audit_plans(
     plans: list[installer.SkillPlan], config: GlobalConfig, *, scope: str, record: bool = True,
 ) -> tuple[AuditReport, ...]:
-    reports = []
+    reports: list[AuditReport] = []
     for plan in plans:
         paths = _admit_snapshot(plan, config.audit.max_request_bytes)
         # Hashing, detectors and the backend consume the same bounded private
