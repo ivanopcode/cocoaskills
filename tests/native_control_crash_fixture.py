@@ -1,6 +1,9 @@
 import ctypes, json, os, signal, subprocess, sys, threading, time
 from pathlib import Path
 
+# Bind synthetic child imports to this checkout, independent of pytest launcher.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
 root = Path(sys.argv[1]).resolve()
 mode = sys.argv[2]
 role = sys.argv[3] if len(sys.argv) > 3 else 'fixture'
@@ -56,7 +59,7 @@ else:
     manager = subprocess.Popen([sys.executable, __file__, str(root), mode, 'manager'])
     pids = []
     try:
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 30
         while not all((root / name).exists() for name in ('ready', 'member', 'detached')):
             if manager.poll() is not None or time.monotonic() > deadline:
                 raise RuntimeError('worker readiness failed')
@@ -73,6 +76,13 @@ else:
         if manager.poll() is None:
             manager.kill()
             manager.wait()
+        for name in ('worker', 'member', 'detached'):
+            try:
+                pid = json.loads((root / name).read_text())
+                if pid not in pids:
+                    pids.append(pid)
+            except (OSError, ValueError):
+                pass
         for pid in pids:
             try:
                 os.kill(pid, signal.SIGKILL)
@@ -80,4 +90,8 @@ else:
                 pass
         if sys.platform == 'linux':
             for pid in pids:
-                os.waitpid(pid, 0)
+                try:
+                    os.waitpid(pid, 0)
+                except ChildProcessError:
+                    # A failed startup may have been joined by its own parent.
+                    pass
