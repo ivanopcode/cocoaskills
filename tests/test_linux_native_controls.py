@@ -89,7 +89,11 @@ def test_fixed_descriptor_collisions_are_not_overwritten(monkeypatch):
             g._PreparedWorkerLaunch("linux")
         assert failure.value.code == g.CODE_CONTROL_UNAVAILABLE
         assert os.fstat(read_fd) == original
-        monkeypatch.setattr(g, "_WORKER_LAUNCH_FDS", (read_fd + 100,))
+        import fcntl
+        # Reserve an actually available high slot, then release it for the allocator.
+        candidate = fcntl.fcntl(read_fd, fcntl.F_DUPFD_CLOEXEC, read_fd + 100)
+        os.close(candidate)
+        monkeypatch.setattr(g, "_WORKER_LAUNCH_FDS", (candidate,))
         capability = g._PreparedWorkerLaunch("linux")
         try:
             # The parent copy stays close-on-exec; only pass_fds admits the child.
@@ -181,8 +185,12 @@ def test_sigkill_before_publication_never_exposes_partial_artifact(tmp_path):
         assert select.select([read_fd], [], [], 10)[0], "publisher never reached rename"
         assert os.read(read_fd, 5) == b"ready"
     finally:
-        os.kill(child, signal.SIGKILL)
-        _, status = os.waitpid(child, 0)
+        # This exact, unreaped child pins its PID. If it already exited, reap
+        # without signaling; never signal a number after ownership was released.
+        joined, status = os.waitpid(child, os.WNOHANG)
+        if joined == 0:
+            os.kill(child, signal.SIGKILL)
+            _, status = os.waitpid(child, 0)
         os.close(read_fd)
     assert os.WTERMSIG(status) == signal.SIGKILL
     assert not _entry_path(home, build_input).exists()
@@ -219,7 +227,8 @@ else:
     raise AssertionError("low descriptor hard limit was accepted")
 assert resource.getrlimit(resource.RLIMIT_NOFILE) == (64,64)
 '''
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=10)
+    script = "import sys; sys.path.insert(0, " + repr(str(Path(g.__file__).resolve().parents[2])) + ")\n" + script
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
 
 
@@ -298,3 +307,227 @@ def test_linux_group_signal_failure_still_reaps_owned_worker(monkeypatch):
         if process.poll() is None:
             process.kill()
         process.wait()
+
+
+@pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="native POSIX pipe watchdog")
+@pytest.mark.parametrize("case", ["queued-open", "busy-closed", "blocked-closed"])
+def test_orderly_watchdog_shutdown_reads_frame_and_exits_zero(case):
+    # Real session leaders retain the frame and exit 0 for open/closed queued
+    # input and a blocked reader; bounded artificial reader work is not a stall guarantee.
+    script = r"""
+import os, sys, time
+sys.path.insert(0, sys.argv[1])
+from csk.builds import go_v1 as g
+watch = g._PosixManagerLossWatch(sys.stdin.buffer, os.getppid())
+os.write(1, b'W')
+if sys.argv[2] != 'blocked-closed':
+    deadline = time.monotonic() + (1.0 if sys.argv[2] == "busy-closed" else .3)
+    while time.monotonic() < deadline:
+        sum(range(100))
+message = g._read_message(sys.stdin.buffer)
+watch.close()
+assert message == {'kind': 'shutdown', 'nonce': 'test'}
+os.write(1, b'frame-read')
+"""
+    for _ in range(3):
+        process = subprocess.Popen([sys.executable, "-B", "-c", script,
+                                    str(Path(g.__file__).resolve().parents[2]), case],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, start_new_session=True)
+        try:
+            assert process.stdout.read(1) == b"W"
+            g._write_message(process.stdin, {"kind": "shutdown", "nonce": "test"})
+            if case != "queued-open":
+                process.stdin.close()
+            assert process.wait(timeout=30) == 0, process.stderr.read()
+            assert process.stdout.read() == b"frame-read"
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            for stream in (process.stdin, process.stdout, process.stderr):
+                stream.close()
+
+
+def test_internal_linux_records_do_not_alias_macos(monkeypatch):
+    # Same mechanisms today, but changing the macOS row cannot rewrite Linux's row.
+    linux = g._control_records("linux")
+    assert linux == g._control_records(g.PLATFORM_MACOS)
+    assert linux is not g._control_records(g.PLATFORM_MACOS)
+    monkeypatch.setattr(g, "_NATIVE_CONTROL_PLATFORMS", {g.PLATFORM_MACOS: {}})
+    assert g._control_records("linux") == linux
+    assert g._control_records(g.PLATFORM_MACOS) == {}
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="native capability probe")
+def test_linux_capability_probe_detects_inheritable_allocation(monkeypatch):
+    # The probe observes the allocator's output; it cannot repair a planted violation.
+    control = g.CONTROL_INHERITED_HANDLE_RESTRICTION
+    assert g._probe_linux_control(control, g.ResourceLimits())
+    prepare = g._PreparedWorkerLaunch._prepare_linux
+    def inheritable(self, record):
+        prepare(self, record)
+        os.set_inheritable(self._read_fd, True)
+    monkeypatch.setattr(g._PreparedWorkerLaunch, "_prepare_linux", inheritable)
+    assert not g._probe_linux_control(control, g.ResourceLimits())
+
+
+@pytest.mark.parametrize("stage", ["capability", "runtime", "watch"])
+def test_worker_startup_refusal_is_framed(monkeypatch, stage):
+    # Startup rejections use the failure frame and status 3, before any session work.
+    import io
+    output = io.BytesIO()
+    context = g._WorkerLaunchContext(parent_pid=os.getpid(), secret=b"x" * g._WORKER_LAUNCH_SECRET_BYTES)
+    def refuse(*args, **kwargs):
+        raise g.GoV1Error(g.CODE_CONTROL_UNAVAILABLE, "planted startup refusal")
+    monkeypatch.setattr(g, "_consume_worker_launch_context", refuse if stage == "capability" else lambda: context)
+    monkeypatch.setattr(g, "worker_runtime_proof", refuse if stage == "runtime" else lambda _: {})
+    monkeypatch.setattr(g, "_PosixManagerLossWatch", refuse)
+    monkeypatch.setattr(sys, "platform", "linux")
+    status = g.run_worker(io.BytesIO(), output, worker_executable=Path(sys.executable))
+    assert status == 3
+    output.seek(0)
+    assert g._read_message(output) == {"kind": "failure", "nonce": "", "failure": {
+        "code": g.CODE_CONTROL_UNAVAILABLE, "detail": "planted startup refusal"}}
+
+
+@pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="POSIX orderly exit")
+@pytest.mark.parametrize("exit_code", [0, 3])
+def test_orderly_exit_requires_zero_and_retains_linux_child(exit_code):
+    # A normal exit is accepted, a nonzero exit is rejected, and Linux's PID
+    # remains pinned until domain teardown; neither path signals a reused PID.
+    process = subprocess.Popen([sys.executable, "-c", f"raise SystemExit({exit_code})"],
+                               start_new_session=True)
+    platform = "linux" if sys.platform == "linux" else g.PLATFORM_MACOS
+    try:
+        if exit_code:
+            with pytest.raises(g.GoV1Error, match="did not exit cleanly") as failure:
+                g._require_orderly_worker_exit(process, platform)
+            assert failure.value.code == g.CODE_WORKER_PROTOCOL_INVALID
+        else:
+            g._require_orderly_worker_exit(process, platform)
+        if platform == "linux":
+            assert process.returncode is None
+            status = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+            assert status.si_status == exit_code
+    finally:
+        if process.poll() is None:
+            process.kill()
+        assert process.wait() == exit_code
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX watchdog stop interleaving")
+def test_watchdog_rechecks_stop_after_observation(monkeypatch):
+    # A stop set during the last observation suppresses killpg, even with an
+    # observation error; this plants the close-vs-poll interleaving without a signal.
+    import select
+    import threading
+    read_fd, write_fd = os.pipe()
+    observed = threading.Event()
+    release = threading.Event()
+    killed = []
+    class Poller:
+        def register(self, *args):
+            pass
+        def poll(self, timeout):
+            observed.set()
+            assert release.wait(5)
+            raise OSError("planted observation failure during close")
+    monkeypatch.setattr(select, "poll", Poller)
+    monkeypatch.setattr(os, "getpgrp", os.getpid)
+    monkeypatch.setattr(os, "getsid", lambda _: os.getpid())
+    monkeypatch.setattr(os, "killpg", lambda *args: killed.append(args))
+    with os.fdopen(read_fd, "rb") as stream:
+        watch = g._PosixManagerLossWatch(stream, os.getppid())
+        try:
+            assert observed.wait(5)
+            watch._stop.set()
+            release.set()
+            watch.close()
+            assert killed == []
+        finally:
+            release.set()
+            watch.close()
+            os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="POSIX manager shutdown")
+@pytest.mark.parametrize("exit_code", [0, 3])
+def test_manager_keeps_shutdown_channel_open_and_checks_exit(tmp_path, monkeypatch, exit_code):
+    # The real manager teardown keeps stdin open through orderly exit, accepts 0,
+    # rejects 3, and still completes native domain cleanup without changing the exit code.
+    from test_builds_go_v1 import _bare_domain, _bare_client
+    # Transport/control test only: identity qualification is a separate contract.
+    cache = tmp_path / "worker-cache"
+    cache.mkdir()
+    identity = SimpleNamespace(verify=lambda: None)
+    plan = SimpleNamespace(executable=identity, process_identity=identity, worker_cache=cache)
+    platform = "linux" if sys.platform == "linux" else g.PLATFORM_MACOS
+    domain = _bare_domain(platform)
+    client, _ = _bare_client(plan, domain)
+    script = """
+import sys
+sys.path.insert(0, sys.argv[1])
+from csk.builds import go_v1 as g
+assert g._read_message(sys.stdin.buffer)['kind'] == 'shutdown'
+raise SystemExit(int(sys.argv[2]))
+"""
+    process = subprocess.Popen([sys.executable, "-c", script,
+                                str(Path(g.__file__).resolve().parents[2]), str(exit_code)],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, start_new_session=True)
+    client.process = process
+    require_exit = g._require_orderly_worker_exit
+    checked = []
+    def check(process, platform):
+        assert not process.stdin.closed
+        checked.append(True)
+        require_exit(process, platform)
+    monkeypatch.setattr(g, "_require_orderly_worker_exit", check)
+    try:
+        if exit_code:
+            with pytest.raises(g.GoV1Error, match="did not exit cleanly") as failure:
+                client.teardown()
+            assert failure.value.code == g.CODE_WORKER_PROTOCOL_INVALID
+        else:
+            client.teardown()
+        assert checked == [True]
+        assert process.returncode == exit_code
+        assert process.stdin.closed
+        assert domain.terminated
+    finally:
+        client._deadline_timer.cancel()
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            stream.close()
+
+
+@pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="POSIX watchdog grace")
+def test_unhandled_pipe_hangup_expires_with_live_manager():
+    # A permanently busy reader cannot disable loss cleanup; a shortened test
+    # grace expires even while the parent is alive. Orderly cases above are the controls.
+    script = """
+import os, sys, time
+sys.path.insert(0, sys.argv[1])
+from csk.builds import go_v1 as g
+g._WORKER_SHUTDOWN_GRACE = .1
+watch = g._PosixManagerLossWatch(sys.stdin.buffer, os.getppid())
+os.write(1, b'W')
+time.sleep(30)
+"""
+    process = subprocess.Popen([sys.executable, "-c", script,
+                                str(Path(g.__file__).resolve().parents[2])],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        assert process.stdout.read(1) == b"W"
+        process.stdin.close()
+        assert process.wait(timeout=10) == -9
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            stream.close()
