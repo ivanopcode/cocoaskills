@@ -128,3 +128,29 @@ def test_bounded_process(tmp_path, monkeypatch):
     import subprocess
     with pytest.raises(subprocess.TimeoutExpired):
         run('import time; time.sleep(10)', timeout=0.1)
+
+
+def test_generated_assignment_variants():
+    # Explicit name/value/boundary combinations complement fragment fuzzing;
+    # ordinary assignments remain visible while every legacy-hidden marker stays hidden.
+    for name in ('TOKEN', 'MY_PRIVATE_KEY', 'COMPASS', 'COLOR', '9KEY', 'éKEY', '_SECRET'):
+        for prefix in ('', 'COLOR=', 'x', ' ', '\n', 'TOKEN='):
+            for value in ('SYNTHSECRET', 'TOKEN=SYNTHSECRET', '"SYNTHSECRET"', "'SYNTHSECRET'", '`SYNTHSECRET`'):
+                text = prefix + name + '=' + value
+                assert redaction.scrub_text(text) == old_scrub(text)
+
+
+@pytest.mark.skipif(not hasattr(os, 'mkfifo'), reason='FIFO replacement requires POSIX')
+def test_fifo_replacement_after_admission(tmp_path):
+    # A regular path replaced with a FIFO is rejected without blocking on open.
+    source = tmp_path / 'a'
+    source.write_bytes(b'ok')
+    original = pipeline._admit_snapshot
+    def replace_with_fifo(plan, limit):
+        paths = original(plan, limit)
+        source.unlink()
+        os.mkfifo(source)
+        return paths
+    with patch.object(pipeline, '_admit_snapshot', side_effect=replace_with_fifo):
+        with pytest.raises(AuditBackendError, match='audit.input.changed: expected regular file'):
+            pipeline.audit_plans([Plan(tmp_path)], SimpleNamespace(audit=SimpleNamespace(max_request_bytes=100)), scope='test')
