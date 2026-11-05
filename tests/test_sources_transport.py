@@ -4500,3 +4500,60 @@ def test_line_partition_keeps_remote_prefixed_physical_lines_prefixed(
     """The splitter alphabet is LF only: CR, VT and FF never break a line."""
 
     assert git_admission._classify_git_failure_output(envelope) == expected
+
+
+# Captured with Git 2.53.0 and libcurl 8.18.0 (GnuTLS) on Ubuntu 26.04.
+# Only ephemeral loopback ports and private CA paths have been normalized.
+_CURRENT_CURL_REFUSAL = (
+    "fatal: unable to access 'https://127.0.0.1:37407/kit.git/': "
+    "Failed to connect to 127.0.0.1 port 37407 after 0 ms: Could not connect to server\n"
+)
+_CURRENT_GNUTLS_REFUSAL = (
+    "fatal: unable to access 'https://127.0.0.1:40949/kit.git/': "
+    "SSL certificate verification failed: certificate signer not trusted. "
+    "(CAfile: /tmp/fixture/ca.pem CRLfile: none)\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        (_CURRENT_CURL_REFUSAL, "connection-refused"),
+        (_CURRENT_GNUTLS_REFUSAL, "tls"),
+        # Captured with the same Git 2.53.0 and extracted Ubuntu libcurl 8.5.0.
+        (
+            "fatal: unable to access 'https://127.0.0.1:41777/kit.git/': "
+            "Failed to connect to 127.0.0.1 port 41777 after 0 ms: Couldn't connect to server\n",
+            "connection-refused",
+        ),
+        (
+            "fatal: unable to access 'https://127.0.0.1:47067/kit.git/': "
+            "server certificate verification failed. CAfile: none CRLfile: none\n",
+            "tls",
+        ),
+    ],
+)
+def test_current_and_legacy_curl_transport_frames(stderr: str, expected: str) -> None:
+    # Complete local records classify; TLS refusal still forbids endpoint fallback.
+    assert git_admission._classify_git_failure_output(stderr) == expected
+    if expected == "tls":
+        assert repository_policy.classify_failure(expected) == "forbidden"
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "remote: " + _CURRENT_GNUTLS_REFUSAL,
+        "remote: body\r" + _CURRENT_GNUTLS_REFUSAL,
+        _CURRENT_GNUTLS_REFUSAL.replace("fatal: ", ""),
+        _CURRENT_GNUTLS_REFUSAL.replace("certificate signer not trusted", "unknown failure"),
+        _CURRENT_GNUTLS_REFUSAL.replace(" CRLfile: none)", ""),
+        _CURRENT_GNUTLS_REFUSAL + _CURRENT_CURL_REFUSAL,
+        _CURRENT_CURL_REFUSAL.replace("Could not connect to server", "unknown failure"),
+        "fatal: unable to access 'https://example.org/': unknown SSL failure\n",
+    ],
+)
+def test_current_curl_unknown_relayed_and_conflicting_frames_fail_closed(stderr: str) -> None:
+    # Nearby positive controls prevent reject-all; unknown and body text never authorize fallback.
+    assert git_admission._classify_git_failure_output(stderr) == "unclassified"
+    assert repository_policy.classify_failure("unclassified") == "forbidden"

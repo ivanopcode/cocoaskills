@@ -34,11 +34,12 @@ def test_env_sh_never_introduces_empty_path_entry(tmp_path, shell, initial_path)
         pytest.skip(f"{shell} not available")
     project = tmp_path / "project with spaces"
     env_files.write_env_files(project)
+    # Set the tested PATH after mandatory system zshenv; retain exact empty/set assertions.
     arguments = ["-dfc"] if shell == "zsh" else ["--noprofile", "--norc", "-c"]
     completed = subprocess.run(
-        [executable, *arguments, '. "$ENV_FILE" || exit; printf "%s\\n" "$CSK_PROJECT_ROOT" "$PATH"'],
+        [executable, *arguments, 'PATH=$INITIAL_PATH; export PATH; . "$ENV_FILE" || exit; printf "%s\\n" "$CSK_PROJECT_ROOT" "$PATH"'],
         cwd=tmp_path,
-        env={**os.environ, "PATH": initial_path, "ENV_FILE": str(project / ".agents" / "env.sh")},
+        env={**os.environ, "PATH": initial_path, "INITIAL_PATH": initial_path, "ENV_FILE": str(project / ".agents" / "env.sh")},
         text=True, capture_output=True, timeout=120, check=False,
     )
     assert completed.returncode == 0, completed.stderr

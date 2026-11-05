@@ -1654,6 +1654,13 @@ def _evidence_class(record: str) -> str | None:
         r"fatal: unable to access 'https://[^']+': server certificate verification failed.*",
         record,
     ) or re.fullmatch(
+        # GnuTLS/libcurl 8.18 names the local verification failure explicitly.
+        # Require the captured signer failure and complete CA/CRL frame;
+        # unknown SSL errors must not become TLS evidence.
+        r"fatal: unable to access 'https://[^']+': ssl certificate verification "
+        r"failed: certificate signer not trusted\. \(cafile: [^\r\n]+ crlfile: none\)",
+        record,
+    ) or re.fullmatch(
         # curl's OpenSSL backend also renders SSL_get_verify_result via
         # X509_verify_cert_error_string, followed by the nonzero result code
         # (lib/vtls/openssl.c, Curl_ossl_check_peer_cert). These are local
@@ -1700,7 +1707,7 @@ def _evidence_class(record: str) -> str | None:
         r"ssh: connect to host [a-z0-9][a-z0-9.-]* port [0-9]+: connection refused",
         record,
     ) or re.fullmatch(
-        r"fatal: unable to access 'https://[^']+': failed to connect to [a-z0-9][a-z0-9.-]* port [0-9]+ after [0-9]+ ms: couldn't connect to server",
+        r"fatal: unable to access 'https://[^']+': failed to connect to [a-z0-9][a-z0-9.-]* port [0-9]+ after [0-9]+ ms: (?:couldn't|could not) connect to server",
         record,
     ) or re.fullmatch(
         r"fatal: unable to access 'https://[^']+': failed to connect to "
