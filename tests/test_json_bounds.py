@@ -22,12 +22,13 @@ def test_depth_admission(decode, monkeypatch):
 
 # A sparse oversized document must refuse without opening or reading content;
 # the same reader admits a valid file before the planted forbidden-open guard.
-def test_sparse_read_refuses_before_open(tmp_path, monkeypatch):
+@pytest.mark.parametrize("size", [pj.MAX_INPUT_BYTES + 1, 4 * 1024**3])
+def test_sparse_read_refuses_before_open(tmp_path, monkeypatch, size):
     path = tmp_path / 'Skillfile.json'
     path.write_bytes(b'{}')
     assert pj.loads(pj.read_bytes(path)) == {}
     with path.open('wb') as stream:
-        stream.truncate(pj.MAX_INPUT_BYTES + 1)
+        stream.truncate(size)
     def forbidden(*args, **kwargs):
         pytest.fail('oversized input was opened')
     monkeypatch.setattr(Path, 'open', forbidden)
@@ -80,3 +81,31 @@ def test_standalone_depth():
     runtime._check_json_depth('[' * pj.MAX_DEPTH + '0' + ']' * pj.MAX_DEPTH)
     with pytest.raises(ValueError, match='maximum depth'):
         runtime._check_json_depth('[' * 1200 + '0' + ']' * 1200)
+
+
+# A multi-GB marker must produce the existing typed non-current verdict before
+# opening content; its valid JSON control passes the same file admission gate.
+def test_sparse_marker_status(tmp_path, monkeypatch):
+    from csk import install_marker
+    path = tmp_path / '.csk-install.json'
+    path.write_bytes(b'{}')
+    assert pj.loads(pj.read_bytes(path)) == {}
+    with path.open('wb') as stream:
+        stream.truncate(4 * 1024**3)
+    def forbidden(*args, **kwargs):
+        pytest.fail('oversized marker was opened')
+    monkeypatch.setattr(Path, 'open', forbidden)
+    verdict = install_marker.evaluate_marker_status(path, None)
+    assert not verdict.current
+    assert 'maximum size' in verdict.detail
+
+
+# Deep valid JSON must be translated at the real manifest entry point rather
+# than leaking RecursionError; an ordinary empty manifest remains valid.
+def test_deep_manifest_typed_refusal(tmp_path):
+    path = tmp_path / 'Skillfile.json'
+    path.write_text('{"schema_version":1,"skills":[]}')
+    assert manifest.load_manifest(tmp_path) is not None
+    path.write_text('[' * 1200 + '0' + ']' * 1200)
+    with pytest.raises(manifest.ManifestError, match='maximum depth'):
+        manifest.load_manifest(tmp_path)

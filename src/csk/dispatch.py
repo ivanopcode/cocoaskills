@@ -486,7 +486,7 @@ def _installed_consumer_roots(
             f"migration"
         ], True
     try:
-        data = protocol_json.loads(raw)
+        data = protocol_json.loads_compatible(raw)
     except (UnicodeDecodeError, ValueError):
         return set(), [
             f"dispatch consumers record {path} is not valid JSON; install "
