@@ -359,3 +359,12 @@ csk shell-init --install
 CocoaSkill хранит отдельный блок для каждого проекта/worktree между `# CocoaSkill project <key>` и `# End CocoaSkill project <key>`. Непрозрачный ключ определяется метаданными worktree и путём к корню проекта относительно репозитория. При обновлении меняется только собственный блок; остальные блоки и пользовательские байты остаются без изменений. Все операции записи выполняются по очереди под OS lock в постоянном файле `$GIT_COMMON_DIR/csk-exclude.lock`. При завершении процесса ОС освобождает lock; replay и rollback транзакции объединяют с текущим файлом только записанный блок проекта. Не удаляйте lock-файл, пока csk работает. Старые exclude-блоки без ключа сохраняются как существующие правила; удаляйте устаревшие записи вручную.
 
 In 0.21.x an existing top-level `ignore_mode` field still selects the effective mode until migration. Run `csk ignore-mode show` to see the mode and its source. Use `csk ignore-mode set gitignore` to select a managed project block, or `csk ignore-mode set exclude` for local Git excludes. The switch preserves user rules and removes only the deprecated field. Without that field, block location selects the mode and exclude is the default. Global/hybrid modes are unchanged.
+
+
+For local SSH credential problems, run `csk config build-ssh doctor <host/path>`
+(or add `--all-os`). It makes no network connection or agent changes. See
+[the doctor reference](cli.md#csk-config-build-ssh-doctor) for lifetime ownership,
+public-key pins, hardware-agent traps and unverified platform routes. Prefer
+a private identity path even with an agent so both loaded and file states
+can work; passphrase-protected files still need a capable loaded agent under
+the current non-prompting SSH policy.
