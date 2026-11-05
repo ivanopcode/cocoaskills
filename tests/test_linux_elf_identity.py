@@ -237,3 +237,20 @@ def test_loader_scope_flags(tag, value):
     with pytest.raises(go_v1.GoV1Error) as error:
         elf.parse_elf(bytes(data))
     assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+
+
+# Match the existing interpreter resolver's sixteen-step walk budget: a
+# fifteen-link control resolves; adding the sixteenth link refuses.
+def test_link_walk_budget(layout, tmp_path):
+    executable, _ = layout
+    path = executable
+    for i in range(15):
+        link = tmp_path / f'link-{i}'
+        link.symlink_to(path)
+        path = link
+    assert linux.capture(path).identity.path == executable
+    extra = tmp_path/'extra-link'
+    extra.symlink_to(path)
+    with pytest.raises(go_v1.GoV1Error) as error:
+        linux.capture(extra)
+    assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
