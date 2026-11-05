@@ -118,6 +118,8 @@ def parse_elf(data: bytes) -> ELF:
         if s.size != len(interpreter) + 1:
             raise refuse("trailing interpreter bytes")
     d = dynamic[0]
+    if mapped(d.address, d.size) != d.offset:
+        raise refuse("dynamic table differs from loaded mapping")
     if d.size % 16 or not 0 < d.size // 16 <= MAX_DYNAMIC:
         raise refuse("invalid dynamic bounds")
     tags: dict[int, int] = {}
@@ -136,6 +138,10 @@ def parse_elf(data: bytes) -> ELF:
             tags[tag] = value
     if not terminated or 5 not in tags or not 0 < tags.get(10, 0) <= MAX_STRINGS:
         raise refuse("missing dynamic terminator or string table")
+    if (any(tag in tags for tag in (16, 0x6FFFFEFC, 0x6FFFFEFB, 0x7FFFFFFD, 0x7FFFFFFF))
+            or tags.get(30, 0) & ~0x18
+            or tags.get(0x6FFFFFFB, 0) & ~(1 | 0x08000000)):
+        raise refuse("unsupported loader scope, audit or filter flags")
     strings = span(mapped(tags[5], tags[10]), tags[10])
     needed = tuple(name(strings, off) for off in needed_offsets)
     if len(set(needed)) != len(needed) or any(not n or "/" in n for n in needed):

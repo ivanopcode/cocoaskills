@@ -606,3 +606,8 @@ Run `PYTHONDONTWRITEBYTECODE=1 uv run python .scripts/scan_mcp_base_commands.py 
 for a name/stat-only base-system snapshot. Review it with the documented package
 families in `tests/fixtures/mcp/base-system-commands.json`; runtime policy data
 is committed in `src/csk/mcp_base_commands.py`. Neither scanner executes programs.
+
+The isolated Linux ELF identity developer checks are documented in
+[Linux ELF identity slice](docs/design/linux-elf-identity-slice.md). Run
+`python -m pytest -q tests/test_linux_elf_identity.py` and `python -m mypy`;
+keep scratch logs in `.temp/`. These checks do not enable Linux source builds.
