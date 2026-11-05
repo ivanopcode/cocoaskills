@@ -136,7 +136,18 @@
 
    Результат: команда `csk --version` выводит версию CocoaSkills.
 
-2. Перейдите в каталог проекта и инициализируйте конфигурацию:
+2. Configure credentials for private build repositories before installing skills.
+   SSH is the default. With the matching key already loaded in your agent, run:
+
+   ```bash
+   csk config build-ssh add git.example.com/team --agent auto --identity ~/.ssh/build_key.pub
+   ```
+
+   The command saves an operator-owned scope. Follow the
+   [SSH key setup guide](docs/ssh-key-setup.md) for file keys, passphrase keys,
+   hardware keys, platform limits and custom agents such as 1Password.
+
+3. Перейдите в каталог проекта и инициализируйте конфигурацию:
 
    ```bash
    cd /path/to/project
@@ -145,7 +156,7 @@
 
    Результат: команда создаёт манифест `Skillfile.json` с начальной конфигурацией проекта и записывает блок директорий `.agents/`, `.claude/skills/`, `.codex/skills/`, `.cursor/rules/`, `.gemini/skills/` и файла `Skillfile.dev.json` в локальный `$GIT_COMMON_DIR/info/exclude`. `.gitignore` не меняется. Linked worktrees используют общий exclude-файл.
 
-3. Добавьте объявление скилла в проект:
+4. Добавьте объявление скилла в проект:
 
    ```bash
    csk add skill-tracker --git git@gitlab.example.com:skills/skill-tracker.git --tag v1.0.0
@@ -153,7 +164,7 @@
 
    Результат: команда записывает объект скилла с именем `skill-tracker`, указанным репозиторием и тегом `v1.0.0` в массив `skills` файла `Skillfile.json`.
 
-4. Выполните установку объявленных скиллов:
+5. Выполните установку объявленных скиллов:
 
    ```bash
    csk install
@@ -161,7 +172,7 @@
 
    Результат: установщик скачивает репозиторий, извлекает файлы скилла в `.agents/skills/skill-tracker/`, генерирует адаптеры для указанных агентов и создаёт исполняемые шимы в `.agents/bin/` для скиллов с командами.
 
-5. Проверьте доступность скилла в подключённом агенте:
+6. Проверьте доступность скилла в подключённом агенте:
 
    ```bash
    claude
@@ -169,24 +180,14 @@
 
    Результат: агент считывает инструкции из адаптера `.claude/skills/` и применяет правила скилла `skill-tracker` в текущей сессии.
 
-### Приватные репозитории сборки: за один Enter
+### Private build repository credentials
 
-Скомпилированные команды скилла могут собираться из отдельно запиненного git-репозитория. Если репозиторий приватный, при первой установке `csk` показывает обнаруженные варианты (ssh-agent, ваши `*.pub`): вы выбираете вариант на терминале (по умолчанию предлагается вариант "агент + пин ключа"), указываете скоуп, и выбор сохраняется в конфиг. В CI то же самое задаётся заранее:
+Set up credentials before the first install using the
+[SSH key setup guide](docs/ssh-key-setup.md). It covers agent, agent plus
+pinned public key, and file modes. The operator owns agent contents and key
+lifetimes. csk does not start, fill or manage an agent.
 
-```bash
-csk config build-ssh add gitlab.example.com/portals/infra \
-    --agent auto --identity ~/.ssh/work.pub
-```
-
-Приватный репозиторий сборки работает и по SSH, и по HTTPS. Для HTTPS ничего заводить не нужно, если вы уже клонируете по HTTPS: `csk` предложит переиспользовать ваши собственные креды Git при первой установке за один Enter. Для неинтерактивного случая выполните команду:
-
-```bash
-csk config build-https add gitlab.example.com/portals/infra --token-source git-credentials
-```
-
-В CI задайте переменную `CSK_BUILD_HTTPS_TOKEN` (и `CSK_BUILD_HTTPS_HOST`, если репозитории сборки живут на разных хостах).
-
-Пакет скилла выбрать креды не может: выбор делает только оператор и только явно. Подробности устройства брокеров кредов и скоупов описаны в [`docs/external-build-repositories.md`](docs/external-build-repositories.md).
+HTTPS is an explicit option. See [HTTPS credentials](docs/external-build-repositories.md#private-https-build-repositories).
 
 ## Режимы установки скиллов
 
@@ -576,6 +577,7 @@ csk shell-init                      # Генерирует или устанав
 
 - [`docs/cli.md`](docs/cli.md): справочник команд `csk`, флагов и кодов завершения.
 - [`docs/reference.md`](docs/reference.md): справочник по матрице установки, зависимостям скиллов, манифестам и аудиту безопасности.
+- [`docs/ssh-key-setup.md`](docs/ssh-key-setup.md): early SSH credential setup, platform routes and verification limits.
 - [`docs/external-build-repositories.md`](docs/external-build-repositories.md): устройство внешних репозиториев сборки, брокеров кредов SSH/HTTPS и моделей доступа.
 - [`docs/design/linux-go-v1.md`](docs/design/linux-go-v1.md): Linux source-build design proposal, protocol requirements, qualification gates, and pending native probes.
 - [`docs/skillfile-sources.md`](docs/skillfile-sources.md): источники Skillfile schema 2, машинная транспортная политика и семантика лока.
