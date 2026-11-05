@@ -72,12 +72,22 @@ rehashes the complete snapshot, validates `skill-build.json`, and runs the
 independent external audit before any protected artifact lookup or compiler
 call.
 
-Selected external sources are acquired and validated in a separate pass before
-any external audit callback, artifact lookup or compilation. One explicit
-acquisition/execution boundary separates these passes. Within an invocation,
-commands sharing repository identity, object format, commit and tag reuse one
-successfully validated acquisition; failures are not memoized. Each later
-install still reacquires source, including fresh tag proof, before cache reuse.
+The acquisition/execution boundary is **per pass**, not per CLI invocation.
+Each external install pass acquires and validates all its selected sources,
+closes its own transport capability at the boundary, then runs external audit
+callbacks, artifact lookup and compilation. A generation-change retry or the
+next project may start another pass and acquire again, using new connections
+(and potentially prompting again). Before that pass starts, a process-local
+pipeline guard requires the previous pass to be closed and its synchronous
+worker teardown to have completed. An unclosed boundary refuses execution and
+later passes; unsuccessful worker teardown also refuses later acquisition.
+No transport capability is opened by this state-only guard today.
+
+Within a pass, commands sharing identity, object format, commit, tag, transport
+and endpoint plan reuse a successfully validated network acquisition. Local
+path substitutions are reacquired so changes to local HEAD are observed.
+Failures are not memoized. Every later pass still reacquires source, including
+fresh tag proof, before cache reuse.
 
 Non-executable text below `vendor/` in a third-party module (such as a
 dependency's README or Makefile) does not block installation: the fixed
