@@ -783,12 +783,13 @@ def test_init_symlink_loop_is_structured_refusal(tmp_path, capsys):
 
 @pytest.mark.parametrize("err", ERRNO_CASES)
 def test_config_show_read_refuses(monkeypatch, tmp_path, skills_root, csk_home, capsys, err):
+    """Each injected bounded-read error keeps config display's typed refusal."""
     project = make_project(tmp_path)
     cfg = make_config(csk_home, skills_root, project)
     csk_config.save_config(cfg)
     monkeypatch.setenv("CSK_CONFIG", str(cfg.path))
     with fault_at(
-        monkeypatch, module="csk.cli", func="_cmd_config_show", op="read_text",
+        monkeypatch, module="csk.cli", func="_cmd_config_show", op="read_bytes",
         target=cfg.path, err=err,
     ) as firings:
         code = cli.main(["config", "show"])
