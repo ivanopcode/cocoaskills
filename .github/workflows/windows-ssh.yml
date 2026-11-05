@@ -1,0 +1,57 @@
+name: Native Windows SSH
+
+on:
+  push:
+    branches: [main, feat/windows-build-ssh-agent]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows_ssh:
+    name: Windows native SSH / real Git and service agent
+    runs-on: windows-2025
+    timeout-minutes: 20
+    env:
+      CSK_SSH_KIT: ${{ runner.temp }}/csk-native-ssh-kit
+      CSK_SSH_EVIDENCE: ${{ runner.temp }}/csk-native-ssh-evidence
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Install package and configure fixture Git
+        shell: pwsh
+        run: |
+          python -m pip install ".[dev]" bcrypt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git config --global core.autocrlf false
+          git config --global core.symlinks false
+      - name: Provision disposable native loopback kit
+        id: setup
+        shell: pwsh
+        run: python .github/scripts/windows_ssh_kit.py setup --root "$env:CSK_SSH_KIT"
+      - name: Run real Git and SSH; require seven native cases without skips
+        id: run
+        shell: pwsh
+        run: python .github/scripts/windows_ssh_kit.py run --root "$env:CSK_SSH_KIT" --results "$env:CSK_SSH_EVIDENCE/results.xml"
+      - name: Remove generated keys and server; restore agent service
+        id: cleanup
+        if: always()
+        shell: pwsh
+        run: python .github/scripts/windows_ssh_kit.py cleanup --root "$env:CSK_SSH_KIT" --evidence "$env:CSK_SSH_EVIDENCE"
+      - name: Upload native SSH evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-native-ssh
+          path: ${{ env.CSK_SSH_EVIDENCE }}
+          if-no-files-found: error
