@@ -37,14 +37,14 @@ if role == 'worker':
             if detached:
                 os.setsid()
             write('detached' if detached else 'member', os.getpid())
-            time.sleep(60)
+            time.sleep(180)
             os._exit(0)
         children.append(child)
     if mode in ('eof', 'both'):
         from csk.builds.go_v1 import _PosixManagerLossWatch
         watch = _PosixManagerLossWatch(sys.stdin.buffer, parent)
     write('ready', {'worker': os.getpid(), 'sid': os.getsid(0), 'pgid': os.getpgrp()})
-    time.sleep(60)
+    time.sleep(180)
     for child in children:
         os.waitpid(child, 0)
 elif role == 'manager':
@@ -61,19 +61,37 @@ else:
         libc = ctypes.CDLL(None, use_errno=True)
         assert libc.prctl(36, 1, 0, 0, 0) == 0  # Fixture alone adopts its descendants.
     manager = subprocess.Popen([sys.executable, __file__, str(root), mode, 'manager'])
+    stopped = threading.Event()
+    signal.signal(signal.SIGTERM, lambda signum, frame: stopped.set())
     pids = []
     try:
-        deadline = time.monotonic() + 30
+        startup_started = time.monotonic()
+        deadline = startup_started + 90
         while not all((root / name).exists() for name in ('ready', 'member', 'detached')):
+            if stopped.is_set():
+                raise RuntimeError('fixture interrupted; cleaning up owned descendants')
             if manager.poll() is not None or time.monotonic() > deadline:
-                raise RuntimeError('worker readiness failed')
+                raise RuntimeError(f'worker readiness failed after {time.monotonic() - startup_started:.2f}s; manager status={manager.returncode}')
             time.sleep(.01)
         pids = [json.loads((root / name).read_text()) for name in ('worker', 'member', 'detached')]
+        startup_seconds = time.monotonic() - startup_started
+        before = dict(zip(('worker', 'member', 'detached'), map(live, pids)))
+        assert all(before.values()), before
         manager.kill()
         manager.wait(timeout=5)
-        time.sleep(.5)
+        observation_started = time.monotonic()
+        if mode == 'eof':
+            # Cooperative cleanup has no scheduler-independent half-second SLA.
+            # Observe quiescence within a fixture-only bound, never assume it.
+            deadline = observation_started + 10
+            while (live(pids[0]) or live(pids[1])) and time.monotonic() < deadline:
+                time.sleep(.05)
+        else:
+            time.sleep(.5)
         result = dict(zip(('worker_live', 'member_live', 'detached_live'), map(live, pids)))
-        result.update(mode=mode, platform=sys.platform, manager_returncode=manager.returncode,
+        result.update(mode=mode, platform=sys.platform, before_kill=before,
+                      startup_seconds=startup_seconds,
+                      observation_seconds=time.monotonic() - observation_started, manager_returncode=manager.returncode,
                       launch=json.loads((root / 'ready').read_text()))
         print(json.dumps(result), flush=True)
     finally:
