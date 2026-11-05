@@ -86,7 +86,13 @@ following manager death; it is not a published artifact.
 Run `python -m pytest tests/test_linux_native_controls.py -q` on native Linux.
 The fixture atomically publishes readiness/PID records and treats zombie status
 as dead on both macOS and Linux. It uses a scoped Linux subreaper only in its own
-test process and reaps its descendants; macOS orphan reaping remains OS-owned. It writes only under pytest's temporary directory. No cgroup,
+test process and reaps its descendants; macOS orphan reaping remains OS-owned.
+Its startup allowance is 90 seconds to accommodate imports under host load;
+this does not change any production deadline. It verifies all three processes
+are live before manager SIGKILL and observes EOF cleanup for up to ten seconds
+rather than asserting a scheduler-independent half-second response. It records
+startup and observation durations. An outer fixture timeout requests TERM cleanup
+and waits for the fixture to reap its children instead of killing their owner. It writes only under pytest's temporary directory. No cgroup,
 shared UID limit, privilege, or system configuration is changed. The baseline
 crash case is a control plant: without the watcher, the ordinary descendant must
 survive. The file-limit noop plant must prevent worker creation. An inheritable-allocation
