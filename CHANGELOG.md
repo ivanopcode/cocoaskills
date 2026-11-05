@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows SSH build repositories can explicitly select the OpenSSH service agent with `agent=auto` without `SSH_AUTH_SOCK`. Only the standard local agent pipe is admitted; missing services and other pipe paths refuse. Non-interactive SSH options remain unchanged.
+
 ## [0.21.1] - 2026-10-30
 
 ### Исправлено

@@ -203,6 +203,11 @@ cache artifact is written.
 | Agent socket | `--build-ssh-agent [SOCKET]` | `CSK_BUILD_SSH_AGENT` |
 | Host keys | `--build-ssh-known-hosts PATH` | `CSK_BUILD_SSH_KNOWN_HOSTS` |
 
+On Windows, `agent=auto` explicitly selects the local OpenSSH service pipe
+`\\.\pipe\openssh-ssh-agent`; `SSH_AUTH_SOCK` is not required or imported.
+The operator must enable the service and load keys with `ssh-add` first.
+Other Windows pipe paths are refused. This does not enable passphrase prompting.
+
 Flags win over the environment. `--build-ssh-agent` with no value, or the value
 `auto`, adopts the operator's live `SSH_AUTH_SOCK`. Host keys default to the
 operator home's `.ssh/known_hosts` because the fetch pins
