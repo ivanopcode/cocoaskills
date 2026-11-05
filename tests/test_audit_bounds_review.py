@@ -58,6 +58,11 @@ def test_generated_redaction_non_disclosure():
 @dataclass
 class Plan:
     snapshot: Path
+    schema_version: int = 3
+
+    @property
+    def spec(self):
+        return SimpleNamespace(schema_version=self.schema_version)
 
 
 # A growth race is rejected before hashing/detectors; the positive control shows
@@ -169,3 +174,14 @@ def test_non_regular_symlinks_rejected(tmp_path, kind):
     (tmp_path / 'link').symlink_to(target)
     with pytest.raises(HashingError, match='symbolic links'):
         pipeline._admit_snapshot(Plan(tmp_path), 100)
+
+
+@pytest.mark.parametrize('threshold', ['off', 'critical', 'high'])
+def test_oversize_legacy_still_requires_verified_pin(tmp_path, threshold):
+    # Strict legacy admission must not become allowed merely because HIGH is
+    # below fail_on; an unread snapshot cannot establish its content-bound pin.
+    (tmp_path / 'a').write_bytes(b'x' * 20)
+    cfg = SimpleNamespace(audit=SimpleNamespace(enabled=True, max_request_bytes=10, mode='strict', fail_on=threshold))
+    result = pipeline.gate_plans([Plan(tmp_path, schema_version=2)], cfg, scope='test')
+    assert result.blocked
+    assert 'audit.request.too-large' in result.errors[0]
