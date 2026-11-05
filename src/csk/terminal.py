@@ -13,9 +13,9 @@ def terminal_text(value: object) -> str:
     result = []
     for char in str(value):
         code = ord(char)
-        if unicodedata.category(char) in {"Cc", "Cs", "Zl", "Zp"} or unicodedata.bidirectional(char) in {"LRE", "RLE", "LRO", "RLO", "PDF", "LRI", "RLI", "FSI", "PDI"}:
+        if unicodedata.category(char) in {"Cc", "Cf", "Cs", "Zl", "Zp"} or unicodedata.bidirectional(char) in {"LRE", "RLE", "LRO", "RLO", "PDF", "LRI", "RLI", "FSI", "PDI"}:
             result.append({10: r"\n", 13: r"\r", 9: r"\t"}.get(
-                code, f"\\x{code:02x}" if code < 256 else f"\\u{code:04x}"
+                code, f"\\x{code:02x}" if code < 256 else (f"\\u{code:04x}" if code <= 0xffff else f"\\U{code:08x}")
             ))
         else:
             result.append(char)
@@ -41,7 +41,12 @@ def shell_word(value: str) -> str:
             parts.append("\\'")
         elif terminal_text(char) != char:
             code = ord(char)
-            parts.append({10: r"\n", 13: r"\r", 9: r"\t"}.get(code, f"\\{code:03o}" if code < 128 else f"\\u{code:04x}"))
+            parts.append({10: r"\n", 13: r"\r", 9: r"\t"}.get(code, f"\\{code:03o}" if code < 128 else (f"\\u{code:04x}" if code <= 0xffff else f"\\U{code:08x}")))
         else:
             parts.append(char)
     return "$'" + "".join(parts) + "'"
+
+
+def terminal_document(value: str) -> str:
+    """Escape document characters while retaining owned JSON whitespace layout."""
+    return "".join(char if char in "\n\r\t" else terminal_text(char) for char in value)

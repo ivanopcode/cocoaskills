@@ -143,7 +143,7 @@ def failure_text(exc: BaseException, *, verbose: bool = False) -> str:
 
     chain = list(_failure_cause_chain(exc))
     message = _failure_message_with_specific_reason(exc, chain)
-    if isinstance(exc, git_ops.GitError) or any(isinstance(cause, git_ops.GitError) for cause in chain):
+    if isinstance(exc, (git_ops.GitError, closure.ClosureError)) or any(isinstance(cause, (git_ops.GitError, closure.ClosureError)) for cause in chain):
         message = terminal_text(message)
     missing_error = next(
         (item for item in [exc, *chain] if isinstance(item, closure.MissingSystemCommandsError)),

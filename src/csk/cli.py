@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .terminal import terminal_text
+from .terminal import terminal_document, terminal_text
 
 import argparse
 import getpass
@@ -1411,7 +1411,7 @@ def _cmd_config_show() -> int:
         print(f"error: cannot read config at {terminal_text(path)}: {terminal_text(exc)}", file=sys.stderr)
         return EXIT_CONFIG
     else:
-        print(content, end="")
+        print(terminal_document(content), end="")
     return EXIT_OK
 
 
