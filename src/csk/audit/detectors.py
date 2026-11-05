@@ -4,6 +4,7 @@ import ast
 import json
 import re
 import shlex
+import stat
 from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import urlparse
@@ -14,21 +15,6 @@ from .model import CapabilityViolation, Finding, Location, Severity, Surface
 
 
 MAX_TEXT_BYTES = 1_000_000
-TEXT_SUFFIXES = {
-    "",
-    ".bash",
-    ".cfg",
-    ".json",
-    ".md",
-    ".ps1",
-    ".py",
-    ".sh",
-    ".toml",
-    ".txt",
-    ".yaml",
-    ".yml",
-    ".zsh",
-}
 SECRET_MARKERS = ("TOKEN", "SECRET", "PASSWORD", "PASS", "KEY", "PRIVATE")
 
 _CURL_PIPE_RE = re.compile(r"\b(?:curl|wget)\b[^\n|;]*\|\s*(?:sh|bash|zsh|python)\b")
@@ -55,12 +41,16 @@ COMMON_SYSTEM_COMMANDS = {
     "sudo",
     "zsh",
 }
-OPAQUE_PREFIXES = ("agents/", "references/", "scripts/")
 
 
 def detect_snapshot(snapshot: Path, capabilities: CapabilityManifest) -> tuple[Finding, ...]:
     findings: list[Finding] = []
-    for rel_path, text in _iter_text_files(snapshot):
+    manifest_name = next((name for name in ("agent-skill.json", "csk-skill.json") if (snapshot / name).exists()), None)
+    for item in _iter_text_files(snapshot):
+        if isinstance(item, Finding):
+            findings.append(item)
+            continue
+        rel_path, text = item
         secrets, text = detect_and_mask(rel_path, text)
         findings.extend(secrets)
         findings.extend(_detect_curl_pipe(rel_path, text))
@@ -71,28 +61,47 @@ def detect_snapshot(snapshot: Path, capabilities: CapabilityManifest) -> tuple[F
         if rel_path.endswith(".py"):
             findings.extend(_detect_python_ast(rel_path, text, capabilities))
         findings.extend(_detect_minified_text(rel_path, text))
-    findings.extend(_detect_manifest(snapshot))
-    findings.extend(_detect_opaque_files(snapshot))
+        if rel_path == manifest_name:
+            findings.extend(_detect_manifest(rel_path, text))
     return tuple(findings)
 
 
-def _iter_text_files(snapshot: Path) -> Iterable[tuple[str, str]]:
+def _iter_text_files(snapshot: Path) -> Iterable[tuple[str, str] | Finding]:
+    # Runtime roots and legacy script paths are unrestricted by suffix. Scan
+    # every regular snapshot file, including custom roots and extensionless scripts.
     for path in sorted(snapshot.rglob("*")):
-        if not path.is_file():
-            continue
-        if path.suffix not in TEXT_SUFFIXES:
-            continue
+        rel_path = path.relative_to(snapshot).as_posix()
         try:
-            raw = path.read_bytes()
+            if path.is_symlink():
+                yield _opaque_finding(rel_path, "scan skipped: symbolic link")
+                continue
+            if path.is_dir():
+                continue
+            metadata = path.stat()
+            if not stat.S_ISREG(metadata.st_mode):
+                yield _opaque_finding(rel_path, "scan skipped: non-regular file")
+                continue
+            if metadata.st_size > MAX_TEXT_BYTES:
+                yield _opaque_finding(rel_path, "scan skipped: size exceeds text limit")
+                continue
+            with path.open("rb") as stream:
+                raw = stream.read(MAX_TEXT_BYTES + 1)
         except OSError:
+            # Exception messages can contain package-derived data or host paths.
+            yield _opaque_finding(rel_path, "scan skipped: read error")
             continue
-        if len(raw) > MAX_TEXT_BYTES or b"\x00" in raw:
+        if len(raw) > MAX_TEXT_BYTES:
+            yield _opaque_finding(rel_path, "scan skipped: size exceeds text limit")
+            continue
+        if b"\x00" in raw:
+            yield _opaque_finding(rel_path, "scan skipped: NUL byte (binary content)")
             continue
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
+            yield _opaque_finding(rel_path, "scan skipped: invalid UTF-8")
             continue
-        yield path.relative_to(snapshot).as_posix(), text
+        yield rel_path, text
 
 
 def _detect_curl_pipe(rel_path: str, text: str) -> list[Finding]:
@@ -501,19 +510,10 @@ def _ast_finding(
     )
 
 
-def _detect_manifest(snapshot: Path) -> list[Finding]:
-    manifest_name = next(
-        (name for name in ("agent-skill.json", "csk-skill.json") if (snapshot / name).exists()),
-        None,
-    )
-    if manifest_name is None:
-        return []
-    path = snapshot / manifest_name
-    if not path.exists():
-        return []
+def _detect_manifest(manifest_name: str, text: str) -> list[Finding]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(text)
+    except json.JSONDecodeError:
         return []
     commands = data.get("commands", {}) if isinstance(data, dict) else {}
     if not isinstance(commands, dict):
@@ -537,26 +537,7 @@ def _detect_manifest(snapshot: Path) -> list[Finding]:
     return findings
 
 
-def _detect_opaque_files(snapshot: Path) -> list[Finding]:
-    findings: list[Finding] = []
-    for path in sorted(snapshot.rglob("*")):
-        if not path.is_file():
-            continue
-        rel_path = path.relative_to(snapshot).as_posix()
-        if not rel_path.startswith(OPAQUE_PREFIXES):
-            continue
-        try:
-            raw = path.read_bytes()
-        except OSError:
-            continue
-        if b"\x00" in raw:
-            findings.append(_opaque_finding(rel_path, "binary content"))
-    return findings
-
-
 def _detect_minified_text(rel_path: str, text: str) -> list[Finding]:
-    if not rel_path.startswith(OPAQUE_PREFIXES):
-        return []
     if len(text) < 10_000:
         return []
     lines = text.splitlines() or [text]
