@@ -2,8 +2,8 @@
 
 Only glibc ELF64, direct versioned CPython linkage or a defined executable
 Py_GetVersion symbol are accepted. A later worker must prove loaded ownership.
-This identity binds the loader and consulted cache/preload slots; it does not
-claim mutation retention or a complete Python startup identity.
+This identity binds the loader, dependency images and cache/preload slots; it
+claims neither mutation retention nor a complete Python startup identity.
 """
 from __future__ import annotations
 
@@ -189,6 +189,7 @@ def resolve_linux_identity(path: Path, *, version: str,
     seen = {process.identity.path, runtime.identity.path, loader.identity.path}
     if runtime != process:
         pending.append((runtime, parse_elf(runtime.contents)))
+    total_bytes = len(process.contents) + len(runtime.contents) + len(loader.contents)
     while pending:
         owner, metadata = pending.pop()
         if owner != process and (metadata.rpath is not None or metadata.runpath is not None):
@@ -212,7 +213,8 @@ def resolve_linux_identity(path: Path, *, version: str,
             if image.identity.path in seen:
                 continue
             seen.add(image.identity.path)
-            if len(seen) > 128:
+            total_bytes += len(image.contents)
+            if len(seen) > 128 or total_bytes > 256 * 1024 * 1024:
                 raise refuse("dependency closure bound")
             parsed = parse_elf(image.contents)
             if parsed.machine != elf.machine or parsed.kind != 3 or parsed.defines_python:

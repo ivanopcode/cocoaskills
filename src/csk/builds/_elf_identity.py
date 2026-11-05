@@ -78,12 +78,23 @@ def parse_elf(data: bytes) -> ELF:
         raise refuse("missing load segments")
 
     def mapped(address: int, size: int) -> int:
-        matches = [s.offset + address - s.address for s in loads
-                   if s.address <= address and size <= s.size
-                   and address - s.address <= s.size - size]
-        if len(matches) != 1:
-            raise refuse("unmapped or ambiguous virtual range")
-        return matches[0]
+        if size <= 0 or address + size >= 1 << 64:
+            raise refuse("invalid virtual range")
+        covering = sorted((s for s in loads if s.address < address + size
+                           and s.address + s.size > address), key=lambda s: s.address)
+        cursor = address
+        delta: int | None = None
+        for segment in covering:
+            if segment.address > cursor:
+                raise refuse("unmapped virtual range")
+            translation = segment.offset - segment.address
+            if delta is not None and translation != delta:
+                raise refuse("ambiguous or noncontiguous virtual mapping")
+            delta = translation
+            cursor = max(cursor, segment.address + segment.size)
+        if cursor < address + size or delta is None:
+            raise refuse("unmapped virtual range")
+        return address + delta
 
     def name(raw: bytes, offset: int = 0) -> str:
         if not 0 <= offset < len(raw):
@@ -137,8 +148,7 @@ def parse_elf(data: bytes) -> ELF:
         if tags.get(11) != 24:
             raise refuse("unsupported symbol size")
         symoff = mapped(tags[6], 24)
-        # SysV hash provides an exact dynamic symbol count. GNU-only layouts
-        # need a separately bounded GNU hash implementation before acceptance.
+        # Dynamic hashes bound the symbol table without section headers.
         if 4 in tags:
             hash_off = mapped(tags[4], 8)
             buckets, count = unpack("<II", hash_off)
