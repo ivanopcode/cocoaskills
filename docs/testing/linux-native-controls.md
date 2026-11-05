@@ -48,8 +48,9 @@ identity qualification.
 The combination result is scheduling-dependent and establishes a counterexample
 to a stronger guarantee, not a universal outcome. Linux PDEATHSIG additionally
 refers to the creating parent thread, is cleared in a forked child, and can reset
-on privileged exec. Parent-thread death and privileged exec were not measured in
-this run. The implemented watcher was measured separately on Linux and is covered
+on privileged exec. A separate Linux probe confirmed that creator-thread exit killed the worker
+while the manager process was still alive; both descendants survived. Privileged
+exec was not measured. The implemented watcher was measured separately on Linux and is covered
 by native POSIX crash regression tests.
 
 Windows code creates a noninheritable Job, sets kill-on-close for descendant
@@ -77,6 +78,6 @@ survive. The file-limit noop plant must prevent worker creation.
 
 Remaining qualification: full identity-authenticated list/build; fork-near-teardown
 cleanup; worker-loss and scheduler-stall bounds; all restoration-error precedence
-cases; parent-thread and privileged-exec probes; native Windows crash execution;
+cases; privileged-exec probes; native Windows crash execution;
 full installed-manager publication crash matrix. GOOS mapping is left to the
 plan/artifact change.
