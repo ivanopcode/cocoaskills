@@ -1,6 +1,8 @@
 """Local ignore placement, explicit migration and deprecated writer boundaries."""
 from __future__ import annotations
 
+import io
+
 import errno
 import json
 from pathlib import Path
@@ -371,13 +373,14 @@ def test_policy_input_io_fault_is_typed(tmp_path, monkeypatch, operation, number
     path = tmp_path / 'Skillfile.json'
     original_bytes = b'{"schema_version":2,"skills":[]}'
     path.write_bytes(original_bytes)
-    original = getattr(Path, operation)
+    owner = io if operation == "open" else Path
+    original = getattr(owner, operation)
     def fail(self, *args, **kwargs):
         if self == path:
             raise OSError(number, 'injected input I/O failure')
         return original(self, *args, **kwargs)
     with monkeypatch.context() as fault:
-        fault.setattr(Path, operation, fail)
+        fault.setattr(owner, operation, fail)
         with pytest.raises(gitignore_gate.GitignoreError, match='Cannot read ignore policy file'):
             _regular_bytes(path)
     assert _regular_bytes(path) == original_bytes

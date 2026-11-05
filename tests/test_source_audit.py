@@ -15,6 +15,8 @@ draft-sources suite via ``test_draft_sources_conformance``.
 
 from __future__ import annotations
 
+import io
+
 import base64
 import errno
 import hashlib
@@ -785,7 +787,7 @@ def test_unreadable_report_refuses_with_distinct_code(
     record, csk_home, package, content, policy = _recorded(tmp_path)
     target = source_audit.source_audit_report_path(csk_home, content)
     reached = {"read": False}
-    original_read_bytes = Path.open
+    original_read_bytes = io.open
 
     def failing_read_bytes(self: Path, *args, **kwargs):
         if self == target:
@@ -793,7 +795,7 @@ def test_unreadable_report_refuses_with_distinct_code(
             raise error
         return original_read_bytes(self, *args, **kwargs)
 
-    with patch.object(Path, "open", failing_read_bytes):
+    with patch.object(io, "open", failing_read_bytes):
         with pytest.raises(SourceAuditError) as excinfo:
             source_audit.validate_source_audit(
                 record,
@@ -1741,14 +1743,14 @@ def test_network_git_evidence_defect_family_refuses(tmp_path: Path, defect: str)
         kid = mutation.pop("key_id", key_id)
         _write_evidence(tmp_path, kid, **mutation)
     if defect == "unreadable":
-        original_read_bytes = Path.open
+        original_read_bytes = io.open
 
         def refusing_read_bytes(self: Path, *args, **kwargs):
             if self == evidence_path:
                 raise PermissionError("evidence store denied the read")
             return original_read_bytes(self, *args, **kwargs)
 
-        ctx: Any = patch.object(Path, "open", refusing_read_bytes)
+        ctx: Any = patch.object(io, "open", refusing_read_bytes)
     else:
         import contextlib
 
@@ -2615,7 +2617,7 @@ def test_trust_reader_seam_failure_refuses_structured(
         ctx: Any = patch.object(Path, "exists", faulted_exists)
     else:
         assert seam == "read"
-        original_read_text = Path.open
+        original_read_text = io.open
 
         def faulted_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
             if self == target:
@@ -2623,7 +2625,7 @@ def test_trust_reader_seam_failure_refuses_structured(
                 raise error
             return original_read_text(self, *args, **kwargs)
 
-        ctx = patch.object(Path, "open", faulted_read_text)
+        ctx = patch.object(io, "open", faulted_read_text)
     if seam == "stat":
         # Survivor contract (TASK-260921-qe62bu): no existence probe, so a
         # faulted Path.exists is never consulted and validation succeeds.
@@ -2706,7 +2708,7 @@ def test_trust_reader_seam_failure_refuses_through_plan_hook(
         ctx: Any = patch.object(Path, "exists", faulted_exists)
     else:
         assert seam == "read"
-        original_read_text = Path.open
+        original_read_text = io.open
 
         def faulted_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
             if self == target:
@@ -2714,7 +2716,7 @@ def test_trust_reader_seam_failure_refuses_through_plan_hook(
                 raise error
             return original_read_text(self, *args, **kwargs)
 
-        ctx = patch.object(Path, "open", faulted_read_text)
+        ctx = patch.object(io, "open", faulted_read_text)
     events: list[str] = []
     if seam == "stat":
         # Survivor contract (TASK-260921-qe62bu): no existence probe, so a

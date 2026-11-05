@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ... import protocol_json
+
 import json
 import shutil
 import subprocess
@@ -80,8 +82,8 @@ class CodexBackend:
             if not response_file.exists():
                 raise AuditBackendError(f"Audit backend did not write output-last-message: {self.name}")
             try:
-                response = json.loads(response_file.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
+                response = protocol_json.loads_compatible(protocol_json.read_bytes(response_file))
+            except (OSError, protocol_json.ProtocolJSONError) as exc:
                 raise AuditBackendError(f"Audit backend returned invalid JSON: {self.name}") from exc
         if not isinstance(response, dict):
             raise AuditBackendError(f"Audit backend response must be a JSON object: {self.name}")
