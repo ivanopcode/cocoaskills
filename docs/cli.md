@@ -1057,7 +1057,10 @@ The longest matching configured scope is used; explicit options and
 `CSK_BUILD_SSH_*` take precedence. `--agent auto` selects `SSH_AUTH_SOCK`.
 Without `--all-os`, instructions fit the current OS. No network, prompts,
 signatures, token access or agent mutation occurs. Missing tools and inconclusive
-metadata report `unknown`, never an unusable-key refusal.
+metadata report `unknown`, never an unusable-key refusal. A recognized OpenSSH
+warning that private-key permissions are too open establishes a local refusal
+when no agent is selected or the selected agent is confirmed not to hold the key;
+csk does not change permissions.
 
 SSH prompts remain disabled. A proven unusable selection fails locally with
 `build_repository_ssh_credential_unusable`, classified as `auth-unavailable` so
