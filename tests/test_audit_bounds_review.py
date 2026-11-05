@@ -154,3 +154,18 @@ def test_fifo_replacement_after_admission(tmp_path):
     with patch.object(pipeline, '_admit_snapshot', side_effect=replace_with_fifo):
         with pytest.raises(AuditBackendError, match='audit.input.changed: expected regular file'):
             pipeline.audit_plans([Plan(tmp_path)], SimpleNamespace(audit=SimpleNamespace(max_request_bytes=100)), scope='test')
+
+
+@pytest.mark.parametrize('kind', ['directory', 'missing', 'fifo'])
+def test_non_regular_symlinks_rejected(tmp_path, kind):
+    # Copying must not silently drop symlinks that the original hash rejected.
+    target = tmp_path / 'target'
+    if kind == 'directory':
+        target.mkdir()
+    elif kind == 'fifo':
+        if not hasattr(os, 'mkfifo'):
+            pytest.skip('FIFO requires POSIX')
+        os.mkfifo(target)
+    (tmp_path / 'link').symlink_to(target)
+    with pytest.raises(HashingError, match='symbolic links'):
+        pipeline._admit_snapshot(Plan(tmp_path), 100)
