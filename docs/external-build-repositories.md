@@ -215,6 +215,10 @@ only in the environment of the fetch children. `token_value` is excluded from
 
 ## Private SSH build repositories
 
+Configure credentials before the first install. Follow the
+[SSH key setup guide](ssh-key-setup.md) for the three modes, operator-managed
+agent lifetimes, platform limits and hardware verification status.
+
 An SSH build repository fetch runs in a private empty `HOME` with an empty
 `PATH` and no inherited agent socket, so it never adopts the operator's
 `~/.ssh/config`, ambient `GIT_SSH_COMMAND`, or a repository-selected wrapper.
