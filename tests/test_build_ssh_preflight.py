@@ -127,12 +127,14 @@ def test_doctor_read_only_and_os_filter(monkeypatch, capsys, platform, label):
 
 # Regression: file-only menu choices must select the private sibling; an agent
 # choice is separately allowed to pin the public file in test_build_ssh.py.
-def test_file_only_menu_uses_private_sibling(monkeypatch):
-    monkeypatch.setattr(build_ssh, 'discover_candidates', lambda: build_ssh.DiscoveredCandidates(public_keys=('/keys/work.pub',)))
+def test_file_only_menu_uses_private_sibling(monkeypatch, tmp_path):
+    private = tmp_path / "work"
+    private.touch()
+    monkeypatch.setattr(build_ssh, 'discover_candidates', lambda: build_ssh.DiscoveredCandidates(public_keys=(str(private) + '.pub',)))
     answers = iter(['1', '3'])
     monkeypatch.setattr('builtins.input', lambda *a: next(answers))
     rule, persist = installer._prompt_build_ssh_rule('skill', 'command', 'example.test/group/repo')
-    assert rule.identity == '/keys/work'
+    assert rule.identity == str(private)
     assert rule.agent is None
     assert not persist
 
@@ -140,13 +142,18 @@ def test_file_only_menu_uses_private_sibling(monkeypatch):
 # Help fixtures pin this new surface; a planted unrelated help edit must fail
 # the same byte comparison, while the unchanged positive control passes.
 @pytest.mark.parametrize('mutate', [False, True])
-def test_doctor_help_golden(monkeypatch, capsys, mutate):
+@pytest.mark.parametrize('command,fixture,marker', [
+    (['config', 'build-ssh', 'doctor', '--help'], 'config-build-ssh-doctor-help.stdout', '--all-os'),
+    (['config', 'build-ssh', '--help'], 'config-build-ssh-help.stdout', '--agent auto'),
+])
+def test_doctor_help_golden(monkeypatch, capsys, mutate, command, fixture, marker):
     monkeypatch.setenv('COLUMNS', '80')
-    assert cli.main(['config', 'build-ssh', 'doctor', '--help']) == 0
+    assert cli.main(command) == 0
     actual = capsys.readouterr().out
-    expected = (Path(__file__).parent / 'fixtures/cli-golden-v1/config-build-ssh-doctor-help.stdout').read_text()
+    expected = (Path(__file__).parent / 'fixtures/cli-golden-v1' / fixture).read_text()
     if mutate:
-        actual = actual.replace('--all-os', '--unrelated', 1)
+        assert marker in actual
+        actual = actual.replace(marker, '--unrelated', 1)
         assert actual != expected
     else:
         assert actual == expected
@@ -185,3 +192,120 @@ def test_real_key_metadata(tmp_path, passphrase, state):
     assert result.state == state
     assert result.passphrase == bool(passphrase)
     assert result.key_kind == 'ED25519'
+
+
+# Real subprocess output parsing: malformed provider records must stay unknown,
+# while a valid absent provider refuses and a built-in provider remains unknown.
+# These metadata stubs never request a signature and do not model a real token.
+@pytest.mark.skipif(build_ssh.os.name == 'nt', reason='POSIX executable metadata stubs')
+@pytest.mark.parametrize('settings,state', [
+    ('securitykeyprovider \n', 'unknown'),
+    ('securitykeyprovider\n', 'unknown'),
+    ('securitykeyprovider\t \n', 'unknown'),
+    ('unfamiliar setting\n', 'unknown'),
+    ('securitykeyprovider internal\n', 'unknown'),
+    ('securitykeyprovider none\n', 'unusable'),
+])
+def test_provider_output_with_real_metadata_processes(tmp_path, monkeypatch, settings, state):
+    import sys
+    tools = tmp_path / 'tools'
+    tools.mkdir()
+    ssh = tools / 'ssh'
+    ssh.write_text(
+        f'#!{sys.executable}\nimport sys\n'
+        f'print({settings!r} if "-G" in sys.argv else "OpenSSH fixture", end="")\n'
+    )
+    keygen = tools / 'ssh-keygen'
+    keygen.write_text(
+        f'#!{sys.executable}\nimport sys\n'
+        'print("256 SHA256:fixture fixture (ED25519-SK)" if "-l" in sys.argv else "sk-ssh-ed25519@openssh.com AAAA")\n'
+    )
+    ssh.chmod(0o700)
+    keygen.chmod(0o700)
+    identity = tmp_path / 'key'
+    identity.touch()
+    result = build_ssh.inspect_key(ssh, identity)
+    assert result.state == state
+    assert result.provider == ('none' if state == 'unusable' else 'internal' if 'internal' in settings else 'unknown')
+    if state == 'unusable':
+        assert result.reason == 'SSH has no configured security-key provider in this lane'
+    else:
+        # The same parser result reaches doctor and preflight without crashing
+        # or refusing. No network/wrapper is executed in this focused control.
+        original_resolver = build_ssh.resolve_tool
+        def resolve(name, **kwargs):
+            return str(ssh) if name == 'ssh' and 'executable' not in kwargs else original_resolver(name, **kwargs)
+        monkeypatch.setattr(build_ssh, 'resolve_tool', resolve)
+        text = build_ssh.doctor((), identity=str(identity))
+        assert 'Local state: unknown' in text
+        creds = git_admission.OperatorSSHCredentials(identity=identity)
+        monkeypatch.setattr(git_admission, 'validate_operator_ssh_credentials', lambda c: c)
+        tool = git_admission.GitTool(Path('/git'), Path('/exec'), (), ssh=ssh, ssh_credentials=creds)
+        git_admission._preflight_ssh(parse_repository_source('git@example.test:group/repo.git'), tool)
+
+
+# Only recognized OpenSSH evidence of ignored private-file permissions refuses.
+# A matching loaded agent bypasses that bad file; ambiguous/unreadable output
+# stays unknown, and valid file output prevents reject-all success.
+@pytest.mark.parametrize('stderr,rc,loaded,state', [
+    ('This private key will be ignored.\nLoad key "key": bad permissions', 255, False, 'unusable'),
+    ('This private key will be ignored.\nLoad key "key": bad permissions', 255, True, 'unknown'),
+    ('bad permissions', 255, False, 'unknown'),
+    ('Permission denied', 255, False, 'unknown'),
+    ('', 0, False, 'unknown'),
+])
+def test_private_key_permission_evidence(monkeypatch, stderr, rc, loaded, state):
+    def probe(argv, **kwargs):
+        if '-l' in argv:
+            return subprocess.CompletedProcess(argv, 0, '256 SHA256:fixture key (ED25519)', '')
+        if '-L' in argv:
+            return subprocess.CompletedProcess(argv, 0, 'ssh-ed25519 AAAA', '')
+        return subprocess.CompletedProcess(argv, rc, 'ssh-ed25519 AAAA' if rc == 0 else '', stderr)
+    monkeypatch.setattr(build_ssh, '_local_probe', probe)
+    result = build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/key'), Path('/agent') if loaded else None)
+    assert result.state == state
+    if state == 'unusable':
+        assert result.reason == 'private key permissions are too open; SSH will ignore this file'
+
+
+# Orphan public files remain valid agent pins, but never produce a file-only
+# command/menu option; a real private sibling remains available beside them.
+@pytest.mark.parametrize('agent', [None, '/agent'])
+def test_orphan_public_key_is_not_a_file_candidate(tmp_path, monkeypatch, capsys, agent):
+    private = tmp_path / 'present'
+    private.touch()
+    orphan = tmp_path / 'orphan.pub'
+    candidates = build_ssh.DiscoveredCandidates(
+        agent_socket=agent, public_keys=(str(orphan), str(private) + '.pub'),
+    )
+    commands = build_ssh.candidate_commands('example.test/group', candidates)
+    assert any(f'--identity {private}' in command for command in commands)
+    assert all('--agent' in command for command in commands if str(orphan) in command)
+    assert not any(command.endswith(' --identity ' + str(orphan)[:-4]) and '--agent' not in command for command in commands)
+    monkeypatch.setattr(build_ssh, 'discover_candidates', lambda: candidates)
+    answers = iter(['n'])
+    monkeypatch.setattr('builtins.input', lambda *a: next(answers))
+    assert installer._prompt_build_ssh_rule('skill', 'command', 'example.test/group/repo') == (None, False)
+    lines = capsys.readouterr().out.splitlines()
+    assert any(str(private) in line for line in lines)
+    assert all('pin ' + str(orphan) in line for line in lines if str(orphan) in line)
+    assert any(str(orphan) in line for line in lines) == bool(agent)
+
+
+# Real OpenSSH establishes the too-open-file refusal; owner-only permissions
+# are the valid neighbor. Only generated keys are used, with no signing.
+@pytest.mark.skipif(build_ssh.os.name == 'nt', reason='POSIX private-key permission evidence')
+@pytest.mark.parametrize('mode,state', [(0o600, 'unknown'), (0o644, 'unusable')])
+def test_real_private_key_permissions(tmp_path, mode, state):
+    try:
+        ssh = Path(build_ssh.resolve_tool('ssh'))
+        keygen = build_ssh.resolve_tool('ssh-keygen', executable=str(ssh.parent / 'ssh-keygen'))
+    except FileNotFoundError:
+        pytest.skip('matching OpenSSH tools unavailable')
+    identity = tmp_path / 'generated-key'
+    subprocess.run([keygen, '-q', '-t', 'ed25519', '-N', '', '-f', str(identity)], check=True, stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+    identity.chmod(mode)
+    result = build_ssh.inspect_key(ssh, identity)
+    assert result.state == state
+    if state == 'unusable':
+        assert result.reason == 'private key permissions are too open; SSH will ignore this file'
