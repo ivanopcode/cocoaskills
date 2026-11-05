@@ -18,6 +18,16 @@ from draft_sources_accounting import record as _record_draft_sources_outcome
 from git_fixture_isolation import check_own_git_dir, discover_git_dir, run_fixture_git
 
 
+# Each test models a fresh manager process. Within one test, retries, projects
+# and later installs retain the same fail-closed build/acquisition state.
+@pytest.fixture(autouse=True)
+def isolated_acquisition_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    from csk import build_repository_pipeline
+
+    monkeypatch.setattr(build_repository_pipeline, "_PASS_STATE",
+                        build_repository_pipeline.AcquisitionPassState())
+
+
 def run(cmd: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
     if cmd and Path(cmd[0]).name in ("git", "git.exe"):
         # Fixture git children run through the one shared runner: an ambient
