@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from . import protocol_json
+
 import ctypes
 import errno
 import hashlib
@@ -984,8 +986,8 @@ def _read_lock_fd_bytes(fd: int) -> bytes | None:
 
 def _decode_lock(payload: bytes) -> dict[str, object] | None:
     try:
-        value = json.loads(payload)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        value = protocol_json.loads_compatible(payload)
+    except (UnicodeDecodeError, protocol_json.ProtocolJSONError):
         return None
     return value if isinstance(value, dict) else None
 

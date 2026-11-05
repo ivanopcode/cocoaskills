@@ -198,7 +198,7 @@ def render_locale(
 
 def _load_metadata(path: Path) -> dict[str, object]:
     try:
-        data = protocol_json.loads(path.read_bytes())
+        data = protocol_json.loads(protocol_json.read_bytes(path))
     except protocol_json.ProtocolJSONError as exc:
         raise LocaleError(f"Malformed locale metadata {path}: {exc}") from exc
     if not isinstance(data, dict):

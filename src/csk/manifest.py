@@ -187,7 +187,7 @@ def remove_skill_decl(project_root: Path, name: str) -> Path:
 
 def _read_payload(path: Path) -> dict[str, Any]:
     try:
-        raw = path.read_bytes()
+        raw = protocol_json.read_bytes(path)
     except (FileNotFoundError, NotADirectoryError) as exc:
         raise ManifestError(f"Skillfile.json not found at {path}; run 'csk init' first") from exc
     except OSError as exc:
@@ -220,7 +220,7 @@ def load_manifest(
 
     path = manifest_path(project_root)
     try:
-        raw = path.read_bytes()
+        raw = protocol_json.read_bytes(path)
     except (FileNotFoundError, NotADirectoryError):
         return None
     except OSError as exc:

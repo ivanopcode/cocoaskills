@@ -1629,6 +1629,10 @@ class _FailingRecordHandle:
         self._method = method
         self._error = error
 
+    def fileno(self) -> int:
+        # Keep the real descriptor available for pre-read size admission.
+        return self._real.fileno()
+
     def read(self, *args: Any, **kwargs: Any) -> Any:
         if self._method == "read":
             raise self._error("injected post-open read failure")

@@ -55,7 +55,7 @@ def _attest_root(
         return results
     for marker_path in sorted(skills_root.glob("*/.csk-install.json")):
         try:
-            marker = protocol_json.loads(marker_path.read_bytes())
+            marker = protocol_json.loads(protocol_json.read_bytes(marker_path))
         except (OSError, ValueError):
             continue
         name = marker.get("name")

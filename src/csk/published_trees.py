@@ -7,6 +7,8 @@ staging copies; the transaction engine journals publication and backup cleanup.
 
 from __future__ import annotations
 
+from . import protocol_json
+
 import os
 from pathlib import Path
 import shlex
@@ -157,7 +159,7 @@ def validate_context(path: Path, *, home: Path) -> None:
             return
         if not stat.S_ISREG(marker_path.lstat().st_mode):
             return
-        marker = install_marker.read_install_marker(marker_path.read_bytes())
+        marker = install_marker.read_install_marker(protocol_json.read_bytes(marker_path))
     except (OSError, install_marker.InstallMarkerError):
         return
     inventory = {name: "file" for name in marker.files}

@@ -165,7 +165,7 @@ def _collect_retained(
 
 def _read_installed_marker(path: Path) -> install_marker.InstallMarker | None:
     try:
-        return install_marker.read_install_marker(path.read_bytes())
+        return install_marker.read_install_marker(protocol_json.read_bytes(path))
     except (OSError, install_marker.InstallMarkerError):
         return None
 
@@ -1466,7 +1466,7 @@ def _plans_with_available_dependencies(
 
 def _read_global_payload(path: Path) -> dict[str, Any]:
     try:
-        data = protocol_json.loads(path.read_bytes())
+        data = protocol_json.loads(protocol_json.read_bytes(path))
     except protocol_json.ProtocolJSONError as exc:
         raise GlobalInstallError(f"Malformed JSON in global Skillfile {path}: {exc}") from exc
     if not isinstance(data, dict):

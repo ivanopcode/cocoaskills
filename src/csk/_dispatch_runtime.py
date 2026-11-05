@@ -268,6 +268,30 @@ def _refuse_symlink_component(path: str, *, manager_home: str) -> None:
         )
 
 
+def _check_json_depth(text: str) -> None:
+    # Scan tokens without recursion or constructing a parsed object. Escaped
+    # quotes and brackets inside strings do not affect container depth.
+    depth = 0
+    quoted = escaped = False
+    for character in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                quoted = False
+        elif character == '"':
+            quoted = True
+        elif character in "[{":
+            depth += 1
+            if depth > 128:
+                raise ValueError("JSON input exceeds maximum depth")
+        elif character in "]}":
+            depth -= 1
+
+
+
 def _read_no_follow(path: str, *, manager_home: str, what: str) -> bytes:
     """Read one registry file without following a final-component symlink.
 
@@ -290,7 +314,12 @@ def _read_no_follow(path: str, *, manager_home: str, what: str) -> bytes:
         ) from exc
     try:
         with os.fdopen(fd, "rb") as handle:
-            return handle.read()
+            if os.fstat(handle.fileno()).st_size > 16 * 1024 * 1024:
+                raise OSError("JSON input exceeds maximum size")
+            raw = handle.read(16 * 1024 * 1024 + 1)
+            if len(raw) > 16 * 1024 * 1024:
+                raise OSError("JSON input exceeds maximum size")
+            return raw
     except OSError as exc:
         raise DispatchError(
             f"dispatch registry for manager at {manager_home} cannot be "
@@ -450,8 +479,9 @@ def load_active_generation(
             kind="registry_unreadable",
         ) from exc
     try:
+        _check_json_depth(text)
         data = json.loads(text)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise DispatchError(
             f"dispatch registry generation {generation_id} for manager at "
             f"{manager_home} is not valid JSON ({exc}); reinstall the "

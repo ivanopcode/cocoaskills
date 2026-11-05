@@ -84,7 +84,7 @@ def refusal(detail: str) -> SourceError:
 
 def check_path(path: Path) -> None:
     try:
-        raw = path.read_bytes()
+        raw = protocol_json.read_bytes(path)
     except FileNotFoundError:
         return
     except OSError as exc:

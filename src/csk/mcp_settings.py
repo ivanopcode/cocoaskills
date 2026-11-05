@@ -89,7 +89,7 @@ def run(args: argparse.Namespace) -> None:
         raise skillfile_deprecations.refusal(
             "Skillfile must be a regular file without links"
         )
-    before = manifest_path.read_bytes()
+    before = protocol_json.read_bytes(manifest_path)
     loaded = manifest.parse_manifest(protocol_json.loads(before), manifest_path)
     parsed = d.parse_mcp_servers(
         loaded.mcp_servers,
@@ -200,7 +200,7 @@ def run(args: argparse.Namespace) -> None:
         engine.require_recovered(lock)
         engine.recover(lock)
         if (
-            manifest_path.read_bytes() != before
+            protocol_json.read_bytes(manifest_path) != before
             or transactions.digest_target(local.path(root, home)) != local_digest
         ):
             raise ValueError(
