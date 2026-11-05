@@ -317,6 +317,15 @@ Redaction contract for `AuditRequest.files` (this is a hard boundary, not just a
 `evidence` concern):
 
 - A local backend (`cloud=False`) may receive raw file bytes.
+- Before hashing, detectors, or request reads, the pipeline admits the snapshot
+  against `max_request_bytes` using aggregate file sizes and UTF-8 relative-path
+  bytes. Oversized input raises `audit.request.too-large` through the existing
+  backend-error policy (strict blocks; advisory warns). This preflight assumes
+  the installer-owned snapshot is stable; request reads additionally enforce a
+  byte budget if files grow. The serialized request still has its own size gate.
+- Command-backend failure stderr exceeding 2,000 bytes is omitted in full before
+  decoding or redaction, so a truncated credential cannot leak. Short stderr is
+  scrubbed and its displayed result is limited to 2,000 characters.
 - A cloud backend (`cloud=True`) receives **scrubbed file content**: redaction is
   applied to the file bytes in the request, not only to `evidence`. If scrubbing
   changed any file, the request carries `redacted=True` and a `redaction`
