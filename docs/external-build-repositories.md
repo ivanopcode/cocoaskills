@@ -207,6 +207,24 @@ On Windows, `agent=auto` explicitly selects the local OpenSSH service pipe
 `\\.\pipe\openssh-ssh-agent`; `SSH_AUTH_SOCK` is not required or imported.
 The operator must enable the service and load keys with `ssh-add` first.
 Other Windows pipe paths are refused. This does not enable passphrase prompting.
+Windows SSH children also retain the operator's `PROGRAMDATA`: native OpenSSH
+requires it during startup, including `ssh -V`. This does not import system SSH
+configuration: the empty `-F` configuration and both known-host paths stay pinned.
+Ambient `PATH`, `USERPROFILE`, agent variables and executable overrides remain
+excluded. POSIX and HTTPS environments do not acquire this variable.
+
+The native Windows regression matrix is opt-in for a disposable loopback server.
+Set `CSK_TEST_WINDOWS_SSH_ROOT` to an operator-provisioned fixture directory with
+`endpoint.json` (`{"port":22224,"user":"TestUser"}`), `known_hosts`, authorized
+private keys named `ed25519`, `rsa`, `ecdsa`, and `encrypted`, and load the encrypted
+key into the standard service agent. Bind sshd only to 127.0.0.1; its forced
+upload-pack command must read the repository path from the fixture directory's
+`repository` file. Run `python -m pytest -q tests/test_git_admission_ssh.py`.
+The matrix creates disposable repositories and exercises complete snapshot
+admission through native Git/SSH. Without this kit only these five live cases
+skip; environment construction tests still run everywhere. Use no personal keys
+or existing repositories, and remove the kit and agent key after testing.
+
 
 Flags win over the environment. `--build-ssh-agent` with no value, or the value
 `auto`, adopts the operator's live `SSH_AUTH_SOCK`. Host keys default to the

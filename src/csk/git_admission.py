@@ -1490,6 +1490,13 @@ def _clean_git_environment(
             "PATH": os.fspath(paths.empty_path),
         }
     )
+    if transport == "ssh" and sys.platform == "win32":
+        # Win32-OpenSSH expands its system data directory during startup,
+        # even with -F and known-host files pinned. Without PROGRAMDATA it
+        # exits 255 before diagnostics (even ssh -V). This admits no search
+        # path or config: PATH stays empty and all SSH trust files are pinned.
+        if program_data := os.environ.get("PROGRAMDATA"):
+            environment["PROGRAMDATA"] = program_data
     if transport == "https":
         if https_broker is not None:
             environment["GIT_ASKPASS"] = os.fspath(https_broker)
