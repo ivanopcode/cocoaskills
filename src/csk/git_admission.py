@@ -1021,6 +1021,7 @@ def _run_git_ls_remote(
             SOURCE_UNAVAILABLE,
             "private Git resolution timed out",
             failure_class="timeout",
+            hints=_git_failure_hints(exc.stderr),
         ) from exc
     except subprocess.CalledProcessError as exc:
         raise GitAdmissionError(
@@ -1585,6 +1586,7 @@ def _run_git(
             SOURCE_UNAVAILABLE,
             "private Git operation timed out",
             failure_class="timeout",
+            hints=_git_failure_hints(exc.stderr),
         ) from exc
     except subprocess.CalledProcessError as exc:
         raise GitAdmissionError(
@@ -1614,13 +1616,26 @@ def _git_failure_hints(output: bytes | str | None) -> tuple[str, ...]:
         record = raw.removesuffix("\r").strip()
         if record.startswith("remote:"):
             continue
-        if re.fullmatch(r"sign_and_send_pubkey: signing failed for .+", record):
-            hint = "ssh-signing-failed"
+        if re.fullmatch(r"sign_and_send_pubkey: signing failed(?: for .+|: .+)", record):
+            if record.endswith(": agent refused operation"):
+                hint = "ssh-agent-refused"
+            elif record.endswith(": device not found"):
+                hint = "ssh-device-missing"
+            elif record.endswith(": invalid format"):
+                hint = "ssh-token-not-signed"
+            elif re.search(r": incorrect passphrase supplied(?: to decrypt private key)?$", record):
+                hint = "ssh-pin-unavailable"
+            else:
+                hint = "ssh-signing-failed"
+        elif re.fullmatch(r'load key "[^"\n]+\.pub": .+', record):
+            hint = "ssh-pinned-key-not-loaded"
         elif re.fullmatch(
             r"load key .+: (?:incorrect passphrase supplied to decrypt private key|invalid format)",
             record,
         ):
             hint = "ssh-key-load-failed"
+        elif re.fullmatch(r"warning: identity file .+ not accessible(?:[.:].*)?", record):
+            hint = "ssh-identity-inaccessible"
         else:
             continue
         if hint not in hints:
@@ -1658,7 +1673,7 @@ def _git_failure_hints(output: bytes | str | None) -> tuple[str, ...]:
 # response body could otherwise suppress a fallback at will.  Diagnostics
 # (askpass errors, signing failures, host-key warning blocks) state why a
 # helper step failed and may supply hints; the terminal outcome record states the
-# transport outcome, and the terminal record alone decides.  Unknown and
+# transport outcome; all evidence records must agree on one class. Unknown and
 # future output carries no positive outcome and is ignored; conflict means
 # two evidence-bearing records disagreeing, and no evidence at all fails
 # closed to unclassified.
