@@ -82,6 +82,26 @@ def test_descriptor_recheck(tmp_path, monkeypatch):
         pj.read_bytes(path)
 
 
+# Directory admission preserves the platform's existing I/O error before open;
+# an ordinary file remains readable through the same entry point.
+def test_directory_keeps_io_refusal(tmp_path, monkeypatch):
+    import errno
+    import os
+    path = tmp_path / 'config.json'
+    path.write_bytes(b'{}')
+    assert pj.read_bytes(path) == b'{}'
+    path.unlink()
+    path.mkdir()
+    def forbidden(*args, **kwargs):
+        pytest.fail('directory was opened')
+    monkeypatch.setattr(io, 'open', forbidden)
+    expected = PermissionError if os.name == 'nt' else IsADirectoryError
+    with pytest.raises(expected) as caught:
+        pj.read_bytes(path)
+    assert caught.value.errno == (errno.EACCES if os.name == 'nt' else errno.EISDIR)
+    assert caught.value.filename == str(path)
+
+
 # The copied standalone dispatcher enforces the same depth boundary.
 def test_standalone_depth():
     from csk import _dispatch_runtime as runtime
