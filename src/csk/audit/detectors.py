@@ -3,7 +3,9 @@ from __future__ import annotations
 from .. import protocol_json
 
 import ast
+from bisect import bisect_left
 import json
+import os
 import re
 import shlex
 import stat
@@ -11,7 +13,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .secret_values import detect_and_mask
+from .secret_values import detect_and_mask, sanitize_findings
 from .capabilities import CapabilityManifest
 from .model import CapabilityViolation, Finding, Location, Severity, Surface
 
@@ -19,7 +21,6 @@ from .model import CapabilityViolation, Finding, Location, Severity, Surface
 MAX_TEXT_BYTES = 1_000_000
 SECRET_MARKERS = ("TOKEN", "SECRET", "PASSWORD", "PASS", "KEY", "PRIVATE")
 
-_CURL_PIPE_RE = re.compile(r"\b(?:curl|wget)\b[^\n|;]*\|\s*(?:sh|bash|zsh|python)\b")
 _PYTHON_SHELL_TRUE_RE = re.compile(r"\bshell\s*=\s*True\b")
 _URL_RE = re.compile(r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+")
 _ENV_RE = re.compile(
@@ -47,13 +48,14 @@ COMMON_SYSTEM_COMMANDS = {
 
 def detect_snapshot(snapshot: Path, capabilities: CapabilityManifest) -> tuple[Finding, ...]:
     findings: list[Finding] = []
+    secret_values: set[str] = set()
     manifest_name = next((name for name in ("agent-skill.json", "csk-skill.json") if (snapshot / name).exists()), None)
     for item in _iter_text_files(snapshot):
         if isinstance(item, Finding):
             findings.append(item)
             continue
         rel_path, text = item
-        secrets, text = detect_and_mask(rel_path, text)
+        secrets, text = detect_and_mask(rel_path, text, secret_values)
         findings.extend(secrets)
         findings.extend(_detect_curl_pipe(rel_path, text))
         findings.extend(_detect_python_shell_true(rel_path, text))
@@ -65,13 +67,17 @@ def detect_snapshot(snapshot: Path, capabilities: CapabilityManifest) -> tuple[F
         findings.extend(_detect_minified_text(rel_path, text))
         if rel_path == manifest_name:
             findings.extend(_detect_manifest(rel_path, text))
-    return tuple(findings)
+    return sanitize_findings(findings, secret_values)
 
 
 def _iter_text_files(snapshot: Path) -> Iterable[tuple[str, str] | Finding]:
     # Runtime roots and legacy script paths are unrestricted by suffix. Scan
     # every regular snapshot file, including custom roots and extensionless scripts.
-    for path in sorted(snapshot.rglob("*")):
+    for entry in _walk_files(snapshot):
+        if isinstance(entry, Finding):
+            yield entry
+            continue
+        path = entry
         rel_path = path.relative_to(snapshot).as_posix()
         try:
             if path.is_symlink():
@@ -106,19 +112,42 @@ def _iter_text_files(snapshot: Path) -> Iterable[tuple[str, str] | Finding]:
         yield rel_path, text
 
 
+def _walk_files(snapshot: Path) -> Iterable[Path | Finding]:
+    pending = [snapshot]
+    while pending:
+        directory = pending.pop()
+        try:
+            with os.scandir(directory) as entries:
+                paths = sorted((Path(entry.path) for entry in entries), reverse=True)
+        except OSError:
+            yield _opaque_finding(directory.relative_to(snapshot).as_posix(), "scan skipped: directory read error")
+            continue
+        for path in paths:
+            if not path.is_symlink() and path.is_dir():
+                pending.append(path)
+            else:
+                yield path
+
+
 def _detect_curl_pipe(rel_path: str, text: str) -> list[Finding]:
-    return [
-        _finding(
-            finding_id="static.shell.curl-pipe",
-            category="shell-pipe-install",
-            severity=Severity.HIGH,
-            rel_path=rel_path,
-            text=text,
-            start=match.start(),
-            evidence=match.group(0),
-        )
-        for match in _CURL_PIPE_RE.finditer(text)
-    ]
+    findings: list[Finding] = []
+    newlines = [i for i, char in enumerate(text) if char == "\n"]
+    # Each segment is inspected once, rather than rescanning its suffix per curl.
+    for segment in re.finditer(r"[^|;\n]+", text):
+        end = segment.end()
+        if end == len(text) or text[end] != '|':
+            continue
+        target = re.compile(r"\s*(?:sh|bash|zsh|python)\b").match(text, end + 1)
+        source = re.search(r"\b(?:curl|wget)\b", segment.group())
+        if target and source:
+            start = segment.start() + source.start()
+            findings.append(_finding(
+                finding_id="static.shell.curl-pipe", category="shell-pipe-install",
+                severity=Severity.HIGH, rel_path=rel_path, text=text, start=start,
+                evidence=text[start:target.end()],
+                line=bisect_left(newlines, start) + 1,
+            ))
+    return findings
 
 
 def _detect_python_shell_true(rel_path: str, text: str) -> list[Finding]:
@@ -587,8 +616,9 @@ def _finding(
     start: int,
     evidence: str,
     violation: CapabilityViolation | None = None,
+    line: int | None = None,
 ) -> Finding:
-    line = text.count("\n", 0, start) + 1
+    line = line if line is not None else text.count("\n", 0, start) + 1
     return Finding(
         id=finding_id,
         surface=Surface.CODE,
@@ -605,4 +635,4 @@ def _finding(
 
 def _short_evidence(value: str) -> str:
     normalized = " ".join(value.strip().split())
-    return normalized[:160]
+    return normalized
