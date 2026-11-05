@@ -207,14 +207,39 @@ On Windows, `agent=auto` explicitly selects the local OpenSSH service pipe
 `\\.\pipe\openssh-ssh-agent`; `SSH_AUTH_SOCK` is not required or imported.
 The operator must enable the service and load keys with `ssh-add` first.
 Other Windows pipe paths are refused. This does not enable passphrase prompting.
-Windows SSH children also retain the operator's `PROGRAMDATA`: native OpenSSH
-requires it during startup, including `ssh -V`. This does not import system SSH
-configuration: the empty `-F` configuration and both known-host paths stay pinned.
+The pipe probe checks availability, not ownership: `auto` trusts whoever owns
+that name, as native OpenSSH does. Keep the real `ssh-agent` service running
+with Automatic startup: the name can be squatted while the service is stopped.
+Windows SSH children receive a synthesized empty private `PROGRAMDATA`: native
+OpenSSH requires the variable during startup, including `ssh -V`. The ambient
+value is ignored, even if missing, empty, relative or hostile. The empty `-F`
+configuration and both known-host paths remain independently pinned.
 Ambient `PATH`, `USERPROFILE`, agent variables and executable overrides remain
 excluded. POSIX and HTTPS environments do not acquire this variable.
 
 The native Windows regression matrix is opt-in for a disposable loopback server.
-Set `CSK_TEST_WINDOWS_SSH_ROOT` to an operator-provisioned fixture directory with
+The dedicated `windows-ssh.yml` CI job provisions this kit and requires all five
+matrix cases and both native startup cases to pass without skips. To reproduce
+it on a disposable elevated Windows host, run the `setup`, `run` and `cleanup`
+commands in `.github/scripts/windows_ssh_kit.py`; `cleanup` restores the service
+state and removes the generated keys, server/task and private run files.
+The kit requires Git for Windows, Python 3.14 with `.[dev]` and `bcrypt`, and
+the native OpenSSH client/server (included on Windows Server 2025). `bcrypt`
+unlocks only a generated fixture copy to load the service agent; this does not
+test interactive `ssh-add` prompting. From the checkout, for example:
+
+```powershell
+python -m pip install ".[dev]" bcrypt
+try {
+  python .github/scripts/windows_ssh_kit.py setup --root "$env:TEMP/csk-ssh-kit"
+  python .github/scripts/windows_ssh_kit.py run --root "$env:TEMP/csk-ssh-kit" --results "$env:TEMP/csk-ssh-evidence/results.xml"
+} finally {
+  python .github/scripts/windows_ssh_kit.py cleanup --root "$env:TEMP/csk-ssh-kit" --evidence "$env:TEMP/csk-ssh-evidence"
+}
+```
+
+For a separately provisioned fixture instead of the helper,
+set `CSK_TEST_WINDOWS_SSH_ROOT` to an operator-provisioned fixture directory with
 `endpoint.json` (`{"port":22224,"user":"TestUser"}`), `known_hosts`, authorized
 private keys named `ed25519`, `rsa`, `ecdsa`, and `encrypted`, and load the encrypted
 key into the standard service agent. Bind sshd only to 127.0.0.1; its forced
@@ -227,7 +252,8 @@ or existing repositories, and remove the kit and agent key after testing.
 
 
 Flags win over the environment. `--build-ssh-agent` with no value, or the value
-`auto`, adopts the operator's live `SSH_AUTH_SOCK`. Host keys default to the
+`auto`, adopts the operator's live `SSH_AUTH_SOCK` on POSIX and selects the
+standard service pipe on Windows, ignoring `SSH_AUTH_SOCK`. Host keys default to the
 operator home's `.ssh/known_hosts` because the fetch pins
 `StrictHostKeyChecking=yes`; the file is copied into the private root, so a
 fetch cannot rewrite operator state. All three accept symbolic links and are
@@ -272,8 +298,9 @@ every configured scope.
 A scope needs at least one of `agent` or `identity`; each alone is a complete
 selection:
 
-- `{"agent": "auto"}`: agent-only. The install adopts the operator's live
-  `SSH_AUTH_SOCK` at run time and the agent signs with its loaded keys in
+- `{"agent": "auto"}`: agent-only. At run time the install adopts the operator's
+  live `SSH_AUTH_SOCK` on POSIX or the standard service pipe on Windows,
+  ignoring `SSH_AUTH_SOCK` there. The agent signs with its loaded keys in
   turn. No key file is named, so a populated agent can exhaust the server's
   `MaxAuthTries` budget before reaching the right key.
 - `{"identity": "~/.ssh/key"}`: identity-file only, for an unencrypted key
