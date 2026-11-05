@@ -216,6 +216,10 @@ def gate_plans(
     except AuditInputTooLarge as exc:
         decision = policy.decide((_too_large_finding(config.audit.max_request_bytes + 1, config.audit.max_request_bytes),),
                                  mode=config.audit.mode, fail_on=config.audit.fail_on)
+        # A rejected legacy snapshot has no hash with which to verify a pin.
+        # Preserve strict legacy refusal even when HIGH is below fail_on.
+        if config.audit.mode == "strict" and any(plan.spec.schema_version < 3 for plan in plans):
+            decision = Decision.BLOCK
         message = f"audit {'blocked' if decision == Decision.BLOCK else 'warning'}: {exc}"
         return GateResult(reports=(), errors=(message,)) if decision == Decision.BLOCK else GateResult(reports=(), warnings=(message,))
     except AuditCanaryError as exc:
