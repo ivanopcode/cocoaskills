@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .. import protocol_json
+
 import ast
 import json
 import re
@@ -509,8 +511,8 @@ def _detect_manifest(snapshot: Path) -> list[Finding]:
     if not path.exists():
         return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        data = protocol_json.loads_compatible(protocol_json.read_bytes(path))
+    except (OSError, protocol_json.ProtocolJSONError):
         return []
     commands = data.get("commands", {}) if isinstance(data, dict) else {}
     if not isinstance(commands, dict):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 from pathlib import Path
@@ -26,7 +27,7 @@ def read_bytes(path: Path) -> bytes:
     with path.open("rb") as stream:
         try:
             size = os.fstat(stream.fileno()).st_size
-        except (OSError, ValueError):
+        except io.UnsupportedOperation:
             # Virtual snapshot paths expose in-memory streams, not descriptors.
             size = path.stat().st_size
         if size > MAX_INPUT_BYTES:
@@ -37,7 +38,7 @@ def read_bytes(path: Path) -> bytes:
     return raw
 
 
-def _check_depth(text: str) -> None:
+def check_depth(text: str) -> None:
     # Scan tokens without recursion or constructing a parsed object. Escaped
     # quotes and brackets inside strings do not affect container depth.
     depth = 0
@@ -95,7 +96,7 @@ def loads(raw: bytes | str) -> Any:
         )
     except ProtocolJSONError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise ProtocolJSONError(str(exc)) from exc
     _validate_unicode(value)
     return value
@@ -134,7 +135,7 @@ def loads_canonical(raw: bytes | str) -> Any:
         )
     except ProtocolJSONError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise ProtocolJSONError(str(exc)) from exc
     validate_canonical(value)
     return value
@@ -222,7 +223,7 @@ def _decode_utf8(
         raise ProtocolJSONError(bom_message)
     if not isinstance(raw, bytes) and len(text.encode("utf-8", errors="surrogatepass")) > MAX_INPUT_BYTES:
         raise ProtocolJSONSizeError("JSON input exceeds maximum size")
-    _check_depth(text)
+    check_depth(text)
     return text
 
 
