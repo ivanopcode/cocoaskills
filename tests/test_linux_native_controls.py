@@ -190,6 +190,9 @@ def test_descriptor_capacity_refuses_low_hard_limit_and_preserves_limit():
 from csk.builds import go_v1 as g
 previous = resource.getrlimit(resource.RLIMIT_NOFILE)
 c = g._PreparedWorkerLaunch("linux")
+second = g._PreparedWorkerLaunch("linux")
+assert second._read_fd != c._read_fd
+second.close_parent_copy()
 c.close_parent_copy()
 assert resource.getrlimit(resource.RLIMIT_NOFILE) == previous
 resource.setrlimit(resource.RLIMIT_NOFILE, (64,64))
