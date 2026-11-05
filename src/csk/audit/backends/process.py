@@ -5,6 +5,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+from typing import BinaryIO
 
 from .base import AuditBackendError
 
@@ -16,10 +17,12 @@ def run(argv: list[str], *, input: bytes, cwd: Path, env: dict[str, str],
     deadline = time.monotonic() + timeout
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, cwd=cwd, env=env)
+    stdin, stdout, stderr = proc.stdin, proc.stdout, proc.stderr
+    assert stdin is not None and stdout is not None and stderr is not None
     output = [bytearray(), bytearray()]
     overflow = threading.Event()
 
-    def drain(stream, index, limit):
+    def drain(stream: BinaryIO, index: int, limit: int) -> None:
         try:
             while chunk := stream.read(8192):
                 available = limit - len(output[index])
@@ -30,20 +33,20 @@ def run(argv: list[str], *, input: bytes, cwd: Path, env: dict[str, str],
         finally:
             stream.close()
 
-    def feed():
+    def feed() -> None:
         try:
-            proc.stdin.write(input)
-            proc.stdin.flush()
+            stdin.write(input)
+            stdin.flush()
         except (BrokenPipeError, OSError):
             pass
         finally:
             try:
-                proc.stdin.close()
+                stdin.close()
             except (BrokenPipeError, OSError):
                 pass
 
-    workers = [threading.Thread(target=drain, args=(proc.stdout, 0, MAX_RESPONSE_BYTES), daemon=True),
-               threading.Thread(target=drain, args=(proc.stderr, 1, 2001), daemon=True),
+    workers = [threading.Thread(target=drain, args=(stdout, 0, MAX_RESPONSE_BYTES), daemon=True),
+               threading.Thread(target=drain, args=(stderr, 1, 2001), daemon=True),
                threading.Thread(target=feed, daemon=True)]
     for worker in workers:
         worker.start()
