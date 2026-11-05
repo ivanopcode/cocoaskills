@@ -588,7 +588,7 @@ class DiskProtectedStore:
             or not self._proof(info, False)
         ):
             raise ValueError("protected file shape is invalid")
-        data = path.read_bytes()
+        data = protocol_json.read_bytes(path, maximum=maximum)
         if len(data) > maximum:
             raise ValueError("protected file exceeds limit")
         return data

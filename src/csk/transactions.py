@@ -2643,11 +2643,13 @@ def _read_bounded_regular(path: Path, *, limit: int) -> bytes:
             f"journal is not a bounded regular file: {path}"
         )
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(path, flags)
+    fd = protocol_json._open_regular(os.fspath(path), flags)
     try:
         after = os.fstat(fd)
         if not stat.S_ISREG(after.st_mode) or not os.path.samestat(before, after):
             raise TransactionCorruptionError(f"journal changed while opening: {path}")
+        if after.st_size > limit:
+            raise TransactionCorruptionError(f"journal exceeds the size limit: {path}")
         with os.fdopen(fd, "rb", closefd=False) as handle:
             payload = handle.read(limit + 1)
     finally:

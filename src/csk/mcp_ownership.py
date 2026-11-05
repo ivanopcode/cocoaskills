@@ -712,13 +712,15 @@ def _read_store(csk_home: Path, store: str, consumer: str) -> bytes | None:
         | getattr(os, "O_BINARY", 0)
     )
     try:
-        descriptor = os.open(current, flags)
+        descriptor = protocol_json._open_regular(os.fspath(current), flags)
     except OSError as exc:
         raise _unknown(f"cannot open store: {exc.strerror or exc}") from exc
     try:
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode) or not os.path.samestat(info, opened):
             raise _unknown("store changed while opening")
+        if opened.st_size > _STORE_LIMIT:
+            raise _unknown("store exceeds the size limit")
         with os.fdopen(descriptor, "rb", closefd=False) as handle:
             payload = handle.read(_STORE_LIMIT + 1)
     except OSError as exc:

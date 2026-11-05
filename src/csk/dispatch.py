@@ -234,7 +234,8 @@ def atomic_write_bytes(path: Path, content: bytes, *, mode: int) -> None:
         info is not None
         and stat.S_ISREG(info.st_mode)
         and not stat.S_ISLNK(info.st_mode)
-        and target.read_bytes() == content
+        and info.st_size == len(content)
+        and protocol_json.read_bytes(target, maximum=len(content)) == content
     ):
         if stat.S_IMODE(info.st_mode) != mode:
             os.chmod(target, mode)
