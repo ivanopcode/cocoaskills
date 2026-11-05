@@ -139,6 +139,7 @@ class AttemptDiagnostic:
     endpoint: EndpointProvenance
     classification: str
     code: str
+    hints: tuple[str, ...] = ()
 
     @property
     def failure_class(self) -> str:
@@ -373,6 +374,7 @@ def default_attempt(
             "trusted Git admission failed",
             code=code,
         )
+        failure.hints = exc.hints
         failure.original = _original_failure(exc, failure_class, code)
         raise failure from exc
 
@@ -421,6 +423,7 @@ def _original_failure(
         and isinstance(error.__cause__, git_trust.GitTrustError)
         else "trusted Git admission failed",
         failure_class=failure_class,
+        hints=error.hints,
     )
     failure.__cause__ = error
     return failure
@@ -437,6 +440,7 @@ def _normalise_failure(error: BaseException) -> TransportFailure:
             "trusted Git admission failed",
             code=code,
         )
+        failure.hints = error.hints
         failure.original = _original_failure(error, failure_class, code)
         return failure
     return TransportFailure(
@@ -532,6 +536,7 @@ def acquire_plan(
                     endpoint=endpoint.provenance,
                     classification=failure_class,
                     code=_safe_code(failure.code, "build_repository_transport_failure"),
+                    hints=failure.hints,
                 )
             )
             alternate = plan.next_endpoint(
@@ -650,6 +655,7 @@ def default_resolve_attempt(
             "trusted Git ref resolution failed",
             code=code,
         )
+        failure.hints = exc.hints
         failure.original = _original_failure(exc, failure_class, code)
         raise failure from exc
 
@@ -719,6 +725,7 @@ def resolve_plan(
                     endpoint=endpoint.provenance,
                     classification=failure_class,
                     code=_safe_code(failure.code, "build_repository_transport_failure"),
+                    hints=failure.hints,
                 )
             )
             alternate = plan.next_endpoint(
