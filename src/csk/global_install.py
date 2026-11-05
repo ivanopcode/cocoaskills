@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .terminal import terminal_text
+
 import json
 import os
 import shutil
@@ -326,11 +328,11 @@ def load_manifest(csk_home: Path) -> manifest.ProjectManifest:
 
 def list_declared(csk_home: Path) -> str:
     global_manifest = load_manifest(csk_home)
-    lines = [f"Global Skillfile: {global_skillfile(csk_home)}"]
+    lines = [f"Global Skillfile: {terminal_text(global_skillfile(csk_home))}"]
     if not global_manifest.skills:
         lines.append("  no skills declared")
     for decl in global_manifest.skills:
-        lines.append(f"  {decl.name} ({decl.ref.kind} {decl.ref.value})")
+        lines.append(f"  {terminal_text(decl.name)} ({terminal_text(decl.ref.kind)} {terminal_text(decl.ref.value)})")
     return "\n".join(lines)
 
 

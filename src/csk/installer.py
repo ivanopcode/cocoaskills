@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .terminal import terminal_text
+
 import hashlib
 import json
 import os
@@ -1558,8 +1560,8 @@ def _prompt_build_ssh_rule(
     namespace = build_ssh_module.default_scope(canonical_identity)
     host = canonical_identity.split("/")[0]
     print(
-        f"Skill {skill_name!r} builds {command!r} from the private SSH repository\n"
-        f"  {canonical_identity}\n"
+        f"Skill {terminal_text(skill_name)!r} builds {terminal_text(command)!r} from the private SSH repository\n"
+        f"  {terminal_text(canonical_identity)}\n"
         "No build-SSH credentials are configured for this scope."
     )
     candidates = build_ssh_module.discover_candidates()
@@ -1587,7 +1589,7 @@ def _prompt_build_ssh_rule(
     print("Detected candidates:")
     for index, (label, _, _) in enumerate(options, start=1):
         marker = "   <- default" if index == 1 and len(options) > 1 else ""
-        print(f"  [{index}] {label}{marker}")
+        print(f"  [{index}] {terminal_text(label)}{terminal_text(marker)}")
     choice_raw = input(f"Select [1-{len(options)}, empty=1, n=abort]: ").strip().lower()
     if choice_raw in {"n", "no"}:
         return None, False
@@ -1611,8 +1613,8 @@ def _prompt_build_ssh_rule(
         return None, False
     scope_answer = input(
         "Persist to config for future installs?\n"
-        f"  [1] {namespace}   (default)\n"
-        f"  [2] {host}\n"
+        f"  [1] {terminal_text(namespace)}   (default)\n"
+        f"  [2] {terminal_text(host)}\n"
         "  [3] this run only\n"
         "  or type a custom scope: "
     ).strip()
@@ -1635,7 +1637,7 @@ def _prompt_build_ssh_rule(
                 f"scope {scope!r} does not cover {canonical_identity}"
             )
     except build_ssh_module.BuildSSHError as exc:
-        print(f"Rejected: {exc}")
+        print(f"Rejected: {terminal_text(exc)}")
         return None, False
     return rule, persist
 
@@ -1964,8 +1966,8 @@ def _prompt_build_https_rule(
     namespace = build_https_module.default_scope(canonical_identity)
     host = canonical_identity.split("/", 1)[0]
     print(
-        f"Skill {skill_name!r} builds {command!r} from the private HTTPS repository\n"
-        f"  {canonical_identity}\n"
+        f"Skill {terminal_text(skill_name)!r} builds {terminal_text(command)!r} from the private HTTPS repository\n"
+        f"  {terminal_text(canonical_identity)}\n"
         "No build-HTTPS credentials are configured for this scope."
     )
     material = build_https_module.discover_host_material(
@@ -1983,7 +1985,7 @@ def _prompt_build_https_rule(
     print("Detected candidates:")
     for index, (label, _) in enumerate(options, start=1):
         marker = "   <- default" if index == 1 and len(options) > 1 else ""
-        print(f"  [{index}] {label}{marker}")
+        print(f"  [{index}] {terminal_text(label)}{terminal_text(marker)}")
     choice_raw = input(f"Select [1-{len(options)}, empty=1, n=abort]: ").strip().lower()
     if choice_raw in {"n", "no"}:
         return None, False
@@ -1995,8 +1997,8 @@ def _prompt_build_https_rule(
         return None, False
     scope_answer = input(
         "Persist to config for future installs?\n"
-        f"  [1] {namespace}   (default)\n"
-        f"  [2] {host}\n"
+        f"  [1] {terminal_text(namespace)}   (default)\n"
+        f"  [2] {terminal_text(host)}\n"
         "  [3] this run only\n"
         "  or type a custom scope: "
     ).strip()
@@ -2016,7 +2018,7 @@ def _prompt_build_https_rule(
                 f"scope {scope!r} does not cover {canonical_identity}"
             )
     except (ValueError, build_https_module.BuildHTTPSError) as exc:
-        print(f"Rejected: {exc}")
+        print(f"Rejected: {terminal_text(exc)}")
         return None, False
     if kind == "login":
         import getpass
@@ -2033,7 +2035,7 @@ def _prompt_build_https_rule(
                 home=build_https_module.resolve_operator_home(),
             )
         except build_https_module.BuildHTTPSError as exc:
-            print(f"Rejected: {exc}")
+            print(f"Rejected: {terminal_text(exc)}")
             return None, False
         rule = build_https_module.BuildHTTPSRule(scope=scope, token="keyring")
     else:

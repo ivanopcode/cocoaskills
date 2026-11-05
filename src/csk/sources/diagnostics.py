@@ -18,6 +18,8 @@ names its subject but never a secret.
 
 from __future__ import annotations
 
+from ..terminal import terminal_text
+
 from typing import Final
 
 from . import errors as source_errors
@@ -102,8 +104,8 @@ def format_diagnostic(code: str, reason: str) -> str:
     except KeyError as exc:
         raise ValueError(f"unknown schema-2 source diagnostic code: {code}") from exc
     return (
-        f"{code}: {source_errors.sanitize_detail(reason)}\n"
-        f"remediation: {remediation}"
+        f"{terminal_text(code)}: {terminal_text(source_errors.sanitize_detail(reason))}\n"
+        f"remediation: {terminal_text(remediation)}"
     )
 
 
