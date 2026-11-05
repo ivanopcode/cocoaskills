@@ -558,3 +558,24 @@ def test_windows_agent_pipe_probe_distinguishes_busy_from_missing(
     for result, error, expected in ((1, 0, True), (0, 121, True), (0, 2, False), (0, 5, False)):
         monkeypatch.setattr(ctypes, "get_last_error", lambda: error)
         assert git_admission._windows_ssh_agent_pipe_available() is expected
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows SSH option escaping")
+def test_windows_agent_argument_survives_ssh_config_parsing(tmp_path: Path) -> None:
+    # Slash spelling reaches the native pipe; raw backslashes are SSH config
+    # escapes and caused real authentication failure with a loaded key.
+    policy = git_admission.SSHPolicy(
+        wrapper=tmp_path / "wrapper.py", ssh=tmp_path / "ssh.exe",
+        expected_host=EXPECTED_HOST, repository_path=EXPECTED_PATH,
+        empty_config=tmp_path / "config", known_hosts=tmp_path / "known_hosts",
+        empty_known_hosts=tmp_path / "empty",
+        agent_socket=Path(r"\\.\pipe\openssh-ssh-agent"),
+    )
+    command = git_admission.exact_ssh_command(
+        policy, [str(policy.wrapper), EXPECTED_HOST, f"git-upload-pack '{EXPECTED_PATH}'"]
+    )
+    assert "IdentityAgent=//./pipe/openssh-ssh-agent" in command
+    assert r"IdentityAgent=\\.\pipe\openssh-ssh-agent" not in command
+    assert "BatchMode=yes" in command
+    assert "NumberOfPasswordPrompts=0" in command
+    assert "IdentitiesOnly=no" in command

@@ -603,6 +603,12 @@ def exact_ssh_command(policy: SSHPolicy, argv: Sequence[str]) -> tuple[str, ...]
         raise GitAdmissionError(
             IDENTITY_INVALID, "SSH authentication material must be absolute"
         )
+    # ssh parses -o values as configuration text: native backslashes are
+    # escapes there. Windows accepts the slash form of its local pipe path.
+    agent_option = (
+        agent_socket.as_posix() if os.name == "nt" and agent_socket is not None
+        else str(agent_socket)
+    )
     if identity is not None and agent_socket is not None:
         # The agent holds the private key, and the identity pins which agent key
         # is offered.  Without the pin a populated agent walks every loaded key
@@ -613,7 +619,7 @@ def exact_ssh_command(policy: SSHPolicy, argv: Sequence[str]) -> tuple[str, ...]
                 "-o",
                 "IdentitiesOnly=yes",
                 "-o",
-                f"IdentityAgent={agent_socket}",
+                f"IdentityAgent={agent_option}",
                 "-i",
                 os.fspath(identity),
             )
@@ -637,7 +643,7 @@ def exact_ssh_command(policy: SSHPolicy, argv: Sequence[str]) -> tuple[str, ...]
                 "-o",
                 "IdentityFile=none",
                 "-o",
-                f"IdentityAgent={agent_socket}",
+                f"IdentityAgent={agent_option}",
             )
         )
     else:
