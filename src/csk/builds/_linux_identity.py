@@ -57,39 +57,64 @@ def capture(path: Path, *, executable: bool = False) -> Image:
     raise refuse("excessive link chain")
 
 
+# Bound both wire size and expansion: offsets may alias long strings repeatedly.
+MAX_CACHE_BYTES = 8 * 1024 * 1024
+MAX_CACHE_ENTRIES = 100000
+MAX_CACHE_NAME = 4096
+MAX_CACHE_OUTPUT = 8 * 1024 * 1024
+MAX_CACHE_CANDIDATES = 64
+
+
 def cache_entries(data: bytes, machine: int = 62) -> dict[str, tuple[str, ...]]:
-    """Read only the new glibc 1.1 cache; refuse compatibility/hwcap entries."""
-    if not data.startswith(b"glibc-ld.so.cache1.1") or len(data) < 48 or len(data) > 8 * 1024 * 1024:
+    """Read bounded new-format glibc cache entries for exactly one ABI."""
+    expected_flags = {62: 0x303, 183: 0xA03}.get(machine)
+    if (expected_flags is None or len(data) < 48 or len(data) > MAX_CACHE_BYTES
+            or not data.startswith(b"glibc-ld.so.cache1.1")):
         raise refuse("unsupported loader cache")
     count, strings_size = struct.unpack_from("<II", data, 20)
     end = 48 + count * 24
-    if count > 100000 or end > len(data) or strings_size > len(data) - end or data[28] not in (0, 2):
+    if count > MAX_CACHE_ENTRIES or end > len(data) or strings_size > len(data) - end or data[28] not in (0, 2):
         raise refuse("loader cache bounds/endian")
-    def string(offset: int) -> str:
+    # First pass validates every applicable string and the total expansion before
+    # decoding/retaining any. Bounded find prevents repeated unbounded scanning.
+    def string_end(offset: int) -> int:
         if not end <= offset < end + strings_size:
             raise refuse("loader cache string bounds")
-        stop = data.find(b"\0", offset, end + strings_size)
+        stop = data.find(b"\0", offset, min(end + strings_size, offset + MAX_CACHE_NAME + 1))
         if stop < 0:
-            raise refuse("loader cache unterminated string")
-        try:
-            return data[offset:stop].decode("ascii")
-        except UnicodeDecodeError as exc:
-            raise refuse("loader cache encoding") from exc
-    result: dict[str, tuple[str, ...]] = {}
+            raise refuse("loader cache unterminated or oversized string")
+        return stop
+
+    output_bytes = 0
+    for i in range(count):
+        flags, key, value, _, _ = struct.unpack_from("<iIIIQ", data, 48 + i * 24)
+        # glibc ignores all foreign ABI flags, including architectures unknown
+        # here. They cannot poison a supported same-SONAME entry.
+        if flags != expected_flags:
+            continue
+        output_bytes += string_end(key) - key + string_end(value) - value
+        if output_bytes > MAX_CACHE_OUTPUT:
+            raise refuse("loader cache output exceeds bound")
+
+    result: dict[str, list[str]] = {}
     for i in range(count):
         flags, key, value, osversion, hwcap = struct.unpack_from("<iIIIQ", data, 48 + i * 24)
-        name, path = string(key), string(value)
-        # glibc cache contains multiple ABIs. Exclude known foreign ELF ABIs;
-        # never use a 32-bit entry to resolve a 64-bit dependency.
-        expected_flags = {62: 0x303, 183: 0xA03}[machine]
-        if flags in (0x3, 0x303, 0xA03, 0x803) and flags != expected_flags:
+        if flags != expected_flags:
             continue
-        if flags != expected_flags or hwcap or osversion or not path.startswith("/"):
-            # Refuse a selected unsupported cache entry, without guessing its
-            # applicability from the current manager CPU.
+        try:
+            name = data[key:string_end(key)].decode("ascii")
+            path = data[value:string_end(value)].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise refuse("loader cache encoding") from exc
+        if hwcap or osversion or not path.startswith("/"):
+            # Same-ABI conditional entries may win. Without modeling their
+            # applicability, refuse selection rather than ignore them.
             path = "!unsupported-cache-entry"
-        result[name] = result.get(name, ()) + (path,)
-    return result
+        candidates = result.setdefault(name, [])
+        if len(candidates) >= MAX_CACHE_CANDIDATES:
+            raise refuse("loader cache candidate count exceeds bound")
+        candidates.append(path)
+    return {name: tuple(paths) for name, paths in result.items()}
 
 
 @dataclass(frozen=True)

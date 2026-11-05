@@ -164,11 +164,9 @@ def test_admission_is_disconnected(monkeypatch, tmp_path):
 # GNU-only indexing accepts a defined symbol; an unterminated chain cannot
 # overrun the captured image or satisfy the parser by reaching unrelated bytes.
 def test_gnu_hash_bounds():
-    data = bytearray(image())
-    struct.pack_into('<qQ', data, 320, 0x6ffffef5, 0x400900)
-    struct.pack_into('<IIIIQII', data, 2304, 1, 1, 1, 5, 0, 1, 1)
+    data = gnu_image(image())
     assert elf.parse_elf(bytes(data)).defines_python
-    data[2332:] = bytes(len(data)-2332)
+    data[2396:] = bytes(len(data)-2396)
     with pytest.raises(go_v1.GoV1Error) as error:
         elf.parse_elf(bytes(data))
     assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
@@ -225,7 +223,7 @@ def test_adjacent_load_string_table():
 
 # Loader-altering tags cannot hide an unmodeled Python provider. BIND_NOW is
 # the nearby allowed control; this does not test all glibc dynamic tags.
-@pytest.mark.parametrize('tag,value', [(0x7fffffff, 1), (0x6ffffefc, 1), (30, 2), (0x6ffffffb, 0x800)])
+@pytest.mark.parametrize('tag,value', [(0x7fffffff, 1), (0x6ffffefc, 1), (0x7ffffffe, 1), (0x70000001, 1), (30, 2), (0x6ffffffb, 0x800)])
 def test_loader_scope_flags(tag, value):
     data = bytearray(image())
     struct.pack_into('<Q', data, 120+32, 112)
@@ -263,6 +261,173 @@ def test_special_python_symbol_is_not_embedding(section):
     data = bytearray(image())
     assert elf.parse_elf(bytes(data)).defines_python
     struct.pack_into('<H', data, 2072+6, section)
+    with pytest.raises(go_v1.GoV1Error) as error:
+        elf.parse_elf(bytes(data))
+    assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+
+
+def dynamic_tag(data, tag, value):
+    data = bytearray(data)
+    for pos in range(256, 768, 16):
+        current, = struct.unpack_from('<q', data, pos)
+        if current in (0, tag):
+            struct.pack_into('<qQ', data, pos, tag, value)
+            if current == 0:
+                struct.pack_into('<qQ', data, pos + 16, 0, 0)
+                for field in (152, 160):
+                    struct.pack_into('<Q', data, field, pos + 32 - 256)
+            return data
+    raise AssertionError('fixture dynamic table exhausted')
+
+
+def gnu_image(data, *, both=False):
+    data = bytearray(data)
+    if not both:
+        for pos in range(256, 768, 16):
+            if struct.unpack_from('<q', data, pos)[0] == 4:
+                struct.pack_into('<qQ', data, pos, 0x6ffffef5, 0x400940)
+                break
+    else:
+        data = dynamic_tag(data, 0x6ffffef5, 0x400940)
+    hashed = 5381
+    for byte in b'Py_GetVersion':
+        hashed = (hashed * 33 + byte) & 0xffffffff
+    bloom = (1 << (hashed % 64)) | (1 << ((hashed >> 5) % 64))
+    struct.pack_into('<IIIIQII', data, 2368, 1, 1, 1, 5, bloom, 1, hashed | 1)
+    return data
+
+
+# Single-hash lookup must honor buckets, chains, bloom and hash values, not
+# merely scan dynsym. Captured bytes do not prove native loader agreement.
+@pytest.mark.parametrize('plant', ['sysv-count', 'sysv-bucket', 'sysv-cycle',
+                                  'gnu-bloom', 'gnu-bucket', 'gnu-hash', 'gnu-shift'])
+def test_symbol_lookup_reachability(plant):
+    data = gnu_image(image()) if plant.startswith('gnu') else bytearray(image())
+    assert elf.parse_elf(bytes(data)).defines_python
+    offset, value = {'sysv-count': (2308, 1), 'sysv-bucket': (2312, 0),
+                     'sysv-cycle': (2320, 1), 'gnu-bloom': (2384, 0),
+                     'gnu-bucket': (2392, 0), 'gnu-hash': (2396, 1),
+                     'gnu-shift': (2380, 32)}[plant]
+    struct.pack_into('<Q' if plant == 'gnu-bloom' else '<I', data, offset, value)
+    if plant == 'gnu-bucket':
+        # An empty GNU table exports nothing; bytes after its bound are irrelevant.
+        assert not elf.parse_elf(bytes(data)).defines_python
+    else:
+        with pytest.raises(go_v1.GoV1Error) as error:
+            elf.parse_elf(bytes(data))
+        assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+
+
+# Reproduce the review's dependency: SysV nchain=1 conceals a GNU-visible
+# Py_GetVersion interposer. Dual hashes (including the unpatched control) refuse;
+# the nearby ordinary GNU-only dependency resolves the exact intended runtime.
+@pytest.mark.parametrize('machine', [62, 183])
+@pytest.mark.parametrize('plant', ['unpatched', 'short-sysv', 'empty-gnu'])
+def test_forged_dual_hash_dependency(layout, machine, plant):
+    executable, resolve = layout
+    write(executable.parents[2]/'loader', image(machine=machine, symbol=False, interpreter=False, kind=3))
+    runtime = 'libpython3.14.so.1.0'
+    write(executable, image(machine=machine, symbol=False, needed=['libevil.so.1', runtime], search='$ORIGIN/../lib'))
+    lib = executable.parents[1]/'lib'
+    expected = write(lib/runtime, gnu_image(image(machine=machine, soname=runtime, interpreter=False, kind=3)))
+    provider = lib/'libevil.so.1'
+    write(provider, gnu_image(image(machine=machine, symbol=False, soname=provider.name, interpreter=False, kind=3)))
+    assert resolve().runtime.identity.path == expected
+    forged = gnu_image(image(machine=machine, soname=provider.name, interpreter=False, kind=3), both=True)
+    if plant == 'short-sysv':
+        struct.pack_into('<I', forged, 2308, 1)
+    elif plant == 'empty-gnu':
+        struct.pack_into('<I', forged, 2392, 0)
+    write(provider, forged)
+    with pytest.raises(go_v1.GoV1Error) as error:
+        resolve()
+    assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+
+
+def cache_fixture(entries, *, name='libpython3.14.so.1.0', path='/lib/libpython3.14.so.1.0'):
+    # Shared offsets deliberately stress expansion rather than input size.
+    strings = name.encode() + b'\0' + path.encode() + b'\0'
+    end = 48 + 24 * len(entries)
+    data = bytearray(end) + strings
+    data[:20] = b'glibc-ld.so.cache1.1'
+    struct.pack_into('<II', data, 20, len(entries), len(strings))
+    for i, (flags, osversion, hwcap) in enumerate(entries):
+        struct.pack_into('<iIIIQ', data, 48 + i*24, flags, end, end+len(name)+1, osversion, hwcap)
+    return bytes(data)
+
+
+# F2's shared 64 KiB strings and other structured amplification cases refuse
+# before expansion. A supported cache paired with each plant must still parse.
+@pytest.mark.parametrize('plant', ['review-oom', 'total-output', 'candidates', 'count', 'machine'])
+def test_cache_expansion_bounds(plant):
+    good = cache_fixture([(0x303, 0, 0)])
+    assert linux.cache_entries(good) == {'libpython3.14.so.1.0': ('/lib/libpython3.14.so.1.0',)}
+    machine = 62
+    if plant == 'review-oom':
+        data = cache_fixture([(0x303, 0, 0)] * 50000, name='x'*65536, path='/'+'y'*65535)
+    elif plant == 'total-output':
+        data = cache_fixture([(0x303, 0, 0)] * 2048, name='x'*4096, path='/'+'y'*4095)
+    elif plant == 'candidates':
+        data = cache_fixture([(0x303, 0, 0)] * 65)
+    elif plant == 'count':
+        data = bytearray(good)
+        struct.pack_into('<I', data, 20, 0xffffffff)
+    else:
+        data, machine = good, 40
+    with pytest.raises(go_v1.GoV1Error) as error:
+        linux.cache_entries(data, machine)
+    assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+
+
+# Unknown foreign ABIs are ignored, like known foreign ABIs. Same-ABI hwcap/OS
+# conditions remain a deliberate refusal at selection: their precedence is unmodeled.
+@pytest.mark.parametrize('machine,flags', [(62, 0x303), (183, 0xa03)])
+def test_cache_abi_and_conditional_entries(machine, flags):
+    good = cache_fixture([(flags, 0, 0)])
+    expected = linux.cache_entries(good, machine)
+    assert expected == {'libpython3.14.so.1.0': ('/lib/libpython3.14.so.1.0',)}
+    for foreign in (0x3, 0x803, 0xb03, 0x123403):
+        assert linux.cache_entries(cache_fixture([(foreign, 0, 0), (flags, 0, 0)]), machine) == expected
+    for osversion, hwcap in ((1, 0), (0, 1)):
+        result = linux.cache_entries(cache_fixture([(flags, osversion, hwcap)]), machine)
+        assert result == {'libpython3.14.so.1.0': ('!unsupported-cache-entry',)}
+
+
+# Bounded deterministic fuzzing covers random bytes, valid mutations, extreme
+# counts/offsets and repeated strings. It is a finite corpus, not all-input proof;
+# every case must return a bounded mapping or the exact identity diagnostic.
+def test_cache_bounded_fuzz():
+    import random
+    rng = random.Random(20261106)
+    seed = cache_fixture([(0x303, 0, 0), (0xb03, 0, 0)])
+    accepted = refused = 0
+    for i in range(2000):
+        data = bytearray(seed) if i % 3 else bytearray(rng.randbytes(rng.randrange(256)))
+        if i % 3 == 1:
+            for _ in range(rng.randrange(1, 6)):
+                data[rng.randrange(len(data))] = rng.randrange(256)
+        elif i % 3 == 2 and i % 5:
+            struct.pack_into('<I', data, rng.choice([20, 24, 52, 56, 76, 80]), rng.choice([0, 1, 4096, 100000, 0xffffffff]))
+        try:
+            result = linux.cache_entries(bytes(data), rng.choice([62, 183]))
+            assert sum(len(paths) for paths in result.values()) <= linux.MAX_CACHE_ENTRIES
+            assert all(len(paths) <= linux.MAX_CACHE_CANDIDATES for paths in result.values())
+            assert sum(len(name)+len(path) for name, paths in result.items() for path in paths) <= linux.MAX_CACHE_OUTPUT
+            accepted += 1
+        except go_v1.GoV1Error as error:
+            assert error.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+            refused += 1
+    assert accepted and refused
+
+
+# A supported global export remains valid; version-qualified/hidden/local
+# version entries refuse instead of guessing an unversioned loader match.
+@pytest.mark.parametrize('version', [0, 2, 0x8001, 0x8002])
+def test_versioned_python_export_refuses(version):
+    data = dynamic_tag(image(), 0x6ffffff0, 0x400b00)
+    struct.pack_into('<HH', data, 2816, 0, 1)
+    assert elf.parse_elf(bytes(data)).defines_python
+    struct.pack_into('<H', data, 2818, version)
     with pytest.raises(go_v1.GoV1Error) as error:
         elf.parse_elf(bytes(data))
     assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
