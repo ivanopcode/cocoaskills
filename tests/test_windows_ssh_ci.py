@@ -56,6 +56,9 @@ def test_native_junit_rejects_unexecuted_or_failed_cases(tmp_path: Path, violati
 def _assert_job(job: dict) -> None:
     assert job["runs-on"] == "windows-2025", "native SSH job requires Windows 2025"
     assert "if" not in job, "native SSH job must not be manual-only or conditional"
+    # runner is unavailable in job-level env expressions; GitHub rejects the
+    # workflow before scheduling any job if it is used there.
+    assert all("runner." not in value for value in job["env"].values()), "runner context is unavailable in job env"
     steps = {step["id"]: step for step in job["steps"] if "id" in step}
     assert {"setup", "run", "cleanup"} <= steps.keys(), "native SSH kit lifecycle is required"
     for phase in ("setup", "run", "cleanup"):
@@ -89,6 +92,7 @@ def test_native_windows_job_runs_on_feature_push_and_pull_requests() -> None:
     ("wrong-root", "must share the same kit"),
     ("no-cleanup", "cleanup must always run"),
     ("no-junit", "JUnit guard requires its report"),
+    ("invalid-job-context", "runner context is unavailable in job env"),
 ])
 def test_native_job_checker_rejects_skip_or_cleanup_bypasses(violation: str, diagnostic: str) -> None:
     # Bounded workflow plants exercise the same checker as the valid job:
@@ -105,6 +109,8 @@ def test_native_job_checker_rejects_skip_or_cleanup_bypasses(violation: str, dia
         steps["run"]["run"] = steps["run"]["run"].replace("$env:CSK_SSH_KIT", "$env:OTHER")
     elif violation == "no-cleanup":
         steps["cleanup"].pop("if")
+    elif violation == "invalid-job-context":
+        job["env"]["CSK_SSH_KIT"] = "${{ runner.temp }}/csk-native-ssh-kit"
     else:
         steps["run"]["run"] = steps["run"]["run"].split(" --results")[0]
     with pytest.raises(AssertionError, match=diagnostic):
