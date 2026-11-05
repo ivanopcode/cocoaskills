@@ -223,7 +223,7 @@ def test_adjacent_load_string_table():
 
 # Loader-altering tags cannot hide an unmodeled Python provider. BIND_NOW is
 # the nearby allowed control; this does not test all glibc dynamic tags.
-@pytest.mark.parametrize('tag,value', [(0x7fffffff, 1), (0x6ffffefc, 1), (0x7ffffffe, 1), (0x70000001, 1), (30, 2), (0x6ffffffb, 0x800)])
+@pytest.mark.parametrize('tag,value', [(0x7fffffff, 1), (0x6ffffefc, 1), (0x7ffffffe, 1), (0x70000002, 1), (30, 2), (0x6ffffffb, 0x800)])
 def test_loader_scope_flags(tag, value):
     data = bytearray(image())
     struct.pack_into('<Q', data, 120+32, 112)
@@ -323,7 +323,7 @@ def test_symbol_lookup_reachability(plant):
 # the resolver; corrupt tables refuse in the parser. An ordinary dependency
 # resolves the exact intended runtime; bytes alone do not prove loader agreement.
 @pytest.mark.parametrize('machine', [62, 183])
-@pytest.mark.parametrize('plant', ['unpatched', 'short-sysv', 'empty-gnu'])
+@pytest.mark.parametrize('plant', ['unpatched', 'short-sysv', 'empty-gnu', 'empty-sysv', 'empty-bloom'])
 def test_forged_dual_hash_dependency(layout, machine, plant):
     executable, resolve = layout
     write(executable.parents[2]/'loader', image(machine=machine, symbol=False, interpreter=False, kind=3))
@@ -340,6 +340,10 @@ def test_forged_dual_hash_dependency(layout, machine, plant):
         struct.pack_into('<I', forged, 2308, 1)
     elif plant == 'empty-gnu':
         struct.pack_into('<I', forged, 2392, 0)
+    elif plant == 'empty-sysv':
+        struct.pack_into('<I', forged, 2312, 0)
+    elif plant == 'empty-bloom':
+        struct.pack_into('<Q', forged, 2384, 0)
     write(provider, forged)
     with pytest.raises(go_v1.GoV1Error) as error:
         resolve()
@@ -454,9 +458,19 @@ def test_cache_conditional_selection_refuses(layout, tmp_path, condition):
 
 # Native AArch64 libraries carry this presence-only BTI marker. It is admitted
 # only on that architecture with the supported zero value; other tags refuse.
-@pytest.mark.parametrize('machine,tag,value', [(62, 0x70000001, 0), (183, 0x70000001, 1), (183, 0x70000002, 0)])
+@pytest.mark.parametrize('machine,tag,value', [(183, 0x70000000, 0), (183, 0x70000001, 1), (183, 0x70000002, 0)])
 def test_aarch64_bti_tag_scope(machine, tag, value):
     assert elf.parse_elf(bytes(dynamic_tag(image(machine=183), 0x70000001, 0))).defines_python
     with pytest.raises(go_v1.GoV1Error) as error:
         elf.parse_elf(bytes(dynamic_tag(image(machine=machine), tag, value)))
+    assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+
+
+# Explicit relocation descriptors are accepted without interpreting relocations;
+# the neighboring unknown tag still refuses. This is identity-only evidence.
+@pytest.mark.parametrize('tag', [0x70000000, 0x70000001, 0x70000003, 0x6ffffef6, 0x6ffffef7])
+def test_known_relocation_tags(tag):
+    assert elf.parse_elf(bytes(dynamic_tag(image(), tag, 16))).defines_python
+    with pytest.raises(go_v1.GoV1Error) as error:
+        elf.parse_elf(bytes(dynamic_tag(image(), 0x70000002, 16)))
     assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID

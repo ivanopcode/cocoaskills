@@ -70,8 +70,9 @@ decoding. Candidate accumulation uses lists, avoiding repeated tuple copying.
 All foreign ABI flags are ignored. Same-ABI hwcap/OS-conditional entries remain
 unsupported candidates: ignoring one could skip the loader's preferred image.
 Dynamic tags use an explicit allowlist of supported linkage/hash/version tags
-and ordinary relocation/init metadata (including the zero-valued AArch64 BTI
-PLT marker on AArch64 only); unknown tags and unsupported flag bits
+and ordinary relocation/init metadata (including TLSDESC PLT/GOT, the x86-64
+PLT address/size/entry descriptors on x86-64, and the zero-valued AArch64 BTI
+PLT marker on AArch64); unknown tags and unsupported flag bits
 refuse.
 
 Additional deliberate availability limits: `e_flags` must be zero; interpreter
