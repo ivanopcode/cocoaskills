@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from . import protocol_json
+from .terminal import terminal_text
 
 import json
 import stat
@@ -132,7 +133,7 @@ def collect_global_status(config: GlobalConfig) -> ProjectStatus:
     return _attach_capability_evidence([status])[0]
 
 
-def _schema2_status_error_row(item: str) -> str:
+def _schema2_status_error_row(item: str, *, terminal: bool = False) -> str:
     """Render one evaluated status error for the operator.
 
     Items carrying a stable table code (the ``code: detail`` shape of
@@ -144,8 +145,13 @@ def _schema2_status_error_row(item: str) -> str:
 
     code, separator, reason = item.partition(": ")
     if separator and code in source_diagnostics.REMEDIATION_BY_CODE:
-        return source_diagnostics.format_diagnostic(code, reason)
-    return source_errors.sanitize_detail(item)
+        # Collection retains the historical JSON text. Display reconstructs only
+        # the table-owned layout; all remaining reason text is untrusted data.
+        suffix = "\nremediation: " + source_diagnostics.REMEDIATION_BY_CODE[code]
+        if terminal:
+            reason = reason.removesuffix(suffix)
+        return source_diagnostics.format_diagnostic(code, reason, terminal=terminal)
+    return terminal_text(item) if terminal else source_errors.sanitize_detail(item)
 
 
 def _collect_schema2_project_status(
@@ -1307,12 +1313,12 @@ def _render_project_status(
     global_scope: bool = False,
 ) -> str:
     lines = (
-        [f"Global skills ({project.path})"]
+        [f"Global skills ({terminal_text(project.path)})"]
         if global_scope
-        else [f"Project {project.alias} ({project.path})"]
+        else [f"Project {terminal_text(project.alias)} ({terminal_text(project.path)})"]
     )
     for substitution in project.substitutions:
-        lines.append(f"  SUBSTITUTION {substitution}")
+        lines.append(f"  SUBSTITUTION {terminal_text(substitution)}")
     if not project.skillfile_present:
         lines.append("  Skillfile.json missing")
         return "\n".join(lines)
@@ -1324,18 +1330,18 @@ def _render_project_status(
         commit = (skill.installed_commit or "")[:7]
         suffix = ""
         if skill.label == "update-available" and skill.resolved_commit:
-            suffix = f" -> {skill.resolved_commit[:7]}"
+            suffix = f" -> {terminal_text(skill.resolved_commit[:7])}"
         if skill.detail:
-            suffix += f" ({skill.detail})"
+            suffix += f" ({terminal_text(skill.detail)})"
         lines.append(
-            f"  {skill.name:<20} {skill.ref_kind:<8} {skill.ref:<12} "
-            f"{commit:<7}  {skill.label}{suffix}"
+            f"  {terminal_text(skill.name):<20} {terminal_text(skill.ref_kind):<8} {terminal_text(skill.ref):<12} "
+            f"{terminal_text(commit):<7}  {terminal_text(skill.label)}{terminal_text(suffix)}"
         )
     for build in project.builds:
         key = build.recorded_cache_key or build.expected_cache_key or ""
         lines.append(
-            f"  BUILD {build.provider}/{build.command:<20} {key}  "
-            f"{build.label} ({build.detail})"
+            f"  BUILD {terminal_text(build.provider)}/{terminal_text(build.command):<20} {terminal_text(key)}  "
+            f"{terminal_text(build.label)} ({terminal_text(build.detail)})"
         )
     if project.capability_evidence is not None:
         lines.append(
@@ -1349,13 +1355,13 @@ def _render_project_status(
     elif project.capability_evidence_error is not None:
         lines.append(
             "  CAPABILITY unavailable (result-only; currentness unchanged): "
-            + project.capability_evidence_error
+            + terminal_text(project.capability_evidence_error)
         )
     if project.mcp is not None:
         lines.extend(row.render() for row in project.mcp)
         lines.append("MCP authentication and connectivity: not checked.")
     for error in project.errors:
-        lines.append(f"  ERROR {error}")
+        lines.append(f"  ERROR {_schema2_status_error_row(error, terminal=True)}")
     return "\n".join(lines)
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .terminal import terminal_text
+
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -93,9 +95,9 @@ def render(results: list[AttestResult]) -> str:
         return "no installed skills to attest"
     lines: list[str] = []
     for item in results:
-        suffix = f" ({item.detail})" if item.detail else ""
-        registry = f" via {item.registry}" if item.registry else ""
-        lines.append(f"{item.project}: {item.skill:<24} {item.result}{registry}{suffix}")
+        suffix = f" ({terminal_text(item.detail)})" if item.detail else ""
+        registry = f" via {terminal_text(item.registry)}" if item.registry else ""
+        lines.append(f"{terminal_text(item.project)}: {terminal_text(item.skill):<24} {terminal_text(item.result)}{terminal_text(registry)}{terminal_text(suffix)}")
     return "\n".join(lines)
 
 

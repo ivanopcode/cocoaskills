@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .terminal import terminal_text
+
 import hashlib
 import json
 import os
@@ -142,6 +144,21 @@ def failure_text(exc: BaseException, *, verbose: bool = False) -> str:
 
     chain = list(_failure_cause_chain(exc))
     message = _failure_message_with_specific_reason(exc, chain)
+    if isinstance(exc, git_ops.GitError) or any(isinstance(cause, git_ops.GitError) for cause in chain):
+        message = terminal_text(message)
+    missing_error = next(
+        (item for item in [exc, *chain] if isinstance(item, closure.MissingSystemCommandsError)),
+        None,
+    )
+    if missing_error is not None:
+        message = closure.format_missing_system_commands([
+            closure.MissingSystemCommand(
+                terminal_text(item.skill),
+                terminal_text(item.command) if item.command is not None else None,
+                terminal_text(item.hint) if item.hint is not None else None,
+            )
+            for item in missing_error.missing
+        ])
     if isinstance(exc, git_admission.GitAdmissionError) and exc.failure_class:
         failure_class = (
             exc.failure_class
@@ -219,7 +236,7 @@ def _render_coded_failure_cause(exc: BaseException) -> str | None:
     if code is None or reason is None:
         return None
     namespace = "go-v1 " if type(exc) is build_toolchain.ToolchainError else ""
-    return _sanitize_failure_secrets(f"{namespace}{code}: {reason}")
+    return _sanitize_failure_secrets(f"{namespace}{code}: {terminal_text(reason)}")
 
 
 def _omit_failure_cause(_exc: BaseException) -> None:
@@ -361,7 +378,7 @@ def install(config: GlobalConfig, *, alias: str | None = None, options: InstallO
                 result for result in results if result.status == "ok"
             )
             successful.messages.append(
-                f"{successful.alias}: post-install garbage collection "
+                f"{terminal_text(successful.alias)}: post-install garbage collection "
                 f"skipped: {exc}"
             )
     return results
@@ -431,7 +448,7 @@ def _selected_projects(config: GlobalConfig, alias: str | None) -> list[ProjectC
         return list(config.projects.values())
     project = config.projects.get(alias)
     if project is None:
-        raise InstallError(f"Unknown project alias: {alias}")
+        raise InstallError(f"Unknown project alias: {terminal_text(alias)}")
     return [project]
 
 
@@ -571,7 +588,7 @@ def _install_schema2_once(
             has_source_substitution or has_external_substitution
         ) and strict_audit:
             raise InstallError(
-                f"Dev substitutions are active in {dev_substitutions.DEV_MANIFEST_NAME}; "
+                f"Dev substitutions are active in {terminal_text(dev_substitutions.DEV_MANIFEST_NAME)}; "
                 "strict audit refuses substituted installs"
             )
         if has_source_substitution or has_external_substitution:
@@ -592,8 +609,8 @@ def _install_schema2_once(
                         f"{repository_substitution.ref_kind} {repository_substitution.ref_value}"
                     )
                     result.messages.append(
-                        f"{project.alias}: BUILD REPOSITORY SUBSTITUTION "
-                        f"{skill_name}.{repository_name} -> {selected}"
+                        f"{terminal_text(project.alias)}: BUILD REPOSITORY SUBSTITUTION "
+                        f"{terminal_text(skill_name)}.{terminal_text(repository_name)} -> {terminal_text(selected)}"
                     )
         try:
             hybrid_decls = hybrid.load_hybrid_decls(config.path.parent)
@@ -611,7 +628,7 @@ def _install_schema2_once(
         ]
         if applicable:
             raise InstallError(
-                f"Hybrid skill declarations are not supported for schema-2 project '{project.alias}'"
+                f"Hybrid skill declarations are not supported for schema-2 project '{terminal_text(project.alias)}'"
             )
         git_tools: dict[
             tuple[
@@ -845,15 +862,15 @@ def _publish_empty_dispatch_scope(
         canonical = dispatch.canonical_root_for_project(project.path)
     except OSError as exc:
         result.messages.append(
-            f"{project.alias}: dispatch scope not published: {exc}"
+            f"{terminal_text(project.alias)}: dispatch scope not published: {exc}"
         )
         return
     try:
         os.stat(canonical)
     except OSError:
         result.messages.append(
-            f"{project.alias}: dispatch scope not published: project root "
-            f"{canonical} cannot be stated"
+            f"{terminal_text(project.alias)}: dispatch scope not published: project root "
+            f"{terminal_text(canonical)} cannot be stated"
         )
         return
     try:
@@ -902,7 +919,7 @@ def _install_project_once(
             return result
         if project_manifest is None:
             result.status = "skipped"
-            result.messages.append(f"{project.alias}: Skillfile.json not found; skipped")
+            result.messages.append(f"{terminal_text(project.alias)}: Skillfile.json not found; skipped")
             _publish_empty_dispatch_scope(config, project, options, result)
             return result
 
@@ -930,7 +947,7 @@ def _install_project_once(
                 result.errors.append(f"{project.alias}: {exc.code}: {exc}")
                 return result
             result.status = "skipped"
-            result.messages.append(f"{project.alias}: {exc.code}: {exc}; skipped")
+            result.messages.append(f"{terminal_text(project.alias)}: {terminal_text(exc.code)}: {exc}; skipped")
             _publish_empty_dispatch_scope(config, project, options, result)
             return result
 
@@ -952,7 +969,7 @@ def _install_project_once(
         if substitutions or dev_manifest.build_repository_substitutions:
             if config.audit.enabled and config.audit.mode == "strict":
                 raise InstallError(
-                    f"Dev substitutions are active in {dev_substitutions.DEV_MANIFEST_NAME}; "
+                    f"Dev substitutions are active in {terminal_text(dev_substitutions.DEV_MANIFEST_NAME)}; "
                     "strict audit refuses substituted installs"
                 )
             try:
@@ -964,12 +981,12 @@ def _install_project_once(
                 )
             except gitignore_gate.GitignoreError as exc:
                 result.status = "skipped"
-                result.messages.append(f"{project.alias}: {exc}; skipped")
+                result.messages.append(f"{terminal_text(project.alias)}: {exc}; skipped")
                 _publish_empty_dispatch_scope(config, project, options, result)
                 return result
             for substitution in substitutions.values():
                 result.messages.append(
-                    f"{project.alias}: SUBSTITUTION {substitution.name} -> {substitution.describe()}"
+                    f"{terminal_text(project.alias)}: SUBSTITUTION {terminal_text(substitution.name)} -> {substitution.describe()}"
                 )
             for skill_name in sorted(dev_manifest.build_repository_substitutions):
                 for repository_name, repository_substitution in sorted(
@@ -982,8 +999,8 @@ def _install_project_once(
                         f"{repository_substitution.ref_kind} {repository_substitution.ref_value}"
                     )
                     result.messages.append(
-                        f"{project.alias}: BUILD REPOSITORY SUBSTITUTION "
-                        f"{skill_name}.{repository_name} -> {selected}"
+                        f"{terminal_text(project.alias)}: BUILD REPOSITORY SUBSTITUTION "
+                        f"{terminal_text(skill_name)}.{terminal_text(repository_name)} -> {terminal_text(selected)}"
                     )
 
         try:
@@ -1003,7 +1020,7 @@ def _install_project_once(
         project_declared = {decl.name for decl in project_manifest.skills}
         for shadowed in sorted(item.decl.name for item in applicable if item.decl.name in project_declared):
             result.messages.append(
-                f"{project.alias}: hybrid skill {shadowed} is shadowed by the project declaration"
+                f"{terminal_text(project.alias)}: hybrid skill {terminal_text(shadowed)} is shadowed by the project declaration"
             )
         hybrid_direct = [item.decl for item in applicable if item.decl.name not in project_declared]
         effective_manifest = (
@@ -1026,7 +1043,7 @@ def _install_project_once(
             )
             if options.fetch:
                 for repo in sorted(fetched_repos - fetched_before):
-                    result.messages.append(f"{project.alias}: fetched {repo.name}")
+                    result.messages.append(f"{terminal_text(project.alias)}: fetched {terminal_text(repo.name)}")
             hybrid_store_names = _hybrid_store_names(nodes, project_declared)
             plans = [
                 SkillPlan(decl=node.decl, resolved=node.resolved, repo=node.repo, snapshot=node.snapshot, spec=node.spec)
@@ -1124,11 +1141,11 @@ def _install_project_once(
                         separators=(",", ":"),
                     )
                     result.messages.append(
-                        f"{project.alias}: build {payload}"
+                        f"{terminal_text(project.alias)}: build {terminal_text(payload)}"
                     )
                 for node in nodes:
-                    result.messages.append(f"{project.alias}: {_node_summary(node)} (planned)")
-                result.messages.append(f"{project.alias}: dry-run; no files modified")
+                    result.messages.append(f"{terminal_text(project.alias)}: {_node_summary(node)} (planned)")
+                result.messages.append(f"{terminal_text(project.alias)}: dry-run; no files modified")
                 return result
 
             (
@@ -1202,7 +1219,7 @@ def _install_project_once(
                 project_bin
             ):
                 result.messages.append(
-                    f"{project.alias}: commands are installed in {project_bin}, which is not on PATH; "
+                    f"{terminal_text(project.alias)}: commands are installed in {terminal_text(project_bin)}, which is not on PATH; "
                     "agent skills resolve that directory directly. For optional bare commands in an interactive "
                     "shell, run 'csk shell-init --install' once and source the printed hook from your profile"
                 )
@@ -1254,11 +1271,11 @@ def _node_summary(node: closure.ClosureNode) -> str:
     active = ",".join(sorted(node.active_commands()))
     consumers_label = ",".join(node.consumers())
     summary = (
-        f"{node.name} {node.resolved.kind} {node.resolved.ref} {node.resolved.commit[:7]} "
-        f"context={'yes' if node.context_active else 'no'} commands=[{active}] via={consumers_label}"
+        f"{terminal_text(node.name)} {terminal_text(node.resolved.kind)} {terminal_text(node.resolved.ref)} {terminal_text(node.resolved.commit[:7])} "
+        f"context={terminal_text('yes' if node.context_active else 'no')} commands=[{terminal_text(active)}] via={terminal_text(consumers_label)}"
     )
     if node.substituted:
-        summary += f" SUBSTITUTED ({node.substituted})"
+        summary += f" SUBSTITUTED ({terminal_text(node.substituted)})"
     return summary
 
 
@@ -1312,7 +1329,7 @@ def _operator_program(
     try:
         return Path(resolve_tool(name, search_path=os.pathsep.join(operator_search_path.entries)))
     except FileNotFoundError as exc:
-        raise InstallError(f"operator-provided {name} is unavailable") from exc
+        raise InstallError(f"operator-provided {terminal_text(name)} is unavailable") from exc
 
 
 def _external_git_tool(
@@ -1442,7 +1459,7 @@ def _external_static_audit(subject: build_repository_pipeline.AuditSubject) -> N
     if blocked:
         raise InstallError(
             "external repository static audit blocked: "
-            + ", ".join(sorted({finding.id for finding in blocked}))
+            + terminal_text(", ".join(sorted({finding.id for finding in blocked})))
         )
 
 
@@ -1552,7 +1569,7 @@ def _rule_credentials(
         )
     except git_admission.GitAdmissionError as exc:
         raise InstallError(
-            f"build_ssh scope {rule.scope!r} selected for {canonical_identity}: {exc}"
+            f"build_ssh scope {terminal_text(rule.scope)!r} selected for {terminal_text(canonical_identity)}: {exc}"
         ) from exc
 
 
@@ -1571,8 +1588,8 @@ def _prompt_build_ssh_rule(
     namespace = build_ssh_module.default_scope(canonical_identity)
     host = canonical_identity.split("/")[0]
     print(
-        f"Skill {skill_name!r} builds {command!r} from the private SSH repository\n"
-        f"  {canonical_identity}\n"
+        f"Skill {terminal_text(skill_name)!r} builds {terminal_text(command)!r} from the private SSH repository\n"
+        f"  {terminal_text(canonical_identity)}\n"
         "No build-SSH credentials are configured for this scope."
     )
     candidates = build_ssh_module.discover_candidates()
@@ -1600,7 +1617,7 @@ def _prompt_build_ssh_rule(
     print("Detected candidates:")
     for index, (label, _, _) in enumerate(options, start=1):
         marker = "   <- default" if index == 1 and len(options) > 1 else ""
-        print(f"  [{index}] {label}{marker}")
+        print(f"  [{index}] {terminal_text(label)}{terminal_text(marker)}")
     choice_raw = input(f"Select [1-{len(options)}, empty=1, n=abort]: ").strip().lower()
     if choice_raw in {"n", "no"}:
         return None, False
@@ -1624,8 +1641,8 @@ def _prompt_build_ssh_rule(
         return None, False
     scope_answer = input(
         "Persist to config for future installs?\n"
-        f"  [1] {namespace}   (default)\n"
-        f"  [2] {host}\n"
+        f"  [1] {terminal_text(namespace)}   (default)\n"
+        f"  [2] {terminal_text(host)}\n"
         "  [3] this run only\n"
         "  or type a custom scope: "
     ).strip()
@@ -1648,7 +1665,7 @@ def _prompt_build_ssh_rule(
                 f"scope {scope!r} does not cover {canonical_identity}"
             )
     except build_ssh_module.BuildSSHError as exc:
-        print(f"Rejected: {exc}")
+        print(f"Rejected: {terminal_text(exc)}")
         return None, False
     return rule, persist
 
@@ -1790,8 +1807,8 @@ def _https_rule_credentials(
         value = os.environ.get(rule.token_env)
         if not value:
             raise InstallError(
-                f"{git_admission.CREDENTIAL_POLICY_INVALID}: the environment "
-                f"variable configured for build_https scope {rule.scope!r} is "
+                f"{terminal_text(git_admission.CREDENTIAL_POLICY_INVALID)}: the environment "
+                f"variable configured for build_https scope {terminal_text(rule.scope)!r} is "
                 "not set"
             )
         return git_admission.OperatorHTTPSCredentials(
@@ -1807,9 +1824,9 @@ def _https_rule_credentials(
         )
         if not token:
             raise InstallError(
-                f"{git_admission.CREDENTIAL_POLICY_INVALID}: build_https scope "
-                f"{rule.scope!r} selects a stored token, but none is saved; run: "
-                f"csk config build-https login {rule.scope}"
+                f"{terminal_text(git_admission.CREDENTIAL_POLICY_INVALID)}: build_https scope "
+                f"{terminal_text(rule.scope)!r} selects a stored token, but none is saved; run: "
+                f"csk config build-https login {terminal_text(rule.scope)}"
             )
         return git_admission.OperatorHTTPSCredentials(
             scope=rule.scope,
@@ -1821,10 +1838,10 @@ def _https_rule_credentials(
     material = build_https_module.read_host_credentials(host, git_executable, home)
     if material is None:
         raise InstallError(
-            f"{git_admission.CREDENTIAL_POLICY_INVALID}: build_https scope "
-            f"{rule.scope!r} selects your Git credentials, but no helper holds "
-            f"one for {host!r}; clone once over HTTPS, or run: "
-            f"csk config build-https login {rule.scope}"
+            f"{terminal_text(git_admission.CREDENTIAL_POLICY_INVALID)}: build_https scope "
+            f"{terminal_text(rule.scope)!r} selects your Git credentials, but no helper holds "
+            f"one for {terminal_text(host)!r}; clone once over HTTPS, or run: "
+            f"csk config build-https login {terminal_text(rule.scope)}"
         )
     username, token = material
     return git_admission.OperatorHTTPSCredentials(
@@ -1977,8 +1994,8 @@ def _prompt_build_https_rule(
     namespace = build_https_module.default_scope(canonical_identity)
     host = canonical_identity.split("/", 1)[0]
     print(
-        f"Skill {skill_name!r} builds {command!r} from the private HTTPS repository\n"
-        f"  {canonical_identity}\n"
+        f"Skill {terminal_text(skill_name)!r} builds {terminal_text(command)!r} from the private HTTPS repository\n"
+        f"  {terminal_text(canonical_identity)}\n"
         "No build-HTTPS credentials are configured for this scope."
     )
     material = build_https_module.discover_host_material(
@@ -1996,7 +2013,7 @@ def _prompt_build_https_rule(
     print("Detected candidates:")
     for index, (label, _) in enumerate(options, start=1):
         marker = "   <- default" if index == 1 and len(options) > 1 else ""
-        print(f"  [{index}] {label}{marker}")
+        print(f"  [{index}] {terminal_text(label)}{terminal_text(marker)}")
     choice_raw = input(f"Select [1-{len(options)}, empty=1, n=abort]: ").strip().lower()
     if choice_raw in {"n", "no"}:
         return None, False
@@ -2008,8 +2025,8 @@ def _prompt_build_https_rule(
         return None, False
     scope_answer = input(
         "Persist to config for future installs?\n"
-        f"  [1] {namespace}   (default)\n"
-        f"  [2] {host}\n"
+        f"  [1] {terminal_text(namespace)}   (default)\n"
+        f"  [2] {terminal_text(host)}\n"
         "  [3] this run only\n"
         "  or type a custom scope: "
     ).strip()
@@ -2029,7 +2046,7 @@ def _prompt_build_https_rule(
                 f"scope {scope!r} does not cover {canonical_identity}"
             )
     except (ValueError, build_https_module.BuildHTTPSError) as exc:
-        print(f"Rejected: {exc}")
+        print(f"Rejected: {terminal_text(exc)}")
         return None, False
     if kind == "login":
         import getpass
@@ -2046,7 +2063,7 @@ def _prompt_build_https_rule(
                 home=build_https_module.resolve_operator_home(),
             )
         except build_https_module.BuildHTTPSError as exc:
-            print(f"Rejected: {exc}")
+            print(f"Rejected: {terminal_text(exc)}")
             return None, False
         rule = build_https_module.BuildHTTPSRule(scope=scope, token="keyring")
     else:
@@ -2529,7 +2546,7 @@ def _publish_external_builds(
             or result.subject is None
             or result.build_source is None
         ):
-            raise InstallError(f"external build {node.name}.{name} returned incomplete state")
+            raise InstallError(f"external build {terminal_text(node.name)}.{terminal_text(name)} returned incomplete state")
         receipt_value = protocol_json.loads_canonical(result.receipt)
         assert isinstance(receipt_value, dict)
         artifact_value = receipt_value.get("artifact")
@@ -2541,13 +2558,13 @@ def _publish_external_builds(
         if node_package is None:
             if receipt_schema_version != 2:
                 raise InstallError(
-                    f"external build {node.name}.{name} returned receipt "
-                    f"schema {receipt_schema_version!r} without a source package"
+                    f"external build {terminal_text(node.name)}.{terminal_text(name)} returned receipt "
+                    f"schema {terminal_text(receipt_schema_version)!r} without a source package"
                 )
         elif receipt_schema_version != 3:
             raise InstallError(
-                f"external build {node.name}.{name} returned receipt "
-                f"schema {receipt_schema_version!r} for a source package"
+                f"external build {terminal_text(node.name)}.{terminal_text(name)} returned receipt "
+                f"schema {terminal_text(receipt_schema_version)!r} for a source package"
             )
         selected_state = result.subject.effective
         substitution_record = (
@@ -3052,8 +3069,8 @@ def _build_private_misses(
     for plan in candidates:
         if plan.inspection.status is build_cache.CacheEntryStatus.UNSUPPORTED:
             raise InstallError(
-                f"{plan.driver} cache is unavailable: "
-                f"{plan.inspection.reason}"
+                f"{terminal_text(plan.driver)} cache is unavailable: "
+                f"{terminal_text(plan.inspection.reason)}"
             )
     if not candidates:
         return {}
@@ -3098,14 +3115,14 @@ def _build_private_misses(
         if isinstance(plan.input, build_metadata.SourceAwareBuildInput):
             if not allow_source_aware:
                 raise InstallError(
-                    f"{plan.provider}.{plan.command} selected a receipt-3 build input, "
+                    f"{terminal_text(plan.provider)}.{terminal_text(plan.command)} selected a receipt-3 build input, "
                     "which the legacy build lane cannot publish"
                 )
             plan_toolchain = plan.input.build.toolchain
         else:
             if allow_source_aware:
                 raise InstallError(
-                    f"{plan.provider}.{plan.command} selected a legacy build input, "
+                    f"{terminal_text(plan.provider)}.{terminal_text(plan.command)} selected a legacy build input, "
                     "which the source-aware build lane cannot publish"
                 )
             plan_toolchain = plan.input.toolchain
@@ -3120,12 +3137,12 @@ def _build_private_misses(
         if isinstance(plan.input, build_metadata.SourceAwareBuildInput):
             if not allow_source_aware:
                 raise InstallError(
-                    f"{plan.provider}.{plan.command} selected a receipt-3 build input, "
+                    f"{terminal_text(plan.provider)}.{terminal_text(plan.command)} selected a receipt-3 build input, "
                     "which the legacy build lane cannot publish"
                 )
         elif allow_source_aware:
             raise InstallError(
-                f"{plan.provider}.{plan.command} selected a legacy build input, "
+                f"{terminal_text(plan.provider)}.{terminal_text(plan.command)} selected a legacy build input, "
                 "which the source-aware build lane cannot publish"
             )
         provider = providers_by_name.get(plan.provider)
@@ -3141,8 +3158,8 @@ def _build_private_misses(
                 continue
             if inspection.status is build_cache.CacheEntryStatus.UNSUPPORTED:
                 raise InstallError(
-                    f"{plan.driver} cache is unavailable: "
-                    f"{inspection.reason}"
+                    f"{terminal_text(plan.driver)} cache is unavailable: "
+                    f"{terminal_text(inspection.reason)}"
                 )
             command = next(
                 (
@@ -3188,9 +3205,9 @@ def _build_private_misses(
             artifact = built.artifact
             if artifact.metadata.path != plan.input.artifact_path:
                 raise InstallError(
-                    f"{plan.provider}.{plan.command} produced artifact "
-                    f"{artifact.metadata.path!r}, expected "
-                    f"{plan.input.artifact_path!r}"
+                    f"{terminal_text(plan.provider)}.{terminal_text(plan.command)} produced artifact "
+                    f"{terminal_text(artifact.metadata.path)!r}, expected "
+                    f"{terminal_text(plan.input.artifact_path)!r}"
                 )
             # The artifact was produced by the compiler inside the manager's
             # private operation root, but only POSIX gives it the private,
@@ -3282,8 +3299,8 @@ def _publish_planned_builds(
             or inspection.artifact_path is None
         ):
             raise InstallError(
-                f"{plan.driver} cache did not yield a verified winner for "
-                f"{plan.provider}.{plan.command}: {inspection.reason}"
+                f"{terminal_text(plan.driver)} cache did not yield a verified winner for "
+                f"{terminal_text(plan.provider)}.{terminal_text(plan.command)}: {terminal_text(inspection.reason)}"
             )
         receipt = inspection.receipt
         marker = install_marker.InstallMarkerBuild(
@@ -3403,7 +3420,7 @@ def _commit_materialization(
             )
         except dispatch.DispatchPublishError as exc:
             raise InstallError(
-                f"{project.alias}: dispatch publication failed: {exc}"
+                f"{terminal_text(project.alias)}: dispatch publication failed: {exc}"
             ) from exc
         messages.extend(
             f"{project.alias}: {warning}" for warning in dispatch_warnings
@@ -3588,7 +3605,7 @@ def _stage_materialization(
                     published.plan.input, build_metadata.SourceAwareBuildInput
                 ):
                     raise InstallError(
-                        f"build provider {node.name}.{name} selected a receipt-3 "
+                        f"build provider {terminal_text(node.name)}.{terminal_text(name)} selected a receipt-3 "
                         "build input, which the legacy build lane cannot publish"
                     )
                 identity = published.plan.input.build_source
@@ -3596,14 +3613,14 @@ def _stage_materialization(
                 identity = published.build_source_identity
             if identity is None:
                 raise InstallError(
-                    f"build provider {node.name}.{name} has no source identity"
+                    f"build provider {terminal_text(node.name)}.{terminal_text(name)} has no source identity"
                 )
             if not external and (
                 build_source_identity is not None
                 and identity != build_source_identity
             ):
                 raise InstallError(
-                    f"build provider {node.name} has inconsistent source "
+                    f"build provider {terminal_text(node.name)} has inconsistent source "
                     "identities"
                 )
             if not external:
@@ -3615,7 +3632,7 @@ def _stage_materialization(
                 )
                 if published.receipt_bytes is None or published.artifact_path is None:
                     raise InstallError(
-                        f"external build {node.name}.{name} has incomplete publication state"
+                        f"external build {terminal_text(node.name)}.{terminal_text(name)} has incomplete publication state"
                     )
                 activation = shims.select_external_build_activation(
                     csk_home=config.path.parent,
@@ -3632,7 +3649,7 @@ def _stage_materialization(
                     or published.inspection is None
                 ):
                     raise InstallError(
-                        f"local build {node.name}.{name} has incomplete publication state"
+                        f"local build {terminal_text(node.name)}.{terminal_text(name)} has incomplete publication state"
                     )
                 activation = shims.select_build_activation(
                     csk_home=config.path.parent,
@@ -3652,8 +3669,8 @@ def _stage_materialization(
             previous_dispatch = dispatch_commands.get(name)
             if previous_dispatch is not None and previous_dispatch[0] != node.name:
                 raise InstallError(
-                    f"Command collision for {name!r}: exported by "
-                    f"{previous_dispatch[0]} and {node.name}"
+                    f"Command collision for {terminal_text(name)!r}: exported by "
+                    f"{terminal_text(previous_dispatch[0])} and {terminal_text(node.name)}"
                 )
             dispatch_commands[name] = (
                 node.name,
@@ -3817,7 +3834,7 @@ def _copy_live_directory(source: Path, destination: Path) -> None:
     if not stat.S_ISDIR(info.st_mode) or source.is_symlink():
         raise InstallError(
             f"managed materialization root is not a real directory: "
-            f"{source}"
+            f"{terminal_text(source)}"
         )
     shutil.copytree(source, destination, symlinks=True)
 
@@ -3839,13 +3856,13 @@ def _make_missing_directories(path: Path) -> list[Path]:
             if not stat.S_ISDIR(info.st_mode) or path.is_symlink():
                 raise InstallError(
                     f"materialization parent is not a real directory: "
-                    f"{path}"
+                    f"{terminal_text(path)}"
                 )
             return created
         return [*created, path]
     if not stat.S_ISDIR(info.st_mode) or path.is_symlink():
         raise InstallError(
-            f"materialization parent is not a real directory: {path}"
+            f"materialization parent is not a real directory: {terminal_text(path)}"
         )
     return []
 
@@ -3983,13 +4000,13 @@ def _build_plans(
             snap = tmp_root / decl.source
             git_ops.archive(repo, resolved.commit, snap)
         if git_ops.repository_has_submodules(snap):
-            raise InstallError(f"Submodules are unsupported in MVP: {decl.source}")
+            raise InstallError(f"Submodules are unsupported in MVP: {terminal_text(decl.source)}")
         try:
             spec = skillspec.load_skill_spec(snap)
         except skillspec.SkillSpecError as exc:
             raise InstallError(
-                f"Invalid skill manifest for {decl.name} "
-                f"{resolved.kind} {resolved.ref}: {exc}"
+                f"Invalid skill manifest for {terminal_text(decl.name)} "
+                f"{terminal_text(resolved.kind)} {terminal_text(resolved.ref)}: {exc}"
             ) from exc
         plans.append(SkillPlan(decl=decl, resolved=resolved, repo=repo, snapshot=snap, spec=spec))
     return plans
@@ -4005,16 +4022,16 @@ def _ensure_skill_repo(
     repo = config.skills_root / decl.source
     if repo.exists():
         if not (repo / ".git").exists():
-            raise InstallError(f"Local skill path exists but is not a git repository: {repo}")
+            raise InstallError(f"Local skill path exists but is not a git repository: {terminal_text(repo)}")
         git_ops.ensure_git_repo(repo)
         return repo
     if not decl.git:
-        raise InstallError(f"Skill repository not found for {decl.name}: {repo}")
+        raise InstallError(f"Skill repository not found for {terminal_text(decl.name)}: {terminal_text(repo)}")
     if use_persistent_clone:
         try:
             git_ops.clone_repo(decl.git, repo)
         except git_ops.GitError as exc:
-            raise InstallError(f"Failed to clone {decl.name} from {decl.git}: {exc}") from exc
+            raise InstallError(f"Failed to clone {terminal_text(decl.name)} from {terminal_text(decl.git)}: {exc}") from exc
         return repo
     if stack is None:
         raise InstallError("dry-run source cloning requires an ExitStack")
@@ -4023,7 +4040,7 @@ def _ensure_skill_repo(
     try:
         git_ops.clone_repo(decl.git, tmp_repo)
     except git_ops.GitError as exc:
-        raise InstallError(f"Failed to clone {decl.name} from {decl.git}: {exc}") from exc
+        raise InstallError(f"Failed to clone {terminal_text(decl.name)} from {terminal_text(decl.git)}: {exc}") from exc
     return tmp_repo
 
 
@@ -4036,7 +4053,7 @@ def _detect_command_collisions(plans: list[SkillPlan]) -> None:
             previous = owners.get(command.name)
             if previous:
                 raise InstallError(
-                    f"Command collision for {command.name!r}: exported by {previous} and {plan.decl.name}"
+                    f"Command collision for {terminal_text(command.name)!r}: exported by {terminal_text(previous)} and {terminal_text(plan.decl.name)}"
                 )
             owners[command.name] = plan.decl.name
 
@@ -4062,21 +4079,21 @@ def skill_command_dependency_errors(plan: SkillPlan, plans: list[SkillPlan]) -> 
         if dependency.type != "skill":
             continue
         if not dependency.skill or not dependency.command:
-            errors.append(f"Invalid skill dependency for {plan.decl.name}: {dependency.name}")
+            errors.append(f"Invalid skill dependency for {terminal_text(plan.decl.name)}: {terminal_text(dependency.name)}")
             continue
         provider = by_skill.get(dependency.skill)
         if provider is None:
-            hint = f" Hint: {dependency.hint}" if dependency.hint else ""
+            hint = f" Hint: {terminal_text(dependency.hint)}" if dependency.hint else ""
             errors.append(
-                f"Missing skill dependency {dependency.skill!r} for {plan.decl.name}; "
-                f"add {dependency.skill} to Skillfile.json.{hint}"
+                f"Missing skill dependency {terminal_text(dependency.skill)!r} for {terminal_text(plan.decl.name)}; "
+                f"add {terminal_text(dependency.skill)} to Skillfile.json.{hint}"
             )
             continue
         provided = provider.spec.commands.get(dependency.command)
         if provided is None or provided.type != "script":
             errors.append(
-                f"Skill dependency {plan.decl.name} requires {dependency.skill}.{dependency.command}, "
-                f"but {dependency.skill} does not export a script command named {dependency.command!r}"
+                f"Skill dependency {terminal_text(plan.decl.name)} requires {terminal_text(dependency.skill)}.{terminal_text(dependency.command)}, "
+                f"but {terminal_text(dependency.skill)} does not export a script command named {terminal_text(dependency.command)!r}"
             )
     return errors
 
@@ -4118,7 +4135,7 @@ def _check_audit_registries(
         read_only=read_only,
     )
     for warning in snapshot_warnings:
-        result.messages.append(f"{alias}: registry: {warning}")
+        result.messages.append(f"{terminal_text(alias)}: registry: {terminal_text(warning)}")
     registries = tuple(r for r in registries if r.url not in unavailable)
     if not registries:
         # Every trusted registry served a tampered snapshot; refuse to proceed.
@@ -4144,16 +4161,16 @@ def _check_audit_registries(
             fetch=fetch,
         )
         for warning in resolution.warnings:
-            result.messages.append(f"{alias}: registry: {warning}")
+            result.messages.append(f"{terminal_text(alias)}: registry: {terminal_text(warning)}")
         if resolution.result == audit_registry.RESULT_REVOKED:
             registry = resolution.attestation.registry if resolution.attestation else "a trusted registry"
-            errors.append(f"{plan.decl.name} is revoked by {registry}")
+            errors.append(f"{terminal_text(plan.decl.name)} is revoked by {terminal_text(registry)}")
             continue
         if resolution.result == audit_registry.RESULT_DEPRECATED:
-            result.messages.append(f"{alias}: registry: {plan.decl.name} is marked deprecated")
+            result.messages.append(f"{terminal_text(alias)}: registry: {terminal_text(plan.decl.name)} is marked deprecated")
         if strict and resolution.result == audit_registry.RESULT_UNKNOWN:
             errors.append(
-                f"{plan.decl.name} is not audited by any trusted registry (registry_policy is strict)"
+                f"{terminal_text(plan.decl.name)} is not audited by any trusted registry (registry_policy is strict)"
             )
             continue
         if resolution.attestation is not None:
@@ -4179,7 +4196,7 @@ def _check_mcp_servers(
     agent holds pending until the checkout is trusted.
     Raises InstallError when a requirement is not satisfied.
     """
-    prefix = f"{alias}: " if alias else ""
+    prefix = f"{terminal_text(alias)}: " if alias else ""
     found: dict[str, dict[str, list[str]]] = {}
     errors: list[str] = []
     warnings: list[str] = []
@@ -4195,19 +4212,19 @@ def _check_mcp_servers(
                 missing = sorted(agent for agent, ok in resolution.items() if not ok)
                 if missing:
                     errors.append(
-                        f"MCP server {requirement.name!r} required by {plan.decl.name} is not configured "
-                        f"for agent(s): {', '.join(missing)}. Hint: {requirement.hint}"
+                        f"MCP server {terminal_text(requirement.name)!r} required by {terminal_text(plan.decl.name)} is not configured "
+                        f"for agent(s): {terminal_text(', '.join(missing))}. Hint: {terminal_text(requirement.hint)}"
                     )
             elif not available:
                 errors.append(
-                    f"MCP server {requirement.name!r} required by {plan.decl.name} is not configured "
-                    f"in any target agent environment. Hint: {requirement.hint}"
+                    f"MCP server {terminal_text(requirement.name)!r} required by {terminal_text(plan.decl.name)} is not configured "
+                    f"in any target agent environment. Hint: {terminal_text(requirement.hint)}"
                 )
             for agent, command in sorted(
                 mcp_configs.missing_stdio_commands(project_root, available, requirement.name).items()
             ):
                 warnings.append(
-                    f"{prefix}MCP server {requirement.name!r} for {agent} runs {command!r}, "
+                    f"{prefix}MCP server {terminal_text(requirement.name)!r} for {terminal_text(agent)} runs {terminal_text(command)!r}, "
                     "which is not on PATH"
                 )
             trust_gated = sorted(
@@ -4217,8 +4234,8 @@ def _check_mcp_servers(
             )
             if trust_gated:
                 warnings.append(
-                    f"{prefix}MCP server {requirement.name!r} is declared only in project-level "
-                    f"config for {', '.join(trust_gated)}; agents keep project servers pending "
+                    f"{prefix}MCP server {terminal_text(requirement.name)!r} is declared only in project-level "
+                    f"config for {terminal_text(', '.join(trust_gated))}; agents keep project servers pending "
                     "until the checkout is trusted"
                 )
         found[plan.decl.name] = per_skill
@@ -4291,8 +4308,8 @@ def _runtime_path_suffix(plan: SkillPlan) -> tuple[Path, ...]:
             )
         except (FileNotFoundError, ValueError) as exc:
             raise InstallError(
-                f"Cannot resolve system command {dependency.command!r} "
-                f"for {plan.decl.name}: {exc}"
+                f"Cannot resolve system command {terminal_text(dependency.command)!r} "
+                f"for {terminal_text(plan.decl.name)}: {exc}"
             ) from exc
         candidates.append(Path(executable).parent)
     return _dedupe_path_candidates(candidates)
@@ -4371,7 +4388,7 @@ def install_runtime_commands(
     # command's shim, not even declared-only.
     rejection = skillspec.script_execution_policy_rejection(plan.spec)
     if rejection is not None:
-        raise InstallError(f"{plan.decl.name}: {rejection}")
+        raise InstallError(f"{terminal_text(plan.decl.name)}: {terminal_text(rejection)}")
     final_home = csk_home if activation_home is None else activation_home
     final_bin = bin_dir if activation_bin_dir is None else activation_bin_dir
     path_entries = _runtime_path_entries(plan, final_bin)
@@ -4412,8 +4429,8 @@ def install_runtime_commands(
             previous = command_targets.get(command.name)
             if previous is not None and previous[0] != plan.decl.name:
                 raise InstallError(
-                    f"Command collision for {command.name!r}: exported by "
-                    f"{previous[0]} and {plan.decl.name}"
+                    f"Command collision for {terminal_text(command.name)!r}: exported by "
+                    f"{terminal_text(previous[0])} and {terminal_text(plan.decl.name)}"
                 )
             command_targets[command.name] = (
                 plan.decl.name,
@@ -4737,7 +4754,7 @@ def _marker_is_current(
     ):
         raise InstallError(
             f"Unsupported installed marker schema in "
-            f"{target / '.csk-install.json'}"
+            f"{terminal_text(target / '.csk-install.json')}"
         )
     try:
         typed_marker = install_marker.parse_install_marker(marker)

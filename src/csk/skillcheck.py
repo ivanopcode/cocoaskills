@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .terminal import terminal_text
+
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -85,8 +87,8 @@ def issue_to_dict(issue: ValidationIssue) -> dict[str, str]:
 
 
 def format_issue(issue: ValidationIssue) -> str:
-    location = f" {issue.path}" if issue.path else ""
-    return f"{issue.severity}: {issue.code}{location}: {issue.message}"
+    location = f" {terminal_text(issue.path)}" if issue.path else ""
+    return f"{terminal_text(issue.severity)}: {terminal_text(issue.code)}{terminal_text(location)}: {terminal_text(issue.message)}"
 
 
 def _skill_spec_path(skill_dir: Path) -> str:

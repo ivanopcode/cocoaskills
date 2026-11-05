@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from . import protocol_json
+from .terminal import terminal_text
 
 import argparse
 import getpass
@@ -186,14 +187,16 @@ def main(argv: list[str] | None = None) -> int:
         with command_warnings():
             return _dispatch(args)
     except gitignore_gate.GitignoreError as exc:
-        print(f"error: {exc.code}: {exc}", file=sys.stderr)
+        print(f"error: {terminal_text(exc.code)}: {terminal_text(exc)}", file=sys.stderr)
+        return EXIT_CONFIG
+    except (global_install.GlobalInstallError, installer.InstallError) as exc:
+        rendered = installer.failure_text(exc) if isinstance(exc, installer.InstallError) else str(exc)
+        print(f"error: {rendered}", file=sys.stderr)
         return EXIT_CONFIG
     except (
         config.ConfigError,
         manifest.ManifestError,
         project_resolver.ProjectResolutionError,
-        global_install.GlobalInstallError,
-        installer.InstallError,
         hybrid.HybridError,
         audit_runner.AuditError,
         AuditBackendError,
@@ -205,17 +208,17 @@ def main(argv: list[str] | None = None) -> int:
         if rendered is not None:
             print(rendered, file=sys.stderr)
             return EXIT_CONFIG
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {terminal_text(exc)}", file=sys.stderr)
         return EXIT_CONFIG
     except source_transport.TransportError as exc:
         rendered = source_diagnostics.format_transport_exception(exc)
         if rendered is not None:
             print(rendered, file=sys.stderr)
         else:
-            print(f"error: {exc}", file=sys.stderr)
+            print(f"error: {terminal_text(exc)}", file=sys.stderr)
         return EXIT_CONFIG
     except LockError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {terminal_text(exc)}", file=sys.stderr)
         return EXIT_LOCK
 
 
@@ -934,7 +937,7 @@ def _dispatch(args: argparse.Namespace) -> int:
                 engine = transactions.TransactionEngine(home, pre_write_hook=source_publish.make_publication_hook())
                 engine.rollback(lock, args.rollback)
         except transactions.TransactionError as exc:
-            print(f"error: {exc}", file=sys.stderr)
+            print(f"error: {terminal_text(exc)}", file=sys.stderr)
             return EXIT_PARTIAL_FAIL
         print("Unfinished installation rolled back; rerun csk install to review a fresh plan.")
         print("Empty directories may remain; previous directory modes are not restored "
@@ -985,8 +988,8 @@ def _dispatch(args: argparse.Namespace) -> int:
                 config.config_path().parent,
                 include_global=not args.no_global,
             )
-            print(f"Wrote {hook_path}")
-            print(f"Add this to your shell profile: {shell_init.source_command(selected_shell, hook_path)}")
+            print(f"Wrote {terminal_text(hook_path)}")
+            print(f"Add this to your shell profile: {terminal_text(shell_init.source_command(selected_shell, hook_path))}")
         else:
             print(shell_init.shell_init(selected_shell, include_global=not args.no_global))
         return EXIT_OK
@@ -1053,10 +1056,10 @@ def _dispatch(args: argparse.Namespace) -> int:
                 git=args.git,
                 source=args.source,
             )
-            print(f"Added skill {args.name}: {ref_kind} {ref} ({project_root / 'Skillfile.json'})")
+            print(f"Added skill {terminal_text(args.name)}: {terminal_text(ref_kind)} {terminal_text(ref)} ({terminal_text(project_root / 'Skillfile.json')})")
         else:
             manifest.remove_skill_decl(project_root, args.name)
-            print(f"Removed skill {args.name} ({project_root / 'Skillfile.json'})")
+            print(f"Removed skill {terminal_text(args.name)} ({terminal_text(project_root / 'Skillfile.json')})")
         print("Run 'csk install' to apply.")
         return EXIT_OK
 
@@ -1071,13 +1074,13 @@ def _dispatch(args: argparse.Namespace) -> int:
                 guard=home_lock,
             )
         print(
-            f"gc: removed {stats.runtime_removed} runtime dir(s), "
-            f"{stats.snapshots_removed} snapshot(s), "
-            f"{stats.builds_removed} build(s), "
-            f"pruned {stats.consumers_pruned} consumer(s)"
+            f"gc: removed {terminal_text(stats.runtime_removed)} runtime dir(s), "
+            f"{terminal_text(stats.snapshots_removed)} snapshot(s), "
+            f"{terminal_text(stats.builds_removed)} build(s), "
+            f"pruned {terminal_text(stats.consumers_pruned)} consumer(s)"
         )
         for warning in stats.warnings:
-            print(f"gc: warning: {warning}", file=sys.stderr)
+            print(f"gc: warning: {terminal_text(warning)}", file=sys.stderr)
         return EXIT_OK
 
     if args.command in {"install", "update", "upgrade"}:
@@ -1106,7 +1109,7 @@ def _dispatch_global(args: argparse.Namespace) -> int:
     if args.global_command == "init":
         default_agents = _global_default_agents()
         path = global_install.init(csk_home, default_agents=default_agents)
-        print(f"Initialized global CocoaSkills at {path.parent}")
+        print(f"Initialized global CocoaSkills at {terminal_text(path.parent)}")
         return EXIT_OK
     if args.global_command == "add":
         ref_kind, ref = _global_ref_from_args(args)
@@ -1119,11 +1122,11 @@ def _dispatch_global(args: argparse.Namespace) -> int:
             source=args.source,
             default_agents=_global_default_agents(),
         )
-        print(f"Added global skill {args.name}: {ref_kind} {ref}")
+        print(f"Added global skill {terminal_text(args.name)}: {terminal_text(ref_kind)} {terminal_text(ref)}")
         return EXIT_OK
     if args.global_command == "remove":
         global_install.remove_decl(csk_home, args.name)
-        print(f"Removed global skill {args.name}")
+        print(f"Removed global skill {terminal_text(args.name)}")
         return EXIT_OK
     if args.global_command == "list":
         print(global_install.list_declared(csk_home))
@@ -1197,12 +1200,12 @@ def _cmd_hybrid(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
             git=args.git,
             targets=list(args.target),
         )
-        print(f"Added hybrid skill {args.name}: {ref_kind} {ref} -> {', '.join(args.target)}")
+        print(f"Added hybrid skill {terminal_text(args.name)}: {terminal_text(ref_kind)} {terminal_text(ref)} -> {terminal_text(', '.join(args.target))}")
         print("Apply with 'csk install' in a targeted project.")
         return EXIT_OK
     if args.hybrid_command == "remove":
         hybrid.remove_hybrid_decl(csk_home, args.name)
-        print(f"Removed hybrid skill {args.name}")
+        print(f"Removed hybrid skill {terminal_text(args.name)}")
         print("Run 'csk install' in previously targeted projects to clean up.")
         return EXIT_OK
     decls = hybrid.load_hybrid_decls(csk_home)
@@ -1232,7 +1235,7 @@ def _cmd_hybrid(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
                         commit = marker.get("commit")
                         state = f"installed {str(commit)[:7]}" if isinstance(commit, str) else "installed"
             line += f"  [{state}]"
-        print(line)
+        print(terminal_text(line))
     return EXIT_OK
 
 
@@ -1265,12 +1268,12 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
     except FileNotFoundError:
         config_present = False
     except OSError as exc:
-        print(f"error: cannot inspect config at {path}: {exc}", file=sys.stderr)
+        print(f"error: cannot inspect config at {terminal_text(path)}: {terminal_text(exc)}", file=sys.stderr)
         return EXIT_CONFIG
     else:
         config_present = True
     if config_present and getattr(args, "if_missing", False):
-        print(f"Kept existing config: {path}")
+        print(f"Kept existing config: {terminal_text(path)}")
         return EXIT_OK
     if not non_interactive and (sys.stdin is None or not sys.stdin.isatty()):
         print(
@@ -1283,12 +1286,12 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
     if config_present:
         if non_interactive:
             if not getattr(args, "force", False):
-                print(f"error: config exists at {path}; pass --force to overwrite", file=sys.stderr)
+                print(f"error: config exists at {terminal_text(path)}; pass --force to overwrite", file=sys.stderr)
                 return EXIT_CONFIG
         elif not getattr(args, "force", False):
-            answer = input(f"Config exists at {path}. Overwrite? [y/N] ").strip().lower()
+            answer = input(f"Config exists at {terminal_text(path)}. Overwrite? [y/N] ").strip().lower()
             if answer != "y":
-                print(f"Kept existing config: {path}")
+                print(f"Kept existing config: {terminal_text(path)}")
                 return EXIT_OK
     skills_root = (getattr(args, "skills_root", None) or "").strip()
     if not skills_root and not non_interactive:
@@ -1330,7 +1333,7 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
                     ),
                 )
             except build_ssh.BuildSSHError as exc:
-                print(f"Skipping build-ssh setup: {exc}")
+                print(f"Skipping build-ssh setup: {terminal_text(exc)}")
                 print("You can configure it later with: csk config build-ssh add")
     cfg = config.GlobalConfig(
         path=path,
@@ -1343,7 +1346,7 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
         build_ssh=build_ssh_rules,
     )
     config.save_config(cfg)
-    print(f"Wrote {path}")
+    print(f"Wrote {terminal_text(path)}")
     print("Shell profile changes are not required: agent skills resolve project and global command shims directly.")
     print("Optional bare project commands for humans: csk shell-init --install")
     return EXIT_OK
@@ -1394,20 +1397,20 @@ def _cmd_init(args: argparse.Namespace) -> int:
     else:
         gitignore_gate.ensure_ignored(root, entries, mode=ignore_mode)
     manifest.ensure_project_manifest(root, alias=alias, agents=agents)
-    print(f"Initialized CocoaSkill project at {root}")
+    print(f"Initialized CocoaSkill project at {terminal_text(root)}")
     return EXIT_OK
 
 
 def _cmd_config_show() -> int:
     path = config.config_path()
-    print(f"Config path: {path}")
+    print(f"Config path: {terminal_text(path)}")
     try:
         content = protocol_json.read_bytes(path).decode("utf-8")
         content = content.replace("\r\n", "\n").replace("\r", "\n")
     except (FileNotFoundError, NotADirectoryError):
         print("Config does not exist")
     except OSError as exc:
-        print(f"error: cannot read config at {path}: {exc}", file=sys.stderr)
+        print(f"error: cannot read config at {terminal_text(path)}: {terminal_text(exc)}", file=sys.stderr)
         return EXIT_CONFIG
     else:
         print(content, end="")
@@ -1428,17 +1431,17 @@ def _cmd_config_build_ssh(args: argparse.Namespace) -> int:
                 parts.append(f"identity={rule.identity}")
             if rule.known_hosts is not None:
                 parts.append(f"known_hosts={rule.known_hosts}")
-            print(f"{rule.scope}: " + " ".join(parts))
+            print(f"{terminal_text(rule.scope)}: " + terminal_text(" ".join(parts)))
         return EXIT_OK
     if args.build_ssh_command == "remove":
         remaining = tuple(
             rule for rule in cfg.build_ssh if rule.scope != args.scope
         )
         if len(remaining) == len(cfg.build_ssh):
-            print(f"No build-ssh scope {args.scope!r}", file=sys.stderr)
+            print(f"No build-ssh scope {terminal_text(args.scope)!r}", file=sys.stderr)
             return EXIT_CONFIG
         config.save_config(replace(cfg, build_ssh=remaining))
-        print(f"Removed build-ssh scope {args.scope}")
+        print(f"Removed build-ssh scope {terminal_text(args.scope)}")
         return EXIT_OK
     # add
     if args.agent is None and args.identity is None:
@@ -1456,11 +1459,11 @@ def _cmd_config_build_ssh(args: argparse.Namespace) -> int:
             known_hosts=args.known_hosts,
         )
     except build_ssh.BuildSSHError as exc:
-        print(str(exc), file=sys.stderr)
+        print(terminal_text(str(exc)), file=sys.stderr)
         return EXIT_CONFIG
     others = tuple(r for r in cfg.build_ssh if r.scope != args.scope)
     config.save_config(replace(cfg, build_ssh=others + (rule,)))
-    print(f"Configured build-ssh scope {args.scope}")
+    print(f"Configured build-ssh scope {terminal_text(args.scope)}")
     return EXIT_OK
 
 
@@ -1485,14 +1488,14 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
                     home=build_https.resolve_operator_home(),
                 )
                 parts.append("stored=yes" if stored else "stored=NO")
-            print(f"{rule.scope}: " + " ".join(parts))
+            print(f"{terminal_text(rule.scope)}: " + terminal_text(" ".join(parts)))
         return EXIT_OK
     if args.build_https_command == "remove":
         remaining = tuple(
             rule for rule in cfg.build_https if rule.scope != args.scope
         )
         if len(remaining) == len(cfg.build_https):
-            print(f"No build-https scope {args.scope!r}", file=sys.stderr)
+            print(f"No build-https scope {terminal_text(args.scope)!r}", file=sys.stderr)
             return EXIT_CONFIG
         config.save_config(replace(cfg, build_https=remaining))
         # "git credential reject" exits 0 whether or not an entry existed, so
@@ -1505,9 +1508,9 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
         )
         build_https.delete_namespaced_token(args.scope, host, git=resolve_tool("git"), home=home)
         if had_token:
-            print(f"Removed build-https scope {args.scope} and its stored token")
+            print(f"Removed build-https scope {terminal_text(args.scope)} and its stored token")
         else:
-            print(f"Removed build-https scope {args.scope}")
+            print(f"Removed build-https scope {terminal_text(args.scope)}")
         return EXIT_OK
     if args.build_https_command == "login":
         import getpass
@@ -1515,7 +1518,7 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
         try:
             build_ssh.validate_scope(args.scope)
         except build_ssh.BuildSSHError as exc:
-            print(str(exc), file=sys.stderr)
+            print(terminal_text(str(exc)), file=sys.stderr)
             return EXIT_CONFIG
         if sys.stdin.isatty():
             token = getpass.getpass("Personal access token (hidden): ").strip()
@@ -1533,7 +1536,7 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
                 home=build_https.resolve_operator_home(),
             )
         except build_https.BuildHTTPSError as exc:
-            print(str(exc), file=sys.stderr)
+            print(terminal_text(str(exc)), file=sys.stderr)
             return EXIT_CONFIG
         rule = build_https.BuildHTTPSRule(
             scope=args.scope,
@@ -1542,7 +1545,7 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
         )
         others = tuple(r for r in cfg.build_https if r.scope != args.scope)
         config.save_config(replace(cfg, build_https=others + (rule,)))
-        print(f"Stored a token for {args.scope} through your Git credential helper")
+        print(f"Stored a token for {terminal_text(args.scope)} through your Git credential helper")
         return EXIT_OK
     # add
     if (args.token_source is None) == (args.token_env is None):
@@ -1561,11 +1564,11 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
         )
         build_https.parse_rules(build_https.serialize_rules((rule,)))
     except (build_ssh.BuildSSHError, build_https.BuildHTTPSError) as exc:
-        print(str(exc), file=sys.stderr)
+        print(terminal_text(str(exc)), file=sys.stderr)
         return EXIT_CONFIG
     others = tuple(r for r in cfg.build_https if r.scope != args.scope)
     config.save_config(replace(cfg, build_https=others + (rule,)))
-    print(f"Configured build-https scope {args.scope}")
+    print(f"Configured build-https scope {terminal_text(args.scope)}")
     return EXIT_OK
 
 
@@ -1576,8 +1579,8 @@ def _cmd_project_add(alias: str, path: Path) -> int:
     home = cfg.path.parent
     if dispatch.manager_home_inside_root(home, path.expanduser()):
         print(
-            f"error: cannot register project {alias}: the manager home "
-            f"{home} is inside {path}; use a manager home outside every "
+            f"error: cannot register project {terminal_text(alias)}: the manager home "
+            f"{terminal_text(home)} is inside {terminal_text(path)}; use a manager home outside every "
             f"checkout",
             file=sys.stderr,
         )
@@ -1602,14 +1605,14 @@ def _cmd_project_add(alias: str, path: Path) -> int:
                 )
             except (dispatch.DispatchPublishError, OSError) as exc:
                 print(
-                    f"error: project {alias} was registered but its dispatch "
-                    f"scope failed: {exc}",
+                    f"error: project {terminal_text(alias)} was registered but its dispatch "
+                    f"scope failed: {terminal_text(exc)}",
                     file=sys.stderr,
                 )
                 return EXIT_CONFIG
             for warning in scope_warnings:
-                print(f"warning: {warning}", file=sys.stderr)
-    print(f"Added project {alias}: {path}")
+                print(f"warning: {terminal_text(warning)}", file=sys.stderr)
+    print(f"Added project {terminal_text(alias)}: {terminal_text(path)}")
     return EXIT_OK
 
 
@@ -1623,7 +1626,7 @@ def _cmd_skill_check(args: argparse.Namespace) -> int:
         print(json.dumps([skillcheck.issue_to_dict(issue) for issue in issues], ensure_ascii=False, indent=2))
     else:
         if not issues:
-            print(f"{skill_dir}: ok")
+            print(f"{terminal_text(skill_dir)}: ok")
         for issue in issues:
             print(skillcheck.format_issue(issue))
     return EXIT_PARTIAL_FAIL if skillcheck.has_errors(issues) else EXIT_OK
@@ -1641,16 +1644,16 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
         with GlobalLock(csk_home):
             dispatch.recover_launchers(csk_home)
     except (dispatch.DispatchPublishError, OSError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {terminal_text(exc)}", file=sys.stderr)
         return EXIT_CONFIG
     shims = dispatch.shims_dir(csk_home)
     shell = shell_init.detect_shell() if args.shell == "auto" else args.shell
     try:
         snippet = dispatch.setup_snippet(shims, shell=shell)
     except dispatch.DispatchPublishError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {terminal_text(exc)}", file=sys.stderr)
         return EXIT_CONFIG
-    print(f"Dispatch shims: {shims}")
+    print(f"Dispatch shims: {terminal_text(shims)}")
     if not args.install:
         print("Append this directory to your PATH (idempotent):")
         print(snippet, end="")
@@ -1669,12 +1672,12 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
     try:
         changed = dispatch.install_setup_snippet(rc_path, snippet)
     except (dispatch.DispatchPublishError, OSError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {terminal_text(exc)}", file=sys.stderr)
         return EXIT_CONFIG
     if changed:
-        print(f"Installed dispatch PATH entry in {rc_path}")
+        print(f"Installed dispatch PATH entry in {terminal_text(rc_path)}")
     else:
-        print(f"Dispatch PATH entry already present in {rc_path}")
+        print(f"Dispatch PATH entry already present in {terminal_text(rc_path)}")
     return EXIT_OK
 
 
@@ -1687,7 +1690,7 @@ def _cmd_dispatch_recover(args: argparse.Namespace) -> int:
                 csk_home, reset=bool(getattr(args, "reset", False))
             )
     except (dispatch.DispatchPublishError, OSError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {terminal_text(exc)}", file=sys.stderr)
         return EXIT_CONFIG
     print(message)
     return EXIT_OK
@@ -1745,13 +1748,13 @@ def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
     # install's job.
     for project, item in loaded_manifests:
         if item is None:
-            print(f"{project.alias}: Skillfile.json missing")
+            print(f"{terminal_text(project.alias)}: Skillfile.json missing")
             failed = True
             continue
         if item.schema_version == 1:
             print(
-                f"{project.alias}: schema_version 1 valid "
-                f"({len(item.skills)} skills)"
+                f"{terminal_text(project.alias)}: schema_version 1 valid "
+                f"({terminal_text(len(item.skills))} skills)"
             )
             continue
         try:
@@ -1769,7 +1772,7 @@ def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
 def _print_check_failure(exc: Exception) -> None:
     rendered = source_diagnostics.format_exception(exc)
     if rendered is None:
-        rendered = f"error: {exc}"
+        rendered = f"error: {terminal_text(exc)}"
     print(rendered, file=sys.stderr)
 
 
@@ -1825,9 +1828,9 @@ def _verify_schema2_project(
         ", network sources planned, not acquired" if has_network_sources else ""
     )
     print(
-        f"{project.alias}: schema_version {loaded.schema_version} valid "
-        f"({len(loaded.sources)} sources, {len(loaded.selectors)} selectors, "
-        f"{lock_note}, {policy_note}{acquisition_note})"
+        f"{terminal_text(project.alias)}: schema_version {terminal_text(loaded.schema_version)} valid "
+        f"({terminal_text(len(loaded.sources))} sources, {terminal_text(len(loaded.selectors))} selectors, "
+        f"{terminal_text(lock_note)}, {terminal_text(policy_note)}{terminal_text(acquisition_note)})"
     )
 
 
@@ -1837,9 +1840,9 @@ def _cmd_update(cfg: config.GlobalConfig) -> int:
     for repo, error in results:
         if error:
             failed = True
-            print(f"fetch failed {repo.name}: {error}", file=sys.stderr)
+            print(f"fetch failed {terminal_text(repo.name)}: {error}", file=sys.stderr)
         else:
-            print(f"fetched {repo.name}")
+            print(f"fetched {terminal_text(repo.name)}")
     return EXIT_PARTIAL_FAIL if failed else EXIT_OK
 
 
@@ -1868,12 +1871,12 @@ def _cmd_install(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
             print(row, file=sys.stderr)
         for error in result.errors:
             failed = True
-            print(f"{result.alias}: {error}", file=sys.stderr)
+            print(f"{terminal_text(result.alias)}: {error}", file=sys.stderr)
         if args.alias is not None and result.status == "skipped":
             # An explicitly requested project that was refused must not look
             # like a successful install to scripts and CI.
             failed = True
-            print(f"{result.alias}: skipped; nothing installed", file=sys.stderr)
+            print(f"{terminal_text(result.alias)}: skipped; nothing installed", file=sys.stderr)
     return EXIT_PARTIAL_FAIL if failed else EXIT_OK
 
 
@@ -1930,7 +1933,7 @@ def _cmd_audit(args: argparse.Namespace) -> int:
             reason=args.reason or "",
             pinned_by=getpass.getuser(),
         )
-        print(f"Pinned audit trust for {args.allow.lower()}: {path}")
+        print(f"Pinned audit trust for {terminal_text(args.allow.lower())}: {terminal_text(path)}")
         return EXIT_OK
     if args.all:
         if args.target is not None or args.global_scope:
@@ -1993,16 +1996,16 @@ def _project_path_suffix(path: Path) -> str:
 
 
 def _render_list(cfg: config.GlobalConfig, *, show_paths: bool = False) -> str:
-    lines = [f"Config: {cfg.path}", f"Skills root: {cfg.skills_root}"]
+    lines = [f"Config: {terminal_text(cfg.path)}", f"Skills root: {terminal_text(cfg.skills_root)}"]
     for alias, project in cfg.projects.items():
         if show_paths:
             suffix = _project_path_suffix(project.path)
             lines.append(
-                f"Project {alias}: path={project.path}{suffix} "
-                f"project_alias={project.project_alias or alias} checkout_alias={project.checkout_alias or alias}"
+                f"Project {terminal_text(alias)}: path={terminal_text(project.path)}{terminal_text(suffix)} "
+                f"project_alias={terminal_text(project.project_alias or alias)} checkout_alias={terminal_text(project.checkout_alias or alias)}"
             )
         else:
-            lines.append(f"Project {alias}: {project.path}")
+            lines.append(f"Project {terminal_text(alias)}: {terminal_text(project.path)}")
         project_manifest = manifest.load_manifest(project.path)
         if project_manifest is None:
             lines.append("  Skillfile.json missing")
@@ -2011,7 +2014,7 @@ def _render_list(cfg: config.GlobalConfig, *, show_paths: bool = False) -> str:
             lines.append("  no skills declared")
             continue
         for decl in project_manifest.skills:
-            lines.append(f"  {decl.name} ({decl.ref.kind} {decl.ref.value})")
+            lines.append(f"  {terminal_text(decl.name)} ({terminal_text(decl.ref.kind)} {terminal_text(decl.ref.value)})")
     return "\n".join(lines)
 
 
@@ -2151,23 +2154,23 @@ def _render_project_resolution(cfg: config.GlobalConfig, args: argparse.Namespac
     if project_manifest:
         agents = project_manifest.agents
     lines = [
-        f"project_alias: {resolved.project_alias}",
-        f"checkout_alias: {resolved.checkout_alias}",
-        f"path: {resolved.root}",
-        f"skillfile: {resolved.skillfile}",
-        f"branch: {resolved.branch or ''}",
-        f"task_id: {resolved.task_id or ''}",
-        f"path_hash: {resolved.path_hash}",
+        f"project_alias: {terminal_text(resolved.project_alias)}",
+        f"checkout_alias: {terminal_text(resolved.checkout_alias)}",
+        f"path: {terminal_text(resolved.root)}",
+        f"skillfile: {terminal_text(resolved.skillfile)}",
+        f"branch: {terminal_text(resolved.branch or '')}",
+        f"task_id: {terminal_text(resolved.task_id or '')}",
+        f"path_hash: {terminal_text(resolved.path_hash)}",
         "install_paths:",
-        f"  skills: {resolved.root / '.agents' / 'skills'}",
-        f"  bin: {resolved.root / '.agents' / 'bin'}",
-        f"  claude_code: {resolved.root / '.claude' / 'skills'}",
-        f"  codex_cli: {resolved.root / '.codex' / 'skills'}",
-        f"  cursor: {resolved.root / '.cursor' / 'rules'}",
-        f"  gemini: {resolved.root / '.gemini' / 'skills'}",
-        f"  opencode: {resolved.root / '.agents' / 'skills'} (native discovery)",
-        f"  windsurf: {resolved.root / '.agents' / 'skills'} (native discovery)",
-        f"agents: {', '.join(agents or cfg.default_agents)}",
+        f"  skills: {terminal_text(resolved.root / '.agents' / 'skills')}",
+        f"  bin: {terminal_text(resolved.root / '.agents' / 'bin')}",
+        f"  claude_code: {terminal_text(resolved.root / '.claude' / 'skills')}",
+        f"  codex_cli: {terminal_text(resolved.root / '.codex' / 'skills')}",
+        f"  cursor: {terminal_text(resolved.root / '.cursor' / 'rules')}",
+        f"  gemini: {terminal_text(resolved.root / '.gemini' / 'skills')}",
+        f"  opencode: {terminal_text(resolved.root / '.agents' / 'skills')} (native discovery)",
+        f"  windsurf: {terminal_text(resolved.root / '.agents' / 'skills')} (native discovery)",
+        f"agents: {terminal_text(', '.join(agents or cfg.default_agents))}",
     ]
     return "\n".join(lines)
 
@@ -2186,23 +2189,23 @@ def _render_configured_project_resolution(project: config.ProjectConfig, worktre
         path_hash = project_resolver.stable_path_hash(root)
     return "\n".join(
         [
-            f"project_alias: {project.project_alias or project.alias}",
-            f"checkout_alias: {project.checkout_alias or project.alias}",
-            f"path: {root}",
-            f"skillfile: {root / manifest.MANIFEST_NAME}",
-            f"branch: {branch or ''}",
-            f"task_id: {task_id or ''}",
-            f"path_hash: {path_hash}",
+            f"project_alias: {terminal_text(project.project_alias or project.alias)}",
+            f"checkout_alias: {terminal_text(project.checkout_alias or project.alias)}",
+            f"path: {terminal_text(root)}",
+            f"skillfile: {terminal_text(root / manifest.MANIFEST_NAME)}",
+            f"branch: {terminal_text(branch or '')}",
+            f"task_id: {terminal_text(task_id or '')}",
+            f"path_hash: {terminal_text(path_hash)}",
             "install_paths:",
-            f"  skills: {root / '.agents' / 'skills'}",
-            f"  bin: {root / '.agents' / 'bin'}",
-            f"  claude_code: {root / '.claude' / 'skills'}",
-            f"  codex_cli: {root / '.codex' / 'skills'}",
-            f"  cursor: {root / '.cursor' / 'rules'}",
-            f"  gemini: {root / '.gemini' / 'skills'}",
-            f"  opencode: {root / '.agents' / 'skills'} (native discovery)",
-            f"  windsurf: {root / '.agents' / 'skills'} (native discovery)",
-            f"agents: {', '.join(project.agents)}",
+            f"  skills: {terminal_text(root / '.agents' / 'skills')}",
+            f"  bin: {terminal_text(root / '.agents' / 'bin')}",
+            f"  claude_code: {terminal_text(root / '.claude' / 'skills')}",
+            f"  codex_cli: {terminal_text(root / '.codex' / 'skills')}",
+            f"  cursor: {terminal_text(root / '.cursor' / 'rules')}",
+            f"  gemini: {terminal_text(root / '.gemini' / 'skills')}",
+            f"  opencode: {terminal_text(root / '.agents' / 'skills')} (native discovery)",
+            f"  windsurf: {terminal_text(root / '.agents' / 'skills')} (native discovery)",
+            f"agents: {terminal_text(', '.join(project.agents))}",
         ]
     )
 

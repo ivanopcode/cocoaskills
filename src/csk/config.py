@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .terminal import terminal_text
+
 import dataclasses
 import json
 import ipaddress
@@ -314,7 +316,7 @@ def _apply_system_config(
             if key in user_data and user_data[key] != value:
                 if not quiet:
                     print(
-                        f"warning: config key {key!r} is locked by {system_path}; "
+                        f"warning: config key {terminal_text(key)!r} is locked by {terminal_text(system_path)}; "
                         "the user override is ignored",
                         file=sys.stderr,
                     )
