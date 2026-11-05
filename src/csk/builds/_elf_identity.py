@@ -140,8 +140,10 @@ def parse_elf(data: bytes) -> ELF:
         if tag == 0:
             terminated = True
             break
-        if tag not in ALLOWED_TAGS:
-            raise refuse("unsupported dynamic tag")
+        # AArch64 BTI PLT is a presence-only branch-protection marker, not a
+        # lookup/scope override. No other processor-specific tags are admitted.
+        if tag not in ALLOWED_TAGS and not (machine == 183 and tag == 0x70000001 and value == 0):
+            raise refuse(f"unsupported dynamic tag {tag:#x}")
         if tag == 1:
             needed_offsets.append(value)
         else:
@@ -161,10 +163,6 @@ def parse_elf(data: bytes) -> ELF:
     # A defined exported function is positive embedding evidence, never a
     # filename/absence inference. Symbol ownership still requires worker proof.
     defines_python = False
-    if 4 in tags and 0x6FFFFEF5 in tags:
-        # glibc prefers GNU_HASH. Refuse both even if they appear consistent:
-        # accepting a SysV-derived bound can hide a GNU-visible interposer.
-        raise refuse("dual symbol hashes are outside the supported identity contract")
     if 6 in tags:
         if tags.get(11) != 24:
             raise refuse("unsupported symbol size")
@@ -173,6 +171,8 @@ def parse_elf(data: bytes) -> ELF:
         # Scanning every symbol alone can invent exports absent from the hash.
         target = b"Py_GetVersion"
         reachable: set[int] = set()
+        sysv_reachable: set[int] | None = None
+        sysv_count: int | None = None
         if 4 in tags:
             hash_off = mapped(tags[4], 8)
             buckets, count = unpack("<II", hash_off)
@@ -191,7 +191,10 @@ def parse_elf(data: bytes) -> ELF:
                     raise refuse("SysV hash chain index or cycle")
                 reachable.add(index)
                 index, = unpack("<I", hash_off + 8 + 4 * (buckets + index))
-        elif 0x6FFFFEF5 in tags:
+            sysv_count = count
+            sysv_reachable = reachable
+        if 0x6FFFFEF5 in tags:
+            reachable = set()
             address = tags[0x6FFFFEF5]
             buckets, first, bloom, shift = unpack("<IIII", mapped(address, 16))
             if (not 0 < buckets <= MAX_SYMBOLS or not 0 < bloom <= MAX_SYMBOLS
@@ -235,13 +238,17 @@ def parse_elf(data: bytes) -> ELF:
                     if chain & 1:
                         break
                     index += 1
-        else:
+            if sysv_count is not None and count != sysv_count:
+                raise refuse("dual symbol hash bounds disagree")
+        elif sysv_count is None:
             raise refuse("missing bounded symbol index")
         mapped(tags[6], count * 24)
         for i in range(count):
             nm, info, other, section, value, size = unpack("<IBBHQQ", symoff + i * 24)
             symbol = name(strings, nm)
             if symbol == "Py_GetVersion" and section != 0:
+                if sysv_reachable is not None and (i in reachable) != (i in sysv_reachable):
+                    raise refuse("dual symbol hash Python lookups disagree")
                 if i not in reachable:
                     raise refuse("Python definition is not reachable through loader hash")
                 if 0x6FFFFFF0 in tags:

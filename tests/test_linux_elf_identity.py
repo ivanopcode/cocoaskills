@@ -319,8 +319,9 @@ def test_symbol_lookup_reachability(plant):
 
 
 # Reproduce the review's dependency: SysV nchain=1 conceals a GNU-visible
-# Py_GetVersion interposer. Dual hashes (including the unpatched control) refuse;
-# the nearby ordinary GNU-only dependency resolves the exact intended runtime.
+# Py_GetVersion interposer. The intact provider is identified and rejected by
+# the resolver; corrupt tables refuse in the parser. An ordinary dependency
+# resolves the exact intended runtime; bytes alone do not prove loader agreement.
 @pytest.mark.parametrize('machine', [62, 183])
 @pytest.mark.parametrize('plant', ['unpatched', 'short-sysv', 'empty-gnu'])
 def test_forged_dual_hash_dependency(layout, machine, plant):
@@ -334,6 +335,7 @@ def test_forged_dual_hash_dependency(layout, machine, plant):
     write(provider, gnu_image(image(machine=machine, symbol=False, soname=provider.name, interpreter=False, kind=3)))
     assert resolve().runtime.identity.path == expected
     forged = gnu_image(image(machine=machine, soname=provider.name, interpreter=False, kind=3), both=True)
+    assert elf.parse_elf(bytes(forged)).defines_python
     if plant == 'short-sysv':
         struct.pack_into('<I', forged, 2308, 1)
     elif plant == 'empty-gnu':
@@ -430,4 +432,31 @@ def test_versioned_python_export_refuses(version):
     struct.pack_into('<H', data, 2818, version)
     with pytest.raises(go_v1.GoV1Error) as error:
         elf.parse_elf(bytes(data))
+    assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+
+
+# An unknown foreign ABI cannot poison selection. Same-ABI conditional entries
+# refuse with the identity diagnostic, paired with the same exact-image control.
+@pytest.mark.parametrize('condition', [(1, 0), (0, 1)])
+def test_cache_conditional_selection_refuses(layout, tmp_path, condition):
+    executable, resolve = layout
+    name = 'libpython3.14.so.1.0'
+    write(executable, image(symbol=False, needed=[name]))
+    runtime = write(tmp_path/'distribution'/name, image(soname=name, interpreter=False, kind=3))
+    write(tmp_path/'cache', cache_fixture([(0xb03, 0, 0), (0x303, 0, 0)], path=str(runtime)))
+    assert resolve().runtime.identity.path == runtime
+    osversion, hwcap = condition
+    write(tmp_path/'cache', cache_fixture([(0x303, osversion, hwcap), (0x303, 0, 0)], path=str(runtime)))
+    with pytest.raises(go_v1.GoV1Error) as error:
+        resolve()
+    assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+
+
+# Native AArch64 libraries carry this presence-only BTI marker. It is admitted
+# only on that architecture with the supported zero value; other tags refuse.
+@pytest.mark.parametrize('machine,tag,value', [(62, 0x70000001, 0), (183, 0x70000001, 1), (183, 0x70000002, 0)])
+def test_aarch64_bti_tag_scope(machine, tag, value):
+    assert elf.parse_elf(bytes(dynamic_tag(image(machine=183), 0x70000001, 0))).defines_python
+    with pytest.raises(go_v1.GoV1Error) as error:
+        elf.parse_elf(bytes(dynamic_tag(image(machine=machine), tag, value)))
     assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
