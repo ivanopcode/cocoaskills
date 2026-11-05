@@ -1870,6 +1870,8 @@ class _PreparedWorkerLaunch:
                 raise GoV1Error(CODE_CONTROL_UNAVAILABLE, "cannot restore manager descriptor capacity") from exc
 
     def _prepare_macos(self, record: bytes) -> None:
+        import fcntl
+
         read_fd, write_fd = os.pipe()
         try:
             _write_launch_record_fd(write_fd, record)
@@ -1882,17 +1884,16 @@ class _PreparedWorkerLaunch:
         try:
             for candidate in _WORKER_LAUNCH_FDS:
                 try:
-                    os.fstat(candidate)
-                except OSError as exc:
-                    if exc.errno != errno.EBADF:
-                        continue
-                else:
-                    continue
-                try:
-                    os.dup2(read_fd, candidate, inheritable=True)
+                    # Allocate atomically: a concurrent opener must never be
+                    # overwritten after a separate vacancy check. pass_fds
+                    # releases CLOEXEC only in the intended child.
+                    duplicate = fcntl.fcntl(read_fd, fcntl.F_DUPFD_CLOEXEC, candidate)
                 except OSError:
                     continue
-                selected = candidate
+                if duplicate != candidate:
+                    os.close(duplicate)
+                    continue
+                selected = duplicate
                 break
             if selected < 0:
                 raise GoV1Error(
@@ -1902,6 +1903,8 @@ class _PreparedWorkerLaunch:
             os.close(read_fd)
             self._read_fd = selected
         except BaseException:
+            if selected >= 0:
+                os.close(selected)
             if read_fd >= 0:
                 os.close(read_fd)
             raise
