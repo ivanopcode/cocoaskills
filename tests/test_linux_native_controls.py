@@ -249,7 +249,9 @@ def test_linux_teardown_preserves_signal_failure_over_join_failure(monkeypatch):
     domain = object.__new__(g._NativeControlDomain)
     def failed_wait(*args, **kwargs):
         raise subprocess.TimeoutExpired("fixture", 1)
-    process = type("Process", (), {"pid": 12345, "returncode": None, "wait": failed_wait})()
+    killed = []
+    process = type("Process", (), {"pid": 12345, "returncode": None, "wait": failed_wait,
+                                    "kill": lambda self: killed.append(self.pid)})()
     monkeypatch.setattr(os, "waitid", lambda *args: None)
     monkeypatch.setattr(os, "getpgid", lambda pid: pid)
     monkeypatch.setattr(os, "getsid", lambda pid: pid)
@@ -260,3 +262,25 @@ def test_linux_teardown_preserves_signal_failure_over_join_failure(monkeypatch):
         domain._terminate_linux(process)
     assert failure.value.code == g.CODE_CONTROL_UNAVAILABLE
     assert isinstance(failure.value.__cause__, PermissionError)
+    assert killed == [12345]
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux direct-child rollback")
+def test_linux_group_signal_failure_still_reaps_owned_worker(monkeypatch):
+    # Denial of group signaling rejects, but does not abandon the direct worker.
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+    domain = object.__new__(g._NativeControlDomain)
+    def denied(pid, sig):
+        raise PermissionError(errno.EPERM, "planted group denial")
+    monkeypatch.setattr(os, "killpg", denied)
+    try:
+        with pytest.raises(g.GoV1Error, match="planted group denial") as failure:
+            domain._terminate_linux(process)
+        assert failure.value.code == g.CODE_CONTROL_UNAVAILABLE
+        assert process.returncode == -9
+        with pytest.raises(ChildProcessError):
+            os.waitpid(process.pid, os.WNOHANG)
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
