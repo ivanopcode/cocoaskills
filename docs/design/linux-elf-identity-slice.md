@@ -20,9 +20,11 @@ The parser accepts little-endian ELF64 x86-64 and AArch64 only. Bounds are
 100000 symbols/hash-chain steps, 128 dependency images and 256 MiB aggregate
 image data. Section headers are unnecessary. Single SysV or GNU dynamic hashes
 bound the symbol scan; Python exports must also be reachable through that hash's
-lookup (including GNU bloom and chain checks). Dual-hash images always refuse,
-even when their tables agree: glibc prefers GNU, so a SysV-derived bound cannot
-safely establish absence of a GNU-visible interposer. Versioned Python exports
+lookup (including GNU bloom and chain checks). Dual-hash images require equal
+independently derived symbol bounds and agreement of both lookups for Python
+definitions. glibc prefers GNU, so a SysV-derived bound alone cannot safely
+establish absence of a GNU-visible interposer. Disagreement refuses, including
+a forged shorter SysV bound or emptied GNU buckets. Versioned Python exports
 also refuse; only an unversioned global function is supported. Adjacent file-contiguous LOAD segments can contain a
 relocated string table; holes and conflicting mappings refuse.
 
@@ -68,7 +70,8 @@ decoding. Candidate accumulation uses lists, avoiding repeated tuple copying.
 All foreign ABI flags are ignored. Same-ABI hwcap/OS-conditional entries remain
 unsupported candidates: ignoring one could skip the loader's preferred image.
 Dynamic tags use an explicit allowlist of supported linkage/hash/version tags
-and ordinary relocation/init metadata; unknown tags and unsupported flag bits
+and ordinary relocation/init metadata (including the zero-valued AArch64 BTI
+PLT marker on AArch64 only); unknown tags and unsupported flag bits
 refuse.
 
 Additional deliberate availability limits: `e_flags` must be zero; interpreter
