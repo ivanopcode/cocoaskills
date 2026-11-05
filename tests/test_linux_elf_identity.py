@@ -1,4 +1,5 @@
 """Captured-byte fixtures prove parser behavior, never loader agreement."""
+import os
 import struct
 import pytest
 from csk.builds import _elf_identity as elf, _linux_identity as linux, go_v1
@@ -43,6 +44,8 @@ def write(path, data):
 
 @pytest.fixture
 def layout(tmp_path, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("POSIX Linux filesystem fixture; byte parser tests remain portable")
     loader = write(tmp_path/'loader', image(symbol=False, interpreter=False, kind=3))
     original = linux.capture
     def capture(path, **kwargs):
@@ -142,6 +145,7 @@ def test_resolver_refuses(layout, tmp_path, plant):
 
 
 # Popen covers worker/Go spawning; both admission gates stop before identity.
+@pytest.mark.skipif(os.name == "nt", reason="Linux admission simulation requires POSIX")
 def test_admission_is_disconnected(monkeypatch, tmp_path):
     import subprocess
     from csk import installer
