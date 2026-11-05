@@ -479,10 +479,36 @@ _NATIVE_CONTROL_PLATFORMS: Final[
 )
 
 
+_LINUX_CONTROL_RECORDS: Final = MappingProxyType(
+    {
+        CONTROL_DESCENDANT_DOMAIN_TERMINATION: _InventoryRecord(
+            AVAILABILITY_AVAILABLE,
+            "process-group-and-session-teardown",
+        ),
+        CONTROL_ACTIVE_PROCESS_COUNT_LIMIT: _InventoryRecord(
+            AVAILABILITY_UNAVAILABLE,
+            unavailable_reason=UNAVAILABLE_REASON_NO_PRIVATE_AGGREGATE_DOMAIN,
+        ),
+        CONTROL_AGGREGATE_MEMORY_LIMIT: _InventoryRecord(
+            AVAILABILITY_UNAVAILABLE,
+            unavailable_reason=UNAVAILABLE_REASON_NO_PRIVATE_AGGREGATE_DOMAIN,
+        ),
+        CONTROL_PER_FILE_SIZE_LIMIT: _InventoryRecord(
+            AVAILABILITY_AVAILABLE,
+            "rlimit-fsize",
+        ),
+        CONTROL_INHERITED_HANDLE_RESTRICTION: _InventoryRecord(
+            AVAILABILITY_AVAILABLE,
+            "close-on-exec-and-explicit-descriptor-release",
+        ),
+    }
+)
+
+
 def _control_records(platform: str) -> Mapping[str, _InventoryRecord] | None:
     # Internal Linux adapter only; public inventory admission remains closed.
     if platform == PLATFORM_LINUX:
-        return _NATIVE_CONTROL_PLATFORMS[PLATFORM_MACOS]
+        return _LINUX_CONTROL_RECORDS
     return _NATIVE_CONTROL_PLATFORMS.get(platform)
 
 
@@ -4837,19 +4863,25 @@ class _PosixManagerLossWatch:
         poller.register(descriptor, select.POLLHUP | select.POLLERR | select.POLLNVAL)
 
         def watch() -> None:
+            hangup_deadline: float | None = None
             while not self._stop.wait(0.02):
                 try:
                     lost = os.getppid() != parent_pid
                     if not lost:
-                        # HUP observes writer closure without consuming bytes or
-                        # racing the protocol reader over available-byte counts.
-                        lost = bool(poller.poll(0))
+                        # HUP also accompanies an orderly close with unread data.
+                        # Allow the reader to finish, including buffered frames;
+                        # parent death independently triggers immediate cleanup.
+                        if poller.poll(0):
+                            if hangup_deadline is None:
+                                hangup_deadline = time.monotonic() + _WORKER_SHUTDOWN_GRACE
+                            lost = time.monotonic() >= hangup_deadline
                     if not lost:
                         continue
                 except OSError:
                     # Losing observation must not allow Go to continue.
                     pass
-                os.killpg(own_pid, signal.SIGKILL)
+                if not self._stop.is_set():
+                    os.killpg(own_pid, signal.SIGKILL)
                 return
 
         self._thread = threading.Thread(target=watch, daemon=True)
@@ -4877,16 +4909,6 @@ def run_worker(
 ) -> int:
     """Run the fixed hidden worker session and return its process exit code."""
 
-    launch_context = (
-        _consume_worker_launch_context()
-        if _launch_context is None
-        else _launch_context
-    )
-    startup = (
-        worker_runtime_proof(launch_context)
-        if runtime_proof is None
-        else runtime_proof
-    )
     actual_input = (
         cast(BinaryIO, sys.stdin.buffer)
         if input_stream is None
@@ -4897,25 +4919,37 @@ def run_worker(
         if output_stream is None
         else output_stream
     )
-    executable = worker_executable
-    if executable is None:
-        executable = _manager_executable_from_argv0(sys.argv[0])
-    session = _WorkerSession(
-        actual_input,
-        actual_output,
-        executor=executor or SubprocessProcessExecutor(),
-        worker_executable=executable,
-        identity_resolver=identity_resolver or _resolve_worker_manager_identity,
-        control_observer=control_observer or _observe_native_controls,
-        runtime_proof=startup,
-        launch_context=launch_context,
-    )
-    watch = (
-        _PosixManagerLossWatch(actual_input, launch_context.parent_pid)
-        if runtime_proof is None and sys.platform in {"darwin", "linux"}
-        else None
-    )
+    session: _WorkerSession | None = None
+    watch: _PosixManagerLossWatch | None = None
     try:
+        launch_context = (
+            _consume_worker_launch_context()
+            if _launch_context is None
+            else _launch_context
+        )
+        startup = (
+            worker_runtime_proof(launch_context)
+            if runtime_proof is None
+            else runtime_proof
+        )
+        executable = worker_executable
+        if executable is None:
+            executable = _manager_executable_from_argv0(sys.argv[0])
+        session = _WorkerSession(
+            actual_input,
+            actual_output,
+            executor=executor or SubprocessProcessExecutor(),
+            worker_executable=executable,
+            identity_resolver=identity_resolver or _resolve_worker_manager_identity,
+            control_observer=control_observer or _observe_native_controls,
+            runtime_proof=startup,
+            launch_context=launch_context,
+        )
+        watch = (
+            _PosixManagerLossWatch(actual_input, launch_context.parent_pid)
+            if runtime_proof is None and sys.platform in {"darwin", "linux"}
+            else None
+        )
         session.run()
     except BaseException as exc:
         failure = (
@@ -4931,7 +4965,7 @@ def run_worker(
                 actual_output,
                 {
                     "kind": "failure",
-                    "nonce": session.nonce,
+                    "nonce": session.nonce if session is not None else "",
                     "failure": {
                         "code": failure.code,
                         "detail": failure.detail,
@@ -5374,14 +5408,13 @@ def _probe_linux_control(name: str, limits: ResourceLimits) -> bool:
     if sys.platform != "linux":
         raise OSError("Linux controls require a native Linux host")
     if name in (CONTROL_ACTIVE_PROCESS_COUNT_LIMIT, CONTROL_AGGREGATE_MEMORY_LIMIT):
-        # This adapter owns only a session/group, never a delegated cgroup.
-        os.killpg(os.getpgrp(), 0)
+        # Adapter policy, not a host-wide facility-absence measurement: this
+        # adapter never acquires a private aggregate domain.
         return False
     if name == CONTROL_INHERITED_HANDLE_RESTRICTION:
         with _WORKER_LAUNCH_LOCK:
             capability = _PreparedWorkerLaunch(PLATFORM_LINUX)
             try:
-                os.set_inheritable(capability._read_fd, False)
                 return not os.get_inheritable(capability._read_fd)
             finally:
                 capability.close_parent_copy()
@@ -7059,17 +7092,15 @@ class _WorkerClient:
                 failure = _dominant_failure(failure, error)
 
             stdin_pipe = self.process.stdin
+            shutdown_sent = False
             if stdin_pipe is not None:
                 try:
                     _write_message(
                         cast(BinaryIO, stdin_pipe),
                         {"kind": "shutdown", "nonce": self.nonce},
                     )
+                    shutdown_sent = True
                 except BaseException:
-                    pass
-                try:
-                    stdin_pipe.close()
-                except OSError:
                     pass
 
             stdout_pipe = self.process.stdout
@@ -7087,10 +7118,21 @@ class _WorkerClient:
             drain_thread = threading.Thread(target=drain_stdout, daemon=True)
             drain_thread.start()
             drained.wait(_WORKER_SHUTDOWN_GRACE)
+            if (shutdown_sent and self.domain.platform in _POSIX_CONTROL_PLATFORMS
+                    and not self._expired.is_set()):
+                try:
+                    _require_orderly_worker_exit(self.process, self.domain.platform)
+                except BaseException as exc:
+                    record(exc)
             try:
                 self.domain.terminate(self.process)
             except BaseException as exc:
                 record(exc)
+            if stdin_pipe is not None:
+                try:
+                    stdin_pipe.close()
+                except OSError:
+                    pass
             if stdout_pipe is not None:
                 try:
                     stdout_pipe.close()
@@ -7135,6 +7177,23 @@ class _WorkerClient:
                 self.domain.terminate(self.process)
             except BaseException as exc:
                 self._expiration_error = exc
+
+
+def _require_orderly_worker_exit(process: subprocess.Popen[bytes], platform: str) -> None:
+    if platform == PLATFORM_LINUX and process.returncode is None:
+        deadline = time.monotonic() + _WORKER_SHUTDOWN_GRACE
+        while True:
+            status = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            if status is not None:
+                returncode = status.si_status if status.si_code == os.CLD_EXITED else -status.si_status
+                break
+            if time.monotonic() >= deadline:
+                raise GoV1Error(CODE_CONTROL_UNAVAILABLE, "worker did not exit after shutdown")
+            time.sleep(0.005)
+    else:
+        returncode = process.wait(timeout=_WORKER_SHUTDOWN_GRACE)
+    if returncode != 0:
+        raise GoV1Error(CODE_WORKER_PROTOCOL_INVALID, "worker did not exit cleanly after shutdown")
 
 
 def _match_applied_controls(
