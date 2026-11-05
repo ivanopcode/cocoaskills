@@ -48,6 +48,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import time
 import uuid
 from dataclasses import dataclass
@@ -225,7 +226,7 @@ def _read_record(entry: Path, skill: str, package: str) -> _ValidatedRecord:
     raw: bytes | None = None
     for attempt in range(_RECORD_REPLACE_ATTEMPTS):
         try:
-            handle = open(path, "rb")
+            handle = open(path, "rb", opener=protocol_json._open_regular)
         except PermissionError as exc:
             if attempt + 1 >= _RECORD_REPLACE_ATTEMPTS:
                 raise _StoreUnavailable(f"{subject} cannot be read: {exc}") from exc
@@ -244,7 +245,10 @@ def _read_record(entry: Path, skill: str, package: str) -> _ValidatedRecord:
             # only outcome is a read failure, never a retry, never absence.
             try:
                 with handle:
-                    if os.fstat(handle.fileno()).st_size > protocol_json.MAX_INPUT_BYTES:
+                    opened = os.fstat(handle.fileno())
+                    if not stat.S_ISREG(opened.st_mode):
+                        raise OSError("JSON input must be a regular file")
+                    if opened.st_size > protocol_json.MAX_INPUT_BYTES:
                         raise protocol_json.ProtocolJSONSizeError("JSON input exceeds maximum size")
                     raw = handle.read(protocol_json.MAX_INPUT_BYTES + 1)
                     if len(raw) > protocol_json.MAX_INPUT_BYTES:

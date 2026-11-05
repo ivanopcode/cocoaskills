@@ -1044,7 +1044,7 @@ def _read_regular_file_noatime(
     descriptor = -1
     try:
         try:
-            descriptor = os.open(path, flags)
+            descriptor = protocol_json._open_regular(os.fspath(path), flags)
         except OSError as exc:
             noatime = getattr(os, "O_NOATIME", 0)
             if (
@@ -1054,7 +1054,7 @@ def _read_regular_file_noatime(
                 not in {errno.EPERM, errno.EACCES, errno.EINVAL, errno.ENOTSUP}
             ):
                 raise
-            descriptor = os.open(path, flags & ~noatime)
+            descriptor = protocol_json._open_regular(os.fspath(path), flags & ~noatime)
         opened = os.fstat(descriptor)
         if opened.st_size > protocol_json.MAX_INPUT_BYTES:
             raise protocol_json.ProtocolJSONSizeError("JSON input exceeds maximum size")
