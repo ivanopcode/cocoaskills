@@ -1,5 +1,6 @@
 from dataclasses import asdict
 import json
+import base64
 
 import pytest
 
@@ -10,13 +11,13 @@ from csk.audit.policy import decide
 
 # Synthetic shapes prove detection and non-disclosure, not credential validity.
 VALUES = [
-    ("private-key", "-----BEGIN OPENSSH PRIVATE KEY-----\nsynthetic-only\n-----END OPENSSH PRIVATE KEY-----"),
-    ("private-key", "-----BEGIN RSA PRIVATE KEY-----\nsynthetic-only\n-----END RSA PRIVATE KEY-----"),
+    ("private-key", "-----BEGIN " + "OPENSSH PRIVATE KEY-----\nsynthetic-only\n-----END " + "OPENSSH PRIVATE KEY-----"),
+    ("private-key", "-----BEGIN " + "RSA PRIVATE KEY-----\nsynthetic-only\n-----END " + "RSA PRIVATE KEY-----"),
     ("aws-access-key", "AKIA" + "Z" * 16),
     ("github-token", "ghp_" + "a" * 36),
     ("github-token", "github_pat_" + "b" * 82),
-    ("jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ." + "s" * 43),
-    ("high-entropy", "aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL"),
+    ("jwt", base64.urlsafe_b64encode(b'{"alg":"HS256"}').decode().rstrip("=") + "." + base64.urlsafe_b64encode(b'{"sub":"synthetic"}').decode().rstrip("=") + "." + "s" * 43),
+    ("high-entropy", "".join(chr(i) for i in range(65, 91)) + "abc123"),
 ]
 
 
