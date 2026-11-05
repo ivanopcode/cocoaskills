@@ -12,6 +12,7 @@ from .. import redaction, serialization
 from ..backend_config import CodexBackendConfig
 from ..capabilities import CapabilityManifest
 from ..model import Finding, Severity
+from . import process
 from .base import AuditBackendError, AuditRequest
 from .environment import CODEX_REQUIRED_ENV, backend_environment
 
@@ -61,7 +62,7 @@ class CodexBackend:
             schema_file.write_text(json.dumps(_response_schema(), indent=2, sort_keys=True), encoding="utf-8")
             argv = self._argv(cwd=cwd, schema_file=schema_file, response_file=response_file)
             try:
-                proc = subprocess.run(
+                proc = process.run(
                     argv,
                     input=prompt.encode("utf-8"),
                     cwd=cwd,
@@ -75,13 +76,17 @@ class CodexBackend:
             except OSError as exc:
                 raise AuditBackendError(f"Audit backend failed to start: {self.name}: {exc}") from exc
             if proc.returncode != 0:
-                stderr = redaction.scrub_text(proc.stderr.decode("utf-8", errors="replace"))[:2000]
+                stderr = redaction.scrub_stderr(proc.stderr)
                 raise AuditBackendError(f"Audit backend exited with code {proc.returncode}: {self.name}: {stderr}")
             if not response_file.exists():
                 raise AuditBackendError(f"Audit backend did not write output-last-message: {self.name}")
             try:
-                response = json.loads(response_file.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
+                with response_file.open("rb") as stream:
+                    raw = stream.read(process.MAX_RESPONSE_BYTES + 1)
+                if len(raw) > process.MAX_RESPONSE_BYTES:
+                    raise AuditBackendError("Audit backend response exceeds output byte limit")
+                response = json.loads(raw.decode("utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise AuditBackendError(f"Audit backend returned invalid JSON: {self.name}") from exc
         if not isinstance(response, dict):
             raise AuditBackendError(f"Audit backend response must be a JSON object: {self.name}")

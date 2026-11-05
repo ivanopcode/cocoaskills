@@ -10,6 +10,7 @@ from .. import redaction, serialization
 from ..backend_config import CommandBackendConfig
 from ..capabilities import CapabilityManifest
 from ..model import Finding, Severity
+from . import process
 from .base import AuditBackendError, AuditRequest
 from .environment import COMMAND_REQUIRED_ENV, backend_environment
 
@@ -57,7 +58,7 @@ class CommandBackend:
             run_cwd = cwd or Path(tmp)
             env = backend_environment(COMMAND_REQUIRED_ENV, overrides=self.config.env)
             try:
-                proc = subprocess.run(
+                proc = process.run(
                     list(self.config.command),
                     input=stdin,
                     cwd=run_cwd,
@@ -71,11 +72,7 @@ class CommandBackend:
             except OSError as exc:
                 raise AuditBackendError(f"Audit backend failed to start: {self.name}: {exc}") from exc
         if proc.returncode != 0:
-            # A prefix can cut through a PEM or credential and defeat redaction.
-            # Omit oversized diagnostics entirely before decoding or scrubbing.
-            stderr = "<stderr omitted: exceeds 2000 bytes>"
-            if len(proc.stderr) <= 2000:
-                stderr = redaction.scrub_text(proc.stderr.decode("utf-8", errors="replace"))[:2000]
+            stderr = redaction.scrub_stderr(proc.stderr)
             raise AuditBackendError(f"Audit backend exited with code {proc.returncode}: {self.name}: {stderr}")
         try:
             response = json.loads(proc.stdout.decode("utf-8"))
