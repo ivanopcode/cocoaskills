@@ -58,7 +58,9 @@ class AuditInputTooLarge(AuditBackendError):
     pass
 
 
-def audit_plans(plans, config, *, scope, record=True):
+def audit_plans(
+    plans: list[installer.SkillPlan], config: GlobalConfig, *, scope: str, record: bool = True,
+) -> tuple[AuditReport, ...]:
     reports = []
     for plan in plans:
         paths = _admit_snapshot(plan, config.audit.max_request_bytes)
