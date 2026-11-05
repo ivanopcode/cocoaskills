@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from . import protocol_json
+
 import json
 from collections.abc import Iterable
 from pathlib import Path
@@ -23,8 +25,8 @@ def load_consumers(csk_home: Path) -> list[Path]:
     if not path.exists():
         return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        data = protocol_json.loads_compatible(protocol_json.read_bytes(path))
+    except (protocol_json.ProtocolJSONError, OSError):
         return []
     raw = data.get("consumers") if isinstance(data, dict) else None
     if not isinstance(raw, list):

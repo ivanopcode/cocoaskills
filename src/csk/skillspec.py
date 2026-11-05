@@ -371,7 +371,7 @@ def load_skill_spec(snapshot: Path) -> SkillSpec:
 
     def _read(name: str) -> bytes:
         if name not in cache:
-            cache[name] = (snapshot / Path(name)).read_bytes()
+            cache[name] = protocol_json.read_bytes(snapshot / Path(name))
         return cache[name]
 
     decision = select_effective_manifest(present, _read)
@@ -422,7 +422,7 @@ def manifest_source_path(snapshot: Path) -> str:
     if not present:
         return ""
     decision = select_effective_manifest(
-        present, lambda name: (snapshot / Path(name)).read_bytes()
+        present, lambda name: protocol_json.read_bytes(snapshot / Path(name))
     )
     return decision.name if decision is not None else ""
 
@@ -439,7 +439,7 @@ def _json_values_equal(left: Any, right: Any) -> bool:
 
 def _load_skill_manifest(path: Path) -> tuple[SkillSpec, dict[str, Any]]:
     try:
-        data = protocol_json.loads(path.read_bytes())
+        data = protocol_json.loads(protocol_json.read_bytes(path))
     except protocol_json.ProtocolJSONError as exc:
         raise SkillSpecError(f"Malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
@@ -776,7 +776,7 @@ def parse_runtime_fallback_bytes(
 
 
 def _load_runtime_fallback(path: Path) -> SkillSpec:
-    return parse_runtime_fallback_bytes(path.read_bytes(), RUNTIME_FALLBACK, label=path)
+    return parse_runtime_fallback_bytes(protocol_json.read_bytes(path), RUNTIME_FALLBACK, label=path)
 
 
 def _parse_dependencies(

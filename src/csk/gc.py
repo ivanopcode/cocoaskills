@@ -256,7 +256,7 @@ def _load_consumers_strict(csk_home: Path) -> list[Path]:
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise ValueError(f"{path} is not a regular non-link file")
     try:
-        value = protocol_json.loads(path.read_bytes())
+        value = protocol_json.loads(protocol_json.read_bytes(path))
     except (OSError, protocol_json.ProtocolJSONError) as exc:
         raise ValueError(f"cannot read {path}: {exc}") from exc
     if not isinstance(value, dict) or set(value) != {
@@ -359,7 +359,7 @@ def _collect_marker_directory(
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
         return False, "marker is not a regular non-link file"
     try:
-        raw = marker_path.read_bytes()
+        raw = protocol_json.read_bytes(marker_path)
         after = marker_path.lstat()
         marker = install_marker.read_install_marker(raw)
     except (OSError, install_marker.InstallMarkerError) as exc:

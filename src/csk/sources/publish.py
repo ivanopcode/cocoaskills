@@ -1667,7 +1667,7 @@ def read_schema2_lock(project_path: Path) -> SkillfileLock | None:
             CODE_OUTPUT_OVERLAP, f"Lock {path} is not a regular file"
         )
     try:
-        raw = path.read_bytes()
+        raw = protocol_json.read_bytes(path)
     except _FS_ERRORS as exc:
         raise SourceError(
             CODE_MEMBER_INVALID, f"Lock {path} is unreadable: {exc}"
@@ -1741,7 +1741,7 @@ def live_context_managed(live: Path, name: str) -> bool:
 
     marker_path = live / ".csk-install.json"
     try:
-        raw = marker_path.read_bytes()
+        raw = protocol_json.read_bytes(marker_path)
     except _FS_ERRORS:
         return False
     try:
@@ -2893,7 +2893,7 @@ def _validate_runtime_inventory(spec: TargetSpec) -> None:
     record_path = record_dir / "record.json"
     if not record_path.is_file() or record_path.is_symlink():
         raise SourceError(CODE_SNAPSHOT_UNAVAILABLE, "runtime inventory record is unavailable")
-    record = protocol_json.loads(record_path.read_bytes())
+    record = protocol_json.loads(protocol_json.read_bytes(record_path))
     if not isinstance(record, dict) or not isinstance(record.get("skill"), str) or not isinstance(record.get("package"), str):
         raise SourceError(CODE_SNAPSHOT_UNAVAILABLE, "runtime inventory record is malformed")
     name, package_key = record["skill"], record["package"]
@@ -3112,7 +3112,7 @@ def _marker_reusable(
 
     marker_path = live / ".csk-install.json"
     try:
-        raw = marker_path.read_bytes()
+        raw = protocol_json.read_bytes(marker_path)
     except _FS_ERRORS:
         return False
     try:
@@ -3409,7 +3409,7 @@ def _read_fresh_manifest(
 
     path = project_path / manifest.MANIFEST_NAME
     try:
-        raw = path.read_bytes()
+        raw = protocol_json.read_bytes(path)
     except _FS_ERRORS as exc:
         raise manifest.ManifestError(f"Skillfile cannot be read: {exc}") from exc
     try:
@@ -5992,7 +5992,7 @@ def reconstruct_schema2_local_builds(
         }
     if status_marker_path is not None:
         try:
-            recorded = install_marker.read_install_marker(status_marker_path.read_bytes())
+            recorded = install_marker.read_install_marker(protocol_json.read_bytes(status_marker_path))
         except (OSError, install_marker.InstallMarkerError) as exc:
             raise SourceError(
                 CODE_MEMBER_INVALID, f"Skill {name!r} install marker is not usable: {exc}"
@@ -6088,7 +6088,7 @@ def reconstruct_schema2_external_builds(
     if not external:
         return empty_build_outputs()
     try:
-        raw = live_marker_path.read_bytes()
+        raw = protocol_json.read_bytes(live_marker_path)
     except _FS_ERRORS as exc:
         raise SourceError(
             CODE_MEMBER_INVALID,
@@ -6350,7 +6350,7 @@ def _binding_move_messages(
             continue
         try:
             prior = read_machine_private_binding(
-                binding_path(home, slug, source_alias).read_bytes()
+                protocol_json.read_bytes(binding_path(home, slug, source_alias))
             )
             prior_location = prior.canonical_source_location
         except SourceError:
@@ -6369,7 +6369,7 @@ def _marker_snapshot(marker_path: Path) -> str | None:
     """Read the installed snapshot a marker claims, or None when unusable."""
 
     try:
-        raw = marker_path.read_bytes()
+        raw = protocol_json.read_bytes(marker_path)
     except _FS_ERRORS:
         return None
     try:

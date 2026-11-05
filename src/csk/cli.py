@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from . import protocol_json
+
 import argparse
 import getpass
 import json
@@ -1213,14 +1215,14 @@ def _cmd_hybrid(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
         if args.hybrid_command == "status":
             marker_path = store / item.decl.name / ".csk-install.json"
             try:
-                marker_text = marker_path.read_text(encoding="utf-8")
+                marker_text = protocol_json.read_bytes(marker_path)
             except (FileNotFoundError, NotADirectoryError):
                 state = "missing"
             except OSError:
                 state = "unreadable marker"
             else:
                 try:
-                    marker = json.loads(marker_text)
+                    marker = protocol_json.loads_compatible(marker_text)
                 except ValueError:
                     state = "unreadable marker"
                 else:

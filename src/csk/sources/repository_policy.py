@@ -823,7 +823,7 @@ def load_policy(
             f"source policy is not a regular file: {resolved}",
         )
     try:
-        raw = resolved.read_bytes()
+        raw = protocol_json.read_bytes(resolved)
     except Exception as exc:
         raise RepositoryPolicyError(
             CODE_POLICY_INVALID,

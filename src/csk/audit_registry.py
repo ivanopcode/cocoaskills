@@ -984,7 +984,7 @@ def _read_cache(path: Path) -> tuple[float, list[dict[str, Any]]] | None:
     if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
         return None
     try:
-        data = json.loads(
+        data = protocol_json.loads_compatible(
             _read_regular_file_noatime(path, metadata).decode("utf-8")
         )
         fetched_at = float(data["fetched_at"])

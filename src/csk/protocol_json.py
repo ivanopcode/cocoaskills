@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 from typing import Any, Final
 
 
@@ -8,11 +10,70 @@ class ProtocolJSONError(ValueError):
     pass
 
 
+# Admission limits apply to operator-controlled documents, before decoding.
+MAX_INPUT_BYTES: Final = 16 * 1024 * 1024
+MAX_DEPTH: Final = 128
+
+
+class ProtocolJSONSizeError(ProtocolJSONError, OSError):
+    """A document exceeds the read budget; also fits existing I/O refusals."""
+
+
+def read_bytes(path: Path) -> bytes:
+    """Admit size before opening, then cap the read if the file grows."""
+    if path.stat().st_size > MAX_INPUT_BYTES:
+        raise ProtocolJSONSizeError("JSON input exceeds maximum size")
+    with path.open("rb") as stream:
+        try:
+            size = os.fstat(stream.fileno()).st_size
+        except (OSError, ValueError):
+            # Virtual snapshot paths expose in-memory streams, not descriptors.
+            size = path.stat().st_size
+        if size > MAX_INPUT_BYTES:
+            raise ProtocolJSONSizeError("JSON input exceeds maximum size")
+        raw = stream.read(MAX_INPUT_BYTES + 1)
+    if len(raw) > MAX_INPUT_BYTES:
+        raise ProtocolJSONSizeError("JSON input exceeds maximum size")
+    return raw
+
+
+def _check_depth(text: str) -> None:
+    # Scan tokens without recursion or constructing a parsed object. Escaped
+    # quotes and brackets inside strings do not affect container depth.
+    depth = 0
+    quoted = escaped = False
+    for character in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                quoted = False
+        elif character == '"':
+            quoted = True
+        elif character in "[{":
+            depth += 1
+            if depth > MAX_DEPTH:
+                raise ProtocolJSONError("JSON input exceeds maximum depth")
+        elif character in "]}":
+            depth -= 1
+
+
 # CCJ-1 keeps integers inside the range every conforming JSON implementation
 # represents exactly, so a signed or hashed object survives a round trip
 # through a language that stores numbers as IEEE 754 doubles.
 MAX_SAFE_INTEGER: Final = 9_007_199_254_740_991
 MIN_SAFE_INTEGER: Final = -MAX_SAFE_INTEGER
+
+
+def loads_compatible(raw: bytes | str) -> Any:
+    """Bound legacy JSON without changing duplicate-key or number semantics."""
+    text = _decode_utf8(raw, invalid_message="JSON must be UTF-8", bom_message="JSON must not contain a byte-order mark")
+    try:
+        return json.loads(text)
+    except (ValueError, RecursionError) as exc:
+        raise ProtocolJSONError(str(exc)) from exc
 
 
 def loads(raw: bytes | str) -> Any:
@@ -34,7 +95,7 @@ def loads(raw: bytes | str) -> Any:
         )
     except ProtocolJSONError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ProtocolJSONError(str(exc)) from exc
     _validate_unicode(value)
     return value
@@ -73,7 +134,7 @@ def loads_canonical(raw: bytes | str) -> Any:
         )
     except ProtocolJSONError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ProtocolJSONError(str(exc)) from exc
     validate_canonical(value)
     return value
@@ -148,6 +209,8 @@ def _decode_utf8(
     invalid_message: str,
     bom_message: str,
 ) -> str:
+    if len(raw) > MAX_INPUT_BYTES:
+        raise ProtocolJSONSizeError("JSON input exceeds maximum size")
     if isinstance(raw, bytes):
         try:
             text = raw.decode("utf-8", errors="strict")
@@ -157,6 +220,9 @@ def _decode_utf8(
         text = raw
     if text.startswith("\ufeff"):
         raise ProtocolJSONError(bom_message)
+    if not isinstance(raw, bytes) and len(text.encode("utf-8", errors="surrogatepass")) > MAX_INPUT_BYTES:
+        raise ProtocolJSONSizeError("JSON input exceeds maximum size")
+    _check_depth(text)
     return text
 
 

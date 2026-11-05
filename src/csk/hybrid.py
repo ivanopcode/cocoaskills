@@ -46,7 +46,7 @@ def load_hybrid_decls(csk_home: Path) -> list[HybridDecl]:
     if not path.exists():
         return []
     try:
-        data = protocol_json.loads(path.read_bytes())
+        data = protocol_json.loads(protocol_json.read_bytes(path))
     except protocol_json.ProtocolJSONError as exc:
         raise HybridError(f"Malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
@@ -146,7 +146,7 @@ def _read_or_init(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"schema_version": manifest.SCHEMA_VERSION, "skills": []}
     try:
-        data = protocol_json.loads(path.read_bytes())
+        data = protocol_json.loads(protocol_json.read_bytes(path))
     except protocol_json.ProtocolJSONError as exc:
         raise HybridError(f"Malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):

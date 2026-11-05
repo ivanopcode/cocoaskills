@@ -332,7 +332,7 @@ def _read_ledger(
 def _read_declarations(
     root: Path, target_agents: Sequence[str], raw: object, *, resolve_launchers: bool = True
 ) -> tuple[str, dict[str, declarations.McpDeclaration]]:
-    manifest_bytes = (root / "Skillfile.json").read_bytes()
+    manifest_bytes = protocol_json.read_bytes(root / "Skillfile.json")
     current = protocol_json.loads(manifest_bytes)
     if (
         not isinstance(current, dict)
@@ -873,7 +873,7 @@ def _legacy_without_launchers(journal: transactions.Journal) -> bool:
 def assert_current(plan: ProjectPlan) -> None:
     """Compare whole-file bytes and permissions, never only the owned subtree."""
     if (
-        hashlib.sha256((plan.root / "Skillfile.json").read_bytes()).hexdigest()
+        hashlib.sha256(protocol_json.read_bytes(plan.root / "Skillfile.json")).hexdigest()
         != plan.manifest_sha256
     ):
         raise refusal("mcp_declaration_invalid", "Skillfile changed since MCP planning")

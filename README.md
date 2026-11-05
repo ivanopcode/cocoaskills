@@ -606,3 +606,14 @@ Run `PYTHONDONTWRITEBYTECODE=1 uv run python .scripts/scan_mcp_base_commands.py 
 for a name/stat-only base-system snapshot. Review it with the documented package
 families in `tests/fixtures/mcp/base-system-commands.json`; runtime policy data
 is committed in `src/csk/mcp_base_commands.py`. Neither scanner executes programs.
+
+### JSON input limits
+
+Operator JSON documents are limited to 16 MiB and 128 nested containers.
+File readers check size before reading and cap reads against concurrent growth;
+parsers check nesting before constructing the decoded value. Existing smaller
+limits on native MCP files, registry evidence, and lock records still apply.
+Canonical JSON encoding and strict duplicate-key, Unicode, and numeric checks
+are unchanged. Run the focused boundary checks with
+`uv run --extra dev pytest tests/test_json_bounds.py tests/test_protocol_json.py`;
+temporary test artifacts belong in `.temp/`.

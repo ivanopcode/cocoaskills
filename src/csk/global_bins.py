@@ -398,7 +398,7 @@ def _read_managed(bin_dir: Path) -> set[str]:
     if not path.exists():
         return set()
     try:
-        data = protocol_json.loads(path.read_bytes())
+        data = protocol_json.loads(protocol_json.read_bytes(path))
     except (OSError, protocol_json.ProtocolJSONError):
         return set()
     if (

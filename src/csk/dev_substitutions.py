@@ -121,7 +121,7 @@ def load_manifest(project_root: Path) -> DevManifest:
     if not path.exists():
         return DevManifest(schema_version=1, substitutions={}, build_repository_substitutions={})
     try:
-        return parse_manifest(path.read_bytes(), project_root)
+        return parse_manifest(protocol_json.read_bytes(path), project_root)
     except protocol_json.ProtocolJSONError as exc:
         raise DevSubstitutionError(f"Malformed JSON in {path}: {exc}") from exc
 

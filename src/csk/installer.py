@@ -1454,7 +1454,7 @@ def _existing_external_snapshot_key(
     for root in marker_roots:
         path = root / provider / ".csk-install.json"
         try:
-            marker = install_marker.read_install_marker(path.read_bytes())
+            marker = install_marker.read_install_marker(protocol_json.read_bytes(path))
         except (OSError, install_marker.InstallMarkerError):
             continue
         if not isinstance(
@@ -4849,7 +4849,7 @@ def _read_marker(path: Path) -> dict[str, object] | None:
     if not path.exists():
         return None
     try:
-        data = protocol_json.loads(path.read_bytes())
+        data = protocol_json.loads(protocol_json.read_bytes(path))
     except (OSError, protocol_json.ProtocolJSONError):
         return None
     return data if isinstance(data, dict) else None

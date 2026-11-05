@@ -29,7 +29,7 @@ def _regular_bytes(path: Path) -> bytes | None:
     if not stat.S_ISREG(mode) or not mode & 0o222:
         raise gate.GitignoreError(f'Ignore policy requires a writable regular file, never a symlink: {path.name}')
     try:
-        return path.read_bytes()
+        return protocol_json.read_bytes(path) if path.name == "Skillfile.json" else path.read_bytes()
     except OSError as exc:
         raise gate.GitignoreError(f'Cannot read ignore policy file: {path.name}') from exc
 
