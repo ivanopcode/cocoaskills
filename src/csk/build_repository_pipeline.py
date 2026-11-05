@@ -6,8 +6,9 @@ import shutil
 import stat
 import tempfile
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from contextlib import ExitStack
 from enum import StrEnum
 from pathlib import Path
 from typing import Final, NoReturn, Protocol
@@ -617,7 +618,57 @@ class DiskProtectedStore:
         raise ExternalBuildError(code, f"protected entry invalid: {cause}") from cause
 
 
+@dataclass(frozen=True)
+class AcquiredSource:
+    request: PipelineRequest
+    snapshot: Snapshot
+    target: BuildTarget
+    effective: EffectiveState
+    snapshot_key: str
+    subject: AuditSubject
+
+
+class AcquisitionMemo:
+    """Operation-local validated source states; acquisition failures never enter it."""
+
+    def __init__(self) -> None:
+        self._snapshots: dict[tuple[str, str, str, str, str | None], Snapshot] = {}
+
+    @staticmethod
+    def _key(request: PipelineRequest) -> tuple[str, str, str, str, str | None]:
+        effective = request.effective
+        tag = request.declared.tag
+        if effective.substitution is not None:
+            substitution = effective.substitution
+            tag = substitution.ref_value if substitution.ref_kind == "tag" else None
+        return (effective.identity_kind, effective.identity, effective.object_format, effective.commit, tag)
+
+    def lookup(self, request: PipelineRequest) -> Snapshot | None:
+        return self._snapshots.get(self._key(request))
+
+    def remember(self, request: PipelineRequest, snapshot: Snapshot) -> None:
+        self._snapshots[self._key(request)] = snapshot
+
+
+def acquisition_execution_boundary() -> None:
+    """All external sources are validated; future transport closure belongs here."""
+
+
+def run_pipelines(requests: Sequence[PipelineRequest]) -> list[PipelineResult]:
+    with ExitStack() as stack:
+        memo = AcquisitionMemo()
+        acquired = [acquire_pipeline(request, stack, memo) for request in requests]
+        acquisition_execution_boundary()
+        return [execute_pipeline(source) for source in acquired]
+
+
 def run_pipeline(request: PipelineRequest) -> PipelineResult:
+    return run_pipelines([request])[0]
+
+
+def acquire_pipeline(
+    request: PipelineRequest, stack: ExitStack, memo: AcquisitionMemo | None = None
+) -> AcquiredSource | PipelineResult:
     mutate = request.operation in {Operation.INSTALL, Operation.REPAIR}
     endpoints = list(request.endpoints)
     if request.endpoint is not None:
@@ -626,12 +677,16 @@ def run_pipeline(request: PipelineRequest) -> PipelineResult:
         validate_external_build_endpoint(endpoint)
     _trace(request, "exact-source-acquisition")
     try:
-        snapshot = request.acquire()
+        snapshot = memo.lookup(request) if memo is not None else None
+        if snapshot is None:
+            snapshot = request.acquire()
+        acquired = True
     except GitAdmissionError as acquire_error:
         if acquire_error.code != SOURCE_UNAVAILABLE:
             raise
         if request.operation is Operation.SYNTAX:
             return PipelineResult(state="unverified-offline", code=UNVERIFIED_OFFLINE)
+        acquired = False
         snapshot = None
         if (
             request.declared.tag is None
@@ -651,118 +706,135 @@ def run_pipeline(request: PipelineRequest) -> PipelineResult:
 
     _trace(request, "raw-object-identity-and-graph-proof")
     _trace(request, "all-blob-lfs-scan")
-    with tempfile.TemporaryDirectory(prefix="csk-external-snapshot-") as raw_root:
-        root = Path(raw_root)
-        snapshot.materialize(root)
-        _trace(request, "immutable-snapshot-materialization")
-        _trace(request, "whole-snapshot-validation")
-        _validate_materialized(root, snapshot)
-        _trace(request, "build-source-digest")
-        try:
-            descriptor = load_skill_build(root)
-            target = descriptor.targets[request.target]
-            _validate_target(root, target)
-        except (OSError, KeyError, ValueError) as exc:
-            raise ExternalBuildError(DESCRIPTOR_INVALID, str(exc)) from exc
-        effective = request.effective
-        if (
-            effective.substituted
-            and effective.substitution is not None
-            and (
-                effective.substitution.type == "local-path"
-                or effective.substitution.ref_kind != "revision"
-            )
-        ):
-            effective = replace(
-                effective,
-                object_format=snapshot.object_format,
-                commit=snapshot.commit,
-            )
-        _trace(request, "descriptor-and-target-validation")
-        _validate_binding(request.declared, effective, snapshot)
-        snap_key = snapshot_key(effective, snapshot.digest)
-        subject = AuditSubject(
-            declared=request.declared,
-            effective=effective,
-            build_source=snapshot.digest,
-            descriptor_target=request.target,
-            snapshot_root=root,
-            tag_verified=request.declared.tag is not None and snapshot.tag_verified,
+    root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="csk-external-snapshot-")))
+    snapshot.materialize(root)
+    _trace(request, "immutable-snapshot-materialization")
+    _trace(request, "whole-snapshot-validation")
+    _validate_materialized(root, snapshot)
+    _trace(request, "build-source-digest")
+    try:
+        descriptor = load_skill_build(root)
+        target = descriptor.targets[request.target]
+        _validate_target(root, target)
+    except (OSError, KeyError, ValueError) as exc:
+        raise ExternalBuildError(DESCRIPTOR_INVALID, str(exc)) from exc
+    effective = request.effective
+    if (
+        effective.substituted
+        and effective.substitution is not None
+        and (
+            effective.substitution.type == "local-path"
+            or effective.substitution.ref_kind != "revision"
         )
-        _trace(request, "independent-external-audit")
-        try:
-            request.audit(subject)
-        except BaseException as exc:
-            raise ExternalBuildError(AUDIT_BLOCKED, "independent external repository audit failed") from exc
-        _validate_materialized(root, snapshot)
-        if request.operation in {Operation.AUDIT, Operation.SYNTAX}:
-            return PipelineResult(
-                state="audited" if request.operation is Operation.AUDIT else "source-covered",
-                build_source=snapshot.digest,
-                snapshot_key=snap_key,
-                subject=subject,
-            )
-        if request.store is None or request.compiler is None:
-            raise ExternalBuildError(PROTECTED_BOUNDARY_UNTRUSTED, "protected store and Go compiler session are required")
-        if mutate:
-            request.store.store_snapshot(snap_key, snapshot)
-        input_value = receipt_input(request, effective, target, snapshot.digest, request.compiler.identity)
-        if request.package is None:
-            wrapped_json: Mapping[str, object] | None = None
-            key = _digest_json(input_value)
-        else:
-            wrapped = build_metadata.wrap_receipt_v3_input(
-                request.package,
-                build_metadata.parse_repository_build_input(input_value),
-            )
-            wrapped_json = wrapped.to_json()
-            key = build_metadata.source_aware_cache_key(wrapped)
-        _trace(request, "artifact-cache-lookup")
-        cache_error: ExternalBuildError | None = None
-        try:
-            if wrapped_json is None:
-                hit = request.store.lookup_artifact(key, input_value, mutate=mutate)
-            else:
-                hit = request.store.lookup_receipt_v3(key, wrapped_json, mutate=mutate)
-        except ExternalBuildError as exc:
-            cache_error = exc
-            hit = None
-        if hit is not None:
-            _validate_materialized(root, snapshot)
-            return PipelineResult("cache-hit", snapshot.digest, snap_key, key, artifact=hit.artifact, receipt=hit.receipt, subject=subject)
-        if request.operation is Operation.DRY_RUN:
-            return PipelineResult(
-                "corrupt" if cache_error else "would-preflight-and-build",
-                snapshot.digest,
-                snap_key,
-                key,
-                code=cache_error.code if cache_error else None,
-                subject=subject,
-            )
-        with tempfile.TemporaryDirectory(prefix="csk-external-build-root-") as view_root:
-            view = Path(view_root)
-            _copy_build_root(root, target, view)
-            source_dir = "." if target.source_dir == target.build_root else target.source_dir.removeprefix(target.build_root + "/")
-            _trace(request, "compiler")
-            artifact = request.compiler.compile(view, source_dir, request.command)
-        if not artifact:
-            raise ExternalBuildError(ARTIFACT_INVALID, "compiler returned an empty artifact")
-        _validate_materialized(root, snapshot)
-        if wrapped_json is None:
-            receipt = request.store.store_artifact(key, input_value, artifact)
-        else:
-            receipt = request.store.store_receipt_v3(key, wrapped_json, artifact)
-        _trace(request, "receipt-publication")
+    ):
+        effective = replace(
+            effective,
+            object_format=snapshot.object_format,
+            commit=snapshot.commit,
+        )
+    _trace(request, "descriptor-and-target-validation")
+    _validate_binding(request.declared, effective, snapshot)
+    snap_key = snapshot_key(effective, snapshot.digest)
+    subject = AuditSubject(
+        declared=request.declared,
+        effective=effective,
+        build_source=snapshot.digest,
+        descriptor_target=request.target,
+        snapshot_root=root,
+        tag_verified=request.declared.tag is not None and snapshot.tag_verified,
+    )
+    if memo is not None and acquired:
+        memo.remember(request, snapshot)
+    return AcquiredSource(request, snapshot, target, effective, snap_key, subject)
+
+
+def execute_pipeline(source: AcquiredSource | PipelineResult) -> PipelineResult:
+    if isinstance(source, PipelineResult):
+        return source
+    request = source.request
+    snapshot = source.snapshot
+    target = source.target
+    effective = source.effective
+    snap_key = source.snapshot_key
+    subject = source.subject
+    root = subject.snapshot_root
+    mutate = request.operation in {Operation.INSTALL, Operation.REPAIR}
+    _validate_materialized(root, snapshot)
+    _trace(request, "independent-external-audit")
+    try:
+        request.audit(subject)
+    except BaseException as exc:
+        raise ExternalBuildError(AUDIT_BLOCKED, "independent external repository audit failed") from exc
+    _validate_materialized(root, snapshot)
+    if request.operation in {Operation.AUDIT, Operation.SYNTAX}:
         return PipelineResult(
-            "would-rebuild-untrusted-cache" if cache_error else "would-preflight-and-build",
+            state="audited" if request.operation is Operation.AUDIT else "source-covered",
+            build_source=snapshot.digest,
+            snapshot_key=snap_key,
+            subject=subject,
+        )
+    if request.store is None or request.compiler is None:
+        raise ExternalBuildError(PROTECTED_BOUNDARY_UNTRUSTED, "protected store and Go compiler session are required")
+    if mutate:
+        request.store.store_snapshot(snap_key, snapshot)
+    input_value = receipt_input(request, effective, target, snapshot.digest, request.compiler.identity)
+    if request.package is None:
+        wrapped_json: Mapping[str, object] | None = None
+        key = _digest_json(input_value)
+    else:
+        wrapped = build_metadata.wrap_receipt_v3_input(
+            request.package,
+            build_metadata.parse_repository_build_input(input_value),
+        )
+        wrapped_json = wrapped.to_json()
+        key = build_metadata.source_aware_cache_key(wrapped)
+    _trace(request, "artifact-cache-lookup")
+    cache_error: ExternalBuildError | None = None
+    try:
+        if wrapped_json is None:
+            hit = request.store.lookup_artifact(key, input_value, mutate=mutate)
+        else:
+            hit = request.store.lookup_receipt_v3(key, wrapped_json, mutate=mutate)
+    except ExternalBuildError as exc:
+        cache_error = exc
+        hit = None
+    if hit is not None:
+        _validate_materialized(root, snapshot)
+        return PipelineResult("cache-hit", snapshot.digest, snap_key, key, artifact=hit.artifact, receipt=hit.receipt, subject=subject)
+    if request.operation is Operation.DRY_RUN:
+        return PipelineResult(
+            "corrupt" if cache_error else "would-preflight-and-build",
             snapshot.digest,
             snap_key,
             key,
             code=cache_error.code if cache_error else None,
-            artifact=artifact,
-            receipt=receipt,
             subject=subject,
         )
+    with tempfile.TemporaryDirectory(prefix="csk-external-build-root-") as view_root:
+        view = Path(view_root)
+        _copy_build_root(root, target, view)
+        source_dir = "." if target.source_dir == target.build_root else target.source_dir.removeprefix(target.build_root + "/")
+        _trace(request, "compiler")
+        artifact = request.compiler.compile(view, source_dir, request.command)
+    if not artifact:
+        raise ExternalBuildError(ARTIFACT_INVALID, "compiler returned an empty artifact")
+    _validate_materialized(root, snapshot)
+    if wrapped_json is None:
+        receipt = request.store.store_artifact(key, input_value, artifact)
+    else:
+        receipt = request.store.store_receipt_v3(key, wrapped_json, artifact)
+    _trace(request, "receipt-publication")
+    return PipelineResult(
+        "would-rebuild-untrusted-cache" if cache_error else "would-preflight-and-build",
+        snapshot.digest,
+        snap_key,
+        key,
+        code=cache_error.code if cache_error else None,
+        artifact=artifact,
+        receipt=receipt,
+        subject=subject,
+    )
+
 
 
 def snapshot_key(effective: EffectiveState, digest: str) -> str:
