@@ -74,12 +74,24 @@ def _scrub_pem(value: str) -> str:
     pieces: list[str] = []
     start: int | None = None
     end = 0
-    for match in PEM_RE.finditer(value):
+    position = 0
+    while match := PEM_RE.search(value, position):
+        position = match.end()
         if match[1] == "BEGIN" and start is None:
             start = match.start()
         elif match[1] == "END" and start is not None:
             pieces.extend((value[end:start], "<redacted-private-key>"))
             end = match.end()
             start = None
+        else:
+            # Ignored markers may share their trailing five dashes with the
+            # next marker. Only this fixed-size suffix needs reconsideration.
+            position = match.end() - 5
     pieces.append(value[end:])
     return "".join(pieces)
+
+
+def scrub_stderr(value: bytes) -> str:
+    if len(value) > 2000:
+        return "<stderr omitted: exceeds 2000 bytes>"
+    return scrub_text(value.decode("utf-8", errors="replace"))[:2000]

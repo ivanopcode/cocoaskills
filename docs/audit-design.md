@@ -317,15 +317,21 @@ Redaction contract for `AuditRequest.files` (this is a hard boundary, not just a
 `evidence` concern):
 
 - A local backend (`cloud=False`) may receive raw file bytes.
-- Before hashing, detectors, or request reads, the pipeline admits the snapshot
-  against `max_request_bytes` using aggregate file sizes and UTF-8 relative-path
-  bytes. Oversized input raises `audit.request.too-large` through the existing
-  backend-error policy (strict blocks; advisory warns). This preflight assumes
-  the installer-owned snapshot is stable; request reads additionally enforce a
-  byte budget if files grow. The serialized request still has its own size gate.
-- Command-backend failure stderr exceeding 2,000 bytes is omitted in full before
-  decoding or redaction, so a truncated credential cannot leak. Short stderr is
-  scrubbed and its displayed result is limited to 2,000 characters.
+- Before hashing, detectors, or request reads, the pipeline admits aggregate file
+  and UTF-8 relative-path bytes against `max_request_bytes`, then copies them
+  with a remaining-byte budget into a private temporary snapshot. Hashing,
+  detectors and requests consume that copy; concurrent source growth cannot
+  enlarge their reads. Special files are excluded and symlinks are rejected.
+- Raw admission failure emits `audit.request.too-large` through the gate using
+  HIGH-severity `fail_on` policy. It cannot produce a content-addressed report or
+  cache lookup without reading rejected data. Raw limits apply before cloud
+  redaction, even when the redacted request would fit. Serialized size checking
+  remains a separate gate.
+- Both backends retain at most 2,001 stderr bytes while draining output. Diagnostics
+  over 2,000 bytes are omitted whole before decoding; short diagnostics are scrubbed.
+  Captured stdout and the Codex response file have a 16 MiB limit; stdout overflow
+  terminates the owned child and fails the request. Execution and pipe draining
+  share the configured timeout. Descendant lifecycle remains the backend's responsibility.
 - A cloud backend (`cloud=True`) receives **scrubbed file content**: redaction is
   applied to the file bytes in the request, not only to `evidence`. If scrubbing
   changed any file, the request carries `redacted=True` and a `redaction`

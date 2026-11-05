@@ -4,7 +4,10 @@ from ..terminal import terminal_text
 
 import fnmatch
 import json
-from dataclasses import dataclass
+import os
+import stat
+import tempfile
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 from pathlib import Path
@@ -53,7 +56,40 @@ class GateResult:
         return bool(self.errors)
 
 
-def audit_plans(
+class AuditInputTooLarge(AuditBackendError):
+    pass
+
+
+def audit_plans(plans, config, *, scope, record=True):
+    reports = []
+    for plan in plans:
+        paths = _admit_snapshot(plan, config.audit.max_request_bytes)
+        # Hashing, detectors and the backend consume the same bounded private
+        # copy. A writer to the source cannot enlarge downstream reads.
+        with tempfile.TemporaryDirectory(prefix="csk-audit-input-") as tmp:
+            root = Path(tmp)
+            remaining = config.audit.max_request_bytes
+            for path in paths:
+                rel = path.relative_to(plan.snapshot)
+                remaining -= len(rel.as_posix().encode("utf-8"))
+                if path.is_symlink():
+                    raise hashing.HashingError("symbolic links are not supported in protocol trees")
+                fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+                with os.fdopen(fd, "rb") as stream:
+                    if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                        raise AuditBackendError("audit.input.changed: expected regular file")
+                    content = stream.read(max(0, remaining) + 1)
+                remaining -= len(content)
+                if remaining < 0:
+                    raise AuditInputTooLarge("audit.request.too-large: snapshot grew beyond input byte limit")
+                target = root / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+            reports.extend(_audit_plans([replace(plan, snapshot=root)], config, scope=scope, record=record))
+    return tuple(reports)
+
+
+def _audit_plans(
     plans: list[installer.SkillPlan],
     config: GlobalConfig,
     *,
@@ -175,6 +211,11 @@ def gate_plans(
         return GateResult(reports=())
     try:
         reports = audit_plans(plans, config, scope=scope, record=record)
+    except AuditInputTooLarge as exc:
+        decision = policy.decide((_too_large_finding(config.audit.max_request_bytes + 1, config.audit.max_request_bytes),),
+                                 mode=config.audit.mode, fail_on=config.audit.fail_on)
+        message = f"audit {'blocked' if decision == Decision.BLOCK else 'warning'}: {exc}"
+        return GateResult(reports=(), errors=(message,)) if decision == Decision.BLOCK else GateResult(reports=(), warnings=(message,))
     except AuditCanaryError as exc:
         return GateResult(reports=(), errors=(f"audit blocked: audit canary failed: {exc}",))
     except AuditEgressError as exc:
@@ -318,7 +359,7 @@ def _admit_snapshot(plan: installer.SkillPlan, limit: int) -> list[Path]:
         # Include names so arbitrarily many empty files cannot bypass admission.
         size += len(path.relative_to(plan.snapshot).as_posix().encode("utf-8"))
         if size > limit:
-            raise AuditBackendError(f"audit.request.too-large: input exceeds {limit} bytes")
+            raise AuditInputTooLarge(f"audit.request.too-large: input exceeds {limit} bytes")
         paths.append(path)
     return sorted(paths)
 
@@ -340,7 +381,7 @@ def _build_request(
             content = stream.read(remaining + 1)
         remaining -= len(content)
         if remaining < 0:
-            raise AuditBackendError("audit.request.too-large: snapshot grew beyond input byte limit")
+            raise AuditInputTooLarge("audit.request.too-large: snapshot grew beyond input byte limit")
         if cloud:
             scrubbed = redaction.scrub_bytes(content)
             if scrubbed != content:
