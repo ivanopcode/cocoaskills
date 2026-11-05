@@ -368,7 +368,7 @@ def _collect_scope(
         builds = _unavailable_recorded_builds(
             skills_root,
             scope_manifest.skills,
-            detail=str(exc),
+            detail="Build currentness unknown because scope closure resolution failed",
         )
         return ProjectStatus(
             alias=alias,
