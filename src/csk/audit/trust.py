@@ -16,7 +16,7 @@ CODE_TRUST_UNWRITABLE = "audit_trust_unwritable"
 PROMPT_VERSION = 1
 # Bump RULESET_VERSION whenever detector semantics or severity classification
 # changes. Cache hits intentionally skip canary and detector execution.
-RULESET_VERSION = 1
+RULESET_VERSION = 2
 HASH_RE = re.compile(r"^(?:sha256:)?([A-Fa-f0-9]{64})$")
 
 
