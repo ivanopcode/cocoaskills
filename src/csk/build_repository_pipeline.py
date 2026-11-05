@@ -173,10 +173,7 @@ class ExistingGoV1Session:
 
     def compile(self, root: Path, source_dir: str, command: str) -> bytes:
         with build_source.freeze_snapshot(root) as frozen:
-            state = _PASS_STATE if _PASS_STATE.active else None
-            if state is not None:
-                state.workers_reaped = False
-            result = go_v1.build(
+            result = build_go_v1(
                 go_v1.BuildRequest(
                     toolchain_session=self._session,
                     source_snapshot=frozen,
@@ -190,8 +187,6 @@ class ExistingGoV1Session:
                     command=command,
                 )
             )
-            if state is not None:
-                state.workers_reaped = True
             return result.artifact.staged_path.read_bytes()
 
 
@@ -645,10 +640,15 @@ class AcquisitionPassState:
         self.closed = True
         self.active = False
         self.workers_reaped = True
+        self.worker_failure: str | None = None
         self._lock = Lock()
 
     def require_idle(self) -> None:
-        if self.active or not self.closed or not self.workers_reaped:
+        if not self.workers_reaped:
+            detail = f" after {self.worker_failure}" if self.worker_failure else ""
+            raise ExternalBuildError(PROTECTED_BOUNDARY_UNTRUSTED,
+                f"previous build worker teardown is unconfirmed{detail}; acquisition is inadmissible")
+        if self.active or not self.closed:
             raise ExternalBuildError(PROTECTED_BOUNDARY_UNTRUSTED, "previous acquisition pass is not closed or reaped")
 
     def start(self) -> None:
@@ -667,6 +667,27 @@ class AcquisitionPassState:
 
 
 _PASS_STATE = AcquisitionPassState()
+
+
+def build_go_v1(request: go_v1.BuildRequest) -> go_v1.BuildResult:
+    """Track every installer build domain, including post-pass private builds.
+
+    Successful synchronous return includes teardown/join. Exceptions leave
+    completion unconfirmed, so later acquisition fails closed in this process.
+    """
+    state = _PASS_STATE
+    if not state.workers_reaped:
+        state.require_idle()
+    state.workers_reaped = False
+    state.worker_failure = None
+    try:
+        result = go_v1.build(request)
+    except BaseException as exc:
+        # Retain a manager diagnostic code, never arbitrary exception text.
+        state.worker_failure = exc.code if isinstance(exc, go_v1.GoV1Error) else "build failure"
+        raise
+    state.workers_reaped = True
+    return result
 
 
 class AcquisitionMemo:
