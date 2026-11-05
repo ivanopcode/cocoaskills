@@ -328,15 +328,24 @@ def inspect_key(
     if security_key:
         settings = _local_probe((str(ssh), "-G", "-F", os.devnull, "example.invalid"))
         if settings is not None and settings.returncode == 0:
-            for line in settings.stdout.splitlines():
-                fields = line.split(maxsplit=1)
+            # Only one well-formed physical record establishes a provider.
+            # Duplicates and unexpected separators cannot resolve its state.
+            records = []
+            for line in settings.stdout.split("\n"):
+                fields = line.split()
                 if fields and fields[0] == "securitykeyprovider":
-                    if len(fields) != 2:
-                        return KeyInspection(
-                            reason="SSH security-key provider output is unfamiliar",
-                            key_kind=kind, loaded=loaded,
-                        )
-                    provider = fields[1]
+                    records.append(fields)
+            unfamiliar_separator = any(
+                (char.isspace() and char not in " \t\n")
+                or (ord(char) < 32 and char not in "\t\n") or ord(char) == 127
+                for char in settings.stdout
+            )
+            if unfamiliar_separator or len(records) != 1 or len(records[0]) != 2:
+                return KeyInspection(
+                    reason="SSH security-key provider output is unfamiliar",
+                    key_kind=kind, loaded=loaded,
+                )
+            provider = records[0][1]
     private = Path(str(identity)[:-4]) if str(identity).endswith(".pub") else identity
     decrypted = _local_probe((keygen, "-y", "-P", "", "-f", str(private)))
     passphrase = None
