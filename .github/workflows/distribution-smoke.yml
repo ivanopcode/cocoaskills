@@ -85,10 +85,27 @@ jobs:
       UV_EXTRA_INDEX_URL: ""
       MISE_PIPX_REGISTRY_URL: https://pypi.org/simple/{}
     steps:
+      - name: Checkout pip dependency specs
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: .github/workflows/distribution-smoke.yml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Record pip cache release scope
+        env:
+          CHANNEL: ${{ matrix.channel }}
+        run: printf '%s\n' "$CSK_VERSION" "$CHANNEL" > .pip-cache-scope
+
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            .github/workflows/distribution-smoke.yml
+            .pip-cache-scope
 
       - name: Configure git
         run: |
