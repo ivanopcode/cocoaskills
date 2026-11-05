@@ -7,8 +7,9 @@ controls (`no-private-aggregate-domain`). It does not adopt a protocol pin,
 resolve ELF identities, implement mutation retention, or qualify complete builds.
 
 The anonymous launch capability temporarily raises only the soft descriptor
-limit when needed, verifies restoration, preserves occupied fixed slots, and
-closes the parent copy. The worker consumes the capability once. Its observations
+limit when needed, verifies restoration, atomically allocates unoccupied fixed
+slots with `F_DUPFD_CLOEXEC`, and closes the parent copy. The parent descriptor
+stays close-on-exec; only the explicit `pass_fds` list admits it to the child. The worker consumes the capability once. Its observations
 check both session and group leadership and inherited file size limit. The file
 limit launch path verifies installation and restoration. These temporary limits
 are process-wide; locks serialize cooperating launch paths, not unrelated writes

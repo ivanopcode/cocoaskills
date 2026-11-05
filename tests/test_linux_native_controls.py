@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,6 +15,8 @@ from csk.builds import go_v1 as g
 def test_linux_admission_stays_closed(monkeypatch):
     # A working internal adapter must not admit Linux through either public predicate.
     monkeypatch.setattr(sys, "platform", "linux")
+    # Simulate the POSIX branch without mutating the host's global os.name.
+    monkeypatch.setattr(g, "os", SimpleNamespace(**(vars(os) | {"name": "posix"})))
     assert not installer.supports_external_builds()
     with pytest.raises(g.GoV1Error) as failure:
         g.inventory_platform()
@@ -24,14 +27,11 @@ def test_linux_admission_stays_closed(monkeypatch):
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="real Linux controls")
-def test_native_linux_launch_observation_and_join(tmp_path):
+def test_native_linux_launch_observation_and_join(tmp_path, monkeypatch):
     # Real child inherits session, file limit and authenticated FD; no public identity claim.
     platform, probes = g.probe_native_controls(g.ResourceLimits(), _platform="linux")
     domain = g._NativeControlDomain(platform, probes, g.ResourceLimits())
     previous = __import__("resource").getrlimit(__import__("resource").RLIMIT_FSIZE)
-    capability = g._PreparedWorkerLaunch(platform)
-    options = dict(start_new_session=True, stdout=subprocess.PIPE, close_fds=True)
-    capability.add_popen_options(options)
     script = '''import os, resource
 from csk.builds import go_v1 as g
 context = g._consume_worker_launch_context()
@@ -48,23 +48,33 @@ print("observed", flush=True)
 import time
 time.sleep(30)
 '''
+    # Identity and argv are explicit test seams; ELF qualification is separate.
+    identity = SimpleNamespace(
+        path=Path(sys.executable),
+        startup=SimpleNamespace(site_root=Path(g.__file__).resolve().parents[2],
+                                python_home=Path(sys.base_prefix)),
+    )
+    monkeypatch.setattr(g, "worker_argv", lambda _: (sys.executable, "-B", "-c", script))
+    cache = tmp_path / "worker-cache"
+    cache.mkdir()
     process = None
     try:
-        process = domain._launch_macos([sys.executable, "-c", script], options)
-        capability.close_parent_copy()
+        process = domain.launch(identity, cache)
         assert process.stdout.readline() == b"observed\n"
+        assert len(domain.installed_controls()) == 3
         domain.terminate(process)
         assert domain.terminated
         domain.terminate(process)
         with pytest.raises(ProcessLookupError):
             os.killpg(process.pid, 0)
     finally:
-        capability.close_parent_copy()
         if process is not None:
             if process.poll() is None:
                 process.kill()
             process.wait()
-            process.stdout.close()
+            for stream in (process.stdin, process.stdout, process.stderr):
+                stream.close()
+        domain.close()
     assert __import__("resource").getrlimit(__import__("resource").RLIMIT_FSIZE) == previous
 
 
@@ -81,7 +91,11 @@ def test_fixed_descriptor_collisions_are_not_overwritten(monkeypatch):
         assert os.fstat(read_fd) == original
         monkeypatch.setattr(g, "_WORKER_LAUNCH_FDS", (read_fd + 100,))
         capability = g._PreparedWorkerLaunch("linux")
-        capability.close_parent_copy()
+        try:
+            # The parent copy stays close-on-exec; only pass_fds admits the child.
+            assert not os.get_inheritable(capability._read_fd)
+        finally:
+            capability.close_parent_copy()
     finally:
         os.close(read_fd)
         os.close(write_fd)
