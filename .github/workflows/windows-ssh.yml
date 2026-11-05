@@ -16,8 +16,8 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 20
     env:
-      CSK_SSH_KIT: ${{ runner.temp }}/csk-native-ssh-kit
-      CSK_SSH_EVIDENCE: ${{ runner.temp }}/csk-native-ssh-evidence
+      CSK_SSH_KIT: ${{ github.workspace }}/.temp/csk-native-ssh-kit
+      CSK_SSH_EVIDENCE: ${{ github.workspace }}/.temp/csk-native-ssh-evidence
     steps:
       - name: Checkout
         uses: actions/checkout@v7
