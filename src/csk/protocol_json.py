@@ -3,8 +3,9 @@ from __future__ import annotations
 import io
 import json
 import os
+import stat
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, cast
 
 
 class ProtocolJSONError(ValueError):
@@ -20,20 +21,64 @@ class ProtocolJSONSizeError(ProtocolJSONError, OSError):
     """A document exceeds the read budget; also fits existing I/O refusals."""
 
 
-def read_bytes(path: Path) -> bytes:
-    """Admit size before opening, then cap the read if the file grows."""
-    if path.stat().st_size > MAX_INPUT_BYTES:
-        raise ProtocolJSONSizeError("JSON input exceeds maximum size")
-    with path.open("rb") as stream:
+def _open_regular(path: str, flags: int) -> int:
+    if os.name != "nt":
+        return os.open(path, flags | os.O_NONBLOCK)
+    # Open asynchronously first, reject pipes/devices, then reopen the same
+    # disk object synchronously for the CRT. No path lookup races the check.
+    import ctypes
+    import msvcrt
+    kernel = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32,
+                       ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+    create.restype = ctypes.c_void_p
+    reopen = kernel.ReOpenFile
+    reopen.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32]
+    reopen.restype = ctypes.c_void_p
+    kind = kernel.GetFileType
+    kind.argtypes = [ctypes.c_void_p]
+    kind.restype = ctypes.c_uint32
+    close = kernel.CloseHandle
+    close.argtypes = [ctypes.c_void_p]
+    close.restype = ctypes.c_int
+    handle = create(path, 0x80000000, 7, None, 3, 0x40000000, None)
+    invalid = ctypes.c_void_p(-1).value
+    if handle == invalid:
+        raise getattr(ctypes, "WinError")(getattr(ctypes, "get_last_error")())
+    try:
+        if kind(handle) != 1:
+            raise ProtocolJSONSizeError("JSON input must be a regular file")
+        synchronous = reopen(handle, 0x80000000, 7, 0)
+        if synchronous == invalid:
+            raise getattr(ctypes, "WinError")(getattr(ctypes, "get_last_error")())
         try:
-            size = os.fstat(stream.fileno()).st_size
-        except io.UnsupportedOperation:
-            # Virtual snapshot paths expose in-memory streams, not descriptors.
-            size = path.stat().st_size
-        if size > MAX_INPUT_BYTES:
+            return int(getattr(msvcrt, "open_osfhandle")(synchronous, os.O_RDONLY | getattr(os, "O_BINARY")))
+        except BaseException:
+            close(synchronous)
+            raise
+    finally:
+        close(handle)
+
+
+def read_bytes(path: Path, *, maximum: int = MAX_INPUT_BYTES) -> bytes:
+    """Admit regular files without blocking, checking the opened descriptor."""
+    info = path.stat()
+    if not stat.S_ISREG(info.st_mode):
+        raise ProtocolJSONSizeError("JSON input must be a regular file")
+    if info.st_size > maximum:
+        raise ProtocolJSONSizeError("JSON input exceeds maximum size")
+    virtual_read = getattr(path, "_read_bounded_json", None)
+    if virtual_read is not None:
+        return cast(bytes, virtual_read(maximum))
+    with io.open(path, "rb", opener=_open_regular) as stream:
+        opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode):
+            raise ProtocolJSONSizeError("JSON input must be a regular file")
+        if opened.st_size > maximum:
             raise ProtocolJSONSizeError("JSON input exceeds maximum size")
-        raw = stream.read(MAX_INPUT_BYTES + 1)
-    if len(raw) > MAX_INPUT_BYTES:
+        raw = stream.read(maximum + 1)
+    if len(raw) > maximum:
         raise ProtocolJSONSizeError("JSON input exceeds maximum size")
     return raw
 
@@ -70,9 +115,14 @@ MIN_SAFE_INTEGER: Final = -MAX_SAFE_INTEGER
 
 def loads_compatible(raw: bytes | str) -> Any:
     """Bound legacy JSON without changing duplicate-key or number semantics."""
-    text = _decode_utf8(raw, invalid_message="JSON must be UTF-8", bom_message="JSON must not contain a byte-order mark")
+    if len(raw) > MAX_INPUT_BYTES:
+        raise ProtocolJSONSizeError("JSON input exceeds maximum size")
     try:
-        return json.loads(text)
+        text = raw.decode(json.detect_encoding(raw), "surrogatepass") if isinstance(raw, bytes) else raw
+        if isinstance(raw, str) and len(raw.encode("utf-8", "surrogatepass")) > MAX_INPUT_BYTES:
+            raise ProtocolJSONSizeError("JSON input exceeds maximum size")
+        check_depth(text)
+        return json.loads(raw)
     except (ValueError, RecursionError) as exc:
         raise ProtocolJSONError(str(exc)) from exc
 

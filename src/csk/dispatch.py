@@ -2220,7 +2220,7 @@ def _commit_if_changed(
     payload = protocol_json.canonical_bytes(registry) + b"\n"
     if current_id is not None:
         try:
-            previous = generation_registry_path(home, current_id).read_bytes()
+            previous = protocol_json.read_bytes(generation_registry_path(home, current_id))
         except OSError:
             previous = b""
         if previous == payload:

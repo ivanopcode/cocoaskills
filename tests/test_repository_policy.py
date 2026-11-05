@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+
 import errno
 import json
 import os
@@ -912,14 +914,14 @@ def test_loader_read_error_is_not_treated_as_absent(
     path = tmp_path / "source-policy.json"
     path.write_bytes(json.dumps(_document()).encode("utf-8"))
     assert policy.load_policy(path) is not None
-    original_open = Path.open
+    original_open = io.open
 
     def deny_read(candidate: Path, *args, **kwargs):
         if candidate == path:
             raise failure_type("injected policy read failure")
         return original_open(candidate, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "open", deny_read)
+    monkeypatch.setattr(io, "open", deny_read)
     with pytest.raises(policy.RepositoryPolicyError) as excinfo:
         policy.load_policy(path)
     assert excinfo.value.code == policy.CODE_POLICY_INVALID

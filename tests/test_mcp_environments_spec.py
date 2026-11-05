@@ -1,3 +1,4 @@
+import io
 """Canonical selection and separately approved operator-local targets."""
 
 import json
@@ -711,7 +712,7 @@ def test_preflight_read_failure_is_normalized(tmp_path, monkeypatch):
         def fail(self, *args, **kwargs):
             raise PermissionError("injected read refusal")
 
-        patch.setattr(Path, "open", fail)
+        patch.setattr(io, "open", fail)
         with pytest.raises(manifest.ManifestError, match="Cannot read Skillfile at"):
             skillfile_deprecations.check_path(path)
     skillfile_deprecations.check_path(path)
