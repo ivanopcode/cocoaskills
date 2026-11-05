@@ -145,10 +145,21 @@ def test_manager_sigkill_crash_boundary(tmp_path, mode, member_survives):
     # setsid escape remains alive. Linux fixture adopts and reaps every descendant.
     import json
     fixture = Path(__file__).with_name("native_control_crash_fixture.py")
-    result = subprocess.run([sys.executable, str(fixture), str(tmp_path / mode), mode],
-                            capture_output=True, text=True, timeout=60)
-    assert result.returncode == 0, result.stderr
-    record = json.loads(result.stdout)
+    process = subprocess.Popen([sys.executable, str(fixture), str(tmp_path / mode), mode],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        output, error = process.communicate(timeout=150)
+    except subprocess.TimeoutExpired:
+        # The fixture owns its descendants: TERM runs its finally/reap path;
+        # killing the fixture outright would abandon its cleanup responsibility.
+        process.terminate()
+        output, error = process.communicate()
+        pytest.fail(f"crash fixture exceeded its budget after cleanup: {error}")
+    assert process.returncode == 0, error
+    record = json.loads(output)
+    # Retain phase timing and liveness observations in pytest's captured evidence.
+    print(json.dumps(record, sort_keys=True))
+    assert record["before_kill"] == {"worker": True, "member": True, "detached": True}
     assert record["manager_returncode"] == -9
     assert record["member_live"] is member_survives
     assert record["worker_live"] is member_survives
