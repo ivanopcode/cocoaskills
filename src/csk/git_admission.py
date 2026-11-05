@@ -44,6 +44,7 @@ LOCAL_LAYOUT_UNSAFE = "build_repository_local_layout_unsafe"
 LOCAL_FORMAT_UNSUPPORTED = "build_repository_local_format_unsupported"
 LOCAL_OBJECT_FORMAT_UNSUPPORTED = "build_repository_local_object_format_unsupported"
 LOCAL_CLEANUP_FAILED = "build_repository_local_cleanup_failed"
+SSH_CREDENTIAL_UNUSABLE = "build_repository_ssh_credential_unusable"
 SSH_CREDENTIAL_MISSING = "build_repository_ssh_credential_missing"
 CREDENTIAL_POLICY_INVALID = "build_repository_credential_policy_invalid"
 HTTPS_BROKER_TOKEN_ENV = "CSK_HTTPS_BROKER_TOKEN"
@@ -824,6 +825,7 @@ def acquire_network(
         raise GitAdmissionError(
             IDENTITY_INVALID, "network source or exact tag is invalid"
         )
+    _preflight_ssh(source, tool)
     with tempfile.TemporaryDirectory(prefix="csk-buildrepo-") as raw_root:
         paths = _make_private_paths(Path(raw_root))
         _remaining_limits(limits, deadline)
@@ -1068,6 +1070,7 @@ def resolve_network_ref(
         )
     wanted = f"refs/tags/{ref_value}" if ref_kind == "tag" else f"refs/heads/{ref_value}"
     remote_url = source.git if connection is None else connection.remote_url
+    _preflight_ssh(source, tool)
     with tempfile.TemporaryDirectory(prefix="csk-buildrepo-") as raw_root:
         paths = _make_private_paths(Path(raw_root))
         _remaining_limits(limits, deadline)
@@ -1262,6 +1265,22 @@ def _wrapper_interpreter() -> Path:
             IDENTITY_INVALID, "manager interpreter is not an admitted regular file"
         )
     return interpreter
+
+
+def _preflight_ssh(source: RepositorySource, tool: GitTool) -> None:
+    from .build_ssh import inspect_key
+
+    if source.transport != "ssh" or tool.ssh is None or tool.ssh_credentials is None:
+        return
+    credentials = validate_operator_ssh_credentials(tool.ssh_credentials)
+    result = inspect_key(Path(tool.ssh), credentials.identity, credentials.agent_socket)
+    if result.state == "unusable":
+        raise GitAdmissionError(
+            SSH_CREDENTIAL_UNUSABLE,
+            f"cannot fetch {source.identity}; reason: {result.reason}; "
+            f"next: run csk config build-ssh doctor {source.identity} and select "
+            "a usable private key or a capable operator-managed agent",
+        )
 
 
 def _materialize_ssh_wrapper(

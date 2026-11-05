@@ -473,6 +473,10 @@ csk shell-init                      # Генерирует или устанав
 
 ## Development tools
 
+`csk config build-ssh doctor [scope]` prints read-only local SSH diagnostics and
+operator setup steps to stdout; `--all-os` includes every supported OS. See
+[the CLI reference](docs/cli.md#csk-config-build-ssh-doctor) for verification limits.
+
 Перед каждым запуском git csk выбирает и проверяет CA bundle, затем закрепляет
 приватную копию оставшихся исходных PEM-блоков на время операции. CA из
 встроенного списка отказа удаляются; предупреждение `git_trust_anchor_distrusted`

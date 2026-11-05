@@ -47,6 +47,7 @@ _KNOWN_SAFE_CODES = frozenset(
         git_admission.INCOMPLETE_SOURCE,
         git_admission.OBJECT_SEMANTICS_INVALID,
         git_admission.SSH_CREDENTIAL_MISSING,
+        git_admission.SSH_CREDENTIAL_UNUSABLE,
         git_admission.CREDENTIAL_POLICY_INVALID,
         git_trust.INVALID,
     }
@@ -383,6 +384,7 @@ def _classify_git_error(error: GitAdmissionError) -> str:
         return _safe_class(classified)
     if error.code in {
         git_admission.SSH_CREDENTIAL_MISSING,
+        git_admission.SSH_CREDENTIAL_UNUSABLE,
         git_admission.CREDENTIAL_POLICY_INVALID,
     }:
         return "auth-unavailable"

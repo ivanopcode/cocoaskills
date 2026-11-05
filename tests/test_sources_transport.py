@@ -4500,3 +4500,24 @@ def test_line_partition_keeps_remote_prefixed_physical_lines_prefixed(
     """The splitter alphabet is LF only: CR, VT and FF never break a line."""
 
     assert git_admission._classify_git_failure_output(envelope) == expected
+
+
+# An unusable local SSH credential opens only declared availability/auth
+# fallback; a policy forbidding fallback must preserve the refusal code.
+@pytest.mark.parametrize('fallback,expected_attempts', [('availability-auth', 2), ('none', 1)])
+def test_local_unusable_ssh_obeys_declared_fallback(fallback, expected_attempts):
+    calls = []
+    def attempt(**kwargs):
+        calls.append(kwargs['endpoint'].url)
+        if len(calls) == 1:
+            raise git_admission.GitAdmissionError(
+                git_admission.SSH_CREDENTIAL_UNUSABLE, 'local key unusable'
+            )
+        return _snapshot()
+    if fallback == 'none':
+        with pytest.raises(transport.TransportResolutionError) as error:
+            transport.acquire_plan(_v1_plan(fallback), LOCK, attempt=attempt)
+        assert error.value.attempts[0].failure_class == 'auth-unavailable'
+    else:
+        transport.acquire_plan(_v1_plan(fallback), LOCK, attempt=attempt)
+    assert len(calls) == expected_attempts
