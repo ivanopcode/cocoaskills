@@ -269,18 +269,6 @@ CLI собран другим тулчейном. Для проектов, гд�
 
 Семейства 1.25 и старше не квалифицированы. Сообщение называет версию, путь к Go и поддерживаемые семейства и содержит ту же строку `remediation:` с Go 1.27.3 или новее. Семейства новее 1.27 принимаются с предупреждением по умолчанию; для строгого отказа задайте `builds.go_future_families: "refuse"` в `~/.cocoaskills/config.json` либо `CSK_GO_FUTURE_FAMILIES=refuse`.
 
-## build_repository_ssh_credential_missing
-
-Для приватного SSH-репозитория сборки не выбраны креды. При наличии интерактивного TTY csk выводит меню обнаруженных кандидатов; без TTY установка завершается ошибкой `build_repository_ssh_credential_missing`.
-
-Привяжите креды к скоупу канонической идентичности репозитория:
-
-```bash
-csk config build-ssh add <host>/<namespace> --agent auto --identity ~/.ssh/<key>.pub
-```
-
-Команда записывает скоуп в `~/.cocoaskills/config.json` и печатает `Configured build-ssh scope <scope>`. Повторите установку: инсталлятор возьмёт креды из скоупа.
-
 ## build_repository_credential_policy_invalid
 
 Скоуп аутентификации `build_https` совпал в конфигурации, но выбранный источник токена не вернул данные. Текст ошибки называет конкретный случай из трёх возможных:
@@ -370,3 +358,129 @@ public-key pins, hardware-agent traps and unverified platform routes. Prefer
 a private identity path even with an agent so both loaded and file states
 can work; passphrase-protected files still need a capable loaded agent under
 the current non-prompting SSH policy.
+## SSH build repository failures
+
+Configure credentials before the first install with the
+[SSH key setup guide](ssh-key-setup.md). csk isolates SSH fetches from
+`~/.ssh/config` and ordinary Git configuration. A working `git clone` does
+not prove that csk selected the same key, agent or client.
+
+### build_repository_ssh_credential_missing
+
+No operator selection covers the repository, a trusted host-key file is
+missing, or `--agent auto` cannot find `SSH_AUTH_SOCK`. The latter reports
+`SSH agent was requested but SSH_AUTH_SOCK is not set`.
+
+Load the intended key into your own agent, make its socket available to
+csk, and save a scope with `csk config build-ssh add`. For a loaded key:
+
+```sh
+csk config build-ssh add git.example.com/team --agent auto --identity ~/.ssh/build_key.pub
+```
+
+For `SSH build repositories pin StrictHostKeyChecking and require operator host keys`,
+provide the verified host-key file with `--known-hosts` on `add`.
+
+The command saves a selection; it does not load the key. For file mode,
+select an unencrypted private file with `--identity` and omit `--agent`.
+Check `csk config build-ssh list`, scope boundaries and any overriding
+`--build-ssh-*` flags or `CSK_BUILD_SSH_*` values, then retry.
+
+### build_repository_identity_invalid
+
+Read the accompanying detail. `SSH identity is unavailable` means the
+selected identity path could not be resolved. `SSH agent socket is
+unavailable` means the selected socket could not be resolved.
+`SSH identity path must be absolute` or `SSH agent socket path must be
+absolute` requires a full path. `SSH agent socket is not an admitted socket`
+requires a real supported socket, not a regular file or Windows pipe.
+
+Correct the selected path and its accessibility. If an agent restarted,
+select its current socket. Do not replace the socket with a file or weaken
+file permissions to bypass admission.
+
+`operator known hosts file is unreadable` or a missing host-key file
+requires an accessible file containing independently verified server keys.
+Name a custom file with `--known-hosts` on `csk config build-ssh add`,
+keeping the same agent and identity selection.
+
+### repository_endpoint_unavailable / Permission denied (publickey)
+
+The generic endpoint error alone does not prove a bad key. A visible
+`Permission denied (publickey)` indicates SSH authentication failed.
+Check the selected scope, loaded fingerprint, account access and repository
+path. The same error can result from an encrypted file that cannot prompt.
+For that file, load the key into your own agent using a task-sized
+`ssh-add -t`, then select the agent plus its matching `.pub`.
+
+`Too many authentication failures` can mean an agent offered too many keys.
+Pin the intended public key with `--identity` alongside `--agent`.
+Do not upload a private key to the provider.
+
+### Host key verification failed
+
+An unknown or changed host key fails closed. Verify the fingerprint with
+the provider or administrator, then update the operator's selected
+`known_hosts` file. Do not disable host-key checks or blindly accept a
+replacement. Retry with the verified file.
+
+### SSH hardware and agent failures
+
+`signing failed ... from agent: agent refused operation` means the selected
+agent did not complete signing. Check agent lock/approval state and support
+for that key type. A public key listed by `ssh-add -l` proves enumeration,
+not signing. macOS system-agent software-provider tests reproduced this
+failure with security keys. Choose a compatible client and agent; loading
+an SK key into the same incompatible agent again does not fix it.
+
+If an incompatible agent copy masks a working file identity, the operator
+can remove just that copy with `ssh-add -d ~/.ssh/build_key_sk.pub`.
+Reconfigure the intended route before retrying. csk currently cannot use
+an encrypted file by asking for its passphrase.
+
+`Load key "...pub": bad permissions` or `WARNING: UNPROTECTED PRIVATE KEY FILE!`
+can appear when SSH tries to use a pinned public file without its private
+key loaded. Load the matching private key into the selected agent; keep the
+`.pub` pin. Changing public-file permissions cannot make it sign.
+
+`signing failed ... device not found` calls for checking token connection
+and client support. `signing failed ... invalid format` can have several
+causes, including provider problems or an incomplete touch.
+`signing failed ... incorrect passphrase supplied` can indicate an
+unavailable PIN on a security-key route. Do not infer a wrong passphrase
+from that text alone or repeatedly guess PINs.
+
+Apple SSH can ignore security-key identities without a provider. Current
+csk fetches do not import a provider from `~/.ssh/config` or
+`SSH_SK_PROVIDER`. Select a client with built-in FIDO support on `PATH`.
+Real-token behavior and these token-specific messages remain unverified;
+the research used a software provider.
+
+### build_repository_transport_unclassified / build_repository_source_unavailable
+
+These codes alone do not establish an authentication cause. Preserve the
+full sanitized diagnostic, repository identity and command name when
+reporting the failure. Check client selection, credentials and the provider's
+clone URL. A logging wrapper that redirects SSH stderr away from Git can
+remove classification evidence. Remove such a wrapper from your ordinary
+reproduction; do not add one to csk's isolated fetch.
+
+For a reported `timeout`, check network reachability and whether the chosen
+agent or token needs operator approval. Retry after fixing the cause.
+Do not assume that a longer timeout enables passphrase prompts.
+
+### SSH build platform limit
+
+`go-repository-v1 is supported only on macOS and Windows; Linux qualification is deferred`
+means external build publication is unavailable on the selected platform. Credential setup does
+not lift this gate. Use a supported build platform or wait for Linux support.
+
+### SSH Windows agent limit
+
+`SSH agent was requested but SSH_AUTH_SOCK is not set` and
+`SSH agent socket is not an admitted socket` can expose the current native
+Windows agent limit. csk requires a filesystem socket and does not admit
+the Windows OpenSSH named pipe. Starting the service or setting the pipe
+name as a socket does not fix this. Use file mode with a suitable
+unencrypted key, or explicitly choose HTTPS with an operator-managed token.
+Windows SSH integration and real-token behavior remain unverified.
