@@ -140,7 +140,7 @@ def parse_elf(data: bytes) -> ELF:
         raise refuse("missing dynamic terminator or string table")
     if (any(tag in tags for tag in (16, 0x6FFFFEFC, 0x6FFFFEFB, 0x7FFFFFFD, 0x7FFFFFFF))
             or tags.get(30, 0) & ~0x18
-            or tags.get(0x6FFFFFFB, 0) & ~(1 | 0x08000000)):
+            or tags.get(0x6FFFFFFB, 0) & ~(1 | 8 | 0x08000000)):
         raise refuse("unsupported loader scope, audit or filter flags")
     strings = span(mapped(tags[5], tags[10]), tags[10])
     needed = tuple(name(strings, off) for off in needed_offsets)
