@@ -81,7 +81,7 @@ def test_stderr_bounded_before_scrub(tmp_path, stderr, expected):
     backend = CommandBackend(SimpleNamespace(name='test', cloud=False, model=None, cwd=tmp_path, env={}, command=['test']))
     request = AuditRequest(skill='test', source='test', commit='test', content_sha256='test', files={},
         capabilities=CapabilityManifest.implicit_none(), contract_reference='', response_schema={}, static_findings=(), redacted=False)
-    with patch('csk.audit.backends.command_backend.subprocess.run', return_value=SimpleNamespace(returncode=1, stderr=stderr)), patch.object(
+    with patch('csk.audit.backends.command_backend.process.run', return_value=SimpleNamespace(returncode=1, stderr=stderr)), patch.object(
         redaction, 'scrub_text', wraps=redaction.scrub_text
     ) as scrub:
         with pytest.raises(AuditBackendError, match='exited with code 1') as exc:
