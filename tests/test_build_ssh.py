@@ -337,6 +337,8 @@ def test_discover_candidates_reports_agent_socket(
 
 
 def test_candidate_commands_prefer_pinned_agent(tmp_path: Path) -> None:
+    # Existing private siblings remain file candidates alongside public agent pins.
+    (tmp_path / "work").touch()
     candidates = build_ssh.DiscoveredCandidates(
         agent_socket="/tmp/sock",
         agent_key_count=5,
@@ -352,6 +354,8 @@ def test_candidate_commands_prefer_pinned_agent(tmp_path: Path) -> None:
 
 
 def test_candidate_commands_without_agent(tmp_path: Path) -> None:
+    # A present private sibling is offered without an agent.
+    (tmp_path / "k").touch()
     candidates = build_ssh.DiscoveredCandidates(
         agent_socket=None, public_keys=(str(tmp_path / "k.pub"),)
     )
