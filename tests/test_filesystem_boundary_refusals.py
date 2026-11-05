@@ -628,7 +628,7 @@ def test_census_out_of_scope_handlers_have_no_cli_seams():
             found = by_func.get(func, [])
             if func == "_cmd_hybrid":
                 assert len(found) == 1, f"{leaf}: {func} seam set changed: {found}"
-                assert found[0].lineno == 1071 or "read_text" in found[0].op, found
+                assert found[0].lineno == 1071 or "read_bytes" in found[0].op, found
                 continue
             assert not found, f"{leaf}: {func} gained a cli.py seam: {found}"
 
@@ -1451,16 +1451,20 @@ def test_sweep_add_decl_each_ordinal_refuses(monkeypatch, tmp_path):
         label="add_skill_decl",
         setup=setup,
         sites=[
-            ("io.open", "csk.manifest", "_read_payload"),
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
             ("os.stat", "csk.manifest", "_skillfile_present"),
-            ("io.open", "csk.manifest", "_read_payload"),
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
             ("io.open", "csk.manifest", "_write_skillfile_text"),
         ],
         expect={
             1: (manifest.ManifestError, "Cannot read Skillfile at"),
             2: (manifest.ManifestError, "Cannot read Skillfile at"),
             3: (manifest.ManifestError, "Cannot read Skillfile at"),
-            4: (manifest.ManifestError, "Cannot write Skillfile at"),
+            4: (manifest.ManifestError, "Cannot read Skillfile at"),
+            5: (manifest.ManifestError, "Cannot read Skillfile at"),
+            6: (manifest.ManifestError, "Cannot write Skillfile at"),
         },
     )
 
@@ -1559,7 +1563,7 @@ def test_sweep_init_target_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         sites.append(("os.stat", "csk.cli", "_cmd_init"))
     prefix_count = len(sites)
     sites.extend([
-        ("io.open", "csk.manifest", "load_manifest"),
+        ("os.stat", "csk.protocol_json", "read_bytes"),
         ("Path.is_file", "csk.gitignore_gate", "legacy_block"),
         ("io.open", "csk.gitignore_gate", "legacy_block"),
         ("Path.exists", "csk.gitignore_gate", "append_entries"),
@@ -1626,7 +1630,7 @@ def test_sweep_config_show_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
 
 
 def test_sweep_hybrid_status_each_ordinal_degrades(monkeypatch, tmp_path, capsys):
-    """The hybrid marker read degrades to [unreadable marker] at ordinal 1."""
+    """The hybrid marker read degrades to [unreadable marker] at each size/read ordinal."""
     monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
 
@@ -1651,15 +1655,21 @@ def test_sweep_hybrid_status_each_ordinal_degrades(monkeypatch, tmp_path, capsys
         monkeypatch, capsys,
         label="hybrid status",
         setup=setup,
-        sites=[("io.open", "csk.cli", "_cmd_hybrid")],
-        expect={1: ("ok", "[unreadable marker]")},
+        sites=[
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
+        ],
+        expect={
+            1: ("ok", "[unreadable marker]"),
+            2: ("ok", "[unreadable marker]"),
+        },
         dry=(cli.EXIT_OK, "[installed", ""),
         kp1=(cli.EXIT_OK, "[installed", ""),
     )
 
 
 def test_sweep_list_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
-    """The list Skillfile read refuses at ordinal 1."""
+    """The list Skillfile read refuses at each size/read ordinal."""
     monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
 
@@ -1685,8 +1695,14 @@ def test_sweep_list_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         monkeypatch, capsys,
         label="list",
         setup=setup,
-        sites=[("io.open", "csk.manifest", "load_manifest")],
-        expect={1: ("refuse", "Cannot read Skillfile at")},
+        sites=[
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
+        ],
+        expect={
+            1: ("refuse", "Cannot read Skillfile at"),
+            2: ("refuse", "Cannot read Skillfile at"),
+        },
         dry=(cli.EXIT_OK, "no skills declared", ""),
         kp1=(cli.EXIT_OK, "no skills declared", ""),
     )
@@ -1721,11 +1737,13 @@ def test_sweep_list_paths_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         setup=setup,
         sites=[
             ("os.stat", "csk.cli", "_project_path_suffix"),
-            ("io.open", "csk.manifest", "load_manifest"),
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
         ],
         expect={
             1: ("ok", "(unreadable)"),
             2: ("refuse", "Cannot read Skillfile at"),
+            3: ("refuse", "Cannot read Skillfile at"),
         },
         dry=(cli.EXIT_OK, "no skills declared", ""),
         kp1=(cli.EXIT_OK, "no skills declared", ""),
@@ -1733,7 +1751,7 @@ def test_sweep_list_paths_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
 
 
 def test_sweep_status_all_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
-    """The status --all Skillfile read refuses at ordinal 1."""
+    """The status --all Skillfile read refuses at each size/read ordinal."""
     monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
 
@@ -1759,8 +1777,14 @@ def test_sweep_status_all_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         monkeypatch, capsys,
         label="status --all",
         setup=setup,
-        sites=[("io.open", "csk.manifest", "load_manifest")],
-        expect={1: ("refuse", "Cannot read Skillfile at")},
+        sites=[
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
+        ],
+        expect={
+            1: ("refuse", "Cannot read Skillfile at"),
+            2: ("refuse", "Cannot read Skillfile at"),
+        },
         dry=(cli.EXIT_OK, "no skills declared", ""),
         kp1=(cli.EXIT_OK, "no skills declared", ""),
     )
@@ -1868,7 +1892,7 @@ def test_sweep_project_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         sites=[
             ("os.stat", "csk.dispatch", "manager_home_inside_root"),
             ("os.lstat", "csk.dispatch", "manager_home_inside_root"),
-            ("io.open", "csk.skillfile_deprecations", "check_path"),
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
             ("os.stat", "csk.manifest", "_require_project_dir"),
             ("os.stat", "csk.manifest", "_skillfile_present"),
             ("os.stat", "csk.manifest", "_skillfile_present"),
@@ -1930,16 +1954,20 @@ def test_sweep_add_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         label="add",
         setup=setup,
         sites=[
-            ("io.open", "csk.manifest", "_read_payload"),
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
             ("os.stat", "csk.manifest", "_skillfile_present"),
-            ("io.open", "csk.manifest", "_read_payload"),
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
             ("io.open", "csk.manifest", "_write_skillfile_text"),
         ],
         expect={
             1: ("refuse", "Cannot read Skillfile at"),
             2: ("refuse", "Cannot read Skillfile at"),
             3: ("refuse", "Cannot read Skillfile at"),
-            4: ("refuse", "Cannot write Skillfile at"),
+            4: ("refuse", "Cannot read Skillfile at"),
+            5: ("refuse", "Cannot read Skillfile at"),
+            6: ("refuse", "Cannot write Skillfile at"),
         },
         dry=(cli.EXIT_OK, "Added skill", ""),
         kp1=(cli.EXIT_OK, "Added skill", ""),
@@ -1970,16 +1998,20 @@ def test_sweep_remove_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         label="remove",
         setup=setup,
         sites=[
-            ("io.open", "csk.manifest", "_read_payload"),
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
             ("os.stat", "csk.manifest", "_skillfile_present"),
-            ("io.open", "csk.manifest", "_read_payload"),
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
             ("io.open", "csk.manifest", "_write_skillfile_text"),
         ],
         expect={
             1: ("refuse", "Cannot read Skillfile at"),
             2: ("refuse", "Cannot read Skillfile at"),
             3: ("refuse", "Cannot read Skillfile at"),
-            4: ("refuse", "Cannot write Skillfile at"),
+            4: ("refuse", "Cannot read Skillfile at"),
+            5: ("refuse", "Cannot read Skillfile at"),
+            6: ("refuse", "Cannot write Skillfile at"),
         },
         dry=(cli.EXIT_OK, "Removed skill", ""),
         kp1=(cli.EXIT_OK, "Removed skill", ""),
@@ -1987,7 +2019,7 @@ def test_sweep_remove_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
 
 
 def test_sweep_audit_publish_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
-    """The audit-publish record read refuses at ordinal 1.
+    """The audit-publish record read refuses at each size/read ordinal.
 
     The unfaulted run itself exits 2 (the probe record fails name
     validation); the sweep distinguishes the fault refusal ("cannot
@@ -2057,10 +2089,10 @@ def test_sweep_audit_trust_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         label="audit trust",
         setup=setup,
         sites=[
-            ("io.open", "csk.audit.trust", "load_trust_record"),
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
             ("os.stat", "csk.audit.trust", "_confirm_missing_trust_path"),
             ("os.stat", "csk.audit.trust", "_confirm_missing_trust_path"),
-            ("io.open", "csk.audit.trust", "load_cached_verdict"),
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
             ("os.mkdir", "csk.audit.trust", "store_verdict"),
             ("io.open", "csk.audit.trust", "store_verdict"),
         ],
@@ -2112,7 +2144,7 @@ def test_sweep_audit_allow_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
 
 
 def test_sweep_trust_record_each_ordinal_refuses(monkeypatch, tmp_path):
-    """The trust-record read refuses at ordinal 1."""
+    """The trust-record read refuses at each size/read ordinal."""
     def setup(tag: str):
         home = tmp_path / f"tr{tag}" / "home"
         path = audit_trust.trust_path(home, _TRUST_HASH)
@@ -2124,13 +2156,19 @@ def test_sweep_trust_record_each_ordinal_refuses(monkeypatch, tmp_path):
         monkeypatch,
         label="load_trust_record",
         setup=setup,
-        sites=[("io.open", "csk.audit.trust", "load_trust_record")],
-        expect={1: (audit_trust.TrustRecordError, audit_trust.CODE_TRUST_UNREADABLE)},
+        sites=[
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
+        ],
+        expect={
+            1: (audit_trust.TrustRecordError, audit_trust.CODE_TRUST_UNREADABLE),
+            2: (audit_trust.TrustRecordError, audit_trust.CODE_TRUST_UNREADABLE),
+        },
     )
 
 
 def test_sweep_cached_verdict_each_ordinal_refuses(monkeypatch, tmp_path):
-    """The cached-verdict read refuses at ordinal 1."""
+    """The cached-verdict read refuses at each size/read ordinal."""
     def setup(tag: str):
         home = tmp_path / f"cv{tag}" / "home"
         stored = audit_trust.store_verdict(home, _verdict(_TRUST_HASH))
@@ -2140,13 +2178,19 @@ def test_sweep_cached_verdict_each_ordinal_refuses(monkeypatch, tmp_path):
         monkeypatch,
         label="load_cached_verdict",
         setup=setup,
-        sites=[("io.open", "csk.audit.trust", "load_cached_verdict")],
-        expect={1: (audit_trust.TrustRecordError, audit_trust.CODE_TRUST_UNREADABLE)},
+        sites=[
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
+        ],
+        expect={
+            1: (audit_trust.TrustRecordError, audit_trust.CODE_TRUST_UNREADABLE),
+            2: (audit_trust.TrustRecordError, audit_trust.CODE_TRUST_UNREADABLE),
+        },
     )
 
 
 def test_sweep_load_manifest_each_ordinal_refuses(monkeypatch, tmp_path):
-    """The load_manifest read refuses at ordinal 1."""
+    """The load_manifest read refuses at each size/read ordinal."""
     def setup(tag: str):
         project = tmp_path / f"lm{tag}"
         project.mkdir(parents=True, exist_ok=True)
@@ -2160,8 +2204,14 @@ def test_sweep_load_manifest_each_ordinal_refuses(monkeypatch, tmp_path):
         monkeypatch,
         label="load_manifest",
         setup=setup,
-        sites=[("io.open", "csk.manifest", "load_manifest")],
-        expect={1: (manifest.ManifestError, "Cannot read Skillfile at")},
+        sites=[
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
+        ],
+        expect={
+            1: (manifest.ManifestError, "Cannot read Skillfile at"),
+            2: (manifest.ManifestError, "Cannot read Skillfile at"),
+        },
     )
 
 
@@ -2182,16 +2232,20 @@ def test_sweep_remove_decl_each_ordinal_refuses(monkeypatch, tmp_path):
         label="remove_skill_decl",
         setup=setup,
         sites=[
-            ("io.open", "csk.manifest", "_read_payload"),
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
             ("os.stat", "csk.manifest", "_skillfile_present"),
-            ("io.open", "csk.manifest", "_read_payload"),
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
             ("io.open", "csk.manifest", "_write_skillfile_text"),
         ],
         expect={
             1: (manifest.ManifestError, "Cannot read Skillfile at"),
             2: (manifest.ManifestError, "Cannot read Skillfile at"),
             3: (manifest.ManifestError, "Cannot read Skillfile at"),
-            4: (manifest.ManifestError, "Cannot write Skillfile at"),
+            4: (manifest.ManifestError, "Cannot read Skillfile at"),
+            5: (manifest.ManifestError, "Cannot read Skillfile at"),
+            6: (manifest.ManifestError, "Cannot write Skillfile at"),
         },
     )
 
@@ -2668,8 +2722,14 @@ def test_sweep_ignore_mode_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         return project / manifest.MANIFEST_NAME, ["ignore-mode", "show", "--project", str(project)]
     _sweep_cli(
         monkeypatch, capsys, label="ignore-mode show", setup=setup,
-        sites=[("io.open", "csk.manifest", "load_manifest")],
-        expect={1: ("refuse", "Cannot read Skillfile at")},
+        sites=[
+            ('os.stat', 'csk.protocol_json', 'read_bytes'),
+            ('io.open', 'csk.protocol_json', 'read_bytes'),
+        ],
+        expect={
+            1: ("refuse", "Cannot read Skillfile at"),
+            2: ("refuse", "Cannot read Skillfile at"),
+        },
         dry=(cli.EXIT_OK, "Ignore mode:", ""),
         kp1=(cli.EXIT_OK, "Ignore mode:", ""),
     )

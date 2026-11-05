@@ -609,7 +609,7 @@ is committed in `src/csk/mcp_base_commands.py`. Neither scanner executes program
 
 ### JSON input limits
 
-Operator JSON documents are limited to 16 MiB and 128 nested containers.
+Operator JSON documents are limited to 16 MiB and 256 nested containers.
 File readers check size before reading and cap reads against concurrent growth;
 parsers check nesting before constructing the decoded value. Existing smaller
 limits on native MCP files, registry evidence, and lock records still apply.

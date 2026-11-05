@@ -364,7 +364,7 @@ def test_shared_block_roundtrip_preserves_user_bytes(user):
 
 
 # Policy input I/O faults are typed refusals; restoring access returns the same untouched bytes.
-@pytest.mark.parametrize('operation', ['lstat', 'read_bytes'])
+@pytest.mark.parametrize('operation', ['lstat', 'stat', 'open'])
 @pytest.mark.parametrize('number', [errno.EACCES, errno.EIO, errno.ENAMETOOLONG, errno.ELOOP])
 def test_policy_input_io_fault_is_typed(tmp_path, monkeypatch, operation, number):
     from csk.ignore_policy import _regular_bytes
