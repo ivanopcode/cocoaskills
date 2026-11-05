@@ -6,6 +6,7 @@ import shutil
 import stat
 import tempfile
 import time
+from threading import Lock
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from contextlib import ExitStack
@@ -172,6 +173,9 @@ class ExistingGoV1Session:
 
     def compile(self, root: Path, source_dir: str, command: str) -> bytes:
         with build_source.freeze_snapshot(root) as frozen:
+            state = _PASS_STATE if _PASS_STATE.active else None
+            if state is not None:
+                state.workers_reaped = False
             result = go_v1.build(
                 go_v1.BuildRequest(
                     toolchain_session=self._session,
@@ -186,6 +190,8 @@ class ExistingGoV1Session:
                     command=command,
                 )
             )
+            if state is not None:
+                state.workers_reaped = True
             return result.artifact.staged_path.read_bytes()
 
 
@@ -628,38 +634,85 @@ class AcquiredSource:
     subject: AuditSubject
 
 
+class AcquisitionPassState:
+    """Process-local guard for serial passes, including retries and projects.
+
+    A later pass may acquire again only after the previous pass closed its own
+    transport capability and finished synchronous worker teardown.
+    """
+
+    def __init__(self) -> None:
+        self.closed = True
+        self.active = False
+        self.workers_reaped = True
+        self._lock = Lock()
+
+    def start(self) -> None:
+        with self._lock:
+            if self.active or not self.closed or not self.workers_reaped:
+                raise ExternalBuildError(PROTECTED_BOUNDARY_UNTRUSTED, "previous acquisition pass is not closed or reaped")
+            self.active = True
+            self.closed = False
+
+    def close(self) -> None:
+        # Future transport close-and-verify must succeed before setting closed.
+        self.closed = True
+
+    def require_closed(self) -> None:
+        if not self.closed:
+            raise ExternalBuildError(PROTECTED_BOUNDARY_UNTRUSTED, "acquisition pass boundary did not close")
+
+
+_PASS_STATE = AcquisitionPassState()
+
+
 class AcquisitionMemo:
     """Operation-local validated source states; acquisition failures never enter it."""
 
     def __init__(self) -> None:
-        self._snapshots: dict[tuple[str, str, str, str, str | None], Snapshot] = {}
+        self._snapshots: dict[tuple[object, ...], Snapshot] = {}
 
     @staticmethod
-    def _key(request: PipelineRequest) -> tuple[str, str, str, str, str | None]:
+    def _key(request: PipelineRequest) -> tuple[object, ...]:
         effective = request.effective
         tag = request.declared.tag
         if effective.substitution is not None:
             substitution = effective.substitution
             tag = substitution.ref_value if substitution.ref_kind == "tag" else None
-        return (effective.identity_kind, effective.identity, effective.object_format, effective.commit, tag)
+        return (effective.identity_kind, effective.identity, effective.object_format, effective.commit, tag,
+                request.declared.transport, effective.transport, request.endpoint, request.endpoints)
 
     def lookup(self, request: PipelineRequest) -> Snapshot | None:
+        if request.effective.identity_kind == "operator-local-git":
+            return None
         return self._snapshots.get(self._key(request))
 
     def remember(self, request: PipelineRequest, snapshot: Snapshot) -> None:
-        self._snapshots[self._key(request)] = snapshot
+        if request.effective.identity_kind != "operator-local-git":
+            self._snapshots[self._key(request)] = snapshot
 
 
 def acquisition_execution_boundary() -> None:
-    """All external sources are validated; future transport closure belongs here."""
+    """Close this pass before execution; retries/projects start fresh passes."""
+    _PASS_STATE.close()
 
 
 def run_pipelines(requests: Sequence[PipelineRequest]) -> list[PipelineResult]:
-    with ExitStack() as stack:
-        memo = AcquisitionMemo()
-        acquired = [acquire_pipeline(request, stack, memo) for request in requests]
-        acquisition_execution_boundary()
-        return [execute_pipeline(source) for source in acquired]
+    state = _PASS_STATE
+    state.start()
+    try:
+        with ExitStack() as stack:
+            memo = AcquisitionMemo()
+            try:
+                acquired = [acquire_pipeline(request, stack, memo) for request in requests]
+            except BaseException:
+                state.close()
+                raise
+            acquisition_execution_boundary()
+            state.require_closed()
+            return [execute_pipeline(source) for source in acquired]
+    finally:
+        state.active = False
 
 
 def run_pipeline(request: PipelineRequest) -> PipelineResult:
