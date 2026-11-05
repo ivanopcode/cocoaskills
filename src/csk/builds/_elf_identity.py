@@ -21,7 +21,7 @@ ALLOWED_TAGS = frozenset({
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
     17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29, 30,
     32, 33, 34, 35, 36, 37,  # preinit, symtab section indices, RELR
-    0x6FFFFEF5,  # GNU_HASH
+    0x6FFFFEF5, 0x6FFFFEF6, 0x6FFFFEF7,  # GNU_HASH, TLSDESC_PLT/GOT
     0x6FFFFFF0, 0x6FFFFFF9, 0x6FFFFFFA, 0x6FFFFFFB,  # VERSYM, REL[A]COUNT, FLAGS_1
     0x6FFFFFFC, 0x6FFFFFFD, 0x6FFFFFFE, 0x6FFFFFFF,  # VERDEF/NUM, VERNEED/NUM
 })
@@ -140,9 +140,11 @@ def parse_elf(data: bytes) -> ELF:
         if tag == 0:
             terminated = True
             break
-        # AArch64 BTI PLT is a presence-only branch-protection marker, not a
-        # lookup/scope override. No other processor-specific tags are admitted.
-        if tag not in ALLOWED_TAGS and not (machine == 183 and tag == 0x70000001 and value == 0):
+        # Explicit processor metadata: x86 PLT rewriting descriptors and the
+        # AArch64 BTI presence marker. Neither changes symbol lookup scope.
+        processor_tag = (machine == 62 and tag in (0x70000000, 0x70000001, 0x70000003)) or (
+            machine == 183 and tag == 0x70000001 and value == 0)
+        if tag not in ALLOWED_TAGS and not processor_tag:
             raise refuse(f"unsupported dynamic tag {tag:#x}")
         if tag == 1:
             needed_offsets.append(value)
