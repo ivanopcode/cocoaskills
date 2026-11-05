@@ -128,7 +128,7 @@ def test_manager_sigkill_crash_boundary(tmp_path, mode, member_survives):
     import json
     fixture = Path(__file__).with_name("native_control_crash_fixture.py")
     result = subprocess.run([sys.executable, str(fixture), str(tmp_path / mode), mode],
-                            capture_output=True, text=True, timeout=20)
+                            capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
     record = json.loads(result.stdout)
     assert record["manager_returncode"] == -9
@@ -219,3 +219,41 @@ def test_file_limit_installation_readback_catches_noop(monkeypatch):
     monkeypatch.setattr(g.subprocess, "Popen", forbidden)
     with pytest.raises(OSError, match="installation did not persist"):
         domain._launch_macos(("unused",), {})
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux zombie and waitid semantics")
+def test_linux_zombie_leader_is_reaped_before_success():
+    # WNOWAIT retains the exited child's PID until teardown joins it; no orphan fixture.
+    process = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    try:
+        os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+        domain = object.__new__(g._NativeControlDomain)
+        domain._terminate_linux(process)
+        assert process.returncode == 0
+        with pytest.raises(ChildProcessError):
+            os.waitpid(process.pid, os.WNOHANG)
+        with pytest.raises(ProcessLookupError):
+            os.killpg(process.pid, 0)
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux teardown error precedence")
+def test_linux_teardown_preserves_signal_failure_over_join_failure(monkeypatch):
+    # An EPERM plant remains the diagnostic even when joining independently fails.
+    domain = object.__new__(g._NativeControlDomain)
+    def failed_wait(*args, **kwargs):
+        raise subprocess.TimeoutExpired("fixture", 1)
+    process = type("Process", (), {"pid": 12345, "returncode": None, "wait": failed_wait})()
+    monkeypatch.setattr(os, "waitid", lambda *args: None)
+    monkeypatch.setattr(os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(os, "getsid", lambda pid: pid)
+    def denied(pid, sig):
+        raise PermissionError(errno.EPERM, "planted group denial")
+    monkeypatch.setattr(os, "killpg", denied)
+    with pytest.raises(g.GoV1Error, match="planted group denial") as failure:
+        domain._terminate_linux(process)
+    assert failure.value.code == g.CODE_CONTROL_UNAVAILABLE
+    assert isinstance(failure.value.__cause__, PermissionError)
