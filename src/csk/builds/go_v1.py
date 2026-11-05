@@ -5953,6 +5953,7 @@ class _NativeControlDomain:
         # Keep the direct child unreaped until the last group signal. A zombie
         # leader pins the numerical PGID; no signal is sent after reaping it.
         failure: BaseException | None = None
+        direct_owned = False
         try:
             if process.returncode is not None:
                 # Another path already reaped it: never signal a reusable PID.
@@ -5962,11 +5963,17 @@ class _NativeControlDomain:
                     return
                 raise OSError("Linux worker was reaped before domain teardown")
             os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            direct_owned = True
             if os.getpgid(process.pid) != process.pid or os.getsid(process.pid) != process.pid:
                 raise OSError("Linux worker no longer anchors its private session")
             os.killpg(process.pid, signal.SIGKILL)
         except BaseException as exc:
             failure = exc
+        if failure is not None and direct_owned:
+            try:
+                process.kill()
+            except BaseException as cleanup_error:
+                failure.add_note(f"direct worker kill also failed: {cleanup_error}")
         try:
             process.wait(timeout=_WORKER_SHUTDOWN_GRACE)
         except BaseException as exc:
