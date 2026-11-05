@@ -99,11 +99,11 @@ REMEDIATION_BY_CODE: Final[dict[str, str]] = {
 NEXT_BY_FAILURE_CLASS: Final[dict[str, str]] = {
     "dns": "check DNS for the repository host and rerun csk install",
     "connection-refused": "check the repository host, port and network access",
-    "timeout": "check network access and whether SSH is waiting for a PIN or key touch; retry when ready",
+    "timeout": "check network access and whether SSH is waiting for a passphrase, PIN or key touch; retry when ready",
     "endpoint-unavailable": "check the listed repository endpoint and retry",
     "auth-unavailable": "select usable credentials with csk config build-ssh add or csk config build-https add",
     "auth-rejected": "verify the selected account has read access to the repository",
-    "ssh-auth-rejected": "verify the selected SSH key and account have repository read access; review csk config build-ssh list",
+    "ssh-auth-rejected": "the key may be unusable locally (a passphrase key may not be loaded in a capable agent), or the server may deny repository read access; review csk config build-ssh list and check both key usability and account access",
     "http-401": "check the selected HTTPS credential and repository read access",
     "http-403": "grant the selected account repository read access or select an authorized credential",
     "host-key": "verify the host fingerprint with the repository operator and update the selected known_hosts file",
@@ -121,22 +121,37 @@ NEXT_BY_FAILURE_CLASS: Final[dict[str, str]] = {
     "http-404": "verify the repository URL and the selected account's read access",
     "malformed-response": "check the repository service response before retrying",
     "partial-response": "check the repository service and network before retrying",
-    "unclassified": "check repository access and Git/SSH locally; keep stderr attached when diagnosing the failed command",
+    "unclassified": "review csk config build-ssh list, then check the selected Git/SSH command locally with stderr attached; csk --verbose shows the safe cause chain",
 }
 for _status in ("http-502", "http-503", "http-504"):
     NEXT_BY_FAILURE_CLASS[_status] = "check repository service availability and retry"
 
 HINT_TEXT: Final[dict[str, str]] = {
+    "ssh-pinned-key-not-loaded": "SSH reported failure loading a public-key pin; load the matching key into a capable agent or select the matching private identity path with csk config build-ssh add",
+    "ssh-agent-refused": "SSH reported agent refusal; check whether the agent supports this key; for a PIN-required key use the file route with a usable provider rather than relying on a client terminal",
+    "ssh-device-missing": "SSH reported a missing device; connect the security key and retry",
+    "ssh-token-not-signed": "SSH reported invalid signing format; touch the security key when required and check that a usable security-key provider is selected",
+    "ssh-pin-unavailable": "SSH reported an unavailable PIN; use a PIN-capable attended file route or an agent configured with askpass",
+    "ssh-identity-inaccessible": "SSH reported an inaccessible identity; correct the selected identity path with csk config build-ssh add",
+
     "ssh-signing-failed": "SSH reported a signing failure; check the selected key, agent and any required PIN or touch",
     "ssh-key-load-failed": "SSH reported a key-loading failure; check the selected key format and unlock method",
 }
 
 
-def transport_next_steps(failure_class: str, hints: tuple[str, ...] = ()) -> str:
-    """Use only fixed text; unknown hints and raw child output never render."""
-    action = NEXT_BY_FAILURE_CLASS.get(failure_class, NEXT_BY_FAILURE_CLASS["unclassified"])
-    lines = [f"next: {action}"]
-    lines.extend(f"hint: {HINT_TEXT[hint]}" for hint in hints if hint in HINT_TEXT)
+def transport_next_steps(
+    failure_class: object, hints: object = (), *, ordinal: int | None = None
+) -> str:
+    """Use only fixed text; malformed hints and raw child output never render."""
+    safe_class = failure_class if type(failure_class) is str else "unclassified"
+    action = NEXT_BY_FAILURE_CLASS.get(safe_class, NEXT_BY_FAILURE_CLASS["unclassified"])
+    label = f"attempt {ordinal}: " if type(ordinal) is int else ""
+    lines = [f"next: {label}{action}"]
+    if type(hints) is tuple:
+        lines.extend(
+            f"hint: {label}{HINT_TEXT[hint]}"
+            for hint in hints if type(hint) is str and hint in HINT_TEXT
+        )
     return "\n".join(lines)
 
 
@@ -246,13 +261,26 @@ def format_transport_exception(exc: BaseException) -> str | None:
     rendering) and a transport-module origin.
     """
 
-    code = getattr(exc, "code", None)
-    if not isinstance(code, str) or code not in REMEDIATION_BY_CODE:
+    code = None
+    try:
+        code = getattr(exc, "code", None)
+        if type(code) is not str or code not in REMEDIATION_BY_CODE:
+            return None
+        transport_module = __name__.rsplit(".", 1)[0] + ".transport"
+        if type(exc).__module__ != transport_module:
+            return None
+        rendered = format_diagnostic(code, transport_failure_reason(exc))
+        attempts = getattr(exc, "attempts", ())
+        if type(attempts) is tuple:
+            for index, attempt in enumerate(attempts, 1):
+                ordinal = getattr(attempt, "ordinal", index)
+                rendered += "\n" + transport_next_steps(
+                    getattr(attempt, "classification", "unclassified"),
+                    getattr(attempt, "hints", ()),
+                    ordinal=ordinal if type(ordinal) is int else index,
+                )
+        return rendered
+    except Exception:  # A malformed diagnostic must not mask the original refusal.
+        if type(code) is str and code in REMEDIATION_BY_CODE:
+            return format_diagnostic(code, "transport refusal recorded without attempt detail")
         return None
-    transport_module = __name__.rsplit(".", 1)[0] + ".transport"
-    if type(exc).__module__ != transport_module:
-        return None
-    rendered = format_diagnostic(code, transport_failure_reason(exc))
-    for attempt in getattr(exc, "attempts", ()):
-        rendered += "\n" + transport_next_steps(attempt.classification, attempt.hints)
-    return rendered
