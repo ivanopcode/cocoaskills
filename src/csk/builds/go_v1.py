@@ -21,6 +21,8 @@ detected worker-identity change.
 
 from __future__ import annotations
 
+from .. import protocol_json
+
 import base64
 import binascii
 import ctypes
@@ -4330,8 +4332,10 @@ def _read_message(stream: BinaryIO) -> Mapping[str, object]:
         )
     payload = _read_exact(stream, length)
     try:
+        text = payload.decode("utf-8", errors="strict")
+        protocol_json.check_depth(text)
         message = json.loads(
-            payload.decode("utf-8", errors="strict"),
+            text,
             object_pairs_hook=_closed_object,
         )
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:

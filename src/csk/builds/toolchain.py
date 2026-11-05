@@ -8,6 +8,8 @@ directory, or runs a source-aware Go command.
 
 from __future__ import annotations
 
+from .. import protocol_json
+
 import hashlib
 import json
 import ntpath
@@ -1127,10 +1129,11 @@ def _decode_probe_environment(payload: bytes, output_limit: int) -> dict[str, st
         return result
 
     try:
+        protocol_json.check_depth(text)
         decoded = json.loads(text, object_pairs_hook=unique_object)
     except _DuplicateJSONKey as exc:
         raise ToolchainError("invalid_go_env", f"go env output repeats {exc}") from exc
-    except (json.JSONDecodeError, UnicodeError) as exc:
+    except (json.JSONDecodeError, UnicodeError, protocol_json.ProtocolJSONError) as exc:
         raise ToolchainError("invalid_go_env", "go env output is not valid JSON") from exc
     if not isinstance(decoded, dict):
         raise ToolchainError("invalid_go_env", "go env output is not a JSON object")
