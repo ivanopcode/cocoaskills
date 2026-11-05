@@ -72,6 +72,13 @@ rehashes the complete snapshot, validates `skill-build.json`, and runs the
 independent external audit before any protected artifact lookup or compiler
 call.
 
+Selected external sources are acquired and validated in a separate pass before
+any external audit callback, artifact lookup or compilation. One explicit
+acquisition/execution boundary separates these passes. Within an invocation,
+commands sharing repository identity, object format, commit and tag reuse one
+successfully validated acquisition; failures are not memoized. Each later
+install still reacquires source, including fresh tag proof, before cache reuse.
+
 Non-executable text below `vendor/` in a third-party module (such as a
 dependency's README or Makefile) does not block installation: the fixed
 build session runs only `go list` and `go build`, hooks and generators are

@@ -2358,6 +2358,7 @@ def _publish_external_builds(
     )
     project_identity = locking.canonical_project_identity(project_root)
     published: dict[str, dict[str, _PublishedBuild]] = {}
+    requests: list[build_repository_pipeline.PipelineRequest] = []
     for node, name in selected:
         command = node.spec.commands[name]
         assert command.repository is not None and command.target is not None
@@ -2472,7 +2473,7 @@ def _publish_external_builds(
             ).snapshot
 
         node_package = packages.get(node.name) if packages is not None else None
-        result = build_repository_pipeline.run_pipeline(
+        requests.append(
             build_repository_pipeline.PipelineRequest(
                 operation=(
                     build_repository_pipeline.Operation.DRY_RUN
@@ -2496,6 +2497,12 @@ def _publish_external_builds(
                 package=node_package,
             )
         )
+    results = build_repository_pipeline.run_pipelines(requests)
+    for (node, name), result in zip(selected, results, strict=True):
+        command = node.spec.commands[name]
+        assert command.repository is not None
+        repository = node.spec.build_repositories[command.repository]
+        node_package = packages.get(node.name) if packages is not None else None
         messages.append(
             f"external build {node.name}.{name}: {result.state} "
             f"source={result.build_source} cache={result.cache_key}"
