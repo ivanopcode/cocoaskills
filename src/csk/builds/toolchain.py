@@ -1629,6 +1629,8 @@ def _verify_selected_root(
 def _native_executable_header(header: bytes, host: _Host) -> bool:
     if host.windows:
         return header.startswith(b"MZ")
+    if host.goos == "linux":
+        return header.startswith(b"\x7fELF")
     return header.startswith(b"\x7fELF") or header[:4] in _MACHO_MAGICS
 
 

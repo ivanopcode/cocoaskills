@@ -127,8 +127,12 @@ def test_generation_probe_does_not_treat_file_parent_as_absence(
     assert error.value.code == "generation_unreadable"
 
 
+# Both native target families propagate through the same read-only planner;
+# the fake session proves planning semantics, not native compiler execution.
+@pytest.mark.parametrize("goos", ["darwin", "linux"])
 def test_plan_builds_is_provider_first_command_lexical_and_records_all_outcomes(
     tmp_path: Path,
+    goos: str,
 ) -> None:
     first_root = tmp_path / "first"
     second_root = tmp_path / "second"
@@ -153,7 +157,14 @@ def test_plan_builds_is_provider_first_command_lexical_and_records_all_outcomes(
         assert config.private_base.is_dir()
         configs.append(config)
         events.append("toolchain")
-        return _FakeToolchainSession(events)
+        session = _FakeToolchainSession(events)
+        session.target = toolchain.NativeTarget(
+            goos=goos, goarch="arm64", tuning={"GOARM64": "v8.0"},
+        )
+        session.toolchain = replace(
+            session.toolchain, go_version=f"go version go1.27.3 {goos}/arm64",
+        )
+        return session
 
     with source.freeze_snapshot(first_root) as first, source.freeze_snapshot(second_root) as second:
         providers = (
@@ -182,6 +193,7 @@ def test_plan_builds_is_provider_first_command_lexical_and_records_all_outcomes(
             establish_toolchain=establish,
         )
 
+    assert all(plan.input.target.goos == goos for plan in plans)
     assert [(plan.provider, plan.command) for plan in plans] == [
         ("provider-first", "z-hit"),
         ("provider-second", "a-miss"),
@@ -232,7 +244,7 @@ def test_plan_builds_is_provider_first_command_lexical_and_records_all_outcomes(
             "source_dir": plan.input.source_dir,
             "target": {
                 "goarch": "arm64",
-                "goos": "darwin",
+                "goos": goos,
                 "tuning": {"GOARM64": "v8.0"},
             },
         }
