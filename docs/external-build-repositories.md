@@ -458,3 +458,12 @@ hosts. Linux support is deliberately deferred and is not implied by generic
 CocoaSkills script/system-command support. Platform evidence must record the
 exact OS, architecture, Python, Git, Go, csk, Curator consumer, protocol commit,
 and corpus manifest used by the run.
+
+
+For local SSH credential problems, run `csk config build-ssh doctor <host/path>`
+(or add `--all-os`). It makes no network connection or agent changes. See
+[the doctor reference](cli.md#csk-config-build-ssh-doctor) for lifetime ownership,
+public-key pins, hardware-agent traps and unverified platform routes. Prefer
+a private identity path even with an agent so both loaded and file states
+can work; passphrase-protected files still need a capable loaded agent under
+the current non-prompting SSH policy.
