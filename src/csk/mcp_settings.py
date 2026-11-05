@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .terminal import terminal_text
+
 import argparse
 import json
 import stat
@@ -55,7 +57,7 @@ def main(argv: list[str]) -> int:
         transactions.TransactionError,
         locking.LockError,
     ) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {terminal_text(exc)}", file=sys.stderr)
         return 1
 
 
@@ -67,7 +69,7 @@ def _approve(subjects: list[o.ConsentSubject]) -> None:
             )
         try:
             answer = input(
-                f"Approve local: cursor for {subject.name} ({subject.scope})? [y/N] "
+                f"Approve local: cursor for {terminal_text(subject.name)} ({terminal_text(subject.scope)})? [y/N] "
             )
         except (EOFError, KeyboardInterrupt):
             answer = ""
@@ -104,7 +106,7 @@ def run(args: argparse.Namespace) -> None:
         for target in sorted(state):
             if args.server is None or target in ("*", args.server):
                 print(
-                    f'local: cursor server={target} approved={",".join(sorted(state[target])) or "none"}'
+                    f'local: cursor server={terminal_text(target)} approved={terminal_text(",".join(sorted(state[target])) or "none")}'
                 )
         return
     parsed = d.resolve_launchers(parsed)
