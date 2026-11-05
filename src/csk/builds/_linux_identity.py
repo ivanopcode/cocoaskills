@@ -190,6 +190,8 @@ def resolve_linux_identity(path: Path, *, version: str,
     if runtime != process:
         pending.append((runtime, parse_elf(runtime.contents)))
     total_bytes = len(process.contents) + len(runtime.contents) + len(loader.contents)
+    if total_bytes > 256 * 1024 * 1024:
+        raise refuse("dependency closure bound")
     while pending:
         owner, metadata = pending.pop()
         if owner != process and (metadata.rpath is not None or metadata.runpath is not None):

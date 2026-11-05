@@ -254,3 +254,15 @@ def test_link_walk_budget(layout, tmp_path):
     with pytest.raises(go_v1.GoV1Error) as error:
         linux.capture(extra)
     assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+
+
+# Absolute/common/reserved symbols are not loaded definitions in the image,
+# even when their forged value happens to fall inside a LOAD segment.
+@pytest.mark.parametrize('section', [0xff00, 0xfff1, 0xfff2, 0xffff])
+def test_special_python_symbol_is_not_embedding(section):
+    data = bytearray(image())
+    assert elf.parse_elf(bytes(data)).defines_python
+    struct.pack_into('<H', data, 2072+6, section)
+    with pytest.raises(go_v1.GoV1Error) as error:
+        elf.parse_elf(bytes(data))
+    assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID

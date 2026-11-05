@@ -194,7 +194,8 @@ def parse_elf(data: bytes) -> ELF:
             nm, info, other, section, value, size = unpack("<IBBHQQ", symoff + i * 24)
             symbol = name(strings, nm)
             if symbol == "Py_GetVersion" and section != 0:
-                if defines_python or info != 0x12 or other != 0 or not size:
+                if (defines_python or info != 0x12 or other != 0 or not size
+                        or section >= 0xFF00):
                     raise refuse("ambiguous Python symbol")
                 mapped(value, size)
                 if not any(s.flags & 1 and s.address <= value and value + size <= s.address + s.size for s in loads):
