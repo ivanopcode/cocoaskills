@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import shlex
+from .terminal import shell_word
 import stat
 from typing import Iterable, Mapping
 
@@ -133,7 +133,7 @@ def validate_tree(
         quoted = "'" + str(remedy).replace("'", "''") + "'"
         command = f"Remove-Item -LiteralPath {quoted} -Recurse -Force"
     else:
-        quoted = shlex.quote(str(remedy))
+        quoted = shell_word(str(remedy))
         command = f"rm -rf -- {quoted}"
         if any(entry == remedy and stat.S_ISDIR(mode) for entry, mode in entries):
             # Traversal can succeed without unlink permission; nested directories may also be restrictive.
@@ -251,7 +251,7 @@ def require_exclusive_mode_change(path: Path, info: os.stat_result, mode: int) -
     """A private pathname does not imply an exclusively owned regular-file inode."""
     if stat.S_ISREG(info.st_mode) and info.st_nlink > 1 and stat.S_IMODE(info.st_mode) != mode:
         remedy = (f"unlink only the hard-linked entry {str(path)!r} without changing its file attributes"
-                  if os.name == "nt" else f"rm -f -- {shlex.quote(str(path))}")
+                  if os.name == "nt" else f"rm -f -- {shell_word(str(path))}")
         raise RuntimeTreeModified(
             f"{CODE_RUNTIME_TREE_MODIFIED}: non-exclusive file inode at {str(path)!r}; "
             f"refusing to change permissions on another hardlink. See {AUTHORING_GUIDE}\n"

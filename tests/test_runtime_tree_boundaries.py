@@ -107,7 +107,8 @@ def test_gc_preserves_external_hardlink(runtime_scope, tmp_path):
     (0o000, 0o000), (0o400, 0o000), (0o100, 0o000),
     (0o500, 0o500), (0o755, 0o500), (0o755, 0o755),
 ], ids=['no-access', 'read-only', 'search-only', 'read-search', 'nested-read-search', 'writable'])
-def test_unreadable_foreign_directory_remedy(runtime_scope, tmp_path, capsys, command, mode, nested_mode):
+@pytest.mark.parametrize('shell', ['bash', 'zsh'])
+def test_unreadable_foreign_directory_remedy(runtime_scope, tmp_path, capsys, command, mode, nested_mode, shell):
     project, home, runtime, invoke, _ = runtime_scope
     runtime.chmod(stat.S_IMODE(runtime.stat().st_mode) | stat.S_IWUSR)
     foreign = runtime / "--foreign 'quoted'\nentry"
@@ -150,12 +151,13 @@ def test_unreadable_foreign_directory_remedy(runtime_scope, tmp_path, capsys, co
         foreign.chmod(mode)
         remedy = message.split('remediation: remove only the foreign entry with ', 1)[1].split(
             '; then rerun the same command', 1)[0]
-        quoted = shlex.quote(str(foreign))
+        from csk.terminal import shell_word
+        quoted = shell_word(str(foreign))
         plain = f"rm -rf -- {quoted}"
         directory_access = (f"chmod u+rwx {quoted} && find -P {quoted} -type d "
                             f"-exec chmod u+rwx {{}} \\; && {plain}")
         assert remedy in (plain, directory_access)
-        result = subprocess.run(['/bin/sh', '-c', remedy], capture_output=True, text=True)
+        result = subprocess.run([shell, '-c', remedy], capture_output=True, text=True)
         assert tree_state(outside) == outside_before
         assert tree_state(runtime / 'scripts') == managed_before
         assert result.returncode == 0, result.stderr

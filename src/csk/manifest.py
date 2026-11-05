@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import unicodedata
+
 import json
 import stat
 import unicodedata
@@ -421,6 +423,9 @@ def _finish_legacy_skill(raw: dict[str, Any], name: str) -> SkillDecl:
     git_url = raw.get("git")
     if git_url is not None and (not isinstance(git_url, str) or not git_url):
         raise ManifestError(f"Skill {name!r} field 'git' must be a non-empty string when present")
+
+    if git_url is not None and any(unicodedata.category(char) == "Cc" for char in git_url):
+        raise ManifestError(f"Skill {name!r} field 'git' must not contain control characters")
 
     ref_keys = [key for key in ("tag", "branch", "revision") if key in raw]
     if len(ref_keys) != 1:
