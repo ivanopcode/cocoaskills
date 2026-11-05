@@ -353,6 +353,8 @@ def _admit_snapshot(plan: installer.SkillPlan, limit: int) -> list[Path]:
     paths = []
     size = 0
     for path in plan.snapshot.rglob("*"):
+        if path.is_symlink():
+            raise hashing.HashingError("symbolic links are not supported in protocol trees")
         if not path.is_file():
             continue
         size += path.stat().st_size
