@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import io
 import json
 import os
@@ -64,6 +65,9 @@ def _open_regular(path: str, flags: int) -> int:
 def read_bytes(path: Path, *, maximum: int = MAX_INPUT_BYTES) -> bytes:
     """Admit regular files without blocking, checking the opened descriptor."""
     info = path.stat()
+    if stat.S_ISDIR(info.st_mode):
+        code = errno.EACCES if os.name == "nt" else errno.EISDIR
+        raise OSError(code, os.strerror(code), str(path))
     if not stat.S_ISREG(info.st_mode):
         raise ProtocolJSONSizeError("JSON input must be a regular file")
     if info.st_size > maximum:
