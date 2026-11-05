@@ -1065,7 +1065,7 @@ def _runtime_exposes_build_roots(
 
 def _marker_bytes_unchanged(path: Path, expected: bytes) -> bool:
     try:
-        return path.read_bytes() == expected
+        return protocol_json.read_bytes(path) == expected
     except OSError:
         return False
 

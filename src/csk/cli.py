@@ -1402,7 +1402,8 @@ def _cmd_config_show() -> int:
     path = config.config_path()
     print(f"Config path: {path}")
     try:
-        content = path.read_text(encoding="utf-8")
+        content = protocol_json.read_bytes(path).decode("utf-8")
+        content = content.replace("\r\n", "\n").replace("\r", "\n")
     except (FileNotFoundError, NotADirectoryError):
         print("Config does not exist")
     except OSError as exc:

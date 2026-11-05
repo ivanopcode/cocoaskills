@@ -1604,7 +1604,7 @@ def test_sweep_init_target_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
 
 
 def test_sweep_config_show_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
-    """The config-show marker reaches its guarded read once."""
+    """Config display refuses errors at both size admission and file open."""
     monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
 
@@ -1622,8 +1622,11 @@ def test_sweep_config_show_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
         monkeypatch, capsys,
         label="config show",
         setup=setup,
-        sites=[("io.open", "csk.cli", "_cmd_config_show")],
-        expect={1: ("refuse", "cannot read config")},
+        sites=[
+            ("os.stat", "csk.protocol_json", "read_bytes"),
+            ("io.open", "csk.protocol_json", "read_bytes"),
+        ],
+        expect={ordinal: ("refuse", "cannot read config") for ordinal in (1, 2)},
         dry=(cli.EXIT_OK, "Config path:", ""),
         kp1=(cli.EXIT_OK, "Config path:", ""),
     )

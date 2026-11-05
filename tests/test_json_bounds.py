@@ -230,3 +230,121 @@ def test_broker_state_bounds(tmp_path, monkeypatch):
         pytest.fail('oversized broker state was opened')
     monkeypatch.setattr(io, 'open', forbidden)
     assert https_broker.answer(str(path), prompt, {}) is None
+
+
+# The status marker recheck admits identical bytes but refuses a sparse
+# replacement before opening it, even though this path does not parse JSON.
+def test_status_marker_recheck_is_bounded(tmp_path, monkeypatch):
+    from csk import status
+    path = tmp_path / '.csk-install.json'
+    path.write_bytes(b'{}')
+    assert status._marker_bytes_unchanged(path, b'{}')
+    assert not status._marker_bytes_unchanged(path, b'{"changed":true}')
+    with path.open('wb') as stream:
+        stream.truncate(4 * 1024**3)
+    def forbidden(*args, **kwargs):
+        pytest.fail('oversized marker recheck was opened')
+    monkeypatch.setattr(io, 'open', forbidden)
+    assert not status._marker_bytes_unchanged(path, b'{}')
+
+
+# Config display uses the same file budget despite not parsing its text.
+def test_config_show_is_bounded(tmp_path, monkeypatch, capsys):
+    from csk import cli
+    path = tmp_path / 'config.json'
+    path.write_bytes(b'{}')
+    monkeypatch.setenv('CSK_CONFIG', str(path))
+    assert cli._cmd_config_show() == 0
+    assert '{}' in capsys.readouterr().out
+    with path.open('wb') as stream:
+        stream.truncate(4 * 1024**3)
+    def forbidden(*args, **kwargs):
+        pytest.fail('oversized config display was opened')
+    monkeypatch.setattr(io, 'open', forbidden)
+    assert cli._cmd_config_show() == cli.EXIT_CONFIG
+    assert 'maximum size' in capsys.readouterr().err
+
+
+# Atomic publication need not read an obsolete file whose size differs from
+# the desired payload; the unchanged regular-file control still succeeds.
+def test_atomic_publication_skips_oversized_comparison(tmp_path, monkeypatch):
+    from csk import dispatch
+    path = tmp_path / 'registry.json'
+    path.write_bytes(b'{}')
+    dispatch.atomic_write_bytes(path, b'{}', mode=0o644)
+    with path.open('wb') as stream:
+        stream.truncate(4 * 1024**3)
+    real_open = io.open
+    def forbidden_target(file, *args, **kwargs):
+        if not isinstance(file, int) and Path(file) == path:
+            pytest.fail('obsolete registry comparison was opened')
+        return real_open(file, *args, **kwargs)
+    monkeypatch.setattr(io, 'open', forbidden_target)
+    dispatch.atomic_write_bytes(path, b'{}', mode=0o644)
+    with real_open(path, 'rb') as stream:
+        assert stream.read() == b'{}'
+
+
+# Existing descriptor readers reject a FIFO swapped in at open, and the
+# snapshot reader rejects a FIFO present initially; each has a valid control.
+@pytest.mark.skipif(__import__('os').name == 'nt', reason='POSIX FIFO control')
+@pytest.mark.parametrize('reader', ['audit', 'ownership', 'journal', 'snapshot'])
+def test_descriptor_readers_refuse_fifo(tmp_path, reader):
+    import os
+    import subprocess
+    import sys
+    script = '''
+import json, os, sys
+from pathlib import Path
+from csk import audit_registry, mcp_ownership, transactions
+from csk.sources import store
+root, reader = Path(sys.argv[1]), sys.argv[2]
+target = root / 'record.json'
+raw = b'{}'
+consumer = 'p-' + '0' * 40
+if reader == 'ownership':
+    target = root / 'state/mcp/ownership' / (consumer + '.json')
+    target.parent.mkdir(parents=True)
+if reader == 'snapshot':
+    digest = 'sha256:' + '0' * 64
+    raw = json.dumps({'schema': store.RECORD_SCHEMA, 'schema_version': store.RECORD_VERSION,
+        'skill': 'skill', 'package': 'package', 'snapshot': digest,
+        'inventory': {'snapshot': digest, 'files': []}}).encode()
+target.write_bytes(raw)
+info = target.stat()
+if reader == 'audit':
+    read = lambda: audit_registry._read_regular_file_noatime(target, info)
+    error, diagnostic = OSError, 'changed while opening'
+elif reader == 'ownership':
+    read = lambda: mcp_ownership._read_store(root, 'ownership', consumer)
+    error, diagnostic = mcp_ownership.McpOwnershipError, 'changed while opening'
+elif reader == 'journal':
+    read = lambda: transactions._read_bounded_regular(target, limit=1024)
+    error, diagnostic = transactions.TransactionCorruptionError, 'changed while opening'
+else:
+    read = lambda: store._read_record(root, 'skill', 'package')
+    error, diagnostic = store._StoreUnavailable, 'regular file'
+control = read()
+assert control.snapshot == digest if reader == 'snapshot' else control == raw
+if reader == 'snapshot':
+    target.unlink()
+    os.mkfifo(target)
+else:
+    original = os.open
+    def replace(path, *args, **kwargs):
+        if Path(path) == target:
+            target.unlink()
+            os.mkfifo(target)
+        return original(path, *args, **kwargs)
+    os.open = replace
+try:
+    read()
+except error as exc:
+    assert diagnostic in str(exc), str(exc)
+else:
+    raise AssertionError('FIFO admitted')
+'''
+    env = dict(os.environ, PYTHONPATH=str(Path(pj.__file__).parent.parent))
+    result = subprocess.run([sys.executable, '-c', script, str(tmp_path), reader],
+                            env=env, capture_output=True, timeout=8)
+    assert result.returncode == 0, result.stderr.decode()
