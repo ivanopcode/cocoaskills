@@ -114,6 +114,8 @@ CAPABILITY_EVIDENCE_VERSION: Final = "capability-evidence-v1"
 PROBE_TIMING: Final = "pre-worker-launch"
 
 PLATFORM_MACOS: Final = "macos"
+PLATFORM_LINUX: Final = "linux"
+_POSIX_CONTROL_PLATFORMS: Final = frozenset({PLATFORM_MACOS, PLATFORM_LINUX})
 PLATFORM_WINDOWS: Final = "windows"
 PLATFORM_LINUX: Final = "linux"
 AVAILABILITY_AVAILABLE: Final = "available"
@@ -476,6 +478,13 @@ _NATIVE_CONTROL_PLATFORMS: Final[
         ),
     }
 )
+
+
+def _control_records(platform: str) -> Mapping[str, _InventoryRecord] | None:
+    # Internal Linux adapter only; public inventory admission remains closed.
+    if platform == PLATFORM_LINUX:
+        return _NATIVE_CONTROL_PLATFORMS[PLATFORM_MACOS]
+    return _NATIVE_CONTROL_PLATFORMS.get(platform)
 
 
 def inventory_platform() -> str:
@@ -1825,7 +1834,9 @@ class _PreparedWorkerLaunch:
         self._read_fd = -1
         self._windows_handle = 0
         record = _worker_launch_record(self.secret, os.getpid())
-        if platform == PLATFORM_MACOS:
+        if platform == PLATFORM_LINUX:
+            self._prepare_linux(record)
+        elif platform == PLATFORM_MACOS:
             self._prepare_macos(record)
         elif platform == PLATFORM_WINDOWS:
             self._prepare_windows(record)
@@ -1835,10 +1846,32 @@ class _PreparedWorkerLaunch:
                 "manager-owned launch capability is unsupported on this host",
             )
 
+    def _prepare_linux(self, record: bytes) -> None:
+        import resource
+
+        previous = resource.getrlimit(resource.RLIMIT_NOFILE)
+        wanted = max(previous[0], min(_WORKER_LAUNCH_FDS) + 1)
+        if previous[1] != resource.RLIM_INFINITY and wanted > previous[1]:
+            raise GoV1Error(CODE_CONTROL_UNAVAILABLE, "worker launch descriptor capacity is unavailable")
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (wanted, previous[1]))
+            self._prepare_macos(record)
+        finally:
+            try:
+                resource.setrlimit(resource.RLIMIT_NOFILE, previous)
+                if resource.getrlimit(resource.RLIMIT_NOFILE) != previous:
+                    raise OSError("descriptor limit restoration did not persist")
+            except BaseException as exc:
+                self.close_parent_copy()
+                raise GoV1Error(CODE_CONTROL_UNAVAILABLE, "cannot restore manager descriptor capacity") from exc
+
     def _prepare_macos(self, record: bytes) -> None:
         read_fd, write_fd = os.pipe()
         try:
             _write_launch_record_fd(write_fd, record)
+        except BaseException:
+            os.close(read_fd)
+            raise
         finally:
             os.close(write_fd)
         selected = -1
@@ -1890,7 +1923,7 @@ class _PreparedWorkerLaunch:
             raise
 
     def add_popen_options(self, options: dict[str, object]) -> None:
-        if self.platform == PLATFORM_MACOS:
+        if self.platform in _POSIX_CONTROL_PLATFORMS:
             options["pass_fds"] = (self._read_fd,)
             return
         startup_info = cast(Any, subprocess).STARTUPINFO()
@@ -1912,8 +1945,8 @@ class _PreparedWorkerLaunch:
 def _consume_worker_launch_context() -> _WorkerLaunchContext:
     """Consume the manager-only inherited capability before hidden dispatch."""
 
-    platform = inventory_platform()
-    if platform == PLATFORM_MACOS:
+    platform = PLATFORM_LINUX if sys.platform == "linux" else inventory_platform()
+    if platform in _POSIX_CONTROL_PLATFORMS:
         record = _read_posix_worker_launch_record()
     else:
         record = _read_windows_worker_launch_record()
@@ -4784,6 +4817,45 @@ class _WorkerSession:
         return self._plan
 
 
+class _PosixManagerLossWatch:
+    """Cooperative crash cleanup, not kernel containment or detachment denial."""
+
+    def __init__(self, stream: BinaryIO, parent_pid: int):
+        import select
+
+        descriptor = stream.fileno()
+        own_pid = os.getpid()
+        if (not stat.S_ISFIFO(os.fstat(descriptor).st_mode)
+                or os.getpgrp() != own_pid or os.getsid(0) != own_pid):
+            raise GoV1Error(CODE_CONTROL_UNAVAILABLE, "manager-loss watch requires a private session and pipe")
+        self._stop = threading.Event()
+        poller = select.poll()
+        poller.register(descriptor, select.POLLHUP | select.POLLERR | select.POLLNVAL)
+
+        def watch() -> None:
+            while not self._stop.wait(0.02):
+                try:
+                    lost = os.getppid() != parent_pid
+                    if not lost:
+                        # HUP observes writer closure without consuming bytes or
+                        # racing the protocol reader over available-byte counts.
+                        lost = bool(poller.poll(0))
+                    if not lost:
+                        continue
+                except OSError:
+                    # Losing observation must not allow Go to continue.
+                    pass
+                os.killpg(own_pid, signal.SIGKILL)
+                return
+
+        self._thread = threading.Thread(target=watch, daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop.set()
+        self._thread.join()
+
+
 def run_worker(
     input_stream: BinaryIO | None = None,
     output_stream: BinaryIO | None = None,
@@ -4834,6 +4906,11 @@ def run_worker(
         runtime_proof=startup,
         launch_context=launch_context,
     )
+    watch = (
+        _PosixManagerLossWatch(actual_input, launch_context.parent_pid)
+        if runtime_proof is None and sys.platform in {"darwin", "linux"}
+        else None
+    )
     try:
         session.run()
     except BaseException as exc:
@@ -4860,6 +4937,9 @@ def run_worker(
         except BaseException:
             pass
         return 3
+    finally:
+        if watch is not None:
+            watch.close()
     return 0
 
 
@@ -5099,13 +5179,16 @@ def probe_native_controls(
     selected_platform = (
         inventory_platform() if _platform is None else _platform
     )
-    records = _NATIVE_CONTROL_PLATFORMS.get(selected_platform)
+    records = _control_records(selected_platform)
     if records is None:
         raise GoV1Error(
             CODE_CONTROL_UNAVAILABLE,
             "the native-control inventory has no record for this host",
         )
-    probe = _native_probe or _probe_native_control
+    probe = _native_probe or (
+        _probe_linux_control if selected_platform == PLATFORM_LINUX
+        else _probe_native_control
+    )
     result: list[ControlProbe] = []
     for name in NATIVE_CONTROL_INVENTORY:
         record = records[name]
@@ -5154,7 +5237,7 @@ def _validate_probe_set(
     platform: str,
     probes: Sequence[ControlProbe],
 ) -> None:
-    records = _NATIVE_CONTROL_PLATFORMS.get(platform)
+    records = _control_records(platform)
     if records is None or len(probes) != len(NATIVE_CONTROL_INVENTORY):
         raise GoV1Error(
             CODE_CAPABILITY_EVIDENCE_INVALID,
@@ -5281,6 +5364,24 @@ def _probe_macos_control(name: str, limits: ResourceLimits) -> bool:
             os.close(read_fd)
             os.close(write_fd)
     raise ValueError(f"no macOS mechanism for inventory control {name!r}")
+
+
+def _probe_linux_control(name: str, limits: ResourceLimits) -> bool:
+    if sys.platform != "linux":
+        raise OSError("Linux controls require a native Linux host")
+    if name in (CONTROL_ACTIVE_PROCESS_COUNT_LIMIT, CONTROL_AGGREGATE_MEMORY_LIMIT):
+        # This adapter owns only a session/group, never a delegated cgroup.
+        os.killpg(os.getpgrp(), 0)
+        return False
+    if name == CONTROL_INHERITED_HANDLE_RESTRICTION:
+        with _WORKER_LAUNCH_LOCK:
+            capability = _PreparedWorkerLaunch(PLATFORM_LINUX)
+            try:
+                os.set_inheritable(capability._read_fd, False)
+                return not os.get_inheritable(capability._read_fd)
+            finally:
+                capability.close_parent_copy()
+    return _probe_macos_control(name, limits)
 
 
 def _wanted_file_limit(limits: ResourceLimits) -> int:
@@ -5570,7 +5671,7 @@ class _NativeControlDomain:
         self.job_handle = 0
         self.file_limit = 0
         self.launch_secret = b""
-        if platform == PLATFORM_MACOS:
+        if platform in _POSIX_CONTROL_PLATFORMS:
             if CONTROL_PER_FILE_SIZE_LIMIT in self.controls:
                 self.file_limit = _wanted_file_limit(limits)
         elif platform == PLATFORM_WINDOWS:
@@ -5621,7 +5722,7 @@ class _NativeControlDomain:
                 capability = _PreparedWorkerLaunch(self.platform)
                 capability.add_popen_options(kwargs)
                 try:
-                    if self.platform == PLATFORM_MACOS:
+                    if self.platform in _POSIX_CONTROL_PLATFORMS:
                         kwargs["start_new_session"] = (
                             CONTROL_DESCENDANT_DOMAIN_TERMINATION
                             in self.controls
@@ -5673,15 +5774,21 @@ class _NativeControlDomain:
                     resource.RLIMIT_FSIZE,
                     (self.file_limit, previous[1]),
                 )
+                if resource.getrlimit(resource.RLIMIT_FSIZE) != (self.file_limit, previous[1]):
+                    raise OSError("worker RLIMIT_FSIZE installation did not persist")
                 process = subprocess.Popen(
                     tuple(argv),
                     **cast(Any, dict(kwargs)),
                 )
             except BaseException:
                 resource.setrlimit(resource.RLIMIT_FSIZE, previous)
+                if resource.getrlimit(resource.RLIMIT_FSIZE) != previous:
+                    raise GoV1Error(CODE_CONTROL_UNAVAILABLE, "manager RLIMIT_FSIZE rollback did not persist")
                 raise
             try:
                 resource.setrlimit(resource.RLIMIT_FSIZE, previous)
+                if resource.getrlimit(resource.RLIMIT_FSIZE) != previous:
+                    raise OSError("manager RLIMIT_FSIZE restoration did not persist")
             except BaseException as exc:
                 process.kill()
                 process.wait()
@@ -5722,6 +5829,12 @@ class _NativeControlDomain:
         self,
         process: subprocess.Popen[bytes] | None,
     ) -> None:
+        if self.terminated:
+            return
+        if self.platform == PLATFORM_LINUX and process is not None:
+            self._terminate_linux(process)
+            self.terminated = True
+            return
         failure: BaseException | None = None
         if self.platform == PLATFORM_WINDOWS and self.job_handle:
             try:
@@ -5830,6 +5943,50 @@ class _NativeControlDomain:
             ) from failure
         self.terminated = True
 
+    def _terminate_linux(self, process: subprocess.Popen[bytes]) -> None:
+        # Keep the direct child unreaped until the last group signal. A zombie
+        # leader pins the numerical PGID; no signal is sent after reaping it.
+        failure: BaseException | None = None
+        try:
+            if process.returncode is not None:
+                # Another path already reaped it: never signal a reusable PID.
+                try:
+                    os.killpg(process.pid, 0)
+                except ProcessLookupError:
+                    return
+                raise OSError("Linux worker was reaped before domain teardown")
+            os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            if os.getpgid(process.pid) != process.pid or os.getsid(process.pid) != process.pid:
+                raise OSError("Linux worker no longer anchors its private session")
+            os.killpg(process.pid, signal.SIGKILL)
+        except BaseException as exc:
+            failure = exc
+        try:
+            process.wait(timeout=_WORKER_SHUTDOWN_GRACE)
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+        if failure is None:
+            deadline = time.monotonic() + _WORKER_SHUTDOWN_GRACE
+            while True:
+                try:
+                    os.killpg(process.pid, 0)
+                except ProcessLookupError:
+                    break
+                except OSError as exc:
+                    failure = exc
+                    break
+                if time.monotonic() >= deadline:
+                    failure = TimeoutError("Linux worker group did not become absent after reaping")
+                    break
+                time.sleep(0.005)
+        if failure is not None:
+            raise GoV1Error(
+                CODE_CONTROL_UNAVAILABLE,
+                "cannot prove complete worker-domain termination and join: "
+                f"{type(failure).__name__}: {failure}",
+            ) from failure
+
     def close(self) -> None:
         self.launch_secret = b""
         if self.job_handle:
@@ -5933,7 +6090,7 @@ def _indispensable_worker_environment(
         "PYTHONPATH": os.fspath(site_root),
         "PYTHONPYCACHEPREFIX": os.fspath(worker_cache),
     }
-    if platform == PLATFORM_MACOS:
+    if platform in _POSIX_CONTROL_PLATFORMS:
         # The hardened worker cannot consult the host's account database to
         # resolve Path.home(); bind pathlib to the existing private empty root.
         result["HOME"] = os.fspath(worker_cache)
@@ -5985,9 +6142,9 @@ def _observe_native_controls(
         if probe.availability == AVAILABILITY_UNAVAILABLE:
             continue
         name = probe.name
-        if platform == PLATFORM_MACOS:
+        if platform in _POSIX_CONTROL_PLATFORMS:
             if name == CONTROL_DESCENDANT_DOMAIN_TERMINATION:
-                if os.getpgid(0) != os.getpid():
+                if os.getpgid(0) != os.getpid() or os.getsid(0) != os.getpid():
                     raise GoV1Error(
                         CODE_CAPABILITY_EVIDENCE_INVALID,
                         "worker is not leader of its private process group",
