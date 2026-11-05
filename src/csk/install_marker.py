@@ -1661,7 +1661,7 @@ def validate_attestation_evidence(
     """
 
     try:
-        raw = evidence_path.read_bytes()
+        raw = protocol_json.read_bytes(evidence_path)
     except FileNotFoundError as exc:
         raise InstallMarkerError(
             "attestation_evidence_missing",
@@ -1893,7 +1893,7 @@ def evaluate_marker_status(marker_path: Path, plan: MarkerPlan) -> MarkerStatusV
     """
 
     try:
-        raw = marker_path.read_bytes()
+        raw = protocol_json.read_bytes(marker_path)
     except FileNotFoundError:
         return MarkerStatusVerdict(False, (), "install marker is missing")
     except OSError as exc:

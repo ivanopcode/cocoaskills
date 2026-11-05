@@ -250,7 +250,7 @@ def system_config_path() -> Path | None:
 def load_config(path: Path | None = None, *, quiet: bool = False) -> GlobalConfig:
     resolved = path or config_path()
     try:
-        user_data = protocol_json.loads(resolved.read_bytes())
+        user_data = protocol_json.loads(protocol_json.read_bytes(resolved))
     except FileNotFoundError as exc:
         raise ConfigError(f"Global config not found: {resolved}") from exc
     except protocol_json.ProtocolJSONError as exc:
@@ -261,7 +261,7 @@ def load_config(path: Path | None = None, *, quiet: bool = False) -> GlobalConfi
     system_path = system_config_path()
     if system_path is not None:
         try:
-            system_data = protocol_json.loads(system_path.read_bytes())
+            system_data = protocol_json.loads(protocol_json.read_bytes(system_path))
         except FileNotFoundError:
             system_data = None
         except protocol_json.ProtocolJSONError as exc:

@@ -230,7 +230,7 @@ def parse_skill_build(raw: bytes | str) -> SkillBuildDescriptor:
 
 
 def load_skill_build(repository_root: Path) -> SkillBuildDescriptor:
-    return parse_skill_build((repository_root / DESCRIPTOR_NAME).read_bytes())
+    return parse_skill_build(protocol_json.read_bytes((repository_root / DESCRIPTOR_NAME)))
 
 
 def normalize_local_selector(selector: str) -> str:

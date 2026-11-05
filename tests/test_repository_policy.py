@@ -912,14 +912,14 @@ def test_loader_read_error_is_not_treated_as_absent(
     path = tmp_path / "source-policy.json"
     path.write_bytes(json.dumps(_document()).encode("utf-8"))
     assert policy.load_policy(path) is not None
-    original_read_bytes = Path.read_bytes
+    original_open = Path.open
 
-    def deny_read(candidate: Path) -> bytes:
+    def deny_read(candidate: Path, *args, **kwargs):
         if candidate == path:
             raise failure_type("injected policy read failure")
-        return original_read_bytes(candidate)
+        return original_open(candidate, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", deny_read)
+    monkeypatch.setattr(Path, "open", deny_read)
     with pytest.raises(policy.RepositoryPolicyError) as excinfo:
         policy.load_policy(path)
     assert excinfo.value.code == policy.CODE_POLICY_INVALID

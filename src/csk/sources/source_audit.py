@@ -530,7 +530,7 @@ def record_source_audit(
 def _read_report_bytes(csk_home: Path, content_sha256: str) -> bytes:
     path = source_audit_report_path(csk_home, content_sha256)
     try:
-        return path.read_bytes()
+        return protocol_json.read_bytes(path)
     except FileNotFoundError as exc:
         # A dangling link reads as ENOENT but the entry exists: a failure,
         # never an absence.

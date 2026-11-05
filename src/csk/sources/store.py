@@ -244,7 +244,11 @@ def _read_record(entry: Path, skill: str, package: str) -> _ValidatedRecord:
             # only outcome is a read failure, never a retry, never absence.
             try:
                 with handle:
-                    raw = handle.read()
+                    if os.fstat(handle.fileno()).st_size > protocol_json.MAX_INPUT_BYTES:
+                        raise protocol_json.ProtocolJSONSizeError("JSON input exceeds maximum size")
+                    raw = handle.read(protocol_json.MAX_INPUT_BYTES + 1)
+                    if len(raw) > protocol_json.MAX_INPUT_BYTES:
+                        raise protocol_json.ProtocolJSONSizeError("JSON input exceeds maximum size")
             except _FS_ERRORS as exc:
                 raise _StoreUnavailable(f"{subject} cannot be read: {exc}") from exc
             break
@@ -255,7 +259,7 @@ def _read_record(entry: Path, skill: str, package: str) -> _ValidatedRecord:
     except UnicodeError as exc:
         raise _StoreUnavailable(f"{subject} is not valid UTF-8") from exc
     try:
-        record: object = json.loads(text)
+        record: object = protocol_json.loads_compatible(text)
     except ValueError as exc:
         raise _StoreUnavailable(f"{subject} is not valid JSON") from exc
     if not isinstance(record, dict) or set(record) != set(_RECORD_KEYS):

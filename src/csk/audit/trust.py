@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .. import protocol_json
+
 import json
 import re
 import stat
@@ -57,12 +59,12 @@ def load_cached_verdict(
 
     path = verdict_path(csk_home, content_sha256, backend, model, prompt_version, ruleset_version)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = protocol_json.loads_compatible(protocol_json.read_bytes(path))
     except FileNotFoundError:
         return None
     except OSError as exc:
         raise TrustRecordError(CODE_TRUST_UNREADABLE, f"{path}: {exc}") from exc
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (protocol_json.ProtocolJSONError, UnicodeDecodeError):
         return None
     if not isinstance(payload, dict):
         return None
@@ -101,13 +103,13 @@ def load_trust_record(csk_home: Path, content_sha256: str) -> TrustRecord:
 
     path = trust_path(csk_home, content_sha256)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = protocol_json.loads_compatible(protocol_json.read_bytes(path))
     except FileNotFoundError:
         _confirm_missing_trust_path(path)
         return TrustRecord()
     except OSError as exc:
         raise TrustRecordError(CODE_TRUST_UNREADABLE, f"{path}: {exc}") from exc
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (protocol_json.ProtocolJSONError, UnicodeDecodeError):
         return TrustRecord()
     if not isinstance(payload, dict):
         return TrustRecord()
