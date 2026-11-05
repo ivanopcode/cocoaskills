@@ -1,0 +1,22 @@
+usage: csk config build-ssh [-h] {add,doctor,list,remove} ...
+
+positional arguments:
+  {add,doctor,list,remove}
+    add                 Add or replace one credential scope.
+    doctor              Inspect local SSH metadata and print operator setup
+                        steps (read-only).
+    list                List configured credential scopes.
+    remove              Remove one credential scope.
+
+options:
+  -h, --help            show this help message and exit
+
+A scope is a canonical-identity prefix (host or host/namespace);
+the longest matching scope selects the credentials for a build
+repository. Flags and CSK_BUILD_SSH_* still win over every scope.
+
+Examples:
+  csk config build-ssh add gitlab.example.com/portals/infra \
+      --agent auto --identity ~/.ssh/work.pub
+  csk config build-ssh list
+  csk config build-ssh remove gitlab.example.com/portals/infra

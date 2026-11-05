@@ -1,0 +1,12 @@
+usage: csk config build-ssh doctor [-h] [--all-os] [--identity PATH]
+                                   [--agent SOCKET]
+                                   [scope]
+
+positional arguments:
+  scope            scope or canonical repository identity
+
+options:
+  -h, --help       show this help message and exit
+  --all-os         include macOS, Linux and Windows steps
+  --identity PATH  inspect this identity instead of the configured selection
+  --agent SOCKET   inspect this agent socket (or auto)
