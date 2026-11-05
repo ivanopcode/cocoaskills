@@ -194,19 +194,29 @@ def test_real_key_metadata(tmp_path, passphrase, state):
     assert result.key_kind == 'ED25519'
 
 
-# Real subprocess output parsing: malformed provider records must stay unknown,
+# Real subprocess output parsing: malformed or duplicate provider records stay unknown,
 # while a valid absent provider refuses and a built-in provider remains unknown.
 # These metadata stubs never request a signature and do not model a real token.
 @pytest.mark.skipif(build_ssh.os.name == 'nt', reason='POSIX executable metadata stubs')
-@pytest.mark.parametrize('settings,state', [
-    ('securitykeyprovider \n', 'unknown'),
-    ('securitykeyprovider\n', 'unknown'),
-    ('securitykeyprovider\t \n', 'unknown'),
-    ('unfamiliar setting\n', 'unknown'),
-    ('securitykeyprovider internal\n', 'unknown'),
-    ('securitykeyprovider none\n', 'unusable'),
+@pytest.mark.parametrize('settings,state,provider', [
+    ('securitykeyprovider \n', 'unknown', 'unknown'),
+    ('securitykeyprovider\n', 'unknown', 'unknown'),
+    ('securitykeyprovider\t \n', 'unknown', 'unknown'),
+    ('unfamiliar setting\n', 'unknown', 'unknown'),
+    ('securitykeyprovider internal\nsecuritykeyprovider none\n', 'unknown', 'unknown'),
+    ('securitykeyprovider none\nsecuritykeyprovider internal\n', 'unknown', 'unknown'),
+    ('securitykeyprovider unfamiliar\nsecuritykeyprovider none\n', 'unknown', 'unknown'),
+    ('securitykeyprovider none\nsecuritykeyprovider unfamiliar\n', 'unknown', 'unknown'),
+    ('securitykeyprovider internal\u2028securitykeyprovider none\n', 'unknown', 'unknown'),
+    ('securitykeyprovider none\u2028securitykeyprovider internal\n', 'unknown', 'unknown'),
+    ('securitykeyprovider none\nsecuritykeyprovider none\n', 'unknown', 'unknown'),
+    ('securitykeyprovider internal extra\nsecuritykeyprovider none\n', 'unknown', 'unknown'),
+    ('securitykeyprovider none\x00\n', 'unknown', 'unknown'),
+    ('securitykeyprovider internal\n', 'unknown', 'internal'),
+    ('securitykeyprovider none\n', 'unusable', 'none'),
+    ('securitykeyprovider none\r\n', 'unusable', 'none'),
 ])
-def test_provider_output_with_real_metadata_processes(tmp_path, monkeypatch, settings, state):
+def test_provider_output_with_real_metadata_processes(tmp_path, monkeypatch, settings, state, provider):
     import sys
     tools = tmp_path / 'tools'
     tools.mkdir()
@@ -226,22 +236,28 @@ def test_provider_output_with_real_metadata_processes(tmp_path, monkeypatch, set
     identity.touch()
     result = build_ssh.inspect_key(ssh, identity)
     assert result.state == state
-    assert result.provider == ('none' if state == 'unusable' else 'internal' if 'internal' in settings else 'unknown')
+    assert result.provider == provider
+    original_resolver = build_ssh.resolve_tool
+    def resolve(name, **kwargs):
+        return str(ssh) if name == 'ssh' and 'executable' not in kwargs else original_resolver(name, **kwargs)
+    monkeypatch.setattr(build_ssh, 'resolve_tool', resolve)
+    text = build_ssh.doctor((), identity=str(identity))
+    assert f'Local state: {state}' in text
+    creds = git_admission.OperatorSSHCredentials(identity=identity)
+    monkeypatch.setattr(git_admission, 'validate_operator_ssh_credentials', lambda c: c)
+    tool = git_admission.GitTool(Path('/git'), Path('/exec'), (), ssh=ssh, ssh_credentials=creds)
+    source = parse_repository_source('git@example.test:group/repo.git')
     if state == 'unusable':
         assert result.reason == 'SSH has no configured security-key provider in this lane'
+        with pytest.raises(git_admission.GitAdmissionError, match='build_repository_ssh_credential_unusable') as error:
+            git_admission._preflight_ssh(source, tool)
+        assert result.reason in str(error.value)
     else:
         # The same parser result reaches doctor and preflight without crashing
         # or refusing. No network/wrapper is executed in this focused control.
-        original_resolver = build_ssh.resolve_tool
-        def resolve(name, **kwargs):
-            return str(ssh) if name == 'ssh' and 'executable' not in kwargs else original_resolver(name, **kwargs)
-        monkeypatch.setattr(build_ssh, 'resolve_tool', resolve)
-        text = build_ssh.doctor((), identity=str(identity))
-        assert 'Local state: unknown' in text
-        creds = git_admission.OperatorSSHCredentials(identity=identity)
-        monkeypatch.setattr(git_admission, 'validate_operator_ssh_credentials', lambda c: c)
-        tool = git_admission.GitTool(Path('/git'), Path('/exec'), (), ssh=ssh, ssh_credentials=creds)
-        git_admission._preflight_ssh(parse_repository_source('git@example.test:group/repo.git'), tool)
+        if provider == 'unknown':
+            assert result.reason == 'SSH security-key provider output is unfamiliar'
+        git_admission._preflight_ssh(source, tool)
 
 
 # Only recognized OpenSSH evidence of ignored private-file permissions refuses.
