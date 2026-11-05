@@ -217,3 +217,19 @@ def test_adjacent_load_string_table():
     with pytest.raises(go_v1.GoV1Error) as error:
         elf.parse_elf(bytes(data))
     assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+
+
+# Loader-altering tags cannot hide an unmodeled Python provider. BIND_NOW is
+# the nearby allowed control; this does not test all glibc dynamic tags.
+@pytest.mark.parametrize('tag,value', [(0x7fffffff, 1), (0x6ffffefc, 1), (30, 2), (0x6ffffffb, 0x800)])
+def test_loader_scope_flags(tag, value):
+    data = bytearray(image())
+    struct.pack_into('<Q', data, 120+32, 112)
+    struct.pack_into('<Q', data, 120+40, 112)
+    struct.pack_into('<qQ', data, 336, 30, 8)
+    struct.pack_into('<qQ', data, 352, 0, 0)
+    assert elf.parse_elf(bytes(data)).defines_python
+    struct.pack_into('<qQ', data, 336, tag, value)
+    with pytest.raises(go_v1.GoV1Error) as error:
+        elf.parse_elf(bytes(data))
+    assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
