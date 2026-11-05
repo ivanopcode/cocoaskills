@@ -369,7 +369,7 @@ def test_skipped_close_plant_and_next_pass_guard(tmp_path, monkeypatch):
 def test_unreaped_worker_guard(tmp_path):
     pipeline._PASS_STATE.workers_reaped = False
     events = []
-    with pytest.raises(pipeline.ExternalBuildError, match='previous acquisition pass is not closed or reaped'):
+    with pytest.raises(pipeline.ExternalBuildError, match='previous build worker teardown is unconfirmed'):
         pipeline.run_pipelines(_requests(tmp_path, events, _Compiler(events)))
     assert events == []
 
@@ -459,7 +459,7 @@ def test_production_compiler_reaping_guard(tmp_path, monkeypatch, fail):
     assert state.workers_reaped is not fail
     events = []
     if fail:
-        with pytest.raises(pipeline.ExternalBuildError, match='previous acquisition pass is not closed or reaped'):
+        with pytest.raises(pipeline.ExternalBuildError, match='previous build worker teardown is unconfirmed'):
             pipeline.run_pipelines(_requests(tmp_path / 'next', events, _Compiler(events)))
         assert events == []
     else:
@@ -503,3 +503,120 @@ def test_unclosed_pass_refuses_before_assurance(tmp_path, csk_home, skills_root,
         results = installer.install(cfg)
     assert all('previous acquisition pass is not closed or reaped' in ' '.join(r.errors) for r in results)
     assert calls == []
+
+# Real install scheduling/private build call sites must prevent a second
+# acquisition after an unconfirmed private worker teardown. The paired success
+# joins the child and must permit both projects. Native Go is not qualified.
+@pytest.mark.parametrize('lane', ['project', 'global', 'schema2', 'schema3', 'repair2', 'repair3'])
+@pytest.mark.parametrize('teardown_fails', [False, True])
+def test_private_build_end_required_before_next_project(tmp_path, csk_home, skills_root, monkeypatch, lane, teardown_fails):
+    _private_lifetime(tmp_path, csk_home, skills_root, monkeypatch, lane, teardown_fails)
+
+
+def _private_lifetime(tmp_path, csk_home, skills_root, monkeypatch, lane, teardown_fails, bypass=False):
+    import subprocess
+    import sys
+    from csk import installer, global_install, config
+    from csk.builds import go_v1
+    from csk.sources import publish
+    from conftest import make_config, make_project, make_skill_repo, write_skillfile
+    from test_installer_transactions import _build_skill_files, _install_fake_build_pipeline
+    schema = int(lane[-1]) if lane.startswith(('schema', 'repair')) else 1
+    monkeypatch.setattr(pipeline, '_PASS_STATE', pipeline.AcquisitionPassState())
+    first = make_project(tmp_path)
+    files = _build_skill_files('tool')
+    files['SKILL.md'] = '---\nname: built\ndescription: Review worker lifetime fixture\n---\n\n# Built\n'
+    make_skill_repo(skills_root, 'built', files, tag='v1')
+    doc = {'schema_version': schema, 'skills': [{'name': 'built', 'tag': 'v1'}]}
+    if schema > 1:
+        doc = {'schema_version': schema, 'sources': {'local': {'path': str(skills_root)}},
+               'skills': [{'name': 'built', 'from': 'local', 'directory': 'built'}]}
+    write_skillfile(first, doc)
+    second = make_project(tmp_path / 'second')
+    write_skillfile(second, {'schema_version': 1, 'skills': []})
+    cfg = replace(make_config(csk_home, skills_root, first),
+                  experimental=config.ExperimentalConfig(skillfile_sources=True),
+                  audit=config.AuditConfig(enabled=True),
+                  disable_builtin_registries=True)
+    cfg.projects['second'] = replace(cfg.projects['app'], alias='second', path=second)
+    events = []
+    children = []
+    acquisitions = []
+    _install_fake_build_pipeline(monkeypatch, events=events)
+    fake_build = go_v1.build
+    def build(request):
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)' if teardown_fails else 'pass'])
+        children.append(child)
+        if teardown_fails:
+            raise go_v1.GoV1Error(go_v1.CODE_CONTROL_UNAVAILABLE, 'worker-domain teardown did not complete (review fault)')
+        assert child.wait(timeout=10) == 0
+        return fake_build(request)
+    monkeypatch.setattr(go_v1, 'build', build)
+    def external(*args, **kwargs):
+        request = _request(tmp_path / ('external-' + str(len(acquisitions))), pipeline.Operation.INSTALL, events, _Compiler(events))
+        def acquire():
+            acquisitions.append({'live': [p.pid for p in children if p.poll() is None],
+                                 'closed': pipeline._PASS_STATE.closed,
+                                 'workers_reaped': pipeline._PASS_STATE.workers_reaped})
+            return _snapshot()
+        pipeline.run_pipeline(replace(request, acquire=acquire))
+        return {}, []
+    monkeypatch.setattr(installer, '_publish_external_builds', external)
+    def schema_external(*args, **kwargs):
+        external(*args, **kwargs)
+        return publish.empty_build_outputs(), []
+    monkeypatch.setattr(publish, 'publish_schema2_external_builds', schema_external)
+    if bypass:
+        monkeypatch.setattr(pipeline, 'build_go_v1', lambda request: go_v1.build(request))
+    try:
+        if lane.startswith('repair'):
+            # Populate the lock with a successful build, then corrupt its live
+            # output and clear only this fixture's artifact cache to force repair.
+            original_build = go_v1.build
+            monkeypatch.setattr(go_v1, 'build', fake_build)
+            initial = installer.install(cfg, alias='app')
+            assert all(not r.failed for r in initial), [r.errors for r in initial]
+            lock = (first / 'Skillfile.lock.json').read_bytes()
+            import shutil
+            import os
+            cache = csk_home / 'builds'
+            for directory, dirs, files in os.walk(cache, followlinks=False):
+                Path(directory).chmod(0o700)
+            shutil.rmtree(cache)
+
+            for path in first.rglob('tool'):
+                if path.is_file():
+                    path.write_bytes(b'broken')
+            monkeypatch.setattr(go_v1, 'build', original_build)
+            acquisitions.clear()
+        if lane == 'global':
+            global_install.init(csk_home)
+            import json
+            global_install.global_skillfile(csk_home).write_text(json.dumps(doc))
+            results = [global_install.install(cfg), *installer.install(cfg, alias='second')]
+        else:
+            results = installer.install(cfg)
+        if lane.startswith('repair'):
+            assert (first / 'Skillfile.lock.json').read_bytes() == lock
+        assert len(children) == 1, [r.errors for r in results]
+        if teardown_fails:
+            assert results[0].failed and 'worker-domain teardown did not complete' in ' '.join(results[0].errors)
+            assert len(acquisitions) == 1, 'next project acquired after unconfirmed private worker teardown'
+            assert results[1].failed
+            assert 'previous build worker teardown is unconfirmed' in ' '.join(results[1].errors)
+            assert go_v1.CODE_CONTROL_UNAVAILABLE in ' '.join(results[1].errors)
+        else:
+            assert all(not r.failed for r in results), [r.errors for r in results]
+            assert len(acquisitions) == 2 and not any(a['live'] for a in acquisitions)
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=10)
+
+
+# Bypassing the shared lifecycle guard must expose the reviewer's live-child
+# witness; this plant fails on the intended second-acquisition assertion.
+def test_private_lifetime_checker_rejects_bypass(tmp_path, csk_home, skills_root, monkeypatch):
+    with pytest.raises(AssertionError, match='next project acquired after unconfirmed private worker teardown'):
+        _private_lifetime(tmp_path, csk_home, skills_root, monkeypatch, 'project', True, bypass=True)
