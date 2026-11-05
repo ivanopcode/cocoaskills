@@ -556,7 +556,9 @@ def test_real_transport_client_lifecycle(recorder, tmp_path):
             child.kill()
         child.wait()
         actions.append("terminated")
-    domain = SimpleNamespace(terminate=terminate, close=lambda: actions.append("closed"))
+    domain = SimpleNamespace(terminate=terminate, close=lambda: actions.append("closed"),
+                             platform={"linux": go_v1.PLATFORM_LINUX,
+                                       "darwin": go_v1.PLATFORM_MACOS}.get(sys.platform, go_v1.PLATFORM_WINDOWS))
     identity = SimpleNamespace(verify=lambda: None)
     plan = SimpleNamespace(executable=identity, process_identity=identity,
                            worker_cache=cache, build_argv=("build",),

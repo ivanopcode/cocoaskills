@@ -9,14 +9,18 @@ mode = sys.argv[2]
 role = sys.argv[3] if len(sys.argv) > 3 else 'fixture'
 
 def write(name, value):
-    (root / name).write_text(json.dumps(value))
+    temporary = root / f'{name}.{os.getpid()}.tmp'
+    temporary.write_text(json.dumps(value))
+    temporary.replace(root / name)
 
 def live(pid):
     try:
         if sys.platform == 'linux':
             return Path(f'/proc/{pid}/stat').read_text().split(') ')[1][0] != 'Z'
-        os.kill(pid, 0)
-        return True
+        result = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)],
+                                capture_output=True, text=True, check=False)
+        status = result.stdout.strip()
+        return bool(status) and not status.startswith('Z')
     except (OSError, ProcessLookupError):
         return False
 

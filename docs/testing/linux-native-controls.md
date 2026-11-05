@@ -25,12 +25,21 @@ group; stronger late-fork cleanup is still required before qualification.
 
 ## Manager death
 
-The POSIX worker watches protocol-pipe hangup without consuming protocol bytes,
-and checks its authenticated parent PID. On loss it kills its own group. This is
-cooperative cleanup: a suspended or independently killed worker cannot run the
-watcher. It does not prevent a descendant from creating another session. No
-PDEATHSIG is installed: a kernel SIGKILL can destroy the watcher before it cleans
-up the group.
+The POSIX worker samples its authenticated parent PID and protocol-pipe hangup.
+A changed parent PID triggers group cleanup on the next scheduled watch iteration.
+Pipe hangup alone starts a five-second grace, because HUP can accompany an
+orderly close while a frame is still queued or buffered. The watch does not read
+protocol bytes and rechecks its stop event before signaling. The manager keeps
+stdin open through orderly worker exit, requires exit status zero on the POSIX
+path, then completes domain teardown and closes stdin. Linux observes orderly
+exit with WNOWAIT so the child still pins its PID until domain teardown.
+
+This is cooperative cleanup: a suspended or independently killed worker cannot
+run the watcher, and there is no scheduler-independent latency guarantee. A
+reader taking longer than the pipe-close grace can still be killed; arbitrary
+stalls are not orderly-shutdown success evidence. A descendant that creates a
+new session escapes the group. No PDEATHSIG is installed: a kernel SIGKILL can
+destroy the watcher before it cleans up the group.
 
 Native synthetic-build measurements (one run per comparison) used real manager
 SIGKILL, the existing session/file-limit launch path, and one ordinary plus one
@@ -51,8 +60,12 @@ to a stronger guarantee, not a universal outcome. Linux PDEATHSIG additionally
 refers to the creating parent thread, is cleared in a forked child, and can reset
 on privileged exec. A separate Linux probe confirmed that creator-thread exit killed the worker
 while the manager process was still alive; both descendants survived. Privileged
-exec was not measured. The implemented watcher was measured separately on Linux and is covered
-by native POSIX crash regression tests.
+exec was not measured. The implemented watcher is covered by native POSIX crash regression tests.
+After the shutdown correction, a real native Go compiler held in flight by
+bounded diagnostic-pipe backpressure reproduced the baseline/EOF contrast on
+macOS and Linux x86-64: baseline left the compiler live, the watcher killed the
+worker and compiler, and a setsid descendant survived. These are one-run control
+measurements, not complete installed-manager Go builds.
 
 Windows code creates a noninheritable Job, sets kill-on-close for descendant
 termination, assigns the suspended worker, then resumes it. Last Job-handle close
@@ -71,11 +84,23 @@ or every crash point in an installed-manager build. Private staging may remain
 following manager death; it is not a published artifact.
 
 Run `python -m pytest tests/test_linux_native_controls.py -q` on native Linux.
-The fixture uses a scoped Linux subreaper only in its own test process and reaps
-its descendants. It writes only under pytest's temporary directory. No cgroup,
+The fixture atomically publishes readiness/PID records and treats zombie status
+as dead on both macOS and Linux. It uses a scoped Linux subreaper only in its own
+test process and reaps its descendants; macOS orphan reaping remains OS-owned. It writes only under pytest's temporary directory. No cgroup,
 shared UID limit, privilege, or system configuration is changed. The baseline
 crash case is a control plant: without the watcher, the ordinary descendant must
-survive. The file-limit noop plant must prevent worker creation.
+survive. The file-limit noop plant must prevent worker creation. An inheritable-allocation
+plant must fail the descriptor probe without the probe repairing it. Aggregate
+unavailability is an adapter policy (no private aggregate domain is acquired),
+not a measurement that the host has no such facility.
+
+Orderly-watch tests cover queued input with an open writer, a closed writer with
+a reader doing one second of artificial work, and a reader blocked awaiting the
+frame. Each case repeats three times per file run and requires the full frame
+and exit zero. A stop-during-observation plant suppresses signaling; a shortened
+grace control still kills a permanently busy worker after channel loss. Startup
+refusal tests require a framed diagnostic and status 3. These bounded controls
+do not prove successful shutdown under arbitrary scheduling delay.
 
 Remaining qualification: full identity-authenticated list/build; fork-near-teardown
 cleanup; worker-loss and scheduler-stall bounds; all restoration-error precedence
