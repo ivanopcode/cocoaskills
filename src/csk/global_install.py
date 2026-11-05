@@ -1283,11 +1283,11 @@ def update(
                 git_ops.fetch_repo(repo)
                 result.messages.append(f"fetched {terminal_text(decl.source)}")
             except Exception as exc:  # noqa: BLE001 - report every per-source fetch failure
-                result.errors.append(f"fetch failed {decl.source}: {exc}")
+                result.errors.append(f"fetch failed {terminal_text(decl.source)}: {installer.failure_text(exc)}")
         return result
     except Exception as exc:  # noqa: BLE001 - global update boundary reports failures
         result.status = "failed"
-        result.errors.append(str(exc))
+        result.errors.append(terminal_text(exc))
         return result
 
 
@@ -1317,7 +1317,7 @@ def _build_plans(
             )
         except Exception as exc:  # noqa: BLE001 - preserve per-source diagnostics
             result.errors.append(
-                f"{decl.name}: {installer.failure_text(exc, verbose=options.verbose)}"
+                f"{terminal_text(decl.name)}: {installer.failure_text(exc, verbose=options.verbose)}"
             )
     return plans
 
@@ -1358,7 +1358,7 @@ def _build_nodes(
             try:
                 isolated = resolve([decl], check_system_commands=False)
             except Exception as exc:  # noqa: BLE001 - preserve per-source diagnostics
-                isolated_errors.append(f"{decl.name}: {exc}")
+                isolated_errors.append(f"{terminal_text(decl.name)}: {installer.failure_text(exc)}")
             else:
                 available.append(decl)
                 readable_nodes.update(
@@ -1374,7 +1374,7 @@ def _build_nodes(
             [(node.name, node.spec) for node in readable_nodes.values()]
         )
         if missing:
-            result.errors.append(closure.format_missing_system_commands(missing))
+            result.errors.append(installer.failure_text(closure.MissingSystemCommandsError(missing)))
             return []
         if not available:
             return []
