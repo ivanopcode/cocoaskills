@@ -333,6 +333,8 @@ def inspect_key(
         r"/(?:private/)?tmp/com[.]apple[.]launchd[.][^/]+/Listeners", str(agent)
     ):
         return replace(facts, state="unusable", reason="macOS system agent masks this USB security key and cannot sign with it")
+    if security_key and provider in {"$SSH_SK_PROVIDER", "none"}:
+        return replace(facts, state="unusable", reason="SSH has no configured security-key provider in this lane")
     if loaded:
         return replace(facts, state="unknown", reason="key is listed in the agent; signing ability is unverified")
     if agent is not None and loaded is None:
@@ -341,8 +343,6 @@ def inspect_key(
         return replace(facts, state="unusable", reason="a public key alone cannot sign and no matching agent key is available")
     if passphrase:
         return replace(facts, state="unusable", reason="key has a passphrase and no matching agent key is available; SSH prompts are disabled")
-    if security_key and provider in {"$SSH_SK_PROVIDER", "none"}:
-        return replace(facts, state="unusable", reason="SSH has no configured security-key provider in this lane")
     return replace(facts, state="unknown", reason="local metadata does not establish that the key is unusable")
 
 
