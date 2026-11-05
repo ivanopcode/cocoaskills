@@ -4520,11 +4520,17 @@ _CURRENT_GNUTLS_REFUSAL = (
     [
         (_CURRENT_CURL_REFUSAL, "connection-refused"),
         (_CURRENT_GNUTLS_REFUSAL, "tls"),
-        (_CURRENT_CURL_REFUSAL.replace("Could not", "Couldn't"), "connection-refused"),
-        (_CURRENT_GNUTLS_REFUSAL.replace(
-            "SSL certificate verification failed: certificate signer not trusted.",
-            "server certificate verification failed."
-        ), "tls"),
+        # Captured with the same Git 2.53.0 and extracted Ubuntu libcurl 8.5.0.
+        (
+            "fatal: unable to access 'https://127.0.0.1:41777/kit.git/': "
+            "Failed to connect to 127.0.0.1 port 41777 after 0 ms: Couldn't connect to server\n",
+            "connection-refused",
+        ),
+        (
+            "fatal: unable to access 'https://127.0.0.1:47067/kit.git/': "
+            "server certificate verification failed. CAfile: none CRLfile: none\n",
+            "tls",
+        ),
     ],
 )
 def test_current_and_legacy_curl_transport_frames(stderr: str, expected: str) -> None:
