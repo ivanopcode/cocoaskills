@@ -87,14 +87,18 @@ def test_backend_windows_mixed_case_override_through_launch(tmp_path, monkeypatc
     else:
         cfg=parse_backend_config(kind,{'kind':kind,'oss':True,'local_provider':'ollama'},global_model=None,allow_cloud=False)
         backend=CodexBackend(cfg)
+    # Observe the final Popen boundary through the real bounded capture helper:
+    # allowed mixed-case variables survive, secret overrides never reach a child.
+    import io
     launches=[]
-    def run(argv, **kwargs):
+    def popen(argv, **kwargs):
         launches.append(kwargs['env'])
         data=json.dumps({'schema_version':1,'findings':[]})
         if '--output-last-message' in argv:
             Path(argv[argv.index('--output-last-message')+1]).write_text(data)
-        return subprocess.CompletedProcess(argv,0,data.encode(),b'')
-    monkeypatch.setattr(subprocess,'run',run)
+        return SimpleNamespace(stdin=io.BytesIO(), stdout=io.BytesIO(data.encode()),
+            stderr=io.BytesIO(), returncode=0, wait=lambda **kw: 0, kill=lambda: None)
+    monkeypatch.setattr(subprocess,'Popen',popen)
     if phase=='extract':
         assert backend.extract(_request(),timeout=5)==()
     else:
