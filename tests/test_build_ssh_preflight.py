@@ -25,6 +25,8 @@ from csk.sources import transport
         (False, True, 'matching', True, 'ED25519', 'internal', 'unknown', 'listed'),
         (False, False, None, False, 'ED25519-SK', '$SSH_SK_PROVIDER', 'unusable', 'provider'),
         (False, False, None, False, 'ED25519-SK', 'internal', 'unknown', 'does not establish'),
+        (False, True, 'matching', False, 'ED25519-SK', '$SSH_SK_PROVIDER', 'unusable', 'provider'),
+        (False, True, 'matching', False, 'ED25519-SK', 'internal', 'unknown', 'listed'),
     ],
 )
 def test_key_evidence(monkeypatch, encrypted, agent, listing, public, kind, provider, state, reason):
@@ -54,7 +56,10 @@ def test_probe_failure_and_environment(monkeypatch):
     def run(argv, **kwargs):
         assert kwargs['stdin'] == subprocess.DEVNULL
         assert kwargs['timeout'] == 5
-        assert kwargs['env'] == {'LC_ALL': 'C'}
+        expected = {'LC_ALL': 'C'}
+        if build_ssh.os.name == 'nt' and build_ssh.os.environ.get('SystemRoot'):
+            expected['SystemRoot'] = build_ssh.os.environ['SystemRoot']
+        assert kwargs['env'] == expected
         raise subprocess.TimeoutExpired(argv, 5)
     monkeypatch.setattr(build_ssh, 'resolve_tool', lambda *a, **k: '/tools/ssh-keygen')
     monkeypatch.setattr(subprocess, 'run', run)
@@ -166,6 +171,7 @@ def test_macos_hardware_agent_mask(monkeypatch, socket, state):
 
 # Real OpenSSH metadata probes distinguish a throwaway encrypted key from its
 # plain positive control without a server, terminal, agent or signature.
+# The fixture setup timeout is not a key-generation latency assertion.
 @pytest.mark.parametrize('passphrase,state', [('', 'unknown'), ('fixture-only', 'unusable')])
 def test_real_key_metadata(tmp_path, passphrase, state):
     try:
@@ -174,7 +180,7 @@ def test_real_key_metadata(tmp_path, passphrase, state):
     except FileNotFoundError:
         pytest.skip('matching OpenSSH tools unavailable')
     identity = tmp_path / 'key'
-    subprocess.run([keygen, '-q', '-t', 'ed25519', '-N', passphrase, '-f', str(identity)], check=True, stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+    subprocess.run([keygen, '-q', '-t', 'ed25519', '-N', passphrase, '-f', str(identity)], check=True, stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
     result = build_ssh.inspect_key(ssh, identity)
     assert result.state == state
     assert result.passphrase == bool(passphrase)
