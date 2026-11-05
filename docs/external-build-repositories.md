@@ -265,9 +265,13 @@ Three selections are accepted:
 # Unencrypted key on disk.
 csk install --build-ssh-identity ~/.ssh/id_ed25519
 
-# Agent holds the key, and the public key pins which agent key is offered.
-# Prefer this for passphrase-protected keys.
-csk install --build-ssh-agent --build-ssh-identity ~/.ssh/id_ed25519.pub
+# Prefer the private path with an agent: it pins the loaded key and also
+# permits direct file signing when the key is absent from the agent.
+# A passphrase-protected file still needs a matching loaded agent key.
+csk install --build-ssh-agent --build-ssh-identity ~/.ssh/id_ed25519
+
+# A public-only identity is useful for custom agents; it cannot sign by itself.
+csk install --build-ssh-agent /path/to/agent.sock --build-ssh-identity ~/.ssh/id_ed25519.pub
 
 # Agent only. Every loaded key is offered in turn, so a populated agent can
 # exhaust the server's MaxAuthTries budget before reaching the right one.

@@ -1000,6 +1000,7 @@ usage: csk config build-ssh [-h] {add,doctor,list,remove} ...
 
 * `-h`, `--help`: выводит краткое справочное сообщение.
 * `add`: добавляет или перезаписывает скоуп SSH-кредов.
+* `doctor`: prints read-only local diagnostics and operator setup steps.
 * `list`: выводит список настроенных скоупов SSH-кредов.
 * `remove`: удаляет скоуп SSH-кредов.
 
@@ -1008,9 +1009,9 @@ usage: csk config build-ssh [-h] {add,doctor,list,remove} ...
 **Примеры использования:**
 
 ```bash
-# Скоуп неймспейса: ssh-agent с фиксацией публичного ключа
+# Namespace scope: prefer a private identity with the operator agent
 csk config build-ssh add gitlab.example.com/portals/infra \
-    --agent auto --identity ~/.ssh/work.pub
+    --agent auto --identity ~/.ssh/work
 
 # Скоуп хоста: приватный ключ с диска без агента
 csk config build-ssh add gitlab.example.com --identity ~/.ssh/personal
