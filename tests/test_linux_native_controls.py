@@ -469,6 +469,8 @@ def test_manager_keeps_shutdown_channel_open_and_checks_exit(tmp_path, monkeypat
 import sys
 sys.path.insert(0, sys.argv[1])
 from csk.builds import go_v1 as g
+sys.stdout.buffer.write(b'W')
+sys.stdout.buffer.flush()
 assert g._read_message(sys.stdin.buffer)['kind'] == 'shutdown'
 raise SystemExit(int(sys.argv[2]))
 """
@@ -485,6 +487,9 @@ raise SystemExit(int(sys.argv[2]))
         require_exit(process, platform)
     monkeypatch.setattr(g, "_require_orderly_worker_exit", check)
     try:
+        # Real clients reach teardown only after worker startup/readiness. Do not
+        # charge interpreter imports under host load to the shutdown grace.
+        assert process.stdout.read(1) == b"W"
         if exit_code:
             with pytest.raises(g.GoV1Error, match="did not exit cleanly") as failure:
                 client.teardown()
