@@ -668,6 +668,13 @@ class _SnapshotPath(_SNAPSHOT_PATH_BASE):  # type: ignore[misc, valid-type]
         _ = follow_symlinks
         return self.lstat()
 
+    def _read_bounded_json(self, maximum: int) -> bytes:
+        """Admit immutable captured bytes without opening a host path."""
+        raw = self.read_bytes()
+        if len(raw) > maximum:
+            raise OSError("JSON input exceeds maximum size")
+        return raw
+
     def read_bytes(self) -> bytes:
         """Return captured bytes without dispatching to a path read."""
 

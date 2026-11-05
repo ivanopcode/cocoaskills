@@ -292,15 +292,56 @@ def _check_json_depth(text: str) -> None:
 
 
 
+def _open_regular(path: str, flags: int) -> int:
+    if os.name != "nt":
+        return os.open(path, flags | os.O_NONBLOCK)
+    # Open asynchronously first, reject pipes/devices, then reopen the same
+    # disk object synchronously for the CRT. No path lookup races the check.
+    import ctypes
+    import msvcrt
+    kernel = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32,
+                       ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+    create.restype = ctypes.c_void_p
+    reopen = kernel.ReOpenFile
+    reopen.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32]
+    reopen.restype = ctypes.c_void_p
+    kind = kernel.GetFileType
+    kind.argtypes = [ctypes.c_void_p]
+    kind.restype = ctypes.c_uint32
+    close = kernel.CloseHandle
+    close.argtypes = [ctypes.c_void_p]
+    close.restype = ctypes.c_int
+    handle = create(path, 0x80000000, 7, None, 3, 0x40000000, None)
+    invalid = ctypes.c_void_p(-1).value
+    if handle == invalid:
+        raise getattr(ctypes, "WinError")(getattr(ctypes, "get_last_error")())
+    try:
+        if kind(handle) != 1:
+            raise OSError("JSON input must be a regular file")
+        synchronous = reopen(handle, 0x80000000, 7, 0)
+        if synchronous == invalid:
+            raise getattr(ctypes, "WinError")(getattr(ctypes, "get_last_error")())
+        try:
+            return int(getattr(msvcrt, "open_osfhandle")(synchronous, os.O_RDONLY | getattr(os, "O_BINARY")))
+        except BaseException:
+            close(synchronous)
+            raise
+    finally:
+        close(handle)
+
+
+
 def _read_no_follow(path: str, *, manager_home: str, what: str) -> bytes:
     """Read one registry file without following a final-component symlink.
 
     ``O_NOFOLLOW`` makes the leaf check atomic: a symlink races the
     ``lstat`` walk as ``ELOOP`` instead of checkout bytes.
     """
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
-        fd = os.open(path, flags)
+        fd = _open_regular(path, flags)
     except FileNotFoundError:
         raise
     except OSError as exc:
@@ -314,6 +355,8 @@ def _read_no_follow(path: str, *, manager_home: str, what: str) -> bytes:
         ) from exc
     try:
         with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise OSError("JSON input must be a regular file")
             if os.fstat(handle.fileno()).st_size > 16 * 1024 * 1024:
                 raise OSError("JSON input exceeds maximum size")
             raw = handle.read(16 * 1024 * 1024 + 1)

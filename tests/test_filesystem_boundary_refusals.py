@@ -2048,8 +2048,14 @@ def test_sweep_audit_publish_each_ordinal_refuses(monkeypatch, tmp_path, capsys)
         monkeypatch, capsys,
         label="audit publish",
         setup=setup,
-        sites=[("io.open", "csk.cli", "_cmd_audit_publish")],
-        expect={1: ("refuse", "cannot read audit record file")},
+        sites=[
+            ('os.stat','csk.protocol_json','read_bytes'),
+            ('io.open','csk.protocol_json','read_bytes'),
+        ],
+        expect={
+            1: ("refuse", "cannot read audit record file"),
+            2: ("refuse", "cannot read audit record file"),
+        },
         dry=(cli.EXIT_CONFIG, "", "cannot publish audit record"),
         kp1=(cli.EXIT_CONFIG, "", "cannot publish audit record"),
     )

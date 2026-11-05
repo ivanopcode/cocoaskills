@@ -1955,7 +1955,7 @@ def _cmd_audit_publish(args: argparse.Namespace) -> int:
         raise ValueError("--publish requires --registry")
     token = registry_token(args.token_file)
     try:
-        record_json = Path(args.publish).read_bytes()
+        record_json = protocol_json.read_bytes(Path(args.publish))
     except OSError as exc:
         raise ValueError(f"cannot read audit record file {args.publish}: {exc}") from exc
     registry_url = config.canonical_registry_url(args.registry, field="--registry")
