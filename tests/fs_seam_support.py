@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 import csk
+from csk import protocol_json
 
 SRC_ROOT = Path(csk.__file__).resolve().parent
 
@@ -281,6 +282,16 @@ def fault_at(
             return original_method(self, *args, **kwargs)
 
         monkeypatch.setattr(Path, op, path_fault)
+        if op == "read_bytes":
+            original_bounded = protocol_json.read_bytes
+
+            def bounded_fault(path: Path) -> bytes:
+                if _matches(path, normalized):
+                    _fire()
+                return original_bounded(path)
+
+            monkeypatch.setattr(protocol_json, "read_bytes", bounded_fault)
+
     else:  # pragma: no cover - enumerator admits no other op in scope today
         raise AssertionError(f"fault injection has no patch point for op {op!r}")
     yield firings

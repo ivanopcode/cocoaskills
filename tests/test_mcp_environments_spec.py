@@ -708,10 +708,10 @@ def test_preflight_read_failure_is_normalized(tmp_path, monkeypatch):
     path.write_bytes(original)
     with monkeypatch.context() as patch:
 
-        def fail(self):
+        def fail(self, *args, **kwargs):
             raise PermissionError("injected read refusal")
 
-        patch.setattr(Path, "read_bytes", fail)
+        patch.setattr(Path, "open", fail)
         with pytest.raises(manifest.ManifestError, match="Cannot read Skillfile at"):
             skillfile_deprecations.check_path(path)
     skillfile_deprecations.check_path(path)

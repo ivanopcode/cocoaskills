@@ -1260,14 +1260,14 @@ def _defect_fixture(
 def _refuse_evidence_reads(monkeypatch: pytest.MonkeyPatch, evidence_path: Path) -> None:
     """Fail exactly the evidence read: the marker seam must keep working."""
 
-    original = Path.read_bytes
+    original = Path.open
 
-    def _selective(self: Path) -> bytes:
+    def _selective(self: Path, *args, **kwargs):
         if self == evidence_path:
             raise PermissionError("evidence store denied the read")
-        return original(self)
+        return original(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", _selective)
+    monkeypatch.setattr(Path, "open", _selective)
 
 
 @pytest.mark.parametrize("defect", list(install_marker.ATTESTATION_EVIDENCE_DEFECTS))
@@ -1435,11 +1435,11 @@ def test_attestation_evidence_read_failures_are_unreadable_not_absent(
 
     reached = {"count": 0}
 
-    def _fail(self: Path) -> bytes:
+    def _fail(self: Path, *args, **kwargs):
         reached["count"] += 1
         raise error
 
-    monkeypatch.setattr(Path, "read_bytes", _fail)
+    monkeypatch.setattr(Path, "open", _fail)
     with pytest.raises(install_marker.InstallMarkerError) as raised:
         install_marker.validate_attestation_evidence(
             evidence_path, expectation, evidence_fresh=True, evidence_revoked=False
@@ -1917,10 +1917,10 @@ def test_marker_status_unreadable_marker_is_noncurrent(
         tmp_path, install_marker.InstallMarkerV5(**_base_marker()).to_json()
     )
 
-    def _fail(self: Path) -> bytes:
+    def _fail(self: Path, *args, **kwargs):
         raise PermissionError("denied")
 
-    monkeypatch.setattr(Path, "read_bytes", _fail)
+    monkeypatch.setattr(Path, "open", _fail)
     verdict = install_marker.evaluate_marker_status(marker_path, _base_plan())
 
     assert verdict.current is False

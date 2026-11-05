@@ -129,7 +129,7 @@ def test_enumeration_pins_known_seams():
     """
 
     groups = {(seam.module, seam.func, seam.op) for seam in enumerate_all_seams()}
-    assert ("csk.audit.trust", "load_trust_record", "read_text") in groups
+    assert ("csk.audit.trust", "load_trust_record", "read_bytes") in groups
     assert ("csk.audit.trust", "_confirm_missing_trust_path", "stat") in groups
     assert ("csk.audit.trust", "store_verdict", "mkdir") in groups
     assert ("csk.audit.trust", "store_verdict", "write_text") in groups
@@ -286,7 +286,7 @@ def test_trust_record_read_refuses(monkeypatch, tmp_path, err):
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({"schema_version": 1, "pinned": True, "reason": "r"}))
     with fault_at(
-        monkeypatch, module="csk.audit.trust", func="load_trust_record", op="read_text",
+        monkeypatch, module="csk.audit.trust", func="load_trust_record", op="read_bytes",
         target=path, err=err,
     ) as firings, pytest.raises(audit_trust.TrustRecordError) as excinfo:
         audit_trust.load_trust_record(csk_home, _TRUST_HASH)
@@ -352,66 +352,65 @@ def test_trust_record_file_as_parent_refuses(tmp_path):
 def test_trust_record_windows_path_not_found_file_as_parent_refuses(
     monkeypatch, tmp_path
 ):
-    """Windows ERROR_PATH_NOT_FOUND at open cannot turn a file parent into no pin."""
+    """Windows ERROR_PATH_NOT_FOUND at size admission cannot turn a file parent into no pin."""
 
     csk_home = tmp_path / "home"
     path = audit_trust.trust_path(csk_home, _TRUST_HASH)
     path.parent.parent.mkdir(parents=True)
     path.parent.write_text("not a directory", encoding="utf-8")
 
-    real_open = io.open
-    opened: list[Path] = []
+    original_stat = Path.stat
+    inspected: list[Path] = []
 
     def windows_path_not_found(file, *args, **kwargs):
         if os.fspath(file) == os.fspath(path):
-            opened.append(path)
+            inspected.append(path)
             error = FileNotFoundError(
                 errno.ENOENT, "Windows ERROR_PATH_NOT_FOUND", os.fspath(path)
             )
             error.winerror = 3
             raise error
-        return real_open(file, *args, **kwargs)
+        return original_stat(file, *args, **kwargs)
 
-    monkeypatch.setattr(io, "open", windows_path_not_found)
+    monkeypatch.setattr(Path, "stat", windows_path_not_found)
     with pytest.raises(audit_trust.TrustRecordError) as excinfo:
         audit_trust.load_trust_record(csk_home, _TRUST_HASH)
 
-    assert opened == [path]
+    assert inspected == [path]
     assert excinfo.value.code == audit_trust.CODE_TRUST_UNREADABLE
     assert str(path.parent) in excinfo.value.detail
 
 
 def test_trust_record_parent_recheck_os_error_refuses(monkeypatch, tmp_path):
-    """A failed parent re-check after an absent read is still a refusal."""
+    """A failed parent re-check after absent size admission is still a refusal."""
 
     csk_home = tmp_path / "home"
     csk_home.mkdir()
     path = audit_trust.trust_path(csk_home, _TRUST_HASH)
-    real_open = io.open
-    real_stat = Path.stat
-    opened: list[Path] = []
+    original_stat = Path.stat
+    inspected: list[Path] = []
 
     def windows_path_not_found(file, *args, **kwargs):
         if os.fspath(file) == os.fspath(path):
-            opened.append(path)
+            inspected.append(path)
             error = FileNotFoundError(
                 errno.ENOENT, "Windows ERROR_PATH_NOT_FOUND", os.fspath(path)
             )
             error.winerror = 3
             raise error
-        return real_open(file, *args, **kwargs)
+        return original_stat(file, *args, **kwargs)
 
     def denied_parent_stat(self, *args, **kwargs):
         if self == path.parent:
             raise PermissionError(errno.EACCES, "re-check denied", os.fspath(self))
-        return real_stat(self, *args, **kwargs)
+        return windows_path_not_found(self, *args, **kwargs)
 
-    monkeypatch.setattr(io, "open", windows_path_not_found)
+    monkeypatch.setattr(Path, "stat", windows_path_not_found)
     monkeypatch.setattr(Path, "stat", denied_parent_stat)
     with pytest.raises(audit_trust.TrustRecordError) as excinfo:
         audit_trust.load_trust_record(csk_home, _TRUST_HASH)
 
-    assert opened == [path]
+    assert inspected == [path]
     assert excinfo.value.code == audit_trust.CODE_TRUST_UNREADABLE
     assert "re-check denied" in excinfo.value.detail
 
@@ -447,7 +446,7 @@ def test_cached_verdict_read_refuses(monkeypatch, tmp_path, err):
     assert audit_trust.load_cached_verdict(csk_home, _TRUST_HASH, "null", None) is not None
     with (
         fault_at(
-            monkeypatch, module="csk.audit.trust", func="load_cached_verdict", op="read_text",
+            monkeypatch, module="csk.audit.trust", func="load_cached_verdict", op="read_bytes",
             target=stored, err=err,
         ) as firings,
         pytest.raises(audit_trust.TrustRecordError) as excinfo,
@@ -691,7 +690,7 @@ def test_hybrid_status_marker_read_degrades(monkeypatch, tmp_path, skills_root, 
     marker.parent.mkdir(parents=True)
     marker.write_text(json.dumps({"commit": "abcdef123456"}), encoding="utf-8")
     with fault_at(
-        monkeypatch, module="csk.cli", func="_cmd_hybrid", op="read_text",
+        monkeypatch, module="csk.cli", func="_cmd_hybrid", op="read_bytes",
         target=marker, err=err,
     ) as firings:
         assert cli.main(["hybrid", "status"]) == cli.EXIT_OK

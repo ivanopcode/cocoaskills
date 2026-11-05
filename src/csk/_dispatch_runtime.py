@@ -285,7 +285,7 @@ def _check_json_depth(text: str) -> None:
             quoted = True
         elif character in "[{":
             depth += 1
-            if depth > 128:
+            if depth > 256:
                 raise ValueError("JSON input exceeds maximum depth")
         elif character in "]}":
             depth -= 1
