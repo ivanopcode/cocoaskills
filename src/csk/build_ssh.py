@@ -243,11 +243,22 @@ def candidate_commands(
     if candidates.agent_socket is not None:
         commands.append(f"csk config build-ssh add {scope} --agent auto")
     for pub in pubs:
-        private = pub[:-4]
+        private = _private_identity_candidate(pub)
+        if private is None:
+            continue
         commands.append(f"csk config build-ssh add {scope} --identity {private}")
         if len(commands) >= limit + 1:
             break
     return commands[: limit + 1]
+
+
+def _private_identity_candidate(public_key: str) -> str | None:
+    """List only existing private siblings; public-only agent pins stay valid."""
+    private = public_key[:-4]
+    try:
+        return private if Path(private).is_file() else None
+    except OSError:
+        return None
 
 
 @dataclass(frozen=True)
@@ -318,12 +329,24 @@ def inspect_key(
         settings = _local_probe((str(ssh), "-G", "-F", os.devnull, "example.invalid"))
         if settings is not None and settings.returncode == 0:
             for line in settings.stdout.splitlines():
-                if line.startswith("securitykeyprovider "):
-                    provider = line.split(maxsplit=1)[1]
+                fields = line.split(maxsplit=1)
+                if fields and fields[0] == "securitykeyprovider":
+                    if len(fields) != 2:
+                        return KeyInspection(
+                            reason="SSH security-key provider output is unfamiliar",
+                            key_kind=kind, loaded=loaded,
+                        )
+                    provider = fields[1]
     private = Path(str(identity)[:-4]) if str(identity).endswith(".pub") else identity
     decrypted = _local_probe((keygen, "-y", "-P", "", "-f", str(private)))
     passphrase = None
+    bad_permissions = False
     if decrypted is not None:
+        bad_permissions = (
+            decrypted.returncode != 0
+            and "bad permissions" in decrypted.stderr.lower()
+            and "private key will be ignored" in decrypted.stderr.lower()
+        )
         if decrypted.returncode == 0:
             passphrase = False
         elif decrypted.returncode == 255 and "incorrect passphrase" in decrypted.stderr.lower():
@@ -341,6 +364,8 @@ def inspect_key(
         return replace(facts, reason="agent availability or key membership is unknown")
     if str(identity).endswith(".pub"):
         return replace(facts, state="unusable", reason="a public key alone cannot sign and no matching agent key is available")
+    if bad_permissions:
+        return replace(facts, state="unusable", reason="private key permissions are too open; SSH will ignore this file")
     if passphrase:
         return replace(facts, state="unusable", reason="key has a passphrase and no matching agent key is available; SSH prompts are disabled")
     return replace(facts, state="unknown", reason="local metadata does not establish that the key is unusable")
