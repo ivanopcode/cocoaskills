@@ -406,10 +406,12 @@ The error includes `cannot fetch`, the repository identity, `reason:` and
 | `a public key alone cannot sign and no matching agent key is available` | Load the matching private key into the selected agent, or choose a usable private file. |
 | `macOS system agent masks this USB security key and cannot sign with it` | Remove only that agent copy with `ssh-add -d`, then choose a capable client and agent. |
 | `SSH has no configured security-key provider in this lane` | Select an OpenSSH client with built-in FIDO support on `PATH`; csk has no provider-selection flag. |
+| `private key permissions are too open; SSH will ignore this file` | Correct the private file permissions under your policy, or select a capable agent holding the matching key. csk never changes key permissions. |
 
 Doctor's `unknown` state means local checks were inconclusive, not that
-signing will succeed. Loaded-agent keys normally remain unverified until
-used. No real-token route has been verified. The refusal is classified as
+signing will succeed. Unfamiliar provider output stays `unknown`. A matching
+loaded agent can serve a key even when SSH would ignore its private file.
+Loaded-agent keys normally remain unverified until used. No real-token route has been verified. The refusal is classified as
 `auth-unavailable` for explicitly declared fallback policy; it does not
 authorize an automatic HTTPS switch.
 
@@ -417,7 +419,9 @@ authorize an automatic HTTPS switch.
 
 The development diagnostics preserve `attempt 1=...` classifications for
 transport errors. Direct Git-admission errors can print `failure class:`.
-Each classified failure gets a `next:` action. Build failures also name the
+Each classified failure gets a `next:` action. Transport actions and hints
+include the attempt number, such as `next: attempt 2:` and `hint: attempt 2:`.
+Recognized hints also survive timeout errors. Build failures name the
 repository, command and skill. Older releases can show only a generic
 private-Git message.
 
@@ -425,20 +429,39 @@ private-Git message.
 | --- | --- |
 | `dns` | Check DNS for the repository host and retry. |
 | `connection-refused` | Check the host, port and network access. |
-| `timeout` | Check network access and whether an operator-owned agent or token awaits PIN, approval or touch. |
+| `timeout` | Check network access and whether SSH awaits a passphrase, PIN or touch, or an operator-owned agent awaits approval. This advice does not enable passphrase prompts in csk. |
 | `endpoint-unavailable` | Check the listed repository endpoint and retry. |
 | `auth-unavailable` | Select usable SSH or explicitly chosen HTTPS credentials. |
-| `ssh-auth-rejected` / `auth-rejected` | Verify the key/account has repository read access; review `csk config build-ssh list`. |
+| `ssh-auth-rejected` | Check local key usability as well as server-side read access; a passphrase key may not be loaded in a capable agent. Review `csk config build-ssh list`. |
+| `auth-rejected` | Verify the selected account has repository read access. |
 | `host-key` | Independently verify the host fingerprint and update the selected `known_hosts` file. |
-| `unclassified` | Check Git/SSH and repository access locally; keep stderr attached when diagnosing the failed command. |
+| `unclassified` | Review `csk config build-ssh list`, then check the selected Git/SSH command locally with stderr attached. Use `csk --verbose` for the safe cause chain. |
 
-`hint: SSH reported a signing failure; check the selected key, agent and any required PIN or touch`
-calls for checking agent support and approval, then token availability.
-`hint: SSH reported a key-loading failure; check the selected key format and unlock method`
-calls for checking the selected file and using a capable loaded agent for
-an encrypted key. These are fixed hints, not echoed SSH stderr.
+The following fixed hint lines refine the next step. Transport errors insert
+`attempt N:` after `hint:`. These hints do not echo SSH stderr:
+
+| Hint line | Next step |
+| --- | --- |
+| `hint: SSH reported failure loading a public-key pin; load the matching key into a capable agent or select the matching private identity path with csk config build-ssh add` | Load the matching key into the selected agent, or select the matching usable private file. |
+| `hint: SSH reported agent refusal; check whether the agent supports this key; for a PIN-required key use the file route with a usable provider rather than relying on a client terminal` | Check agent support and approval. A client terminal cannot supply a PIN to the agent; see the current file-route limit below. |
+| `hint: SSH reported a missing device; connect the security key and retry` | Connect the token and retry after checking client support. |
+| `hint: SSH reported invalid signing format; touch the security key when required and check that a usable security-key provider is selected` | Check required touch and provider support. This text alone does not prove either cause. |
+| `hint: SSH reported an unavailable PIN; use a PIN-capable attended file route or an agent configured with askpass` | Use an operator-managed agent configured to obtain the PIN through askpass, or another usable credential. The attended file route is unavailable in current csk. |
+| `hint: SSH reported an inaccessible identity; correct the selected identity path with csk config build-ssh add` | Correct the selected path and its accessibility, then retry. |
+| `hint: SSH reported a signing failure; check the selected key, agent and any required PIN or touch` | Check agent support and approval, then token availability. |
+| `hint: SSH reported a key-loading failure; check the selected key format and unlock method` | Check the selected file; use a capable loaded agent for an encrypted key. |
+
+The file-route advice in the PIN and agent-refusal hints requires capabilities
+current csk does not provide. There is no supported attended mode or
+provider-selection flag. Use a capable operator-managed agent with the
+required approval/PIN mechanism, or choose another usable credential.
+No real-token route has been verified.
+
 A signing hint can accompany `unclassified`; it never changes the class.
 The diagnostics do not add raw SSH output in `--verbose` mode.
+If attempt details cannot be rendered safely, the fixed reason is
+`transport refusal recorded without attempt detail`. Review the safe cause
+chain and selected credentials before reproducing the command locally.
 
 ### build_repository_identity_invalid
 
