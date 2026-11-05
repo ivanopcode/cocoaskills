@@ -354,6 +354,60 @@ select an unencrypted private file with `--identity` and omit `--agent`.
 Check `csk config build-ssh list`, scope boundaries and any overriding
 `--build-ssh-*` flags or `CSK_BUILD_SSH_*` values, then retry.
 
+### build_repository_ssh_credential_unusable (pending release)
+
+The development preflight rejects a selection only when local metadata
+establishes it cannot work in the non-prompting lane. It runs before the
+SSH fetch. Older releases do not have this check. With a version containing
+doctor, inspect the repository's selected credentials:
+
+```sh
+csk config build-ssh doctor git.example.com/team/tools
+```
+
+The error includes `cannot fetch`, the repository identity, `reason:` and
+`next:`. Follow the reason's next step:
+
+| Reason | Next step |
+| --- | --- |
+| `key has a passphrase and no matching agent key is available; SSH prompts are disabled` | Load the key into your capable operator-managed agent with a task-sized `ssh-add -t`, then select that agent and identity. |
+| `a public key alone cannot sign and no matching agent key is available` | Load the matching private key into the selected agent, or choose a usable private file. |
+| `macOS system agent masks this USB security key and cannot sign with it` | Remove only that agent copy with `ssh-add -d`, then choose a capable client and agent. |
+| `SSH has no configured security-key provider in this lane` | Select an OpenSSH client with built-in FIDO support on `PATH`; csk has no provider-selection flag. |
+
+Doctor's `unknown` state means local checks were inconclusive, not that
+signing will succeed. Loaded-agent keys normally remain unverified until
+used. No real-token route has been verified. The refusal is classified as
+`auth-unavailable` for explicitly declared fallback policy; it does not
+authorize an automatic HTTPS switch.
+
+### SSH diagnostic actions (pending release)
+
+The development diagnostics preserve `attempt 1=...` classifications for
+transport errors. Direct Git-admission errors can print `failure class:`.
+Each classified failure gets a `next:` action. Build failures also name the
+repository, command and skill. Older releases can show only a generic
+private-Git message.
+
+| Failure class | Next step |
+| --- | --- |
+| `dns` | Check DNS for the repository host and retry. |
+| `connection-refused` | Check the host, port and network access. |
+| `timeout` | Check network access and whether an operator-owned agent or token awaits PIN, approval or touch. |
+| `endpoint-unavailable` | Check the listed repository endpoint and retry. |
+| `auth-unavailable` | Select usable SSH or explicitly chosen HTTPS credentials. |
+| `ssh-auth-rejected` / `auth-rejected` | Verify the key/account has repository read access; review `csk config build-ssh list`. |
+| `host-key` | Independently verify the host fingerprint and update the selected `known_hosts` file. |
+| `unclassified` | Check Git/SSH and repository access locally; keep stderr attached when diagnosing the failed command. |
+
+`hint: SSH reported a signing failure; check the selected key, agent and any required PIN or touch`
+calls for checking agent support and approval, then token availability.
+`hint: SSH reported a key-loading failure; check the selected key format and unlock method`
+calls for checking the selected file and using a capable loaded agent for
+an encrypted key. These are fixed hints, not echoed SSH stderr.
+A signing hint can accompany `unclassified`; it never changes the class.
+The diagnostics do not add raw SSH output in `--verbose` mode.
+
 ### build_repository_identity_invalid
 
 Read the accompanying detail. `SSH identity is unavailable` means the

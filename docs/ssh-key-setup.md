@@ -85,6 +85,45 @@ on `PATH` before starting csk. The current SSH options include
 `BatchMode=yes` and `NumberOfPasswordPrompts=0`; there is no supported
 attended passphrase mode.
 
+When a private file exists, you may also combine `--agent auto` with
+`--identity ~/.ssh/build_key`. SSH can use the loaded agent key, or a
+usable plain file if that key is absent. An encrypted private file still
+requires its matching key loaded while SSH prompts are disabled.
+The `.pub` form remains appropriate for keys held only by an agent.
+
+## Local checks (pending release)
+
+The development implementation adds a read-only doctor and local preflight.
+Use these commands only with a csk version whose `csk config build-ssh --help` lists
+`doctor`:
+
+```sh
+csk config build-ssh doctor git.example.com/team/tools
+csk config build-ssh doctor git.example.com/team/tools --all-os
+```
+
+Doctor reports the selected identity and agent, SSH path/version and local
+key metadata. `--identity PATH` and `--agent SOCKET` override the inspected
+selection. Environment selections override configured scopes. `--all-os`
+includes instructions for every OS. Doctor makes no network connection,
+requests no signatures, prompts for nothing and changes no agent state.
+It does not check repository permissions or prove that a token can sign.
+
+The preflight inspects local metadata before an SSH fetch. A proven unusable
+selection produces `build_repository_ssh_credential_unusable` with a reason
+and a doctor command. Inconclusive metadata remains `unknown`; it does not
+prove either readiness or failure. An agent listing alone never proves
+signing ability. The preflight classifies a refusal as `auth-unavailable`,
+so an explicitly declared transport fallback can remain eligible.
+It does not create a fallback or switch to HTTPS automatically.
+
+The development diagnostics preserve attempt classifications and print
+`next:` actions, plus fixed `hint:` text for recognized signing or key-loading
+failures. Hints do not change the failure class or fallback rules. See
+[preflight refusals](troubleshooting.md#build_repository_ssh_credential_unusable-pending-release)
+and [diagnostic actions](troubleshooting.md#ssh-diagnostic-actions-pending-release).
+Older releases may still show a generic private-Git failure.
+
 ## Agent lifetime and access
 
 Choose a lifetime that fits the task and is not longer than that task.
