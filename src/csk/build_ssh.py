@@ -25,7 +25,11 @@ keep precedence over every configured scope.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+import os
+import subprocess
+import sys
+from pathlib import Path
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .tool_paths import resolve_tool
@@ -244,3 +248,184 @@ def candidate_commands(
         if len(commands) >= limit + 1:
             break
     return commands[: limit + 1]
+
+
+@dataclass(frozen=True)
+class KeyInspection:
+    """Local evidence only; unknown never establishes an unusable credential."""
+
+    state: str = "unknown"
+    reason: str = "local checks were inconclusive"
+    key_kind: str = "unknown"
+    passphrase: bool | None = None
+    loaded: bool | None = None
+    provider: str = "unknown"
+
+
+def _local_probe(
+    argv: tuple[str, ...], *, agent: Path | None = None, data: str | None = None,
+) -> subprocess.CompletedProcess[str] | None:
+    # No inherited askpass, provider, config or agent selection. These commands
+    # inspect metadata and public identities; none requests a signature.
+    environment = {"LC_ALL": "C"}
+    if os.name == "nt" and os.environ.get("SystemRoot"):
+        environment["SystemRoot"] = os.environ["SystemRoot"]
+    if agent is not None:
+        environment["SSH_AUTH_SOCK"] = str(agent)
+    try:
+        executable = resolve_tool(Path(argv[0]).name, executable=argv[0])
+        return subprocess.run(
+            (executable, *argv[1:]), input=data, stdin=subprocess.DEVNULL if data is None else None,
+            capture_output=True, text=True, timeout=5, env=environment,
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return None
+
+
+def inspect_key(
+    ssh: Path, identity: Path | None, agent: Path | None = None,
+) -> KeyInspection:
+    """Inspect with siblings of the admitted ssh; never open private material.
+
+    This describes the pinned non-prompting lane, not eventual server acceptance.
+    Missing tools, unfamiliar output and unavailable agents remain unknown.
+    """
+    if identity is None:
+        return KeyInspection(reason="no identity pin; agent signing ability is unknown")
+    suffix = ".exe" if ssh.suffix.lower() == ".exe" else ""
+    keygen = str(ssh.parent / ("ssh-keygen" + suffix))
+    add = str(ssh.parent / ("ssh-add" + suffix))
+    info = _local_probe((keygen, "-l", "-f", str(identity)))
+    if info is None or info.returncode != 0 or len(info.stdout.split()) < 2:
+        return KeyInspection()
+    fingerprint = info.stdout.split()[1]
+    kind = info.stdout.strip().rsplit("(", 1)[-1].rstrip(")")
+    loaded = None
+    if agent is not None:
+        listing = _local_probe((add, "-L"), agent=agent)
+        if listing is not None and listing.returncode == 1:
+            loaded = False
+        elif listing is not None and listing.returncode == 0:
+            fingerprints = _local_probe((keygen, "-l", "-f", "-"), data=listing.stdout)
+            if fingerprints is not None and fingerprints.returncode == 0:
+                loaded = fingerprint in [
+                    line.split()[1] for line in fingerprints.stdout.splitlines()
+                    if len(line.split()) >= 2
+                ]
+    provider = "unknown"
+    security_key = "-SK" in kind.upper()
+    if security_key:
+        settings = _local_probe((str(ssh), "-G", "-F", os.devnull, "example.invalid"))
+        if settings is not None and settings.returncode == 0:
+            for line in settings.stdout.splitlines():
+                if line.startswith("securitykeyprovider "):
+                    provider = line.split(maxsplit=1)[1]
+    private = Path(str(identity)[:-4]) if str(identity).endswith(".pub") else identity
+    decrypted = _local_probe((keygen, "-y", "-P", "", "-f", str(private)))
+    passphrase = None
+    if decrypted is not None:
+        if decrypted.returncode == 0:
+            passphrase = False
+        elif decrypted.returncode == 255 and "incorrect passphrase" in decrypted.stderr.lower():
+            passphrase = True
+    facts = KeyInspection(key_kind=kind, passphrase=passphrase, loaded=loaded, provider=provider)
+    if security_key and loaded and sys.platform == "darwin" and agent is not None and re.fullmatch(
+        r"/(?:private/)?tmp/com[.]apple[.]launchd[.][^/]+/Listeners", str(agent)
+    ):
+        return replace(facts, state="unusable", reason="macOS system agent masks this USB security key and cannot sign with it")
+    if loaded:
+        return replace(facts, state="unknown", reason="key is listed in the agent; signing ability is unverified")
+    if agent is not None and loaded is None:
+        return replace(facts, reason="agent availability or key membership is unknown")
+    if str(identity).endswith(".pub"):
+        return replace(facts, state="unusable", reason="a public key alone cannot sign and no matching agent key is available")
+    if passphrase:
+        return replace(facts, state="unusable", reason="key has a passphrase and no matching agent key is available; SSH prompts are disabled")
+    if security_key and provider in {"$SSH_SK_PROVIDER", "none"}:
+        return replace(facts, state="unusable", reason="SSH has no configured security-key provider in this lane")
+    return replace(facts, state="unknown", reason="local metadata does not establish that the key is unusable")
+
+
+def doctor(
+    rules: tuple[BuildSSHRule, ...], scope: str | None = None, *,
+    identity: str | None = None, agent: str | None = None, all_os: bool = False,
+) -> str:
+    """Render local observations and operator instructions, without mutation."""
+    rule = match(rules, scope) if scope else None
+    identity = identity or os.environ.get("CSK_BUILD_SSH_IDENTITY") or (rule.identity if rule else None)
+    agent = agent or os.environ.get("CSK_BUILD_SSH_AGENT") or (rule.agent if rule else None)
+    socket = os.environ.get("SSH_AUTH_SOCK") if agent == "auto" else agent
+    lines = [
+        "Build SSH doctor (read-only; no network, prompts, signatures or agent changes)",
+        f"Repository/scope: {scope or '(none selected)'}",
+        f"OS: {sys.platform}",
+        f"Identity: {identity or '(none selected)'}",
+        f"Agent: {socket or '(none selected or auto unavailable)'}",
+    ]
+    try:
+        ssh = Path(resolve_tool("ssh"))
+    except (OSError, ValueError):
+        lines.append("ssh: unavailable; local state unknown")
+    else:
+        version = _local_probe((str(ssh), "-V"))
+        lines.append(f"ssh: {ssh} ({version.stderr.strip() if version else 'version unknown'})")
+        if identity:
+            facts = inspect_key(ssh, Path(identity).expanduser(), Path(socket).expanduser() if socket else None)
+            lines.extend([
+                f"Key: {facts.key_kind}; passphrase: {facts.passphrase}; in agent: {facts.loaded}",
+                f"Security-key provider: {facts.provider}",
+                f"Local state: {facts.state}; {facts.reason}",
+            ])
+    lines.extend([
+        "SSH prompts remain disabled in csk; a passphrase key needs a matching capable agent.",
+        "The agent and its keys are managed by the person who owns the computer; csk does not manage them.",
+        "Choose a lifetime that fits the task and is no longer than the task needs.",
+        "Controlling that lifetime is a separate security matter for the operator.",
+        "Examples use 1h; replace it with your chosen task lifetime.",
+        "Prefer --identity <private-key> together with --agent auto: the private path works with the key loaded or absent (a plain key can sign directly).",
+        "Plain key: csk config build-ssh add <scope> --identity <private-key>",
+        "Passphrase key: load into your capable agent using the steps below, then select --agent auto --identity <private-key>.",
+        "Custom agent, e.g. 1Password (unverified): unlock/configure it in its own UI, then:",
+        "  csk config build-ssh add <scope> --agent <socket> --identity <key>.pub",
+        "A .pub only pins an agent key; it cannot sign by itself. Custom-agent support for FIDO/PIN is unverified.",
+    ])
+    if all_os or sys.platform == "darwin":
+        lines.extend([
+            "macOS:",
+            "  Plain/passphrase key, operator-managed agent: ssh-add -t 1h <private-key>",
+            "  Optional Keychain storage: ssh-add --apple-use-keychain -t 1h <private-key>",
+            "  FIDO without PIN (unverified on a real token): use Homebrew OpenSSH and its agent:",
+            "    brew install openssh",
+            '    eval "$("$(brew --prefix openssh)/bin/ssh-agent" -s)"',
+            '    "$(brew --prefix openssh)/bin/ssh-add" -t 1h <private-key>',
+            "  Ensure csk resolves Homebrew ssh, not Apple ssh; Apple SSH needs a provider that this lane does not configure.",
+            "  The macOS system agent cannot sign with USB keys; adding the key there masks the file route.",
+            "  Undo that masking yourself: ssh-add -d <key>.pub",
+            "  FIDO with PIN (unverified on a real token): agent signing needs askpass/display configured by its owner; a terminal alone does not help.",
+            "  File PIN entry needs a terminal and is unsuitable for this non-prompting lane; use an alternative credential if needed.",
+        ])
+    if all_os or sys.platform.startswith("linux"):
+        lines.extend([
+            "Linux (routes unverified here):",
+            '  Plain/passphrase key: eval "$(ssh-agent -s)"',
+            "  ssh-add -t 1h <private-key>",
+            "  FIDO without PIN (unverified on a real token): use an OpenSSH build with built-in FIDO and its capable agent; same lifetime command, touch per connection.",
+            "  FIDO with PIN (unverified on a real token): the agent needs owner-configured askpass/display; otherwise choose another credential for non-prompting runs.",
+            "  Desktop/custom agents may differ. Linux external builds are not currently admitted; source SSH uses the shared lane.",
+        ])
+    if all_os or sys.platform == "win32":
+        lines.extend([
+            "Windows (all routes unverified; current csk agent-pipe/wrapper support is incomplete):",
+            "  Plain key: select the private file; verify your OpenSSH build separately.",
+            "  Passphrase key, operator setup in elevated PowerShell:",
+            "    Get-Service ssh-agent | Set-Service -StartupType Manual",
+            "    Start-Service ssh-agent",
+            "  Then unelevated: ssh-add -t 1h <private-key>",
+            "  Verify your agent supports the requested lifetime before relying on it.",
+            "  csk cannot currently select the Windows service pipe through --agent; these are preparation steps, not a working csk agent route.",
+            "  FIDO without PIN: OpenSSH/token support and console integration need real-token verification.",
+            "  FIDO with PIN: PIN/dialog and agent behavior need real-token verification; do not assume success.",
+            "  Resident-key ssh-add -K is unsupported in documented Win32-OpenSSH versions.",
+        ])
+    lines.append("Hardware routes are unverified on a real token; software-provider evidence does not establish token compatibility.")
+    return "\n".join(lines)
