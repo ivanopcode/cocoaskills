@@ -876,6 +876,7 @@ def _install_project_once(
 ) -> ProjectResult:
     result = ProjectResult(alias=project.alias, path=project.path, status="ok")
     try:
+        build_repository_pipeline._PASS_STATE.require_idle()
         try:
             project_manifest = manifest.load_manifest(project.path)
         except source_errors.SourceError as exc:

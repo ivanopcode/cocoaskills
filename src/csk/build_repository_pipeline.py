@@ -647,10 +647,13 @@ class AcquisitionPassState:
         self.workers_reaped = True
         self._lock = Lock()
 
+    def require_idle(self) -> None:
+        if self.active or not self.closed or not self.workers_reaped:
+            raise ExternalBuildError(PROTECTED_BOUNDARY_UNTRUSTED, "previous acquisition pass is not closed or reaped")
+
     def start(self) -> None:
         with self._lock:
-            if self.active or not self.closed or not self.workers_reaped:
-                raise ExternalBuildError(PROTECTED_BOUNDARY_UNTRUSTED, "previous acquisition pass is not closed or reaped")
+            self.require_idle()
             self.active = True
             self.closed = False
 

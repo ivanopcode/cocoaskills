@@ -12,6 +12,7 @@ from typing import Any
 
 from . import (
     adapters,
+    build_repository_pipeline,
     closure,
     config as config_module,
     consumers,
@@ -415,6 +416,7 @@ def _install_once(
     result = GlobalResult()
     csk_home = config.path.parent
     try:
+        build_repository_pipeline._PASS_STATE.require_idle()
         global_manifest = load_manifest(csk_home)
         agents = global_manifest.agents or config.default_agents
         effective_locale = global_manifest.locale or config.preferred_locale
