@@ -1,8 +1,8 @@
 # Linux go-v1 source builds
 
-Status: design proposal; protocol amendment and native qualification required.
-Date: 2026-10-21.
-Code baseline: `2e39fbb1af1bfa791cfa3196ba5699fd7d7a6a00`.
+Status: blocked on transient mapped-write retention; protocol amendment and native qualification required.
+Date: 2026-11-05.
+Code baseline: `e69b5755a717413b5f985d2da577ddb469ae7ae7` (fetched `origin/main`).
 
 ## 1. Scope and evidence
 
@@ -12,13 +12,12 @@ graph, compiler-input validation, source/toolchain identity, authenticated
 one-list/one-build exchange, publication transaction, and deferred guarantees.
 This document changes no product behavior and grants no Linux qualification.
 
-**All Linux behavior below is unverified on a real host.** Mechanisms are
-supported by interface documentation; proposed availability is a design verdict,
-not a measured capability. Remote authentication failed before any remote
-command ran. No Linux OS, kernel, architecture, filesystem, libc, interpreter,
-Go, or uv version was observed. No remote retry or alternate access was used.
-Section 8 records the exact pending probes. Code findings were inspected at the
-baseline above; later implementations must recheck their cited symbols.
+Native mechanism probes ran on Linux on 2026-11-05. Section 8 distinguishes
+measured results from unverified integration and matrix coverage. The evidence
+package is `linux-go/` beside the checkout, task `TASK-261105-4mkuiu`, story
+`STORY-261105-7e3djz`. It contains raw output, reproduction scripts, a protocol
+draft, the mutation decision, and a probe-to-output index. No Linux product
+admission or qualification is granted by these measurements.
 
 The current admission boundary is explicit:
 
@@ -33,12 +32,14 @@ The current admission boundary is explicit:
 
 Code citations below name symbols in
 [`src/csk/builds/go_v1.py`](../../src/csk/builds/go_v1.py) unless a different file
-is linked. They refer to the inspected baseline, including its existing macOS
-layout heuristic; they do not assume a pending macOS parser change is merged.
+is linked. They refer to the inspected baseline. The macOS resolver now parses captured
+Mach-O linkage at `go_v1.py:2727`; its framework branch remains layout-based
+(`go_v1.py:2838`). The non-framework branch distinguishes embedded Python from
+an external library through linkage (`go_v1.py:2883`).
 
 ## 2. Protocol decision comes first
 
-The accepted shared protocol is `1.0.0-rc.10`, commit
+The downstream accepted protocol pin is `1.0.0-rc.10`, commit
 `b8b03d597ac83d158a0eadd9d0b25d2e883de1a3`, as pinned in
 [external build repositories](../external-build-repositories.md).
 Its `protocol/core.md` section 4.2.1 and
@@ -60,15 +61,23 @@ Generic Linux support elsewhere in the protocol does not extend this inventory.
 In particular, section 4.1.1's separate script inventory already has Linux and
 `host-conditional` controls. Its own text makes the inventories independent.
 
-**Recommendation:** request a new build inventory version with a Linux table,
-plus updated build evidence grammar/vectors admitting `linux`. For the two
-aggregate controls, use an explicitly specified host-conditional model, similar
-to the script inventory, with updated evidence consistency rules. Prefer a new
-evidence record version if adding `host-conditional` to the record vocabulary;
-old readers reject unknown records rather than misinterpret them. Exact version
-names belong to the protocol owner. Preserve `manager-worker-v1` and existing
-cache inputs unless that owner changes execution semantics; inventory expansion
-alone is not a reason to change policy identity or force a new cache format.
+Current protocol main `627d92726e17a2177acde1ec4687cb51143c330e` has
+already merged a separate Linux successor. Its Core section 4.2.1 at lines
+850-884 defines `rc5-native-control-inventory-v2` and admits `linux` in
+`capability-evidence-v1`. Both aggregate controls remain fixed `unavailable`.
+The `conformance/go-native-controls-v2/README.md` marks that corpus unreleased;
+released rc.14 data remains frozen. Merged specification, released pin, and
+native implementation qualification are separate facts. The code still pins
+rc.10 in `src/csk/build_repository.py:32-34` and the docs match it.
+
+**Recommendation:** amend the merged successor with an explicit conditional
+model for the two aggregate controls. The local draft proposes provisional
+inventory v3 and evidence v2, with all four controller combinations and negative
+vectors. Names and CIP number require protocol-owner assignment. The measured
+host has no delegated private domain; controller presence alone is insufficient.
+Preserve `manager-worker-v1` and cache inputs unless execution semantics change.
+The draft is unpublished and needs canonical generator, validator, profile and
+release-gate integration before acceptance.
 
 Until that revision is accepted, csk must retain both Linux admission refusals.
 Do not label Linux as macOS, append Linux privately to the v1 table, borrow a
@@ -84,7 +93,8 @@ protocol amendment record through the owner's normal flow before enabling it.
 ## 3. Native controls and truthful availability
 
 These are proposed per-operation outcomes for an ordinary unprivileged account
-with **no delegated cgroup subtree**. Every Linux entry is host-unverified.
+with **no delegated cgroup subtree**. The no-delegation outcome is measured in section 8. Basic session, file-limit
+and FD probes are measured; the actual worker adapter remains unverified.
 `unavailable_reason` belongs to the normative inventory metadata; the current
 build evidence entries have only name, availability, status, and probe timing.
 Do not silently add a reason field to that closed record.
@@ -252,7 +262,9 @@ before accepting a layout.
 
 ### 4.2 Layout rules
 
-All rows are expected Linux shapes, **unverified on the target host**.
+The distribution executable is measured as embedded Python on the target host.
+Copied and symlink venv prefix/path and symbol-segment probes ran under fixed
+flags. All other rows and complete startup/configuration binding remain unverified.
 Installation-tool names are hints, never an identity verdict.
 
 | Layout | Expected process/runtime decision | Required additional binding or refusal |
@@ -342,16 +354,30 @@ escalate that precise guarantee decision; do not silently weaken mutation
 detection to a final hash or publish Linux support with the gap hidden. This
 is a possible architecture blocker, not an optional aggregate-control absence.
 
+### 5.1 Measured decision on 2026-11-05
+
+Blocker: `linux-transient-mapped-write-retention`. The mapped plants actually
+changed bytes, then restored them. A warmed writable page evaded inotify and
+left inode, size, mtime and ctime unchanged. O_PATH and final hashing also
+missed it. See section 8 and the evidence package's mutation decision.
+
+The owner must select enforced immutability of the complete identity closure
+or a manager-owned immutable snapshot architecture with reviewed loader/import
+semantics. Neither is proven here. Copying or chmod alone is insufficient.
+Keep admission closed while that architecture and its negative plants are
+unverified. The protocol amendment does not discharge this independent gate.
+
 ## 6. Complete implementation map
 
-All proposed Linux mechanisms in this map remain host-unverified. Shared paths
-still need Linux integration tests even when their source has no OS branch.
+Section 8 records the measured mechanisms. All proposed Linux integration in
+this map remains unverified. Shared paths still need Linux integration tests
+even when their source has no OS branch.
 
 | Existing boundary / code citation | Current proof or enforcement and purpose | Required Linux work |
 | --- | --- | --- |
 | `inventory_platform`, `_NATIVE_CONTROL_PLATFORMS`, `probe_native_controls`, `_validate_probe_set`, `validate_capability_evidence` | Closed inventory; measured per-operation availability; reject missing, duplicate, contradictory, unknown, or hardened entries. | Add only the accepted protocol table/version and evidence grammar; conditional outcomes need an explicit schema change. |
 | `_PreparedWorkerLaunch`, `_read_posix_worker_launch_record`, `_launch_authenticator` | Anonymous inherited capability authenticates the manager-owned child; prevents arbitrary hidden-worker entry. Windows uses a restricted inheritable handle. | Explicit Linux/POSIX dispatch, FD-capacity and collision probes; preserve no-secret argv/env and consume-before-Go rules. |
-| `_resolve_interpreter_identity`, `_resolve_interpreter_runtime`, `_manager_interpreter_path` | Bind launcher, bounded symlink chain, interpreter and native runtime. Windows binds venv base/DLL; baseline macOS uses framework/dylib layout selection. | Captured-byte ELF linkage resolver and independent runtime proof, no glob-only decision. Keep absolute shebang, no shell wrappers. |
+| `_resolve_interpreter_identity`, `_resolve_interpreter_runtime`, `_manager_interpreter_path` | Bind launcher, bounded symlink chain, interpreter and native runtime. Windows binds venv base/DLL; macOS uses framework layout plus captured-byte Mach-O linkage for non-framework images (`go_v1.py:2727`, `:2838`). | Captured-byte ELF linkage resolver and independent runtime proof, no glob-only decision. Keep absolute shebang, no shell wrappers. |
 | `_resolve_manager_identity`, `_resolve_worker_manager_identity`, `_manager_stdlib_root`, `_manager_runtime_roots`, `_runtime_archive_slots`, `_resolve_startup_identity` | Close installed package, mutable startup/config, stdlib, extension modules, archives and absent slots; avoid startup/import injection. | Explicit Linux layout/base prefix, dist-packages and lib64 handling, loader inputs, bound venv configuration, correct archive slots. |
 | `_IdentityMutationGuard`, `_ensure_macos_identity_descriptor_capacity` | Observe mutation on macOS; deny conflicting opens on Windows; retain complete identities until teardown. | Section 5 gate, bounded retention/watches, registration race closure, descriptor-limit restoration; no claim based solely on O_PATH. |
 | `_NativeControlDomain.launch`, `_launch_macos`, `_attach_and_resume_windows` | Install session/file limit or suspended Job before worker execution; return only a controlled process. | Session/limit installation with verified rollback; resolve parent-death and optional cgroup attachment timing without unbound helper/preexec code. |
@@ -380,7 +406,7 @@ asserts the intended diagnostic, child count, cleanup and publication state.
 
 | Order / slice | Positive claims | Negative claims and control plants | Where evidence can run |
 | --- | --- | --- | --- |
-| 1. Protocol amendment and admission sentinels | Accepted Linux table/evidence examples parse; existing platform examples remain exact. | Old version plus linux, extra/missing/duplicate controls, false applied claims, unprobed outcomes and hardened names reject. Existing Linux refusal still starts zero workers/Go and publishes nothing. Plant a false applied value to show the checker rejects that property. | Data/adapter tests on macOS and Linux; normative corpus acceptance belongs to protocol review. |
+| 1. Protocol amendment and admission sentinels | Accepted Linux table/evidence examples parse; existing platform examples remain exact. | Predecessor inventory v1 plus linux, extra/missing/duplicate controls, false applied claims, unprobed outcomes and hardened names reject. Existing Linux refusal still starts zero workers/Go and publishes nothing. Plant a false applied value to show the checker rejects that property. | Data/adapter tests on macOS and Linux; normative corpus acceptance belongs to protocol review. |
 | 2. Bounded ELF identity parser/resolver | Embedded, shared, PIE, stripped executable, SONAME symlink, approved origin-relative and distribution-library fixtures select exact expected images. | Truncated/overflowing headers, invalid class/endian/machine, unmapped string table, unterminated names, duplicate Python dependencies, escape/ambiguous search, forged static inference, wrong ABI and loader config mutation reject with identity diagnostic. Include valid embedded executable beside irrelevant shared library. | Captured-byte and fake-tree fixtures on macOS; real glibc layout/loader agreement on Linux. Never mark fixture success as loader qualification. |
 | 3. Linux startup closure and loaded-image proof | Installed distribution, standalone embedded/shared, pyenv and copied/symlink venv identities agree with symbol-owning loaded image under fixed flags/environment. | Replaced executable/library/config, unexpected LD/Python values, injected archive/module/root, absent procfs, deleted/mapped substitute or wrong image reject before Go. | Layout fixtures on macOS; actual procfs/libc/Python version matrix on Linux. |
 | 4. Mutation retention and native control adapter | Unchanged bounded identity closure stays silent; session/file limit/descriptor controls are applied and observed; no-delegation aggregate outcomes are truthful. | Ordinary write and rename/restore plants must trigger the guard; mapped write/restore plant must either trigger it or block the design. Inject overflow/watch loss/FD exhaustion and setup/restore failures; assert no worker or publication. Show unrelated UID tasks do not become a claimed private domain. | Parsers, event-state/rollback fixtures on macOS; real Linux filesystems, limits and inheritance required for acceptance. Conditional cgroup tests only inside explicitly delegated isolated fixtures. |
@@ -395,12 +421,40 @@ The current document is non-executable: validate code-reference accuracy,
 protocol counterexamples and document links, plus the required regression run;
 no product-test additions are justified just to test prose.
 
-## 8. Pending exact probes and evidence log
+## 8. Native probes and remaining evidence gates
 
-No command in this section has run on Linux. Run only after access is restored,
-in an owned disposable run directory, with all paths and logs under the
-approved workspace. Record each exit code; optional tool absence is a limit,
-not a pass. Never collect environment dumps or credentials.
+Run: 2026-11-05, source `e69b5755a717413b5f985d2da577ddb469ae7ae7`.
+Host: Ubuntu 26.04.1, Linux 7.0.0-38-generic x86_64, glibc 2.43, ext4,
+Python 3.14.4, Go 1.26.8, Git 2.53.0, readelf 2.46. `uv` was absent.
+`statfs` labels this filesystem family ext2/ext3; `findmnt` reports ext4.
+No AArch64, musl, Go 1.27, remote filesystem or additional interpreter matrix
+was qualified. AArch64 is unnecessary to reproduce the blocker, but eventual
+AArch64 admission requires native architecture evidence.
+
+Raw output is indexed by `linux-go/evidence/index.txt` beside the checkout.
+Each record binds the source and shared host facts. `probes.py` and `extra.py`
+record the reproducible bounded fixtures. Both completed with exit 0; that
+means the probes ran, including the witnessed guard failure, not that a Linux
+build guard passed.
+
+| Probe | Measured result | Coverage limit |
+| --- | --- | --- |
+| cgroup v2 | memory/pids present; current subtree and membership/limit files root-owned, not writable | No delegated fixture; no attach, limit enforcement or cgroup writes performed |
+| Child file limit and FD closure | Two bytes written; third byte rejected with EFBIG; unrelated inheritable FD rejected with EBADF | Standalone subprocess; actual worker/Go descriptor graph unverified |
+| Native symbol ownership | Py_GetVersion belongs to one PT_LOAD segment of `/usr/bin/python3.14`; main image loader name empty | Embedded distro image only; no general ELF resolver implemented |
+| Copied/symlink venv | Fixed `-S -s -B -P` launches report venv prefix and `/usr` base; symbol belongs to main executable PT_LOAD | Full startup/configuration binding and substitution negatives unverified |
+| openat2 | Header-derived syscall accepts retained-relative file and rejects symlink with ELOOP | x86-64 fixture only; no full race-proof path resolver |
+| Ordinary write and rename/restore | Intermediate bytes MUTATED!, restored original; inotify events observed | File and parent watches in private ext4 tree |
+| Existing mapped write/restore | Intermediate bytes MUTATED!, restored original; no inotify events | With flush, timestamps changed; final hash/inode matched |
+| Warmed mapped write/restore | Intermediate bytes MUTATED!, restored original; no events; inode/size/mtime/ctime unchanged | Establishes blind spot in final hash/stat plus inotify |
+| Quiet watch, hardlink and directory rename | Quiet control silent; hardlink bytes changed and events observed; directory move events observed | Registration-race and overflow handling unverified |
+| Watch loss and FD capacity | Removed watch yields IN_IGNORED; child hits EMFILE and restores limit | No production guard error-path integration |
+| Advisory lock | Independent writer changes bytes while exclusive flock held | Advisory lock supplies no write exclusion |
+| Session/group | Recorded child PID equals SID/PGID; SIGTERM, wait and group absence succeed | One child; late fork, zombies, manager loss and detachment unverified |
+
+The commands below remain the probe specification. The evidence index records
+which ran, which ran in equivalent instrumented form, and which could not run.
+A missing fixture or unavailable tool is never a pass.
 
 ### 8.1 Read-only host and runtime facts
 
@@ -533,7 +587,7 @@ blocked-child attachment, bounded task/memory positive-negative controls,
 
 After the implementation fixtures in section 7 exist, the exact native suite
 entry points should be agreed in their reviews; this document does not invent
-commands for nonexistent tests. Required probes still missing are:
+commands for nonexistent tests. Remaining integration and matrix probes include:
 
 - `dl_iterate_phdr` segment ownership versus embedded and shared `Py_GetVersion`,
   including PIE, copied venv, and deleted/substituted images;
@@ -547,20 +601,20 @@ commands for nonexistent tests. Required probes still missing are:
 For every native run, record source head, OS/kernel/architecture/libc/filesystem,
 Python/Git/Go/uv/csk versions, protocol pin, exact command and exit code, verdict,
 cleanup evidence, and any missing coverage. Local fixture results cannot fill
-these native evidence slots. The failed access attempt supplied no Linux
-measurements; no run directory was created remotely.
+these native evidence slots. The historical access failure is superseded by the bounded native run above.
+Its results do not qualify absent integration fixtures.
 
 ## 9. Owner decisions and recommendations
 
 | Decision or risk | Recommendation / acceptance gate |
 | --- | --- |
-| Protocol lacks Linux build inventory and evidence platform | Amend both, version the inventory, and qualify corpus vectors before any product admission. Keep policy/cache identity stable absent a semantic protocol change. |
+| Downstream pin lacks Linux; merged unreleased successor fixes aggregate absence | Review the conditional successor and evidence version, then pin only accepted corpus bytes. Keep policy/cache identity stable absent semantic changes. |
 | cgroup availability varies within Linux | Adopt explicit conditional grammar; report `no-private-aggregate-domain` on measured absence. Do not use per-UID/per-process rlimits as aggregate controls or require system administration for the portable baseline. |
-| Mutation guard cannot yet match transient mapped-write detection | Treat as a blocker to enabling support. Prove an equivalent supported identity closure or choose verified immutability/snapshot redesign; never hide a known blind spot. |
+| Transient mapped-write blind spot reproduced | BLOCKED: owner must select enforced immutability of the complete closure or an immutable snapshot architecture, then require native plants against it. Final hash/stat plus inotify is insufficient. |
 | Arbitrary ELF loader/layout support is too broad | Start with bounded, deterministic glibc x86-64/AArch64 layouts and exact supported Python versions. Refuse unsupported loader/configuration/ABI forms with identity diagnostics. |
 | Manager death versus normal teardown | Qualify bounded normal teardown first. Parent-death signals are supplementary; decide whether crash-complete domain death is a new requirement needing a stronger domain/supervisor. |
 | File-limit inheritance changes manager-global state | Reuse the existing locked lifecycle only with restoration/concurrency evidence; evaluate helper graph costs before introducing one. |
-| Native availability and CI expectations are unmeasured | Keep every Linux claim unverified until native evidence exists; run real accepted builds plus refusal controls on Linux and preserve other-platform regressions. |
+| Native integration and platform matrix remain unverified | Use only the bounded measurements in section 8. Qualify actual builds, refusal controls and other-platform regressions before admission. |
 | Real runtime matrix may expose additional mutable startup inputs | Expand the bound identity closure or refuse the layout. Do not add allowlists of unexpected proof modules just to make tests pass. |
 
 This proposal is ready for protocol and architecture decisions; it is not an
