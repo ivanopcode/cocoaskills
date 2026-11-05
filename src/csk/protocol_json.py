@@ -13,7 +13,7 @@ class ProtocolJSONError(ValueError):
 
 # Admission limits apply to operator-controlled documents, before decoding.
 MAX_INPUT_BYTES: Final = 16 * 1024 * 1024
-MAX_DEPTH: Final = 128
+MAX_DEPTH: Final = 256
 
 
 class ProtocolJSONSizeError(ProtocolJSONError, OSError):

@@ -778,22 +778,22 @@ def test_unreadable_report_refuses_with_distinct_code(
 ) -> None:
     """A read failure is never reported as an absence (S-ERRORS instrument).
 
-    Fault injection at the real call site (``Path.read_bytes`` inside the
+    Fault injection at the real call site (``Path.open`` inside the
     report loader), with a reached-flag and the same fixture succeeding
     unfaulted as the positive control.
     """
     record, csk_home, package, content, policy = _recorded(tmp_path)
     target = source_audit.source_audit_report_path(csk_home, content)
     reached = {"read": False}
-    original_read_bytes = Path.read_bytes
+    original_read_bytes = Path.open
 
-    def failing_read_bytes(self: Path) -> bytes:
+    def failing_read_bytes(self: Path, *args, **kwargs):
         if self == target:
             reached["read"] = True
             raise error
-        return original_read_bytes(self)
+        return original_read_bytes(self, *args, **kwargs)
 
-    with patch.object(Path, "read_bytes", failing_read_bytes):
+    with patch.object(Path, "open", failing_read_bytes):
         with pytest.raises(SourceAuditError) as excinfo:
             source_audit.validate_source_audit(
                 record,
@@ -1741,14 +1741,14 @@ def test_network_git_evidence_defect_family_refuses(tmp_path: Path, defect: str)
         kid = mutation.pop("key_id", key_id)
         _write_evidence(tmp_path, kid, **mutation)
     if defect == "unreadable":
-        original_read_bytes = Path.read_bytes
+        original_read_bytes = Path.open
 
-        def refusing_read_bytes(self: Path) -> bytes:
+        def refusing_read_bytes(self: Path, *args, **kwargs):
             if self == evidence_path:
                 raise PermissionError("evidence store denied the read")
-            return original_read_bytes(self)
+            return original_read_bytes(self, *args, **kwargs)
 
-        ctx: Any = patch.object(Path, "read_bytes", refusing_read_bytes)
+        ctx: Any = patch.object(Path, "open", refusing_read_bytes)
     else:
         import contextlib
 
@@ -2569,7 +2569,7 @@ def test_trust_reader_seam_failure_refuses_structured(
     for the TASK-260921-qe62bu survivor: ``load_trust_record`` attempts the
     read directly and maps only ``FileNotFoundError`` to absence, so there
     is no existence probe to fault. The ``read`` param keeps the original
-    promise — fault injection at ``Path.read_text`` refuses structured,
+    promise — fault injection at ``Path.open`` refuses structured,
     naming the trust path. The ``stat`` param pins the survivor's side of
     the decision: a faulted ``Path.exists`` is never consulted (no probe,
     no TOCTOU, nothing for ``exists()`` to swallow into a silent absence),
@@ -2615,7 +2615,7 @@ def test_trust_reader_seam_failure_refuses_structured(
         ctx: Any = patch.object(Path, "exists", faulted_exists)
     else:
         assert seam == "read"
-        original_read_text = Path.read_text
+        original_read_text = Path.open
 
         def faulted_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
             if self == target:
@@ -2623,7 +2623,7 @@ def test_trust_reader_seam_failure_refuses_structured(
                 raise error
             return original_read_text(self, *args, **kwargs)
 
-        ctx = patch.object(Path, "read_text", faulted_read_text)
+        ctx = patch.object(Path, "open", faulted_read_text)
     if seam == "stat":
         # Survivor contract (TASK-260921-qe62bu): no existence probe, so a
         # faulted Path.exists is never consulted and validation succeeds.
@@ -2706,7 +2706,7 @@ def test_trust_reader_seam_failure_refuses_through_plan_hook(
         ctx: Any = patch.object(Path, "exists", faulted_exists)
     else:
         assert seam == "read"
-        original_read_text = Path.read_text
+        original_read_text = Path.open
 
         def faulted_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
             if self == target:
@@ -2714,7 +2714,7 @@ def test_trust_reader_seam_failure_refuses_through_plan_hook(
                 raise error
             return original_read_text(self, *args, **kwargs)
 
-        ctx = patch.object(Path, "read_text", faulted_read_text)
+        ctx = patch.object(Path, "open", faulted_read_text)
     events: list[str] = []
     if seam == "stat":
         # Survivor contract (TASK-260921-qe62bu): no existence probe, so a
