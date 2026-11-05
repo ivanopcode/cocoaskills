@@ -117,12 +117,28 @@ signing ability. The preflight classifies a refusal as `auth-unavailable`,
 so an explicitly declared transport fallback can remain eligible.
 It does not create a fallback or switch to HTTPS automatically.
 
+If SSH reports that private-file permissions are too open and the file
+will be ignored, preflight refuses that file route. Correct the file's
+permissions under your policy, or select a capable agent holding the matching
+key. csk never changes key permissions. A matching loaded agent can still
+serve the key when the private file is ignored. Unfamiliar provider output
+remains `unknown`.
+
 The development diagnostics preserve attempt classifications and print
 `next:` actions, plus fixed `hint:` text for recognized signing or key-loading
-failures. Hints do not change the failure class or fallback rules. See
+failures, including agent refusal, a missing device, invalid signing format,
+an unavailable PIN, an unloaded public-key pin and an inaccessible identity.
+Transport actions and hints carry their attempt number, such as
+`next: attempt 2:` and `hint: attempt 2:`. Timeout errors retain recognized
+hints too. Hints do not change the failure class or fallback rules. See
 [preflight refusals](troubleshooting.md#build_repository_ssh_credential_unusable-pending-release)
 and [diagnostic actions](troubleshooting.md#ssh-diagnostic-actions-pending-release).
-Older releases may still show a generic private-Git failure.
+An `ssh-auth-rejected` result can mean local key unusability or denied
+repository access; check both. For `unclassified`, review
+`csk config build-ssh list` and reproduce the selected Git/SSH command
+locally with stderr attached. `csk --verbose` shows the safe cause chain,
+without adding raw SSH output. Older releases may still show a generic
+private-Git failure.
 
 ## Agent lifetime and access
 
