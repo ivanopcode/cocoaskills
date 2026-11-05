@@ -176,6 +176,11 @@ def test_consent_exact_argv_and_scope(project_cli, monkeypatch, capsys, tmp_path
         native = tmp_path / "native"; native.mkdir()
         (native / (command + ".exe")).write_bytes(b"MZfixture")
         monkeypatch.setenv("PATH", str(native) + os.pathsep + os.environ["PATH"])
+    # Consent is about argv, not the host's installed runner; the marker forbids execution.
+    marker = None
+    if os.name != "nt" and command in {"npx", "uvx"}:
+        from test_mcp_command_resolution import runner_guard
+        marker = runner_guard(tmp_path, monkeypatch, "")
     declare(stdio(command, args))
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
@@ -184,6 +189,7 @@ def test_consent_exact_argv_and_scope(project_cli, monkeypatch, capsys, tmp_path
     output = capsys.readouterr().out
     assert json.dumps([command, *args]) in output
     assert ("csk cannot verify what this program runs." in output) == opaque
+    assert marker is None or not marker.exists()
 
 
 # Relative implicit global excludes have the same root-context obligation as
