@@ -33,7 +33,7 @@ def capture(path: Path, *, executable: bool = False) -> Image:
     original = path
     links = []
     # Include directory links as well as the final SONAME/interpreter link.
-    for _ in range(32):
+    for _ in range(16):
         parts = path.parts
         for i in range(1, len(parts)):
             component = Path(*parts[:i + 1])
