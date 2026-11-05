@@ -28,6 +28,8 @@ closed with Git's own authentication error.
 
 from __future__ import annotations
 
+from . import protocol_json
+
 import json
 import re
 import sys
@@ -53,8 +55,8 @@ def answer(state_path: str, prompt: str, environ: dict[str, str]) -> str | None:
     """Return the line to print for ``prompt``, or None to fail closed."""
 
     try:
-        raw = Path(state_path).read_bytes()
-        state = json.loads(raw)
+        raw = protocol_json.read_bytes(Path(state_path))
+        state = protocol_json.loads_compatible(raw)
     except (OSError, ValueError):
         return None
     if not isinstance(state, dict):

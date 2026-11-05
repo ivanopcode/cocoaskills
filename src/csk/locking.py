@@ -1006,7 +1006,7 @@ def _path_matches_fd(path: Path, fd: int) -> bool:
 
 def _read_lock(path: Path) -> dict[str, object] | None:
     try:
-        payload = path.read_bytes()
+        payload = protocol_json.read_bytes(path, maximum=_LOCK_RECORD_LIMIT)
     except OSError:
         return None
     return _decode_lock(payload)

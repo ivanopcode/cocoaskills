@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ... import protocol_json
+
 import json
 import shutil
 import subprocess
@@ -74,8 +76,8 @@ class CommandBackend:
             stderr = redaction.scrub_text(proc.stderr.decode("utf-8", errors="replace"))[:2000]
             raise AuditBackendError(f"Audit backend exited with code {proc.returncode}: {self.name}: {stderr}")
         try:
-            response = json.loads(proc.stdout.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            response = protocol_json.loads_compatible(proc.stdout)
+        except (UnicodeDecodeError, protocol_json.ProtocolJSONError) as exc:
             raise AuditBackendError(f"Audit backend returned invalid JSON: {self.name}") from exc
         if not isinstance(response, dict):
             raise AuditBackendError(f"Audit backend response must be a JSON object: {self.name}")
