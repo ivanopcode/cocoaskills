@@ -479,3 +479,27 @@ def test_local_head_is_reacquired(tmp_path):
         first = pipeline.acquire_pipeline(request, stack, memo)
         second = pipeline.acquire_pipeline(request, stack, memo)
         assert first.snapshot.commit != second.snapshot.commit
+
+# An earlier unclosed pass refuses even pre-acquisition assurance backends in
+# the next real install attempt, including both schema versions and global.
+@pytest.mark.parametrize('lane', ['project', 'schema2', 'schema3', 'global'])
+def test_unclosed_pass_refuses_before_assurance(tmp_path, csk_home, skills_root, monkeypatch, lane):
+    from csk import installer, global_install
+    from conftest import make_project, make_config, write_skillfile
+    project = make_project(tmp_path)
+    version = {'project': 1, 'global': 1, 'schema2': 2, 'schema3': 3}[lane]
+    doc = {'schema_version': version, 'skills': []}
+    if version > 1:
+        doc['sources'] = {'local': {'path': '.'}}
+    write_skillfile(project, doc)
+    cfg = make_config(csk_home, skills_root, project)
+    calls = []
+    monkeypatch.setattr(installer.audit_pipeline, 'gate_plans', lambda *a, **k: calls.append('audit'))
+    pipeline._PASS_STATE.closed = False
+    if lane == 'global':
+        global_install.init(csk_home)
+        results = [global_install.install(cfg)]
+    else:
+        results = installer.install(cfg)
+    assert all('previous acquisition pass is not closed or reaped' in ' '.join(r.errors) for r in results)
+    assert calls == []
