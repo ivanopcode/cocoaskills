@@ -15,6 +15,9 @@ def test_depth_admission(decode, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("over-depth input reached decoder")
     monkeypatch.setattr(pj.json, 'loads', forbidden)
+    # Plant a forbidden decoder call to prove the observation guard is active.
+    with pytest.raises(pytest.fail.Exception, match='reached decoder'):
+        pj.json.loads('{}')
     for depth in (pj.MAX_DEPTH + 1, 1200):
         with pytest.raises(pj.ProtocolJSONError, match='maximum depth'):
             decode('[' * depth + '0' + ']' * depth)
@@ -32,6 +35,9 @@ def test_sparse_read_refuses_before_open(tmp_path, monkeypatch, size):
     def forbidden(*args, **kwargs):
         pytest.fail('oversized input was opened')
     monkeypatch.setattr(Path, 'open', forbidden)
+    # Plant an open attempt; the guard must detect it without reading bytes.
+    with pytest.raises(pytest.fail.Exception, match='was opened'):
+        path.open('rb')
     with pytest.raises(pj.ProtocolJSONSizeError, match='maximum size'):
         pj.read_bytes(path)
     with pytest.raises(manifest.ManifestError, match='maximum size'):
