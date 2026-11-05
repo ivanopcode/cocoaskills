@@ -611,3 +611,14 @@ The isolated Linux ELF identity developer checks are documented in
 [Linux ELF identity slice](docs/design/linux-elf-identity-slice.md). Run
 `python -m pytest -q tests/test_linux_elf_identity.py` and `python -m mypy`;
 keep scratch logs in `.temp/`. These checks do not enable Linux source builds.
+
+### JSON input limits
+
+Operator JSON documents are limited to 16 MiB and 128 nested containers.
+File readers check size before reading and cap reads against concurrent growth;
+parsers check nesting before constructing the decoded value. Existing smaller
+limits on native MCP files, registry evidence, and lock records still apply.
+Canonical JSON encoding and strict duplicate-key, Unicode, and numeric checks
+are unchanged. Run the focused boundary checks with
+`uv run --extra dev pytest tests/test_json_bounds.py tests/test_protocol_json.py`;
+temporary test artifacts belong in `.temp/`.

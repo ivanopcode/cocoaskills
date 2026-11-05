@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from . import protocol_json
+
 import json
 import stat
 from collections.abc import Mapping
@@ -598,7 +600,7 @@ def _inspect_node_marker(
 ) -> _MarkerInspection:
     marker_path = installed_dir / ".csk-install.json"
     try:
-        raw = marker_path.read_bytes()
+        raw = protocol_json.read_bytes(marker_path)
     except FileNotFoundError:
         return _MarkerInspection(
             SkillStatus(
@@ -1138,7 +1140,7 @@ def _basic_skill_status(
         )
     marker_path = skills_root / decl.name / ".csk-install.json"
     try:
-        marker = install_marker.read_install_marker(marker_path.read_bytes())
+        marker = install_marker.read_install_marker(protocol_json.read_bytes(marker_path))
     except FileNotFoundError:
         return SkillStatus(
             decl.name,
@@ -1214,7 +1216,7 @@ def _unavailable_recorded_builds(
     for decl in declarations:
         marker_path = skills_root / decl.name / ".csk-install.json"
         try:
-            marker = install_marker.read_install_marker(marker_path.read_bytes())
+            marker = install_marker.read_install_marker(protocol_json.read_bytes(marker_path))
         except Exception:  # noqa: BLE001 - the scope error is already reported
             continue
         if not isinstance(

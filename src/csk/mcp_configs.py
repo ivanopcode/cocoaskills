@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from . import protocol_json
+
 import json
 import shutil
 import tomllib
@@ -140,7 +142,7 @@ def _entries_in_file(path: Path) -> dict[str, object]:
             data = tomllib.loads(path.read_text(encoding="utf-8"))
             servers = data.get("mcp_servers", {})
         elif path.name in _OPENCODE_FILES:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
+            loaded = protocol_json.loads_compatible(protocol_json.read_bytes(path))
             servers = loaded.get("mcp", {}) if isinstance(loaded, dict) else {}
             if isinstance(servers, dict):
                 servers = {
@@ -149,7 +151,7 @@ def _entries_in_file(path: Path) -> dict[str, object]:
                     if not (isinstance(entry, dict) and entry.get("enabled") is False)
                 }
         else:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
+            loaded = protocol_json.loads_compatible(protocol_json.read_bytes(path))
             servers = loaded.get("mcpServers", {}) if isinstance(loaded, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -165,7 +167,7 @@ def _claude_disabled_servers(project_root: Path) -> set[str]:
         if not path.is_file():
             continue
         try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
+            loaded = protocol_json.loads_compatible(protocol_json.read_bytes(path))
         except (OSError, ValueError):
             continue
         if not isinstance(loaded, dict):

@@ -464,7 +464,7 @@ def _read_managed(adapter_root: Path) -> set[str]:
             f"Adapter ledger {path} is not a regular file and is never overwritten"
         )
     try:
-        raw = path.read_bytes()
+        raw = protocol_json.read_bytes(path)
     except OSError as exc:
         raise AdapterError(
             f"Adapter ledger {path} cannot be inspected: {exc}"

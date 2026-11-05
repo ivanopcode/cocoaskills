@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from . import protocol_json
+
 import base64
 import ctypes
 import errno
@@ -1280,7 +1282,7 @@ class TransactionEngine:
         except OSError as exc:
             raise TransactionError(f"cannot read journal {transaction_id}") from exc
         try:
-            raw = json.loads(payload)
+            raw = protocol_json.loads_compatible(payload)
             journal = _journal_from_dict(raw)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise TransactionCorruptionError(

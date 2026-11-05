@@ -476,7 +476,7 @@ def _installed_consumer_roots(
     """
     path = Path(home) / "consumers.json"
     try:
-        raw = path.read_bytes()
+        raw = protocol_json.read_bytes(path)
     except FileNotFoundError:
         return set(), [], False
     except OSError as exc:
@@ -486,7 +486,7 @@ def _installed_consumer_roots(
             f"migration"
         ], True
     try:
-        data = json.loads(raw.decode("utf-8"))
+        data = protocol_json.loads(raw)
     except (UnicodeDecodeError, ValueError):
         return set(), [
             f"dispatch consumers record {path} is not valid JSON; install "
@@ -1993,7 +1993,7 @@ def _readable_generation(
 ) -> dict[str, Any] | None:
     """Return the validated registry at ``registry_path``, if readable."""
     try:
-        data = protocol_json.loads(registry_path.read_bytes())
+        data = protocol_json.loads(protocol_json.read_bytes(registry_path))
     except (OSError, protocol_json.ProtocolJSONError):
         return None
     try:
