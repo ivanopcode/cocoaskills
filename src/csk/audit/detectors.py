@@ -8,6 +8,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .secret_values import detect_and_mask
 from .capabilities import CapabilityManifest
 from .model import CapabilityViolation, Finding, Location, Severity, Surface
 
@@ -60,6 +61,8 @@ OPAQUE_PREFIXES = ("agents/", "references/", "scripts/")
 def detect_snapshot(snapshot: Path, capabilities: CapabilityManifest) -> tuple[Finding, ...]:
     findings: list[Finding] = []
     for rel_path, text in _iter_text_files(snapshot):
+        secrets, text = detect_and_mask(rel_path, text)
+        findings.extend(secrets)
         findings.extend(_detect_curl_pipe(rel_path, text))
         findings.extend(_detect_python_shell_true(rel_path, text))
         findings.extend(_detect_network_urls(rel_path, text, capabilities))
