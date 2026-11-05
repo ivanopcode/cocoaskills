@@ -1,6 +1,6 @@
 # Linux go-v1 source builds
 
-Status: blocked on transient mapped-write retention; protocol amendment and native qualification required.
+Status: blocked on mutation and manager-crash protection design; inventory v2 adoption, implementation and native qualification required.
 Date: 2026-11-05.
 Code baseline: `e69b5755a717413b5f985d2da577ddb469ae7ae7` (fetched `origin/main`).
 
@@ -12,12 +12,17 @@ graph, compiler-input validation, source/toolchain identity, authenticated
 one-list/one-build exchange, publication transaction, and deferred guarantees.
 This document changes no product behavior and grants no Linux qualification.
 
-Native mechanism probes ran on Linux on 2026-11-05. Section 8 distinguishes
-measured results from unverified integration and matrix coverage. The evidence
-package is `linux-go/` beside the checkout, task `TASK-261105-4mkuiu`, story
-`STORY-261105-7e3djz`. It contains raw output, reproduction scripts, a protocol
-draft, the mutation decision, and a probe-to-output index. No Linux product
-admission or qualification is granted by these measurements.
+Native mechanism probes ran on Linux and macOS on 2026-11-05. Sections 5 and 8
+summarize the measured results and independent review for `TASK-261105-4mkuiu`,
+`STORY-261105-7e3djz`, separately from unverified integration and matrix coverage.
+The research was accepted; neither that acceptance nor these measurements grants
+Linux product admission or qualification.
+
+Owner direction, 2026-11-05: qualify x86-64 glibc first, AArch64 glibc next,
+and keep musl refused. Mutation guard and manager-crash protection must be
+equally strong on every platform; documenting a weaker guarantee as a limit is
+not the chosen solution. The mechanisms are still being designed. No design,
+implementation result, or completion date is promised here.
 
 The current admission boundary is explicit:
 
@@ -37,7 +42,7 @@ Mach-O linkage at `go_v1.py:2727`; its framework branch remains layout-based
 (`go_v1.py:2838`). The non-framework branch distinguishes embedded Python from
 an external library through linkage (`go_v1.py:2883`).
 
-## 2. Protocol decision comes first
+## 2. Inventory v2 adoption; conditional v3 is optional
 
 The downstream accepted protocol pin is `1.0.0-rc.10`, commit
 `b8b03d597ac83d158a0eadd9d0b25d2e883de1a3`, as pinned in
@@ -70,25 +75,27 @@ released rc.14 data remains frozen. Merged specification, released pin, and
 native implementation qualification are separate facts. The code still pins
 rc.10 in `src/csk/build_repository.py:32-34` and the docs match it.
 
-**Recommendation:** amend the merged successor with an explicit conditional
-model for the two aggregate controls. The local draft proposes provisional
-inventory v3 and evidence v2, with all four controller combinations and negative
-vectors. Names and CIP number require protocol-owner assignment. The measured
-host has no delegated private domain; controller presence alone is insufficient.
-Preserve `manager-worker-v1` and cache inputs unless execution semantics change.
-The draft is unpublished and needs canonical generator, validator, profile and
-release-gate integration before acceptance.
+**Admission baseline:** inventory v2 already admits portable Linux with both
+aggregate cells fixed unavailable. Core lines 869-876 explicitly require no
+root, sudo or cgroup delegation. Conditional inventory v3 and evidence v2 are
+an unpublished proposal for optional later hardening, not an admission gate.
+Their provisional names and controller combinations still need protocol review
+and generator, validator, profile and release integration if pursued.
 
-Until that revision is accepted, csk must retain both Linux admission refusals.
-Do not label Linux as macOS, append Linux privately to the v1 table, borrow a
-script evidence record, or treat a successful toolchain probe as qualification.
-A Linux table without an evidence-platform amendment is incomplete.
+Downstream must explicitly adopt the v2 source and its separate corpus through
+a release containing them or an accepted exact commit pin for an unreleased
+candidate. Preserve the distinction between the accepted specification revision
+and the frozen corpus identity; changing only a version string does not consume
+v2. The successor corpus README also retains the frozen rc.14 qualification
+vector's exclusion of Linux claims. A candidate pin is neither a release nor a
+Linux conformance claim. Keep policy/cache identities stable unless their
+semantics change.
 
-[`UNRESOLVED_QUESTIONS.md`](../../UNRESOLVED_QUESTIONS.md) currently records
-source-lock directory agreement and future Go-family admission, not a Linux
-build amendment. The latter Go-family exception is unrelated and supplies no
-Linux permission. Keep this design as the Linux decision record; create the
-protocol amendment record through the owner's normal flow before enabling it.
+Both Linux admission refusals remain until that adoption, the native adapter,
+the mutation and manager-crash protection mechanisms, and qualification are
+accepted. Do not label Linux as macOS, append it privately to v1, borrow script
+evidence, or treat a toolchain probe as qualification. Inventory v2 already
+supplies the Linux evidence-platform grammar; v3 is not needed to supply it.
 
 ## 3. Native controls and truthful availability
 
@@ -102,8 +109,8 @@ Do not silently add a reason field to that closed record.
 | Control | macOS mechanism at baseline | Windows mechanism at baseline | Proposed Linux outcome | Linux mechanism or exact unavailable reason |
 | --- | --- | --- | --- | --- |
 | `descendant-domain-termination` | available: process group/session | available: Job Object kill-on-close | `available`, subject to probe | `process-group-and-session-teardown`: `setsid`, `killpg`, direct-child `waitpid`, bounded group-absence verification |
-| `active-process-count-limit` | unavailable: `no-private-aggregate-domain` | available: active-process Job limit | `unavailable` | `no-private-aggregate-domain`; proposed normative Linux cell is host-conditional |
-| `aggregate-memory-limit` | unavailable: `no-private-aggregate-domain` | available: process/job memory limits | `unavailable` | `no-private-aggregate-domain`; proposed normative Linux cell is host-conditional |
+| `active-process-count-limit` | unavailable: `no-private-aggregate-domain` | available: active-process Job limit | `unavailable` | `no-private-aggregate-domain`; inventory v2 fixes this cell unavailable |
+| `aggregate-memory-limit` | unavailable: `no-private-aggregate-domain` | available: process/job memory limits | `unavailable` | `no-private-aggregate-domain`; inventory v2 fixes this cell unavailable |
 | `per-file-size-limit` | available: `RLIMIT_FSIZE` | unavailable: `no-private-aggregate-domain` | `available`, subject to probe | `rlimit-fsize`: `getrlimit`/`setrlimit(RLIMIT_FSIZE)` and worker readback |
 | `inherited-handle-restriction` | available: close-on-exec and release | available: explicit handle list | `available`, subject to probe | `close-on-exec-and-explicit-descriptor-release`: `O_CLOEXEC`, `close_fds`, exact `pass_fds`, explicit protocol-FD release |
 
@@ -141,7 +148,10 @@ descendant group. Set/check it in the earliest trusted worker bootstrap and
 recheck the expected parent after registration to close the death-before-setup
 race. Worker startup still precedes that registration. Do not claim Windows
 kill-on-close crash semantics or use it to replace explicit teardown. Avoid
-Python `preexec_fn` in a threaded manager.
+Python `preexec_fn` in a threaded manager. Under the owner direction, protection
+against manager crash must be equally strong on every platform. Normal teardown
+and a parent-death signal alone do not establish that requirement. The mechanism
+and crash/registration-race qualification are still being designed.
 See [the parent-death interface](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html).
 
 Apply the per-file limit before worker execution, then verify inheritance before
@@ -156,7 +166,7 @@ reaps any started worker. `RLIMIT_FSIZE` bounds file extension, not disk totals;
 a real UID, not one private build. Neither backs an aggregate inventory entry.
 See [`getrlimit(2)`](https://man7.org/linux/man-pages/man2/getrlimit.2.html).
 
-### 3.2 cgroup v2 is conditional, not a default privilege
+### 3.2 Optional future cgroup controls
 
 A mounted cgroup v2 hierarchy does not imply permission to create/configure an
 operation domain. A delegated subtree needs controller availability, writable
@@ -176,11 +186,12 @@ neither a file's presence nor UID ownership guarantees safe authority. Do not
 silently upgrade this into a hardened guarantee. See the kernel's
 [cgroup v2 delegation and controller documentation](https://docs.kernel.org/admin-guide/cgroup-v2.html).
 
-A fixed Linux `unavailable` table would contradict hosts where the probe finds a
-private aggregate domain, just as `probe_native_controls()` currently rejects
-an available measurement against an unavailable cell. Recommend resolving the
-conditional grammar in the amendment, rather than configuring false negatives
-or making delegation mandatory for every Linux install.
+Inventory v2 fixes the portable aggregate controls unavailable and forbids
+applying or reporting controls outside that inventory. A host's delegated domain
+does not authorize overriding those cells. Per-operation evidence must follow
+the accepted inventory without claiming enforcement that did not occur. Using
+host-conditional aggregate enforcement requires a separately accepted successor;
+it is optional later work and must not make delegation mandatory for Linux.
 
 ### 3.3 Descriptor capability and observation
 
@@ -253,7 +264,7 @@ manager's mappings as authority for a potentially different worker invocation.
 See [the loader's resolution rules](https://man7.org/linux/man-pages/man8/ld.so.8.html).
 
 This is a deliberately bounded resolver, not a promise to emulate arbitrary
-loaders. Recommend glibc x86-64 and AArch64 first; musl and unusual ABI layouts
+loaders. Qualify x86-64 glibc first, then AArch64 glibc; musl and unusual ABI layouts
 remain refused until separately qualified. Also identify/bind `PT_INTERP` and
 its configuration as Linux startup inputs. This expands the current explicit
 Python-image closure; it does not claim to hash every system DSO. Document
@@ -311,9 +322,14 @@ unexpected Linux module. Failure to obtain native proof rejects before Go.
 
 At baseline `_IdentityMutationGuard._setup_macos()` retains vnode descriptors
 and kqueue notifications for file/directory changes; `verify()` and `close()`
-reject observed mutation, including replacement followed by restoration.
-Windows `_setup_windows()` retains `CreateFileW` handles with read sharing only,
-preventing conflicting write/delete opens while held. Descriptor exhaustion,
+reject observed mutation, including replacement followed by restoration. This
+does not establish complete mapped-write detection; section 5.1 records misses.
+Windows `_setup_windows()` (`go_v1.py:4080-4092`) retains `CreateFileW` handles
+with read sharing only (`go_v1.py:4251-4284`), preventing conflicting write/delete
+opens while held. A pre-existing writable handle or writable file mapping is
+expected to make setup fail with a sharing violation; this is code/API analysis,
+not a Windows measurement. Constructor setup/error handling is at
+`go_v1.py:4010-4029`, with platform dispatch at `4011-4021`. Descriptor exhaustion,
 setup, observation, release and limit-restoration failures fail closed.
 Neither mechanism is equivalent to merely hashing paths at the end.
 
@@ -344,28 +360,59 @@ ownership/capability and filesystem support, and do not provide a general
 unprivileged lock over a distribution-owned runtime tree. See
 [`inotify(7)` limitations](https://man7.org/linux/man-pages/man7/inotify.7.html).
 
-Recommendation: implement bounded retention/observation as an internal slice,
-but keep admission closed until native ordinary-write, rename/restore,
-hardlink, existing-mapping write/restore, and filesystem tests establish the
-claimed contract. If transient mapped writes cannot be covered, require an
-identity closure with verified enforced immutability or redesign it around
-manager-owned immutable snapshots, then review path/import semantics. Otherwise
-escalate that precise guarantee decision; do not silently weaken mutation
-detection to a final hash or publish Linux support with the gap hidden. This
-is a possible architecture blocker, not an optional aggregate-control absence.
+Keep admission closed until the chosen mechanism and native ordinary-write,
+rename/restore, hardlink, pre-existing-mapping write/restore and filesystem tests
+establish the required protection. This is an architecture gate independent of
+optional aggregate controls. The owner requires equally strong mutation guards
+on every platform, including remediation of supported-platform gaps; a final
+hash or a documented threat-model limit is not the selected resolution.
 
 ### 5.1 Measured decision on 2026-11-05
 
-Blocker: `linux-transient-mapped-write-retention`. The mapped plants actually
-changed bytes, then restored them. A warmed writable page evaded inotify and
-left inode, size, mtime and ctime unchanged. O_PATH and final hashing also
-missed it. See section 8 and the evidence package's mutation decision.
+Blocker: `linux-transient-mapped-write-retention`. All mutation plants witnessed
+intermediate changed bytes and then restored the original bytes. Linux retained
+inode references and final hashing did not close the inotify blind spot.
 
-The owner must select enforced immutability of the complete identity closure
-or a manager-owned immutable snapshot architecture with reviewed loader/import
-semantics. Neither is proven here. Copying or chmod alone is insufficient.
-Keep admission closed while that architecture and its negative plants are
-unverified. The protocol amendment does not discharge this independent gate.
+| Plant | Linux ext4, inotify plus retained inode | macOS APFS, actual baseline guard |
+| --- | --- | --- |
+| Ordinary write/restore and rename/substitute/restore | Events observed | Guard rejects |
+| Pre-existing mapped write/restore with msync | No events; timestamps changed | NOTE_WRITE; guard rejects |
+| Warmed pre-existing mapping, no flush before verification | No events; inode/size/mtime/ctime unchanged | No events; verify and close accept, final stat unchanged |
+| Unwarmed pre-existing mapping, no flush | Not separately measured | Independent review: also missed, final stat unchanged |
+| Explicit flush after restoring original bytes | Not separately measured | Independent review: NOTE_WRITE and stat changes; guard rejects |
+
+The macOS runs used separate real guards for `verify()` and `close()` because
+verification consumes events. Quiet controls passed and ordinary-write controls
+fired. Independent review reproduced the original matrix and extended the Mac
+no-flush case to unwarmed mappings and 5/15/35-second idle checks with no event.
+No-flush results do not prove that later writeback or memory pressure cannot
+produce an event. These are small file fixtures, not a qualified running worker
+or complete identity closure. Windows remains unmeasured for these plants.
+
+The shared no-flush gap is broader than a warmed-page case on macOS. Linux is
+also weaker on the measured msync variant; full parity is not established.
+Same-user sibling process probes supplied no simpler memory-write route on the
+measured hosts: Linux Yama scope 1 denied ptrace and procfs memory access;
+macOS denied ptrace and task-port acquisition. Linux descendant positive controls
+worked. These fixtures do not prove protection of the actual worker or all
+same-user threat models.
+
+Protocol Core lines 793-797 require mutable worker components to be treated as
+trusted computing base, and lines 821-824 require identity verification before
+launch and after execution. Core line 841 distinguishes identity re-verification
+from kernel read-only presentation. Neither those passages nor the product's
+checkpoint descriptions expressly require transient mapped-page detection.
+That textual silence does not override the owner's stronger cross-platform
+direction above.
+
+The reviewed option set was (A) enforced immutability of the complete closure,
+(B) manager-owned immutable snapshots with reviewed loader/import semantics,
+(C) an explicit threat-model limit, or (D) continued Linux refusal. A and B
+remain unproven architecture candidates; copying or chmod alone is insufficient.
+C would accept a known gap, including the msync difference, and is not selected
+under the owner direction. D remains the interim admission state while equal
+mutation and manager-crash protection is designed and qualified. No mechanism
+has been selected or demonstrated to satisfy that combined requirement.
 
 ## 6. Complete implementation map
 
@@ -406,20 +453,21 @@ asserts the intended diagnostic, child count, cleanup and publication state.
 
 | Order / slice | Positive claims | Negative claims and control plants | Where evidence can run |
 | --- | --- | --- | --- |
-| 1. Protocol amendment and admission sentinels | Accepted Linux table/evidence examples parse; existing platform examples remain exact. | Predecessor inventory v1 plus linux, extra/missing/duplicate controls, false applied claims, unprobed outcomes and hardened names reject. Existing Linux refusal still starts zero workers/Go and publishes nothing. Plant a false applied value to show the checker rejects that property. | Data/adapter tests on macOS and Linux; normative corpus acceptance belongs to protocol review. |
+| 1. Inventory v2 adoption and admission sentinels | Accepted Linux table/evidence examples parse; existing platform examples remain exact. | Predecessor inventory v1 plus linux, extra/missing/duplicate controls, false applied claims, unprobed outcomes and hardened names reject. Existing Linux refusal still starts zero workers/Go and publishes nothing. Plant a false applied value to show the checker rejects that property. | Data/adapter tests on macOS and Linux; normative corpus acceptance belongs to protocol review. |
 | 2. Bounded ELF identity parser/resolver | Embedded, shared, PIE, stripped executable, SONAME symlink, approved origin-relative and distribution-library fixtures select exact expected images. | Truncated/overflowing headers, invalid class/endian/machine, unmapped string table, unterminated names, duplicate Python dependencies, escape/ambiguous search, forged static inference, wrong ABI and loader config mutation reject with identity diagnostic. Include valid embedded executable beside irrelevant shared library. | Captured-byte and fake-tree fixtures on macOS; real glibc layout/loader agreement on Linux. Never mark fixture success as loader qualification. |
 | 3. Linux startup closure and loaded-image proof | Installed distribution, standalone embedded/shared, pyenv and copied/symlink venv identities agree with symbol-owning loaded image under fixed flags/environment. | Replaced executable/library/config, unexpected LD/Python values, injected archive/module/root, absent procfs, deleted/mapped substitute or wrong image reject before Go. | Layout fixtures on macOS; actual procfs/libc/Python version matrix on Linux. |
 | 4. Mutation retention and native control adapter | Unchanged bounded identity closure stays silent; session/file limit/descriptor controls are applied and observed; no-delegation aggregate outcomes are truthful. | Ordinary write and rename/restore plants must trigger the guard; mapped write/restore plant must either trigger it or block the design. Inject overflow/watch loss/FD exhaustion and setup/restore failures; assert no worker or publication. Show unrelated UID tasks do not become a claimed private domain. | Parsers, event-state/rollback fixtures on macOS; real Linux filesystems, limits and inheritance required for acceptance. Conditional cgroup tests only inside explicitly delegated isolated fixtures. |
-| 5. Authenticated launch and teardown | Correct capability, nonce, parent, SID/PGID and release let fixed Go list/build complete; normal exit leaves no owned child. | Missing/forged/replayed capability, FD collisions, wrong parent, child-start failure, truncated frames, bad permit, second list/build, timeout, output overflow, cancellation and fork-near-teardown leave no publishable result. Exercise group absence and zombies with recorded fixture PIDs only. | Message/rollback tests on macOS; real Linux exec, FD, process group, signal and reaping tests. |
+| 5. Authenticated launch and teardown | Correct capability, nonce, parent, SID/PGID and release let fixed Go list/build complete; normal exit leaves no owned child. | Missing/forged/replayed capability, FD collisions, wrong parent, child-start failure, truncated frames, bad permit, second list/build, timeout, output overflow, cancellation and fork-near-teardown leave no publishable result. Exercise group absence, zombies and manager-crash/registration-race protection with recorded fixture PIDs only; require equally strong protection across platforms. | Message/rollback tests on macOS; real Linux exec, FD, process group, signal and reaping tests. |
 | 6. Integrate native plan/artifact and external lifecycle | Native Linux GOOS/GOARCH/tuning, vendored build and one ELF artifact pass; cold install and verified reuse/currentness work. | Cross-target/extra env, unvendored dependency, generator/cgo/replacement escapes, PE/Mach-O/symlink/hardlinked/oversize artifact, source/toolchain swap and interrupted activation reject without artifact execution or partial publication. | Plan/format/refusal fixtures on macOS; real Go family/architecture and end-to-end Linux lifecycle. |
-| 7. Qualify and enable last | Native Linux installed-manager runs, full suite and corpus/lifecycle evidence at exact signed head, then product predicate and docs agree. | Unqualified libc/architecture/layout and unsupported kernel capabilities remain closed. After enablement, require an actual Linux build lane so an all-refusing implementation cannot pass; retain macOS/Windows regressions. | Linux x86-64 and AArch64 native jobs, existing macOS/Windows jobs; cross-builds alone do not qualify a host. |
+| 7. Qualify and enable last | Native Linux installed-manager runs, full suite and corpus/lifecycle evidence at exact signed head, then product predicate and docs agree. | Unqualified libc/architecture/layout and unsupported kernel capabilities remain closed. After enablement, require an actual Linux build lane so an all-refusing implementation cannot pass; retain macOS/Windows regressions. | Native x86-64 glibc qualification first, AArch64 glibc next, with macOS/Windows regressions; musl remains refused and cross-builds alone do not qualify a host. |
 
-Do not merge an admission change ahead of the mutation guard or protocol gates.
+Do not merge an admission change ahead of inventory adoption, mutation and
+manager-crash protection, or native qualification.
 Native test fixtures own and reap their children; no shared-user resource stress,
 shared cgroup writes, services, or production-runtime mutation is required.
 The current document is non-executable: validate code-reference accuracy,
-protocol counterexamples and document links, plus the required regression run;
-no product-test additions are justified just to test prose.
+protocol counterexamples and document links. This follow-up changes only prose;
+no new product tests or full-suite rerun are justified by that delta.
 
 ## 8. Native probes and remaining evidence gates
 
@@ -431,11 +479,11 @@ No AArch64, musl, Go 1.27, remote filesystem or additional interpreter matrix
 was qualified. AArch64 is unnecessary to reproduce the blocker, but eventual
 AArch64 admission requires native architecture evidence.
 
-Raw output is indexed by `linux-go/evidence/index.txt` beside the checkout.
-Each record binds the source and shared host facts. `probes.py` and `extra.py`
-record the reproducible bounded fixtures. Both completed with exit 0; that
-means the probes ran, including the witnessed guard failure, not that a Linux
-build guard passed.
+The task's reviewed evidence binds each probe to the source and shared host
+facts. The bounded Linux mechanism probes completed with exit 0; that means
+the probes ran, including the witnessed guard failure, not that a Linux build
+guard passed. The table below provides the public result and coverage summary;
+section 5.1 adds the later macOS measurements and independent review extensions.
 
 | Probe | Measured result | Coverage limit |
 | --- | --- | --- |
@@ -452,9 +500,21 @@ build guard passed.
 | Advisory lock | Independent writer changes bytes while exclusive flock held | Advisory lock supplies no write exclusion |
 | Session/group | Recorded child PID equals SID/PGID; SIGTERM, wait and group absence succeed | One child; late fork, zombies, manager loss and detachment unverified |
 
-The commands below remain the probe specification. The evidence index records
-which ran, which ran in equivalent instrumented form, and which could not run.
-A missing fixture or unavailable tool is never a pass.
+The commands below remain the probe specification; the table above distinguishes
+measured mechanisms from missing integration coverage. A missing fixture or
+unavailable tool is never a pass.
+
+The historical VM regression run was interrupted at 8191 passed, 272 skipped,
+4 failed and 60 setup errors; it was not a green suite or qualification. Review
+at the same source head attributed the 60 errors to missing Git history in the
+archive transfer and three failures to absent external corpus fixtures. Hosted
+Ubuntu CI passed those cases with its checkout and corpus configuration. The
+remaining zsh case failed exact PATH equality after shell startup supplied a
+default PATH; the no-empty-entry property itself held. Hosted Ubuntu CI skipped
+both zsh cases because zsh was absent, so its green result does not resolve that
+failure. Product-versus-test ownership remains open outside this build scope.
+The VM's unrun tail remains unverified by that run; different hosted selections
+and environments are only indirect evidence.
 
 ### 8.1 Read-only host and runtime facts
 
@@ -608,11 +668,11 @@ Its results do not qualify absent integration fixtures.
 
 | Decision or risk | Recommendation / acceptance gate |
 | --- | --- |
-| Downstream pin lacks Linux; merged unreleased successor fixes aggregate absence | Review the conditional successor and evidence version, then pin only accepted corpus bytes. Keep policy/cache identity stable absent semantic changes. |
-| cgroup availability varies within Linux | Adopt explicit conditional grammar; report `no-private-aggregate-domain` on measured absence. Do not use per-UID/per-process rlimits as aggregate controls or require system administration for the portable baseline. |
-| Transient mapped-write blind spot reproduced | BLOCKED: owner must select enforced immutability of the complete closure or an immutable snapshot architecture, then require native plants against it. Final hash/stat plus inotify is insufficient. |
-| Arbitrary ELF loader/layout support is too broad | Start with bounded, deterministic glibc x86-64/AArch64 layouts and exact supported Python versions. Refuse unsupported loader/configuration/ABI forms with identity diagnostics. |
-| Manager death versus normal teardown | Qualify bounded normal teardown first. Parent-death signals are supplementary; decide whether crash-complete domain death is a new requirement needing a stronger domain/supervisor. |
+| Downstream pin lacks Linux; inventory v2 already admits portable Linux | Adopt the accepted v2 source and separate corpus through a release or explicit candidate commit pin, then implement and qualify the adapter. Conditional v3 is optional later hardening. |
+| cgroup availability varies within Linux | Follow the fixed-unavailable v2 cells for portable admission. Any conditional enforcement needs a separate successor; no root, sudo or delegation is required for the baseline. |
+| Transient mapped-write blind spots reproduced on Linux and macOS | BLOCKED: design equally strong mutation protection on every platform, then qualify it with native plants. Section 5.1 preserves the reviewed options; a documented limit is not the selected solution. |
+| Arbitrary ELF loader/layout support is too broad | Qualify bounded x86-64 glibc layouts first, AArch64 glibc next; keep musl refused. Bind exact supported Python versions. Refuse unsupported loader/configuration/ABI forms with identity diagnostics. |
+| Manager death versus normal teardown | Owner direction requires equally strong manager-crash protection on every platform. The mechanism is still being designed; normal teardown and parent-death signals alone are not proof. |
 | File-limit inheritance changes manager-global state | Reuse the existing locked lifecycle only with restoration/concurrency evidence; evaluate helper graph costs before introducing one. |
 | Native integration and platform matrix remain unverified | Use only the bounded measurements in section 8. Qualify actual builds, refusal controls and other-platform regressions before admission. |
 | Real runtime matrix may expose additional mutable startup inputs | Expand the bound identity closure or refuse the layout. Do not add allowlists of unexpected proof modules just to make tests pass. |
