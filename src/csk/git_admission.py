@@ -52,6 +52,7 @@ OPERATOR_SSH_IDENTITY_ENV = "CSK_BUILD_SSH_IDENTITY"
 OPERATOR_SSH_AGENT_ENV = "CSK_BUILD_SSH_AGENT"
 OPERATOR_SSH_KNOWN_HOSTS_ENV = "CSK_BUILD_SSH_KNOWN_HOSTS"
 OPERATOR_SSH_AGENT_AUTO = "auto"
+_WINDOWS_SSH_AGENT_PIPE = r"\\.\pipe\openssh-ssh-agent"
 
 _HEX_BY_FORMAT = {
     "sha1": re.compile(r"^[0-9a-f]{40}$"),
@@ -358,7 +359,8 @@ def capture_operator_ssh_credentials(
     """Capture the operator's SSH selection for external build repositories.
 
     Command-line values win over ``CSK_BUILD_SSH_*``.  ``agent`` accepts the
-    literal ``auto`` to adopt the operator's live ``SSH_AUTH_SOCK``; every other
+    literal ``auto`` to select the Windows OpenSSH service pipe or adopt the
+    operator's live POSIX ``SSH_AUTH_SOCK``; every other
     value is an absolute socket path.  ``known_hosts`` defaults to the operator
     home's ``.ssh/known_hosts`` because the fetch pins
     ``StrictHostKeyChecking=yes`` and has no other source of truth for host keys.
@@ -376,7 +378,11 @@ def capture_operator_ssh_credentials(
         OPERATOR_SSH_KNOWN_HOSTS_ENV
     )
     if raw_agent == OPERATOR_SSH_AGENT_AUTO:
-        raw_agent = source.get("SSH_AUTH_SOCK")
+        raw_agent = (
+            _WINDOWS_SSH_AGENT_PIPE
+            if os.name == "nt"
+            else source.get("SSH_AUTH_SOCK")
+        )
         if not raw_agent:
             raise GitAdmissionError(
                 SSH_CREDENTIAL_MISSING,
@@ -417,6 +423,15 @@ def validate_operator_ssh_credentials(
         if path is None:
             admitted[field] = None
             continue
+        if kind == "socket" and os.name == "nt":
+            if path != Path(_WINDOWS_SSH_AGENT_PIPE):
+                raise GitAdmissionError(
+                    IDENTITY_INVALID, "SSH agent socket is not the admitted Windows pipe"
+                )
+            if not _windows_ssh_agent_pipe_available():
+                raise GitAdmissionError(IDENTITY_INVALID, "SSH agent pipe is unavailable")
+            admitted[field] = path
+            continue
         if not path.is_absolute():
             raise GitAdmissionError(IDENTITY_INVALID, f"{label} path must be absolute")
         try:
@@ -437,6 +452,19 @@ def validate_operator_ssh_credentials(
             )
         admitted[field] = target
     return OperatorSSHCredentials(**admitted)
+
+
+def _windows_ssh_agent_pipe_available() -> bool:
+    # stat/resolve opens named pipes and can fail with ERROR_PIPE_BUSY. Probe
+    # availability without opening a client connection or changing agent state.
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    wait = kernel32.WaitNamedPipeW
+    wait.argtypes = (wintypes.LPCWSTR, wintypes.DWORD)
+    wait.restype = wintypes.BOOL
+    return bool(wait(_WINDOWS_SSH_AGENT_PIPE, 1)) or ctypes.get_last_error() == 121
 
 
 def _operator_known_hosts_default(environment: Mapping[str, str]) -> Path | None:

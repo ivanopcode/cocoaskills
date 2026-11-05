@@ -31,11 +31,6 @@ EXPECTED_HOST = "git@fixture.test"
 EXPECTED_PATH = "repository.git"
 
 
-pytestmark = pytest.mark.skipif(
-    os.name == "nt", reason="the stand-in ssh program relies on POSIX exec semantics"
-)
-
-
 def _git_path() -> Path:
     resolved = shutil.which("git")
     assert resolved is not None
@@ -85,6 +80,8 @@ def _fixture_repository(root: Path) -> tuple[Path, str]:
 def _stub_ssh(root: Path, bare: Path) -> tuple[Path, Path]:
     """Write an ssh stand-in that logs its argv and serves ``git upload-pack``."""
 
+    if os.name == "nt":
+        pytest.skip("the stand-in ssh program requires POSIX exec semantics")
     root.mkdir(parents=True, exist_ok=True)
     log = root / "ssh-argv.jsonl"
     program = root / "ssh"
@@ -138,6 +135,8 @@ def _known_hosts(root: Path) -> Path:
 def _agent_socket(root: Path, request: pytest.FixtureRequest) -> Path:
     # AF_UNIX paths are capped near 104 bytes on macOS, well below what a
     # pytest tmp_path spends on the test name alone.
+    if os.name == "nt":
+        pytest.skip("POSIX agent socket fixture; Windows pipe is tested separately")
     directory = Path(tempfile.mkdtemp(prefix="csk-agent-"))
     path = directory / "agent.sock"
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -467,6 +466,7 @@ def test_capture_defaults_known_hosts_to_the_operator_home(tmp_path: Path) -> No
     assert captured.known_hosts == known_hosts
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlink privileges")
 def test_capture_rejects_material_that_is_not_an_admitted_object(
     tmp_path: Path,
 ) -> None:
@@ -494,6 +494,7 @@ def test_capture_rejects_material_that_is_not_an_admitted_object(
         )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlink privileges")
 def test_capture_resolves_symlinked_material_to_its_target(tmp_path: Path) -> None:
     # A live agent socket is conventionally a stable symlink onto a per-session
     # rendezvous point, so operator paths are resolved rather than refused.
@@ -505,3 +506,55 @@ def test_capture_resolves_symlinked_material_to_its_target(tmp_path: Path) -> No
         {}, identity=os.fspath(link), known_hosts=os.fspath(known_hosts)
     )
     assert captured.identity == identity.resolve(strict=True)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows service pipe contract")
+def test_windows_auto_agent_selects_only_the_standard_pipe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # With no SSH_AUTH_SOCK, auto and the explicit standard pipe are valid;
+    # arbitrary pipes, files and missing service endpoints must still refuse.
+    pipe = Path(r"\\.\pipe\openssh-ssh-agent")
+    known_hosts = _known_hosts(tmp_path)
+    monkeypatch.setattr(git_admission, "_windows_ssh_agent_pipe_available", lambda: True)
+    for selection in ("auto", str(pipe)):
+        result = git_admission.capture_operator_ssh_credentials(
+            {"SSH_AUTH_SOCK": r"\\.\pipe\untrusted"},
+            agent=selection, known_hosts=str(known_hosts),
+        )
+        assert result.agent_socket == pipe
+    for selection in (r"\\.\pipe\untrusted", str(known_hosts), "relative"):
+        with pytest.raises(git_admission.GitAdmissionError) as error:
+            git_admission.capture_operator_ssh_credentials(
+                {}, agent=selection, known_hosts=str(known_hosts)
+            )
+        assert error.value.code == git_admission.IDENTITY_INVALID
+        assert "not the admitted Windows pipe" in str(error.value)
+    monkeypatch.setattr(git_admission, "_windows_ssh_agent_pipe_available", lambda: False)
+    with pytest.raises(git_admission.GitAdmissionError) as error:
+        git_admission.capture_operator_ssh_credentials({}, agent="auto")
+    assert error.value.code == git_admission.IDENTITY_INVALID
+    assert "SSH agent pipe is unavailable" in str(error.value)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows named pipe API")
+def test_windows_agent_pipe_probe_distinguishes_busy_from_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Only success or ERROR_SEM_TIMEOUT proves an existing endpoint;
+    # missing pipes and access failures must refuse.
+    import ctypes
+
+    class Wait:
+        def __call__(self, name: str, timeout: int) -> int:
+            assert name == r"\\.\pipe\openssh-ssh-agent"
+            assert timeout == 1
+            return result
+
+    class Kernel:
+        WaitNamedPipeW = Wait()
+
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: Kernel())
+    for result, error, expected in ((1, 0, True), (0, 121, True), (0, 2, False), (0, 5, False)):
+        monkeypatch.setattr(ctypes, "get_last_error", lambda: error)
+        assert git_admission._windows_ssh_agent_pipe_available() is expected
