@@ -1850,8 +1850,10 @@ class _PreparedWorkerLaunch:
         import resource
 
         previous = resource.getrlimit(resource.RLIMIT_NOFILE)
-        wanted = max(previous[0], min(_WORKER_LAUNCH_FDS) + 1)
-        if previous[1] != resource.RLIM_INFINITY and wanted > previous[1]:
+        required = max(_WORKER_LAUNCH_FDS) + 1
+        ceiling = required if previous[1] == resource.RLIM_INFINITY else previous[1]
+        wanted = max(previous[0], min(required, ceiling))
+        if wanted <= min(_WORKER_LAUNCH_FDS):
             raise GoV1Error(CODE_CONTROL_UNAVAILABLE, "worker launch descriptor capacity is unavailable")
         try:
             resource.setrlimit(resource.RLIMIT_NOFILE, (wanted, previous[1]))
