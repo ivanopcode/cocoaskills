@@ -609,3 +609,24 @@ def test_public_install_failure_types_have_explicit_cause_rendering_rules() -> N
     }
 
     assert set(installer._FAILURE_CAUSE_RENDERERS) == public_failure_types
+
+
+# Real install presentation retains the build subject; raw Git stderr stays hidden.
+@pytest.mark.parametrize("verbose", [False, True])
+def test_cli_build_transport_names_repository_command_and_skill(monkeypatch, tmp_path, capsys, verbose):
+    config, _project, _external, _lock = _external_install_case(tmp_path, annotated_tag_lock=False)
+    monkeypatch.setattr(cli.config, "load_config", lambda: config)
+    _stub_trusted_toolchain(monkeypatch)
+    monkeypatch.setattr(installer, "_external_git_tool", lambda *args, **kwargs: _git_tool())
+    real_acquire = transport.acquire_plan
+    def acquire(plan, lock, tool=None, **kwargs):
+        def fail(**kwargs):
+            raise git_admission.GitAdmissionError(git_admission.SOURCE_UNAVAILABLE, "private Git operation failed", failure_class="ssh-auth-rejected", hints=("ssh-signing-failed",))
+        return real_acquire(plan, lock, tool, attempt=fail, **kwargs)
+    monkeypatch.setattr(transport, "acquire_plan", acquire)
+    code, _stdout, stderr = _invoke_install(capsys, verbose=verbose)
+    assert code == cli.EXIT_PARTIAL_FAIL
+    assert "example.test/external-tool" in stderr
+    assert "command 'external-tool' of skill 'external-skill'" in stderr
+    assert "ssh-auth-rejected" in stderr
+    assert "next:" in stderr and "hint:" in stderr

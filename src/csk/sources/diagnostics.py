@@ -94,6 +94,52 @@ REMEDIATION_BY_CODE: Final[dict[str, str]] = {
 }
 
 
+# Class actions are separate from protocol codes and stderr hints so additions
+# do not change transport classification or fallback policy.
+NEXT_BY_FAILURE_CLASS: Final[dict[str, str]] = {
+    "dns": "check DNS for the repository host and rerun csk install",
+    "connection-refused": "check the repository host, port and network access",
+    "timeout": "check network access and whether SSH is waiting for a PIN or key touch; retry when ready",
+    "endpoint-unavailable": "check the listed repository endpoint and retry",
+    "auth-unavailable": "select usable credentials with csk config build-ssh add or csk config build-https add",
+    "auth-rejected": "verify the selected account has read access to the repository",
+    "ssh-auth-rejected": "verify the selected SSH key and account have repository read access; review csk config build-ssh list",
+    "http-401": "check the selected HTTPS credential and repository read access",
+    "http-403": "grant the selected account repository read access or select an authorized credential",
+    "host-key": "verify the host fingerprint with the repository operator and update the selected known_hosts file",
+    "tls": "verify the server certificate and the selected trust configuration",
+    "integrity": "restore the locked repository objects and rerun csk install",
+    "identity": "check the declared repository identity and endpoint mapping",
+    "ref-moved": "restore the locked ref or run csk upgrade after reviewing the change",
+    "redirect": "declare the intended endpoint explicitly in source-policy.json",
+    "audit": "resolve the repository audit refusal before retrying",
+    "revocation": "replace the revoked repository authorization before retrying",
+    "canary": "investigate the repository canary refusal before retrying",
+    "assurance": "satisfy the required repository assurance level before retrying",
+    "capability": "select an endpoint with the required repository capability",
+    "policy-unreadable": "restore a readable source-policy.json and rerun csk install",
+    "http-404": "verify the repository URL and the selected account's read access",
+    "malformed-response": "check the repository service response before retrying",
+    "partial-response": "check the repository service and network before retrying",
+    "unclassified": "check repository access and Git/SSH locally; keep stderr attached when diagnosing the failed command",
+}
+for _status in ("http-502", "http-503", "http-504"):
+    NEXT_BY_FAILURE_CLASS[_status] = "check repository service availability and retry"
+
+HINT_TEXT: Final[dict[str, str]] = {
+    "ssh-signing-failed": "SSH reported a signing failure; check the selected key, agent and any required PIN or touch",
+    "ssh-key-load-failed": "SSH reported a key-loading failure; check the selected key format and unlock method",
+}
+
+
+def transport_next_steps(failure_class: str, hints: tuple[str, ...] = ()) -> str:
+    """Use only fixed text; unknown hints and raw child output never render."""
+    action = NEXT_BY_FAILURE_CLASS.get(failure_class, NEXT_BY_FAILURE_CLASS["unclassified"])
+    lines = [f"next: {action}"]
+    lines.extend(f"hint: {HINT_TEXT[hint]}" for hint in hints if hint in HINT_TEXT)
+    return "\n".join(lines)
+
+
 def format_diagnostic(code: str, reason: str) -> str:
     """Render one stable class as a reason and remediation line."""
 
@@ -206,4 +252,7 @@ def format_transport_exception(exc: BaseException) -> str | None:
     transport_module = __name__.rsplit(".", 1)[0] + ".transport"
     if type(exc).__module__ != transport_module:
         return None
-    return format_diagnostic(code, transport_failure_reason(exc))
+    rendered = format_diagnostic(code, transport_failure_reason(exc))
+    for attempt in getattr(exc, "attempts", ()):
+        rendered += "\n" + transport_next_steps(attempt.classification, attempt.hints)
+    return rendered
