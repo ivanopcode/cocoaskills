@@ -1949,3 +1949,31 @@ def test_install_verbose_reports_commands_and_full_commit(monkeypatch, tmp_path,
     assert not result.errors
     assert any(f"commit {commit}" in message for message in result.messages)
     assert any("command tool -> .agents/bin/tool" in message for message in result.messages)
+
+
+# A missing sibling must not taint the installed row; scope failure still fails --check.
+def test_global_status_attributes_missing_sibling(tmp_path, skills_root, csk_home, monkeypatch):
+    from csk import status
+
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project)
+    make_skill_repo(skills_root, "healthy", tag="v1")
+    declarations = [{"name": "healthy", "tag": "v1"}]
+    _write_global_skillfile(csk_home, {"schema_version": 1, "skills": declarations})
+    assert not global_install.install(cfg).errors
+    assert status.collect_global_status(cfg).clean
+    declarations.append({"name": "absent", "tag": "v1"})
+    _write_global_skillfile(csk_home, {"schema_version": 1, "skills": declarations})
+    result = status.collect_global_status(cfg)
+    healthy, absent = result.skills
+    assert healthy.label == "up-to-date"
+    assert healthy.detail is None
+    assert absent.label == "error"
+    assert "absent" in absent.detail
+    assert result.errors
+    assert not result.clean
+    payload = status.statuses_to_payload([result])
+    assert payload[0]["skills"][0]["detail"] is None
+    assert "absent" in payload[0]["skills"][1]["detail"]
+    _save_config(monkeypatch, cfg)
+    assert cli.main(["global", "status", "--check"]) == 1
