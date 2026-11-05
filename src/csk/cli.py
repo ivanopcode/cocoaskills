@@ -1427,7 +1427,7 @@ def _cmd_config_build_ssh(args: argparse.Namespace) -> int:
                 parts.append(f"identity={rule.identity}")
             if rule.known_hosts is not None:
                 parts.append(f"known_hosts={rule.known_hosts}")
-            print(f"{terminal_text(rule.scope)}: " + " ".join(parts))
+            print(f"{terminal_text(rule.scope)}: " + terminal_text(" ".join(parts)))
         return EXIT_OK
     if args.build_ssh_command == "remove":
         remaining = tuple(
@@ -1484,7 +1484,7 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
                     home=build_https.resolve_operator_home(),
                 )
                 parts.append("stored=yes" if stored else "stored=NO")
-            print(f"{terminal_text(rule.scope)}: " + " ".join(parts))
+            print(f"{terminal_text(rule.scope)}: " + terminal_text(" ".join(parts)))
         return EXIT_OK
     if args.build_https_command == "remove":
         remaining = tuple(
@@ -1768,7 +1768,7 @@ def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
 def _print_check_failure(exc: Exception) -> None:
     rendered = source_diagnostics.format_exception(exc)
     if rendered is None:
-        rendered = f"error: {exc}"
+        rendered = f"error: {terminal_text(exc)}"
     print(rendered, file=sys.stderr)
 
 

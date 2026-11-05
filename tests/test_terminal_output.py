@@ -72,7 +72,7 @@ def test_audit_and_diagnostic_renderers():
     assert "\x1b" not in rendered
     assert "\nforged" not in rendered
     assert "café" in rendered
-    assert reports_to_payload((report,))[0]["findings"][0]["evidence"] == raw
+    assert reports_to_payload((report,))["reports"][0]["findings"][0]["evidence"] == raw
     assert finding.evidence == raw
     code = next(iter(REMEDIATION_BY_CODE))
     diagnostic = format_diagnostic(code, raw)
@@ -80,3 +80,24 @@ def test_audit_and_diagnostic_renderers():
     assert "\nforged" not in diagnostic
     assert "\nremediation: " in diagnostic
     assert "café" in format_diagnostic(code, "café")
+
+
+# Unclassified check errors use the same display boundary as classified diagnostics.
+def test_check_failure_fallback_is_terminal_safe(capsys):
+    cli._print_check_failure(ValueError("café\nforged\x1b[31m"))
+    assert capsys.readouterr().err == "error: café\\nforged\\x1b[31m\n"
+    cli._print_check_failure(ValueError("café"))
+    assert capsys.readouterr().err == "error: café\n"
+
+
+# Unknown package agent names cannot forge warning rows; supported agents remain silent.
+def test_agent_warning_escapes_package_names(capsys):
+    from csk import adapters
+
+    adapters.warn_unknown_agents(["unknown\nforged\x1b[31m"])
+    warning = capsys.readouterr().err
+    assert "\nforged" not in warning
+    assert "\x1b" not in warning
+    assert r"unknown\nforged\x1b[31m" in warning
+    adapters.warn_unknown_agents(list(adapters.known_agents()))
+    assert capsys.readouterr().err == ""
