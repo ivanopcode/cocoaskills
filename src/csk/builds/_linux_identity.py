@@ -10,10 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
-import re
 import struct
 
-from ._elf_identity import ELF, MAX_IMAGE, parse_elf, refuse
+from ._elf_identity import MAX_IMAGE, parse_elf, refuse
 from .go_v1 import _ExecutableIdentity, _resolve_file_identity
 
 LOADERS = {62: "/lib64/ld-linux-x86-64.so.2", 183: "/lib/ld-linux-aarch64.so.1"}
@@ -58,7 +57,7 @@ def capture(path: Path, *, executable: bool = False) -> Image:
     raise refuse("excessive link chain")
 
 
-def cache_entries(data: bytes) -> dict[str, tuple[str, ...]]:
+def cache_entries(data: bytes, machine: int = 62) -> dict[str, tuple[str, ...]]:
     """Read only the new glibc 1.1 cache; refuse compatibility/hwcap entries."""
     if not data.startswith(b"glibc-ld.so.cache1.1") or len(data) < 48 or len(data) > 8 * 1024 * 1024:
         raise refuse("unsupported loader cache")
@@ -80,9 +79,12 @@ def cache_entries(data: bytes) -> dict[str, tuple[str, ...]]:
     for i in range(count):
         flags, key, value, osversion, hwcap = struct.unpack_from("<iIIIQ", data, 48 + i * 24)
         name, path = string(key), string(value)
-        # Only Python cache entries influence image selection here. Others
-        # remain outside the Python-image closure, as in the design.
-        if flags not in (0x303, 0xA03) or hwcap or osversion or not path.startswith("/"):
+        # glibc cache contains multiple ABIs. Exclude known foreign ELF ABIs;
+        # never use a 32-bit entry to resolve a 64-bit dependency.
+        expected_flags = {62: 0x303, 183: 0xA03}[machine]
+        if flags in (0x3, 0x303, 0xA03, 0x803) and flags != expected_flags:
+            continue
+        if flags != expected_flags or hwcap or osversion or not path.startswith("/"):
             # Refuse a selected unsupported cache entry, without guessing its
             # applicability from the current manager CPU.
             path = "!unsupported-cache-entry"
@@ -134,7 +136,7 @@ def resolve_linux_identity(path: Path, *, version: str,
     if preload is not None and preload.contents.strip():
         raise refuse("nonempty system preload")
     cache = capture(cache_path) if os.path.lexists(cache_path) else None
-    entries = cache_entries(cache.contents) if cache else {}
+    entries = cache_entries(cache.contents, elf.machine) if cache else {}
     python = [n for n in elf.needed if "python" in n.lower()]
     expected = f"libpython{version}.so.1.0"
     if len(python) > 1 or (python and python != [expected]):
