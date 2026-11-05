@@ -365,12 +365,6 @@ def _collect_scope(
             _basic_skill_status(config, skills_root, decl)
             for decl in scope_manifest.skills
         ]
-        skills = [
-            replace(skill, label="error", detail=str(exc))
-            if skill.label == "up-to-date"
-            else skill
-            for skill in skills
-        ]
         builds = _unavailable_recorded_builds(
             skills_root,
             scope_manifest.skills,
