@@ -5,14 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased SSH credential diagnostics
+## [Unreleased]
 
 - Inspect selected SSH keys locally before repository traffic; proven unusable
   keys report an authentication availability failure and preserve declared fallback.
 - Add read-only `csk config build-ssh doctor` with platform guidance and explicit
   real-token verification limits; fix file-only menu choices to use private paths.
-
-## [Unreleased]
 
 ## [0.21.1] - 2026-10-30
 

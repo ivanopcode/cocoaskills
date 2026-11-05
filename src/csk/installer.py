@@ -1582,7 +1582,9 @@ def _prompt_build_ssh_rule(
         )
         options.append((f"ssh-agent{loaded}, no pin", "auto", None))
     for pub in candidates.public_keys[:5]:
-        options.append((pub[:-4], None, pub[:-4]))
+        private = build_ssh_module._private_identity_candidate(pub)
+        if private is not None:
+            options.append((private, None, private))
     options.append(("enter a path manually", None, "__manual__"))
     print("Detected candidates:")
     for index, (label, _, _) in enumerate(options, start=1):
