@@ -71,7 +71,11 @@ class CommandBackend:
             except OSError as exc:
                 raise AuditBackendError(f"Audit backend failed to start: {self.name}: {exc}") from exc
         if proc.returncode != 0:
-            stderr = redaction.scrub_text(proc.stderr.decode("utf-8", errors="replace"))[:2000]
+            # A prefix can cut through a PEM or credential and defeat redaction.
+            # Omit oversized diagnostics entirely before decoding or scrubbing.
+            stderr = "<stderr omitted: exceeds 2000 bytes>"
+            if len(proc.stderr) <= 2000:
+                stderr = redaction.scrub_text(proc.stderr.decode("utf-8", errors="replace"))[:2000]
             raise AuditBackendError(f"Audit backend exited with code {proc.returncode}: {self.name}: {stderr}")
         try:
             response = json.loads(proc.stdout.decode("utf-8"))
