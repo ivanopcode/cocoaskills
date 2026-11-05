@@ -582,12 +582,17 @@ def test_windows_agent_argument_survives_ssh_config_parsing(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
+@pytest.mark.parametrize("ambient", [None, "", "relative-xyz", "hostile"])
 def test_clean_ssh_environment_admits_only_windows_system_data(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, ambient: str | None
 ) -> None:
-    # Windows SSH needs PROGRAMDATA at startup; HTTPS/POSIX must not acquire
-    # it, and no route may inherit PATH, home, agent, or executable overrides.
-    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "system-data"))
+    # Windows SSH gets an empty private PROGRAMDATA even without a parent
+    # value. Ambient absolute/relative/empty values never select trust paths;
+    # HTTPS/POSIX and executable/home/agent exclusions stay unchanged.
+    if ambient is None:
+        monkeypatch.delenv("PROGRAMDATA", raising=False)
+    else:
+        monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "hostile") if ambient == "hostile" else ambient)
     monkeypatch.setenv("PATH", "hostile-search-path")
     monkeypatch.setenv("USERPROFILE", "hostile-home")
     monkeypatch.setenv("SSH_AUTH_SOCK", "hostile-agent")
@@ -598,12 +603,43 @@ def test_clean_ssh_environment_admits_only_windows_system_data(
     for route in ("ssh", "https"):
         environment = git_admission._clean_git_environment(paths, tool, route)
         assert environment.get("PROGRAMDATA") == (
-            str(tmp_path / "system-data") if platform == "win32" and route == "ssh" else None
+            str(paths.ssh / "program-data") if platform == "win32" and route == "ssh" else None
         )
+        if "PROGRAMDATA" in environment:
+            assert Path(environment["PROGRAMDATA"]).is_dir()
+            assert list(Path(environment["PROGRAMDATA"]).iterdir()) == []
         assert environment["PATH"] == str(paths.empty_path)
         assert environment["HOME"] == str(paths.home)
         for name in ("USERPROFILE", "SSH_AUTH_SOCK", "GIT_SSH_COMMAND"):
             assert name not in environment
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows SSH startup")
+@pytest.mark.parametrize("ambient", ["absent", "hostile"])
+def test_windows_native_ssh_starts_with_private_program_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ambient: str
+) -> None:
+    # Real Win32-OpenSSH starts with synthesized PROGRAMDATA, whether the
+    # parent omits it or selects hostile configuration. No server is needed.
+    hostile = tmp_path / "hostile"
+    (hostile / "ssh").mkdir(parents=True)
+    config = hostile / "ssh" / "ssh_config"
+    config.write_bytes(b"ForbiddenTestOption yes\n")
+    if ambient == "absent":
+        monkeypatch.delenv("PROGRAMDATA", raising=False)
+    else:
+        monkeypatch.setenv("PROGRAMDATA", str(hostile))
+    ssh = Path(os.environ["SYSTEMROOT"]) / "System32" / "OpenSSH" / "ssh.exe"
+    if not ssh.is_file():
+        pytest.skip("native OpenSSH client is not installed")
+    paths = _private_paths(tmp_path / "private")
+    tool = git_admission.GitTool(tmp_path / "git", tmp_path / "exec", ("git version",))
+    environment = git_admission._clean_git_environment(paths, tool, "ssh")
+    assert environment["PROGRAMDATA"] == str(paths.ssh / "program-data")
+    result = subprocess.run([str(ssh), "-V"], env=environment, capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert b"OpenSSH_for_Windows" in result.stderr
+    assert config.read_bytes() == b"ForbiddenTestOption yes\n"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows loopback SSH")

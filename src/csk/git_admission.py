@@ -1499,12 +1499,13 @@ def _clean_git_environment(
         }
     )
     if transport == "ssh" and sys.platform == "win32":
-        # Win32-OpenSSH expands its system data directory during startup,
-        # even with -F and known-host files pinned. Without PROGRAMDATA it
-        # exits 255 before diagnostics (even ssh -V). This admits no search
-        # path or config: PATH stays empty and all SSH trust files are pinned.
-        if program_data := os.environ.get("PROGRAMDATA"):
-            environment["PROGRAMDATA"] = program_data
+        # Win32-OpenSSH requires PROGRAMDATA before initializing stderr, even
+        # for ssh -V. It derives system trust paths from this value: provide
+        # an empty private directory, never the ambient system-data location.
+        # The -F and known-host pins remain independent defences.
+        program_data = paths.ssh / "program-data"
+        program_data.mkdir(mode=0o700, exist_ok=True)
+        environment["PROGRAMDATA"] = os.fspath(program_data)
     if transport == "https":
         if https_broker is not None:
             environment["GIT_ASKPASS"] = os.fspath(https_broker)
