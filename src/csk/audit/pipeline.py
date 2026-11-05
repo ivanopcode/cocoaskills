@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from pathlib import Path
 
 from .. import hashing, installer
 from ..config import GlobalConfig
@@ -64,6 +65,8 @@ def audit_plans(
     static_canary_passed: bool | None = None
     backend_canary_passed: bool | None = None
     for plan in plans:
+        # Admission precedes hashing, static detectors, file reads and redaction.
+        _admit_snapshot(plan, config.audit.max_request_bytes)
         content_sha256 = hashing.content_sha256(plan.snapshot)
         trust_record = trust.load_trust_record(config.path.parent, content_sha256)
         revocation = _revocation_reason(config, content_sha256, plan.decl.source, plan.decl.git)
@@ -97,7 +100,7 @@ def audit_plans(
             raise AuditCanaryError("Static audit canary failed; audit detectors are not producing expected findings")
         static_findings = detectors.detect_snapshot(plan.snapshot, plan.spec.capabilities)
         _check_cloud_egress(config, resolved_backend, plan)
-        request = _build_request(plan, static_findings, backend.cloud, content_sha256)
+        request = _build_request(plan, static_findings, backend.cloud, content_sha256, config.audit.max_request_bytes)
         request_size = _request_size(request)
         backend_findings: tuple[Finding, ...]
         if request_size > config.audit.max_request_bytes:
@@ -304,19 +307,40 @@ def _backend_for_config(config: GlobalConfig) -> AuditBackend:
     raise AuditBackendError(f"Unsupported audit backend: {config.audit.backend}")
 
 
+def _admit_snapshot(plan: installer.SkillPlan, limit: int) -> list[Path]:
+    """Reject oversized aggregate input before any content read, even for local backends."""
+    paths = []
+    size = 0
+    for path in plan.snapshot.rglob("*"):
+        if not path.is_file():
+            continue
+        size += path.stat().st_size
+        # Include names so arbitrarily many empty files cannot bypass admission.
+        size += len(path.relative_to(plan.snapshot).as_posix().encode("utf-8"))
+        if size > limit:
+            raise AuditBackendError(f"audit.request.too-large: input exceeds {limit} bytes")
+        paths.append(path)
+    return sorted(paths)
+
+
 def _build_request(
     plan: installer.SkillPlan,
     static_findings: tuple[Finding, ...],
     cloud: bool,
     content_sha256: str,
+    max_request_bytes: int = backend_config.DEFAULT_MAX_REQUEST_BYTES,
 ) -> AuditRequest:
+    paths = _admit_snapshot(plan, max_request_bytes)
+    remaining = max_request_bytes
     files: dict[str, bytes] = {}
     redacted = False
-    for path in sorted(plan.snapshot.rglob("*")):
-        if not path.is_file():
-            continue
+    for path in paths:
         rel = path.relative_to(plan.snapshot).as_posix()
-        content = path.read_bytes()
+        with path.open("rb") as stream:
+            content = stream.read(remaining + 1)
+        remaining -= len(content)
+        if remaining < 0:
+            raise AuditBackendError("audit.request.too-large: snapshot grew beyond input byte limit")
         if cloud:
             scrubbed = redaction.scrub_bytes(content)
             if scrubbed != content:
