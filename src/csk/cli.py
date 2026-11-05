@@ -473,6 +473,13 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
         "--known-hosts", default=None, metavar="PATH",
         help="known_hosts override for this scope",
     )
+    build_ssh_doctor = build_ssh_sub.add_parser(
+        "doctor", help="Inspect local SSH metadata and print operator setup steps (read-only)."
+    )
+    build_ssh_doctor.add_argument("scope", nargs="?", help="scope or canonical repository identity")
+    build_ssh_doctor.add_argument("--all-os", action="store_true", help="include macOS, Linux and Windows steps")
+    build_ssh_doctor.add_argument("--identity", metavar="PATH", help="inspect this identity instead of the configured selection")
+    build_ssh_doctor.add_argument("--agent", metavar="SOCKET", help="inspect this agent socket (or auto)")
     build_ssh_sub.add_parser("list", help="List configured credential scopes.")
     build_ssh_remove = build_ssh_sub.add_parser(
         "remove", help="Remove one credential scope."
@@ -1451,6 +1458,12 @@ def _cmd_config_show() -> int:
 
 def _cmd_config_build_ssh(args: argparse.Namespace) -> int:
     cfg = config.load_config()
+    if args.build_ssh_command == "doctor":
+        print(build_ssh.doctor(
+            cfg.build_ssh, args.scope, identity=args.identity, agent=args.agent,
+            all_os=args.all_os,
+        ))
+        return EXIT_OK
     if args.build_ssh_command == "list":
         if not cfg.build_ssh:
             print("No build-ssh scopes configured")
