@@ -17,6 +17,6 @@ repository. Flags and CSK_BUILD_SSH_* still win over every scope.
 
 Examples:
   csk config build-ssh add gitlab.example.com/portals/infra \
-      --agent auto --identity ~/.ssh/work.pub
+      --agent auto --identity ~/.ssh/work
   csk config build-ssh list
   csk config build-ssh remove gitlab.example.com/portals/infra

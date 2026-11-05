@@ -445,7 +445,7 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
             "repository. Flags and CSK_BUILD_SSH_* still win over every scope.\n\n"
             "Examples:\n"
             "  csk config build-ssh add gitlab.example.com/portals/infra \\\n"
-            "      --agent auto --identity ~/.ssh/work.pub\n"
+            "      --agent auto --identity ~/.ssh/work\n"
             "  csk config build-ssh list\n"
             "  csk config build-ssh remove gitlab.example.com/portals/infra"
         ),
