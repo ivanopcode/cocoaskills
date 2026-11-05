@@ -155,3 +155,65 @@ def test_admission_is_disconnected(monkeypatch, tmp_path):
         go_v1.inventory_platform()
     assert error.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
     assert list(tmp_path.iterdir()) == []
+
+
+# GNU-only indexing accepts a defined symbol; an unterminated chain cannot
+# overrun the captured image or satisfy the parser by reaching unrelated bytes.
+def test_gnu_hash_bounds():
+    data = bytearray(image())
+    struct.pack_into('<qQ', data, 320, 0x6ffffef5, 0x400900)
+    struct.pack_into('<IIIIQII', data, 2304, 1, 1, 1, 5, 0, 1, 1)
+    assert elf.parse_elf(bytes(data)).defines_python
+    data[2332:] = bytes(len(data)-2332)
+    with pytest.raises(go_v1.GoV1Error) as error:
+        elf.parse_elf(bytes(data))
+    assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+
+
+# A structurally valid cache change still invalidates a captured identity.
+def test_loader_configuration_mutation(layout, tmp_path):
+    _, resolve = layout
+    before = resolve()
+    write(tmp_path/'preload', b'')
+    with pytest.raises(go_v1.GoV1Error) as error:
+        before.verify()
+    assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+    resolve().verify()
+
+
+# Native-control admission and interpreter dispatch remain closed even when a
+# synthetic resolver could succeed. No native probe or worker/Go subprocess runs.
+def test_native_dispatch_stays_closed(layout, monkeypatch):
+    import subprocess
+    executable, resolve = layout
+    identity = resolve()
+    calls = []
+    monkeypatch.setattr(go_v1.sys, 'platform', 'linux')
+    monkeypatch.setattr(linux, 'resolve_linux_identity', lambda *a, **k: calls.append('resolver') or identity)
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('worker/Go started'))
+    with pytest.raises(go_v1.GoV1Error) as error:
+        go_v1.probe_native_controls(go_v1.ResourceLimits(), _native_probe=lambda *a: calls.append('probe') or True)
+    assert error.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
+    with pytest.raises(go_v1.GoV1Error) as error:
+        go_v1._resolve_interpreter_runtime(go_v1._resolve_executable_identity(executable))
+    assert error.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
+    assert calls == []
+
+
+# A string table can cross adjacent LOAD segments with identical file mapping
+# (a native relocated-table layout); a virtual hole still rejects.
+def test_adjacent_load_string_table():
+    data = bytearray(image())
+    struct.pack_into('<H', data, 56, 4)
+    struct.pack_into('<Q', data, 64+32, 1030)
+    struct.pack_into('<Q', data, 64+40, 1030)
+    struct.pack_into('<IIQQQQQQ', data, 232, 1, 5, 1030, 0x400406, 0, 4096-1030, 4096-1030, 1)
+    # Move dynamic entries because the additional program header overlaps them.
+    data[512:608] = image()[256:352]
+    struct.pack_into('<Q', data, 120+8, 512)
+    struct.pack_into('<Q', data, 120+16, 0x400200)
+    assert elf.parse_elf(bytes(data)).defines_python
+    struct.pack_into('<Q', data, 232+16, 0x400407)
+    with pytest.raises(go_v1.GoV1Error) as error:
+        elf.parse_elf(bytes(data))
+    assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
