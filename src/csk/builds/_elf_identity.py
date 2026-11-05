@@ -15,6 +15,16 @@ MAX_HEADERS = 256
 MAX_DYNAMIC = 4096
 MAX_STRINGS = 4 * 1024 * 1024
 MAX_SYMBOLS = 100000
+# Standard relocation/init metadata and explicitly supported GNU version/hash
+# metadata. Unknown processor/OS/producer tags refuse before symbol inference.
+ALLOWED_TAGS = frozenset({
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29, 30,
+    32, 33, 34, 35, 36, 37,  # preinit, symtab section indices, RELR
+    0x6FFFFEF5,  # GNU_HASH
+    0x6FFFFFF0, 0x6FFFFFF9, 0x6FFFFFFA, 0x6FFFFFFB,  # VERSYM, REL[A]COUNT, FLAGS_1
+    0x6FFFFFFC, 0x6FFFFFFD, 0x6FFFFFFE, 0x6FFFFFFF,  # VERDEF/NUM, VERNEED/NUM
+})
 
 
 def refuse(reason: str) -> GoV1Error:
@@ -99,7 +109,7 @@ def parse_elf(data: bytes) -> ELF:
     def name(raw: bytes, offset: int = 0) -> str:
         if not 0 <= offset < len(raw):
             raise refuse("string offset outside table")
-        end = raw.find(b"\0", offset)
+        end = raw.find(b"\0", offset, offset + 4097)
         if end < 0 or end - offset > 4096:
             raise refuse("unterminated or oversized name")
         try:
@@ -130,6 +140,8 @@ def parse_elf(data: bytes) -> ELF:
         if tag == 0:
             terminated = True
             break
+        if tag not in ALLOWED_TAGS:
+            raise refuse("unsupported dynamic tag")
         if tag == 1:
             needed_offsets.append(value)
         else:
@@ -138,8 +150,7 @@ def parse_elf(data: bytes) -> ELF:
             tags[tag] = value
     if not terminated or 5 not in tags or not 0 < tags.get(10, 0) <= MAX_STRINGS:
         raise refuse("missing dynamic terminator or string table")
-    if (any(tag in tags for tag in (16, 0x6FFFFEFC, 0x6FFFFEFB, 0x7FFFFFFD, 0x7FFFFFFF))
-            or tags.get(30, 0) & ~0x18
+    if (tags.get(30, 0) & ~0x18
             or tags.get(0x6FFFFFFB, 0) & ~(1 | 8 | 0x08000000)):
         raise refuse("unsupported loader scope, audit or filter flags")
     strings = span(mapped(tags[5], tags[10]), tags[10])
@@ -150,22 +161,43 @@ def parse_elf(data: bytes) -> ELF:
     # A defined exported function is positive embedding evidence, never a
     # filename/absence inference. Symbol ownership still requires worker proof.
     defines_python = False
+    if 4 in tags and 0x6FFFFEF5 in tags:
+        # glibc prefers GNU_HASH. Refuse both even if they appear consistent:
+        # accepting a SysV-derived bound can hide a GNU-visible interposer.
+        raise refuse("dual symbol hashes are outside the supported identity contract")
     if 6 in tags:
         if tags.get(11) != 24:
             raise refuse("unsupported symbol size")
         symoff = mapped(tags[6], 24)
-        # Dynamic hashes bound the symbol table without section headers.
+        # Bound the table AND follow the loader's lookup for this exact name.
+        # Scanning every symbol alone can invent exports absent from the hash.
+        target = b"Py_GetVersion"
+        reachable: set[int] = set()
         if 4 in tags:
             hash_off = mapped(tags[4], 8)
             buckets, count = unpack("<II", hash_off)
             if not 0 < buckets <= MAX_SYMBOLS or not 0 < count <= MAX_SYMBOLS:
                 raise refuse("symbol count exceeds bound")
-            mapped(tags[4], 8 + 4 * (buckets + count))
+            hash_off = mapped(tags[4], 8 + 4 * (buckets + count))
+            value_hash = 0
+            for byte in target:
+                value_hash = (value_hash << 4) + byte
+                high = value_hash & 0xF0000000
+                value_hash ^= high >> 24
+                value_hash &= ~high
+            index, = unpack("<I", hash_off + 8 + 4 * (value_hash % buckets))
+            while index:
+                if index >= count or index in reachable:
+                    raise refuse("SysV hash chain index or cycle")
+                reachable.add(index)
+                index, = unpack("<I", hash_off + 8 + 4 * (buckets + index))
         elif 0x6FFFFEF5 in tags:
             address = tags[0x6FFFFEF5]
             buckets, first, bloom, shift = unpack("<IIII", mapped(address, 16))
-            if not 0 < buckets <= MAX_SYMBOLS or not 0 < bloom <= MAX_SYMBOLS or first > MAX_SYMBOLS:
+            if (not 0 < buckets <= MAX_SYMBOLS or not 0 < bloom <= MAX_SYMBOLS
+                    or bloom & (bloom - 1) or shift >= 32 or not 0 < first <= MAX_SYMBOLS):
                 raise refuse("GNU hash bounds")
+            mapped(address, 16 + bloom * 8)
             bucket_address = address + 16 + bloom * 8
             bucket_off = mapped(bucket_address, buckets * 4)
             starts = unpack("<" + "I" * buckets, bucket_off)
@@ -187,6 +219,22 @@ def parse_elf(data: bytes) -> ELF:
                     if value & 1:
                         break
                 count = max(count, index)
+            value_hash = 5381
+            for byte in target:
+                value_hash = (value_hash * 33 + byte) & 0xFFFFFFFF
+            word, = unpack("<Q", mapped(address + 16 + 8 * ((value_hash // 64) & (bloom - 1)), 8))
+            mask = (1 << (value_hash % 64)) | (1 << ((value_hash >> shift) % 64))
+            if word & mask == mask:
+                index = starts[value_hash % buckets]
+                while index:
+                    if not first <= index < count:
+                        raise refuse("GNU lookup outside bounded symbols")
+                    chain, = unpack("<I", mapped(bucket_address + buckets * 4 + (index - first) * 4, 4))
+                    if (chain | 1) == (value_hash | 1):
+                        reachable.add(index)
+                    if chain & 1:
+                        break
+                    index += 1
         else:
             raise refuse("missing bounded symbol index")
         mapped(tags[6], count * 24)
@@ -194,6 +242,12 @@ def parse_elf(data: bytes) -> ELF:
             nm, info, other, section, value, size = unpack("<IBBHQQ", symoff + i * 24)
             symbol = name(strings, nm)
             if symbol == "Py_GetVersion" and section != 0:
+                if i not in reachable:
+                    raise refuse("Python definition is not reachable through loader hash")
+                if 0x6FFFFFF0 in tags:
+                    symbol_version, = unpack("<H", mapped(tags[0x6FFFFFF0] + i * 2, 2))
+                    if symbol_version != 1:
+                        raise refuse("versioned Python export is unsupported")
                 if (defines_python or info != 0x12 or other != 0 or not size
                         or section >= 0xFF00):
                     raise refuse("ambiguous Python symbol")

@@ -18,8 +18,12 @@ and the worker's loaded-segment proof belongs to subsequent slices.
 The parser accepts little-endian ELF64 x86-64 and AArch64 only. Bounds are
 128 MiB per image, 256 program headers, 4096 dynamic entries, 4 MiB strings,
 100000 symbols/hash-chain steps, 128 dependency images and 256 MiB aggregate
-image data. Section headers are unnecessary. SysV and GNU dynamic hashes bound
-the exported symbol scan. Adjacent file-contiguous LOAD segments can contain a
+image data. Section headers are unnecessary. Single SysV or GNU dynamic hashes
+bound the symbol scan; Python exports must also be reachable through that hash's
+lookup (including GNU bloom and chain checks). Dual-hash images always refuse,
+even when their tables agree: glibc prefers GNU, so a SysV-derived bound cannot
+safely establish absence of a GNU-visible interposer. Versioned Python exports
+also refuse; only an unversioned global function is supported. Adjacent file-contiguous LOAD segments can contain a
 relocated string table; holes and conflicting mappings refuse.
 
 The resolver accepts the two named glibc interpreters and expected CPython
@@ -52,4 +56,26 @@ The fixtures prove parser/selection/refusal behavior, not agreement with a real
 loader. Native probes compare canonical `/proc/self/exe` and `dladdr` ownership
 of `Py_GetVersion` under fixed Python flags and a loader-variable-free child
 environment. They do not substitute for the future loaded-segment worker proof.
-AArch64 loader agreement and musl remain unverified; musl is not admitted.
+Native AArch64 agreement was independently demonstrated for Ubuntu 26.04,
+glibc 2.43 and Python 3.14.4, including embedded, venv, origin-shared and
+cache-shared layouts. That evidence supersedes the earlier byte-fixture-only
+status; it does not qualify other libc or layout families. Musl is not admitted.
+
+The cache parser bounds input and decoded string volume separately at 8 MiB,
+entry count at 100000, each name/path at 4096 bytes and candidates per name at
+64. A first pass validates applicable string spans and total expansion before
+decoding. Candidate accumulation uses lists, avoiding repeated tuple copying.
+All foreign ABI flags are ignored. Same-ABI hwcap/OS-conditional entries remain
+unsupported candidates: ignoring one could skip the loader's preferred image.
+Dynamic tags use an explicit allowlist of supported linkage/hash/version tags
+and ordinary relocation/init metadata; unknown tags and unsupported flag bits
+refuse.
+
+Additional deliberate availability limits: `e_flags` must be zero; interpreter
+strings must match the two named loader paths exactly; captured files must be
+single-link regular files; all ELF names are at most 4096 bytes. An existing but
+unloadable origin candidate refuses instead of falling through to the cache.
+These are supported-contract boundaries, not claims to emulate every glibc
+fallback. Expanding them requires separate identity evidence. SONAME symlinks
+may resolve outside the prefix, with their exact chain and target captured;
+this slice does not impose prefix confinement.
