@@ -667,6 +667,13 @@ def test_windows_real_git_ssh_clean_environment_matrix(
         state = json.loads((root / 'state.json').read_text())
         assert state['kind'] == 'csk-windows-ssh-kit-v1'
         assert state['root'] == str(root) and state['agent_add_attempted']
+        from csk import build_ssh
+        parent = dict(os.environ)
+        parent.pop("SSH_AUTH_SOCK", None)
+        candidates = build_ssh.discover_candidates(environment=parent, home=str(root / "empty-home"))
+        assert candidates.agent_socket == git_admission._WINDOWS_SSH_AGENT_PIPE
+        assert candidates.agent_key_count and candidates.agent_key_count >= 1
+    assert " " in str(root), "native kit must exercise private paths with spaces"
     # PROGRAMDATA is a startup prerequisite, not authority to import system
     # SSH config. If that config is read, this positive control cannot pass.
     system_data = tmp_path / "system-data"
@@ -681,8 +688,9 @@ def test_windows_real_git_ssh_clean_environment_matrix(
     # The kit's forced command reads this operator-controlled pointer. Neither
     # a package nor the remote chooses a local repository or executable.
     (root / "repository").write_text(bare.as_posix(), encoding="utf-8")
+    identity = root / "First Last" / ".ssh" / selection
     credentials = git_admission.capture_operator_ssh_credentials(
-        {}, identity=None if selection == "agent" else str(root / selection),
+        {}, identity=None if selection == "agent" else str(identity),
         agent="auto" if selection == "agent" else None,
         known_hosts=str(root / "known_hosts"),
     )
@@ -750,3 +758,123 @@ def test_windows_real_git_ssh_clean_environment_matrix(
                                      env=environment, stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
             assert removed.returncode == 0, removed.stderr
             assert_local_refusal(pinned)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object descendant lifecycle")
+def test_windows_git_tree_deadline(tmp_path: Path) -> None:
+    # A child retaining stderr cannot extend the budget; its process handle is
+    # signalled after the tree deadline. A normal command is the positive control.
+    import ctypes
+    import time
+    from csk._windows_git_process import run
+    kernel = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    kernel.OpenProcess.restype = ctypes.c_void_p
+    kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    common = dict(stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    assert run([sys.executable, "-c", "print('ok')"], timeout=5, **common).stdout.strip() == b"ok"
+    pid_file = tmp_path / "descendant.pid"
+    code = "import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)']);open(sys.argv[1],'w').write(str(p.pid));time.sleep(120)"
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        run([sys.executable, "-c", code, str(pid_file)], timeout=3, **common)
+    assert time.monotonic() - started < 8
+    handle = kernel.OpenProcess(0x100000, False, int(pid_file.read_text()))
+    if handle:
+        try:
+            assert kernel.WaitForSingleObject(handle, 0) == 0, "descendant survived deadline"
+        finally:
+            kernel.CloseHandle(handle)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native authenticated SSH timeout")
+def test_windows_real_ssh_authenticated_stall(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Real authentication completes, then the remote stalls 120 seconds. Both
+    # fetch must return timeout within budget plus bounded cleanup.
+    import time
+    configured = os.environ.get("CSK_TEST_WINDOWS_SSH_ROOT")
+    if not configured:
+        pytest.skip("requires native loopback kit")
+    root = Path(configured)
+    marker = root / "stall"
+    original = git_admission.Limits
+    monkeypatch.setattr(git_admission, "Limits", lambda: original(timeout_seconds=3))
+    original_acquire = git_admission.acquire_network
+    def bounded(*args, **kwargs):
+        return original_acquire(*args, **kwargs, limits=original(timeout_seconds=3))
+    monkeypatch.setattr(git_admission, "acquire_network", bounded)
+    marker.write_text("stall")
+    started = time.monotonic()
+    try:
+        with pytest.raises(git_admission.GitAdmissionError) as error:
+            test_windows_real_git_ssh_clean_environment_matrix(tmp_path, "ed25519", monkeypatch)
+        assert error.value.failure_class == "timeout"
+        assert (root / "authenticated").is_file(), "must reach authenticated remote command"
+        assert time.monotonic() - started < 10
+    finally:
+        marker.unlink(missing_ok=True)
+        (root / "authenticated").unlink(missing_ok=True)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native TCP black hole deadline")
+@pytest.mark.parametrize("transport", ["ssh", "https"])
+def test_windows_tcp_blackhole(tmp_path: Path, transport: str) -> None:
+    # A TCP listener accepts but never speaks SSH/TLS. Real Git must time out
+    # for either transport; the successful native matrix is the positive control.
+    import socket
+    import threading
+    import time
+    stop = threading.Event()
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(0.2)
+        port = listener.getsockname()[1]
+        def serve():
+            while not stop.is_set():
+                try:
+                    conn, _ = listener.accept()
+                except TimeoutError:
+                    continue
+                with conn:
+                    stop.wait(15)
+        thread = threading.Thread(target=serve)
+        thread.start()
+        try:
+            ssh = Path(os.environ["SYSTEMROOT"]) / "System32/OpenSSH/ssh.exe"
+            credentials = git_admission.OperatorSSHCredentials()
+            tool = _tool(ssh, credentials)
+            paths = _private_paths(tmp_path / "private space")
+            env = git_admission._clean_git_environment(paths, tool, transport)
+            if transport == "ssh":
+                env["GIT_SSH"] = str(ssh)
+                env["GIT_SSH_VARIANT"] = "ssh"
+            started = time.monotonic()
+            with pytest.raises(git_admission.GitAdmissionError) as error:
+                git_admission._run_git_ls_remote(tool, paths, env,
+                    ["ls-remote", f"{transport}://127.0.0.1:{port}/repo"],
+                    limits=git_admission.Limits(timeout_seconds=3))
+            assert error.value.failure_class == "timeout"
+            assert time.monotonic() - started < 10
+        finally:
+            stop.set()
+            thread.join(3)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows destination guard")
+def test_windows_destination_guard_with_space_paths(tmp_path: Path) -> None:
+    # Reject destination substitution before starting native ssh/DNS; nearby
+    # real matrix cases prove the expected host succeeds with these path shapes.
+    configured = os.environ.get("CSK_TEST_WINDOWS_SSH_ROOT")
+    if not configured:
+        pytest.skip("requires native loopback kit")
+    root = Path(configured)
+    credentials = git_admission.capture_operator_ssh_credentials({},
+        identity=str(root / "First Last/.ssh/ed25519"), known_hosts=str(root / "known_hosts"))
+    ssh = Path(os.environ["SYSTEMROOT"]) / "System32/OpenSSH/ssh.exe"
+    paths = _private_paths(tmp_path / "private space")
+    command = git_admission._materialize_ssh_wrapper(paths, _tool(ssh, credentials), parse_repository_source(SOURCE))
+    result = subprocess.run([*command, "shifted.invalid", f"git-upload-pack '{EXPECTED_PATH}'"], capture_output=True)
+    assert result.returncode == 1
+    assert result.stderr.strip() == b"csk: refused unexpected ssh invocation"
