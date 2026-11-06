@@ -21,6 +21,10 @@ _PATTERNS = (
     ("aws-access-key", re.compile(r"(?<![A-Za-z0-9])AKIA[A-Z0-9]{16}(?![A-Za-z0-9])")),
     ("github-token", re.compile(r"(?<![A-Za-z0-9_])(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,255})(?![A-Za-z0-9_])")),
 )
+_OUTPUT_PATTERNS = (
+    ('private-key', re.compile(_PATTERNS[0][1].pattern, re.IGNORECASE)),
+    ('aws-access-key', re.compile(r'AKIA[A-Z0-9]{16}', re.IGNORECASE)),
+)
 _JWT_PART = re.compile(r"[A-Za-z0-9_-]+={0,2}")
 _TOKEN = re.compile(r"[A-Za-z0-9_+/-]+={0,2}")
 _ASSIGNMENT = re.compile(r'''["']?([A-Za-z_][A-Za-z0-9_]*)["']?\s*([:=])\s*["']?$''')
@@ -84,7 +88,7 @@ def _predictable_base64(value: str) -> bool:
 
 
 def _secret_spans(decoded: str, *, contextual: bool) -> Iterator[tuple[int, int, str]]:
-    for kind, pattern in _PATTERNS:
+    for kind, pattern in (_PATTERNS if contextual else _OUTPUT_PATTERNS):
         for match in pattern.finditer(decoded):
             yield match.start(), match.end(), kind
     # Lex segments once, retaining only a three-part window. Padding is part of a segment.
@@ -97,6 +101,11 @@ def _secret_spans(decoded: str, *, contextual: bool) -> Iterator[tuple[int, int,
             continue
         header_part, payload_part, signature = (p.group() for p in parts)
         if not (8 <= len(header_part) <= 2048 and 2 <= len(payload_part) <= 8192 and 16 <= len(signature) <= 2048):
+            continue
+        if not contextual:
+            # Reconstructed prefixes/case changes may invalidate the JSON while
+            # still carrying the original token. Output masking needs no validation.
+            yield parts[0].start(), part.end(), 'jwt'
             continue
         try:
             header = json.loads(_base64(header_part))
