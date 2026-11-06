@@ -2405,7 +2405,8 @@ def _assert_fixed_environment_and_argv(
     frozen = source.freeze_snapshot(snapshot_root)
     captured: list[Any] = []
 
-    def capture_plan(plan: Any) -> None:
+    def capture_plan(plan: Any, *, _lifecycle: Any) -> None:
+        assert _lifecycle.teardown_confirmed  # Capture precedes native execution.
         captured.append(plan)
         raise _PlanCaptured("worker plan captured before execution")
 

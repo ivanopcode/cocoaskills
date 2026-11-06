@@ -87,6 +87,9 @@ external pass. An ordinary build failure with confirmed teardown permits the
 next project to proceed. Failed or unconfirmed teardown retains its diagnostic
 code for the next acquisition refusal; interrupts and unclassified failures
 also fail closed.
+Already admitted private build phases may overlap after closure. The guard
+counts every pending worker: acquisition waits for all of them, and one
+successful completion cannot clear another worker's unconfirmed teardown.
 No transport capability is opened by this state-only guard today.
 
 Within a pass, commands sharing identity, object format, commit, tag, transport
