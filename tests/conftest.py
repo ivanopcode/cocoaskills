@@ -21,11 +21,14 @@ from git_fixture_isolation import check_own_git_dir, discover_git_dir, run_fixtu
 # Each test models a fresh manager process. Within one test, retries, projects
 # and later installs retain the same fail-closed build/acquisition state.
 @pytest.fixture(autouse=True)
-def isolated_acquisition_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
+def isolated_acquisition_lifecycle() -> Iterator[None]:
     from csk import build_repository_pipeline
 
-    monkeypatch.setattr(build_repository_pipeline, "_PASS_STATE",
-                        build_repository_pipeline.AcquisitionPassState())
+    # An independent patch context preserves body-monkeypatch teardown order.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(build_repository_pipeline, "_PASS_STATE",
+                      build_repository_pipeline.AcquisitionPassState())
+        yield
 
 
 def run(cmd: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
