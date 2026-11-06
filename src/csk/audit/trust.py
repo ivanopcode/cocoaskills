@@ -16,7 +16,7 @@ CODE_TRUST_UNWRITABLE = "audit_trust_unwritable"
 PROMPT_VERSION = 1
 # Bump RULESET_VERSION whenever detector semantics or severity classification
 # changes. Cache hits intentionally skip canary and detector execution.
-RULESET_VERSION = 8
+RULESET_VERSION = 9
 HASH_RE = re.compile(r"^(?:sha256:)?([A-Fa-f0-9]{64})$")
 
 
@@ -299,11 +299,16 @@ def _finding_from_payload(payload: dict[str, Any]) -> Finding:
             declared=violation_raw["declared"],
             observed=violation_raw["observed"],
         )
+    try:
+        surface = Surface(payload["surface"])
+        severity = Severity(payload["severity"])
+    except ValueError:
+        raise ValueError("invalid finding classification") from None
     return Finding(
         id=payload["id"],
-        surface=Surface(payload["surface"]),
+        surface=surface,
         category=payload["category"],
-        severity=Severity(payload["severity"]),
+        severity=severity,
         location=location,
         evidence=payload["evidence"],
         detector=payload["detector"],
