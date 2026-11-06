@@ -8,7 +8,6 @@ import shlex
 import shutil
 import stat
 import struct
-import subprocess
 import sys
 import tempfile
 import threading
@@ -21,7 +20,10 @@ from typing import IO, Callable, Mapping, Sequence
 
 from . import git_trust, protocol_json
 from .terminal import shell_word
-from ._windows_git_process import run as _windows_git_run
+if sys.platform == "win32":
+    from . import _windows_git_process as subprocess
+else:
+    import subprocess
 from .build_repository import (
     LockedCommit,
     RepositorySource,
@@ -733,7 +735,7 @@ def validate_git_tool(tool: GitTool, *, timeout_seconds: float = 10.0) -> None:
     try:
         with git_trust.private_git_trust(https_trust_args(tool)) as trust:
             environment = trust.environment(_clean_discovery_environment())
-            result = (_windows_git_run if sys.platform == "win32" else subprocess.run)(
+            result = subprocess.run(
                 git_trust.pinned_command((os.fspath(tool.executable), "--version"), environment),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
@@ -1052,7 +1054,7 @@ def _run_git_ls_remote(
     """Run one ``ls-remote`` under the admission budget, capturing stdout."""
     environment = _operation_trust_environment(paths, tool, environment)
     try:
-        completed = (_windows_git_run if sys.platform == "win32" else subprocess.run)(
+        completed = subprocess.run(
             git_trust.pinned_command((os.fspath(tool.executable), *arguments), environment),
             cwd=paths.work,
             env=environment,
@@ -1647,7 +1649,7 @@ def _run_git(
 ) -> None:
     environment = _operation_trust_environment(paths, tool, environment)
     try:
-        (_windows_git_run if sys.platform == "win32" else subprocess.run)(
+        subprocess.run(
             git_trust.pinned_command((os.fspath(tool.executable), *arguments), environment),
             cwd=paths.work,
             env=environment,
