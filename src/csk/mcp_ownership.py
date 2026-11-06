@@ -722,7 +722,7 @@ def _read_store(csk_home: Path, store: str, consumer: str) -> bytes | None:
         if opened.st_size > _STORE_LIMIT:
             raise _unknown("store exceeds the size limit")
         with os.fdopen(descriptor, "rb", closefd=False) as handle:
-            payload = handle.read(_STORE_LIMIT + 1)
+            payload = protocol_json._read_bounded(handle, _STORE_LIMIT)
     except OSError as exc:
         raise _unknown(f"cannot read store: {exc.strerror or exc}") from exc
     finally:

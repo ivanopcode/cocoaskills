@@ -21,6 +21,7 @@ from pathlib import Path, PurePath
 from typing import Literal, cast
 from xml.parsers.expat import ExpatError
 
+from . import protocol_json
 from .mcp_authenticode import WindowsVerification, verify_windows
 from .mcp_windows_folders import windows_known_folder
 
@@ -207,7 +208,7 @@ def _find_bundle(spec: MacOSLauncher, roots: Sequence[Path]) -> Path:
                     metadata = os.fstat(stream.fileno())
                     if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 1024 * 1024:
                         continue
-                    payload = stream.read(1024 * 1024 + 1)
+                    payload = protocol_json._read_bounded(stream, 1024 * 1024)
                 if len(payload) > 1024 * 1024:
                     continue
                 info = plistlib.loads(payload)
