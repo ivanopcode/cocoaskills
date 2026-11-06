@@ -363,8 +363,11 @@ def _read_no_follow(path: str, *, manager_home: str, what: str) -> bytes:
             # Small registries must not allocate the entire 16 MiB budget.
             chunks: list[bytes] = []
             remaining = 16 * 1024 * 1024 + 1
-            while remaining:
-                chunk = handle.read(min(64 * 1024, remaining))
+            while remaining > 0:
+                requested = min(64 * 1024, remaining)
+                chunk = handle.read(requested)
+                if chunk is not None and len(chunk) > requested:
+                    raise OSError("bounded read exceeded requested size")
                 if not chunk:
                     break
                 chunks.append(chunk)
