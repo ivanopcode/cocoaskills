@@ -77,8 +77,12 @@ def package_model(tmp_path, monkeypatch, stdlib_before_model):
 
     def run(argv, **kwargs):
         assert argv[0] in programs
-        assert kwargs == dict(capture_output=True, text=True, timeout=5, check=False,
-                              env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+        # Every modeled query must pass the finite product bound, including failures.
+        assert 0 < gate.LINUX_PACKAGE_QUERY_TIMEOUT_SECONDS < float("inf")
+        assert kwargs == dict(
+            capture_output=True, text=True, timeout=gate.LINUX_PACKAGE_QUERY_TIMEOUT_SECONDS,
+            check=False, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+        )
         backend = argv[0].rsplit("/", 1)[-1]
         assert argv[1:3] == (["-S", "--"] if backend == "dpkg" else ["-qf", "--"])
         calls.append(argv)
@@ -104,13 +108,16 @@ def package_model(tmp_path, monkeypatch, stdlib_before_model):
 
 
 # A known timeout and an rc=0 no-exact-path record must yield distinct safe reasons
-# through the same real resolver call; both refuse, while adjacent ownership verifies.
+# through the same real resolver call; timeout is incomplete verification, a conclusive
+# mismatch is untrusted, and adjacent ownership verifies. Both refusals redact secrets.
 @pytest.mark.parametrize("outcome", ["timeout", "no-exact-match", "owned"])
 def test_refusal_observes_same_attempt(package_model, outcome):
     root, file, settings, calls = package_model
     if outcome == "timeout":
         settings.answers["dpkg"] = subprocess.TimeoutExpired(
-            "COMMAND_SECRET_CANARY", 5, output="OUTPUT_SECRET_CANARY", stderr="STDERR_SECRET_CANARY")
+            "COMMAND_SECRET_CANARY", gate.LINUX_PACKAGE_QUERY_TIMEOUT_SECONDS,
+            output="OUTPUT_SECRET_CANARY", stderr="STDERR_SECRET_CANARY",
+        )
     elif outcome == "no-exact-match":
         settings.answers["dpkg"] = (0, "example: /other/OUTPUT_SECRET_CANARY\n")
     declaration = gate.parse_launcher({"linux": {"path": "/usr/bin/bin/" + file.name}})
@@ -120,7 +127,9 @@ def test_refusal_observes_same_attempt(package_model, outcome):
     else:
         with pytest.raises(gate.McpLauncherError) as caught:
             gate.resolve_launcher(declaration, platform="linux", roots=(root,))
-        assert caught.value.code == "mcp_launcher_untrusted"
+        expected_code = ("mcp_launcher_verification_timeout" if outcome == "timeout"
+                         else "mcp_launcher_untrusted")
+        assert caught.value.code == expected_code
         assert f"dpkg={outcome}, rpm=tool-missing" in str(caught.value)
         assert "SECRET_CANARY" not in str(caught.value)
     assert calls == [["/usr/bin/dpkg", "-S", "--", str(file)]]
@@ -154,7 +163,7 @@ def test_package_failure_observation(package_model, case, reason):
 def test_successful_fallback_and_bool_api(package_model):
     _, file, settings, calls = package_model
     settings.available.add("rpm")
-    settings.answers["dpkg"] = subprocess.TimeoutExpired("secret", 5)
+    settings.answers["dpkg"] = subprocess.TimeoutExpired("secret", gate.LINUX_PACKAGE_QUERY_TIMEOUT_SECONDS)
     observed = gate._linux_package_observation(file)
     assert observed.owned is True
     assert observed.summary() == "dpkg=timeout, rpm=owned"
