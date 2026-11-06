@@ -672,8 +672,8 @@ _PASS_STATE = AcquisitionPassState()
 def build_go_v1(request: go_v1.BuildRequest) -> go_v1.BuildResult:
     """Track every installer build domain, including post-pass private builds.
 
-    Successful synchronous return includes teardown/join. Exceptions leave
-    completion unconfirmed, so later acquisition fails closed in this process.
+    Success and classified failures with certified teardown permit later passes.
+    Unconfirmed teardown, interrupts and unclassified exceptions fail closed.
     """
     state = _PASS_STATE
     if not state.workers_reaped:
@@ -683,6 +683,9 @@ def build_go_v1(request: go_v1.BuildRequest) -> go_v1.BuildResult:
     try:
         result = go_v1.build(request)
     except BaseException as exc:
+        if isinstance(exc, go_v1.GoV1Error) and exc.worker_teardown_confirmed:
+            state.workers_reaped = True
+            raise
         # Retain a manager diagnostic code, never arbitrary exception text.
         state.worker_failure = exc.code if isinstance(exc, go_v1.GoV1Error) else "build failure"
         raise

@@ -83,8 +83,10 @@ worker teardown to have completed. An unclosed boundary refuses execution and
 later passes; unsuccessful worker teardown also refuses later acquisition.
 One shared build lifecycle guard covers external and local/private Go builds in
 project, global, schema 2/3 and locked-repair paths, including builds after the
-external pass. An unconfirmed build failure retains its diagnostic code for the
-next acquisition refusal.
+external pass. An ordinary build failure with confirmed teardown permits the
+next project to proceed. Failed or unconfirmed teardown retains its diagnostic
+code for the next acquisition refusal; interrupts and unclassified failures
+also fail closed.
 No transport capability is opened by this state-only guard today.
 
 Within a pass, commands sharing identity, object format, commit, tag, transport
