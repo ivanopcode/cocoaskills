@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from csk.config import AuditConfig
 from csk.audit import pipeline, redaction
 from csk.audit.backends.base import AuditBackendError, AuditRequest
 from csk.audit.backends.command_backend import CommandBackend
@@ -34,7 +35,7 @@ def test_admission_precedes_reads(tmp_path, parts):
     ):
         with pytest.raises(AuditBackendError, match='audit.request.too-large'):
             pipeline.audit_plans([plan_at(tmp_path)], SimpleNamespace(
-                audit=SimpleNamespace(max_request_bytes=10000)), scope='global')
+                audit=AuditConfig(max_request_bytes=10000)), scope='global')
 
 
 def test_admitted_request_preserves_local_and_scrubs_cloud(tmp_path):

@@ -323,13 +323,20 @@ Redaction contract for `AuditRequest.files` (this is a hard boundary, not just a
   detectors and requests consume that copy; concurrent source growth cannot
   enlarge their reads. Special files are excluded and symlinks are rejected.
 - Raw admission failure emits `audit.request.too-large` through the gate using
-  HIGH-severity `fail_on` policy. It cannot produce a content-addressed report or
+  fail-closed policy: strict mode blocks regardless of `fail_on`. In any mode,
+  any configured content-hash revocation also blocks unread input because its
+  identity cannot be checked. Advisory mode otherwise warns. Even benign
+  oversized skills block under strict mode; padding must not hide CRITICAL
+  findings or a runtime backend failure. Backend configuration is resolved
+  before admission without reading content. It cannot produce a content-addressed report or
   cache lookup without reading rejected data. Raw limits apply before cloud
   redaction, even when the redacted request would fit. Serialized size checking
   remains a separate gate. Gate outcomes are combined per skill: an oversized or
   skipped skill never discards another skill's reports or denials, and remaining
   skills are still assessed. Source revocations apply even to unread inputs,
-  independently of audit mode and severity threshold.
+  independently of audit mode and severity threshold. `csk audit` continues
+  per plan after oversize refusal, retaining admitted reports and emitting a
+  named error for each unread plan (also in JSON `errors`), with exit code 2.
 - Both backends retain at most 2,001 stderr bytes while draining output. Diagnostics
   over 2,000 bytes are omitted whole before decoding; short diagnostics are scrubbed.
   Captured stdout and the Codex response file have a 16 MiB limit; stdout overflow

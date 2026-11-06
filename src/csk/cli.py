@@ -1929,22 +1929,30 @@ def _cmd_audit(args: argparse.Namespace) -> int:
         )
         print(f"Pinned audit trust for {args.allow.lower()}: {path}")
         return EXIT_OK
+    errors: list[str] = []
     if args.all:
         if args.target is not None or args.global_scope:
             raise ValueError("--all cannot be combined with a project target or --global")
-        reports = audit_runner.audit_projects(cfg, alias=None) + audit_runner.audit_global(cfg)
+        reports = audit_runner.audit_projects(cfg, alias=None, errors=errors) + audit_runner.audit_global(cfg, errors=errors)
     elif args.global_scope:
         if getattr(args, "target", None) is not None or getattr(args, "all", False):
             raise ValueError("--global cannot be combined with a project target or --all")
-        reports = audit_runner.audit_global(cfg)
+        reports = audit_runner.audit_global(cfg, errors=errors)
     else:
         cfg, alias = _cfg_and_alias_for_target(cfg, args)
-        reports = audit_runner.audit_projects(cfg, alias=alias)
+        reports = audit_runner.audit_projects(cfg, alias=alias, errors=errors)
 
     if args.json:
-        print(json.dumps(audit_pipeline.reports_to_payload(reports), indent=2, sort_keys=True))
+        payload = audit_pipeline.reports_to_payload(reports)
+        if errors:
+            payload["errors"] = errors
+        print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(audit_pipeline.render_reports(reports))
+    for error in errors:
+        print(f"error: {error}", file=sys.stderr)
+    if errors:
+        return EXIT_CONFIG
     return EXIT_PARTIAL_FAIL if any(report.decision in {Decision.BLOCK, Decision.REQUIRE_PIN} for report in reports) else EXIT_OK
 
 
