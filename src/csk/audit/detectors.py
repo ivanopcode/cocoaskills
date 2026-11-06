@@ -8,10 +8,11 @@ import re
 import shlex
 import stat
 from collections.abc import Iterable
+from itertools import islice
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .secret_values import detect_and_mask, sanitize_findings
+from .secret_values import MAX_FINDINGS_PER_FILE, detect_and_mask, finding_limit, sanitize_findings
 from .capabilities import CapabilityManifest
 from .model import CapabilityViolation, Finding, Location, Severity, Surface
 
@@ -46,26 +47,36 @@ COMMON_SYSTEM_COMMANDS = {
 
 def detect_snapshot(snapshot: Path, capabilities: CapabilityManifest) -> tuple[Finding, ...]:
     findings: list[Finding] = []
-    secret_values: set[str] = set()
     manifest_name = next((name for name in ("agent-skill.json", "csk-skill.json") if (snapshot / name).exists()), None)
     for item in _iter_text_files(snapshot):
         if isinstance(item, Finding):
-            findings.append(item)
+            findings.extend(sanitize_findings([item], set()))
             continue
         rel_path, text = item
-        secrets, text = detect_and_mask(rel_path, text, secret_values)
-        findings.extend(secrets)
-        findings.extend(_detect_curl_pipe(rel_path, text))
-        findings.extend(_detect_python_shell_true(rel_path, text))
-        findings.extend(_detect_network_urls(rel_path, text, capabilities))
-        findings.extend(_detect_secret_env(rel_path, text, capabilities))
-        findings.extend(_detect_dangerous_rm(rel_path, text))
-        if rel_path.endswith(".py"):
-            findings.extend(_detect_python_ast(rel_path, text, capabilities))
-        findings.extend(_detect_minified_text(rel_path, text))
-        if rel_path == manifest_name:
-            findings.extend(_detect_manifest(rel_path, text))
-    return sanitize_findings(findings, secret_values)
+        secret_values: set[str] = set()
+        produced = _file_findings(rel_path, text, capabilities, manifest_name, secret_values)
+        bounded = list(islice(produced, MAX_FINDINGS_PER_FILE + 1))
+        if len(bounded) > MAX_FINDINGS_PER_FILE:
+            bounded = bounded[:MAX_FINDINGS_PER_FILE] + [finding_limit(rel_path)]
+        findings.extend(sanitize_findings(bounded, secret_values))
+    return tuple(findings)
+
+
+def _file_findings(rel_path: str, text: str, capabilities: CapabilityManifest, manifest_name: str | None, values: set[str]) -> Iterable[Finding]:
+    secrets, text = detect_and_mask(rel_path, text, values, max_findings=MAX_FINDINGS_PER_FILE)
+    yield from secrets
+    if any(f.id == 'static.opaque.finding-limit' for f in secrets):
+        return
+    yield from _detect_curl_pipe(rel_path, text)
+    yield from _detect_python_shell_true(rel_path, text)
+    yield from _detect_network_urls(rel_path, text, capabilities)
+    yield from _detect_secret_env(rel_path, text, capabilities)
+    yield from _detect_dangerous_rm(rel_path, text)
+    if rel_path.endswith(".py"):
+        yield from _detect_python_ast(rel_path, text, capabilities)
+    yield from _detect_minified_text(rel_path, text)
+    if rel_path == manifest_name:
+        yield from _detect_manifest(rel_path, text)
 
 
 def _iter_text_files(snapshot: Path) -> Iterable[tuple[str, str] | Finding]:
@@ -127,8 +138,7 @@ def _walk_files(snapshot: Path) -> Iterable[Path | Finding]:
                 yield path
 
 
-def _detect_curl_pipe(rel_path: str, text: str) -> list[Finding]:
-    findings: list[Finding] = []
+def _detect_curl_pipe(rel_path: str, text: str) -> Iterable[Finding]:
     newlines = [i for i, char in enumerate(text) if char == "\n"]
     # Each segment is inspected once, rather than rescanning its suffix per curl.
     for segment in re.finditer(r"[^|;\n]+", text):
@@ -139,18 +149,17 @@ def _detect_curl_pipe(rel_path: str, text: str) -> list[Finding]:
         source = re.search(r"\b(?:curl|wget)\b", segment.group())
         if target and source:
             start = segment.start() + source.start()
-            findings.append(_finding(
+            yield (_finding(
                 finding_id="static.shell.curl-pipe", category="shell-pipe-install",
                 severity=Severity.HIGH, rel_path=rel_path, text=text, start=start,
                 evidence=text[start:target.end()],
                 line=bisect_left(newlines, start) + 1,
             ))
-    return findings
 
 
-def _detect_python_shell_true(rel_path: str, text: str) -> list[Finding]:
-    return [
-        _finding(
+def _detect_python_shell_true(rel_path: str, text: str) -> Iterable[Finding]:
+    for match in _PYTHON_SHELL_TRUE_RE.finditer(text):
+        yield _finding(
             finding_id="static.python.shell-true",
             category="shell-execution",
             severity=Severity.MEDIUM,
@@ -159,19 +168,16 @@ def _detect_python_shell_true(rel_path: str, text: str) -> list[Finding]:
             start=match.start(),
             evidence=match.group(0),
         )
-        for match in _PYTHON_SHELL_TRUE_RE.finditer(text)
-    ]
 
 
-def _detect_network_urls(rel_path: str, text: str, capabilities: CapabilityManifest) -> list[Finding]:
-    findings: list[Finding] = []
+def _detect_network_urls(rel_path: str, text: str, capabilities: CapabilityManifest) -> Iterable[Finding]:
     seen_hosts: set[str] = set()
     for match in _URL_RE.finditer(text):
         host = urlparse(match.group(0)).hostname
         if not host or host in seen_hosts or _host_allowed(host, capabilities.network):
             continue
         seen_hosts.add(host)
-        findings.append(
+        yield (
             _finding(
                 finding_id="static.network.undeclared-host",
                 category="network",
@@ -187,11 +193,9 @@ def _detect_network_urls(rel_path: str, text: str, capabilities: CapabilityManif
                 ),
             )
         )
-    return findings
 
 
-def _detect_secret_env(rel_path: str, text: str, capabilities: CapabilityManifest) -> list[Finding]:
-    findings: list[Finding] = []
+def _detect_secret_env(rel_path: str, text: str, capabilities: CapabilityManifest) -> Iterable[Finding]:
     declared = set(capabilities.secrets) | set(capabilities.env_read)
     seen: set[str] = set()
     for match in _ENV_RE.finditer(text):
@@ -199,7 +203,7 @@ def _detect_secret_env(rel_path: str, text: str, capabilities: CapabilityManifes
         if name in seen or name in declared or not any(marker in name for marker in SECRET_MARKERS):
             continue
         seen.add(name)
-        findings.append(
+        yield (
             _finding(
                 finding_id="static.env.undeclared-secret",
                 category="secret-env",
@@ -215,12 +219,11 @@ def _detect_secret_env(rel_path: str, text: str, capabilities: CapabilityManifes
                 ),
             )
         )
-    return findings
 
 
-def _detect_dangerous_rm(rel_path: str, text: str) -> list[Finding]:
-    return [
-        _finding(
+def _detect_dangerous_rm(rel_path: str, text: str) -> Iterable[Finding]:
+    for match in _DANGEROUS_RM_RE.finditer(text):
+        yield _finding(
             finding_id="static.shell.dangerous-rm",
             category="destructive-shell",
             severity=Severity.CRITICAL,
@@ -229,15 +232,13 @@ def _detect_dangerous_rm(rel_path: str, text: str) -> list[Finding]:
             start=match.start(),
             evidence=match.group(0),
         )
-        for match in _DANGEROUS_RM_RE.finditer(text)
-    ]
 
 
-def _detect_python_ast(rel_path: str, text: str, capabilities: CapabilityManifest) -> list[Finding]:
+def _detect_python_ast(rel_path: str, text: str, capabilities: CapabilityManifest) -> Iterable[Finding]:
     try:
         tree = ast.parse(text)
     except SyntaxError as exc:
-        return [
+        yield (
             _ast_finding(
                 finding_id="static.opaque.python-parse-error",
                 category="opaque",
@@ -246,21 +247,21 @@ def _detect_python_ast(rel_path: str, text: str, capabilities: CapabilityManifes
                 node=exc,
                 evidence=str(exc),
             )
-        ]
+        )
+        return
     aliases = _python_aliases(tree)
-    findings: list[Finding] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Subscript):
-            findings.extend(_detect_python_env_subscript(rel_path, node, aliases, capabilities))
+            yield from (_detect_python_env_subscript(rel_path, node, aliases, capabilities))
         if not isinstance(node, ast.Call):
             continue
         call_name = _call_name(node.func, aliases)
-        findings.extend(_detect_python_exec_call(rel_path, node, call_name, capabilities))
-        findings.extend(_detect_python_network_call(rel_path, node, call_name, capabilities))
-        findings.extend(_detect_python_filesystem_call(rel_path, node, call_name, capabilities))
-        findings.extend(_detect_python_env_call(rel_path, node, call_name, capabilities))
+        yield from (_detect_python_exec_call(rel_path, node, call_name, capabilities))
+        yield from (_detect_python_network_call(rel_path, node, call_name, capabilities))
+        yield from (_detect_python_filesystem_call(rel_path, node, call_name, capabilities))
+        yield from (_detect_python_env_call(rel_path, node, call_name, capabilities))
         if call_name in {"eval", "exec", "compile"}:
-            findings.append(
+            yield (
                 _ast_finding(
                     finding_id="static.python.dynamic-exec",
                     category="opaque",
@@ -271,7 +272,7 @@ def _detect_python_ast(rel_path: str, text: str, capabilities: CapabilityManifes
                 )
             )
         if call_name in {"__import__", "importlib.import_module"} and not _first_arg_constant_string(node):
-            findings.append(
+            yield (
                 _ast_finding(
                     finding_id="static.python.dynamic-import",
                     category="opaque",
@@ -281,7 +282,6 @@ def _detect_python_ast(rel_path: str, text: str, capabilities: CapabilityManifes
                     evidence=call_name,
                 )
             )
-    return findings
 
 
 def _detect_python_exec_call(
