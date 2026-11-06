@@ -1061,6 +1061,10 @@ metadata report `unknown`, never an unusable-key refusal. A recognized OpenSSH
 warning that private-key permissions are too open establishes a local refusal
 when no agent is selected or the selected agent is confirmed not to hold the key;
 csk does not change permissions.
+Provider refusal requires exactly one raw `securitykeyprovider none` record;
+whitespace variants, conflicting records and unfamiliar metadata stay unknown.
+Other refusals require complete recognized metadata or file-error evidence.
+A `.pub` suffix or a macOS-looking agent socket alone does not prove failure.
 
 SSH prompts remain disabled. A proven unusable selection fails locally with
 `build_repository_ssh_credential_unusable`, classified as `auth-unavailable` so
