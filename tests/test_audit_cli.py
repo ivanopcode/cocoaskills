@@ -481,7 +481,7 @@ def test_cli_audit_source_revocation_blocks_git_source(monkeypatch, tmp_path, cs
 def test_cli_retains_reports_around_oversize(monkeypatch, tmp_path, csk_home, skills_root, capsys, reverse):
     from dataclasses import replace
     for name, text in [('critical', 'rm -rf /\n'), ('oversized', 'x' * 11000), ('benign', 'echo safe\n')]:
-        make_skill_repo(skills_root, name, {'csk-skill.json': json.dumps({'schema_version': 3}), 'payload.sh': text}, tag='v1')
+        make_skill_repo(skills_root, name, {'csk-skill.json': json.dumps({'schema_version': 3, 'capabilities': {'network': 'none', 'exec': 'none'}}), 'payload.sh': text}, tag='v1')
     project = make_project(tmp_path)
     names = ['critical', 'oversized', 'benign']
     if reverse:
@@ -493,6 +493,7 @@ def test_cli_retains_reports_around_oversize(monkeypatch, tmp_path, csk_home, sk
     monkeypatch.setenv('CSK_CONFIG', str(cfg.path))
     assert cli.main(['audit', 'app', '--json']) == 2
     output = capsys.readouterr()
+    assert output.out, output.err
     payload = json.loads(output.out)
     assert {r['skill'] for r in payload['reports']} == {'critical', 'benign'}
     assert any(f['id'] == 'static.shell.dangerous-rm' for r in payload['reports'] for f in r['findings'])
