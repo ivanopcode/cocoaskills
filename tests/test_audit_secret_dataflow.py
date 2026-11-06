@@ -21,6 +21,7 @@ def canary():
 
 @pytest.mark.parametrize('variant', [
     'literal', 'filename', 'declaration', 'concat', 'escaped', 'url-path', 'url-host',
+    'long-filename', 'long-declaration', 'long-concat',
 ])
 def test_entropy_canary_never_enters_outputs(tmp_path, capsys, caplog, variant):
     # Reconstructed and metadata-only entropy values must be absent even from cache bytes.
@@ -34,6 +35,12 @@ def test_entropy_canary_never_enters_outputs(tmp_path, capsys, caplog, variant):
         source += 'token=' + repr(value) + '\n'
     elif variant == 'declaration':
         caps = CapabilityManifest(exec=(value, 'allowed-tool'))
+    elif variant == 'long-filename':
+        path = 'public/' * 50 + value + '.py'
+    elif variant == 'long-declaration':
+        caps = CapabilityManifest(exec=('public' * 80 + value, 'allowed-tool'))
+    elif variant == 'long-concat':
+        source += 'subprocess.run([' + repr('public' * 80 + value[:20]) + ' ' + repr(value[20:]) + '])\n'
     elif variant == 'concat':
         source += 'subprocess.run([' + repr(value[:20]) + ' ' + repr(value[20:]) + '])\n'
     elif variant == 'escaped':
@@ -43,6 +50,7 @@ def test_entropy_canary_never_enters_outputs(tmp_path, capsys, caplog, variant):
         path = 'run.sh'
     elif variant == 'url-host':
         source += 'import requests\nrequests.get("https://' + value + '.invalid/")\n'
+    (snapshot / path).parent.mkdir(parents=True, exist_ok=True)
     (snapshot / path).write_text(source)
     raw = detectors.detect_snapshot(snapshot, caps)
     assert raw
