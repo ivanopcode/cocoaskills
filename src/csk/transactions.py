@@ -2651,7 +2651,7 @@ def _read_bounded_regular(path: Path, *, limit: int) -> bytes:
         if after.st_size > limit:
             raise TransactionCorruptionError(f"journal exceeds the size limit: {path}")
         with os.fdopen(fd, "rb", closefd=False) as handle:
-            payload = handle.read(limit + 1)
+            payload = protocol_json._read_bounded(handle, limit)
     finally:
         os.close(fd)
     if len(payload) > limit:

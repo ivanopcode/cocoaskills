@@ -359,7 +359,17 @@ def _read_no_follow(path: str, *, manager_home: str, what: str) -> bytes:
                 raise OSError("JSON input must be a regular file")
             if os.fstat(handle.fileno()).st_size > 16 * 1024 * 1024:
                 raise OSError("JSON input exceeds maximum size")
-            raw = handle.read(16 * 1024 * 1024 + 1)
+            # Keep this copied runtime independent of the installed package.
+            # Small registries must not allocate the entire 16 MiB budget.
+            chunks: list[bytes] = []
+            remaining = 16 * 1024 * 1024 + 1
+            while remaining:
+                chunk = handle.read(min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
             if len(raw) > 16 * 1024 * 1024:
                 raise OSError("JSON input exceeds maximum size")
             return raw
