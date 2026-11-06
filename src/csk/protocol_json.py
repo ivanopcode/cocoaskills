@@ -66,10 +66,15 @@ def _read_bounded(stream: BinaryIO, maximum: int) -> bytes:
     # A budget-sized read allocates that budget even for a tiny file on
     # Windows. Grow with the actual content, retaining one byte past the cap
     # so callers can distinguish an oversized file from a valid prefix.
+    if maximum < 0:
+        raise ValueError("read budget must be non-negative")
     chunks: list[bytes] = []
     remaining = maximum + 1
-    while remaining:
-        chunk = stream.read(min(64 * 1024, remaining))
+    while remaining > 0:
+        requested = min(64 * 1024, remaining)
+        chunk = stream.read(requested)
+        if chunk is not None and len(chunk) > requested:
+            raise OSError("bounded read exceeded requested size")
         if not chunk:
             break
         chunks.append(chunk)
