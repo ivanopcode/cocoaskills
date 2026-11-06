@@ -194,6 +194,44 @@ def test_doctor_without_working_config(tmp_path, monkeypatch, capsys, config_byt
     assert {str(p): (p.stat().st_size, p.stat().st_mode, p.stat().st_mtime_ns) for p in tmp_path.rglob('*') if p.is_file()} == before_files
 
 
+# Real exec with fd 0 closed gives CPython sys.stdin=None, unlike /dev/null.
+# Both must print diagnostics without a traceback; only generated keys are used.
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX closed-fd exec witness')
+@pytest.mark.parametrize('closed_stdin', [False, True])
+def test_doctor_closed_stdin(real_ssh, tmp_path, closed_stdin):
+    identity = tmp_path / 'key'
+    generate(real_ssh, identity, '-t', 'ed25519', '-N', '')
+    environment = {name: value for name, value in os.environ.items()
+                   if not name.startswith('CSK_BUILD_SSH_') and name not in {'GIT_DIR', 'GIT_WORK_TREE', 'SSH_AUTH_SOCK'}}
+    environment['CSK_CONFIG'] = str(tmp_path / 'absent.json')
+    environment['PYTHONPATH'] = str(Path(__file__).resolve().parents[1] / 'src')
+    command = [sys.executable, '-m', 'csk', 'config', 'build-ssh', 'doctor', '--identity', str(identity)]
+    if closed_stdin:
+        command = [sys.executable, '-c', 'import os,sys; os.close(0); os.execv(sys.argv[1], sys.argv[1:])', *command]
+    result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=environment, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert 'Traceback' not in result.stderr
+    assert 'Terminal: not attached; SSH prompts remain disabled' in result.stdout
+    assert 'Key: ED25519; passphrase: not set; in agent: no' in result.stdout
+    assert 'Local state: unknown; local metadata does not establish that the key is unusable' in result.stdout
+
+
+# A present terminal input must not dereference an absent stderr stream.
+# This unit control models stream presence, not a real terminal or signing.
+@pytest.mark.parametrize('stderr_present', [False, True])
+def test_doctor_terminal_stream_presence(monkeypatch, stderr_present):
+    from types import SimpleNamespace
+    stream = SimpleNamespace(isatty=lambda: True)
+    with monkeypatch.context() as patch:
+        patch.setattr(build_ssh.sys, 'stdin', stream)
+        patch.setattr(build_ssh.sys, 'stderr', stream if stderr_present else None)
+        patch.setattr(build_ssh, 'resolve_tool', lambda name: str(Path('/unavailable/ssh')))
+        patch.setattr(build_ssh, '_local_probe', lambda *args, **kwargs: None)
+        text = build_ssh.doctor(())
+    expected = 'attached' if stderr_present else 'not attached'
+    assert f'Terminal: {expected}; SSH prompts remain disabled' in text
+
+
 # Unresolvable home expansion remains unknown for either selected path; valid
 # ordinary paths in the nearby CLI tests still reach real metadata inspection.
 @pytest.mark.skipif(os.name != 'posix', reason='POSIX named-user home expansion')
@@ -229,9 +267,10 @@ def test_doctor_local_facts(real_ssh, tmp_path):
 # Apple's real client must ignore the unencrypted SK pin with its scrubbed
 # default provider, while a generated plain key is offered to the same server.
 # The loopback server rejects unsigned offers; no signature/token is requested.
+# Paramiko is a required dev dependency, so CI cannot skip a missing observer.
 @pytest.mark.skipif(sys.platform != 'darwin', reason='Apple OpenSSH absence semantics')
 def test_apple_ssh_ignores_sk_without_provider(software_sk, tmp_path):
-    paramiko = pytest.importorskip('paramiko', reason='loopback SSH observer needs optional Paramiko')
+    import paramiko
     ssh = Path('/usr/bin/ssh')
     if build_ssh._security_key_provider(ssh) != 'none':
         pytest.skip('system SSH has a built-in provider; absent-provider route not applicable')
