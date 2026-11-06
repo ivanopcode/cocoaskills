@@ -429,6 +429,8 @@ def validate_operator_ssh_credentials(
         ("known_hosts", "SSH known hosts", "file"),
     ):
         path: Path | None = getattr(credentials, field)
+        if sys.platform == "win32" and path is not None:
+            _validate_windows_ssh_literal_path(path)
         if path is None:
             admitted[field] = None
             continue
@@ -510,9 +512,18 @@ def ssh_endpoint(source: RepositorySource) -> tuple[str, str]:
     return host, path
 
 
+def _validate_windows_ssh_literal_path(path: Path) -> None:
+    if "%" in os.fspath(path) or "${" in os.fspath(path):
+        raise GitAdmissionError(
+            IDENTITY_INVALID,
+            "Windows SSH paths cannot contain '%' or '${': SSH would expand the pinned path",
+        )
+
+
 def _ssh_config_path(path: Path) -> str:
     value = os.fspath(path)
     if sys.platform == "win32":
+        _validate_windows_ssh_literal_path(path)
         return '"' + value.replace("\\", "/").replace('"', '\\"') + '"'
     return value
 
