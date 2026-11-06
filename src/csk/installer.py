@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .terminal import terminal_text
+from .terminal import shell_word, terminal_text
 
 import hashlib
 import json
@@ -159,7 +159,12 @@ def failure_text(exc: BaseException, *, verbose: bool = False) -> str:
             for item in missing_error.missing
         ])
     # Resolution errors already separate escaped data from owned hint layout.
-    if isinstance(exc, git_admission.GitAdmissionError) and not isinstance(exc, source_transport.TransportResolutionError):
+    if not isinstance(exc, source_transport.TransportResolutionError) and (
+        isinstance(exc, git_admission.GitAdmissionError) or any(
+            isinstance(cause, git_admission.GitAdmissionError)
+            and cause.code == git_admission.SSH_CREDENTIAL_UNUSABLE for cause in chain
+        )
+    ):
         message = terminal_text(message)
     if isinstance(exc, git_admission.GitAdmissionError) and exc.failure_class:
         failure_class = (
@@ -1546,7 +1551,7 @@ def _rule_credentials(
         )
     except git_admission.GitAdmissionError as exc:
         raise InstallError(
-            f"build_ssh scope {terminal_text(rule.scope)!r} selected for {terminal_text(canonical_identity)}: {exc}"
+            f"build_ssh scope {terminal_text(rule.scope)!r} selected for {terminal_text(canonical_identity)}: {terminal_text(exc)}"
         ) from exc
 
 
@@ -1696,7 +1701,7 @@ def _resolve_build_ssh_credentials(
             selection[key] = run_selected
             if dry_run:
                 messages.append(
-                    f"external build ssh: {source.identity} <- operator flags/env"
+                    f"external build ssh: {terminal_text(source.identity)} <- operator flags/env"
                 )
             continue
         rule = build_ssh_module.match(rules, source.identity)
@@ -1712,7 +1717,7 @@ def _resolve_build_ssh_credentials(
         selection[key] = _rule_credentials(rule, source.identity)
         if dry_run:
             messages.append(
-                f"external build ssh: {source.identity} <- config scope {rule.scope!r}"
+                f"external build ssh: {terminal_text(source.identity)} <- config scope {terminal_text(rule.scope)!r}"
             )
     if persisted:
         # ``rules`` also carries this run's "this run only" answers; only the
@@ -1722,7 +1727,7 @@ def _resolve_build_ssh_credentials(
         )
         for rule in persisted:
             messages.append(
-                f"build_ssh scope {rule.scope!r} saved to {config.path}"
+                f"build_ssh scope {terminal_text(rule.scope)!r} saved to {terminal_text(config.path)}"
             )
     if missing:
         lines = [
@@ -1730,7 +1735,7 @@ def _resolve_build_ssh_credentials(
             "external build repositories need SSH credentials:",
         ]
         for skill_name, name, identity in missing:
-            lines.append(f"  {identity} (command {name!r} of skill {skill_name!r})")
+            lines.append(f"  {terminal_text(identity)} (command {terminal_text(name)!r} of skill {terminal_text(skill_name)!r})")
         first = missing[0][2]
         scope = build_ssh_module.default_scope(first)
         commands = build_ssh_module.candidate_commands(
@@ -1742,7 +1747,7 @@ def _resolve_build_ssh_credentials(
         else:
             lines.append(
                 "select credentials with: csk config build-ssh add "
-                f"{scope} --agent auto --identity ~/.ssh/<key>.pub"
+                f"{shell_word(scope)} --agent auto --identity ~/.ssh/<key>.pub"
             )
         lines.append(
             "or pass --build-ssh-agent/--build-ssh-identity, "
