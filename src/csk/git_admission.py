@@ -1323,6 +1323,7 @@ def _preflight_ssh(source: RepositorySource, tool: GitTool) -> None:
             f"cannot fetch {source.identity}; reason: {result.reason}; "
             f"next: run csk config build-ssh doctor {source.identity} and select "
             "a usable private key or a capable operator-managed agent",
+            failure_class="auth-unavailable",
         )
 
 
