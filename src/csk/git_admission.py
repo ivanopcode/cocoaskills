@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import IO, Callable, Mapping, Sequence
 
 from . import git_trust
+from ._windows_git_process import run as _windows_git_run
 from .build_repository import (
     LockedCommit,
     RepositorySource,
@@ -507,6 +508,13 @@ def ssh_endpoint(source: RepositorySource) -> tuple[str, str]:
     return host, path
 
 
+def _ssh_config_path(path: Path) -> str:
+    value = os.fspath(path)
+    if sys.platform == "win32":
+        return '"' + value.replace("\\", "/").replace('"', '\\"') + '"'
+    return value
+
+
 def exact_ssh_command(policy: SSHPolicy, argv: Sequence[str]) -> tuple[str, ...]:
     expected_command = f"git-upload-pack '{policy.repository_path}'"
     expected_parts = [os.fspath(policy.wrapper)]
@@ -556,9 +564,9 @@ def exact_ssh_command(policy: SSHPolicy, argv: Sequence[str]) -> tuple[str, ...]
         "-o",
         "StrictHostKeyChecking=yes",
         "-o",
-        f"UserKnownHostsFile={policy.known_hosts}",
+        "UserKnownHostsFile=" + _ssh_config_path(policy.known_hosts),
         "-o",
-        f"GlobalKnownHostsFile={policy.empty_known_hosts}",
+        "GlobalKnownHostsFile=" + _ssh_config_path(policy.empty_known_hosts),
         "-o",
         "CheckHostIP=no",
         "-o",
@@ -723,7 +731,7 @@ def validate_git_tool(tool: GitTool, *, timeout_seconds: float = 10.0) -> None:
     try:
         with git_trust.private_git_trust(https_trust_args(tool)) as trust:
             environment = trust.environment(_clean_discovery_environment())
-            result = subprocess.run(
+            result = (_windows_git_run if sys.platform == "win32" else subprocess.run)(
                 git_trust.pinned_command((os.fspath(tool.executable), "--version"), environment),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
@@ -1041,7 +1049,7 @@ def _run_git_ls_remote(
     """Run one ``ls-remote`` under the admission budget, capturing stdout."""
     environment = _operation_trust_environment(paths, tool, environment)
     try:
-        completed = subprocess.run(
+        completed = (_windows_git_run if sys.platform == "win32" else subprocess.run)(
             git_trust.pinned_command((os.fspath(tool.executable), *arguments), environment),
             cwd=paths.work,
             env=environment,
@@ -1371,6 +1379,10 @@ def _materialize_ssh_wrapper(
         expected.extend(("-p", str(invocation_port)))
     expected.extend((host, f"git-upload-pack '{repository_path}'"))
     command = list(exact_ssh_command(policy, expected))
+    execution = (
+        "import subprocess\nraise SystemExit(subprocess.call(COMMAND))\n"
+        if sys.platform == "win32" else "os.execv(COMMAND[0], COMMAND)\n"
+    )
     _write_private_file(
         script,
         (
@@ -1380,7 +1392,7 @@ def _materialize_ssh_wrapper(
             "if sys.argv != EXPECTED:\n"
             "    sys.stderr.write('csk: refused unexpected ssh invocation\\n')\n"
             "    raise SystemExit(1)\n"
-            "os.execv(COMMAND[0], COMMAND)\n"
+            + execution
         ).encode("utf-8"),
     )
     return (os.fspath(_wrapper_interpreter()), os.fspath(script))
@@ -1614,7 +1626,7 @@ def _run_git(
 ) -> None:
     environment = _operation_trust_environment(paths, tool, environment)
     try:
-        subprocess.run(
+        (_windows_git_run if sys.platform == "win32" else subprocess.run)(
             git_trust.pinned_command((os.fspath(tool.executable), *arguments), environment),
             cwd=paths.work,
             env=environment,

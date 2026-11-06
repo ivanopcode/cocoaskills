@@ -424,3 +424,20 @@ def test_prompt_abort(monkeypatch: pytest.MonkeyPatch) -> None:
         "skill-a", "tool", "gitlab.example.com/x/y"
     )
     assert rule is None and persist is False
+
+
+def test_windows_picker_discovers_standard_pipe_without_ambient_socket(tmp_path, monkeypatch):
+    # Windows discovery offers only the native pipe; its absence offers no
+    # candidate even with a hostile ambient SSH_AUTH_SOCK. No user keys read.
+    import sys
+    import subprocess
+    from csk import git_admission
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(build_ssh, "resolve_tool", lambda *a, **kw: "ssh-add")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(a, 0, "key\n", ""))
+    monkeypatch.setattr(git_admission, "_windows_ssh_agent_pipe_available", lambda: True)
+    candidate = build_ssh.discover_candidates(environment={"SSH_AUTH_SOCK": "hostile"}, home=str(tmp_path))
+    assert candidate.agent_socket == git_admission._WINDOWS_SSH_AGENT_PIPE
+    assert candidate.agent_key_count == 1
+    monkeypatch.setattr(git_admission, "_windows_ssh_agent_pipe_available", lambda: False)
+    assert build_ssh.discover_candidates(environment={"SSH_AUTH_SOCK": "hostile"}, home=str(tmp_path)).agent_socket is None

@@ -463,7 +463,8 @@ def build_parser(*, draft: bool | None = None) -> argparse.ArgumentParser:
         const="auto",
         default=None,
         metavar="SOCKET",
-        help="use the operator ssh-agent; bare flag or 'auto' adopts SSH_AUTH_SOCK",
+        help=("use the operator ssh-agent; bare flag or 'auto' selects the standard Windows agent pipe"
+              if sys.platform == "win32" else "use the operator ssh-agent; bare flag or 'auto' adopts SSH_AUTH_SOCK"),
     )
     build_ssh_add.add_argument(
         "--identity", default=None, metavar="PATH",
@@ -824,8 +825,8 @@ def _add_build_ssh_arguments(parser: argparse.ArgumentParser) -> None:
         const=git_admission.OPERATOR_SSH_AGENT_AUTO,
         metavar="SOCKET",
         help=(
-            "SSH agent socket for private build repositories; bare flag or "
-            "'auto' adopts SSH_AUTH_SOCK "
+            "SSH agent socket for private build repositories; bare flag or " +
+            ("'auto' selects the standard Windows agent pipe " if sys.platform == "win32" else "'auto' adopts SSH_AUTH_SOCK ") +
             f"(env: {git_admission.OPERATOR_SSH_AGENT_ENV})"
         ),
     )
@@ -1345,7 +1346,7 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
         ).strip().lower()
         if wants_ssh in {"y", "yes"}:
             scope_raw = input("Scope (host or host/namespace): ").strip()
-            agent_answer = input("Use your ssh-agent (SSH_AUTH_SOCK)? [Y/n] ").strip().lower()
+            agent_answer = input(("Use your ssh-agent (standard Windows pipe)? [Y/n] " if sys.platform == "win32" else "Use your ssh-agent (SSH_AUTH_SOCK)? [Y/n] ")).strip().lower()
             agent = "auto" if agent_answer in {"", "y", "yes"} else None
             identity_raw = input(
                 "Identity file (a .pub pins which agent key is offered; empty for none): "

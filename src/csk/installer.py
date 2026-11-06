@@ -1637,7 +1637,7 @@ def _prompt_build_ssh_rule(
         identity = identity_raw or None
         if agent is None and identity is None:
             agent_answer = input(
-                "Use your ssh-agent (SSH_AUTH_SOCK)? [Y/n] "
+                ("Use your ssh-agent (standard Windows pipe)? [Y/n] " if sys.platform == "win32" else "Use your ssh-agent (SSH_AUTH_SOCK)? [Y/n] ")
             ).strip().lower()
             agent = "auto" if agent_answer in {"", "y", "yes"} else None
     if agent is None and identity is None:
