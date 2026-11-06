@@ -1435,28 +1435,45 @@ def test_each_endpoint_receives_a_separate_authentication_provider_selection() -
     assert providers == ["first", "second"]
 
 
-def test_two_attempts_share_one_total_deadline() -> None:
+@pytest.mark.parametrize("operation", ["acquire", "resolve"])
+@pytest.mark.parametrize("elapsed", [0.0, 0.25, 5.25])
+def test_two_attempts_share_one_total_deadline(operation: str, elapsed: float) -> None:
+    # Coarse clock rounding never enlarges either operation's budget; elapsed
+    # time reduces fallback's allowance and expiration forbids another attempt.
     plan = _v1_plan()
     observed_limits: list[float] = []
+    now = 123.002  # (now + 5) - now rounds to 5.000000000000014.
 
-    def attempt(**kwargs: object) -> git_admission.Snapshot:
+    def attempt(**kwargs: object) -> git_admission.Snapshot | LockedCommit:
+        nonlocal now
         limits = kwargs["limits"]
         assert isinstance(limits, git_admission.Limits)
         observed_limits.append(limits.timeout_seconds)
         if len(observed_limits) == 1:
+            now += elapsed
             raise transport.TransportFailure("dns")
-        return _snapshot()
+        return _snapshot() if operation == "acquire" else LOCK
 
-    result = transport.acquire_plan(
-        plan,
-        LOCK,
-        limits=git_admission.Limits(timeout_seconds=5.0),
-        attempt=attempt,
-    )
+    def run():
+        options = dict(
+            limits=git_admission.Limits(timeout_seconds=5.0),
+            attempt=attempt,
+            clock=lambda: now,
+        )
+        if operation == "acquire":
+            return transport.acquire_plan(plan, LOCK, **options)
+        return transport.resolve_plan(plan, "branch", "main", **options)
+
+    if elapsed > 5:
+        with pytest.raises(transport.TransportResolutionError) as captured:
+            run()
+        assert [item.classification for item in captured.value.attempts] == ["dns"]
+        assert observed_limits == [5.0]
+        return
+    result = run()
     assert result.attempt_count == 2
     assert len(observed_limits) == 2
-    assert all(0 < value <= 5.0 for value in observed_limits)
-    assert observed_limits[1] <= observed_limits[0]
+    assert observed_limits == [5.0, pytest.approx(5.0 - elapsed)]
 
 
 def test_total_deadline_bounds_elapsed_time_across_both_attempts() -> None:

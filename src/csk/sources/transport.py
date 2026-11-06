@@ -494,7 +494,9 @@ def acquire_plan(
     diagnostics: list[AttemptDiagnostic] = []
     maximum = min(plan.max_attempts, 2, len(plan.endpoints))
     for index, endpoint in enumerate(plan.endpoints[:maximum]):
-        remaining = deadline - clock()
+        # Adding then subtracting a coarse clock can round above the original
+        # budget. An endpoint must never receive more than the caller allowed.
+        remaining = min(limits.timeout_seconds, deadline - clock())
         if remaining <= 0:
             raise TransportResolutionError(tuple(diagnostics))
         attempt_limits = replace(limits, timeout_seconds=remaining)
@@ -687,7 +689,7 @@ def resolve_plan(
     diagnostics: list[AttemptDiagnostic] = []
     maximum = min(plan.max_attempts, 2, len(plan.endpoints))
     for index, endpoint in enumerate(plan.endpoints[:maximum]):
-        remaining = deadline - clock()
+        remaining = min(limits.timeout_seconds, deadline - clock())
         if remaining <= 0:
             raise TransportResolutionError(tuple(diagnostics))
         attempt_limits = replace(limits, timeout_seconds=remaining)
