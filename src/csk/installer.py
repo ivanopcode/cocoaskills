@@ -21,7 +21,7 @@ from pathlib import Path
 
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
-from .tool_paths import resolve_tool
+from .tool_paths import ToolResolutionError, resolve_tool
 
 from . import (
     adapters,
@@ -4273,6 +4273,43 @@ def _runtime_path_entries(plan: SkillPlan, bin_dir: Path) -> tuple[Path, ...]:
     return _dedupe_path_candidates(candidates)
 
 
+def _system_resolution_remedy(error: ToolResolutionError, *, absolute: bool) -> str:
+    excluded = next((item for item in error.rejections if item.reason == "excluded"), None)
+    nonexecutable = next((item for item in error.rejections if item.reason == "not_executable"), None)
+    if excluded is not None:
+        repair = (
+            "move the executable outside those trees and change the command declaration "
+            "to its new absolute path or a bare name on PATH; changing PATH alone "
+            "does not repair an absolute declaration"
+            if absolute else
+            "install the real executable in an absolute PATH directory outside those trees"
+        )
+        return (
+            f"candidate crosses an excluded csk shim tree: {str(excluded.path)!r}. "
+            "Excluded locations for csk shims are .agents/bin, the csk global/bin tree and directories marked by "
+            ".csk-managed.json, including unrelated tools beside that marker and descendants. "
+            f"remediation: {repair}; the entire symlink chain must also stay outside "
+            "those trees. Then rerun the same command"
+        )
+    if nonexecutable is not None:
+        return (
+            f"regular file is not executable: {str(nonexecutable.path)!r}. "
+            "remediation: make that file executable or reinstall a working executable "
+            "at that path; then rerun the same command"
+        )
+    placement = "at the declared absolute path" if absolute else "in an absolute directory on PATH"
+    if any(item.reason == "unusable" for item in error.rejections):
+        return (
+            "no usable regular executable could be resolved (a candidate or its path "
+            "could not be read or was not a valid executable chain). "
+            f"remediation: repair or replace the executable {placement}; then rerun the same command"
+        )
+    return (
+        f"executable not found. remediation: install the executable {placement}; "
+        "then rerun the same command"
+    )
+
+
 def _runtime_path_suffix(plan: SkillPlan) -> tuple[Path, ...]:
     """Derive the launcher PATH suffix from declared system dependencies.
 
@@ -4291,11 +4328,22 @@ def _runtime_path_suffix(plan: SkillPlan) -> tuple[Path, ...]:
             executable = resolve_tool(
                 command_path.name if command_path.is_absolute() else dependency.command,
                 executable=dependency.command if command_path.is_absolute() else None,
+                diagnostics=True,
             )
         except (FileNotFoundError, ValueError) as exc:
+            if isinstance(exc, ToolResolutionError):
+                detail = _system_resolution_remedy(exc, absolute=command_path.is_absolute())
+            elif isinstance(exc, ValueError):
+                detail = (
+                    "invalid command declaration. remediation: change the declaration to "
+                    "a bare command name or an absolute path to the executable; "
+                    "then rerun the same command"
+                )
+            else:
+                detail = str(exc)
             raise InstallError(
                 f"Cannot resolve system command {terminal_text(dependency.command)!r} "
-                f"for {terminal_text(plan.decl.name)}: {terminal_text(exc)}"
+                f"for {terminal_text(plan.decl.name)}: {terminal_text(detail)}"
             ) from exc
         candidates.append(Path(executable).parent)
     return _dedupe_path_candidates(candidates)
