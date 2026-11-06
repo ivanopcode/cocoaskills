@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import IO, Callable, Mapping, Sequence
 
 from . import git_trust
+from .terminal import shell_word
 from .build_repository import (
     LockedCommit,
     RepositorySource,
@@ -1321,7 +1322,7 @@ def _preflight_ssh(source: RepositorySource, tool: GitTool) -> None:
         raise GitAdmissionError(
             SSH_CREDENTIAL_UNUSABLE,
             f"cannot fetch {source.identity}; reason: {result.reason}; "
-            f"next: run csk config build-ssh doctor {source.identity} and select "
+            f"next: run csk config build-ssh doctor {shell_word(source.identity)} and select "
             "a usable private key or a capable operator-managed agent",
             failure_class="auth-unavailable",
         )
