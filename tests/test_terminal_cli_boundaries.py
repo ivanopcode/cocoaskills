@@ -10,13 +10,13 @@ from conftest import make_config, make_project, make_skill_repo, write_skillfile
 
 
 # Exhaustive Unicode category coverage includes all Bidi_Control characters;
-# format characters are visibly escaped, while ordinary multilingual text survives.
+# format characters except legitimate joiners are escaped; multilingual text survives.
 def test_unicode_control_categories():
     for code in range(sys.maxunicode + 1):
         char = chr(code)
-        if unicodedata.category(char) in {'Cc', 'Cf'}:
+        if unicodedata.category(char) in {'Cc', 'Cf'} and char not in '\u200c\u200d':
             assert char not in terminal_text(char), hex(code)
-    assert terminal_text('日本語 café العربية 😀') == '日本語 café العربية 😀'
+    assert terminal_text('日本語 café العربية می\u200cروم 👩\u200d💻') == '日本語 café العربية می\u200cروم 👩\u200d💻'
 
 
 def assert_safe(output):
