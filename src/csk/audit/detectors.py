@@ -15,7 +15,7 @@ from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .secret_values import MAX_FINDINGS_PER_FILE, detect_and_mask, finding_limit, mask_output_text, sanitize_findings
+from .secret_values import MAX_FINDINGS_PER_FILE, detect_and_mask, finding_limit, mask_fragments, mask_output_text, secret_fragments, sanitize_findings
 from .capabilities import CapabilityManifest
 from .model import CapabilityViolation, Finding, Location, Severity, Surface
 
@@ -71,14 +71,14 @@ def _file_findings(rel_path: str, text: str, capabilities: CapabilityManifest, m
     if any(f.id == 'static.opaque.finding-limit' for f in secrets):
         return
     tree = _parse_python(text) if rel_path.endswith(".py") else None
-    sensitive_lines = _python_sensitive_lines(tree) if isinstance(tree, ast.Module) else set()
+    sensitive_lines, fragments = _python_sensitive_data(tree) if isinstance(tree, ast.Module) else (set(), set())
     for finding in chain(_detect_curl_pipe(rel_path, text), _detect_python_shell_true(rel_path, text),
                          _detect_network_urls(rel_path, text, capabilities),
                          _detect_secret_env(rel_path, text, capabilities), _detect_dangerous_rm(rel_path, text)):
         if finding.location and finding.location.span and finding.location.span[0] in sensitive_lines:
             violation = finding.capability_violation
-            finding = replace(finding, evidence="[withheld]", capability_violation=(
-                replace(violation, observed="[withheld]") if violation else None))
+            finding = replace(finding, evidence=mask_fragments(finding.evidence, fragments), capability_violation=(
+                replace(violation, observed=mask_fragments(violation.observed, fragments)) if violation else None))
         yield finding
     if tree is not None:
         yield from _detect_python_ast(rel_path, tree, capabilities)
@@ -185,6 +185,7 @@ def _detect_network_urls(rel_path: str, text: str, capabilities: CapabilityManif
         if not host or host in seen_hosts or _host_allowed(host, capabilities.network):
             continue
         seen_hosts.add(host)
+        safe_host = _safe_host(match.group(0), host)
         yield (
             _finding(
                 finding_id="static.network.undeclared-host",
@@ -193,11 +194,11 @@ def _detect_network_urls(rel_path: str, text: str, capabilities: CapabilityManif
                 rel_path=rel_path,
                 text=text,
                 start=match.start(),
-                evidence=mask_output_text(match.group(0)),
+                evidence=f"{safe_host}: {mask_output_text(match.group(0))}",
                 violation=CapabilityViolation(
                     capability="network",
                     declared=", ".join(capabilities.network) or "none",
-                    observed="[withheld]" if mask_output_text(match.group(0)) != match.group(0) else host,
+                    observed=safe_host,
                 ),
             )
         )
@@ -249,16 +250,19 @@ def _parse_python(text: str) -> ast.Module | SyntaxError:
         return exc
 
 
-def _python_sensitive_lines(tree: ast.Module) -> set[int]:
+def _python_sensitive_data(tree: ast.Module) -> tuple[set[int], set[str]]:
     # Generic regexes see individual source literals; AST constants see their
-    # joined/decoded value. Withhold evidence on affected lines, retaining every
-    # finding and its original capability check (including curl-pipe findings).
+    # joined/decoded value. Track only classified fragments on affected lines;
+    # clean names, findings and original capability checks remain intact.
     lines: set[int] = set()
+    fragments: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if mask_output_text(node.value) != node.value:
+            found = secret_fragments(node.value)
+            if found:
+                fragments.update(found)
                 lines.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
-    return lines
+    return lines, fragments
 
 
 def _detect_python_ast(rel_path: str, tree: ast.Module | SyntaxError, capabilities: CapabilityManifest) -> Iterable[Finding]:
@@ -323,8 +327,10 @@ def _detect_python_exec_call(
         observed = "shell" if _keyword_is_true(node, "shell") else "<dynamic>"
     if observed in capabilities.exec:
         return []
-    if argument is not None and mask_output_text(argument) != argument:
-        observed = "[withheld]"
+    if argument is not None:
+        safe_argument = mask_output_text(argument)
+        if safe_argument != argument and Path(safe_argument).name != observed:
+            observed = "[withheld]"
     return [
         _ast_finding(
             finding_id="static.python.undeclared-exec",
@@ -340,6 +346,11 @@ def _detect_python_exec_call(
             ),
         )
     ]
+
+
+def _safe_host(url: str, host: str) -> str:
+    safe_url = mask_output_text(url)
+    return host if safe_url == url or urlparse(safe_url).hostname == host else "[withheld]"
 
 
 def _detect_python_network_call(
@@ -365,8 +376,8 @@ def _detect_python_network_call(
         observed = urlparse(url).hostname or "<dynamic-url>"
     if observed != "<dynamic-url>" and _host_allowed(observed, capabilities.network):
         return []
-    if url is not None and mask_output_text(url) != url:
-        observed = "[withheld]"
+    if url is not None:
+        observed = _safe_host(url, observed)
     return [
         _ast_finding(
             finding_id="static.python.undeclared-network",

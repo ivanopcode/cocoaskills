@@ -24,6 +24,7 @@ _PATTERNS = (
 _OUTPUT_PATTERNS = (
     ('private-key', re.compile(_PATTERNS[0][1].pattern, re.IGNORECASE)),
     ('aws-access-key', re.compile(r'(?:AKIA|ASIA)[A-Z0-9]{16}', re.IGNORECASE)),
+    ('github-token', re.compile(_PATTERNS[2][1].pattern, re.IGNORECASE)),
 )
 _JWT_PART = re.compile(r"[A-Za-z0-9_-]+={0,2}")
 _TOKEN = re.compile(r"[A-Za-z0-9_+/-]+={0,2}")
@@ -32,7 +33,9 @@ _JSON_VALUE = re.compile(r'"[^"\n]{1,128}"\s*:\s*"$')
 _ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))")
 _PUBLIC_PEM = re.compile(r"-----BEGIN (PUBLIC KEY|CERTIFICATE)-----[\s\S]*?(?:-----END \1-----|\Z)")
 # Output candidates include path/URL separators before any lossy transformation.
-_OUTPUT_TOKEN = re.compile(r"[A-Za-z0-9_+/.:@?&=%-]+")
+_OUTPUT_TOKEN = re.compile(r"[A-Za-z0-9_+/.:@?&=%\\-]+")
+_COMPONENT = re.compile(r"[A-Za-z0-9_+-]+")
+_WORD_COMPONENT = re.compile(r"(?:[a-z]+(?:[-_][a-z]+)*[0-9]*|(?:[A-Z][a-z]+)+[0-9]*|[A-Z]+|[0-9]+)")
 
 
 def _secret_finding(kind: str, rel_path: str, line: int) -> Finding:
@@ -102,66 +105,113 @@ def _secret_spans(decoded: str, *, contextual: bool) -> Iterator[tuple[int, int,
         header_part, payload_part, signature = (p.group() for p in parts)
         if not (8 <= len(header_part) <= 2048 and 2 <= len(payload_part) <= 8192 and 16 <= len(signature) <= 2048):
             continue
-        if not contextual:
-            # Reconstructed prefixes/case changes may invalidate the JSON while
-            # still carrying the original token. Output masking needs no validation.
-            yield parts[0].start(), part.end(), 'jwt'
-            continue
-        try:
-            header = json.loads(_base64(header_part))
-            json.loads(_base64(payload_part))
-            _base64(signature)
-        except (ValueError, UnicodeError, RecursionError):
-            continue
-        if isinstance(header, dict) and isinstance(header.get('alg'), str):
-            yield parts[0].start(), part.end(), 'jwt'
-    if not contextual:
-        # Preserve ordinary URL diagnostics, but mask a complete random-looking
-        # composite before ':' or '.' can split it into short reportable pieces.
-        for match in _OUTPUT_TOKEN.finditer(decoded):
+        # The output may have acquired a short prefix before a valid JWT header.
+        # Validate the same JSON/signature shape, including bounded suffix candidates.
+        headers = (header_part[i:] for i in range(1 if contextual else min(33, len(header_part))))
+        for candidate in headers:
+            try:
+                header = json.loads(_base64(candidate))
+                json.loads(_base64(payload_part))
+                _base64(signature)
+            except (ValueError, UnicodeError, RecursionError):
+                continue
+            if isinstance(header, dict) and isinstance(header.get('alg'), str):
+                yield parts[0].start(), part.end(), 'jwt'
+                break
+    public = list(_PUBLIC_PEM.finditer(decoded))
+    # Source tokens retain their context gates; colon/URL composites also get
+    # classified as values, so low-entropy URL prefixes cannot dilute a secret.
+    patterns = (_TOKEN, _OUTPUT_TOKEN) if contextual else (_OUTPUT_TOKEN,)
+    for pattern in patterns:
+        public_index = 0
+        for match in pattern.finditer(decoded):
             value = match.group()
-            if (len(value) >= 32 and any(c.islower() for c in value)
-                    and any(c.isupper() for c in value) and any(c.isdigit() for c in value)
-                    and _entropy(value) >= 4.5):
-                yield match.start(), match.end(), 'masked-composite'
-    public = list(_PUBLIC_PEM.finditer(decoded)) if contextual else []
-    public_index = 0
-    for match in _TOKEN.finditer(decoded):
-        value = match.group()
-        if not contextual:
-            # Output fields may contain a secret inside a longer path/identifier.
-            # Redact whole long runs; source-context and entropy gates apply only
-            # to classification, never to whether a value can leave the detector.
-            if len(value) >= 32:
-                yield match.start(), match.end(), 'masked-token'
-            continue
-        if not 32 <= len(value) <= 256:
-            continue
-        if contextual:
+            if len(value) < 32:
+                continue
+            if contextual and pattern is _OUTPUT_TOKEN and ':' not in value:
+                continue
             while public_index < len(public) and public[public_index].end() <= match.start():
                 public_index += 1
             if public_index < len(public) and public[public_index].start() <= match.start():
                 continue
-            prefix = decoded[max(0, match.start() - 128):match.start()]
-            assignment = _ASSIGNMENT.search(prefix)
-            name = assignment.group(1).lower().replace('_', '') if assignment else ''
-            sensitive = any(part in name for part in ('secret', 'token', 'password', 'credential', 'apikey', 'privatekey')) or name == 'value'
-            json_value = _JSON_VALUE.search(prefix) is not None
-            bearer = re.search(r'\bBearer\s+$', prefix, re.IGNORECASE) is not None
-            spaced = (match.start() == 0 or decoded[match.start() - 1].isspace() or decoded[match.start() - 1] in '([') and (match.end() == len(decoded) or decoded[match.end()].isspace() or decoded[match.end()] in ']),')
-            query = re.search(r'[?&][A-Za-z0-9_]{1,32}=$', prefix) is not None
-            if not (sensitive or json_value or bearer or spaced or query):
+            if contextual and not _value_context(decoded, match.start(), match.end()):
                 continue
-            if value.startswith(('sha256-', 'sha384-', 'sha512-')) or re.fullmatch(r'[A-Za-z]{2,12}-[A-Za-z0-9-]+', value):
-                continue
-            if _predictable_base64(value):
-                continue
-        if not (any(c.isalpha() for c in value) and any(c.isdigit() for c in value)):
-            continue
-        if contextual and not (any(c.islower() for c in value) and any(c.isupper() for c in value)):
-            continue
-        if _entropy(value) >= 4.5:
-            yield match.start(), match.end(), 'high-entropy'
+            for start, end in _entropy_spans(value):
+                yield match.start() + start, match.start() + end, 'high-entropy'
+
+
+def _value_context(text: str, start: int, end: int) -> bool:
+    prefix = text[max(0, start - 128):start]
+    assignment = _ASSIGNMENT.search(prefix)
+    name = assignment.group(1).lower().replace('_', '') if assignment else ''
+    sensitive = any(part in name for part in ('secret', 'token', 'password', 'credential', 'apikey', 'privatekey')) or name == 'value'
+    json_value = _JSON_VALUE.search(prefix) is not None
+    bearer = re.search(r'\bBearer\s+$', prefix, re.IGNORECASE) is not None
+    spaced = (start == 0 or text[start - 1].isspace() or text[start - 1] in '([') and (end == len(text) or text[end].isspace() or text[end] in ']),')
+    query = re.search(r'[?&][A-Za-z0-9_]{1,32}=$', prefix) is not None
+    return sensitive or json_value or bearer or spaced or query
+
+
+def _entropy_value(value: str) -> bool:
+    if (len(value) < 32 or value.startswith(('sha256-', 'sha384-', 'sha512-'))
+            or re.fullmatch(r'[A-Za-z]{2,12}-[A-Za-z0-9-]+', value)
+            or _predictable_base64(value)):
+        return False
+    if not (any(c.islower() for c in value) and any(c.isupper() for c in value) and any(c.isdigit() for c in value)):
+        return False
+    if len(value) <= 256:
+        return _entropy(value) >= 4.5
+    # A long wrapper can dilute a secret. Check fixed windows with rolling
+    # counts, rather than rescanning every suffix or masking by length alone.
+    counts: Counter[str] = Counter()
+    weighted = 0.0
+    lower = upper = digits = 0
+    for i, char in enumerate(value):
+        changes = ((char, 1),) if i < 32 else ((char, 1), (value[i - 32], -1))
+        for changed, delta in changes:
+            old = counts[changed]
+            new = old + delta
+            weighted += (new * math.log2(new) if new else 0.0) - (old * math.log2(old) if old else 0.0)
+            counts[changed] = new
+            lower += delta * changed.islower()
+            upper += delta * changed.isupper()
+            digits += delta * changed.isdigit()
+        if i >= 31 and lower and upper and digits and 5 - weighted / 32 >= 4.5:
+            if not _predictable_base64(value[i - 31:i + 1]):
+                return True
+    return False
+
+
+def _entropy_spans(value: str) -> Iterator[tuple[int, int]]:
+    # Ordinary word/number path components delimit candidate values. Random
+    # pieces separated by '/' or ':' remain one candidate, even below 32 each.
+    if _predictable_base64(value):
+        return
+    components = list(_COMPONENT.finditer(value))
+    start: int | None = None
+    end = 0
+    runs: list[tuple[int, int]] = []
+    for component in components:
+        ordinary = _WORD_COMPONENT.fullmatch(component.group()) is not None
+        if ordinary:
+            if start is not None:
+                runs.append((start, end))
+                start = None
+        else:
+            if start is None:
+                start = component.start()
+            end = component.end()
+    if start is not None:
+        runs.append((start, end))
+    for start, end in runs:
+        candidate = value[start:end]
+        if _entropy_value(candidate):
+            # When the URL's entire address is the secret, its scheme is part
+            # of that value too. Ordinary host/path neighbours otherwise stay.
+            scheme = re.search(r'https?://$', value[:start])
+            if scheme is not None and end == len(value):
+                start = scheme.start()
+            yield start, end
 
 
 def _entropy(value: str) -> float:
@@ -208,18 +258,53 @@ def detect_and_mask(rel_path: str, text: str, values: set[str] | None = None, *,
 
 
 def mask_output_text(value: str) -> str:
-    """Mask complete output candidates before parsers can discard their prefixes."""
+    """Mask classified values/components before parsers discard their prefixes."""
     decoded, offsets = _decoded(value)
-    return _mask(value, offsets, list(_secret_spans(decoded, contextual=False)))
+    spans = list(_secret_spans(decoded, contextual=False))
+    if not spans:
+        return value
+    # A fixed marker cannot be reclassified as a long token by downstream
+    # serialization. Keep source-buffer masking separate to preserve offsets.
+    marked = bytearray(len(value))
+    for start, end, _ in spans:
+        if offsets:
+            start, end = offsets[start][0], offsets[end - 1][1]
+        marked[start:end] = b'\x01' * (end - start)
+    pieces: list[str] = []
+    position = 0
+    for match in re.finditer(b'\x01+', marked):
+        pieces.extend((value[position:match.start()], '<withheld>'))
+        position = match.end()
+    pieces.append(value[position:])
+    return ''.join(pieces)
+
+
+def secret_fragments(value: str) -> set[str]:
+    decoded, _ = _decoded(value)
+    return {decoded[i:i + 8].lower() for start, end, _ in _secret_spans(decoded, contextual=False)
+            for i in range(start, end - 7)}
+
+
+def mask_fragments(value: str, fragments: set[str]) -> str:
+    if not fragments:
+        return value
+    masked = list(value)
+    for i in range(len(value) - 7):
+        if value[i:i + 8].lower() in fragments:
+            for index in range(i, i + 8):
+                if value[index] not in '/\\.:?&=@\n':
+                    masked[index] = 'x'
+    return ''.join(masked)
 
 
 def sanitize_findings(findings: list[Finding], values: set[str]) -> tuple[Finding, ...]:
     # Output redaction is context-free: decoded evidence and metadata have no source context.
     pattern = re.compile('|'.join(re.escape(v) for v in sorted(values, key=len, reverse=True))) if values else None
+    fragments = {value[i:i + 8].lower() for value in values for i in range(len(value) - 7)}
     @lru_cache(maxsize=256)
     def clean_text(value: str) -> str:
         value = pattern.sub('[withheld]', value) if pattern else value
-        return mask_output_text(value)
+        return mask_output_text(mask_fragments(value, fragments))
     def clean(value: Any) -> Any:
         if isinstance(value, Enum):
             return value
@@ -230,6 +315,6 @@ def sanitize_findings(findings: list[Finding], values: set[str]) -> tuple[Findin
         return value
     # Identifiers and classification fields are fixed detector schema, not input text.
     sanitized = [replace(finding, location=clean(finding.location),
-                         evidence=clean_text(finding.evidence),
+                         evidence=finding.evidence if finding.id in SECRET_REASONS else clean_text(finding.evidence),
                          capability_violation=clean(finding.capability_violation)) for finding in findings]
     return tuple(replace(finding, evidence=finding.evidence[:160]) for finding in sanitized)
