@@ -1,4 +1,5 @@
 import io
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -23,7 +24,12 @@ def test_admission_precedes_reads(tmp_path, parts):
     for index, size in enumerate(parts):
         with (tmp_path / str(index)).open('wb') as stream:
             stream.truncate(size)
-    with patch.object(Path, 'open', side_effect=AssertionError('content read')), patch.object(
+    source_paths = {tmp_path / str(index) for index in range(len(parts))}
+    original_open = os.open
+    def check_open(path, *args, **kwargs):
+        assert Path(path) not in source_paths, 'source descriptor opened before admission'
+        return original_open(path, *args, **kwargs)
+    with patch.object(os, 'open', side_effect=check_open), patch.object(
         pipeline.hashing, 'content_sha256', side_effect=AssertionError('hash read')
     ):
         with pytest.raises(AuditBackendError, match='audit.request.too-large'):

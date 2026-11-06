@@ -211,14 +211,36 @@ def gate_plans(
 ) -> GateResult:
     if not config.audit.enabled:
         return GateResult(reports=())
+    reports: list[AuditReport] = []
+    warnings: list[str] = []
+    errors: list[str] = []
+    for plan in plans:
+        source_revocation = revocation_reason_for(
+            revocations=config.audit.revocations, content_sha256=None,
+            source=plan.decl.source, git=plan.decl.git,
+        )
+        result = _gate_plan(plan, config, scope=scope, record=record)
+        reports.extend(result.reports)
+        warnings.extend(result.warnings)
+        errors.extend(result.errors)
+        # Source revocation needs no content read, even when this plan could
+        # not be audited. A skipped plan must not erase any batch denial.
+        if source_revocation is not None and not result.blocked:
+            errors.append(f"audit blocked: {plan.decl.name}: {source_revocation} is revoked")
+    return GateResult(reports=tuple(reports), warnings=tuple(warnings), errors=tuple(errors))
+
+
+def _gate_plan(
+    plan: installer.SkillPlan, config: GlobalConfig, *, scope: str, record: bool,
+) -> GateResult:
     try:
-        reports = audit_plans(plans, config, scope=scope, record=record)
+        reports = audit_plans([plan], config, scope=scope, record=record)
     except AuditInputTooLarge as exc:
         decision = policy.decide((_too_large_finding(config.audit.max_request_bytes + 1, config.audit.max_request_bytes),),
                                  mode=config.audit.mode, fail_on=config.audit.fail_on)
         # A rejected legacy snapshot has no hash with which to verify a pin.
         # Preserve strict legacy refusal even when HIGH is below fail_on.
-        if config.audit.mode == "strict" and any(plan.spec.schema_version < 3 for plan in plans):
+        if config.audit.mode == "strict" and plan.spec.schema_version < 3:
             decision = Decision.BLOCK
         message = f"audit {'blocked' if decision == Decision.BLOCK else 'warning'}: {exc}"
         return GateResult(reports=(), errors=(message,)) if decision == Decision.BLOCK else GateResult(reports=(), warnings=(message,))
@@ -533,23 +555,23 @@ def _decide(
 def revocation_reason_for(
     *,
     revocations: tuple[str, ...] | list[str],
-    content_sha256: str,
+    content_sha256: str | None,
     source: str,
     git: str | None,
 ) -> str | None:
-    """Return the revocation reason for one content hash, if it is revoked.
+    """Return a matching revocation; None checks sources without reading content.
 
     The one revocation matcher shared by the pipeline decision and by
     source-audit use-time validation, so both refuse the same inputs.
     """
-    normalized = trust.normalize_content_sha256(content_sha256)
+    normalized = trust.normalize_content_sha256(content_sha256) if content_sha256 is not None else None
     for item in revocations:
         if item.startswith("source:"):
             pattern = item.removeprefix("source:")
             if _source_revocation_matches(pattern, source, git):
                 return f"source {pattern}"
             continue
-        if trust.normalize_content_sha256(item) == normalized:
+        if normalized is not None and trust.normalize_content_sha256(item) == normalized:
             return f"content hash {content_sha256}"
     return None
 
