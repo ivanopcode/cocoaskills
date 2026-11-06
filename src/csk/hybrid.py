@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .terminal import terminal_text
+
 from . import manifest, protocol_json, skillfile_deprecations
 
 
@@ -48,9 +50,9 @@ def load_hybrid_decls(csk_home: Path) -> list[HybridDecl]:
     try:
         data = protocol_json.loads(path.read_bytes())
     except protocol_json.ProtocolJSONError as exc:
-        raise HybridError(f"Malformed JSON in {path}: {exc}") from exc
+        raise HybridError(f"Malformed JSON in {terminal_text(path)}: {terminal_text(exc)}") from exc
     if not isinstance(data, dict):
-        raise HybridError(f"{path} must contain a JSON object")
+        raise HybridError(f"{terminal_text(path)} must contain a JSON object")
     parsed = manifest.parse_manifest(data, path, skill_extension_fields={"targets"})
     targets_by_name = _targets_by_name(data, path)
     decls: list[HybridDecl] = []
@@ -110,7 +112,7 @@ def remove_hybrid_decl(csk_home: Path, name: str) -> Path:
         raise HybridError("Hybrid Skillfile field 'skills' must be a list")
     kept = [entry for entry in skills if not (isinstance(entry, dict) and entry.get("name") == name)]
     if len(kept) == len(skills):
-        raise HybridError(f"Skill not declared in hybrid Skillfile: {name}")
+        raise HybridError(f"Skill not declared in hybrid Skillfile: {terminal_text(name)}")
     data["skills"] = kept
     _validate_and_write(path, data)
     return path
@@ -128,7 +130,7 @@ def _targets_by_name(data: dict[str, Any], path: Path) -> dict[str, tuple[str, .
         raw_targets = raw.get("targets")
         if raw_targets is None:
             raise HybridError(
-                f"{path}: hybrid skill at index {index} requires a non-empty 'targets' list "
+                f"{terminal_text(path)}: hybrid skill at index {index} requires a non-empty 'targets' list "
                 "(project alias, absolute path, or path glob)"
             )
         if (
@@ -136,7 +138,7 @@ def _targets_by_name(data: dict[str, Any], path: Path) -> dict[str, tuple[str, .
             or not raw_targets
             or not all(isinstance(item, str) and item for item in raw_targets)
         ):
-            raise HybridError(f"{path}: hybrid skill at index {index} field 'targets' must be a non-empty list of strings")
+            raise HybridError(f"{terminal_text(path)}: hybrid skill at index {index} field 'targets' must be a non-empty list of strings")
         if isinstance(name, str):
             targets[name] = tuple(raw_targets)
     return targets
@@ -148,9 +150,9 @@ def _read_or_init(path: Path) -> dict[str, Any]:
     try:
         data = protocol_json.loads(path.read_bytes())
     except protocol_json.ProtocolJSONError as exc:
-        raise HybridError(f"Malformed JSON in {path}: {exc}") from exc
+        raise HybridError(f"Malformed JSON in {terminal_text(path)}: {terminal_text(exc)}") from exc
     if not isinstance(data, dict):
-        raise HybridError(f"{path} must contain a JSON object")
+        raise HybridError(f"{terminal_text(path)} must contain a JSON object")
     return data
 
 
