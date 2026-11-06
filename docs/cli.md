@@ -1092,6 +1092,11 @@ With a repository scope, doctor checks local host-key presence using
 default; `CSK_BUILD_SSH_KNOWN_HOSTS` overrides it. A local entry is not verification
 of the server fingerprint and no host connection is made.
 
+Doctor and build-preflight diagnostics escape terminal controls in outside data
+such as paths and tool output. Suggested credential commands use shell quoting
+so their arguments survive copying into bash or zsh; JSON values retain their
+semantic contents.
+
 SSH prompts remain disabled. A proven unusable selection fails locally with
 `build_repository_ssh_credential_unusable`, classified as `auth-unavailable` so
 an explicitly declared transport fallback remains eligible. Prefer a private
