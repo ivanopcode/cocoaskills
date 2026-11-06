@@ -1057,10 +1057,12 @@ The longest matching configured scope is used; explicit options and
 `CSK_BUILD_SSH_*` take precedence. `--agent auto` selects `SSH_AUTH_SOCK`.
 Without `--all-os`, instructions fit the current OS. No network, prompts,
 signatures, token access or agent mutation occurs. Missing tools and inconclusive
-metadata report `unknown`, never an unusable-key refusal. A recognized OpenSSH
-warning that private-key permissions are too open establishes a local refusal
-when no agent is selected or the selected agent is confirmed not to hold the key;
-csk does not change permissions.
+metadata report `unknown`, never an unusable-key refusal. On POSIX, stat facts
+establish a permission refusal when the selected identity belongs to the current
+user and has any group or other permission bits. This check is independent of
+fingerprint output and optional public siblings. A selected agent must be confirmed
+not to hold the key before this file-only refusal applies. Windows permission
+state remains unknown. csk does not change ownership or permissions.
 Provider refusal requires exactly one raw `securitykeyprovider none` record;
 whitespace variants, conflicting records and unfamiliar metadata stay unknown.
 Other refusals require complete recognized metadata or file-error evidence.
