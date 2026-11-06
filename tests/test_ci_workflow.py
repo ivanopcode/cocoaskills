@@ -349,7 +349,7 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
     assert "if: github.event_name == 'pull_request'" in ordinary
     assert "os: [ubuntu-latest, macos-latest, windows-latest]" in ordinary
     assert 'python-version: "3.14"' in ordinary
-    assert ordinary.count("--ignore=") == 9
+    assert ordinary.count("--ignore=") == 10
     assert "--ignore=tests/test_protocol_conformance.py" in ordinary
     assert "--ignore=tests/test_go_build_e2e.py" in ordinary
     assert "--ignore=tests/test_mcp_launcher_recovery.py" in ordinary
@@ -512,7 +512,7 @@ def test_main_lane_preserves_full_platform_coverage_and_go_evidence() -> None:
     ) in ordinary
     assert "os: [ubuntu-latest, macos-latest, windows-latest]" in ordinary
     assert 'python-version: ["3.11", "3.12", "3.13", "3.14"]' in ordinary
-    assert ordinary.count("--ignore=") == 2
+    assert ordinary.count("--ignore=") == 3
     assert "-n 4 --dist=loadfile" in ordinary
 
     protocol = _job(workflow, "merge_protocol")
@@ -530,6 +530,58 @@ def test_main_lane_preserves_full_platform_coverage_and_go_evidence() -> None:
     assert "csk_e2e_native" in go_e2e
     assert "Collect accepted Go E2E node IDs" in go_e2e
     assert "Upload accepted Go E2E evidence" in go_e2e
+
+
+def _assert_native_controls_before_parallel_tests(workflow: str, job_id: str) -> None:
+    job = yaml.safe_load(workflow)["jobs"][job_id]
+    steps = job["steps"]
+    parallel_name = "Run fast ordinary tests" if job_id == "fast_ordinary" else "Run full ordinary tests"
+    parallel = next(step for step in steps if step.get("name") == parallel_name)
+    native_path = "tests/test_mcp_launcher_platform_native.py"
+    assert "--ignore=" + native_path in shlex.split(parallel["run"])
+    controls = [step for step in steps[:steps.index(parallel)]
+                if native_path in shlex.split(step.get("run", ""))]
+    assert len(controls) == 1, "native controls must run before parallel tests"
+    control = controls[0]
+    assert not control.get("continue-on-error", False)
+    arguments = shlex.split(control["run"])
+    assert arguments[:4] == ["python", "-m", "pytest", "-v"]
+    assert native_path in arguments[4:]
+    assert not any(arg.partition("=")[0] in {"-n", "-k", "-m", "--deselect", "--ignore", "--ignore-glob"}
+                   for arg in arguments[4:]), "native controls must be serial and unfiltered"
+    if job_id == "fast_ordinary":
+        assert control.get("if") == parallel["if"] == "matrix.partition == 'core'"
+    else:
+        assert "if" not in control
+
+
+# Real host trust checks run once without competing xdist workloads. These
+# wiring checks prove scheduling/coverage, not a host-independent timing bound.
+@pytest.mark.parametrize("job_id", ["fast_ordinary", "merge_ordinary"])
+def test_native_controls_run_before_parallel_workloads(job_id: str) -> None:
+    _assert_native_controls_before_parallel_tests(_workflow(), job_id)
+
+
+# Each planted omission, parallel execution or swallowed failure must be
+# detected; the committed workflow is the corresponding positive control.
+@pytest.mark.parametrize("job_id", ["fast_ordinary", "merge_ordinary"])
+@pytest.mark.parametrize("violation", ["omit", "parallel", "swallow", "duplicate"])
+def test_native_scheduling_checker_rejects_violations(job_id: str, violation: str) -> None:
+    data = yaml.safe_load(_workflow())
+    steps = data["jobs"][job_id]["steps"]
+    control = next(step for step in steps
+                   if "tests/test_mcp_launcher_platform_native.py" in shlex.split(step.get("run", "")))
+    if violation == "omit":
+        steps.remove(control)
+    elif violation == "parallel":
+        control["run"] += " -n 4"
+    elif violation == "swallow":
+        control["continue-on-error"] = True
+    else:
+        parallel = next(step for step in steps if "-n 4" in step.get("run", ""))
+        parallel["run"] = parallel["run"].replace("--ignore=tests/test_mcp_launcher_platform_native.py", "")
+    with pytest.raises(AssertionError):
+        _assert_native_controls_before_parallel_tests(yaml.safe_dump(data), job_id)
 
 
 def test_go_qualification_lanes_pin_each_family_across_all_platforms() -> None:

@@ -194,6 +194,7 @@ jobs:
           python -m pytest -v
           --ignore=tests/test_protocol_conformance.py
           --ignore=tests/test_go_build_e2e.py
+          --ignore=tests/test_mcp_launcher_platform_native.py
           --ignore=tests/test_mcp_launcher_recovery.py
           --ignore=tests/test_mcp_launcher_publication.py
           --ignore=tests/test_source_install_transactions.py
@@ -768,6 +769,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ".[dev]"
 
+      # Native trust controls have a deliberate five-second package-query
+      # bound. Exercise the real host before competing xdist build workloads.
+      - name: Run native launcher controls
+        run: python -m pytest -v tests/test_mcp_launcher_platform_native.py
+
       - name: Run full ordinary tests
         env:
           CURATOR_CONFORMANCE_ROOT: ${{ github.workspace }}/protocol-spec/conformance/v1
@@ -775,6 +781,7 @@ jobs:
           python -m pytest -v
           --ignore=tests/test_protocol_conformance.py
           --ignore=tests/test_go_build_e2e.py
+          --ignore=tests/test_mcp_launcher_platform_native.py
           -n 4 --dist=loadfile
           --basetemp="${{ runner.temp }}/csk-ordinary"
           -o cache_dir="${{ runner.temp }}/csk-pytest-cache"
