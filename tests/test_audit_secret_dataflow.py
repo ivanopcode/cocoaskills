@@ -22,10 +22,16 @@ def canary():
 @pytest.mark.parametrize('variant', [
     'literal', 'filename', 'declaration', 'concat', 'escaped', 'url-path', 'url-host',
     'long-filename', 'long-declaration', 'long-concat',
+    'cross-file-aws', 'cross-file-jwt',
 ])
 def test_entropy_canary_never_enters_outputs(tmp_path, capsys, caplog, variant):
-    # Reconstructed and metadata-only entropy values must be absent even from cache bytes.
+    # Reconstructed/metadata-only canaries, including short cross-file shapes, never reach cache bytes.
     value = canary()
+    if variant == 'cross-file-aws':
+        value = 'AKIA' + 'CANARYSYNTH12345'
+    elif variant == 'cross-file-jwt':
+        encode = lambda text: base64.urlsafe_b64encode(text).decode().rstrip('=')
+        value = encode(b'{"alg":"x"}') + '.' + encode(b'{}') + '.' + 's' * 16
     snapshot = tmp_path / 'package'
     snapshot.mkdir()
     path = value + '.py' if variant == 'filename' else 'run.py'
@@ -41,6 +47,10 @@ def test_entropy_canary_never_enters_outputs(tmp_path, capsys, caplog, variant):
         caps = CapabilityManifest(exec=('public' * 80 + value, 'allowed-tool'))
     elif variant == 'long-concat':
         source += 'subprocess.run([' + repr('public' * 80 + value[:20]) + ' ' + repr(value[20:]) + '])\n'
+    elif variant.startswith('cross-file-'):
+        (snapshot / 'value.txt').write_text(value)
+        split = len(value) // 2
+        source += 'subprocess.run([' + repr('cmd' + value[:split]) + ' ' + repr(value[split:]) + '])\n'
     elif variant == 'concat':
         source += 'subprocess.run([' + repr(value[:20]) + ' ' + repr(value[20:]) + '])\n'
     elif variant == 'escaped':
@@ -56,6 +66,10 @@ def test_entropy_canary_never_enters_outputs(tmp_path, capsys, caplog, variant):
     assert raw
     if variant == 'literal':
         assert 'static.secret.high-entropy' in {f.id for f in raw}
+    if variant.startswith('cross-file-'):
+        expected = 'aws-access-key' if variant.endswith('aws') else 'jwt'
+        assert 'static.secret.' + expected in {f.id for f in raw}
+        assert 'static.python.undeclared-exec' in {f.id for f in raw}
     store = tmp_path / 'store'
     store.mkdir()
     cfg = GlobalConfig(store / 'config.json', tmp_path, None, [], 'auto', '', {},
