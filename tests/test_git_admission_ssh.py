@@ -850,3 +850,21 @@ def test_windows_timeout_preserves_signing_hint(monkeypatch: pytest.MonkeyPatch)
         run([sys.executable, "-c", code], timeout=2, **common)
     assert "bounded Windows Git cleanup failed" in cleanup_error.value.__notes__
     assert "ssh-agent-refused" in git_admission._git_failure_hints(cleanup_error.value.stderr)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows pinned path expansion refusal")
+@pytest.mark.parametrize("segment", ["a%b", "a%hb", "a%%b", "a${HOME}b", "a${NOPE}b"])
+def test_windows_ssh_paths_refuse_token_expansion(tmp_path: Path, segment: str) -> None:
+    # Expansion-capable identity and private trust paths must refuse before
+    # SSH can substitute a sibling. Ordinary space paths remain a valid control.
+    valid = tmp_path / "First Last" / "identity"
+    valid.parent.mkdir(); valid.write_text("fixture")
+    assert git_admission.validate_operator_ssh_credentials(
+        git_admission.OperatorSSHCredentials(identity=valid)).identity == valid
+    bad = tmp_path / segment / "identity"
+    bad.parent.mkdir(); bad.write_text("fixture")
+    with pytest.raises(git_admission.GitAdmissionError, match="SSH would expand the pinned path") as error:
+        git_admission.validate_operator_ssh_credentials(git_admission.OperatorSSHCredentials(identity=bad))
+    assert error.value.code == git_admission.IDENTITY_INVALID
+    with pytest.raises(git_admission.GitAdmissionError, match="SSH would expand the pinned path"):
+        git_admission._ssh_config_path(bad)
