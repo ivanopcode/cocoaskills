@@ -260,6 +260,11 @@ local object reading keeps its existing timer and disables lazy network fetches.
 The native Windows CI kit exercises spaces, authenticated stalls, and TCP black
 holes on SSH and HTTPS. This does not add attended prompting or qualify MSYS SSH.
 
+Windows SSH credential and private trust paths containing `%` or `${` refuse
+with an explicit identity error: native SSH would expand these tokens and could
+select a sibling file. POSIX behavior is unchanged; this Windows qualification
+does not claim literal token paths on POSIX.
+
 The native Windows regression matrix is opt-in for a disposable loopback server.
 The dedicated `windows-ssh.yml` CI job provisions this kit and requires all 12 native
 authentication, startup, destination-guard and deadline cases to pass without skips. To reproduce
