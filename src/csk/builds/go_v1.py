@@ -116,10 +116,9 @@ CAPABILITY_EVIDENCE_VERSION: Final = "capability-evidence-v1"
 PROBE_TIMING: Final = "pre-worker-launch"
 
 PLATFORM_MACOS: Final = "macos"
-PLATFORM_LINUX: Final = "linux"
-_POSIX_CONTROL_PLATFORMS: Final = frozenset({PLATFORM_MACOS, PLATFORM_LINUX})
 PLATFORM_WINDOWS: Final = "windows"
 PLATFORM_LINUX: Final = "linux"
+_POSIX_CONTROL_PLATFORMS: Final = frozenset({PLATFORM_MACOS, PLATFORM_LINUX})
 AVAILABILITY_AVAILABLE: Final = "available"
 AVAILABILITY_UNAVAILABLE: Final = "unavailable"
 STATUS_APPLIED: Final = "applied"
