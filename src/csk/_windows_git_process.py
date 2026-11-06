@@ -3,9 +3,22 @@ from __future__ import annotations
 
 import ctypes
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+# This module is git_admission's Windows subprocess facade. Tests and callers
+# retain one reachable run seam; the default behind it is the real Job runner.
+from subprocess import (
+    CalledProcessError as CalledProcessError,
+    TimeoutExpired as TimeoutExpired,
+    Popen as Popen,
+    PIPE as PIPE,
+    DEVNULL as DEVNULL,
+    SubprocessError as SubprocessError,
+    call as call,
+)
 
 _TH32CS_SNAPTHREAD = 4
 _THREAD_SUSPEND_RESUME = 2
@@ -144,13 +157,13 @@ def _end_job(kernel: Any, job: int) -> None:
     try:
         ids = ProcessIds()
         if not query(job, 3, ctypes.byref(ids), ctypes.sizeof(ids), None):
-            raise ctypes.WinError()  # type: ignore[attr-defined]
+            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
         for pid in ids.ids[:ids.count]:
             handle = open_process(0x100000, False, pid)
             if handle:
                 handles.append(int(handle))
         if not terminate(job, 1):
-            raise ctypes.WinError()  # type: ignore[attr-defined]
+            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
         deadline = time.monotonic() + 2
         for handle in handles:
             remaining = max(0, int((deadline - time.monotonic()) * 1000))
@@ -170,7 +183,7 @@ def run(command: Sequence[str], *, cwd: Path | None = None,
     create.restype = ctypes.c_void_p
     job = create(None, None)
     if not job:
-        raise ctypes.WinError()  # type: ignore[attr-defined]
+        raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
     process = None
     try:
         info = _JobExtendedLimitInformation()
@@ -179,14 +192,14 @@ def run(command: Sequence[str], *, cwd: Path | None = None,
         configure.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
         configure.restype = ctypes.c_int
         if not configure(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
-            raise ctypes.WinError()  # type: ignore[attr-defined]
+            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
         process = subprocess.Popen(command, cwd=cwd, env=env, stdin=stdin,
                                    stdout=stdout, stderr=stderr, creationflags=4)
         assign = kernel.AssignProcessToJobObject
         assign.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         assign.restype = ctypes.c_int
         if not assign(job, int(process._handle)):  # type: ignore[attr-defined]
-            raise ctypes.WinError()  # type: ignore[attr-defined]
+            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
         _resume_windows_process(process.pid)
         output, errors = process.communicate(timeout=timeout)
         status = process.returncode
@@ -194,13 +207,28 @@ def run(command: Sequence[str], *, cwd: Path | None = None,
             raise subprocess.CalledProcessError(status, command, output, errors)
         return subprocess.CompletedProcess(command, status, output, errors)
     finally:
-        # This handle is non-inheritable. Closing it ends every descendant,
-        # including remote helpers retaining the captured stderr pipe.
+        pending = sys.exc_info()[1]
         try:
-            _end_job(kernel, int(job))
+            # This non-inheritable job owns every descendant. Terminate before
+            # collecting output: an unbounded communicate here recreates the bug.
+            try:
+                _end_job(kernel, int(job))
+            finally:
+                _close_windows_handle(int(job))
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            if pending is None:
+                raise
+            pending.add_note("bounded Windows Git cleanup failed")
         finally:
-            _close_windows_handle(int(job))
-        if process is not None:
-            if process.poll() is None:
-                process.kill()
-            process.wait(timeout=2)
+            if isinstance(pending, subprocess.TimeoutExpired) and process is not None:
+                try:
+                    output, errors = process.communicate(timeout=1)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass  # Preserve the original timeout; never wait unboundedly.
+                else:
+                    pending.output = output
+                    pending.stderr = errors
