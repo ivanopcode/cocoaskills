@@ -87,6 +87,52 @@ from the trusted source; an old unselected generation needs its corresponding
 trusted snapshot restored before collection. GC retains unsafe generations and
 their snapshot evidence, reporting the diagnostic as a warning.
 
+### Python virtual environments outside the runtime
+
+Treat the installed runtime as application source, not a working directory.
+`python3 -m venv --copies` is not a repair: a copied environment is still foreign
+state, even if it contains no symlinks. Do not symlink `.venv` from the runtime
+to an external directory either; that link is itself a foreign entry.
+
+For example, a POSIX script skill can document this setup/recreation step. Set
+`runtime_dir` to the directory containing its installed `requirements.lock`
+and `main.py`; resolve it from the script location, not the caller's working
+directory. Use a skill-specific cache directory outside all installed trees:
+
+```sh
+venv="${XDG_CACHE_HOME:-$HOME/.cache}/example-skill/venv"
+if [ -L "$venv" ]; then
+  echo "Refusing to clear a symlinked venv directory" >&2
+  exit 1
+fi
+python3 -m venv --clear "$venv"
+"$venv/bin/python" -m pip install --require-hashes -r "$runtime_dir/requirements.lock"
+```
+
+The skill supplies a pinned, hash-checked requirements file. The chosen Python
+must support the skill's required version. This step **clears the entire named
+venv before recreation**, so packages removed from the lock cannot survive a
+rerun. Reserve that exact skill-specific directory for disposable environment
+contents only. Verify the cache location is user-owned and outside installed
+trees before setup; do not run setup while another setup or command uses it.
+Rerun the complete step when the interpreter or dependency set changes.
+csk does not create, update or garbage-collect this environment.
+
+At invocation, use that environment directly; activation is unnecessary:
+
+```sh
+venv="${XDG_CACHE_HOME:-$HOME/.cache}/example-skill/venv"
+PYTHONDONTWRITEBYTECODE=1 "$venv/bin/python" "$runtime_dir/main.py" "$@"
+```
+
+An externally located venv may use Python's normal symlinks. Keep generated
+output in a separate user-owned cache/state directory too. If `XDG_CACHE_HOME`
+is customized, it must be an absolute path outside csk-published trees. On
+Windows use a user-owned cache directory outside the installation and invoke
+`<venv>\Scripts\python.exe`; do not change the runtime ACLs to enable writes.
+This Windows paragraph is interpreter-location guidance, checked by reading,
+not a complete PowerShell recipe or a claim of PowerShell execution.
+
 ## 2. Обязательные файлы
 
 Каждый устанавливаемый скилл содержит файл:

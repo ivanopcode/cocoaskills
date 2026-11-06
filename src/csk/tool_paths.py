@@ -4,11 +4,35 @@ from __future__ import annotations
 
 import os
 import stat
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 
 _MAX_SYMLINK_HOPS = 40
+
+
+@dataclass(frozen=True)
+class ToolRejection:
+    path: Path
+    reason: Literal["missing", "excluded", "not_executable", "unusable"]
+
+
+class ToolResolutionError(FileNotFoundError):
+    """Optional observations from admission; never a different admission policy."""
+
+    def __init__(self, message: str, rejections: list[ToolRejection]) -> None:
+        super().__init__(message)
+        self.rejections = tuple(rejections)
+
+
+class _ExcludedTree(Exception):
+    """Internal control flow preserving the directory refusal's cause."""
+
+
+def _failure(message: str, rejections: list[ToolRejection] | None) -> FileNotFoundError:
+    return FileNotFoundError(message) if rejections is None else ToolResolutionError(message, rejections)
 
 
 def _has_shim_directory_name(directory: Path) -> bool:
@@ -72,7 +96,7 @@ def _has_managed_ledger(path: Path) -> bool:
 def _admit_directory(directory: Path, budget: int) -> tuple[Path, int] | None:
     """Resolve directory aliases without erasing intermediate shim locations."""
     if _has_shim_directory_name(directory):
-        return None
+        raise _ExcludedTree
     current = Path(directory.anchor)
     pending = list(directory.parts[1:])
     seen: set[tuple[Path, tuple[str, ...]]] = set()
@@ -92,9 +116,9 @@ def _admit_directory(directory: Path, budget: int) -> tuple[Path, int] | None:
         )
         if is_link:
             if _is_shim_directory(current):
-                return None
+                raise _ExcludedTree
             if _has_shim_directory_name(hop):
-                return None
+                raise _ExcludedTree
             state = (hop, tuple(pending))
             if state in seen or hops >= budget:
                 return None
@@ -103,7 +127,7 @@ def _admit_directory(directory: Path, budget: int) -> tuple[Path, int] | None:
             target = Path(os.readlink(hop))
             lexical_target = target if target.is_absolute() else current / target
             if _has_shim_directory_name(lexical_target):
-                return None
+                raise _ExcludedTree
             if target.is_absolute():
                 current = Path(target.anchor)
                 pending = list(target.parts[1:]) + pending
@@ -114,18 +138,26 @@ def _admit_directory(directory: Path, budget: int) -> tuple[Path, int] | None:
                 return None
             current = hop
             if _is_shim_directory(current):
-                return None
+                raise _ExcludedTree
     if _is_shim_directory(current):
-        return None
+        raise _ExcludedTree
     return current, hops
 
 
-def _admit_executable(candidate: Path) -> str | None:
+def _admit_executable(
+    candidate: Path, rejections: list[ToolRejection] | None = None,
+) -> str | None:
+    def reject(reason: Literal["missing", "excluded", "not_executable", "unusable"],
+               path: Path = candidate) -> None:
+        if rejections is not None:
+            rejections.append(ToolRejection(path, reason))
+
     if not candidate.is_absolute():
+        reject("unusable")
         return None
     try:
         if _has_shim_directory_name(candidate.parent):
-            return None
+            raise _ExcludedTree
         hop = candidate
         seen: set[Path] = set()
         hops = 0
@@ -133,9 +165,10 @@ def _admit_executable(candidate: Path) -> str | None:
             # Check before following each link: production POSIX shims are
             # symlinks, so checking only the final target loses their ancestry.
             if _has_shim_directory_name(hop.parent):
-                return None
+                raise _ExcludedTree
             admitted_directory = _admit_directory(hop.parent, _MAX_SYMLINK_HOPS - hops)
             if admitted_directory is None:
+                reject("unusable")
                 return None
             directory, directory_hops = admitted_directory
             hops += directory_hops
@@ -147,6 +180,7 @@ def _admit_executable(candidate: Path) -> str | None:
                 break
             link_identity = hop
             if link_identity in seen or hops >= _MAX_SYMLINK_HOPS:
+                reject("unusable")
                 return None
             seen.add(link_identity)
             hops += 1
@@ -154,10 +188,33 @@ def _admit_executable(candidate: Path) -> str | None:
             hop = target if target.is_absolute() else hop.parent / target
         resolved = hop.resolve(strict=True)
         if _is_shim_directory(resolved.parent):
+            raise _ExcludedTree
+        if not stat.S_ISREG(resolved.stat().st_mode):
+            reject("unusable")
             return None
-        if not stat.S_ISREG(resolved.stat().st_mode) or not os.access(resolved, os.X_OK):
+        if not os.access(resolved, os.X_OK):
+            reject("not_executable", resolved)
             return None
+    except _ExcludedTree:
+        if rejections is not None:
+            # A directory on PATH is not evidence that this command exists.
+            # lstat observes the candidate, including a dangling file symlink;
+            # this optional read never changes the original refusal decision.
+            try:
+                candidate.lstat()
+            except FileNotFoundError:
+                reject("missing")
+                return None
+            except OSError:
+                reject("unusable")
+                return None
+            reject("excluded")
+        return None
+    except FileNotFoundError:
+        reject("missing")
+        return None
     except (OSError, RuntimeError):
+        reject("unusable")
         return None
     return os.fspath(resolved)
 
@@ -165,6 +222,7 @@ def _admit_executable(candidate: Path) -> str | None:
 @lru_cache(maxsize=None)
 def resolve_tool(
     name: str, *, search_path: str | None = None, executable: str | None = None,
+    diagnostics: bool = False,
 ) -> str:
     """Return an absolute regular executable, or fail without a PATH fallback.
 
@@ -172,14 +230,17 @@ def resolve_tool(
     already captured the operator PATH may supply that snapshot; each distinct
     snapshot is resolved once. Explicit paths pass the same admission checks.
     Windows lookup walks only absolute PATH entries, never the implicit CWD.
+    Optional diagnostics carry rejection observations without changing admission;
+    default manager callers retain their original exception types and messages.
     """
     if not name or Path(name).name != name or "/" in name or "\\" in name:
         raise ValueError("manager tool name must be a basename")
+    rejections: list[ToolRejection] | None = [] if diagnostics else None
     if executable is not None:
-        admitted = _admit_executable(Path(executable))
+        admitted = _admit_executable(Path(executable), rejections)
         if admitted is not None:
             return admitted
-        raise FileNotFoundError(f"{name} executable is not an absolute regular tool outside csk shims")
+        raise _failure(f"{name} executable is not an absolute regular tool outside csk shims", rejections)
     path = os.environ.get("PATH", os.defpath) if search_path is None else search_path
     names = [name]
     if os.name == "nt":
@@ -191,7 +252,7 @@ def resolve_tool(
         if not directory.is_absolute():
             continue
         for filename in names:
-            admitted = _admit_executable(directory / filename)
+            admitted = _admit_executable(directory / filename, rejections)
             if admitted is not None:
                 return admitted
-    raise FileNotFoundError(f"{name} executable not found outside project and csk shims; install {name} and ensure it is on PATH")
+    raise _failure(f"{name} executable not found outside project and csk shims; install {name} and ensure it is on PATH", rejections)
