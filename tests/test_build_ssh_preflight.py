@@ -23,10 +23,10 @@ from csk.sources import transport
         (True, True, None, False, 'ED25519', 'internal', 'unknown', 'unknown'),
         (False, False, None, True, 'ED25519', 'internal', 'unusable', 'public key alone'),
         (False, True, 'matching', True, 'ED25519', 'internal', 'unknown', 'listed'),
-        (False, False, None, False, 'ED25519-SK', '$SSH_SK_PROVIDER', 'unusable', 'provider'),
+        (False, False, None, False, 'ED25519-SK', 'none', 'unusable', 'provider'),
         (False, False, None, False, 'ED25519-SK', 'internal', 'unknown', 'does not establish'),
-        (False, True, 'matching', False, 'ED25519-SK', '$SSH_SK_PROVIDER', 'unusable', 'provider'),
-        (False, True, 'matching', False, 'ED25519-SK', 'internal', 'unknown', 'listed'),
+        (False, True, 'matching', False, 'ED25519-SK', 'none', 'unusable', 'provider'),
+        (False, True, 'matching', False, 'ED25519-SK', 'internal', 'unknown', 'does not establish'),
     ],
 )
 def test_key_evidence(monkeypatch, encrypted, agent, listing, public, kind, provider, state, reason):
@@ -34,11 +34,11 @@ def test_key_evidence(monkeypatch, encrypted, agent, listing, public, kind, prov
     def probe(argv, **kwargs):
         calls.append(argv)
         if '-L' in argv:
-            return None if listing is None else subprocess.CompletedProcess(argv, 1 if listing == 'empty' else 0, 'ssh-ed25519 AAAA', '')
+            return None if listing is None else subprocess.CompletedProcess(argv, 1 if listing == 'empty' else 0, 'The agent has no identities.\n' if listing == 'empty' else 'ssh-ed25519 AAAA', '')
         if '-l' in argv:
-            return subprocess.CompletedProcess(argv, 0, f'256 SHA256:match label ({kind})', '')
+            return subprocess.CompletedProcess(argv, 0, f'256 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA label ({kind})', '')
         if '-y' in argv:
-            return None if encrypted is None else subprocess.CompletedProcess(argv, 255 if encrypted else 0, '', 'incorrect passphrase' if encrypted else '')
+            return None if encrypted is None else subprocess.CompletedProcess(argv, 255 if encrypted or public else 0, '', f'Load key "{argv[-1]}": invalid format\n' if public else f'Load key "{argv[-1]}": incorrect passphrase supplied to decrypt private key\n' if encrypted else '')
         return subprocess.CompletedProcess(argv, 0, f'securitykeyprovider {provider}\n', '')
     monkeypatch.setattr(build_ssh, '_local_probe', probe)
     result = build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/key.pub' if public else '/keys/key'), Path('/agent') if agent else None)
@@ -159,20 +159,21 @@ def test_doctor_help_golden(monkeypatch, capsys, mutate, command, fixture, marke
         assert actual == expected
 
 
-# Apple launchd agent masks a listed hardware identity; a separate capable
-# agent remains unknown rather than being rejected on OS alone.
-@pytest.mark.parametrize('socket,state', [('/private/tmp/com.apple.launchd.test/Listeners', 'unusable'), ('/tmp/operator-agent', 'unknown')])
+# A socket pathname does not attest its implementation or signing behavior.
+# Both listed hardware identities stay unknown; no real token is exercised.
+@pytest.mark.parametrize('socket,state', [('/private/tmp/com.apple.launchd.test/Listeners', 'unknown'), ('/tmp/operator-agent', 'unknown')])
 def test_macos_hardware_agent_mask(monkeypatch, socket, state):
     monkeypatch.setattr(build_ssh.sys, 'platform', 'darwin')
     def probe(argv, **kwargs):
         if '-l' in argv:
-            return subprocess.CompletedProcess(argv, 0, '256 SHA256:test label (ED25519-SK)', '')
+            return subprocess.CompletedProcess(argv, 0, '256 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA label (ED25519-SK)', '')
         if '-L' in argv:
             return subprocess.CompletedProcess(argv, 0, 'sk-ssh-ed25519@openssh.com AAAA', '')
         return None
     monkeypatch.setattr(build_ssh, '_local_probe', probe)
     result = build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/token'), Path(socket))
     assert result.state == state
+    assert result.loaded is True
     assert ('masks' in result.reason) == (state == 'unusable')
 
 
@@ -212,9 +213,10 @@ def test_real_key_metadata(tmp_path, passphrase, state):
     ('securitykeyprovider none\nsecuritykeyprovider none\n', 'unknown', 'unknown'),
     ('securitykeyprovider internal extra\nsecuritykeyprovider none\n', 'unknown', 'unknown'),
     ('securitykeyprovider none\x00\n', 'unknown', 'unknown'),
+    ('securitykeyprovider none \n', 'unknown', 'unknown'),
     ('securitykeyprovider internal\n', 'unknown', 'internal'),
     ('securitykeyprovider none\n', 'unusable', 'none'),
-    ('securitykeyprovider none\r\n', 'unusable', 'none'),
+    ('securitykeyprovider none\r\n', 'unknown', 'unknown'),
 ])
 def test_provider_output_with_real_metadata_processes(tmp_path, monkeypatch, settings, state, provider):
     import sys
@@ -228,7 +230,7 @@ def test_provider_output_with_real_metadata_processes(tmp_path, monkeypatch, set
     keygen = tools / 'ssh-keygen'
     keygen.write_text(
         f'#!{sys.executable}\nimport sys\n'
-        'print("256 SHA256:fixture fixture (ED25519-SK)" if "-l" in sys.argv else "sk-ssh-ed25519@openssh.com AAAA")\n'
+        'print("256 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA fixture (ED25519-SK)" if "-l" in sys.argv else "sk-ssh-ed25519@openssh.com AAAA")\n'
     )
     ssh.chmod(0o700)
     keygen.chmod(0o700)
@@ -260,12 +262,24 @@ def test_provider_output_with_real_metadata_processes(tmp_path, monkeypatch, set
         git_admission._preflight_ssh(source, tool)
 
 
+def _permission_error():
+    return (
+        "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+        "@         WARNING: UNPROTECTED PRIVATE KEY FILE!          @\n"
+        "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+        "Permissions 0644 for '/keys/key' are too open.\n"
+        "It is required that your private key files are NOT accessible by others.\n"
+        "This private key will be ignored.\n"
+        'Load key "/keys/key": bad permissions\n'
+    )
+
+
 # Only recognized OpenSSH evidence of ignored private-file permissions refuses.
 # A matching loaded agent bypasses that bad file; ambiguous/unreadable output
 # stays unknown, and valid file output prevents reject-all success.
 @pytest.mark.parametrize('stderr,rc,loaded,state', [
-    ('This private key will be ignored.\nLoad key "key": bad permissions', 255, False, 'unusable'),
-    ('This private key will be ignored.\nLoad key "key": bad permissions', 255, True, 'unknown'),
+    (_permission_error(), 255, False, 'unusable'),
+    (_permission_error(), 255, True, 'unknown'),
     ('bad permissions', 255, False, 'unknown'),
     ('Permission denied', 255, False, 'unknown'),
     ('', 0, False, 'unknown'),
@@ -273,7 +287,7 @@ def test_provider_output_with_real_metadata_processes(tmp_path, monkeypatch, set
 def test_private_key_permission_evidence(monkeypatch, stderr, rc, loaded, state):
     def probe(argv, **kwargs):
         if '-l' in argv:
-            return subprocess.CompletedProcess(argv, 0, '256 SHA256:fixture key (ED25519)', '')
+            return subprocess.CompletedProcess(argv, 0, '256 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA key (ED25519)', '')
         if '-L' in argv:
             return subprocess.CompletedProcess(argv, 0, 'ssh-ed25519 AAAA', '')
         return subprocess.CompletedProcess(argv, rc, 'ssh-ed25519 AAAA' if rc == 0 else '', stderr)
@@ -325,3 +339,83 @@ def test_real_private_key_permissions(tmp_path, mode, state):
     assert result.state == state
     if state == 'unusable':
         assert result.reason == 'private key permissions are too open; SSH will ignore this file'
+
+
+# Seeded, bounded mutations check a refusal invariant, not token usability.
+# Mutate raw provider lines without retaining the exact absent-provider record;
+# the exact record and normal multi-setting output are nearby refusal controls.
+def test_provider_mutations_never_refuse(monkeypatch):
+    import random
+    rng = random.Random(20261106)
+    exact = 'securitykeyprovider none'
+    alphabet = ' abXYZ09\t\r\n\x00\x1b\u2028\u0085'
+    mutations = {exact + ' ', exact + '\t', exact + '\r'}
+    for _ in range(2000):
+        index = rng.randrange(len(exact) + 1)
+        char = rng.choice(alphabet)
+        value = rng.choice((exact[:index] + char + exact[index:], exact[:index] + exact[index + 1:], exact[:index] + char + exact[index + 1:]))
+        if exact not in value.split('\n'):
+            mutations.add(value)
+    for index in range(128):
+        mutations.add(f'ambiguous-{index}\n' + exact)
+        mutations.add(exact + f'\ncontradictory-{index}')
+    assert 400 <= len(mutations) <= 2003
+    output = ''
+    def probe(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, output if '-G' in argv else '256 SHA256:' + 'A' * 43 + ' fixture (ED25519-SK)\n', '')
+    monkeypatch.setattr(build_ssh, '_local_probe', probe)
+    for output in sorted(mutations):
+        verdict = build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/key'))
+        assert verdict.state == 'unknown', repr(output)
+        assert verdict.reason == 'SSH security-key provider output is unfamiliar'
+    for output in (exact, exact + '\n', 'hostname example.invalid\n' + exact + '\n'):
+        verdict = build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/key'))
+        assert verdict.state == 'unusable'
+        assert verdict.reason == 'SSH has no configured security-key provider in this lane'
+
+
+# Ambiguous fingerprint/agent rows and wrapped error text cannot prove failure.
+# Valid encrypted/permission controls refuse; malformed evidence stays unknown.
+# This exercises metadata only; it does not assert agent signing capability.
+@pytest.mark.parametrize('evidence', ['fingerprint', 'empty-agent', 'agent-fingerprints', 'passphrase', 'permissions'])
+def test_other_evidence_mutations_never_refuse(monkeypatch, evidence):
+    fingerprint = '256 SHA256:' + 'A' * 43 + ' fixture (ED25519)\n'
+    error = 'Load key "/keys/key": incorrect passphrase supplied to decrypt private key\n'
+    seed = _permission_error() if evidence == 'permissions' else error
+    mutation = None
+    def probe(argv, **kwargs):
+        if '-L' in argv:
+            return subprocess.CompletedProcess(argv, 1 if evidence == 'empty-agent' else 0, mutation if evidence == 'empty-agent' and mutation is not None else 'The agent has no identities.\n' if evidence == 'empty-agent' else 'ssh-ed25519 AAAA\n', '')
+        if '-l' in argv:
+            value = mutation if mutation is not None and (evidence == 'fingerprint' or evidence == 'agent-fingerprints' and argv[-1] == '-') else fingerprint
+            return subprocess.CompletedProcess(argv, 0, value, '')
+        return subprocess.CompletedProcess(argv, 255, '', mutation if mutation is not None and evidence in {'passphrase', 'permissions'} else seed)
+    monkeypatch.setattr(build_ssh, '_local_probe', probe)
+    agent = Path('/agent') if evidence in {'empty-agent', 'agent-fingerprints'} else None
+    # A valid agent listing matches the key and remains unknown; other valid
+    # controls prove the encrypted/permission refusal in their file route.
+    control = build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/key'), agent)
+    assert control.state == ('unknown' if evidence == 'agent-fingerprints' else 'unusable')
+    for index in range(256):
+        raw = fingerprint if evidence in {'fingerprint', 'agent-fingerprints'} else 'The agent has no identities.\n' if evidence == 'empty-agent' else seed
+        mutation = f'ambiguous-{index}:\n' + raw
+        verdict = build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/key'), agent)
+        assert verdict.state == 'unknown', (evidence, index)
+        mutation = raw + f'contradictory-{index}\n'
+        verdict = build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/key'), agent)
+        assert verdict.state == 'unknown', (evidence, index)
+
+
+# A filename suffix is not proof of public-only content: a private file can be
+# named .pub. Exact keygen failure still refuses the public-only neighbor.
+@pytest.mark.parametrize('failed,state', [(False, 'unknown'), (True, 'unusable')])
+def test_public_suffix_requires_unusable_file_evidence(monkeypatch, failed, state):
+    def probe(argv, **kwargs):
+        if '-l' in argv:
+            return subprocess.CompletedProcess(argv, 0, '256 SHA256:' + 'A' * 43 + ' fixture (ED25519)\n', '')
+        return subprocess.CompletedProcess(argv, 255 if failed else 0, '' if failed else 'ssh-ed25519 AAAA\n', 'Load key "/keys/key.pub": invalid format\n' if failed else '')
+    monkeypatch.setattr(build_ssh, '_local_probe', probe)
+    verdict = build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/key.pub'))
+    assert verdict.state == state
+    if failed:
+        assert verdict.reason == 'a public key alone cannot sign and no matching agent key is available'
