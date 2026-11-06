@@ -467,7 +467,7 @@ def doctor(
         "Build SSH doctor (read-only; no network, prompts, signatures or agent changes)",
         f"Repository/scope: {scope or '(none selected)'}",
         f"OS: {sys.platform}",
-        f"Terminal: {'attached' if sys.stdin.isatty() and sys.stderr.isatty() else 'not attached'}; SSH prompts remain disabled",
+        f"Terminal: {'attached' if sys.stdin is not None and sys.stderr is not None and sys.stdin.isatty() and sys.stderr.isatty() else 'not attached'}; SSH prompts remain disabled",
         f"Identity: {identity or '(none selected)'}",
         f"Agent: {socket or '(none selected or auto unavailable)'}",
     ]
