@@ -2282,3 +2282,37 @@ def test_legacy_global_retention_skips_v5_runtime_references(tmp_path: Path) -> 
 
     assert "golden-skill" in retained.names
     assert retained.references == frozenset()
+
+
+@pytest.mark.parametrize("defect", ["missing", "unreadable"])
+def test_evidence_real_filesystem_refusal(tmp_path: Path, defect: str) -> None:
+    # Required evidence succeeds before real removal/mode denial, then fails
+    # closed with the distinct diagnostic. Windows ACL denial needs its own lane.
+    import os
+    if defect == "unreadable" and (os.name == "nt" or os.geteuid() == 0):
+        pytest.skip("requires effective POSIX mode permissions")
+    target = tmp_path / "evidence.json"
+    before = json.dumps(_evidence_payload()).encode("utf-8")
+    target.write_bytes(before)
+    def validate():
+        return install_marker.validate_attestation_evidence(
+            target, _expectation(), evidence_fresh=True, evidence_revoked=False,
+        )
+    assert validate().name == "golden-skill"
+    mode = target.stat().st_mode
+    if defect == "missing":
+        target.unlink()
+    else:
+        target.chmod(0)
+    try:
+        with pytest.raises(install_marker.InstallMarkerError) as caught:
+            validate()
+        assert caught.value.code == "attestation_evidence_" + defect
+    finally:
+        if defect == "unreadable":
+            target.chmod(mode)
+    if defect == "missing":
+        assert not target.exists()
+    else:
+        assert target.read_bytes() == before
+        assert validate().name == "golden-skill"

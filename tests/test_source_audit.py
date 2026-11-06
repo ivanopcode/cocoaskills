@@ -2966,3 +2966,40 @@ def test_legacy_trust_seam_is_structured_on_every_caller(
     finally:
         for victim, mode_bits in restore:
             victim.chmod(mode_bits)
+
+
+@pytest.mark.parametrize("defect", ["missing", "unreadable"])
+def test_stored_report_real_filesystem_refusal(tmp_path: Path, defect: str) -> None:
+    # The live validator accepts stored evidence, then refuses actual removal or
+    # POSIX permission denial without patching any reader. ACL platforms are separate.
+    import os
+    if defect == "unreadable" and (os.name == "nt" or os.geteuid() == 0):
+        pytest.skip("requires effective POSIX mode permissions")
+    _, home, package, content, policy = _recorded(tmp_path)
+    def validate():
+        return source_audit.validate_stored_report(
+            package=package, content_sha256=content, csk_home=home, policy=policy,
+        )
+    assert validate() is not None
+    target = source_audit.source_audit_report_path(home, content)
+    before = target.read_bytes()
+    mode = target.stat().st_mode
+    if defect == "missing":
+        target.unlink()
+    else:
+        target.chmod(0)
+    try:
+        with pytest.raises(SourceAuditError) as caught:
+            validate()
+        assert caught.value.code == (
+            source_audit.CODE_REPORT_MISSING if defect == "missing"
+            else source_audit.CODE_REPORT_UNREADABLE
+        )
+    finally:
+        if defect == "unreadable":
+            target.chmod(mode)
+    if defect == "missing":
+        assert not target.exists()
+    else:
+        assert target.read_bytes() == before
+        assert validate() is not None

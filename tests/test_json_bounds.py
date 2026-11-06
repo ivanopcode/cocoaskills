@@ -348,3 +348,28 @@ else:
     result = subprocess.run([sys.executable, '-c', script, str(tmp_path), reader],
                             env=env, capture_output=True, timeout=8)
     assert result.returncode == 0, result.stderr.decode()
+
+
+# Every migrated caller receives the original filesystem exception unchanged,
+# whether admission or descriptor open fails; a valid regular file still reads.
+@pytest.mark.parametrize('stage', ['stat', 'open'])
+@pytest.mark.parametrize('kind', [FileNotFoundError, PermissionError, NotADirectoryError])
+def test_filesystem_error_identity(tmp_path, monkeypatch, stage, kind):
+    path = tmp_path / 'record.json'
+    path.write_bytes(b'{}')
+    assert pj.read_bytes(path) == b'{}'
+    error = kind('filesystem refusal')
+    reached = []
+    def refuse(*args, **kwargs):
+        reached.append(True)
+        raise error
+    with monkeypatch.context() as patch:
+        if stage == 'stat':
+            patch.setattr(Path, 'stat', refuse)
+        else:
+            patch.setattr(pj, '_open_regular', refuse)
+        with pytest.raises(kind) as caught:
+            pj.read_bytes(path)
+        assert caught.value is error
+        assert reached == [True]
+    assert pj.read_bytes(path) == b'{}'
