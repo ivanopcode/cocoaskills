@@ -322,7 +322,7 @@ def register_semantic_driver(case_id: str, driver: SemanticDriver) -> None:
 # TASK-260916-11yseo, and its drivers still touch observed marker
 # entries, so no driver changed).
 _PRODUCTION_ENTRY_POINTS: tuple[tuple[str, str], ...] = (
-    ("csk.build_repository_pipeline", "run_pipeline"),
+    ("csk.build_repository_pipeline", "run_pipelines"),
     ("csk.builds.currentness", "compare_external_build_evidence"),
     ("csk.builds.metadata", "parse_receipt_v3"),
     ("csk.builds.metadata", "read_receipt_v3"),

@@ -183,14 +183,20 @@ def test_boundary_refusal_prevents_execution(tmp_path, monkeypatch):
 
 # Exercise the installer scheduling/marker loop with real pipeline validation,
 # receipts and cache, but fake network/toolchain; this is not platform qualification.
-@pytest.mark.parametrize('last_fails', [False, True])
-def test_installer_batches_sources_before_publication(tmp_path, monkeypatch, last_fails):
+# First/last acquisition refusals compile nothing and retain their own distinct
+# command and skill in the transport diagnostic, including the first of two.
+@pytest.mark.parametrize('failed_source', [None, 'first', 'last'])
+def test_installer_batches_sources_before_publication(tmp_path, monkeypatch, failed_source):
     from contextlib import nullcontext
     from types import SimpleNamespace
     from csk import installer, build_repository, dev_substitutions
     from conftest import make_config
     events = []
-    compiler = _Compiler(events)
+    class BatchCompiler(_Compiler):
+        def compile(self, root, source_dir, command):
+            assert command in {'first-tool', 'last-tool'}
+            return super().compile(root, source_dir, 'tool')
+    compiler = BatchCompiler(events)
     config = make_config(tmp_path / 'home', tmp_path / 'skills', tmp_path / 'project')
     nodes = []
     for name in ('first', 'last'):
@@ -200,10 +206,10 @@ def test_installer_batches_sources_before_publication(tmp_path, monkeypatch, las
                             build_repository.LockedCommit('sha1', _snapshot().commit))
         command = SimpleNamespace(repository='tools', target='tool')
         nodes.append(SimpleNamespace(name=name, repo=tmp_path / name,
-                     spec=SimpleNamespace(commands={'tool': command}, build_repositories={'tools': repository})))
+                     spec=SimpleNamespace(commands={name + '-tool': command}, build_repositories={'tools': repository})))
     monkeypatch.setattr(installer, 'supports_external_builds', lambda: True)
-    monkeypatch.setattr(installer, '_active_external_build_command_names', lambda node: {'tool'})
-    selection = {(node.name, 'tool'): None for node in nodes}
+    monkeypatch.setattr(installer, '_active_external_build_command_names', lambda node: set(node.spec.commands))
+    selection = {(node.name, command): None for node in nodes for command in node.spec.commands}
     monkeypatch.setattr(installer, '_resolve_build_ssh_credentials', lambda *a, **k: selection)
     monkeypatch.setattr(installer, '_resolve_build_https_credentials', lambda *a, **k: selection)
     @dataclass(frozen=True)
@@ -215,7 +221,7 @@ def test_installer_batches_sources_before_publication(tmp_path, monkeypatch, las
     def acquire(plan, *args, **kwargs):
         name = 'last' if 'last' in str(plan) else 'first'
         events.append('acquire:' + name)
-        if name == 'last' and last_fails:
+        if name == failed_source:
             raise GitAdmissionError(SOURCE_UNAVAILABLE, 'last source unavailable')
         return SimpleNamespace(snapshot=_snapshot())
     monkeypatch.setattr(installer.source_transport, 'acquire_plan', acquire)
@@ -226,10 +232,12 @@ def test_installer_batches_sources_before_publication(tmp_path, monkeypatch, las
             return installer._publish_external_builds(config, project_root=tmp_path / 'project',
                 nodes=nodes, substitutions=dev_substitutions.DevManifest(2, {}, {}),
                 operator_search_path=None, stack=stack, dry_run=False, marker_roots=())
-    if last_fails:
+    if failed_source is not None:
         with pytest.raises(pipeline.ExternalBuildError) as failure:
             install()
         assert failure.value.code == SOURCE_UNAVAILABLE
+        notes = ' '.join(failure.value.__cause__.__notes__)
+        assert f"command '{failed_source}-tool' of skill '{failed_source}'" in notes, 'first-command diagnostic must name its own command and skill'
         assert compiler.calls == 0
         assert 'audit' not in events
         assert not (config.path.parent / 'external-builds').exists()
@@ -237,7 +245,7 @@ def test_installer_batches_sources_before_publication(tmp_path, monkeypatch, las
         published, _ = install()
         assert set(published) == {'first', 'last'}
         assert events.index('acquire:last') < events.index('boundary') < events.index('audit') < events.index('compile-call')
-        assert published['first']['tool'].marker.declared_identity.value != published['last']['tool'].marker.declared_identity.value
+        assert published['first']['first-tool'].marker.declared_identity.value != published['last']['last-tool'].marker.declared_identity.value
 
 # Real project/global retry loops and schema-2/3 post-external preimage guards
 # run a synthetic external build pass; transport is not under test here. A real
@@ -513,7 +521,7 @@ def test_private_build_end_required_before_next_project(tmp_path, csk_home, skil
     _private_lifetime(tmp_path, csk_home, skills_root, monkeypatch, lane, teardown_fails)
 
 
-def _private_lifetime(tmp_path, csk_home, skills_root, monkeypatch, lane, teardown_fails, bypass=False):
+def _private_lifetime(tmp_path, csk_home, skills_root, monkeypatch, lane, teardown_fails, bypass=False, compile_fails=False):
     import subprocess
     import sys
     from csk import installer, global_install, config
@@ -542,14 +550,29 @@ def _private_lifetime(tmp_path, csk_home, skills_root, monkeypatch, lane, teardo
     events = []
     children = []
     acquisitions = []
+    manager_build = go_v1.build
     _install_fake_build_pipeline(monkeypatch, events=events)
     fake_build = go_v1.build
     def build(request):
         child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)' if teardown_fails else 'pass'])
         children.append(child)
+        if not teardown_fails:
+            assert child.wait(timeout=10) == 0
+        if compile_fails:
+            # Exercise the manager's real error/outcome export with an injected
+            # operation; the child above supplies the join/liveness witness.
+            def operation(request, *, _lifecycle, **kwargs):
+                _lifecycle.teardown_confirmed = not teardown_fails
+                if teardown_fails:
+                    error = go_v1.GoV1Error(go_v1.CODE_CONTROL_UNAVAILABLE, 'worker-domain teardown did not complete (review fault)')
+                    error.add_note('go_build_failed: compile error before teardown')
+                    raise error
+                raise go_v1.GoV1Error('go_build_failed', 'ordinary compile failure')
+            with monkeypatch.context() as patch:
+                patch.setattr(go_v1, '_build', operation)
+                return manager_build(request)
         if teardown_fails:
             raise go_v1.GoV1Error(go_v1.CODE_CONTROL_UNAVAILABLE, 'worker-domain teardown did not complete (review fault)')
-        assert child.wait(timeout=10) == 0
         return fake_build(request)
     monkeypatch.setattr(go_v1, 'build', build)
     def external(*args, **kwargs):
@@ -606,7 +629,11 @@ def _private_lifetime(tmp_path, csk_home, skills_root, monkeypatch, lane, teardo
             assert 'previous build worker teardown is unconfirmed' in ' '.join(results[1].errors)
             assert go_v1.CODE_CONTROL_UNAVAILABLE in ' '.join(results[1].errors)
         else:
-            assert all(not r.failed for r in results), [r.errors for r in results]
+            if compile_fails:
+                assert results[0].failed and 'go_build_failed' in ' '.join(results[0].errors)
+                assert not results[1].failed, 'ordinary compile failure must not block next project'
+            else:
+                assert all(not r.failed for r in results), [r.errors for r in results]
             assert len(acquisitions) == 2 and not any(a['live'] for a in acquisitions)
     finally:
         for child in children:
@@ -620,3 +647,74 @@ def _private_lifetime(tmp_path, csk_home, skills_root, monkeypatch, lane, teardo
 def test_private_lifetime_checker_rejects_bypass(tmp_path, csk_home, skills_root, monkeypatch):
     with pytest.raises(AssertionError, match='next project acquired after unconfirmed private worker teardown'):
         _private_lifetime(tmp_path, csk_home, skills_root, monkeypatch, 'project', True, bypass=True)
+
+
+# The real install loops may continue after a compile error with a joined worker;
+# a compile error together with failed teardown must still block the next pass.
+# The Go operation is a seam; native compiler/resource controls are not qualified.
+@pytest.mark.parametrize('lane', ['project', 'global', 'schema2', 'schema3', 'repair2', 'repair3'])
+@pytest.mark.parametrize('teardown_fails', [False, True])
+def test_compile_error_continuation_depends_on_teardown(tmp_path, csk_home, skills_root, monkeypatch, lane, teardown_fails):
+    _private_lifetime(tmp_path, csk_home, skills_root, monkeypatch, lane, teardown_fails, compile_fails=True)
+
+
+# Removing both closure bindings recreates the textually clean rebase's semantic
+# bug. The same two-command diagnostic assertion must reject this plant.
+def test_diagnostic_checker_rejects_unbound_subject(tmp_path, monkeypatch):
+    from csk import installer
+    tree = ast.parse('from __future__ import annotations\n' + inspect.getsource(installer._publish_external_builds))
+    acquire = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == 'acquire')
+    pairs = list(zip(acquire.args.args, acquire.args.defaults))
+    acquire.args.args = [arg for arg, default in pairs if arg.arg not in {'name', 'node'}]
+    acquire.args.defaults = [default for arg, default in pairs if arg.arg not in {'name', 'node'}]
+    namespace = dict(installer.__dict__)
+    exec(compile(ast.fix_missing_locations(tree), '<unbound-diagnostic-plant>', 'exec'), namespace)
+    planted = namespace['_publish_external_builds']
+    # Use the live module globals so the fixture's transport/toolchain seams
+    # remain identical for the positive control and this implementation plant.
+    planted = type(planted)(planted.__code__, installer.__dict__, argdefs=planted.__defaults__)
+    planted.__kwdefaults__ = namespace['_publish_external_builds'].__kwdefaults__
+    monkeypatch.setattr(installer, '_publish_external_builds', planted)
+    with pytest.raises(AssertionError, match='first-command diagnostic must name its own command and skill'):
+        test_installer_batches_sources_before_publication(tmp_path, monkeypatch, 'first')
+
+
+# An exported no-worker proof permits continuation; unknown exceptions and
+# interrupts remain unclassified even before launch and must refuse acquisition.
+@pytest.mark.parametrize('failure', ['classified', 'unknown', 'interrupt'])
+def test_manager_error_classification_controls_latch(tmp_path, monkeypatch, failure):
+    from csk.builds import go_v1
+    def operation(request, **kwargs):
+        if failure == 'classified':
+            raise go_v1.GoV1Error('invalid_resource_limits', 'no worker started')
+        if failure == 'interrupt':
+            raise KeyboardInterrupt('interrupted')
+        raise RuntimeError('unclassified failure')
+    monkeypatch.setattr(go_v1, '_build', operation)
+    exception = go_v1.GoV1Error if failure == 'classified' else KeyboardInterrupt if failure == 'interrupt' else RuntimeError
+    with pytest.raises(exception):
+        pipeline.build_go_v1(None)
+    events = []
+    requests = _requests(tmp_path, events, _Compiler(events))
+    if failure == 'classified':
+        pipeline.run_pipelines(requests)
+        assert 'acquire:last' in events
+    else:
+        with pytest.raises(pipeline.ExternalBuildError, match='previous build worker teardown is unconfirmed'):
+            pipeline.run_pipelines(requests)
+        assert events == []
+
+
+# Restoring the blanket latch must fail the positive continuation assertion,
+# so a manager which refuses all failed builds cannot satisfy the witness.
+def test_compile_failure_checker_rejects_blanket_latch(tmp_path, csk_home, skills_root, monkeypatch):
+    real_build = pipeline.build_go_v1
+    def blanket(request):
+        try:
+            return real_build(request)
+        except BaseException:
+            pipeline._PASS_STATE.workers_reaped = False
+            raise
+    monkeypatch.setattr(pipeline, 'build_go_v1', blanket)
+    with pytest.raises(AssertionError, match='ordinary compile failure must not block next project'):
+        _private_lifetime(tmp_path, csk_home, skills_root, monkeypatch, 'project', False, compile_fails=True)

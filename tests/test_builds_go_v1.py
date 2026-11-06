@@ -3249,3 +3249,78 @@ def test_output_verification_hashes_permissions_and_never_executes(tmp_path: Pat
     else:
         assert mode == 0o700
     assert output.read_bytes() == payload
+
+
+# The manager's real finally path certifies an operation error only after
+# successful teardown. The client is a seam, so no native controls are qualified.
+@pytest.mark.parametrize('teardown_fails', [False, True])
+def test_build_failure_exports_teardown_outcome(tmp_path, monkeypatch, teardown_fails):
+    from types import SimpleNamespace
+    plan, _, _ = _worker_fixture(tmp_path)
+    operation = tmp_path / 'manager-operation'
+    operation.mkdir()
+    session = SimpleNamespace(goroot=plan.goroot, operation_root=operation,
+                              executable=plan.go_executable, environment=plan.environment,
+                              target=SimpleNamespace(goos='darwin', goarch='arm64'))
+    request = go_v1.BuildRequest(toolchain_session=session, source_snapshot=None,
+                                command_object={}, build_root='.', source_dir='.', command='tool')
+    events = []
+    monkeypatch.setattr(go_v1, '_validate_package_command_surface', lambda request: None)
+    monkeypatch.setattr(go_v1, '_verify_frozen_inputs', lambda *args: None)
+    monkeypatch.setattr(go_v1, '_validate_declared_module_roots', lambda *args: None)
+    monkeypatch.setattr(go_v1, '_canonical_build_directories', lambda *args: (plan.directory,) * 3)
+    monkeypatch.setattr(go_v1, 'probe_native_controls', lambda *args, **kwargs: (plan.platform, plan.probes))
+    monkeypatch.setattr(go_v1, '_resolve_manager_identity', lambda *args: plan.executable)
+    monkeypatch.setattr(go_v1, '_resolve_tool_process_identity', lambda *args: plan.process_identity)
+    class Client:
+        def list(self):
+            raise go_v1.GoV1Error('go_list_failed', 'ordinary operation failure')
+        def teardown(self):
+            events.append('teardown')
+            if teardown_fails:
+                raise go_v1.GoV1Error(go_v1.CODE_CONTROL_UNAVAILABLE, 'join unconfirmed')
+    def launch(plan, *, _lifecycle):
+        _lifecycle.teardown_confirmed = False
+        return Client()
+    monkeypatch.setattr(go_v1._WorkerClient, 'launch', launch)
+    with pytest.raises(go_v1.GoV1Error) as caught:
+        go_v1.build(request)
+    assert events == ['teardown']
+    assert caught.value.worker_teardown_confirmed is not teardown_fails
+    expected = go_v1.CODE_CONTROL_UNAVAILABLE if teardown_fails else 'go_list_failed'
+    assert caught.value.code == expected
+
+
+# No worker exists when package-command validation refuses. This proof is
+# independent of error-code spelling and lets a later project acquire normally.
+def test_pre_worker_failure_certifies_no_pending_domain():
+    request = go_v1.BuildRequest(toolchain_session=None, source_snapshot=None,
+                                command_object={'hooks': ['forbidden']},
+                                build_root='.', source_dir='.', command='tool')
+    with pytest.raises(go_v1.GoV1Error) as caught:
+        go_v1.build(request)
+    assert caught.value.code == go_v1.CODE_PACKAGE_INFLUENCE_FORBIDDEN
+    assert caught.value.worker_teardown_confirmed
+
+
+# A launch attempt without a returned process handle remains unconfirmed even
+# if cleanup accepts None. Refusal before any launch is the no-worker control.
+@pytest.mark.parametrize('attempted', [False, True])
+def test_launch_failure_does_not_invent_join_proof(tmp_path, monkeypatch, attempted):
+    plan, _, _ = _worker_fixture(tmp_path)
+    lifecycle = go_v1._BuildLifecycle()
+    monkeypatch.setattr(go_v1, '_IdentityMutationGuard', lambda *args: _StubIdentityGuard())
+    class Domain:
+        def __init__(self, *args):
+            if not attempted:
+                raise go_v1.GoV1Error(go_v1.CODE_WORKER_IDENTITY_INVALID, 'before launch')
+        def launch(self, *args):
+            raise go_v1.GoV1Error(go_v1.CODE_WORKER_IDENTITY_INVALID, 'launch result unknown')
+        def terminate(self, process):
+            assert process is None
+        def close(self):
+            pass
+    monkeypatch.setattr(go_v1, '_NativeControlDomain', Domain)
+    with pytest.raises(go_v1.GoV1Error, match='before launch|launch result unknown'):
+        go_v1._WorkerClient.launch(plan, _lifecycle=lifecycle)
+    assert lifecycle.teardown_confirmed is not attempted
