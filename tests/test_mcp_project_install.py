@@ -442,8 +442,10 @@ def test_empty_map_is_inert(project_cli, capsys, servers):
 
 
 # A planned HTTP entry satisfies a real skill requirement; a mismatched transport blocks all publication.
+# Repair hints remain raw in package data but cannot forge terminal remediation lines.
+@pytest.mark.parametrize("hint", ["Configure docs", "Configure docs\nremediation: FORGED\x1b"])
 @pytest.mark.parametrize("transport", ["http", "stdio"])
-def test_skill_requirement_uses_planned_view(project_cli, capsys, transport):
+def test_skill_requirement_uses_planned_view(project_cli, capsys, transport, hint):
     root, _, declare = project_cli
     write_files(
         root,
@@ -459,7 +461,7 @@ def test_skill_requirement_uses_planned_view(project_cli, capsys, transport):
                             "docs": {
                                 "transport": transport,
                                 "required_in": "all",
-                                "hint": "Configure docs",
+                                "hint": hint,
                             }
                         }
                     },
@@ -478,6 +480,9 @@ def test_skill_requirement_uses_planned_view(project_cli, capsys, transport):
         assert (root / ".agents/skills/demo/SKILL.md").exists()
     else:
         assert code != 0 and "transport" in output.err
+        from csk.terminal import terminal_text
+        assert terminal_text(hint) in output.err
+        assert "\nremediation: FORGED" not in output.err and "\x1b" not in output.err
         assert native_bytes(root) == {}
         assert not (root / ".agents/skills/demo").exists()
 
