@@ -336,7 +336,7 @@ usage: csk install [-h] [--all] [--dry-run] [--verbose] [--fix-gitignore]
 * `--strict-tags`: завершает работу ошибкой, если тег локально указывает на другой коммит.
 * `--audit [{advisory,strict}]`: запускает проверку аудита перед установкой (по умолчанию: `advisory`).
 * `--build-ssh-identity PATH`: файл идентичности SSH для приватных репозиториев сборки; приватный ключ или соответствующий публичный ключ в сочетании с `--build-ssh-agent` (переменная: `CSK_BUILD_SSH_IDENTITY`).
-* `--build-ssh-agent [SOCKET]`: agent for private build repositories; a bare flag or `auto` selects the standard service pipe on Windows and `SSH_AUTH_SOCK` on POSIX (environment: `CSK_BUILD_SSH_AGENT`).
+* `--build-ssh-agent [SOCKET]`: агент для приватных репозиториев сборки; флаг без значения или `auto` выбирает стандартный канал службы агента в Windows и `SSH_AUTH_SOCK` в POSIX (переменная: `CSK_BUILD_SSH_AGENT`).
 * `--build-ssh-known-hosts PATH`: путь к файлу known_hosts для проверки ключей хоста (по умолчанию: `~/.ssh/known_hosts`; переменная: `CSK_BUILD_SSH_KNOWN_HOSTS`).
 
 **Пример использования:**
@@ -510,7 +510,7 @@ usage: csk upgrade [-h] [--all] [--dry-run] [--verbose] [--fix-gitignore]
 * `--strict-tags`: завершает работу ошибкой, если тег локально указывает на другой коммит.
 * `--audit [{advisory,strict}]`: запускает проверку аудита перед установкой (по умолчанию: `advisory`).
 * `--build-ssh-identity PATH`: файл идентичности SSH для приватных репозиториев сборки; приватный ключ или соответствующий публичный ключ в сочетании с `--build-ssh-agent` (переменная: `CSK_BUILD_SSH_IDENTITY`).
-* `--build-ssh-agent [SOCKET]`: agent for private build repositories; a bare flag or `auto` selects the standard service pipe on Windows and `SSH_AUTH_SOCK` on POSIX (environment: `CSK_BUILD_SSH_AGENT`).
+* `--build-ssh-agent [SOCKET]`: агент для приватных репозиториев сборки; флаг без значения или `auto` выбирает стандартный канал службы агента в Windows и `SSH_AUTH_SOCK` в POSIX (переменная: `CSK_BUILD_SSH_AGENT`).
 * `--build-ssh-known-hosts PATH`: путь к файлу known_hosts для проверки ключей хоста (по умолчанию: `~/.ssh/known_hosts`; переменная: `CSK_BUILD_SSH_KNOWN_HOSTS`).
 
 **Пример использования:**
@@ -700,7 +700,7 @@ usage: csk global install [-h] [--dry-run] [--verbose] [--strict-tags]
 * `--audit [{advisory,strict}]`: запускает проверку аудита перед установкой (по умолчанию: `advisory`).
 * `--only NAME`: ограничивает операцию указанным глобальным скиллом (повторяемый флаг). Выбранный скилл затягивает свои обязательные зависимости в замыкание исполнения. Невыбранные декларации на диске остаются без изменений.
 * `--build-ssh-identity PATH`: файл идентичности SSH для приватных репозиториев сборки; приватный ключ или соответствующий публичный ключ в сочетании с `--build-ssh-agent` (переменная: `CSK_BUILD_SSH_IDENTITY`).
-* `--build-ssh-agent [SOCKET]`: agent for private build repositories; a bare flag or `auto` selects the standard service pipe on Windows and `SSH_AUTH_SOCK` on POSIX (environment: `CSK_BUILD_SSH_AGENT`).
+* `--build-ssh-agent [SOCKET]`: агент для приватных репозиториев сборки; флаг без значения или `auto` выбирает стандартный канал службы агента в Windows и `SSH_AUTH_SOCK` в POSIX (переменная: `CSK_BUILD_SSH_AGENT`).
 * `--build-ssh-known-hosts PATH`: путь к файлу known_hosts для проверки ключей хоста (по умолчанию: `~/.ssh/known_hosts`; переменная: `CSK_BUILD_SSH_KNOWN_HOSTS`).
 
 **Пример использования:**
@@ -757,7 +757,7 @@ usage: csk global upgrade [-h] [--dry-run] [--verbose] [--strict-tags]
 * `--audit [{advisory,strict}]`: запускает проверку аудита перед установкой (по умолчанию: `advisory`).
 * `--only NAME`: обновляет только один указанный скилл (повторяемый флаг).
 * `--build-ssh-identity PATH`: файл идентичности SSH для приватных репозиториев сборки; приватный ключ или соответствующий публичный ключ в сочетании с `--build-ssh-agent` (переменная: `CSK_BUILD_SSH_IDENTITY`).
-* `--build-ssh-agent [SOCKET]`: agent for private build repositories; a bare flag or `auto` selects the standard service pipe on Windows and `SSH_AUTH_SOCK` on POSIX (environment: `CSK_BUILD_SSH_AGENT`).
+* `--build-ssh-agent [SOCKET]`: агент для приватных репозиториев сборки; флаг без значения или `auto` выбирает стандартный канал службы агента в Windows и `SSH_AUTH_SOCK` в POSIX (переменная: `CSK_BUILD_SSH_AGENT`).
 * `--build-ssh-known-hosts PATH`: путь к файлу known_hosts для проверки ключей хоста (по умолчанию: `~/.ssh/known_hosts`; переменная: `CSK_BUILD_SSH_KNOWN_HOSTS`).
 
 **Пример использования:**
@@ -1041,7 +1041,7 @@ usage: csk config build-ssh add [-h] [--agent [SOCKET]] [--identity PATH]
 
 * `scope`: префикс канонической идентичности, например `gitlab.example.com/group`.
 * `-h`, `--help`: выводит краткое справочное сообщение.
-* `--agent [SOCKET]`: operator agent; a bare flag or `auto` selects the standard service pipe on Windows and `SSH_AUTH_SOCK` on POSIX.
+* `--agent [SOCKET]`: агент оператора; флаг без значения или `auto` выбирает стандартный канал службы агента в Windows и `SSH_AUTH_SOCK` в POSIX.
 * `--identity PATH`: путь к файлу идентичности. Указание файла `.pub` при заданном `--agent` фиксирует (пинит) предъявляемый ключ агента; без `--agent` определяет путь к приватному ключу на диске.
 * `--known-hosts PATH`: переопределение файла known_hosts для выбранного скоупа.
 
