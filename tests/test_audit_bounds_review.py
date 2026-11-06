@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from csk.config import AuditConfig
 from csk.audit import pipeline, redaction
 from csk.hashing import HashingError
 from csk.audit.backends import process
@@ -79,7 +80,7 @@ def test_growth_before_and_after_copy(tmp_path):
         paths = original(plan, limit)
         source.write_bytes(b'x' * 100)
         return paths
-    cfg = SimpleNamespace(audit=SimpleNamespace(max_request_bytes=10))
+    cfg = SimpleNamespace(audit=AuditConfig(max_request_bytes=10))
     with patch.object(pipeline, '_admit_snapshot', side_effect=grow), patch.object(pipeline, '_audit_plans') as downstream:
         with pytest.raises(pipeline.AuditInputTooLarge, match='snapshot grew'):
             pipeline.audit_plans([Plan(tmp_path)], cfg, scope='test')
@@ -94,12 +95,12 @@ def test_growth_before_and_after_copy(tmp_path):
         assert pipeline.audit_plans([Plan(tmp_path)], cfg, scope='test') == ()
 
 
-# Raw admission failure retains HIGH-severity threshold semantics without
+# Raw admission failure blocks strict mode at every threshold without
 # inventing a content hash/report for unread data.
-@pytest.mark.parametrize('mode,threshold,blocked', [('strict','high',True), ('strict','critical',False), ('strict','off',False), ('advisory','high',False)])
+@pytest.mark.parametrize('mode,threshold,blocked', [('strict','high',True), ('strict','critical',True), ('strict','off',True), ('advisory','high',False)])
 def test_oversize_gate_policy(tmp_path, mode, threshold, blocked):
     (tmp_path / 'a').write_bytes(b'x'*20)
-    cfg = SimpleNamespace(audit=SimpleNamespace(enabled=True,max_request_bytes=10,mode=mode,fail_on=threshold,revocations=()))
+    cfg = SimpleNamespace(audit=AuditConfig(enabled=True,max_request_bytes=10,mode=mode,fail_on=threshold,revocations=()))
     result = pipeline.gate_plans([Plan(tmp_path)], cfg, scope='test')
     assert result.blocked == blocked
     assert 'audit.request.too-large' in (result.errors + result.warnings)[0]
@@ -119,7 +120,7 @@ def test_name_budget_and_special_files(tmp_path):
     link = tmp_path / 'link'
     link.symlink_to(name)
     with pytest.raises(HashingError, match='symbolic links'):
-        pipeline.audit_plans([Plan(tmp_path)], SimpleNamespace(audit=SimpleNamespace(max_request_bytes=500)), scope='test')
+        pipeline.audit_plans([Plan(tmp_path)], SimpleNamespace(audit=AuditConfig(max_request_bytes=500)), scope='test')
 
 
 # Real children demonstrate bounded stderr retention, stdout overflow refusal,
@@ -162,7 +163,7 @@ def test_fifo_replacement_after_admission(tmp_path):
         return paths
     with patch.object(pipeline, '_admit_snapshot', side_effect=replace_with_fifo):
         with pytest.raises(AuditBackendError, match='audit.input.changed: expected regular file'):
-            pipeline.audit_plans([Plan(tmp_path)], SimpleNamespace(audit=SimpleNamespace(max_request_bytes=100)), scope='test')
+            pipeline.audit_plans([Plan(tmp_path)], SimpleNamespace(audit=AuditConfig(max_request_bytes=100)), scope='test')
 
 
 @pytest.mark.parametrize('kind', ['directory', 'missing', 'fifo'])
@@ -185,7 +186,7 @@ def test_oversize_legacy_still_requires_verified_pin(tmp_path, threshold):
     # Strict legacy admission must not become allowed merely because HIGH is
     # below fail_on; an unread snapshot cannot establish its content-bound pin.
     (tmp_path / 'a').write_bytes(b'x' * 20)
-    cfg = SimpleNamespace(audit=SimpleNamespace(enabled=True, max_request_bytes=10, mode='strict', fail_on=threshold, revocations=()))
+    cfg = SimpleNamespace(audit=AuditConfig(enabled=True, max_request_bytes=10, mode='strict', fail_on=threshold, revocations=()))
     result = pipeline.gate_plans([Plan(tmp_path, schema_version=2)], cfg, scope='test')
     assert result.blocked
     assert 'audit.request.too-large' in result.errors[0]
