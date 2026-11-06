@@ -787,7 +787,7 @@ def test_windows_git_tree_deadline(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(os.name != "nt", reason="native authenticated SSH timeout")
 def test_windows_real_ssh_authenticated_stall(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Real authentication completes, then the remote stalls 120 seconds. Both
+    # Real authentication completes, then the remote stalls 120 seconds. The
     # fetch must return timeout within budget plus bounded cleanup.
     import time
     configured = os.environ.get("CSK_TEST_WINDOWS_SSH_ROOT")
@@ -840,13 +840,24 @@ def test_windows_tcp_blackhole(tmp_path: Path, transport: str) -> None:
         thread.start()
         try:
             ssh = Path(os.environ["SYSTEMROOT"]) / "System32/OpenSSH/ssh.exe"
-            credentials = git_admission.OperatorSSHCredentials()
-            tool = _tool(ssh, credentials)
             paths = _private_paths(tmp_path / "private space")
-            env = git_admission._clean_git_environment(paths, tool, transport)
+            credentials = git_admission.OperatorSSHCredentials()
+            command = None
             if transport == "ssh":
-                env["GIT_SSH"] = str(ssh)
-                env["GIT_SSH_VARIANT"] = "ssh"
+                configured = os.environ.get("CSK_TEST_WINDOWS_SSH_ROOT")
+                if not configured:
+                    pytest.skip("requires native loopback kit for the guarded SSH path")
+                root = Path(configured)
+                credentials = git_admission.capture_operator_ssh_credentials({},
+                    identity=str(root / "First Last/.ssh/ed25519"), known_hosts=str(root / "known_hosts"))
+            tool = _tool(ssh, credentials)
+            if transport == "ssh":
+                url = f"ssh://127.0.0.1:{port}/repo"
+                source = RepositorySource(url, "127.0.0.1/repo", "ssh")
+                connection = git_admission.NetworkEndpoint(url, url, source.identity, "ssh", "127.0.0.1", port,
+                    "127.0.0.1", "/repo", port, port)
+                command = git_admission._materialize_ssh_wrapper(paths, tool, source, connection=connection)
+            env = git_admission._clean_git_environment(paths, tool, transport, ssh_command=command)
             started = time.monotonic()
             with pytest.raises(git_admission.GitAdmissionError) as error:
                 git_admission._run_git_ls_remote(tool, paths, env,
@@ -919,6 +930,63 @@ def test_windows_ssh_paths_refuse_token_expansion(tmp_path: Path, segment: str) 
     assert error.value.code == git_admission.IDENTITY_INVALID
     with pytest.raises(git_admission.GitAdmissionError, match="SSH would expand the pinned path"):
         git_admission._ssh_config_path(bad)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows wrapper exit and manager lifecycle")
+def test_windows_wrapper_exit_propagates_and_manager_kill(tmp_path: Path) -> None:
+    # The real generated wrapper must preserve nonzero SSH exit status; a Job
+    # owner killed externally must leave no inherited child running. No server.
+    import ctypes
+    import time
+    from csk._windows_git_process import run
+    paths = _private_paths(tmp_path / "private space")
+    credentials = git_admission.OperatorSSHCredentials(identity=_identity(tmp_path / "operator"),
+        known_hosts=_known_hosts(tmp_path / "operator"))
+    command = git_admission._materialize_ssh_wrapper(paths, _tool(Path(sys.executable), credentials), parse_repository_source(SOURCE))
+    wrapper = Path(command[1])
+    # Replace only the executable stand-in after materializing the real guard
+    # and dispatch: Python exits with the requested code, with normal CRT argv.
+    source = wrapper.read_text(encoding="utf-8")
+    prefix = source[:source.index("COMMAND = ")]
+    suffix = source[source.index("if sys.argv != EXPECTED:"):]
+    for status in (0, 7, 255):
+        argv = [sys.executable, "-c", f"raise SystemExit({status})"]
+        wrapper.write_text(prefix + "COMMAND = " + repr(argv) + "\n" + suffix, encoding="utf-8")
+        result = subprocess.run([*command, EXPECTED_HOST, f"git-upload-pack '{EXPECTED_PATH}'"], capture_output=True)
+        assert result.returncode == status
+    manager = tmp_path / "manager.py"
+    child_pid = tmp_path / "child.pid"
+    # The manager installs the actual production Job domain and blocks. Its
+    # child signals readiness only after the suspended launch was resumed.
+    manager.write_text("from csk._windows_git_process import run\nimport subprocess,sys\n"
+        "run([sys.executable,'-c'," + repr("import os,time;open(" + repr(str(child_pid)) + ",'w').write(str(os.getpid()));time.sleep(120)") +
+        "],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=120,check=True)\n", encoding="utf-8")
+    env = dict(os.environ, PYTHONPATH=str(Path(git_admission.__file__).parent.parent))
+    process = subprocess.Popen([sys.executable, str(manager)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    kernel = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    kernel.OpenProcess.restype = ctypes.c_void_p
+    kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    handle = None
+    try:
+        deadline = time.monotonic() + 10
+        while not child_pid.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert child_pid.exists(), "Job child never became ready"
+        handle = kernel.OpenProcess(0x100001, False, int(child_pid.read_text()))
+        assert handle
+        process.kill(); process.wait(timeout=5)
+        assert kernel.WaitForSingleObject(handle, 5000) == 0, "child survived manager kill"
+    finally:
+        if process.poll() is None:
+            process.kill(); process.wait(timeout=5)
+        if handle:
+            if kernel.WaitForSingleObject(handle, 0) != 0:
+                kernel.TerminateProcess(handle, 1)
+                kernel.WaitForSingleObject(handle, 5000)
+            kernel.CloseHandle(handle)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows hostile agent pipe")
