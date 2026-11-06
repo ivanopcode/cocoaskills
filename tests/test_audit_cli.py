@@ -76,7 +76,8 @@ def test_cli_audit_redacts_url_secrets_from_output_and_cache(monkeypatch, tmp_pa
     assert "user:secret" not in output
     assert "token=abc" not in cache_payload
     assert "user:secret" not in cache_payload
-    assert "https://evil.example/install.sh?<redacted>#<redacted>" in output
+    assert "evil.example" in output  # Only the allowlisted hostname leaves the finding.
+    assert "install.sh" not in output
 
 
 def test_cli_audit_strict_blocks_on_threshold(monkeypatch, tmp_path, csk_home, skills_root, capsys):

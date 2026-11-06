@@ -107,11 +107,16 @@ def finding_from_payload(payload: dict[str, Any]) -> Finding:
             declared=_required_string(violation_raw, "declared", "finding.capability_violation.declared"),
             observed=_required_string(violation_raw, "observed", "finding.capability_violation.observed"),
         )
+    try:
+        surface = Surface(_required_string(payload, "surface", "finding.surface"))
+        severity = Severity(_required_string(payload, "severity", "finding.severity"))
+    except ValueError:
+        raise ValueError("invalid finding classification") from None
     return Finding(
         id=_required_string(payload, "id", "finding.id"),
-        surface=Surface(_required_string(payload, "surface", "finding.surface")),
+        surface=surface,
         category=_required_string(payload, "category", "finding.category"),
-        severity=Severity(_required_string(payload, "severity", "finding.severity")),
+        severity=severity,
         location=location,
         evidence=_required_string(payload, "evidence", "finding.evidence"),
         detector=_required_string(payload, "detector", "finding.detector"),
@@ -157,5 +162,4 @@ def _required_bool(payload: dict[str, Any], key: str, field: str) -> bool:
 def _reject_unknown_fields(data: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(data) - allowed)
     if unknown:
-        joined = ", ".join(repr(item) for item in unknown)
-        raise ValueError(f"{label} has unsupported field(s): {joined}")
+        raise ValueError(f"{label} has unsupported fields")

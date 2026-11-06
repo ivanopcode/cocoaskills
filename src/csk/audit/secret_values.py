@@ -5,13 +5,10 @@ import base64
 from bisect import bisect_left
 from collections import Counter, deque
 from collections.abc import Iterator
-from dataclasses import fields, is_dataclass, replace
-from enum import Enum
-from functools import lru_cache
+from dataclasses import replace
 import json
 import math
 import re
-from typing import Any
 
 from .model import Finding, Location, Severity, Surface, SECRET_REASONS, _ScanLocation
 
@@ -21,21 +18,22 @@ _PATTERNS = (
     ("aws-access-key", re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])")),
     ("github-token", re.compile(r"(?<![A-Za-z0-9_])(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,255})(?![A-Za-z0-9_])")),
 )
-_OUTPUT_PATTERNS = (
-    ('private-key', re.compile(_PATTERNS[0][1].pattern, re.IGNORECASE)),
-    ('aws-access-key', re.compile(r'(?:AKIA|ASIA)[A-Z0-9]{16}', re.IGNORECASE)),
-    ('github-token', re.compile(_PATTERNS[2][1].pattern, re.IGNORECASE)),
-)
 _JWT_PART = re.compile(r"[A-Za-z0-9_-]+={0,2}")
 _TOKEN = re.compile(r"[A-Za-z0-9_+/-]+={0,2}")
 _ASSIGNMENT = re.compile(r'''["']?([A-Za-z_][A-Za-z0-9_]*)["']?\s*([:=])\s*["']?$''')
 _JSON_VALUE = re.compile(r'"[^"\n]{1,128}"\s*:\s*"$')
 _ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))")
-_PUBLIC_PEM = re.compile(r"-----BEGIN (PUBLIC KEY|CERTIFICATE)-----[\s\S]*?(?:-----END \1-----|\Z)")
+_INTEGRITY = re.compile(r"(?<![A-Za-z0-9_])(?:h1:[A-Za-z0-9+/]{43}=|sha256[-:][A-Za-z0-9+/]{43}=|sha384[-:][A-Za-z0-9+/]{64}|sha512[-:][A-Za-z0-9+/]{86}==)(?![A-Za-z0-9+/=])")
+_PUBLIC_PEM = re.compile(r"-----BEGIN (PUBLIC KEY|CERTIFICATE)-----[A-Za-z0-9+/=\r\n ]+-----END \1-----")
 # Output candidates include path/URL separators before any lossy transformation.
 _OUTPUT_TOKEN = re.compile(r"[A-Za-z0-9_+/.:@?&=%\\-]+")
 _COMPONENT = re.compile(r"[A-Za-z0-9_+-]+")
 _WORD_COMPONENT = re.compile(r"(?:[a-z]+(?:[-_][a-z]+)*[0-9]*|(?:[A-Z][a-z]+)+[0-9]*|[A-Z]+|[0-9]+)")
+
+
+def _safe_scan_path(value: str) -> str:
+    from .output import safe_path
+    return safe_path(value)
 
 
 def _secret_finding(kind: str, rel_path: str, line: int) -> Finding:
@@ -45,7 +43,7 @@ def _secret_finding(kind: str, rel_path: str, line: int) -> Finding:
         raise ValueError('unknown secret kind')
     return Finding(
         id=finding_id, surface=Surface.CODE, category='secret-value',
-        severity=Severity.HIGH, location=_ScanLocation(mask_output_text(rel_path), (line, line)),
+        severity=Severity.HIGH, location=_ScanLocation(_safe_scan_path(rel_path), (line, line)),
         evidence=SECRET_REASONS[finding_id], detector='static.secret',
         confidence='medium' if kind == 'high-entropy' else 'high', verifiable=True,
     )
@@ -90,8 +88,8 @@ def _predictable_base64(value: str) -> bool:
     return len(raw) >= 16 and len({(b - a) % 256 for a, b in zip(raw, raw[1:])}) == 1
 
 
-def _secret_spans(decoded: str, *, contextual: bool) -> Iterator[tuple[int, int, str]]:
-    for kind, pattern in (_PATTERNS if contextual else _OUTPUT_PATTERNS):
+def _secret_spans(decoded: str) -> Iterator[tuple[int, int, str]]:
+    for kind, pattern in _PATTERNS:
         for match in pattern.finditer(decoded):
             yield match.start(), match.end(), kind
     # Lex segments once, retaining only a three-part window. Padding is part of a segment.
@@ -105,36 +103,31 @@ def _secret_spans(decoded: str, *, contextual: bool) -> Iterator[tuple[int, int,
         header_part, payload_part, signature = (p.group() for p in parts)
         if not (8 <= len(header_part) <= 2048 and 2 <= len(payload_part) <= 8192 and 16 <= len(signature) <= 2048):
             continue
-        # The output may have acquired a short prefix before a valid JWT header.
-        # Validate the same JSON/signature shape, including bounded suffix candidates.
-        headers = (header_part[i:] for i in range(1 if contextual else min(33, len(header_part))))
-        for candidate in headers:
-            try:
-                header = json.loads(_base64(candidate))
-                json.loads(_base64(payload_part))
-                _base64(signature)
-            except (ValueError, UnicodeError, RecursionError):
-                continue
-            if isinstance(header, dict) and isinstance(header.get('alg'), str):
-                yield parts[0].start(), part.end(), 'jwt'
-                break
-    public = list(_PUBLIC_PEM.finditer(decoded))
+        try:
+            header = json.loads(_base64(header_part))
+            json.loads(_base64(payload_part))
+            _base64(signature)
+        except (ValueError, UnicodeError, RecursionError):
+            continue
+        if isinstance(header, dict) and isinstance(header.get('alg'), str):
+            yield parts[0].start(), part.end(), 'jwt'
+    public = sorted([*_PUBLIC_PEM.finditer(decoded), *_INTEGRITY.finditer(decoded)], key=lambda m: m.start())
     # Source tokens retain their context gates; colon/URL composites also get
     # classified as values, so low-entropy URL prefixes cannot dilute a secret.
-    patterns = (_TOKEN, _OUTPUT_TOKEN) if contextual else (_OUTPUT_TOKEN,)
+    patterns = (_TOKEN, _OUTPUT_TOKEN)
     for pattern in patterns:
         public_index = 0
         for match in pattern.finditer(decoded):
             value = match.group()
             if len(value) < 32:
                 continue
-            if contextual and pattern is _OUTPUT_TOKEN and ':' not in value:
+            if pattern is _OUTPUT_TOKEN and ':' not in value:
                 continue
             while public_index < len(public) and public[public_index].end() <= match.start():
                 public_index += 1
             if public_index < len(public) and public[public_index].start() <= match.start():
                 continue
-            if contextual and not _value_context(decoded, match.start(), match.end()):
+            if not _value_context(decoded, match.start(), match.end()):
                 continue
             for start, end in _entropy_spans(value):
                 yield match.start() + start, match.start() + end, 'high-entropy'
@@ -208,9 +201,9 @@ def _entropy_spans(value: str) -> Iterator[tuple[int, int]]:
         if _entropy_value(candidate):
             # When the URL's entire address is the secret, its scheme is part
             # of that value too. Ordinary host/path neighbours otherwise stay.
-            scheme = re.search(r'https?://$', value[:start])
+            scheme = re.search(r'https?://$', value[max(0, start - 8):start])
             if scheme is not None and end == len(value):
-                start = scheme.start()
+                start = max(0, start - 8) + scheme.start()
             yield start, end
 
 
@@ -233,7 +226,7 @@ def detect_and_mask(rel_path: str, text: str, values: set[str] | None = None, *,
     decoded, offsets = _decoded(text)
     # Stop the producer, not just the returned list. An extra match is the cap witness.
     spans: list[tuple[int, int, str]] = []
-    for start, end, kind in _secret_spans(decoded, contextual=True):
+    for start, end, kind in _secret_spans(decoded):
         if any(left <= start and end <= right for left, right, _ in spans):
             continue
         spans.append((start, end, kind))
@@ -253,68 +246,28 @@ def detect_and_mask(rel_path: str, text: str, values: set[str] | None = None, *,
         source_start = offsets[start][0] if offsets else start
         findings.append(_secret_finding(kind, rel_path, bisect_left(newlines, source_start) + 1))
     if truncated:
-        findings.append(finding_limit(mask_output_text(rel_path)))
+        findings.append(finding_limit(_safe_scan_path(rel_path)))
     return findings, _mask(text, offsets, spans)
 
 
 def mask_output_text(value: str) -> str:
-    """Mask classified values/components before parsers discard their prefixes."""
-    decoded, offsets = _decoded(value)
-    spans = list(_secret_spans(decoded, contextual=False))
-    if not spans:
-        return value
-    # A fixed marker cannot be reclassified as a long token by downstream
-    # serialization. Keep source-buffer masking separate to preserve offsets.
-    marked = bytearray(len(value))
-    for start, end, _ in spans:
-        if offsets:
-            start, end = offsets[start][0], offsets[end - 1][1]
-        marked[start:end] = b'\x01' * (end - start)
-    pieces: list[str] = []
-    position = 0
-    for match in re.finditer(b'\x01+', marked):
-        pieces.extend((value[position:match.start()], '<withheld>'))
-        position = match.end()
-    pieces.append(value[position:])
-    return ''.join(pieces)
-
-
-def secret_fragments(value: str) -> set[str]:
-    decoded, _ = _decoded(value)
-    return {decoded[i:i + 8].lower() for start, end, _ in _secret_spans(decoded, contextual=False)
-            for i in range(start, end - 7)}
-
-
-def mask_fragments(value: str, fragments: set[str]) -> str:
-    if not fragments:
-        return value
-    masked = list(value)
-    for i in range(len(value) - 7):
-        if value[i:i + 8].lower() in fragments:
-            for index in range(i, i + 8):
-                if value[index] not in '/\\.:?&=@\n':
-                    masked[index] = 'x'
-    return ''.join(masked)
+    """Compatibility entry point for the positive output grammar."""
+    from .output import safe_value
+    return safe_value(value)
 
 
 def sanitize_findings(findings: list[Finding], values: set[str]) -> tuple[Finding, ...]:
-    # Output redaction is context-free: decoded evidence and metadata have no source context.
-    pattern = re.compile('|'.join(re.escape(v) for v in sorted(values, key=len, reverse=True))) if values else None
+    from .output import withheld
     fragments = {value[i:i + 8].lower() for value in values for i in range(len(value) - 7)}
-    @lru_cache(maxsize=256)
-    def clean_text(value: str) -> str:
-        value = pattern.sub('[withheld]', value) if pattern else value
-        return mask_output_text(mask_fragments(value, fragments))
-    def clean(value: Any) -> Any:
-        if isinstance(value, Enum):
-            return value
-        if isinstance(value, str):
-            return clean_text(value)
-        if is_dataclass(value) and not isinstance(value, type):
-            return replace(value, **{field.name: clean(getattr(value, field.name)) for field in fields(value)})
-        return value
-    # Identifiers and classification fields are fixed detector schema, not input text.
-    sanitized = [replace(finding, location=clean(finding.location),
-                         evidence=finding.evidence if finding.id in SECRET_REASONS else clean_text(finding.evidence),
-                         capability_violation=clean(finding.capability_violation)) for finding in findings]
-    return tuple(replace(finding, evidence=finding.evidence[:160]) for finding in sanitized)
+    def clean(value: str) -> str:
+        return withheld(value) if any(value[i:i + 8].lower() in fragments for i in range(len(value) - 7)) else value
+    sanitized = []
+    for finding in findings:
+        location = finding.location
+        if location is not None:
+            location = replace(location, file=clean(location.file))
+        violation = finding.capability_violation
+        if violation is not None:
+            violation = replace(violation, observed=clean(violation.observed), declared=clean(violation.declared))
+        sanitized.append(replace(finding, location=location, capability_violation=violation))
+    return tuple(sanitized)
