@@ -6,7 +6,7 @@ import json
 import os
 import stat
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import Any, BinaryIO, Final, cast
 
 
 class ProtocolJSONError(ValueError):
@@ -62,6 +62,21 @@ def _open_regular(path: str, flags: int) -> int:
         close(handle)
 
 
+def _read_bounded(stream: BinaryIO, maximum: int) -> bytes:
+    # A budget-sized read allocates that budget even for a tiny file on
+    # Windows. Grow with the actual content, retaining one byte past the cap
+    # so callers can distinguish an oversized file from a valid prefix.
+    chunks: list[bytes] = []
+    remaining = maximum + 1
+    while remaining:
+        chunk = stream.read(min(64 * 1024, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
 def read_bytes(path: Path, *, maximum: int = MAX_INPUT_BYTES) -> bytes:
     """Admit regular files without blocking, checking the opened descriptor."""
     info = path.stat()
@@ -81,7 +96,7 @@ def read_bytes(path: Path, *, maximum: int = MAX_INPUT_BYTES) -> bytes:
             raise ProtocolJSONSizeError("JSON input must be a regular file")
         if opened.st_size > maximum:
             raise ProtocolJSONSizeError("JSON input exceeds maximum size")
-        raw = stream.read(maximum + 1)
+        raw = _read_bounded(stream, maximum)
     if len(raw) > maximum:
         raise ProtocolJSONSizeError("JSON input exceeds maximum size")
     return raw
