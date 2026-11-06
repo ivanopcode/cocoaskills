@@ -396,11 +396,13 @@ def test_provider_mutations_never_refuse(monkeypatch):
 
 # Ambiguous fingerprint/agent rows and wrapped error text cannot prove failure.
 # Valid encrypted controls refuse; permission text without stat facts and malformed evidence stay unknown.
-# This exercises metadata only; it does not assert agent signing capability.
+# Native-path keygen diagnostics exercise these refusal controls on POSIX and
+# Windows; permission text stays unknown. No agent signing capability is proved.
 @pytest.mark.parametrize('evidence', ['fingerprint', 'empty-agent', 'agent-fingerprints', 'passphrase', 'permissions'])
 def test_other_evidence_mutations_never_refuse(monkeypatch, evidence):
     fingerprint = '256 SHA256:' + 'A' * 43 + ' fixture (ED25519)\n'
-    error = 'Load key "/keys/key": incorrect passphrase supplied to decrypt private key\n'
+    identity = Path('/keys/key')
+    error = f'Load key "{identity}": incorrect passphrase supplied to decrypt private key\n'
     seed = _permission_error() if evidence == 'permissions' else error
     mutation = None
     def probe(argv, **kwargs):
@@ -414,28 +416,30 @@ def test_other_evidence_mutations_never_refuse(monkeypatch, evidence):
     agent = Path('/agent') if evidence in {'empty-agent', 'agent-fingerprints'} else None
     # A valid agent listing matches the key and remains unknown; other valid
     # controls prove encrypted-file refusal; permission text alone stays unknown.
-    control = build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/key'), agent)
+    control = build_ssh.inspect_key(Path('/tools/ssh'), identity, agent)
     assert control.state == ('unknown' if evidence in {'agent-fingerprints', 'permissions'} else 'unusable')
     for index in range(256):
         raw = fingerprint if evidence in {'fingerprint', 'agent-fingerprints'} else 'The agent has no identities.\n' if evidence == 'empty-agent' else seed
         mutation = f'ambiguous-{index}:\n' + raw
-        verdict = build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/key'), agent)
+        verdict = build_ssh.inspect_key(Path('/tools/ssh'), identity, agent)
         assert verdict.state == 'unknown', (evidence, index)
         mutation = raw + f'contradictory-{index}\n'
-        verdict = build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/key'), agent)
+        verdict = build_ssh.inspect_key(Path('/tools/ssh'), identity, agent)
         assert verdict.state == 'unknown', (evidence, index)
 
 
 # A filename suffix is not proof of public-only content: a private file can be
-# named .pub. Exact keygen failure still refuses the public-only neighbor.
+# named .pub. An exact native-path keygen failure refuses the public-only
+# neighbor on POSIX and Windows; a successful load remains unknown on both.
 @pytest.mark.parametrize('failed,state', [(False, 'unknown'), (True, 'unusable')])
 def test_public_suffix_requires_unusable_file_evidence(monkeypatch, failed, state):
+    identity = Path('/keys/key.pub')
     def probe(argv, **kwargs):
         if '-l' in argv:
             return subprocess.CompletedProcess(argv, 0, '256 SHA256:' + 'A' * 43 + ' fixture (ED25519)\n', '')
-        return subprocess.CompletedProcess(argv, 255 if failed else 0, '' if failed else 'ssh-ed25519 AAAA\n', 'Load key "/keys/key.pub": invalid format\n' if failed else '')
+        return subprocess.CompletedProcess(argv, 255 if failed else 0, '' if failed else 'ssh-ed25519 AAAA\n', f'Load key "{identity}": invalid format\n' if failed else '')
     monkeypatch.setattr(build_ssh, '_local_probe', probe)
-    verdict = build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/key.pub'))
+    verdict = build_ssh.inspect_key(Path('/tools/ssh'), identity)
     assert verdict.state == state
     if failed:
         assert verdict.reason == 'a public key alone cannot sign and no matching agent key is available'
