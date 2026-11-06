@@ -339,6 +339,8 @@ CocoaSkill хранит отдельный блок для каждого про
 In 0.21.x an existing top-level `ignore_mode` field still selects the effective mode until migration. Run `csk ignore-mode show` to see the mode and its source. Use `csk ignore-mode set gitignore` to select a managed project block, or `csk ignore-mode set exclude` for local Git excludes. The switch preserves user rules and removes only the deprecated field. Without that field, block location selects the mode and exclude is the default. Global/hybrid modes are unchanged.
 
 
+### Local SSH credential checks
+
 For local SSH credential problems, run `csk config build-ssh doctor <host/path>`
 (or add `--all-os`). It makes no network connection or agent changes. See
 [the doctor reference](cli.md#csk-config-build-ssh-doctor) for lifetime ownership,
