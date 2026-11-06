@@ -7,7 +7,7 @@ from csk import config
 from csk.audit import canary, detectors, runner, trust
 
 
-@pytest.mark.parametrize("old_ruleset", [1, 2, 3, 4, 5, 6])
+@pytest.mark.parametrize("old_ruleset", [1, 2, 3, 4, 5, 6, 7])
 def test_previous_ruleset_cannot_hide_new_secret_findings(monkeypatch, tmp_path, csk_home, skills_root, old_ruleset):
     # A planted old ALLOW cache must be bypassed, while a current cache remains reusable.
     make_skill_repo(skills_root, "skill-a", {"csk-skill.json": '{"schema_version": 3, "capabilities": {"network": "none", "exec": "none"}, "commands": {}}', "references/value.txt": 'value="' + "ghp_" + "a" * 36 + '"\n'}, tag="v1")
