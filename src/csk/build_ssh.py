@@ -191,6 +191,8 @@ def discover_candidates(
     else:
         agent_socket = env.get("SSH_AUTH_SOCK") or None
     agent_key_count: int | None = None
+    if windows:
+        env.pop("SSH_AUTH_SOCK", None)
     if agent_socket:
         try:
             probe = subprocess.run(

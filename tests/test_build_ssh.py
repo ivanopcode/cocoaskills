@@ -438,7 +438,10 @@ def test_windows_picker_discovers_standard_pipe_without_ambient_socket(tmp_path,
     from csk import git_admission
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(build_ssh, "resolve_tool", lambda *a, **kw: "ssh-add")
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(a, 0, "key\n", ""))
+    def listed(*args, **kwargs):
+        assert "SSH_AUTH_SOCK" not in kwargs["env"]
+        return subprocess.CompletedProcess(args, 0, "key\n", "")
+    monkeypatch.setattr(subprocess, "run", listed)
     monkeypatch.setattr(git_admission, "_windows_ssh_agent_pipe_available", lambda: True)
     candidate = build_ssh.discover_candidates(environment={"SSH_AUTH_SOCK": "hostile"}, home=str(tmp_path))
     assert candidate.agent_socket == git_admission._WINDOWS_SSH_AGENT_PIPE

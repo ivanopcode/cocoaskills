@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Ignore ambient agent sockets during Windows credential discovery; document the
+  standard service pipe in every CLI reference.
+
 - Refuse expansion-capable Windows SSH paths before launch with a clear diagnostic
   so native SSH cannot substitute a sibling file.
 

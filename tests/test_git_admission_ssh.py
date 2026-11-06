@@ -868,3 +868,67 @@ def test_windows_ssh_paths_refuse_token_expansion(tmp_path: Path, segment: str) 
     assert error.value.code == git_admission.IDENTITY_INVALID
     with pytest.raises(git_admission.GitAdmissionError, match="SSH would expand the pinned path"):
         git_admission._ssh_config_path(bad)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows hostile agent pipe")
+def test_windows_discovery_ignores_live_hostile_pipe(tmp_path: Path) -> None:
+    # Prove the sentinel can answer a real ssh-add (empty agent), then discovery
+    # must count the loaded standard agent without contacting that sentinel.
+    import ctypes
+    import struct
+    import threading
+    import time
+    import uuid
+    from csk import build_ssh
+    if not os.environ.get("CSK_TEST_WINDOWS_SSH_ROOT"):
+        pytest.skip("requires generated loaded standard agent")
+    kernel = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
+    kernel.CreateNamedPipeW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32,
+        ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+    kernel.CreateNamedPipeW.restype = ctypes.c_void_p
+    kernel.ConnectNamedPipe.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    kernel.DisconnectNamedPipe.argtypes = [ctypes.c_void_p]
+    kernel.ReadFile.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p]
+    kernel.WriteFile.argtypes = kernel.ReadFile.argtypes
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    name = r"\\.\pipe\csk-discovery-test-" + uuid.uuid4().hex
+    handle = kernel.CreateNamedPipeW(name, 3, 1, 1, 4096, 4096, 0, None)
+    assert handle and handle != ctypes.c_void_p(-1).value
+    hits = []
+    stop = threading.Event()
+    def serve():
+        while not stop.is_set():
+            connected = kernel.ConnectNamedPipe(handle, None)
+            if connected or getattr(ctypes, "get_last_error")() == 535:
+                hits.append(True)
+                buffer = ctypes.create_string_buffer(4096)
+                count = ctypes.c_uint32()
+                deadline = time.monotonic() + 2
+                while not stop.is_set() and time.monotonic() < deadline:
+                    if kernel.ReadFile(handle, buffer, len(buffer), ctypes.byref(count), None) and count.value:
+                        payload = struct.pack(">IBI", 5, 12, 0)
+                        kernel.WriteFile(handle, payload, len(payload), ctypes.byref(count), None)
+                        break
+                    time.sleep(0.01)
+                kernel.DisconnectNamedPipe(handle)
+            time.sleep(0.01)
+    thread = threading.Thread(target=serve)
+    thread.start()
+    try:
+        ssh_add = Path(os.environ["SYSTEMROOT"]) / "System32/OpenSSH/ssh-add.exe"
+        env = dict(os.environ, SSH_AUTH_SOCK=name)
+        control = subprocess.run([str(ssh_add), "-l"], env=env, capture_output=True, timeout=5)
+        assert control.returncode == 1 and len(hits) == 1, "hostile pipe control did not apply"
+        for value in (name, None, "", "/tmp/stale-agent", r"\\.\pipe\csk-missing-agent"):
+            candidate_env = dict(os.environ)
+            candidate_env.pop("SSH_AUTH_SOCK", None)
+            if value is not None:
+                candidate_env["SSH_AUTH_SOCK"] = value
+            result = build_ssh.discover_candidates(environment=candidate_env, home=str(tmp_path))
+            assert len(hits) == 1, "discovery contacted the ambient hostile pipe"
+            assert result.agent_socket == git_admission._WINDOWS_SSH_AGENT_PIPE
+            assert result.agent_key_count and result.agent_key_count >= 1
+    finally:
+        stop.set(); thread.join(3)
+        kernel.CloseHandle(handle)
+        assert not thread.is_alive()
