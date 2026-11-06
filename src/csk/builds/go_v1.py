@@ -118,7 +118,6 @@ PROBE_TIMING: Final = "pre-worker-launch"
 PLATFORM_MACOS: Final = "macos"
 PLATFORM_WINDOWS: Final = "windows"
 PLATFORM_LINUX: Final = "linux"
-_POSIX_CONTROL_PLATFORMS: Final = frozenset({PLATFORM_MACOS, PLATFORM_LINUX})
 AVAILABILITY_AVAILABLE: Final = "available"
 AVAILABILITY_UNAVAILABLE: Final = "unavailable"
 STATUS_APPLIED: Final = "applied"
@@ -126,6 +125,8 @@ STATUS_UNAVAILABLE: Final = "unavailable"
 UNAVAILABLE_REASON_NO_PRIVATE_AGGREGATE_DOMAIN: Final = (
     "no-private-aggregate-domain"
 )
+
+_POSIX_CONTROL_PLATFORMS: Final = frozenset({PLATFORM_MACOS, PLATFORM_LINUX})
 
 CONTROL_DESCENDANT_DOMAIN_TERMINATION: Final = "descendant-domain-termination"
 CONTROL_ACTIVE_PROCESS_COUNT_LIMIT: Final = "active-process-count-limit"
