@@ -7,7 +7,7 @@ import pytest
 
 from csk import build_ssh, cli, config, git_admission, installer
 from csk.build_repository import LockedCommit, parse_repository_source
-from csk.sources import transport
+from csk.sources import diagnostics, transport
 
 
 # Each case pairs refusal evidence with usable/unknown controls. No signatures
@@ -90,6 +90,11 @@ def test_preflight_precedes_network(monkeypatch, tmp_path, resolve, state):
         assert 'example.test/group/repo' in str(error.value)
         assert 'reason: planted passphrase' in str(error.value)
         assert 'next: run csk config build-ssh doctor' in str(error.value)
+        # The local refusal also carries the class used by install's fixed advice;
+        # the unknown control below still reaches the wrapper rather than refusing.
+        assert error.value.failure_class == 'auth-unavailable'
+        rendered = installer.failure_text(error.value)
+        assert diagnostics.transport_next_steps('auth-unavailable') in rendered
         assert transport._classify_git_error(error.value) == 'auth-unavailable'
         assert error.value.code in transport._KNOWN_SAFE_CODES
     else:
@@ -236,6 +241,7 @@ def test_provider_output_with_real_metadata_processes(tmp_path, monkeypatch, set
     keygen.chmod(0o700)
     identity = tmp_path / 'key'
     identity.touch()
+    identity.chmod(0o600)
     result = build_ssh.inspect_key(ssh, identity)
     assert result.state == state
     assert result.provider == provider
@@ -274,11 +280,10 @@ def _permission_error():
     )
 
 
-# Only recognized OpenSSH evidence of ignored private-file permissions refuses.
-# A matching loaded agent bypasses that bad file; ambiguous/unreadable output
-# stays unknown, and valid file output prevents reject-all success.
+# Permission diagnostic text alone cannot refuse: only independent stat facts
+# can prove this condition. Real file-mode controls below prove refusal still works.
 @pytest.mark.parametrize('stderr,rc,loaded,state', [
-    (_permission_error(), 255, False, 'unusable'),
+    (_permission_error(), 255, False, 'unknown'),
     (_permission_error(), 255, True, 'unknown'),
     ('bad permissions', 255, False, 'unknown'),
     ('Permission denied', 255, False, 'unknown'),
@@ -322,23 +327,38 @@ def test_orphan_public_key_is_not_a_file_candidate(tmp_path, monkeypatch, capsys
     assert any(str(orphan) in line for line in lines) == bool(agent)
 
 
-# Real OpenSSH establishes the too-open-file refusal; owner-only permissions
-# are the valid neighbor. Only generated keys are used, with no signing.
-@pytest.mark.skipif(build_ssh.os.name == 'nt', reason='POSIX private-key permission evidence')
-@pytest.mark.parametrize('mode,state', [(0o600, 'unknown'), (0o644, 'unusable')])
-def test_real_private_key_permissions(tmp_path, mode, state):
+# Generated keys cover both filename witnesses, absent/present public siblings,
+# and real POSIX modes through inspection, doctor and preflight. No user key,
+# server or token is involved; credential normalization is outside this test.
+@pytest.mark.skipif(build_ssh.os.name != 'posix', reason='POSIX file permission rule')
+@pytest.mark.parametrize('name', ['key', 'MODE', 'model-MODE-key', '0644'])
+@pytest.mark.parametrize('public', [False, True])
+@pytest.mark.parametrize('mode,state', [(0o600, 'unknown'), (0o640, 'unusable'), (0o644, 'unusable'), (0o400, 'unknown')])
+def test_real_private_key_permissions(tmp_path, monkeypatch, name, public, mode, state):
     try:
         ssh = Path(build_ssh.resolve_tool('ssh'))
         keygen = build_ssh.resolve_tool('ssh-keygen', executable=str(ssh.parent / 'ssh-keygen'))
     except FileNotFoundError:
         pytest.skip('matching OpenSSH tools unavailable')
-    identity = tmp_path / 'generated-key'
+    identity = tmp_path / name
     subprocess.run([keygen, '-q', '-t', 'ed25519', '-N', '', '-f', str(identity)], check=True, stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+    if not public:
+        Path(str(identity) + '.pub').unlink()
     identity.chmod(mode)
     result = build_ssh.inspect_key(ssh, identity)
     assert result.state == state
+    assert f'Local state: {state}' in build_ssh.doctor((), identity=str(identity))
+    creds = git_admission.OperatorSSHCredentials(identity=identity)
+    monkeypatch.setattr(git_admission, 'validate_operator_ssh_credentials', lambda c: c)
+    tool = git_admission.GitTool(Path('/git'), Path('/exec'), (), ssh=ssh, ssh_credentials=creds)
+    source = parse_repository_source('git@example.test:group/repo.git')
     if state == 'unusable':
         assert result.reason == 'private key permissions are too open; SSH will ignore this file'
+        with pytest.raises(git_admission.GitAdmissionError, match='build_repository_ssh_credential_unusable') as error:
+            git_admission._preflight_ssh(source, tool)
+        assert result.reason in str(error.value)
+    else:
+        git_admission._preflight_ssh(source, tool)
 
 
 # Seeded, bounded mutations check a refusal invariant, not token usability.
@@ -375,7 +395,7 @@ def test_provider_mutations_never_refuse(monkeypatch):
 
 
 # Ambiguous fingerprint/agent rows and wrapped error text cannot prove failure.
-# Valid encrypted/permission controls refuse; malformed evidence stays unknown.
+# Valid encrypted controls refuse; permission text without stat facts and malformed evidence stay unknown.
 # This exercises metadata only; it does not assert agent signing capability.
 @pytest.mark.parametrize('evidence', ['fingerprint', 'empty-agent', 'agent-fingerprints', 'passphrase', 'permissions'])
 def test_other_evidence_mutations_never_refuse(monkeypatch, evidence):
@@ -393,9 +413,9 @@ def test_other_evidence_mutations_never_refuse(monkeypatch, evidence):
     monkeypatch.setattr(build_ssh, '_local_probe', probe)
     agent = Path('/agent') if evidence in {'empty-agent', 'agent-fingerprints'} else None
     # A valid agent listing matches the key and remains unknown; other valid
-    # controls prove the encrypted/permission refusal in their file route.
+    # controls prove encrypted-file refusal; permission text alone stays unknown.
     control = build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/key'), agent)
-    assert control.state == ('unknown' if evidence == 'agent-fingerprints' else 'unusable')
+    assert control.state == ('unknown' if evidence in {'agent-fingerprints', 'permissions'} else 'unusable')
     for index in range(256):
         raw = fingerprint if evidence in {'fingerprint', 'agent-fingerprints'} else 'The agent has no identities.\n' if evidence == 'empty-agent' else seed
         mutation = f'ambiguous-{index}:\n' + raw
@@ -419,3 +439,72 @@ def test_public_suffix_requires_unusable_file_evidence(monkeypatch, failed, stat
     assert verdict.state == state
     if failed:
         assert verdict.reason == 'a public key alone cannot sign and no matching agent key is available'
+
+
+# Synthetic ownership/platform controls cover states that cannot be created by
+# an unprivileged worker. Real owned-file modes are exercised above.
+@pytest.mark.parametrize('platform,owner,mode,expected', [
+    ('posix', 42, 0o600, False), ('posix', 42, 0o400, False),
+    ('posix', 42, 0o640, True), ('posix', 42, 0o644, True),
+    ('posix', 42, 0o601, True), ('posix', 43, 0o644, None),
+    ('nt', 42, 0o644, None),
+])
+def test_permission_stat_contract(monkeypatch, platform, owner, mode, expected):
+    identity = Path('/fixture')
+    def stat(path):
+        assert path == identity
+        assert platform == 'posix'
+        return SimpleNamespace(st_uid=owner, st_mode=0o100000 | mode)
+    monkeypatch.setattr(build_ssh, 'os', SimpleNamespace(name=platform, stat=stat, getuid=lambda: 42))
+    assert build_ssh._identity_permissions(identity) is expected
+
+
+# Missing/inaccessible stat data cannot fabricate a refusal; the safe-mode
+# positive control is in the contract table and real-file cases above.
+@pytest.mark.parametrize('error', [FileNotFoundError(), PermissionError()])
+def test_unavailable_permission_stat_is_unknown(monkeypatch, error):
+    identity = Path('/fixture')
+    def stat(path):
+        raise error
+    monkeypatch.setattr(build_ssh, 'os', SimpleNamespace(name='posix', stat=stat))
+    assert build_ssh._identity_permissions(identity) is None
+
+
+# Permission facts survive failed/noisy fingerprints. An agent that may still
+# hold the key keeps the outcome unknown; a proven empty agent cannot sign it.
+@pytest.mark.skipif(build_ssh.os.name != 'posix', reason='POSIX stat evidence')
+@pytest.mark.parametrize('agent,state', [(None, 'unusable'), ('empty', 'unusable'), ('unknown', 'unknown')])
+@pytest.mark.parametrize('fingerprint', [None, 'warning', 'failed'])
+def test_permissions_independent_of_fingerprint(tmp_path, monkeypatch, agent, state, fingerprint):
+    identity = tmp_path / 'model-MODE-key'
+    identity.touch(mode=0o644)
+    identity.chmod(0o644)
+    def probe(argv, **kwargs):
+        if '-L' in argv:
+            return subprocess.CompletedProcess(argv, 1, 'The agent has no identities.\n', '') if agent == 'empty' else None
+        if fingerprint is None:
+            return None
+        return subprocess.CompletedProcess(argv, 0 if fingerprint == 'warning' else 255, '256 SHA256:' + 'A' * 43 + ' fixture (ED25519)\n', _permission_error())
+    monkeypatch.setattr(build_ssh, '_local_probe', probe)
+    result = build_ssh.inspect_key(Path('/tools/ssh'), identity, Path('/agent') if agent else None)
+    assert result.state == state
+    if state == 'unusable':
+        assert result.reason == 'private key permissions are too open; SSH will ignore this file'
+
+
+# The old MODE-substitution bug must not let text about another file override
+# a real safe-mode identity, even when that other filename is the octal mode.
+@pytest.mark.skipif(build_ssh.os.name != 'posix', reason='POSIX stat evidence')
+@pytest.mark.parametrize('name', ['MODE', 'model-MODE-key', '0644'])
+@pytest.mark.parametrize('reported', ['0644', 'other', 'model-MODE-key'])
+def test_permission_diagnostic_cannot_replace_path(tmp_path, monkeypatch, name, reported):
+    identity = tmp_path / name
+    identity.touch(mode=0o600)
+    identity.chmod(0o600)
+    diagnostic = _permission_error().replace('/keys/key', str(tmp_path / reported))
+    def probe(argv, **kwargs):
+        if '-l' in argv:
+            return subprocess.CompletedProcess(argv, 0, '256 SHA256:' + 'A' * 43 + ' fixture (ED25519)\n', '')
+        return subprocess.CompletedProcess(argv, 255, '', diagnostic)
+    monkeypatch.setattr(build_ssh, '_local_probe', probe)
+    assert build_ssh.inspect_key(Path('/tools/ssh'), identity).state == 'unknown'
