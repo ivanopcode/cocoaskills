@@ -4574,6 +4574,8 @@ def test_current_curl_unknown_relayed_and_conflicting_frames_fail_closed(stderr:
     # Nearby positive controls prevent reject-all; unknown and body text never authorize fallback.
     assert git_admission._classify_git_failure_output(stderr) == "unclassified"
     assert repository_policy.classify_failure("unclassified") == "forbidden"
+
+
 # An unusable local SSH credential opens only declared availability/auth
 # fallback; a policy forbidding fallback must preserve the refusal code.
 @pytest.mark.parametrize('fallback,expected_attempts', [('availability-auth', 2), ('none', 1)])

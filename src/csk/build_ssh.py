@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -304,6 +305,19 @@ def _key_fingerprints(output: str) -> list[str] | None:
     return [match[1] for match in matches if match] if all(matches) else None
 
 
+def _identity_permissions(identity: Path) -> bool | None:
+    """POSIX OpenSSH rejects an owner-held identity with group/other bits."""
+    if os.name != "posix":
+        return None
+    try:
+        metadata = os.stat(identity)
+    except (OSError, ValueError):
+        return None
+    if metadata.st_uid != os.getuid() or not stat.S_ISREG(metadata.st_mode):
+        return None
+    return bool(metadata.st_mode & 0o077)
+
+
 def inspect_key(
     ssh: Path, identity: Path | None, agent: Path | None = None,
 ) -> KeyInspection:
@@ -314,26 +328,30 @@ def inspect_key(
     """
     if identity is None:
         return KeyInspection(reason="no identity pin; agent signing ability is unknown")
+    bad_permissions = _identity_permissions(identity)
+    if bad_permissions and agent is None:
+        return KeyInspection(state="unusable", reason="private key permissions are too open; SSH will ignore this file")
     suffix = ".exe" if ssh.suffix.lower() == ".exe" else ""
     keygen = str(ssh.parent / ("ssh-keygen" + suffix))
     add = str(ssh.parent / ("ssh-add" + suffix))
     info = _local_probe((keygen, "-l", "-f", str(identity)))
     admitted = _key_fingerprints(info.stdout) if info is not None and info.returncode == 0 and not info.stderr else None
-    if admitted is None or len(admitted) != 1:
-        return KeyInspection()
-    assert info is not None
-    fingerprint = admitted[0]
-    kind = info.stdout.removesuffix("\n").rsplit("(", 1)[-1][:-1]
+    fingerprint = admitted[0] if admitted is not None and len(admitted) == 1 else None
+    kind = info.stdout.removesuffix("\n").rsplit("(", 1)[-1][:-1] if fingerprint is not None and info is not None else "unknown"
     loaded = None
     if agent is not None:
         listing = _local_probe((add, "-L"), agent=agent)
         if listing is not None and listing.returncode == 1 and listing.stdout == "The agent has no identities.\n" and not listing.stderr:
             loaded = False
-        elif listing is not None and listing.returncode == 0 and not listing.stderr:
+        elif listing is not None and listing.returncode == 0 and not listing.stderr and fingerprint is not None:
             fingerprints = _local_probe((keygen, "-l", "-f", "-"), data=listing.stdout)
             records = _key_fingerprints(fingerprints.stdout) if fingerprints is not None and fingerprints.returncode == 0 and not fingerprints.stderr else None
             if records is not None and len(records) == len(listing.stdout.removesuffix("\n").split("\n")):
                 loaded = fingerprint in records
+    if bad_permissions and loaded is False:
+        return KeyInspection(state="unusable", reason="private key permissions are too open; SSH will ignore this file", key_kind=kind, loaded=loaded)
+    if fingerprint is None:
+        return KeyInspection(loaded=loaded)
     provider = "unknown"
     security_key = "-SK" in kind.upper()
     if security_key:
@@ -355,24 +373,11 @@ def inspect_key(
     private = identity
     decrypted = _local_probe((keygen, "-y", "-P", "", "-f", str(private)))
     passphrase = None
-    bad_permissions = False
     invalid_public = False
     if decrypted is not None:
         error = f'Load key "{private}": '
         passphrase_error = error + "incorrect passphrase supplied to decrypt private key\n"
-        permission_error = (
-            "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
-            "@         WARNING: UNPROTECTED PRIVATE KEY FILE!          @\n"
-            "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
-            f"Permissions MODE for '{private}' are too open.\n"
-            "It is required that your private key files are NOT accessible by others.\n"
-            "This private key will be ignored.\n" + error + "bad permissions\n"
-        )
         failed = decrypted.returncode == 255 and not decrypted.stdout
-        bad_permissions = failed and any(
-            re.fullmatch(re.escape(form).replace("MODE", r"0[0-7]{3,4}"), decrypted.stderr)
-            for form in (permission_error, permission_error.replace("\n", "\r\n"))
-        )
         if decrypted.returncode == 0:
             passphrase = False
         elif failed and decrypted.stderr in {passphrase_error, passphrase_error.replace("\n", "\r\n")}:
@@ -385,10 +390,8 @@ def inspect_key(
         return replace(facts, state="unknown", reason="key is listed in the agent; signing ability is unverified")
     if agent is not None and loaded is None:
         return replace(facts, reason="agent availability or key membership is unknown")
-    if str(identity).endswith(".pub") and (invalid_public or bad_permissions):
+    if str(identity).endswith(".pub") and invalid_public:
         return replace(facts, state="unusable", reason="a public key alone cannot sign and no matching agent key is available")
-    if bad_permissions:
-        return replace(facts, state="unusable", reason="private key permissions are too open; SSH will ignore this file")
     if passphrase:
         return replace(facts, state="unusable", reason="key has a passphrase and no matching agent key is available; SSH prompts are disabled")
     return replace(facts, state="unknown", reason="local metadata does not establish that the key is unusable")
