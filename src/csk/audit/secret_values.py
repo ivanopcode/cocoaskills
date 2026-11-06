@@ -110,6 +110,13 @@ def _secret_spans(decoded: str, *, contextual: bool) -> Iterator[tuple[int, int,
     public_index = 0
     for match in _TOKEN.finditer(decoded):
         value = match.group()
+        if not contextual:
+            # Output fields may contain a secret inside a longer path/identifier.
+            # Redact whole long runs; source-context and entropy gates apply only
+            # to classification, never to whether a value can leave the detector.
+            if len(value) >= 32:
+                yield match.start(), match.end(), 'masked-token'
+            continue
         if not 32 <= len(value) <= 256:
             continue
         if contextual:
@@ -135,9 +142,7 @@ def _secret_spans(decoded: str, *, contextual: bool) -> Iterator[tuple[int, int,
         if contextual and not (any(c.islower() for c in value) and any(c.isupper() for c in value)):
             continue
         entropy = -sum((n / len(value)) * math.log2(n / len(value)) for n in Counter(value).values())
-        # Case-normalized hosts can lose up to one bit per character. Output-only
-        # masking is deliberately conservative and never creates blocking findings.
-        if entropy >= (4.5 if contextual else 3.5):
+        if entropy >= 4.5:
             yield match.start(), match.end(), 'high-entropy'
 
 
