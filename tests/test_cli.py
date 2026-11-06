@@ -1668,18 +1668,21 @@ def test_cli_commands_parse_before_reporting_unloadable_config(
     # file-as-parent as ENOENT (FileNotFoundError, which load_config
     # turns into ConfigError and exit 2, not NotADirectoryError).
     if os.name == "nt" and kind == "is-directory":
-        with pytest.raises(PermissionError) as excinfo:
-            cli.main(["status", "app"])
-        assert "config.json" in str(excinfo.value), kind
+        assert cli.main(["status", "app"]) == 1
+        err = capsys.readouterr().err
+        assert "PermissionError" in err and "config.json" in err, kind
     elif os.name == "nt" and kind == "enotdir-parent":
         assert cli.main(["status", "app"]) == 2, kind
         err = capsys.readouterr().err
         assert "config" in err.lower(), (kind, err)
         assert "invalid choice" not in err, (kind, err)
     elif kind in trunk_lane:
-        with pytest.raises(trunk_lane[kind]) as excinfo:
-            cli.main(["status", "app"])
-        assert "config.json" in str(excinfo.value), kind
+        # Unexpected I/O failures are reported inside the guard, with the same
+        # process failure status and useful traceback, rather than escaping main.
+        assert cli.main(["status", "app"]) == 1
+        err = capsys.readouterr().err
+        assert "Traceback (most recent call last):" in err
+        assert trunk_lane[kind].__name__ in err and "config.json" in err, kind
     else:
         assert cli.main(["status", "app"]) == 2, kind
         err = capsys.readouterr().err

@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import unicodedata
+import traceback
+from collections.abc import Iterable
+from typing import Any, TextIO
 
 
 def terminal_text(value: object) -> str:
@@ -59,7 +62,7 @@ class TerminalWriter:
     opts out. Delegate stream capabilities (isatty, encoding, flush) unchanged.
     """
 
-    def __init__(self, stream):
+    def __init__(self, stream: TextIO) -> None:
         self.stream = stream
         self.machine_json = False
 
@@ -67,9 +70,44 @@ class TerminalWriter:
         self.stream.write(text if self.machine_json else terminal_document(text))
         return len(text)
 
-    def writelines(self, lines) -> None:
+    def writelines(self, lines: Iterable[str]) -> None:
         for line in lines:
             self.write(line)
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self.stream, name)
+
+
+def exception_text(exc: BaseException) -> str:
+    """Render traceback layout separately from exception, note and frame data."""
+    lines: list[str] = []
+    seen: set[int] = set()
+
+    def render(error: BaseException) -> None:
+        if id(error) in seen:
+            return
+        seen.add(id(error))
+        cause = error.__cause__
+        context = error.__context__
+        if cause is not None:
+            render(cause)
+            lines.append("\nThe above exception was the direct cause of the following exception:\n")
+        elif context is not None and not error.__suppress_context__:
+            render(context)
+            lines.append("\nDuring handling of the above exception, another exception occurred:\n")
+        if error.__traceback__ is not None:
+            lines.append("Traceback (most recent call last):")
+            for frame in traceback.extract_tb(error.__traceback__):
+                lines.append(f'  File "{terminal_text(frame.filename)}", line {frame.lineno}, in {terminal_text(frame.name)}')
+                if frame.line:
+                    lines.append("    " + terminal_text(frame.line))
+        lines.append(f"{terminal_text(type(error).__qualname__)}: {terminal_text(error)}")
+        for note in getattr(error, "__notes__", ()):
+            lines.append(terminal_text(note))
+        if isinstance(error, BaseExceptionGroup):
+            for index, child in enumerate(error.exceptions, 1):
+                lines.append(f"  Exception group member {index}:")
+                render(child)
+
+    render(exc)
+    return "\n".join(lines)

@@ -144,7 +144,7 @@ def failure_text(exc: BaseException, *, verbose: bool = False) -> str:
 
     chain = list(_failure_cause_chain(exc))
     message = _failure_message_with_specific_reason(exc, chain)
-    if isinstance(exc, (git_ops.GitError, closure.ClosureError)) or any(isinstance(cause, (git_ops.GitError, closure.ClosureError)) for cause in chain):
+    if isinstance(exc, (git_ops.GitError, closure.ClosureError, manifest.ManifestError)) or any(isinstance(cause, (git_ops.GitError, closure.ClosureError, manifest.ManifestError)) for cause in chain):
         message = terminal_text(message)
     missing_error = next(
         (item for item in [exc, *chain] if isinstance(item, closure.MissingSystemCommandsError)),
@@ -835,7 +835,7 @@ def _generation_after_gate_writes(
     if changed_inputs:
         raise _concurrent_state_change(
             "shared planning input changed while trust gates were running: "
-            + ", ".join(changed_inputs)
+            + ", ".join(terminal_text(path) for path in changed_inputs)
         )
     return current
 
@@ -3364,7 +3364,7 @@ def _commit_materialization(
                     )
                 )
             except OSError as exc:
-                staging_errors.append(f"{parent}: {exc}")
+                staging_errors.append(f"{terminal_text(parent)}: {terminal_text(exc)}")
                 continue
             staging_root = Path(temporary)
             break
@@ -4123,7 +4123,7 @@ def _check_audit_registries(
             audit_registry.migrate_snapshot_states(cache_dir, state_dir)
         except audit_registry.RegistryError as exc:
             raise InstallError(
-                f"audit registry rollback state migration failed: {exc}"
+                f"audit registry rollback state migration failed: {terminal_text(exc)}"
             ) from exc
     unavailable, snapshot_warnings = audit_registry.check_snapshots(
         registries,
@@ -4309,7 +4309,7 @@ def _runtime_path_suffix(plan: SkillPlan) -> tuple[Path, ...]:
         except (FileNotFoundError, ValueError) as exc:
             raise InstallError(
                 f"Cannot resolve system command {terminal_text(dependency.command)!r} "
-                f"for {terminal_text(plan.decl.name)}: {exc}"
+                f"for {terminal_text(plan.decl.name)}: {terminal_text(exc)}"
             ) from exc
         candidates.append(Path(executable).parent)
     return _dedupe_path_candidates(candidates)
@@ -4366,8 +4366,8 @@ def _moved_tag_warnings(skills_dir: Path, plans: list[SkillPlan]) -> list[str]:
             and marker.get("commit") != plan.resolved.commit
         ):
             warnings.append(
-                f"Moved tag for {plan.decl.name}: {plan.resolved.ref} "
-                f"{marker.get('commit')} -> {plan.resolved.commit}"
+                f"Moved tag for {terminal_text(plan.decl.name)}: {terminal_text(plan.resolved.ref)} "
+                f"{terminal_text(marker.get('commit'))} -> {terminal_text(plan.resolved.commit)}"
             )
     return warnings
 

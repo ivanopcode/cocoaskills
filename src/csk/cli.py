@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from . import protocol_json
-from .terminal import TerminalWriter, terminal_document, terminal_text
+from .terminal import TerminalWriter, exception_text, terminal_document, terminal_text
 
 from contextlib import redirect_stdout, redirect_stderr
 
@@ -14,6 +14,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, NoReturn
+from collections.abc import Callable
 
 from . import (
     __version__,
@@ -137,7 +138,7 @@ def _build_recover_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def entry_parser_factories():
+def entry_parser_factories() -> dict[str, Callable[[], argparse.ArgumentParser]]:
     """Parser entry points, including commands kept outside the legacy root help."""
     from . import mcp_settings
 
@@ -151,7 +152,13 @@ def main(argv: list[str] | None = None) -> int:
     if argv is None and sys.argv[1:] == ["__csk-go-worker-v1"]:
         return _main(argv)
     with redirect_stdout(TerminalWriter(sys.stdout)), redirect_stderr(TerminalWriter(sys.stderr)):
-        return _main(argv)
+        try:
+            return _main(argv)
+        except Exception as exc:
+            # Report before redirect_stdout/stderr restore the original streams.
+            # Source-controlled newlines belong to exception data, not layout.
+            print(exception_text(exc), file=sys.stderr)
+            return EXIT_PARTIAL_FAIL
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -215,8 +222,8 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"error: {terminal_text(exc.code)}: {terminal_text(exc)}", file=sys.stderr)
         return EXIT_CONFIG
     except (global_install.GlobalInstallError, installer.InstallError) as exc:
-        rendered = installer.failure_text(exc) if isinstance(exc, installer.InstallError) else str(exc)
-        print(f"error: {rendered}", file=sys.stderr)
+        install_failure = installer.failure_text(exc) if isinstance(exc, installer.InstallError) else str(exc)
+        print(f"error: {install_failure}", file=sys.stderr)
         return EXIT_CONFIG
     except (
         config.ConfigError,
@@ -1239,7 +1246,7 @@ def _cmd_hybrid(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
         return EXIT_OK
     store = hybrid.hybrid_skills_root(csk_home)
     for item in decls:
-        line = f"{item.decl.name:<24} {item.decl.ref.kind:<8} {item.decl.ref.value:<12} targets: {', '.join(item.targets)}"
+        line = f"{terminal_text(item.decl.name):<24} {terminal_text(item.decl.ref.kind):<8} {terminal_text(item.decl.ref.value):<12} targets: {terminal_text(', '.join(item.targets))}"
         if args.hybrid_command == "status":
             marker_path = store / item.decl.name / ".csk-install.json"
             try:

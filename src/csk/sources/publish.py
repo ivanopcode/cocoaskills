@@ -20,6 +20,8 @@ the shared actionable ``RuntimeTreeModified`` diagnostic instead.
 
 from __future__ import annotations
 
+from ..terminal import terminal_text
+
 import base64
 import hashlib
 import os
@@ -4671,8 +4673,8 @@ def _plan_and_publish_schema2(
                 agents,
             )
             if report.errors:
-                raise mcp_project.McpProjectError("; ".join(report.errors))
-            mcp_warnings.extend(report.warnings)
+                raise mcp_project.McpProjectError("; ".join(terminal_text(error) for error in report.errors))
+            mcp_warnings.extend(terminal_text(warning) for warning in report.warnings)
         if manage_ignore:
             ignore_target = gitignore_gate.ignore_path(project_path, ignore_mode)
             ignores = adapters.required_gitignore_entries(agents)
