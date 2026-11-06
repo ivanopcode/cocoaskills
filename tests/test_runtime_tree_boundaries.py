@@ -1,4 +1,5 @@
 """Permission and unreadable-entry boundaries for published runtime operations."""
+import sys
 from dataclasses import replace
 import json
 import os
@@ -109,6 +110,9 @@ def test_gc_preserves_external_hardlink(runtime_scope, tmp_path):
 ], ids=['no-access', 'read-only', 'search-only', 'read-search', 'nested-read-search', 'writable'])
 @pytest.mark.parametrize('shell', ['bash', 'zsh'])
 def test_unreadable_foreign_directory_remedy(runtime_scope, tmp_path, capsys, command, mode, nested_mode, shell):
+    executable = '/bin/bash' if shell == 'bash' and sys.platform == 'darwin' else shutil.which(shell)
+    if executable is None:
+        pytest.skip(f'{shell} is unavailable; other shell cases still run')
     project, home, runtime, invoke, _ = runtime_scope
     runtime.chmod(stat.S_IMODE(runtime.stat().st_mode) | stat.S_IWUSR)
     foreign = runtime / "--foreign 'quoted'\nentry"
@@ -157,7 +161,7 @@ def test_unreadable_foreign_directory_remedy(runtime_scope, tmp_path, capsys, co
         directory_access = (f"chmod u+rwx {quoted} && find -P {quoted} -type d "
                             f"-exec chmod u+rwx {{}} \\; && {plain}")
         assert remedy in (plain, directory_access)
-        result = subprocess.run([shell, '-c', remedy], capture_output=True, text=True)
+        result = subprocess.run([executable, '-c', remedy], capture_output=True, text=True)
         assert tree_state(outside) == outside_before
         assert tree_state(runtime / 'scripts') == managed_before
         assert result.returncode == 0, result.stderr

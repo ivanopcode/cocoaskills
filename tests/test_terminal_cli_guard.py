@@ -197,7 +197,7 @@ def test_real_skill_json_bidi(tmp_path, capsys):
     output = capsys.readouterr().out
     payload = json.loads(output)
     assert '\u202e' in output
-    assert str(root) in json.dumps(payload, ensure_ascii=False)
+    assert any(str(root) in issue['message'] for issue in payload)
     assert cli.main(['skill', 'check', str(root)]) == 1
     output = capsys.readouterr()
     assert '\u202e' not in output.out + output.err

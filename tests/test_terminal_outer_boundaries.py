@@ -11,6 +11,7 @@ from conftest import make_config, make_project, make_skill_repo, write_skillfile
 # Real published -I runtime refuses corrupt state safely; stdout remains the exact
 # machine launcher path, including hostile path bytes (not a valid publication claim).
 @pytest.mark.parametrize('name', ['ordinary café', 'hostile-\x1b]0;FORGED\x07-\u202e', 'hostile-\nremediation: FORGED'])
+@pytest.mark.skipif(sys.platform == 'win32', reason='Generated /bin/sh wrapper and control-bearing paths require POSIX')
 def test_generated_dispatcher_stderr(tmp_path, name):
     home = tmp_path / name
     script = dispatch.ensure_dispatcher_runtime(home)
@@ -77,6 +78,8 @@ def test_global_selection_newlines(tmp_path, skills_root, csk_home, monkeypatch,
 # Genuine malformed hybrid input carries an untrusted path through InstallError.
 @pytest.mark.parametrize('name', ['ordinary', 'manager\nremediation: FORGED'])
 def test_hybrid_path_newlines(tmp_path, skills_root, monkeypatch, capsys, name):
+    if sys.platform == 'win32' and '\n' in name:
+        pytest.skip('Windows forbids newline path components; ordinary malformed input remains covered')
     project = make_project(tmp_path)
     write_skillfile(project, {'schema_version': 1, 'skills': []})
     home = tmp_path / name

@@ -1,4 +1,6 @@
 from __future__ import annotations
+import sys
+import shutil
 
 import json
 from pathlib import Path
@@ -106,13 +108,14 @@ def test_agent_warning_escapes_package_names(capsys):
 # bash and zsh receive precisely the hostile pathname; neighbors remain untouched.
 @pytest.mark.parametrize('shell', ['bash', 'zsh'])
 @pytest.mark.parametrize('name', ["ordinary café ' file", "hostile\n'\t\x1b[31m\\file", "unicode\x85\u2028\U000e0001file"])
+@pytest.mark.skipif(sys.platform == 'win32', reason='POSIX shell remedies use POSIX paths; Windows does not execute this shell contract')
 def test_copyable_shell_word(tmp_path, shell, name):
     import shutil
     import shlex
     import subprocess
     from csk.terminal import shell_word
 
-    executable = shutil.which(shell)
+    executable = '/bin/bash' if shell == 'bash' and sys.platform == 'darwin' else shutil.which(shell)
     if executable is None:
         pytest.skip(f'{shell} is unavailable')
     target = tmp_path / name
