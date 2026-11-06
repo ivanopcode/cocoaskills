@@ -236,8 +236,8 @@ select a sibling file. POSIX behavior is unchanged; this Windows qualification
 does not claim literal token paths on POSIX.
 
 The native Windows regression matrix is opt-in for a disposable loopback server.
-The dedicated `windows-ssh.yml` CI job provisions this kit and requires all 12 native
-authentication, startup, destination-guard and deadline cases to pass without skips. To reproduce
+The dedicated `windows-ssh.yml` CI job provisions this kit and requires all native
+authentication, startup, destination-guard, deadline, lifecycle and diagnostic cases to pass without skips. To reproduce
 it on a disposable elevated Windows host, run the `setup`, `run` and `cleanup`
 commands in `.github/scripts/windows_ssh_kit.py`; `cleanup` restores the service
 state and removes the generated keys, server/task and private run files.

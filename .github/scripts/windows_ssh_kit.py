@@ -17,6 +17,11 @@ import uuid
 import xml.etree.ElementTree as ET
 
 NATIVE_CASES = {
+    "test_windows_timeout_preserves_signing_hint",
+    "test_windows_wrapper_exit_propagates_and_manager_kill",
+    "test_windows_discovery_ignores_live_hostile_pipe",
+    *(f"test_windows_ssh_paths_refuse_token_expansion[{value}]"
+      for value in ("a%b", "a%hb", "a%%b", "a${HOME}b", "a${NOPE}b")),
     "test_windows_destination_guard_with_space_paths",
     "test_windows_git_tree_deadline",
     "test_windows_real_ssh_authenticated_stall",
@@ -33,7 +38,7 @@ def verify_results(results: Path) -> None:
     """Require all native authentication, quoting and deadline cases, never skips."""
     cases = [case for case in ET.parse(results).iter("testcase")
              if case.get("classname", "").rsplit(".", 1)[-1] == "test_git_admission_ssh"
-             and case.get("name", "").startswith(("test_windows_real_git_ssh_", "test_windows_native_ssh_", "test_windows_git_tree_", "test_windows_real_ssh_", "test_windows_tcp_blackhole", "test_windows_destination_guard_"))]
+             and case.get("name", "").startswith(("test_windows_real_git_ssh_", "test_windows_native_ssh_", "test_windows_git_tree_", "test_windows_real_ssh_", "test_windows_tcp_blackhole", "test_windows_destination_guard_", "test_windows_timeout_", "test_windows_wrapper_exit_", "test_windows_discovery_", "test_windows_ssh_paths_"))]
     names = [case.get("name") for case in cases]
     bad = [case.get("name") for case in cases if any(case.find(tag) is not None
                                                      for tag in ("skipped", "failure", "error"))]
