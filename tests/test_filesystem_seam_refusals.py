@@ -27,6 +27,7 @@ import errno
 import io
 import json
 import os
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 
@@ -41,7 +42,7 @@ from fs_seam_support import (
     fault_at,
 )
 
-from csk import cli, hybrid, manifest
+from csk import cli, hybrid, installer, manifest
 from csk import config as csk_config
 from csk.audit import pipeline as audit_pipeline
 from csk.audit import trust as audit_trust
@@ -932,25 +933,48 @@ def test_configured_resolution_missing_hash_is_empty(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("mode", ["advisory", "strict"])
 def test_gate_plans_trust_refusal_blocks_without_warning(
-    monkeypatch, tmp_path, csk_home, skills_root
+    monkeypatch, tmp_path, csk_home, skills_root, mode
 ):
+    # A real admitted plan surfaces an injected trust-read refusal in either
+    # mode. Healthy and empty batches remain valid; no store read is needed
+    # for an empty batch. The injected failure is at the trust-reader boundary.
+    make_skill_repo(skills_root, "skill-a", {
+        "csk-skill.json": json.dumps({
+            "schema_version": 3, "capabilities": {"network": "none", "exec": "none"},
+            "commands": {},
+        }),
+    }, tag="v1")
     project = make_project(tmp_path)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
     cfg = make_config(csk_home, skills_root, project)
-    cfg = replace(cfg, audit=csk_config.AuditConfig(enabled=True))
+    cfg = replace(cfg, audit=csk_config.AuditConfig(enabled=True, mode=mode))
+    project_manifest = manifest.load_manifest(project)
+    assert project_manifest is not None
+    calls = 0
 
-    def failing_plans(*args, **kwargs):
+    def failing_trust(*args, **kwargs):
+        nonlocal calls
+        calls += 1
         raise audit_trust.TrustRecordError(
             audit_trust.CODE_TRUST_UNREADABLE, "trust store unavailable"
         )
 
-    monkeypatch.setattr(audit_pipeline, "audit_plans", failing_plans)
-    result = audit_pipeline.gate_plans([], cfg, scope="app")
-    assert result.blocked
-    assert result.warnings == ()
-    assert result.errors == (
-        f"audit blocked: {audit_trust.CODE_TRUST_UNREADABLE}: trust store unavailable",
-    )
+    with ExitStack() as stack:
+        plans = installer._build_plans(cfg, project_manifest, use_cache=False, stack=stack)
+        healthy = audit_pipeline.gate_plans(plans, cfg, scope="app", record=False)
+        assert not healthy.blocked
+        assert len(healthy.reports) == 1
+        monkeypatch.setattr(audit_trust, "load_trust_record", failing_trust)
+        result = audit_pipeline.gate_plans(plans, cfg, scope="app", record=False)
+        assert result.blocked
+        assert result.warnings == ()
+        assert result.errors == (
+            f"audit blocked: {audit_trust.CODE_TRUST_UNREADABLE}: trust store unavailable",
+        )
+        assert not audit_pipeline.gate_plans([], cfg, scope="app", record=False).blocked
+        assert calls == 1
 
 
 # ---------------------------------------------------------------------------
