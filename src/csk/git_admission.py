@@ -460,11 +460,12 @@ def _windows_ssh_agent_pipe_available() -> bool:
     import ctypes
     from ctypes import wintypes
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # Non-Windows type stubs omit these Windows-only ctypes APIs.
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
     wait = kernel32.WaitNamedPipeW
     wait.argtypes = (wintypes.LPCWSTR, wintypes.DWORD)
     wait.restype = wintypes.BOOL
-    return bool(wait(_WINDOWS_SSH_AGENT_PIPE, 1)) or ctypes.get_last_error() == 121
+    return bool(wait(_WINDOWS_SSH_AGENT_PIPE, 1)) or ctypes.get_last_error() == 121  # type: ignore[attr-defined]
 
 
 def _operator_known_hosts_default(environment: Mapping[str, str]) -> Path | None:
