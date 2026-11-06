@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from . import redaction
-from .model import CapabilityViolation, Decision, Finding, Location, Severity, Surface, TrustRecord, Verdict
+from .model import CapabilityViolation, Decision, Finding, Location, Severity, Surface, TrustRecord, Verdict, _ScanLocation
 
 
 SCHEMA_VERSION = 1
@@ -16,7 +16,7 @@ CODE_TRUST_UNWRITABLE = "audit_trust_unwritable"
 PROMPT_VERSION = 1
 # Bump RULESET_VERSION whenever detector semantics or severity classification
 # changes. Cache hits intentionally skip canary and detector execution.
-RULESET_VERSION = 6
+RULESET_VERSION = 7
 HASH_RE = re.compile(r"^(?:sha256:)?([A-Fa-f0-9]{64})$")
 
 
@@ -287,7 +287,10 @@ def _finding_from_payload(payload: dict[str, Any]) -> Finding:
     if isinstance(location_raw, dict):
         span_raw = location_raw.get("span")
         span = tuple(span_raw) if isinstance(span_raw, list) and len(span_raw) == 2 else None
-        location = Location(file=location_raw["file"], span=span)
+        # Only persisted records restore scan provenance. Backend payloads cannot
+        # claim this static namespace; Finding validates every remaining field.
+        location_type = _ScanLocation if str(payload.get("id", "")).startswith("static.secret.") else Location
+        location = location_type(file=location_raw["file"], span=span)
     violation = None
     violation_raw = payload.get("capability_violation")
     if isinstance(violation_raw, dict):
