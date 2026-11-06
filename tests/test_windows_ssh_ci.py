@@ -73,14 +73,14 @@ def _workflow() -> dict:
     return yaml.safe_load((ROOT / ".github/workflows/windows-ssh.yml").read_text())
 
 
-def test_native_windows_job_runs_on_feature_push_and_pull_requests() -> None:
+def test_native_windows_job_runs_on_main_push_and_pull_requests() -> None:
     # Only this job is added. Normal events run the actual kit/zero-skip gate
     # and unconditional cleanup; this shape check does not prove hosted execution.
     workflow = _workflow()
     assert set(workflow["jobs"]) == {"windows_ssh"}
     events = workflow.get("on", workflow.get(True))
     assert "main" in events["pull_request"]["branches"]
-    assert "feat/windows-build-ssh-agent" in events["push"]["branches"]
+    assert events["push"]["branches"] == ["main"]
     assert workflow["permissions"] == {"contents": "read"}
     _assert_job(workflow["jobs"]["windows_ssh"])
 

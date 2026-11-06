@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve spaces in native Windows SSH identity/private paths and enforce bounded
+  Git descendant cleanup for SSH and HTTPS using a Windows Job Object.
+- Offer the standard Windows service agent in credential discovery and remove
+  the retired feature-branch trigger from native SSH CI.
+
 - Native Windows SSH build fetches synthesize an empty private `PROGRAMDATA`, required by Win32-OpenSSH initialization, ignoring its ambient value. The operation still excludes ambient PATH and pins SSH configuration and host trust files. A dedicated Windows CI job exercises real Git, native SSH and the service agent with generated loopback credentials, rejecting skipped native cases.
 
 - Windows SSH build repositories can explicitly select the OpenSSH service agent with `agent=auto` without `SSH_AUTH_SOCK`. Only the standard local agent pipe is admitted; missing services and other pipe paths refuse. Non-interactive SSH options remain unchanged.
