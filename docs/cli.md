@@ -1086,7 +1086,8 @@ first. A `.pub` suffix or a macOS-looking agent socket alone does not prove fail
 Output includes terminal attachment (prompts still stay disabled), agent key
 count and membership when established, and distinct unknown reasons for missing,
 nonregular or unrecognized identity files. Failed home expansion also reports
-unknown. With a repository scope, doctor checks local host-key presence using
+unknown. Closed stdin or stderr reports `not attached`; doctor still runs.
+With a repository scope, doctor checks local host-key presence using
 `ssh-keygen -F` and the selected `known_hosts` file, or `~/.ssh/known_hosts` by
 default; `CSK_BUILD_SSH_KNOWN_HOSTS` overrides it. A local entry is not verification
 of the server fingerprint and no host connection is made.
