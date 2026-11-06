@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standard service pipe in every CLI reference.
 
 - Refuse expansion-capable Windows SSH paths before launch with a clear diagnostic
-  so native SSH cannot substitute a sibling file.
+  so native SSH cannot substitute a sibling file, including paths reached through
+  symlinks or junctions.
 
 - Preserve Windows SSH timeout hints after bounded tree cleanup and keep the Git
   runner accessible to cross-platform regression tests.
