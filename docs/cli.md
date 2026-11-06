@@ -1053,8 +1053,10 @@ Read-only local metadata inspection and operator setup guidance:
 csk config build-ssh doctor [scope-or-identity] [--identity PATH] [--agent SOCKET] [--all-os]
 ```
 
-The longest matching configured scope is used; explicit options and
-`CSK_BUILD_SSH_*` take precedence. `--agent auto` selects `SSH_AUTH_SOCK`.
+Doctor runs without a global config. Missing or malformed config produces a
+notice and leaves explicit options and environment selections available; it
+does not bootstrap or repair config. When config is usable, the longest matching
+scope is used; explicit options and `CSK_BUILD_SSH_*` take precedence. `--agent auto` selects `SSH_AUTH_SOCK`.
 Without `--all-os`, instructions fit the current OS. No network, prompts,
 signatures, token access or agent mutation occurs. Missing tools and inconclusive
 metadata report `unknown`, never an unusable-key refusal. On POSIX, stat facts
@@ -1062,11 +1064,32 @@ establish a permission refusal when the selected identity belongs to the current
 user and has any group or other permission bits. This check is independent of
 fingerprint output and optional public siblings. A selected agent must be confirmed
 not to hold the key before this file-only refusal applies. Windows permission
-state remains unknown. csk does not change ownership or permissions.
-Provider refusal requires exactly one raw `securitykeyprovider none` record;
-whitespace variants, conflicting records and unfamiliar metadata stay unknown.
-Other refusals require complete recognized metadata or file-error evidence.
-A `.pub` suffix or a macOS-looking agent socket alone does not prove failure.
+state remains unknown. csk does not change ownership or permissions. A `.pub`
+selection instead explains that public-key pins need a matching agent; changing
+permissions cannot turn a public key into a private signing key.
+
+The empty-passphrase `ssh-keygen -y -P ""` probe runs for security-key containers
+and legacy PEM files too, independently of fingerprint success. It reads the
+local container without signing or contacting a token. Exact passphrase evidence
+refuses when no selected agent can provide the key; an unavailable or ambiguous
+agent remains unknown. A matching agent does not prove signing ability.
+
+The provider probe uses `ssh -G -T -F <null-device>` with a scrubbed environment.
+Provider absence requires exactly one raw `securitykeyprovider none` or
+`securitykeyprovider $SSH_SK_PROVIDER` record: that literal variable has no value
+in either the probe or the SSH lane. Whitespace variants, conflicting records,
+stderr and unfamiliar metadata stay unknown. An SK identity with proven provider
+absence is refused even when listed in an agent, because Apple SSH drops that
+identity pin. An encrypted SK container without an agent reports its passphrase
+first. A `.pub` suffix or a macOS-looking agent socket alone does not prove failure.
+
+Output includes terminal attachment (prompts still stay disabled), agent key
+count and membership when established, and distinct unknown reasons for missing,
+nonregular or unrecognized identity files. Failed home expansion also reports
+unknown. With a repository scope, doctor checks local host-key presence using
+`ssh-keygen -F` and the selected `known_hosts` file, or `~/.ssh/known_hosts` by
+default; `CSK_BUILD_SSH_KNOWN_HOSTS` overrides it. A local entry is not verification
+of the server fingerprint and no host connection is made.
 
 SSH prompts remain disabled. A proven unusable selection fails locally with
 `build_repository_ssh_credential_unusable`, classified as `auth-unavailable` so
@@ -1086,8 +1109,9 @@ agent additionally needs owner-configured askpass/display support. Doctor
 prints the commands and caveats. Custom agents such as 1Password can be
 selected with `--agent <socket> --identity <key>.pub`.
 
-All hardware routes are unverified on a real token. Linux guidance is
-unverified here; Linux external builds remain unsupported. All Windows routes
+All hardware routes are unverified on a real token; software middleware evidence
+does not establish hardware compatibility. Local software-key probes and refusal
+paths are tested on macOS and Linux. Linux external builds remain unsupported. All Windows routes
 are unverified, and current csk agent-pipe/wrapper limitations remain. Doctor
 prints Windows preparation steps without claiming that these limitations are
 resolved.
