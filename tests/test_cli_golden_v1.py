@@ -4,7 +4,7 @@ The committed files in ``tests/fixtures/cli-golden-v1/`` preserve the original
 capture from released commit ``ac840828d947d0559b9dd18dcc783bc422a4b341``.
 The active gate renders that released source and the candidate under the same
 Python interpreter because argparse help wrapping changed after Python 3.12.
-Audit and init help permit only the explicit policy differences below.
+Audit, init and Windows SSH help permit only the explicit differences below.
 Both runs use the terminal width from ``base_run_env`` and capture through
 ``StringIO(newline="\\n")``; line endings remain byte-exact and only path
 separators are normalized.
@@ -124,6 +124,24 @@ def test_cli_v1_golden_byte_identical(
         label="released",
     )
 
+    if sys.platform == "win32" and slug in {"install-help", "upgrade-help"}:
+        # Only Windows's declared agent route differs; every surrounding byte
+        # remains compared to the release. POSIX has no help exception here.
+        old = (
+            b"                        flag or 'auto' adopts SSH_AUTH_SOCK (env:\n"
+            b"                        CSK_BUILD_SSH_AGENT)\n"
+        )
+        new = (
+            b"                        flag or 'auto' selects the standard Windows agent pipe\n"
+            b"                        (env: CSK_BUILD_SSH_AGENT)\n"
+        )
+        assert released.stdout.count(old) == 1
+        released = CLIOutput(
+            exit_code=released.exit_code, stdout=released.stdout.replace(old, new),
+            stderr=released.stderr, version=released.version,
+            terminal_width=released.terminal_width,
+        )
+
     if slug == "audit-help":
         # Keep every other help byte under the released comparison. The
         # token option is the one intentional security-related difference.
@@ -211,7 +229,7 @@ def test_cli_v1_golden_byte_identical(
         )
     ) == _normalize(
         tokenize_output(released.stdout, root=str(released_root), version=released.version)
-    )
+    ), f"{slug}: released CLI stdout differs"
     assert _normalize(
         tokenize_output(
             candidate.stderr, root=str(candidate_root), version=candidate.version
@@ -232,6 +250,35 @@ def _audit_help_fixture(tmp_path: Path) -> Path:
         "projects": {"demo": {"path": (root / "project").as_posix()}},
     }), encoding="utf-8")
     return root
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only agent help delta")
+@pytest.mark.parametrize("slug", ["install-help", "upgrade-help"])
+def test_windows_agent_help_comparison_rejects_unrelated_drift(
+    tmp_path, released_v1_source, monkeypatch, slug,
+) -> None:
+    # The nearby real golden cases admit the intended pipe wording. Changing
+    # the identity option must still fail the exact released stdout comparison.
+    original = _run_command_copy
+
+    def changed_help(source_root, command_slug, **kwargs):
+        output, root = original(source_root, command_slug, **kwargs)
+        if kwargs["label"] == "candidate":
+            old = b"SSH identity for private build repositories"
+            assert output.stdout.count(old) == 1
+            output = CLIOutput(
+                exit_code=output.exit_code,
+                stdout=output.stdout.replace(old, b"Wrong identity description"),
+                stderr=output.stderr, version=output.version,
+                terminal_width=output.terminal_width,
+            )
+        return output, root
+
+    monkeypatch.setattr(sys.modules[__name__], "_run_command_copy", changed_help)
+    with pytest.raises(AssertionError, match=f"{slug}: released CLI stdout differs"):
+        test_cli_v1_golden_byte_identical(
+            slug, _audit_help_fixture(tmp_path), released_v1_source, tmp_path,
+        )
 
 
 def test_audit_help_uses_safe_token_sources(tmp_path, released_v1_source) -> None:
