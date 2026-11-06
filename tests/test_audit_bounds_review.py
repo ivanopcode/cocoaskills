@@ -128,7 +128,8 @@ def test_name_budget_and_special_files(tmp_path):
 def test_bounded_process(tmp_path, monkeypatch):
     def run(code, timeout=5):
         return process.run([sys.executable, '-c', code], input=b'', cwd=tmp_path, env=os.environ.copy(), timeout=timeout)
-    assert run("print('ok')").stdout == b'ok\n'
+    # Binary output preserves the exact-byte control on Windows and POSIX.
+    assert run("import sys; sys.stdout.buffer.write(b'ok\\n')").stdout == b'ok\n'
     result = run("import sys; sys.stderr.write('x'*100000)")
     assert len(result.stderr) == 2001
     assert redaction.scrub_stderr(result.stderr).startswith('<stderr omitted:')
