@@ -1211,6 +1211,21 @@ def resolve_command(
     )
 
 
+def _diagnostic_text(value: object) -> str:
+    """Standalone human stderr escaping; stdout remains the launcher protocol."""
+    parts: list[str] = []
+    for char in str(value):
+        code = ord(char)
+        if char not in "\u200c\u200d" and unicodedata.category(char) in {"Cc", "Cf", "Cs", "Zl", "Zp"}:
+            parts.append({10: r"\n", 13: r"\r", 9: r"\t"}.get(
+                code, f"\\x{code:02x}" if code < 256 else
+                (f"\\u{code:04x}" if code <= 0xffff else f"\\U{code:08x}")
+            ))
+        else:
+            parts.append(char)
+    return "".join(parts)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Resolve one command and print its launcher path on stdout.
 
@@ -1241,7 +1256,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         sys.stdout.write(f"{launcher}\n")
     except DispatchError as exc:
-        sys.stderr.write(f"error: {exc}\n")
+        sys.stderr.write(f"error: {_diagnostic_text(exc)}\n")
         sys.stdout.write(f"{failure_launcher_path(manager_home, exc.code)}\n")
         return exc.code
     return EXIT_OK

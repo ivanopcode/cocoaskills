@@ -27,6 +27,96 @@ def commands():
                       for path in command_paths(factory(), (name,) if name else ())))
 
 
+# Frozen admission-only baseline, not a claim of operational coverage for these
+# commands. Every added operation must gain an explicit fixture/review decision;
+# parser enumeration alone cannot silently admit a new raw-output branch.
+ADMISSION_BASELINE = {
+    ('add',),
+    ('audit',),
+    ('bootstrap',),
+    ('check',),
+    ('config', 'build-https', 'add'),
+    ('config', 'build-https', 'list'),
+    ('config', 'build-https', 'login'),
+    ('config', 'build-https', 'remove'),
+    ('config', 'build-ssh', 'add'),
+    ('config', 'build-ssh', 'list'),
+    ('config', 'build-ssh', 'remove'),
+    ('config', 'show'),
+    ('dispatch', 'recover'),
+    ('dispatch', 'setup'),
+    ('gc',),
+    ('global', 'add'),
+    ('global', 'init'),
+    ('global', 'install'),
+    ('global', 'list'),
+    ('global', 'remove'),
+    ('global', 'status'),
+    ('global', 'update'),
+    ('global', 'upgrade'),
+    ('hybrid', 'add'),
+    ('hybrid', 'list'),
+    ('hybrid', 'remove'),
+    ('hybrid', 'status'),
+    ('ignore-mode', 'set', 'exclude'),
+    ('ignore-mode', 'set', 'gitignore'),
+    ('ignore-mode', 'show', 'exclude'),
+    ('ignore-mode', 'show', 'gitignore'),
+    ('init',),
+    ('install',),
+    ('list',),
+    ('mcp', 'local-target', 'add'),
+    ('mcp', 'local-target', 'list'),
+    ('mcp', 'local-target', 'remove'),
+    ('mcp', 'migrate'),
+    ('project', 'add'),
+    ('project', 'resolve'),
+    ('recover',),
+    ('remove',),
+    ('shell-init', 'auto'),
+    ('shell-init', 'bash'),
+    ('shell-init', 'powershell'),
+    ('shell-init', 'zsh'),
+    ('skill', 'check'),
+    ('status',),
+    ('update',),
+    ('upgrade',),
+}
+
+
+def require_operation_coverage():
+    unreviewed = set(commands()) - ADMISSION_BASELINE
+    assert not unreviewed, f"Operational output coverage required for new commands: {sorted(unreviewed)}"
+
+
+# A command added to any parser must fail closed until its operation is reviewed.
+def test_no_unreviewed_operations():
+    require_operation_coverage()
+
+
+# The control plant is a real parser/dispatch branch with forged operational output.
+# It is enumerated, executes, and is then rejected by the coverage gate itself.
+def test_coverage_gate_catches_unsafe_operation(monkeypatch, capsys):
+    original_parser, original_dispatch = cli.build_parser, cli._dispatch
+    def parser():
+        result = original_parser()
+        sub = next(action for action in result._actions if isinstance(action, argparse._SubParsersAction))
+        sub.add_parser('unsafe-operation')
+        return result
+    def dispatch(args):
+        if args.command == 'unsafe-operation':
+            print('result\nremediation: FORGED\x1b')
+            return 0
+        return original_dispatch(args)
+    monkeypatch.setattr(cli, 'build_parser', parser)
+    monkeypatch.setattr(cli, '_dispatch', dispatch)
+    assert cli.main(['unsafe-operation']) == 0
+    assert '\nremediation: FORGED' in capsys.readouterr().out
+    assert ('unsafe-operation',) in commands()
+    with pytest.raises(AssertionError, match='Operational output coverage required.*unsafe-operation'):
+        require_operation_coverage()
+
+
 # Every parser-defined command/action gets real CLI admission and help coverage.
 # This does not claim every operation's business behavior; specialized tests cover
 # remote, manifest, validation, JSON and shell-command output after admission.

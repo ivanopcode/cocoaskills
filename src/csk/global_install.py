@@ -113,7 +113,7 @@ def _select_declarations(
         available = ", ".join(sorted(declared)) or "none"
         raise GlobalInstallError(
             "Global skill not declared: "
-            + ", ".join(unknown)
+            + ", ".join(terminal_text(name) for name in unknown)
             + f"\n  Declared global skills: {terminal_text(available)}"
         )
     return [declared[name] for name in requested]
@@ -208,7 +208,7 @@ def _selection_messages(
     selected = sorted(node.name for node in nodes)
     messages = [
         "global: selective run over "
-        + (", ".join(selected) or "no skills")
+        + (", ".join(terminal_text(name) for name in selected) or "no skills")
         + "; "
         + (
             f"{len(retained.names)} installed skill(s) left untouched"
@@ -220,7 +220,7 @@ def _selection_messages(
     if stale:
         messages.append(
             "global: warning: "
-            + ", ".join(stale)
+            + ", ".join(terminal_text(name) for name in stale)
             + " require a skill this run reinstalled and were not revalidated;"
             " run 'csk global status' or a full 'csk global install'"
         )
@@ -901,7 +901,7 @@ def _commit_global_materialization(
                     )
                 )
             except OSError as exc:
-                staging_errors.append(f"{parent}: {exc}")
+                staging_errors.append(f"{terminal_text(parent)}: {terminal_text(exc)}")
                 continue
             staging_root = Path(temporary)
             break
