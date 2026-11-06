@@ -25,13 +25,14 @@ def _allocated_bytes(path: Path) -> int:
 
 def _assert_sparse(path: Path, size: int) -> None:
     assert path.stat().st_size == size
-    assert _allocated_bytes(path) < size // 2, "fixture allocated its logical payload"
+    assert _allocated_bytes(path) <= 64 * 1024, "fixture allocated its logical payload"
 
 
 # Real filesystem control: large logical files keep zero-filled holes, and a
 # bounded dense-file plant proves the allocation checker rejects a full payload.
-def test_sparse_fixture_allocation_and_dense_control(tmp_path: Path) -> None:
-    size = 2 * 1024**2
+# The 4-GiB case covers the Windows CRT extension path missed by small fixtures.
+@pytest.mark.parametrize("size", [2 * 1024**2, 4 * 1024**3])
+def test_sparse_fixture_allocation_and_dense_control(tmp_path: Path, size: int) -> None:
     path = tmp_path / "sparse"
     path.write_bytes(b"obsolete")
     truncate_sparse(path, size)
@@ -41,6 +42,7 @@ def test_sparse_fixture_allocation_and_dense_control(tmp_path: Path) -> None:
         stream.seek(size - 8)
         assert stream.read() == b"\0" * 8
     dense = tmp_path / "dense"
-    dense.write_bytes(b"x" * size)
+    dense_size = 2 * 1024**2
+    dense.write_bytes(b"x" * dense_size)
     with pytest.raises(AssertionError, match="allocated its logical payload"):
-        _assert_sparse(dense, size)
+        _assert_sparse(dense, dense_size)
