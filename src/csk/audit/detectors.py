@@ -10,11 +10,12 @@ import re
 import shlex
 import stat
 from collections.abc import Iterable
-from itertools import islice
+from itertools import chain, islice
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .secret_values import MAX_FINDINGS_PER_FILE, detect_and_mask, finding_limit, sanitize_findings
+from .secret_values import MAX_FINDINGS_PER_FILE, detect_and_mask, finding_limit, mask_output_text, sanitize_findings
 from .capabilities import CapabilityManifest
 from .model import CapabilityViolation, Finding, Location, Severity, Surface
 
@@ -69,13 +70,18 @@ def _file_findings(rel_path: str, text: str, capabilities: CapabilityManifest, m
     yield from secrets
     if any(f.id == 'static.opaque.finding-limit' for f in secrets):
         return
-    yield from _detect_curl_pipe(rel_path, text)
-    yield from _detect_python_shell_true(rel_path, text)
-    yield from _detect_network_urls(rel_path, text, capabilities)
-    yield from _detect_secret_env(rel_path, text, capabilities)
-    yield from _detect_dangerous_rm(rel_path, text)
-    if rel_path.endswith(".py"):
-        yield from _detect_python_ast(rel_path, text, capabilities)
+    tree = _parse_python(text) if rel_path.endswith(".py") else None
+    sensitive_lines = _python_sensitive_lines(tree) if isinstance(tree, ast.Module) else set()
+    for finding in chain(_detect_curl_pipe(rel_path, text), _detect_python_shell_true(rel_path, text),
+                         _detect_network_urls(rel_path, text, capabilities),
+                         _detect_secret_env(rel_path, text, capabilities), _detect_dangerous_rm(rel_path, text)):
+        if finding.location and finding.location.span and finding.location.span[0] in sensitive_lines:
+            violation = finding.capability_violation
+            finding = replace(finding, evidence="[withheld]", capability_violation=(
+                replace(violation, observed="[withheld]") if violation else None))
+        yield finding
+    if tree is not None:
+        yield from _detect_python_ast(rel_path, tree, capabilities)
     yield from _detect_minified_text(rel_path, text)
     if rel_path == manifest_name:
         yield from _detect_manifest(rel_path, text)
@@ -187,11 +193,11 @@ def _detect_network_urls(rel_path: str, text: str, capabilities: CapabilityManif
                 rel_path=rel_path,
                 text=text,
                 start=match.start(),
-                evidence=match.group(0),
+                evidence=mask_output_text(match.group(0)),
                 violation=CapabilityViolation(
                     capability="network",
                     declared=", ".join(capabilities.network) or "none",
-                    observed=host,
+                    observed="[withheld]" if mask_output_text(match.group(0)) != match.group(0) else host,
                 ),
             )
         )
@@ -236,18 +242,35 @@ def _detect_dangerous_rm(rel_path: str, text: str) -> Iterable[Finding]:
         )
 
 
-def _detect_python_ast(rel_path: str, text: str, capabilities: CapabilityManifest) -> Iterable[Finding]:
+def _parse_python(text: str) -> ast.Module | SyntaxError:
     try:
-        tree = ast.parse(text)
+        return ast.parse(text)
     except SyntaxError as exc:
+        return exc
+
+
+def _python_sensitive_lines(tree: ast.Module) -> set[int]:
+    # Generic regexes see individual source literals; AST constants see their
+    # joined/decoded value. Withhold evidence on affected lines, retaining every
+    # finding and its original capability check (including curl-pipe findings).
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if mask_output_text(node.value) != node.value:
+                lines.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+    return lines
+
+
+def _detect_python_ast(rel_path: str, tree: ast.Module | SyntaxError, capabilities: CapabilityManifest) -> Iterable[Finding]:
+    if isinstance(tree, SyntaxError):
         yield (
             _ast_finding(
                 finding_id="static.opaque.python-parse-error",
                 category="opaque",
                 severity=Severity.HIGH,
                 rel_path=rel_path,
-                node=exc,
-                evidence=str(exc),
+                node=tree,
+                evidence=str(tree),
             )
         )
         return
@@ -294,11 +317,14 @@ def _detect_python_exec_call(
 ) -> list[Finding]:
     if call_name not in {"os.system", "subprocess.call", "subprocess.check_call", "subprocess.check_output", "subprocess.Popen", "subprocess.run"}:
         return []
-    observed = _observed_executable(node)
+    argument = _executable_argument(node)
+    observed = Path(argument).name if argument else None
     if observed is None:
         observed = "shell" if _keyword_is_true(node, "shell") else "<dynamic>"
     if observed in capabilities.exec:
         return []
+    if argument is not None and mask_output_text(argument) != argument:
+        observed = "[withheld]"
     return [
         _ast_finding(
             finding_id="static.python.undeclared-exec",
@@ -339,6 +365,8 @@ def _detect_python_network_call(
         observed = urlparse(url).hostname or "<dynamic-url>"
     if observed != "<dynamic-url>" and _host_allowed(observed, capabilities.network):
         return []
+    if url is not None and mask_output_text(url) != url:
+        observed = "[withheld]"
     return [
         _ast_finding(
             finding_id="static.python.undeclared-network",
@@ -468,7 +496,7 @@ def _call_name(node: ast.AST, aliases: dict[str, str]) -> str:
     return ""
 
 
-def _observed_executable(node: ast.Call) -> str | None:
+def _executable_argument(node: ast.Call) -> str | None:
     if not node.args:
         return None
     first = node.args[0]
@@ -477,11 +505,11 @@ def _observed_executable(node: ast.Call) -> str | None:
             parts = shlex.split(first.value)
         except ValueError:
             parts = first.value.split()
-        return Path(parts[0]).name if parts else None
+        return parts[0] if parts else None
     if isinstance(first, (ast.List, ast.Tuple)) and first.elts:
         head = first.elts[0]
         if isinstance(head, ast.Constant) and isinstance(head.value, str):
-            return Path(head.value).name
+            return head.value
     return None
 
 
