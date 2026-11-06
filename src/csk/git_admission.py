@@ -452,6 +452,8 @@ def validate_operator_ssh_credentials(
             raise GitAdmissionError(
                 IDENTITY_INVALID, f"{label} is unavailable"
             ) from exc
+        if sys.platform == "win32":
+            _validate_windows_ssh_literal_path(target)
         valid = (
             stat.S_ISSOCK(info.st_mode)
             if kind == "socket"
