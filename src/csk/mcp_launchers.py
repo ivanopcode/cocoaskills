@@ -460,6 +460,12 @@ def _check_linux_chain(path: Path, root: Path) -> os.stat_result:
     return file_info
 
 
+# dpkg -S scans installed file lists; hosted queries exceeded 5 seconds
+# even without parallel tests. Allow cold-I/O headroom while staying bounded:
+# at most two backends, hence 60 seconds of query allowance per launcher.
+LINUX_PACKAGE_QUERY_TIMEOUT_SECONDS = 30
+
+
 _LinuxPackageReason = Literal[
     "tool-missing", "tool-untrusted", "tool-not-executable", "timeout",
     "os-error", "decode-error", "value-error", "nonzero", "no-exact-match", "owned",
@@ -505,7 +511,8 @@ def _linux_package_observation(path: Path) -> _LinuxPackageObservation:
             if not tool.is_file() or not os.access(tool, os.X_OK):
                 attempts.append((backend, "tool-not-executable"))
                 continue
-            result = subprocess.run([str(tool), *args], capture_output=True, text=True, timeout=5,
+            result = subprocess.run([str(tool), *args], capture_output=True, text=True,
+                                    timeout=LINUX_PACKAGE_QUERY_TIMEOUT_SECONDS,
                                     check=False, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
             if result.returncode == 0:
                 if program.endswith("rpm") or any(line.partition(": ")[2] == str(path) for line in result.stdout.splitlines()):
@@ -543,6 +550,7 @@ def _resolve_linux(entry: LinuxLauncher, roots: Sequence[Path] | None, verifier:
             raise _path_error("Linux launcher realpath must be valid UTF-8 for native configuration and consent; "
                               "move the application to a valid UTF-8 path") from exc
         owned = False
+        timed_out = False
         summary = "skipped-nonroot"
         if info.st_uid == 0:
             try:
@@ -553,11 +561,18 @@ def _resolve_linux(entry: LinuxLauncher, roots: Sequence[Path] | None, verifier:
                     observation = _linux_package_observation(path)
                     owned = observation.owned
                     summary = observation.summary()
+                    timed_out = any(reason == "timeout" for _, reason in observation.attempts)
             except subprocess.TimeoutExpired:
                 summary = "verifier-timeout"
+                timed_out = True
             except OSError:
                 summary = "verifier-os-error"
         level: TrustLevel = "verified" if owned else "unverified"
+        if not owned and timed_out:
+            raise McpLauncherError("mcp_launcher_verification_timeout",
+                                   "Linux package ownership query timed out; verification is incomplete. "
+                                   "Retry the operation; no trust decision was made. "
+                                   f"package ownership: {summary}")
         if level == "unverified" and entry.trust != "allow-unverified":
             raise McpLauncherError("mcp_launcher_untrusted", "unverified Linux launcher requires trust: allow-unverified and local consent; "
                                    f"package ownership: {summary}")

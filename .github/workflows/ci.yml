@@ -769,8 +769,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ".[dev]"
 
-      # Native trust controls have a deliberate five-second package-query
-      # bound. Exercise the real host before competing xdist build workloads.
+      # Match PR portability coverage: run native controls once, separately
+      # from the ordinary pool. Cold package queries must work here too.
       - name: Run native launcher controls
         run: python -m pytest -v tests/test_mcp_launcher_platform_native.py
 

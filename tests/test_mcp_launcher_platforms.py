@@ -5,6 +5,7 @@ import itertools
 import os
 import stat
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -219,11 +220,11 @@ def test_package_probe_contract(tmp_path, monkeypatch, answer, available):
     def run(argv, **kwargs):
         calls.append(argv)
         assert Path(argv[0]) in programs and Path(argv[0]).name in available
-        assert kwargs == dict(capture_output=True, text=True, timeout=5, check=False,
+        assert kwargs == dict(capture_output=True, text=True, timeout=gate.LINUX_PACKAGE_QUERY_TIMEOUT_SECONDS, check=False,
                               env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
         assert argv[1:] == (["-S", "--", str(path)] if Path(argv[0]).name == "dpkg" else ["-qf", "--", str(path)])
         if answer == "error": raise OSError("probe error")
-        if answer == "timeout": raise subprocess.TimeoutExpired(argv, 5)
+        if answer == "timeout": raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
         success = Path(argv[0]).name == answer
         output = "pkg: " + str(path) if success else "pkg: " + str(tmp_path / "other")
         return SimpleNamespace(returncode=0 if success or answer == "neighbor" and Path(argv[0]).name == "dpkg" else 1, stdout=output)
@@ -274,3 +275,52 @@ def test_windows_environment_root(value):
     assert gate._windows_root_value(r"C:\Program Files") == r"C:\Program Files"
     with pytest.raises(gate.McpLauncherError) as caught: gate._windows_root_value(value)
     assert caught.value.code == "mcp_launcher_path_invalid"
+
+
+# A query completing after the old five-second cutoff is eligible for exact
+# ownership; this models elapsed query time, not a real cold filesystem scan.
+def test_package_query_budget_accepts_slow_exact_owner(tmp_path, monkeypatch):
+    import subprocess
+    assert gate.LINUX_PACKAGE_QUERY_TIMEOUT_SECONDS == 30
+    path = tmp_path / "packaged"
+    calls = []
+    original_resolve, original_stat, original_is_file = Path.resolve, Path.stat, Path.is_file
+    tool = Path('/usr/bin/dpkg')
+    known = {tool, *tool.parents}
+    monkeypatch.setattr(Path, 'resolve', lambda p, **kw: p if p == tool else original_resolve(p, **kw))
+    monkeypatch.setattr(Path, 'stat', lambda p, **kw: SimpleNamespace(st_uid=0, st_mode=(stat.S_IFREG if p == tool else stat.S_IFDIR) | 0o755) if p in known else original_stat(p, **kw))
+    monkeypatch.setattr(Path, 'is_file', lambda p, **kw: True if p == tool else original_is_file(p, **kw))
+    monkeypatch.setattr(gate.os, 'access', lambda *a: True)
+    def run(argv, **kw):
+        calls.append(argv)
+        if kw['timeout'] < 6:
+            raise subprocess.TimeoutExpired(argv, kw['timeout'])
+        return SimpleNamespace(returncode=0, stdout='package: ' + str(path))
+    monkeypatch.setattr(gate.subprocess, 'run', run)
+    assert gate.linux_package_owned(path)
+    assert len(calls) == 1  # No retry or fallback is needed on exact success.
+
+
+# Timeout is incomplete verification, including with consent opt-in; it cannot
+# publish an unverified launcher or masquerade as a conclusive trust refusal.
+# Nearby successful ownership still verifies, including after backend fallback.
+@pytest.mark.parametrize('allow', [False, True])
+@pytest.mark.parametrize('injected', [False, True])
+def test_linux_query_timeout_is_incomplete_not_untrusted(tmp_path, monkeypatch, allow, injected):
+    import subprocess
+    helper(tmp_path, 'Example/bin/server')
+    metadata = gate.linux_metadata
+    monkeypatch.setattr(gate, 'linux_metadata', lambda p: SimpleNamespace(st_uid=0, st_mode=metadata(p).st_mode))
+    def timeout(*args):
+        raise subprocess.TimeoutExpired('verification', gate.LINUX_PACKAGE_QUERY_TIMEOUT_SECONDS)
+    verifier = timeout if injected else None
+    observation = gate._LinuxPackageObservation(False, (('dpkg', 'timeout'), ('rpm', 'nonzero')))
+    monkeypatch.setattr(gate, '_linux_package_observation', lambda p: observation)
+    with pytest.raises(gate.McpLauncherError, match='package ownership query timed out.*Retry the operation') as caught:
+        gate.resolve_launcher(linux(allow), platform='linux', roots=(tmp_path,), verifier=verifier)
+    assert caught.value.code == 'mcp_launcher_verification_timeout'
+    assert 'requires trust' not in str(caught.value)
+    assert 'allow-unverified' not in str(caught.value)
+    observation = gate._LinuxPackageObservation(True, (('dpkg', 'timeout'), ('rpm', 'owned')))
+    good_verifier = (lambda *a: SimpleNamespace(package_owned=True)) if injected else None
+    assert gate.resolve_launcher(linux(allow), platform='linux', roots=(tmp_path,), verifier=good_verifier).trust == 'verified'
