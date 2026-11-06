@@ -260,6 +260,8 @@ def test_explicit_tool_path_is_admitted(tmp_path, monkeypatch, resolver, kind):
 
 @pytest.mark.parametrize("consumer", ["https", "ssh", "installer"])
 def test_probes_use_absolute_tools(tmp_path, monkeypatch, resolver, consumer):
+    # Probes use operator tools, excluding managed shims. Windows needs its
+    # standard pipe: an ambient socket alone must not create a candidate.
     from csk import build_https, build_ssh, installer
     from csk.builds.toolchain import OperatorSearchPath
 
@@ -270,9 +272,11 @@ def test_probes_use_absolute_tools(tmp_path, monkeypatch, resolver, consumer):
     path = os.pathsep.join([str(tmp_path / ".agents" / "bin"), str(real_git.parent)])
     monkeypatch.setenv("PATH", path)
     calls = []
+    environments = []
 
     def fake_run(argv, **kwargs):
         calls.append(tuple(argv))
+        environments.append(kwargs.get("env", {}))
         stdout = "fixture key\n" if kwargs.get("text") else b"username=fixture\npassword=fixture\n"
         return subprocess.CompletedProcess(argv, 0, stdout=stdout)
 
@@ -284,11 +288,25 @@ def test_probes_use_absolute_tools(tmp_path, monkeypatch, resolver, consumer):
         assert calls[0][-2:] == ("credential", "fill")
         assert "http.sslVerify=true" in calls[0]
     elif consumer == "ssh":
+        if sys.platform == "win32":
+            from csk import git_admission
+            monkeypatch.setattr(git_admission, "_windows_ssh_agent_pipe_available", lambda: True)
         found = build_ssh.discover_candidates(
             environment={"PATH": path, "SSH_AUTH_SOCK": "fixture-socket"}, home=str(tmp_path),
         )
         assert found.agent_key_count == 1
         assert calls == [(str(real_ssh_add.resolve()), "-l")]
+        if sys.platform == "win32":
+            assert found.agent_socket == git_admission._WINDOWS_SSH_AGENT_PIPE
+            assert "SSH_AUTH_SOCK" not in environments[0]
+            monkeypatch.setattr(git_admission, "_windows_ssh_agent_pipe_available", lambda: False)
+            missing = build_ssh.discover_candidates(
+                environment={"PATH": path, "SSH_AUTH_SOCK": "fixture-socket"}, home=str(tmp_path),
+            )
+            assert missing.agent_socket is None and missing.agent_key_count is None
+            assert calls == [(str(real_ssh_add.resolve()), "-l")]
+        else:
+            assert environments[0]["SSH_AUTH_SOCK"] == "fixture-socket"
     else:
         assert installer._operator_program("git", OperatorSearchPath(tuple(path.split(os.pathsep)))) == real_git.resolve()
         assert not calls
