@@ -368,7 +368,7 @@ not prove that csk selected the same key, agent or client.
 ### build_repository_ssh_credential_missing
 
 No operator selection covers the repository, a trusted host-key file is
-missing, or `--agent auto` cannot find `SSH_AUTH_SOCK`. The latter reports
+missing, or POSIX `--agent auto` cannot find `SSH_AUTH_SOCK`. The latter reports
 `SSH agent was requested but SSH_AUTH_SOCK is not set`.
 
 Load the intended key into your own agent, make its socket available to
@@ -404,16 +404,30 @@ The error includes `cannot fetch`, the repository identity, `reason:` and
 | --- | --- |
 | `key has a passphrase and no matching agent key is available; SSH prompts are disabled` | Load the key into your capable operator-managed agent with a task-sized `ssh-add -t`, then select that agent and identity. |
 | `a public key alone cannot sign and no matching agent key is available` | Load the matching private key into the selected agent, or choose a usable private file. |
-| `macOS system agent masks this USB security key and cannot sign with it` | Remove only that agent copy with `ssh-add -d`, then choose a capable client and agent. |
-| `SSH has no configured security-key provider in this lane` | Select an OpenSSH client with built-in FIDO support on `PATH`; csk has no provider-selection flag. |
+| `SSH has no configured security-key provider in this lane` | Select an OpenSSH client with built-in FIDO support on `PATH`, even if the key is listed in an agent; csk has no provider-selection flag. |
 | `private key permissions are too open; SSH will ignore this file` | Correct the private file permissions under your policy, or select a capable agent holding the matching key. csk never changes key permissions. |
+| `selected .pub file cannot sign directly; public-key pins need a matching agent; select a usable private identity` | Load the matching key into the selected agent, or select a usable private file. A public file cannot sign; this message does not ask you to change its permissions. |
 
-Doctor's `unknown` state means local checks were inconclusive, not that
-signing will succeed. Unfamiliar provider output stays `unknown`. A matching
-loaded agent can serve a key even when SSH would ignore its private file.
-Loaded-agent keys normally remain unverified until used. No real-token route has been verified. The refusal is classified as
-`auth-unavailable` for explicitly declared fallback policy; it does not
-authorize an automatic HTTPS switch.
+Permission refusal comes from POSIX `stat` facts about the selected file:
+an operator-owned regular file with group or other permission bits. It does
+not come from SSH diagnostic text. With a matching loaded agent, file
+permissions do not establish inability to sign. Unknown agent membership
+also cannot establish that the file is the only route. Socket names alone
+cannot establish agent implementation or signing failure.
+
+An independent empty-passphrase probe handles SK containers and legacy PEM
+files even without a fingerprint. Proven provider absence refuses an SK pin
+even with a matching agent key. Ambiguous provider output stays `unknown`.
+An `unknown` result does not promise signing success. No real-token route
+has been verified. Refusals remain `auth-unavailable` for explicitly declared
+fallback policy and do not authorize automatic HTTPS switching.
+
+Doctor continues without usable config and with closed stdin or stderr.
+A config notice means it used explicit options/environment without repairing
+config. Check the reported terminal, agent count/membership and local host-key
+presence. `Terminal: not attached` does not itself make credentials unusable.
+A found host-key record is only local presence; verify the fingerprint
+independently. Correct a missing host-key record before retrying the fetch.
 
 ### SSH diagnostic actions (pending release)
 
@@ -470,7 +484,8 @@ selected identity path could not be resolved. `SSH agent socket is
 unavailable` means the selected socket could not be resolved.
 `SSH identity path must be absolute` or `SSH agent socket path must be
 absolute` requires a full path. `SSH agent socket is not an admitted socket`
-requires a real supported socket, not a regular file or Windows pipe.
+requires a real supported POSIX socket. On Windows use the standard agent
+pipe through `--agent auto`; arbitrary pipes are not admitted.
 
 Correct the selected path and its accessibility. If an agent restarted,
 select its current socket. Do not replace the socket with a file or weaken
@@ -554,10 +569,21 @@ not lift this gate. Use a supported build platform or wait for Linux support.
 
 ### SSH Windows agent limit
 
-`SSH agent was requested but SSH_AUTH_SOCK is not set` and
-`SSH agent socket is not an admitted socket` can expose the current native
-Windows agent limit. csk requires a filesystem socket and does not admit
-the Windows OpenSSH named pipe. Starting the service or setting the pipe
-name as a socket does not fix this. Use file mode with a suitable
-unencrypted key, or explicitly choose HTTPS with an operator-managed token.
-Windows SSH integration and real-token behavior remain unverified.
+Current main supports private SSH repositories with the standard Windows
+OpenSSH service pipe. `--agent auto` selects `\\.\pipe\openssh-ssh-agent`
+without `SSH_AUTH_SOCK`. Older releases can still report the POSIX socket
+limitations; use a version containing Windows pipe support.
+
+`SSH agent pipe is unavailable` means csk could not establish availability
+of the standard pipe. Check that the operator's service agent is running and
+holds the intended key. csk does not start or fill it.
+`SSH agent socket is not the admitted Windows pipe` means another pipe was
+selected. Use `--agent auto` for the standard pipe; do not substitute a
+regular file or arbitrary named pipe.
+
+The current wrapper does not yet support paths containing spaces. Use
+paths without spaces until the wrapper fix lands. Native Windows loopback
+coverage exercises software keys and the standard service agent; it does
+not qualify hardware tokens or 1Password. Real-token behavior remains
+unverified. Some development doctor builds retain older Windows instructions;
+those do not describe the pipe support already implemented on main.
