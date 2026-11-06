@@ -227,7 +227,10 @@ def gate_plans(
         errors.extend(result.errors)
         # Source revocation needs no content read, even when this plan could
         # not be audited. A skipped plan must not erase any batch denial.
-        if source_revocation is not None and not result.blocked:
+        if source_revocation is not None and not any(
+            message == f"audit blocked: {plan.decl.name}: {source_revocation} is revoked"
+            for message in result.errors
+        ):
             errors.append(f"audit blocked: {plan.decl.name}: {source_revocation} is revoked")
     return GateResult(reports=tuple(reports), warnings=tuple(warnings), errors=tuple(errors))
 
@@ -257,7 +260,9 @@ def _gate_plan(
         return GateResult(reports=(), errors=(f"audit blocked: {exc}",))
     except AuditBackendError as exc:
         message = f"audit backend failed: {exc}"
-        if config.audit.mode == "strict":
+        if config.audit.mode == "strict" or any(
+            not item.startswith("source:") for item in config.audit.revocations
+        ):
             return GateResult(reports=(), errors=(f"audit blocked: {message}",))
         return GateResult(reports=(), warnings=(f"audit warning: {message}; proceeding without audit",))
     warnings: list[str] = []

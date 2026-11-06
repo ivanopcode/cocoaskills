@@ -197,3 +197,15 @@ def test_backend_resolution_precedes_admission(batch):
     assert 'Unsupported audit backend: unavailable' in result.errors[0]
     assert 'too-large' not in result.errors[0]
     assert not pipeline.gate_plans([plans['benign']], cfg, scope='test', record=False).blocked
+
+
+# Advisory skips also fail closed when a content identity must be checked;
+# a source-only nonmatch keeps the ordinary advisory backend warning.
+@pytest.mark.parametrize('content_revocation', [False, True])
+def test_backend_skip_with_content_revocations(batch, content_revocation):
+    plans, cfg = batch
+    revocation = 'sha256:' + 'a' * 64 if content_revocation else 'source:unrelated'
+    cfg = replace(cfg, audit=replace(cfg.audit, mode='advisory', backend='unavailable', revocations=[revocation]))
+    result = pipeline.gate_plans([plans['oversized']], cfg, scope='test', record=False)
+    assert result.blocked == content_revocation
+    assert 'Unsupported audit backend: unavailable' in (result.errors + result.warnings)[0]
