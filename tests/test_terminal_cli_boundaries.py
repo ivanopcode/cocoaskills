@@ -72,3 +72,48 @@ def test_cli_boundaries(tmp_path, skills_root, csk_home, monkeypatch, capsys, pl
         expected = "field 'source' must be a portable relative path" if '\n' in plant else 'repository not found'
         assert expected in (captured.out + captured.err).lower()
         assert_safe(captured.out + captured.err)
+
+
+# Real install dispatch receives Git-boundary failures, including the newly landed
+# class/hint route and structured transport route. No result/renderer is mocked;
+# ordinary install succeeds first and rejected acquisition leaves no publication.
+@pytest.mark.parametrize('structured', [False, True])
+@pytest.mark.parametrize('plant', ['café', 'remote\x1b]0;FORGED\x07\nFORGED\u202e'])
+def test_install_transport_hints(tmp_path, skills_root, csk_home, monkeypatch, capsys, structured, plant):
+    from csk import git_admission
+    from csk.sources import transport
+
+    project = make_project(tmp_path)
+    cfg = make_config(csk_home, skills_root, project)
+    config.save_config(cfg)
+    monkeypatch.setenv('CSK_CONFIG', str(cfg.path))
+    make_skill_repo(skills_root, 'demo', tag='v1')
+    write_skillfile(project, {'schema_version': 1, 'skills': [{'name': 'demo', 'tag': 'v1'}]})
+    assert cli.main(['install', 'app', '--dry-run']) == 0
+    capsys.readouterr()
+    before = (project / 'Skillfile.json').read_bytes()
+
+    def fail(**kwargs):
+        raise git_admission.GitAdmissionError(
+            git_admission.SOURCE_UNAVAILABLE, plant,
+            failure_class='ssh-auth-rejected', hints=('ssh-signing-failed', plant),
+        )
+
+    def resolve(*args, **kwargs):
+        if structured:
+            plan = transport.plan_attempts('example.org/kit', 'ssh://git@example.org/kit.git')
+            transport.resolve_plan(plan, 'tag', 'v1', attempt=fail)
+        fail()
+
+    monkeypatch.setattr(git_ops, 'resolve_ref', resolve)
+    assert cli.main(['install', 'app', '--verbose']) == 1
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert_safe(output)
+    assert 'ssh-auth-rejected' in output
+    assert '\nnext: ' in output and '\nhint: ' in output
+    assert 'SSH reported a signing failure' in output
+    assert 'server may deny repository read access' in output
+    assert terminal_text(plant) in output  # Direct detail or verbose typed cause.
+    assert (project / 'Skillfile.json').read_bytes() == before
+    assert not (project / '.agents' / 'skills' / 'demo').exists()
