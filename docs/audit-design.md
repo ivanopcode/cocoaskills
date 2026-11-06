@@ -326,7 +326,10 @@ Redaction contract for `AuditRequest.files` (this is a hard boundary, not just a
   HIGH-severity `fail_on` policy. It cannot produce a content-addressed report or
   cache lookup without reading rejected data. Raw limits apply before cloud
   redaction, even when the redacted request would fit. Serialized size checking
-  remains a separate gate.
+  remains a separate gate. Gate outcomes are combined per skill: an oversized or
+  skipped skill never discards another skill's reports or denials, and remaining
+  skills are still assessed. Source revocations apply even to unread inputs,
+  independently of audit mode and severity threshold.
 - Both backends retain at most 2,001 stderr bytes while draining output. Diagnostics
   over 2,000 bytes are omitted whole before decoding; short diagnostics are scrubbed.
   Captured stdout and the Codex response file have a 16 MiB limit; stdout overflow

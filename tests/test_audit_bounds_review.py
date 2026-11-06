@@ -61,6 +61,10 @@ class Plan:
     schema_version: int = 3
 
     @property
+    def decl(self):
+        return SimpleNamespace(name='sample', source='sample', git=None)
+
+    @property
     def spec(self):
         return SimpleNamespace(schema_version=self.schema_version)
 
@@ -95,7 +99,7 @@ def test_growth_before_and_after_copy(tmp_path):
 @pytest.mark.parametrize('mode,threshold,blocked', [('strict','high',True), ('strict','critical',False), ('strict','off',False), ('advisory','high',False)])
 def test_oversize_gate_policy(tmp_path, mode, threshold, blocked):
     (tmp_path / 'a').write_bytes(b'x'*20)
-    cfg = SimpleNamespace(audit=SimpleNamespace(enabled=True,max_request_bytes=10,mode=mode,fail_on=threshold))
+    cfg = SimpleNamespace(audit=SimpleNamespace(enabled=True,max_request_bytes=10,mode=mode,fail_on=threshold,revocations=()))
     result = pipeline.gate_plans([Plan(tmp_path)], cfg, scope='test')
     assert result.blocked == blocked
     assert 'audit.request.too-large' in (result.errors + result.warnings)[0]
@@ -181,7 +185,7 @@ def test_oversize_legacy_still_requires_verified_pin(tmp_path, threshold):
     # Strict legacy admission must not become allowed merely because HIGH is
     # below fail_on; an unread snapshot cannot establish its content-bound pin.
     (tmp_path / 'a').write_bytes(b'x' * 20)
-    cfg = SimpleNamespace(audit=SimpleNamespace(enabled=True, max_request_bytes=10, mode='strict', fail_on=threshold))
+    cfg = SimpleNamespace(audit=SimpleNamespace(enabled=True, max_request_bytes=10, mode='strict', fail_on=threshold, revocations=()))
     result = pipeline.gate_plans([Plan(tmp_path, schema_version=2)], cfg, scope='test')
     assert result.blocked
     assert 'audit.request.too-large' in result.errors[0]
