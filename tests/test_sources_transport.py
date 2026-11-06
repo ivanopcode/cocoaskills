@@ -3964,10 +3964,11 @@ def test_public_ca_bundle_reaches_real_https_git(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    # The selected generated CA reaches real Git: TLS succeeds and the fixture receives the HTTP request.
+    # The selected generated CA reaches real Git: TLS succeeds, the fixture
+    # receives HTTP, and the admission seam observes the bounded Windows runner too.
     server = _tls_server_factory(status=404, body=b"not found")
     tool = _fake_http_tool(tmp_path / "tool", {}, allow_loopback_https=True)
-    real_run = subprocess.run
+    real_run = git_admission.subprocess.run
     fetches: list[tuple[str, ...]] = []
     checked_bytes: list[bytes] = []
 
@@ -3979,7 +3980,7 @@ def test_public_ca_bundle_reaches_real_https_git(
             checked_bytes.append(Path(selected).read_bytes())
         return real_run(*args, **kwargs)
 
-    monkeypatch.setattr(subprocess, "run", record)
+    monkeypatch.setattr(git_admission.subprocess, "run", record)
     with pytest.raises(git_admission.GitAdmissionError) as captured:
         transport.acquire_plan(
             _https_mirror_plan(server.url, "https://fixture.test/kit.git"),
