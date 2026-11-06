@@ -869,7 +869,10 @@ def test_windows_timeout_preserves_signing_hint(monkeypatch: pytest.MonkeyPatch)
 @pytest.mark.parametrize("segment", ["a%b", "a%hb", "a%%b", "a${HOME}b", "a${NOPE}b"])
 def test_windows_ssh_paths_refuse_token_expansion(tmp_path: Path, segment: str) -> None:
     # Expansion-capable identity and private trust paths must refuse before
-    # SSH can substitute a sibling. Ordinary space paths remain a valid control.
+    # SSH can substitute a sibling, including targets behind clean junctions.
+    # Ordinary space paths and junctions to them remain valid controls.
+    import _winapi
+
     valid = tmp_path / "First Last" / "identity"
     valid.parent.mkdir(); valid.write_text("fixture")
     assert git_admission.validate_operator_ssh_credentials(
@@ -881,6 +884,21 @@ def test_windows_ssh_paths_refuse_token_expansion(tmp_path: Path, segment: str) 
     assert error.value.code == git_admission.IDENTITY_INVALID
     with pytest.raises(git_admission.GitAdmissionError, match="SSH would expand the pinned path"):
         git_admission._ssh_config_path(bad)
+    for target in (valid, bad):
+        link = tmp_path / "clean junction"
+        _winapi.CreateJunction(str(target.parent), str(link))
+        try:
+            assert (link / "identity").resolve(strict=True) == target
+            for field in ("identity", "known_hosts"):
+                credentials = git_admission.OperatorSSHCredentials(**{field: link / "identity"})
+                if target == valid:
+                    assert getattr(git_admission.validate_operator_ssh_credentials(credentials), field) == valid
+                else:
+                    with pytest.raises(git_admission.GitAdmissionError, match="SSH would expand the pinned path") as error:
+                        git_admission.validate_operator_ssh_credentials(credentials)
+                    assert error.value.code == git_admission.IDENTITY_INVALID
+        finally:
+            link.rmdir()  # Remove only the junction, never its target.
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows wrapper exit and manager lifecycle")
