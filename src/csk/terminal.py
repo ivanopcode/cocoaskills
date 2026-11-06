@@ -29,10 +29,11 @@ def shell_word(value: str) -> str:
     """Copyable bash/zsh word; preserve shlex output when no controls occur.
 
     ANSI-C quoting is not promised for POSIX sh or fish. NUL cannot occur in
-    filesystem paths. Octal escapes preserve UTF-8 bytes even in bash 3.2, which does not
-    support Unicode escapes in ANSI-C words.
+    filesystem paths. Octal escapes preserve filesystem bytes (including surrogateescaped names)
+    even in bash 3.2. Apostrophes use octal to avoid its history-expansion bug.
     """
     import shlex
+    import os
 
     if terminal_text(value) == value:
         return shlex.quote(value)
@@ -41,11 +42,11 @@ def shell_word(value: str) -> str:
         if char == "\\":
             parts.append("\\\\")
         elif char == "'":
-            parts.append("\\'")
+            parts.append(r"\047")
         elif terminal_text(char) != char:
             code = ord(char)
             parts.append({10: r"\n", 13: r"\r", 9: r"\t"}.get(
-                code, "".join(f"\\{byte:03o}" for byte in char.encode("utf-8"))
+                code, "".join(f"\\{byte:03o}" for byte in os.fsencode(char))
             ))
         else:
             parts.append(char)
