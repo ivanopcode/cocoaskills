@@ -34,6 +34,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from .tool_paths import resolve_tool
+from .terminal import shell_word, terminal_text
 
 
 class BuildSSHError(ValueError):
@@ -240,15 +241,15 @@ def candidate_commands(
     if candidates.agent_socket is not None and pubs:
         preferred = _private_identity_candidate(pubs[0]) or pubs[0]
         commands.append(
-            f"csk config build-ssh add {scope} --agent auto --identity {preferred}"
+            f"csk config build-ssh add {shell_word(scope)} --agent auto --identity {shell_word(preferred)}"
         )
     if candidates.agent_socket is not None:
-        commands.append(f"csk config build-ssh add {scope} --agent auto")
+        commands.append(f"csk config build-ssh add {shell_word(scope)} --agent auto")
     for pub in pubs:
         private = _private_identity_candidate(pub)
         if private is None:
             continue
-        commands.append(f"csk config build-ssh add {scope} --identity {private}")
+        commands.append(f"csk config build-ssh add {shell_word(scope)} --identity {shell_word(private)}")
         if len(commands) >= limit + 1:
             break
     return commands[: limit + 1]
@@ -465,21 +466,21 @@ def doctor(
     known_hosts = os.environ.get("CSK_BUILD_SSH_KNOWN_HOSTS") or (rule.known_hosts if rule else None) or "~/.ssh/known_hosts"
     lines = [
         "Build SSH doctor (read-only; no network, prompts, signatures or agent changes)",
-        f"Repository/scope: {scope or '(none selected)'}",
-        f"OS: {sys.platform}",
+        f"Repository/scope: {terminal_text(scope or '(none selected)')}",
+        f"OS: {terminal_text(sys.platform)}",
         f"Terminal: {'attached' if sys.stdin is not None and sys.stderr is not None and sys.stdin.isatty() and sys.stderr.isatty() else 'not attached'}; SSH prompts remain disabled",
-        f"Identity: {identity or '(none selected)'}",
-        f"Agent: {socket or '(none selected or auto unavailable)'}",
+        f"Identity: {terminal_text(identity or '(none selected)')}",
+        f"Agent: {terminal_text(socket or '(none selected or auto unavailable)')}",
     ]
     if config_status:
-        lines.append(config_status)
+        lines.append(terminal_text(config_status))
     try:
         ssh = Path(resolve_tool("ssh"))
     except (OSError, ValueError):
         lines.append("ssh: unavailable; local state unknown")
     else:
         version = _local_probe((str(ssh), "-V"))
-        lines.append(f"ssh: {ssh} ({version.stderr.strip() if version else 'version unknown'})")
+        lines.append(f"ssh: {terminal_text(ssh)} ({terminal_text(version.stderr.strip() if version else 'version unknown')})")
         selected = _expanded_path(identity)
         selected_agent = _expanded_path(socket)
         facts = inspect_key(ssh, selected, selected_agent) if (not identity or selected is not None) and (not socket or selected_agent is not None) else KeyInspection(reason="identity or agent home expansion failed; local state unknown")
@@ -487,12 +488,12 @@ def doctor(
         membership = "yes" if facts.loaded else "no" if facts.loaded is False or not socket else "unknown"
         provider = facts.provider if "-SK" in facts.key_kind else _security_key_provider(ssh)
         lines.extend([
-            f"Key: {facts.key_kind}; passphrase: {passphrase}; in agent: {membership}",
-            f"Agent keys: {facts.agent_key_count if facts.agent_key_count is not None else 'unknown'}",
-            f"Security-key provider: {provider}",
-            f"Local state: {facts.state}; {facts.reason}",
+            f"Key: {terminal_text(facts.key_kind)}; passphrase: {passphrase}; in agent: {membership}",
+            f"Agent keys: {terminal_text(facts.agent_key_count if facts.agent_key_count is not None else 'unknown')}",
+            f"Security-key provider: {terminal_text(provider)}",
+            f"Local state: {terminal_text(facts.state)}; {terminal_text(facts.reason)}",
         ])
-        lines.append(f"Host key: {_host_key_status(ssh, scope, known_hosts)}")
+        lines.append(f"Host key: {terminal_text(_host_key_status(ssh, scope, known_hosts))}")
     lines.extend([
         "SSH prompts remain disabled in csk; a passphrase key needs a matching capable agent.",
         "The agent and its keys are managed by the person who owns the computer; csk does not manage them.",

@@ -8,6 +8,7 @@ import pytest
 
 from csk import cli
 from csk.terminal import TerminalWriter, shell_word, terminal_document
+from test_terminal_build_ssh import doctor_operation, FIELDS, VALUES
 
 
 def command_paths(parser, prefix=()):
@@ -84,9 +85,23 @@ ADMISSION_BASELINE = {
 }
 
 
+# Each new operation registers executable coverage, not an admission exemption.
+# The parametrized test below runs every registered scenario with all plants.
+OPERATIONAL_COVERAGE = {('config', 'build-ssh', 'doctor'): doctor_operation}
+
+
 def require_operation_coverage():
-    unreviewed = set(commands()) - ADMISSION_BASELINE
+    unreviewed = set(commands()) - ADMISSION_BASELINE - OPERATIONAL_COVERAGE.keys()
     assert not unreviewed, f"Operational output coverage required for new commands: {sorted(unreviewed)}"
+
+
+# Real dispatch/config and metadata-boundary inputs prove this new operation
+# escapes data before layout; each field has a nearby unchanged ordinary control.
+@pytest.mark.parametrize("command", OPERATIONAL_COVERAGE)
+@pytest.mark.parametrize("field", FIELDS)
+@pytest.mark.parametrize("value", VALUES)
+def test_reviewed_operational_output(tmp_path, monkeypatch, capsys, command, field, value):
+    assert OPERATIONAL_COVERAGE[command](tmp_path, monkeypatch, capsys, field, value)
 
 
 # A command added to any parser must fail closed until its operation is reviewed.
