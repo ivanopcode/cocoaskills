@@ -3,6 +3,7 @@ import json
 import random
 import string
 from types import SimpleNamespace as NS
+from pathlib import Path
 
 import pytest
 
@@ -29,12 +30,21 @@ def _assert_no_fragments(value, outputs):
         assert not any(window in output.lower() for window in windows), 'secret fragment escaped'
 
 
+@dataclasses.dataclass
+class _Plan:
+    # Match the production plan's replaceable dataclass contract used by bounded private copies.
+    snapshot: Path
+    decl: NS
+    resolved: NS
+    spec: NS
+
+
 def _plan(snapshot, tmp_path, caps=CapabilityManifest()):
     store = tmp_path / 'store'
     store.mkdir()
     cfg = GlobalConfig(store / 'config.json', tmp_path, None, [], 'auto', '', {},
                        audit=AuditConfig(enabled=True, mode='strict'))
-    plan = NS(snapshot=snapshot, decl=NS(name='fixture', source='fixture', git=None),
+    plan = _Plan(snapshot=snapshot, decl=NS(name='fixture', source='fixture', git=None),
               resolved=NS(commit='b' * 40, kind='commit', ref='b' * 40),
               spec=NS(capabilities=caps, schema_version=3, source_file=None, runtime_roots=()))
     return plan, cfg, store

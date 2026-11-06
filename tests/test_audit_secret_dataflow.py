@@ -5,6 +5,7 @@ import json
 import random
 import string
 from types import SimpleNamespace as NS
+from tests.test_audit_secret_fragments import _Plan
 
 import pytest
 
@@ -74,7 +75,7 @@ def test_entropy_canary_never_enters_outputs(tmp_path, capsys, caplog, variant):
     store.mkdir()
     cfg = GlobalConfig(store / 'config.json', tmp_path, None, [], 'auto', '', {},
                        audit=AuditConfig(enabled=True, mode='strict'))
-    plan = NS(snapshot=snapshot, decl=NS(name='fixture', source='fixture', git=None),
+    plan = _Plan(snapshot=snapshot, decl=NS(name='fixture', source='fixture', git=None),
               resolved=NS(commit='b' * 40, kind='commit', ref='b' * 40),
               spec=NS(capabilities=caps, schema_version=3, source_file=None, runtime_roots=()))
     first = pipeline.audit_plans([plan], cfg, scope='fixture')[0]
