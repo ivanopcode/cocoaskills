@@ -4,6 +4,7 @@ import json
 import pytest
 
 from csk.audit import detectors, pipeline, secret_values
+from csk.audit.output import withheld
 from csk.audit.capabilities import CapabilityManifest
 from tests.test_audit_secret_fragments import _assert_no_fragments, _plan, _value
 
@@ -45,16 +46,16 @@ def test_real_long_executable_is_named(tmp_path, value, name):
 @pytest.mark.parametrize('value,host', URLS)
 @pytest.mark.parametrize('python', [True, False])
 def test_deep_url_keeps_host_and_path(tmp_path, value, host, python):
-    # Both regex and AST observations retain deep public URLs' hosts, with declared controls.
+    # Regex and AST retain public hosts, never URL tails; declared hosts remain admitted.
     snapshot = tmp_path / 'package'
     snapshot.mkdir()
     path = snapshot / ('run.py' if python else 'SKILL.md')
     path.write_text('import requests\nrequests.get(' + repr(value) + ')\n' if python else '[release](' + value + ')')
-    assert secret_values.mask_output_text(value) == value
+    assert secret_values.mask_output_text(value) == withheld(value)
     findings = detectors.detect_snapshot(snapshot, CapabilityManifest())
     network = [f for f in findings if f.capability_violation and f.capability_violation.capability == 'network']
     assert network and all(f.capability_violation.observed == host for f in network)
-    assert any(value in f.evidence for f in network)
+    assert all(value not in f.evidence for f in network)  # URLs are not output atoms.
     assert not detectors.detect_snapshot(snapshot, CapabilityManifest(network=(host,)))
     plan, cfg, store = _plan(snapshot, tmp_path)
     reports = tuple(pipeline.audit_plans([plan], cfg, scope='fixture')[0] for _ in range(2))
@@ -81,7 +82,7 @@ def test_ordinary_filesystem_and_secret_location_stay_visible(tmp_path):
 
 @pytest.mark.parametrize('kind', ['path', 'url', 'suffix'])
 def test_only_secret_component_is_withheld(tmp_path, kind):
-    # A real secret component is removed while adjacent public path components and host/name survive.
+    # Unsafe paths are withheld whole; separately allowlisted public hosts remain observable.
     secret = _value('colon').replace(':', '')
     if kind == 'url':
         value = 'https://downloads.example.com/releases/' + secret + '/installer-package'
@@ -90,9 +91,9 @@ def test_only_secret_component_is_withheld(tmp_path, kind):
     else:
         value = ('/opt/company-internal/' if kind == 'path' else '') + secret + '/tools/bin/deploy-helper'
         source = 'import subprocess\nsubprocess.run([' + repr(value) + '])\nopen(' + repr('/' + value.lstrip('/')) + ')\n'
-        expected = 'deploy-helper'
+        expected = withheld(value)
     masked = secret_values.mask_output_text(value)
-    assert masked == value.replace(secret, '<withheld>')
+    assert masked == withheld(value)
     assert 'static.secret.high-entropy' in {f.id for f in secret_values.detect_and_mask('run.txt', 'token=' + repr(secret))[0]}
     snapshot = tmp_path / 'package'
     snapshot.mkdir()
@@ -100,10 +101,10 @@ def test_only_secret_component_is_withheld(tmp_path, kind):
     findings = detectors.detect_snapshot(snapshot, CapabilityManifest())
     assert expected in {f.capability_violation.observed for f in findings if f.capability_violation}
     if kind == 'url':
-        assert any(masked in f.evidence for f in findings)
+        assert any(expected in f.evidence for f in findings)
     else:
         filesystem = next(f for f in findings if f.id == 'static.python.filesystem-outside-envelope')
-        assert filesystem.capability_violation.observed == '/' + masked.lstrip('/')
+        assert filesystem.capability_violation.observed == withheld('/' + value.lstrip('/'))
     plan, cfg, store = _plan(snapshot, tmp_path)
     first = pipeline.audit_plans([plan], cfg, scope='fixture')[0]
     second = pipeline.audit_plans([plan], cfg, scope='fixture')[0]
@@ -113,7 +114,7 @@ def test_only_secret_component_is_withheld(tmp_path, kind):
                '\n'.join(pipeline._gate_messages(first))]
     _assert_no_fragments(secret, [s.encode() for s in outputs] + [p.read_bytes() for p in store.rglob('*.json')])
     assert expected in outputs[2]
-    assert masked in outputs[2]
+    assert expected in outputs[2]
 
 
 @pytest.mark.parametrize('shell', [False, True])
@@ -128,7 +129,7 @@ def test_colon_secret_is_not_diluted_by_url_prefix(tmp_path, shell):
     assert secret_values.detect_and_mask('value.txt', 'token=' + repr(value))[0]
     findings = detectors.detect_snapshot(snapshot, CapabilityManifest())
     assert any(f.category == 'secret-value' for f in findings)
-    assert host in {f.capability_violation.observed for f in findings if f.capability_violation}
+    assert withheld(host) in {f.capability_violation.observed for f in findings if f.capability_violation}
     plan, cfg, store = _plan(snapshot, tmp_path)
     reports = [pipeline.audit_plans([plan], cfg, scope='fixture')[0] for _ in range(2)]
     assert reports[1].cache_hit
@@ -136,16 +137,15 @@ def test_colon_secret_is_not_diluted_by_url_prefix(tmp_path, shell):
     _assert_no_fragments(value, [s.encode() for s in outputs] + [p.read_bytes() for p in store.rglob('*.json')])
 
 
-def test_output_entropy_uses_the_source_value_classifier():
-    # The preservation/masking decisions agree with secret classification in a value context.
-    public = [value for value, _ in EXECUTABLES + URLS]
-    public += ['scripts/deployment/production/run.py', 'a' * 400, _value('colon')[:24] + '/usr/local/bin/git']
-    for value in public:
-        assert not secret_values.detect_and_mask('value.txt', 'token=' + repr(value))[0]
+def test_output_grammar_is_independent_of_entropy():
+    # Privacy accepts bounded structural atoms, irrespective of entropy detection confidence.
+    for value, _ in EXECUTABLES:
         assert secret_values.mask_output_text(value) == value
-    for value in (_value('slash-19'), _value('colon'), _value('url'), 'public' * 80 + _value('slash-19')):
+    for value in [v for v, _ in URLS] + ['a' * 400, _value('colon')[:24] + '/usr/local/bin/git']:
+        assert secret_values.mask_output_text(value) == withheld(value)
+    for value in (_value('slash-19'), _value('colon'), _value('url')):
         assert secret_values.detect_and_mask('value.txt', 'token=' + repr(value))[0]
-        assert secret_values.mask_output_text(value) != value
+        assert secret_values.mask_output_text(value) == withheld(value)
 
 
 def test_known_secret_fragment_in_scanned_filename_is_masked(tmp_path):
@@ -156,6 +156,6 @@ def test_known_secret_fragment_in_scanned_filename_is_masked(tmp_path):
     path.write_text('token=' + repr(value))
     findings = detectors.detect_snapshot(tmp_path, CapabilityManifest())
     secret = next(f for f in findings if f.category == 'secret-value')
-    assert secret.location.file == 'scripts/' + 'x' * 19 + '.py'
+    assert secret.location.file == withheld('scripts/' + value[-19:] + '.py')
     assert secret.location.span == (1, 1)
     _assert_no_fragments(value, [repr(findings).encode()])

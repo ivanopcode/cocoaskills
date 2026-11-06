@@ -46,11 +46,11 @@ class _ScanLocation(Location):
 
     def __post_init__(self) -> None:
         # Import lazily: output masking depends on the Finding schema.
-        from .secret_values import mask_output_text
+        from .output import safe_path
 
         path = PurePosixPath(self.file)
         if (not self.file or path.is_absolute() or ".." in path.parts
-                or mask_output_text(self.file) != self.file
+                or safe_path(self.file) != self.file
                 or self.span is None or len(self.span) != 2 or any(type(line) is not int for line in self.span)
                 or self.span[0] < 1 or self.span[1] != self.span[0]):
             raise ValueError("invalid secret scan location")
@@ -77,8 +77,15 @@ class Finding:
     capability_violation: CapabilityViolation | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.surface, Surface) or not isinstance(self.severity, Severity) or type(self.verifiable) is not bool:
+            raise ValueError("invalid secret finding schema" if self.id.startswith("static.secret.") else "invalid finding classification")
+        if self.location is not None and self.location.span is not None:
+            if len(self.location.span) != 2 or any(type(line) is not int or line < 1 for line in self.location.span):
+                raise ValueError("invalid finding span")
         if not (self.id.startswith("static.secret.") or self.detector == "static.secret"
                 or self.category == "secret-value"):
+            from .output import protect_finding
+            protect_finding(self)
             return
         if (self.id not in SECRET_REASONS or self.surface is not Surface.CODE
                 or self.category != "secret-value" or self.severity is not Severity.HIGH
@@ -88,6 +95,8 @@ class Finding:
                 or not isinstance(self.location, _ScanLocation)):
             # Never echo rejected input: this error can itself be logged.
             raise ValueError("invalid secret finding schema")
+        from .output import protect_finding
+        protect_finding(self)
 
 
 @dataclass(frozen=True)
