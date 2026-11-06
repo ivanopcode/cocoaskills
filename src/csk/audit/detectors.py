@@ -584,7 +584,7 @@ def _detect_manifest(manifest_name: str, text: str) -> list[Finding]:
     try:
         data = protocol_json.loads_compatible(text)
     except protocol_json.ProtocolJSONError:
-        return []
+        return [_opaque_finding(manifest_name, "scan skipped: manifest JSON could not be parsed within limits")]
     commands = data.get("commands", {}) if isinstance(data, dict) else {}
     if not isinstance(commands, dict):
         return []

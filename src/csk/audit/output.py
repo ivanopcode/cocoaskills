@@ -19,6 +19,7 @@ _REASONS = frozenset({
     "scan skipped: symbolic link", "scan skipped: non-regular file", "minified or bundled text",
     "Python syntax could not be parsed", "Python parser resource limit reached",
     "URL hostname could not be parsed",
+    "scan skipped: manifest JSON could not be parsed within limits",
 })
 _EVIDENCE = {
     "static.shell.curl-pipe": "curl | sh",
