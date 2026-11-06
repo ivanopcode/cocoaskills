@@ -21,7 +21,9 @@ from .sources import boundaries, publish
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(prog="csk mcp")
+    from .cli import _CskArgumentParser
+
+    result = _CskArgumentParser(prog="csk mcp")
     sub = result.add_subparsers(dest="command", required=True)
     target = sub.add_parser(
         "local-target",

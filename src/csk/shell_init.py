@@ -70,6 +70,10 @@ def source_command(shell: str, hook_path: Path) -> str:
     if shell == "powershell":
         return ". '" + value.replace("'", "''") + "'"
     if shell in {"zsh", "bash"}:
+        from .terminal import shell_word, terminal_text
+
+        if terminal_text(value) != value:
+            return ". " + shell_word(value)
         return ". '" + value.replace("'", "'\"'\"'") + "'"
     raise ValueError(f"Unsupported shell: {shell}")
 
