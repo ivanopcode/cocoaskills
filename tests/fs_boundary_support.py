@@ -45,12 +45,12 @@ non-refusal (guard degrades by design), D = declared non-named outcome.
 A declared ordinal pins its outcome; it is not skipped.
 
 * bootstrap create (K=2): stat@cli bootstrap R,
-  replace@config save D(raw OSError).
+  replace@config save D(guarded CLI traceback).
 * bootstrap --if-missing (K=1): stat@cli bootstrap R.
 * init target (K=8 on 3.11/3.12, K=7 on 3.13/3.14): resolve
   internals@cli C(exit 0; on 3.11/3.12 ordinal 2 with ELOOP refuses),
   guard stat@cli R, require/present/write@manifest RRR,
-  exists+write@gitignore_gate D(raw OSError x2).
+  exists+write@gitignore_gate D(guarded CLI traceback x2).
 * config show (K=1): read@cli R.
 * hybrid status (K=1): read@cli C([unreadable marker], exit 0).
 * list (K=1), status --all (K=1): read@manifest R.
@@ -58,7 +58,7 @@ A declared ordinal pins its outcome; it is not skipped.
   read@manifest R.
 * project resolve (K=3 on 3.11/3.12, K=2 on 3.13/3.14): stat@cli R,
   resolve internals@project_resolver C(exit 0; on 3.11/3.12 ordinal 3
-  with ELOOP escapes raw RuntimeError, declared).
+  with ELOOP reports a guarded RuntimeError traceback, declared).
 * project add (K=3), ensure_empty (K=3), ensure_project (K=3):
   require/present/write@manifest RRR.
 * add, remove, remove_decl (K=2 each): read/write@manifest RR.
@@ -82,8 +82,8 @@ Errno by ordinal (review N4): every (ordinal, errno) combination is
 exercised (EACCES/EIO/ENAMETOOLONG/ELOOP at every ordinal of every
 sweep); no combination is assumed. The matrix found two errno-sensitive
 ordinals, both pinned per combination: init resolve-stat ELOOP refuses
-on 3.11/3.12, and project-resolve hash-stat ELOOP escapes raw
-``RuntimeError`` (``realpath`` loop mapping) on 3.11/3.12.
+on 3.11/3.12, and project-resolve hash-stat ELOOP reports a guarded
+``RuntimeError`` traceback (``realpath`` loop mapping) on 3.11/3.12.
 
 Glob (review N2, measured per version): a glob resolving to the marker
 is visible except where noted, and a fault there is observable (raw
