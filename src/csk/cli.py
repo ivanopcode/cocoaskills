@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from .terminal import terminal_document, terminal_text
+from .terminal import TerminalWriter, terminal_document, terminal_text
+
+from contextlib import redirect_stdout, redirect_stderr
 
 import argparse
 import getpass
@@ -128,7 +130,30 @@ def _token_env_type(value: str) -> str:
     return value
 
 
+def _build_recover_parser() -> argparse.ArgumentParser:
+    parser = _CskArgumentParser(prog="csk recover", description="Roll back one unfinished installation using its recorded preimages.")
+    parser.add_argument("--rollback", required=True, metavar="TRANSACTION_ID")
+    return parser
+
+
+def entry_parser_factories():
+    """Parser entry points, including commands kept outside the legacy root help."""
+    from . import mcp_settings
+
+    return {"": build_parser, "check": _build_check_parser,
+            "dispatch": _build_dispatch_parser, "recover": _build_recover_parser,
+            "mcp": mcp_settings.parser}
+
+
 def main(argv: list[str] | None = None) -> int:
+    # The worker protocol is not human terminal output.
+    if argv is None and sys.argv[1:] == ["__csk-go-worker-v1"]:
+        return _main(argv)
+    with redirect_stdout(TerminalWriter(sys.stdout)), redirect_stderr(TerminalWriter(sys.stderr)):
+        return _main(argv)
+
+
+def _main(argv: list[str] | None = None) -> int:
     # This is an implementation-only re-execution boundary.  It is reachable
     # only from the actual installed entry point with the one fixed argument;
     # programmatic argv, manifests, environment, PATH, and the public parser
@@ -153,13 +178,8 @@ def main(argv: list[str] | None = None) -> int:
         from . import mcp_settings
         return mcp_settings.main(arguments[1:])
     parser: argparse.ArgumentParser
-    if is_recover:
-        parser = _CskArgumentParser(prog="csk recover", description="Roll back one unfinished installation using its recorded preimages.")
-        parser.add_argument("--rollback", required=True, metavar="TRANSACTION_ID")
-    elif is_dispatch:
-        parser = _build_dispatch_parser()
-    else:
-        parser = _build_check_parser() if is_check else build_parser()
+    factory = entry_parser_factories().get(arguments[0] if arguments else "", build_parser)
+    parser = factory()
     if is_check or is_dispatch or is_recover:
         arguments = arguments[1:]
     try:
@@ -175,6 +195,11 @@ def main(argv: list[str] | None = None) -> int:
     if is_recover:
         args.command = "recover"
         args.version = False
+    if isinstance(sys.stdout, TerminalWriter):
+        sys.stdout.machine_json = bool(
+            getattr(args, "json", False) or getattr(args, "json_output", False)
+            or (args.command == "audit" and getattr(args, "publish", False))
+        )
     if args.version:
         print(f"csk {__version__}")
         return EXIT_OK
@@ -988,7 +1013,7 @@ def _dispatch(args: argparse.Namespace) -> int:
                 include_global=not args.no_global,
             )
             print(f"Wrote {terminal_text(hook_path)}")
-            print(f"Add this to your shell profile: {terminal_text(shell_init.source_command(selected_shell, hook_path))}")
+            print(f"Add this to your shell profile: {shell_init.source_command(selected_shell, hook_path)}")
         else:
             print(shell_init.shell_init(selected_shell, include_global=not args.no_global))
         return EXIT_OK
@@ -1838,7 +1863,7 @@ def _cmd_update(cfg: config.GlobalConfig) -> int:
     for repo, error in results:
         if error:
             failed = True
-            print(f"fetch failed {terminal_text(repo.name)}: {error}", file=sys.stderr)
+            print(f"fetch failed {terminal_text(repo.name)}: {terminal_text(error)}", file=sys.stderr)
         else:
             print(f"fetched {terminal_text(repo.name)}")
     return EXIT_PARTIAL_FAIL if failed else EXIT_OK

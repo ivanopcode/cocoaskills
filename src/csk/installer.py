@@ -4321,7 +4321,7 @@ def _check_skill_validation_errors(issues: list[tuple[SkillPlan, skillcheck.Vali
     errors: list[str] = []
     for plan, issue in issues:
         if issue.severity == "error":
-            errors.append(f"{plan.decl.name}: {issue.message}")
+            errors.append(f"{terminal_text(plan.decl.name)}: {terminal_text(issue.message)}")
     if errors:
         raise InstallError("; ".join(errors))
 

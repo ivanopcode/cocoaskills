@@ -13,7 +13,7 @@ def terminal_text(value: object) -> str:
     result = []
     for char in str(value):
         code = ord(char)
-        if unicodedata.category(char) in {"Cc", "Cf", "Cs", "Zl", "Zp"} or unicodedata.bidirectional(char) in {"LRE", "RLE", "LRO", "RLO", "PDF", "LRI", "RLI", "FSI", "PDI"}:
+        if char not in "\u200c\u200d" and (unicodedata.category(char) in {"Cc", "Cf", "Cs", "Zl", "Zp"} or unicodedata.bidirectional(char) in {"LRE", "RLE", "LRO", "RLO", "PDF", "LRI", "RLI", "FSI", "PDI"}):
             result.append({10: r"\n", 13: r"\r", 9: r"\t"}.get(
                 code, f"\\x{code:02x}" if code < 256 else (f"\\u{code:04x}" if code <= 0xffff else f"\\U{code:08x}")
             ))
@@ -49,4 +49,27 @@ def shell_word(value: str) -> str:
 
 def terminal_document(value: str) -> str:
     """Escape document characters while retaining owned JSON whitespace layout."""
-    return "".join(char if char in "\n\r\t" else terminal_text(char) for char in value)
+    return "".join(char if char in "\n\t" else terminal_text(char) for char in value)
+
+
+class TerminalWriter:
+    """Text-only safety net; source renderers must escape untrusted newlines.
+
+    JSON stdout can opt out after successful argument parsing. Stderr never
+    opts out. Delegate stream capabilities (isatty, encoding, flush) unchanged.
+    """
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.machine_json = False
+
+    def write(self, text: str) -> int:
+        self.stream.write(text if self.machine_json else terminal_document(text))
+        return len(text)
+
+    def writelines(self, lines) -> None:
+        for line in lines:
+            self.write(line)
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
