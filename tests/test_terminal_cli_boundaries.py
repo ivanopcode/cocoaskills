@@ -117,3 +117,28 @@ def test_install_transport_hints(tmp_path, skills_root, csk_home, monkeypatch, c
     assert terminal_text(plant) in output  # Direct detail or verbose typed cause.
     assert (project / 'Skillfile.json').read_bytes() == before
     assert not (project / '.agents' / 'skills' / 'demo').exists()
+
+
+# The bounded reader keeps config-show layout for valid UTF-8 and refuses an
+# oversized file without echoing hostile filename controls or changing the file.
+@pytest.mark.parametrize('name', ['ordinary café.json', 'config\nFORGED\x1b\u202e.json'])
+def test_config_show_bounded_read(tmp_path, monkeypatch, capsys, name):
+    from csk import protocol_json
+
+    if sys.platform == 'win32' and '\n' in name:
+        pytest.skip('Windows forbids control-bearing filenames; ordinary refusal remains covered')
+    path = tmp_path / name
+    monkeypatch.setenv('CSK_CONFIG', str(path))
+    path.write_bytes('{\r\n  "label": "café"\r\n}\r\n'.encode('utf-8'))
+    assert cli.main(['config', 'show']) == 0
+    captured = capsys.readouterr()
+    assert captured.out == f'Config path: {terminal_text(path)}\n{{\n  "label": "café"\n}}\n'
+    assert captured.err == ''
+    size = protocol_json.MAX_INPUT_BYTES + 1
+    with path.open('wb') as stream:
+        stream.truncate(size)
+    assert cli.main(['config', 'show']) == cli.EXIT_CONFIG
+    captured = capsys.readouterr()
+    assert f'cannot read config at {terminal_text(path)}: JSON input exceeds maximum size' in captured.err
+    assert_safe(captured.out + captured.err)
+    assert path.stat().st_size == size
