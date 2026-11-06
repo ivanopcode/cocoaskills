@@ -445,7 +445,7 @@ def test_record_refuses_confirm_decision(tmp_path: Path) -> None:
 def _surrogate_finding(*, location: str | None, evidence: str) -> Finding:
     from csk.audit.model import Location
 
-    return Finding(
+    finding = Finding(
         id="static.opaque.unanalyzable-artifact",
         surface=Surface.CODE,
         category="opaque",
@@ -456,6 +456,13 @@ def _surrogate_finding(*, location: str | None, evidence: str) -> Finding:
         confidence="high",
         verifiable=True,
     )
+
+    # Fault injection bypasses the constructor's output grammar to keep testing
+    # the independent persistence validator on malformed in-memory objects.
+    if location is not None:
+        object.__setattr__(finding, "location", Location(location))
+    object.__setattr__(finding, "evidence", evidence)
+    return finding
 
 
 @pytest.mark.parametrize(
@@ -476,7 +483,7 @@ def _surrogate_finding(*, location: str | None, evidence: str) -> Finding:
 def test_record_with_surrogate_finding_string_is_structured(
     tmp_path: Path, field: str, finding: Finding
 ) -> None:
-    """A lone surrogate from a pipeline-produced finding refuses typed (F5).
+    """A planted lone surrogate bypassing the constructor refuses typed (F5).
 
     Locations derive from real filenames and evidence from detector output,
     so neither may escape as a raw parser error; the refusal names the
