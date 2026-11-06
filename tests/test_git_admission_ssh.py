@@ -809,8 +809,10 @@ def test_windows_tcp_blackhole(tmp_path: Path, transport: str) -> None:
             env = git_admission._clean_git_environment(paths, tool, transport, ssh_command=command)
             started = time.monotonic()
             with pytest.raises(git_admission.GitAdmissionError) as error:
+                # Match admission's protocol pin; Git v2 adds SendEnv, which
+                # the guard correctly refuses before reaching the black hole.
                 git_admission._run_git_ls_remote(tool, paths, env,
-                    ["ls-remote", f"{transport}://127.0.0.1:{port}/repo"],
+                    ["-c", "protocol.version=0", "ls-remote", f"{transport}://127.0.0.1:{port}/repo"],
                     limits=git_admission.Limits(timeout_seconds=3))
             assert error.value.failure_class == "timeout"
             assert time.monotonic() - started < 10
