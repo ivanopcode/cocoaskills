@@ -205,6 +205,22 @@ Update the skill so it stores environments, caches and mutable state outside
 installed trees. On POSIX, successful publication removes all runtime write
 bits while preserving execute bits; Windows permissions and ACLs are unchanged.
 See the [runtime authoring contract](skill-authoring.md#installed-runtime-is-immutable).
+For Python skills, use the [external venv recipe](skill-authoring.md#python-virtual-environments-outside-the-runtime).
+
+## Cannot resolve system command outside csk shims
+
+A command may be visible to your shell yet refused while csk creates a skill's
+launcher. csk excludes whole `.agents/bin` and csk `global/bin` trees, as well as
+directories containing `.csk-managed.json` and their descendants. This includes
+unrelated executables beside csk forwarders in a shared user bin directory.
+Aliases and intermediate symlinks through these directories are also refused.
+
+Install the real tool in a separate directory outside those trees and add its
+absolute directory to `PATH` before running csk. A symlink is acceptable only if
+every directory and file link in its chain stays outside the excluded trees;
+adding an external alias that points back into a mixed shim directory does not
+help. Use the same `PATH` in project setup and the agent's launch environment.
+Keep `.csk-managed.json` intact: deleting csk ownership records is not a remedy.
 
 ## go-v1 toolchain_shim_unresolved
 

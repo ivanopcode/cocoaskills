@@ -87,6 +87,43 @@ from the trusted source; an old unselected generation needs its corresponding
 trusted snapshot restored before collection. GC retains unsafe generations and
 their snapshot evidence, reporting the diagnostic as a warning.
 
+### Python virtual environments outside the runtime
+
+Treat the installed runtime as application source, not a working directory.
+`python3 -m venv --copies` is not a repair: a copied environment is still foreign
+state, even if it contains no symlinks. Do not symlink `.venv` from the runtime
+to an external directory either; that link is itself a foreign entry.
+
+For example, a POSIX script skill can document this one-time setup. Set
+`runtime_dir` to the directory containing its installed `requirements.lock`
+and `main.py`; resolve it from the script location, not the caller's working
+directory. Use a skill-specific cache directory outside all installed trees:
+
+```sh
+venv="${XDG_CACHE_HOME:-$HOME/.cache}/example-skill/venv"
+python3 -m venv "$venv"
+"$venv/bin/python" -m pip install --require-hashes -r "$runtime_dir/requirements.lock"
+```
+
+The skill supplies a pinned, hash-checked requirements file. The chosen Python
+must support the skill's required version. Recreate this disposable environment
+when that interpreter or dependency set changes, with no concurrent setup or
+running command using it; a versioned cache directory can keep different sets
+separate. csk does not create, update or garbage-collect this environment.
+
+At invocation, use that environment directly; activation is unnecessary:
+
+```sh
+venv="${XDG_CACHE_HOME:-$HOME/.cache}/example-skill/venv"
+PYTHONDONTWRITEBYTECODE=1 "$venv/bin/python" "$runtime_dir/main.py" "$@"
+```
+
+An externally located venv may use Python's normal symlinks. Keep generated
+output in a separate user-owned cache/state directory too. If `XDG_CACHE_HOME`
+is customized, it must be an absolute path outside csk-published trees. On
+Windows use a user-owned cache directory outside the installation and invoke
+`<venv>\Scripts\python.exe`; do not change the runtime ACLs to enable writes.
+
 ## 2. Обязательные файлы
 
 Каждый устанавливаемый скилл содержит файл:

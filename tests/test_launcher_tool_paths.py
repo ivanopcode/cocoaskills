@@ -192,6 +192,35 @@ def test_launcher_missing_dependency_refuses_before_publication(tmp_path, monkey
     assert not bin_dir.exists()
 
 
+# A real tool beside managed shims refuses with a usable placement remedy;
+# moving that same tool outside the directory permits publication.
+@pytest.mark.parametrize("declaration", ["explicit", "legacy"])
+def test_mixed_directory_dependency_remedy(tmp_path, monkeypatch, declaration):
+    tool = _tool(tmp_path / "mixed-bin")
+    ledger = tool.parent / ".csk-managed.json"
+    ledger.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("PATH", str(tool.parent))
+    plan = _plan(tmp_path, declaration)
+    bin_dir, home = tmp_path / "bin", tmp_path / "home"
+    with pytest.raises(installer.InstallError) as error:
+        installer.install_runtime_commands(home, bin_dir, plan)
+    diagnostic = str(error.value)
+    assert "Cannot resolve system command 'external-helper'" in diagnostic
+    assert "including unrelated tools beside .csk-managed.json" in diagnostic
+    assert "absolute PATH directory outside those trees" in diagnostic
+    assert "symlink chain must also stay outside" in diagnostic
+    assert not bin_dir.exists() and not (home / "runtime").exists()
+    assert ledger.read_text(encoding="utf-8") == "{}"
+    external = tmp_path / "external-bin"
+    external.mkdir()
+    tool.rename(external / tool.name)
+    monkeypatch.setenv("PATH", str(external))
+    resolve_tool.cache_clear()
+    assert installer.install_runtime_commands(home, bin_dir, plan) == {"tool"}
+    _, suffix = _split_launcher(_launcher_text(bin_dir))
+    assert str(external.resolve()) in suffix
+
+
 @pytest.mark.parametrize("declaration", ["explicit", "legacy"])
 def test_runtime_prefix_contains_only_manager_directories(tmp_path, monkeypatch, declaration):
     tool = _tool(tmp_path / "tools")

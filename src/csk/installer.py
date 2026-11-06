@@ -4312,7 +4312,13 @@ def _runtime_path_suffix(plan: SkillPlan) -> tuple[Path, ...]:
         except (FileNotFoundError, ValueError) as exc:
             raise InstallError(
                 f"Cannot resolve system command {terminal_text(dependency.command)!r} "
-                f"for {terminal_text(plan.decl.name)}: {terminal_text(exc)}"
+                f"for {terminal_text(plan.decl.name)}: {terminal_text(exc)}. "
+                "csk excludes entire shim directories, including unrelated tools "
+                "beside .csk-managed.json, and their descendants. "
+                "remediation: install the real executable in an absolute PATH "
+                "directory outside those trees; its symlink chain must also stay "
+                "outside .agents/bin, the csk global/bin directory and directories "
+                "marked by .csk-managed.json. Then rerun the same command"
             ) from exc
         candidates.append(Path(executable).parent)
     return _dedupe_path_candidates(candidates)
