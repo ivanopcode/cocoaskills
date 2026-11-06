@@ -159,6 +159,9 @@ def failure_text(exc: BaseException, *, verbose: bool = False) -> str:
             )
             for item in missing_error.missing
         ])
+    # Resolution errors already separate escaped data from owned hint layout.
+    if isinstance(exc, git_admission.GitAdmissionError) and not isinstance(exc, source_transport.TransportResolutionError):
+        message = terminal_text(message)
     if isinstance(exc, git_admission.GitAdmissionError) and exc.failure_class:
         failure_class = (
             exc.failure_class

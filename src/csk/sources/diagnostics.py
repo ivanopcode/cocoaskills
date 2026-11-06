@@ -148,10 +148,10 @@ def transport_next_steps(
     safe_class = failure_class if type(failure_class) is str else "unclassified"
     action = NEXT_BY_FAILURE_CLASS.get(safe_class, NEXT_BY_FAILURE_CLASS["unclassified"])
     label = f"attempt {ordinal}: " if type(ordinal) is int else ""
-    lines = [f"next: {label}{action}"]
+    lines = [f"next: {label}{terminal_text(action)}"]
     if type(hints) is tuple:
         lines.extend(
-            f"hint: {label}{HINT_TEXT[hint]}"
+            f"hint: {label}{terminal_text(HINT_TEXT[hint])}"
             for hint in hints if type(hint) is str and hint in HINT_TEXT
         )
     return "\n".join(lines)
