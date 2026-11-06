@@ -285,12 +285,23 @@ def _local_probe(
         environment["SSH_AUTH_SOCK"] = str(agent)
     try:
         executable = resolve_tool(Path(argv[0]).name, executable=argv[0])
-        return subprocess.run(
-            (executable, *argv[1:]), input=data, stdin=subprocess.DEVNULL if data is None else None,
-            capture_output=True, text=True, timeout=5, env=environment,
+        result = subprocess.run(
+            (executable, *argv[1:]), input=data.encode("utf-8") if data is not None else None, stdin=subprocess.DEVNULL if data is None else None,
+            capture_output=True, timeout=5, env=environment,
+        )
+        return subprocess.CompletedProcess(
+            result.args, result.returncode, result.stdout.decode("utf-8"), result.stderr.decode("utf-8"),
         )
     except (OSError, subprocess.SubprocessError, UnicodeError):
         return None
+
+
+def _key_fingerprints(output: str) -> list[str] | None:
+    """Accept complete OpenSSH SHA256 fingerprint records, never partial rows."""
+    rows = output.removesuffix("\n").split("\n")
+    pattern = r"[1-9][0-9]* (SHA256:[A-Za-z0-9+/]{43}) [^\r\n]* \((?:RSA|DSA|ECDSA|ED25519|ECDSA-SK|ED25519-SK)\)"
+    matches = [re.fullmatch(pattern, row) for row in rows]
+    return [match[1] for match in matches if match] if all(matches) else None
 
 
 def inspect_key(
@@ -307,71 +318,74 @@ def inspect_key(
     keygen = str(ssh.parent / ("ssh-keygen" + suffix))
     add = str(ssh.parent / ("ssh-add" + suffix))
     info = _local_probe((keygen, "-l", "-f", str(identity)))
-    if info is None or info.returncode != 0 or len(info.stdout.split()) < 2:
+    admitted = _key_fingerprints(info.stdout) if info is not None and info.returncode == 0 and not info.stderr else None
+    if admitted is None or len(admitted) != 1:
         return KeyInspection()
-    fingerprint = info.stdout.split()[1]
-    kind = info.stdout.strip().rsplit("(", 1)[-1].rstrip(")")
+    assert info is not None
+    fingerprint = admitted[0]
+    kind = info.stdout.removesuffix("\n").rsplit("(", 1)[-1][:-1]
     loaded = None
     if agent is not None:
         listing = _local_probe((add, "-L"), agent=agent)
-        if listing is not None and listing.returncode == 1:
+        if listing is not None and listing.returncode == 1 and listing.stdout == "The agent has no identities.\n" and not listing.stderr:
             loaded = False
-        elif listing is not None and listing.returncode == 0:
+        elif listing is not None and listing.returncode == 0 and not listing.stderr:
             fingerprints = _local_probe((keygen, "-l", "-f", "-"), data=listing.stdout)
-            if fingerprints is not None and fingerprints.returncode == 0:
-                loaded = fingerprint in [
-                    line.split()[1] for line in fingerprints.stdout.splitlines()
-                    if len(line.split()) >= 2
-                ]
+            records = _key_fingerprints(fingerprints.stdout) if fingerprints is not None and fingerprints.returncode == 0 and not fingerprints.stderr else None
+            if records is not None and len(records) == len(listing.stdout.removesuffix("\n").split("\n")):
+                loaded = fingerprint in records
     provider = "unknown"
     security_key = "-SK" in kind.upper()
     if security_key:
         settings = _local_probe((str(ssh), "-G", "-F", os.devnull, "example.invalid"))
-        if settings is not None and settings.returncode == 0:
-            # Only one well-formed physical record establishes a provider.
-            # Duplicates and unexpected separators cannot resolve its state.
-            records = []
-            for line in settings.stdout.split("\n"):
-                fields = line.split()
-                if fields and fields[0] == "securitykeyprovider":
-                    records.append(fields)
-            unfamiliar_separator = any(
-                (char.isspace() and char not in " \t\n")
-                or (ord(char) < 32 and char not in "\t\n") or ord(char) == 127
-                for char in settings.stdout
+        # No token/provider state is inferred from normalized values or socket names.
+        # Only the exact absent-provider record is affirmative refusal evidence.
+        records = [line for line in settings.stdout.split("\n") if "securitykeyprovider" in line.lower()] if settings is not None else []
+        if settings is not None and settings.returncode == 0 and not settings.stderr:
+            rows = settings.stdout.removesuffix("\n").split("\n")
+            canonical = all(re.fullmatch(r"[a-z][a-z0-9]* [^\x00-\x1f\x7f]+", row) for row in rows) and not any(
+                char.isspace() and char not in " \n" for char in settings.stdout
             )
-            if unfamiliar_separator or len(records) != 1 or len(records[0]) != 2:
-                return KeyInspection(
-                    reason="SSH security-key provider output is unfamiliar",
-                    key_kind=kind, loaded=loaded,
-                )
-            provider = records[0][1]
-    private = Path(str(identity)[:-4]) if str(identity).endswith(".pub") else identity
+            if canonical and records == ["securitykeyprovider none"]:
+                return KeyInspection(state="unusable", reason="SSH has no configured security-key provider in this lane", key_kind=kind, loaded=loaded, provider="none")
+            if canonical and records == ["securitykeyprovider internal"]:
+                provider = "internal"
+        reason = "local metadata does not establish that the key is unusable" if provider == "internal" else "SSH security-key provider output is unfamiliar"
+        return KeyInspection(reason=reason, key_kind=kind, loaded=loaded, provider=provider)
+    private = identity
     decrypted = _local_probe((keygen, "-y", "-P", "", "-f", str(private)))
     passphrase = None
     bad_permissions = False
+    invalid_public = False
     if decrypted is not None:
-        bad_permissions = (
-            decrypted.returncode != 0
-            and "bad permissions" in decrypted.stderr.lower()
-            and "private key will be ignored" in decrypted.stderr.lower()
+        error = f'Load key "{private}": '
+        passphrase_error = error + "incorrect passphrase supplied to decrypt private key\n"
+        permission_error = (
+            "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+            "@         WARNING: UNPROTECTED PRIVATE KEY FILE!          @\n"
+            "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+            f"Permissions MODE for '{private}' are too open.\n"
+            "It is required that your private key files are NOT accessible by others.\n"
+            "This private key will be ignored.\n" + error + "bad permissions\n"
+        )
+        failed = decrypted.returncode == 255 and not decrypted.stdout
+        bad_permissions = failed and any(
+            re.fullmatch(re.escape(form).replace("MODE", r"0[0-7]{3,4}"), decrypted.stderr)
+            for form in (permission_error, permission_error.replace("\n", "\r\n"))
         )
         if decrypted.returncode == 0:
             passphrase = False
-        elif decrypted.returncode == 255 and "incorrect passphrase" in decrypted.stderr.lower():
+        elif failed and decrypted.stderr in {passphrase_error, passphrase_error.replace("\n", "\r\n")}:
             passphrase = True
+        invalid_public = failed and decrypted.stderr in {
+            error + suffix + ending for suffix in ("invalid format", "error in libcrypto") for ending in ("\n", "\r\n")
+        }
     facts = KeyInspection(key_kind=kind, passphrase=passphrase, loaded=loaded, provider=provider)
-    if security_key and loaded and sys.platform == "darwin" and agent is not None and re.fullmatch(
-        r"/(?:private/)?tmp/com[.]apple[.]launchd[.][^/]+/Listeners", str(agent)
-    ):
-        return replace(facts, state="unusable", reason="macOS system agent masks this USB security key and cannot sign with it")
-    if security_key and provider in {"$SSH_SK_PROVIDER", "none"}:
-        return replace(facts, state="unusable", reason="SSH has no configured security-key provider in this lane")
     if loaded:
         return replace(facts, state="unknown", reason="key is listed in the agent; signing ability is unverified")
     if agent is not None and loaded is None:
         return replace(facts, reason="agent availability or key membership is unknown")
-    if str(identity).endswith(".pub"):
+    if str(identity).endswith(".pub") and (invalid_public or bad_permissions):
         return replace(facts, state="unusable", reason="a public key alone cannot sign and no matching agent key is available")
     if bad_permissions:
         return replace(facts, state="unusable", reason="private key permissions are too open; SSH will ignore this file")
