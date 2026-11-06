@@ -1178,19 +1178,20 @@ def _check_cli_outcome(
     payload: str,
     thunk,
 ) -> None:
-    """Assert one firing run's outcome. Kinds: refuse/ok/raw-oserror/raw-runtime."""
-    if kind == "raw-oserror":
-        with pytest.raises(OSError):
-            thunk()
-        capsys.readouterr()
-        return
-    if kind == "raw-runtime":
-        with pytest.raises(RuntimeError, match=payload):
-            thunk()
-        capsys.readouterr()
-        return
+    """Assert one firing run's outcome. Kinds: refuse/ok/reported-oserror/reported-runtime."""
     code = thunk()
     captured = capsys.readouterr()
+    # Unexpected faults now cross the CLI's guarded traceback boundary. Pin the
+    # exact injected errno/type, not just any failure; dry/K+1 still require success.
+    if kind in {"reported-oserror", "reported-runtime"}:
+        assert code == cli.EXIT_PARTIAL_FAIL
+        assert "Traceback (most recent call last):" in captured.err
+        if kind == "reported-oserror":
+            error = OSError(err, os.strerror(err))
+            assert f"{type(error).__name__}: {error}" in captured.err
+        else:
+            assert "RuntimeError:" in captured.err and payload in captured.err
+        return
     if kind == "refuse":
         assert code == cli.EXIT_CONFIG, (
             f"{label} ord{ordinal} errno={err}: expected refusal, got {code}"
@@ -1501,8 +1502,8 @@ def test_sweep_bootstrap_create_each_ordinal_refuses(monkeypatch, tmp_path, caps
     """The bootstrap create path: guard stat then save.
 
     K=2. The guarded stat refuses; the trailing non-named
-    ``config._write_json_atomic`` (``os.replace``) escapes raw, which is
-    the declared out-of-contract bound, not a refusal.
+    ``config._write_json_atomic`` (``os.replace``) produces the guarded
+    unexpected-error traceback, not a domain refusal.
     """
     monkeypatch.delenv(csk_config.SKILLFILE_SOURCES_ENV_VAR, raising=False)
     monkeypatch.delenv("CSK_SYSTEM_CONFIG", raising=False)
@@ -1525,7 +1526,7 @@ def test_sweep_bootstrap_create_each_ordinal_refuses(monkeypatch, tmp_path, caps
         ],
         expect={
             1: ("refuse", "cannot inspect config"),
-            2: ("raw-oserror", ""),
+            2: ("reported-oserror", ""),
         },
         dry=(cli.EXIT_OK, "Wrote", ""),
         kp1=(cli.EXIT_OK, "Wrote", ""),
@@ -1537,7 +1538,7 @@ def test_sweep_init_target_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
 
     A real Git fixture selects legacy behavior explicitly via its managed block.
     Mode discovery adds a guarded manifest read and two non-named policy reads.
-    Non-named legacy ignore reads/writes retain their declared raw-error bound.
+    Non-named legacy ignore reads/writes produce guarded error tracebacks.
     Default exclude rejection and byte preservation have separate real-Git tests.
     Fixed POSIX pins and the existing Windows ordinal mapping remain enforced.
     """
@@ -1574,11 +1575,11 @@ def test_sweep_init_target_each_ordinal_refuses(monkeypatch, tmp_path, capsys):
     expect[prefix_count] = ("refuse", "cannot access target path")
     tail = [
         ("refuse", "Cannot read Skillfile at"),
-        ("raw-oserror", ""),
-        ("raw-oserror", ""),
-        ("raw-oserror", ""),
-        ("raw-oserror", ""),
-        ("raw-oserror", ""),
+        ("reported-oserror", ""),
+        ("reported-oserror", ""),
+        ("reported-oserror", ""),
+        ("reported-oserror", ""),
+        ("reported-oserror", ""),
         ("refuse", "Cannot access project path"),
         ("refuse", "Cannot read Skillfile at"),
         ("refuse", "Cannot read Skillfile at"),
@@ -1827,7 +1828,7 @@ def test_sweep_project_resolve_each_ordinal_refuses(monkeypatch, tmp_path, capsy
             2: ("ok", "path_hash:"),
             3: ("ok", "path_hash:"),
         }
-        overrides = {(3, errno.ELOOP): ("raw-runtime", "Symlink loop")}
+        overrides = {(3, errno.ELOOP): ("reported-runtime", "Symlink loop")}
 
     _sweep_cli(
         monkeypatch, capsys,
