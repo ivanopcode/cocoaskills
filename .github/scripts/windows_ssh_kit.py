@@ -17,6 +17,11 @@ import uuid
 import xml.etree.ElementTree as ET
 
 NATIVE_CASES = {
+    "test_windows_destination_guard_with_space_paths",
+    "test_windows_git_tree_deadline",
+    "test_windows_real_ssh_authenticated_stall",
+    "test_windows_tcp_blackhole[ssh]",
+    "test_windows_tcp_blackhole[https]",
     *(f"test_windows_real_git_ssh_clean_environment_matrix[{key}]"
       for key in ("ed25519", "rsa", "ecdsa", "encrypted", "agent")),
     *(f"test_windows_native_ssh_starts_with_private_program_data[{value}]"
@@ -25,10 +30,10 @@ NATIVE_CASES = {
 
 
 def verify_results(results: Path) -> None:
-    """Require the real five-route matrix and both startup probes, never skips."""
+    """Require all native authentication, quoting and deadline cases, never skips."""
     cases = [case for case in ET.parse(results).iter("testcase")
              if case.get("classname", "").rsplit(".", 1)[-1] == "test_git_admission_ssh"
-             and case.get("name", "").startswith(("test_windows_real_git_ssh_", "test_windows_native_ssh_"))]
+             and case.get("name", "").startswith(("test_windows_real_git_ssh_", "test_windows_native_ssh_", "test_windows_git_tree_", "test_windows_real_ssh_", "test_windows_tcp_blackhole", "test_windows_destination_guard_"))]
     names = [case.get("name") for case in cases]
     bad = [case.get("name") for case in cases if any(case.find(tag) is not None
                                                      for tag in ("skipped", "failure", "error"))]
@@ -65,9 +70,18 @@ def save(root: Path, state: dict) -> None:
 
 def server_pids(root: Path) -> list[int]:
     config = (root / "sshd_config").as_posix()
-    result = ps("@(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'sshd.exe' -and "
-                f"$_.CommandLine.Contains({quote(config)}) }} | ForEach-Object {{ $_.ProcessId }}) "
-                "| ConvertTo-Json -Compress")
+    # A disconnected forced command can outlive its sshd parent. Include only
+    # this kit's exact script as an additional owned process-tree root.
+    server = str(root / "server.py")
+    result = ps("$all=@(Get-CimInstance Win32_Process);"
+                "$ids=[System.Collections.Generic.List[int]]::new();"
+                f"foreach($p in $all){{if(($p.Name -eq 'sshd.exe' -and $p.CommandLine.Contains({quote(config)})) "
+                f"-or ($p.Name -eq 'python.exe' -and $p.CommandLine.Contains({quote(server)})))"
+                "{$ids.Add([int]$p.ProcessId)}};"
+                "$changed=$true;while($changed){$changed=$false;foreach($p in $all){"
+                "if($ids.Contains([int]$p.ParentProcessId) -and -not $ids.Contains([int]$p.ProcessId)){"
+                "$ids.Add([int]$p.ProcessId);$changed=$true}}};"
+                "@($ids.ToArray()) | ConvertTo-Json -Compress")
     values = json.loads(result or "[]")
     return values if isinstance(values, list) else [values]
 
@@ -101,6 +115,14 @@ def setup(root: Path, port: int) -> None:
         # Public fixture phrase protects only a newly generated disposable key.
         phrase = "csk-generated-test-passphrase" if key == "encrypted" else ""
         checked([keygen, "-q", "-t", kind, "-N", phrase, "-C", "csk-disposable-fixture", "-f", str(root / key)])
+    identities = root / "First Last" / ".ssh"
+    identities.mkdir(parents=True)
+    for key in ("ed25519", "rsa", "ecdsa", "encrypted"):
+        target = identities / key
+        shutil.copyfile(root / key, target)
+        ps("$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;"
+           f"& icacls.exe {quote(target)} /inheritance:r /grant:r \"*$sid`:F\" | Out-Null;"
+           "if($LASTEXITCODE){throw 'generated identity ACL failed'}")
     (root / "authorized_keys").write_text("".join((root / (key + ".pub")).read_text()
                                                for key in ("ed25519", "rsa", "ecdsa", "encrypted")), encoding="ascii")
     (root / "known_hosts").write_text(f"[127.0.0.1]:{port} " + (root / "host.pub").read_text(), encoding="ascii")
@@ -195,8 +217,13 @@ def cleanup(root: Path, evidence: Path) -> None:
     # pattern kill. The config path distinguishes the normal system sshd.
     state["pids"] = server_pids(root)
     save(root, state)
-    for pid in state["pids"]:
-        checked(["taskkill.exe", "/PID", str(pid), "/F"])
+    for pid in reversed(state["pids"]):
+        killed = subprocess.run(["taskkill.exe", "/PID", str(pid), "/F"], capture_output=True, timeout=5)
+        if killed.returncode:
+            # A child may exit after its parent or sibling was terminated.
+            ps(f"if(Get-Process -Id {pid} -ErrorAction SilentlyContinue){{throw 'owned server termination failed'}};exit 0")
+        ps(f"Wait-Process -Id {pid} -Timeout 5 -ErrorAction SilentlyContinue;"
+           f"if(Get-Process -Id {pid} -ErrorAction SilentlyContinue){{throw 'owned server process survived cleanup'}};exit 0")
     task = quote(state["task"])
     ps(f"if(Get-ScheduledTask -TaskName {task} -ErrorAction SilentlyContinue) "
        f"{{Unregister-ScheduledTask -TaskName {task} -Confirm:$false}}")
@@ -206,6 +233,8 @@ def cleanup(root: Path, evidence: Path) -> None:
         remaining = subprocess.run([add, "-l"], capture_output=True)
         if removed.returncode not in (0, 1) or remaining.returncode != 1:
             raise RuntimeError("generated agent identity cleanup did not leave the initially empty agent empty")
+        state["agent_add_attempted"] = False
+        save(root, state)
         print("agent identity readback exit=1 (empty)", flush=True)
     service = state["service"]
     if service["State"] != "Running":
@@ -253,6 +282,9 @@ def main() -> int:
             parser.error("cleanup requires --evidence outside the kit root")
         cleanup(root, args.evidence.resolve())
     else:
+        if (root / "stall").exists():
+            (root / "authenticated").write_text("yes")
+            time.sleep(120)
         state = json.loads((root / "state.json").read_text())
         repository = (root / "repository").read_text(encoding="utf-8").strip()
         return subprocess.call([state["git"], "upload-pack", repository])

@@ -191,13 +191,19 @@ def discover_candidates(
     from pathlib import Path
 
     env = dict(environment) if environment is not None else dict(os.environ)
-    agent_socket = env.get("SSH_AUTH_SOCK") or None
+    import sys
+    windows = sys.platform == "win32"
+    if windows:
+        from .git_admission import _windows_ssh_agent_pipe_available, _WINDOWS_SSH_AGENT_PIPE
+        agent_socket = _WINDOWS_SSH_AGENT_PIPE if _windows_ssh_agent_pipe_available() else None
+    else:
+        agent_socket = env.get("SSH_AUTH_SOCK") or None
     agent_key_count: int | None = None
     if agent_socket:
         try:
             probe = subprocess.run(
                 (resolve_tool("ssh-add", search_path=env.get("PATH")), "-l"),
-                env={"SSH_AUTH_SOCK": agent_socket, "PATH": env.get("PATH", "")},
+                env=(env if windows else {"SSH_AUTH_SOCK": agent_socket, "PATH": env.get("PATH", "")}),
                 capture_output=True,
                 text=True,
                 timeout=5,

@@ -2,7 +2,7 @@ name: Native Windows SSH
 
 on:
   push:
-    branches: [main, feat/windows-build-ssh-agent]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -16,7 +16,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 20
     env:
-      CSK_SSH_KIT: ${{ github.workspace }}/.temp/csk-native-ssh-kit
+      CSK_SSH_KIT: ${{ github.workspace }}/.temp/csk native ssh kit
       CSK_SSH_EVIDENCE: ${{ github.workspace }}/.temp/csk-native-ssh-evidence
     steps:
       - name: Checkout
@@ -39,7 +39,7 @@ jobs:
         id: setup
         shell: pwsh
         run: python .github/scripts/windows_ssh_kit.py setup --root "$env:CSK_SSH_KIT"
-      - name: Run real Git and SSH; require seven native cases without skips
+      - name: Run real Git and SSH; require native cases without skips
         id: run
         shell: pwsh
         run: python .github/scripts/windows_ssh_kit.py run --root "$env:CSK_SSH_KIT" --results "$env:CSK_SSH_EVIDENCE/results.xml"

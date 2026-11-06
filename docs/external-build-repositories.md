@@ -244,8 +244,8 @@ Ambient `PATH`, `USERPROFILE`, agent variables and executable overrides remain
 excluded. POSIX and HTTPS environments do not acquire this variable.
 
 The native Windows regression matrix is opt-in for a disposable loopback server.
-The dedicated `windows-ssh.yml` CI job provisions this kit and requires all five
-matrix cases and both native startup cases to pass without skips. To reproduce
+The dedicated `windows-ssh.yml` CI job provisions this kit and requires all 12 native
+authentication, startup, destination-guard and deadline cases to pass without skips. To reproduce
 it on a disposable elevated Windows host, run the `setup`, `run` and `cleanup`
 commands in `.github/scripts/windows_ssh_kit.py`; `cleanup` restores the service
 state and removes the generated keys, server/task and private run files.
@@ -257,24 +257,22 @@ test interactive `ssh-add` prompting. From the checkout, for example:
 ```powershell
 python -m pip install ".[dev]" bcrypt
 try {
-  python .github/scripts/windows_ssh_kit.py setup --root "$env:TEMP/csk-ssh-kit"
-  python .github/scripts/windows_ssh_kit.py run --root "$env:TEMP/csk-ssh-kit" --results "$env:TEMP/csk-ssh-evidence/results.xml"
+  python .github/scripts/windows_ssh_kit.py setup --root "$env:TEMP/csk ssh kit"
+  python .github/scripts/windows_ssh_kit.py run --root "$env:TEMP/csk ssh kit" --results "$env:TEMP/csk-ssh-evidence/results.xml"
 } finally {
-  python .github/scripts/windows_ssh_kit.py cleanup --root "$env:TEMP/csk-ssh-kit" --evidence "$env:TEMP/csk-ssh-evidence"
+  python .github/scripts/windows_ssh_kit.py cleanup --root "$env:TEMP/csk ssh kit" --evidence "$env:TEMP/csk-ssh-evidence"
 }
 ```
 
-For a separately provisioned fixture instead of the helper,
-set `CSK_TEST_WINDOWS_SSH_ROOT` to an operator-provisioned fixture directory with
-`endpoint.json` (`{"port":22224,"user":"TestUser"}`), `known_hosts`, authorized
-private keys named `ed25519`, `rsa`, `ecdsa`, and `encrypted`, and load the encrypted
-key into the standard service agent. Bind sshd only to 127.0.0.1; its forced
-upload-pack command must read the repository path from the fixture directory's
-`repository` file. Run `python -m pytest -q tests/test_git_admission_ssh.py`.
-The matrix creates disposable repositories and exercises complete snapshot
-admission through native Git/SSH. Without this kit only these five live cases
-skip; environment construction tests still run everywhere. Use no personal keys
-or existing repositories, and remove the kit and agent key after testing.
+The helper sets `CSK_TEST_WINDOWS_SSH_ROOT` and TEMP/TMP before starting Python.
+Its private root contains spaces, and selected identities live under
+`First Last/.ssh`. A separately provisioned fixture must match the helper's
+layout, ACLs and forced-command stall controls to run the same regressions.
+The matrix exercises complete snapshot admission through native Git/SSH.
+Without the kit the server-backed cases explicitly skip; the CI verifier rejects
+any skipped native case. Environment construction tests still run everywhere.
+Use no personal keys or existing repositories, and remove the kit and agent key
+after testing.
 
 
 Flags win over the environment. `--build-ssh-agent` with no value, or the value
@@ -497,3 +495,13 @@ public-key pins, hardware-agent traps and unverified platform routes. Prefer
 a private identity path even with an agent so both loaded and file states
 can work; passphrase-protected files still need a capable loaded agent under
 the current non-prompting SSH policy.
+On Windows, the guarded SSH wrapper owns a native subprocess with an argument
+list, preserving spaces in private directories and identity paths. Known-hosts
+paths are also quoted as SSH configuration list elements. The guarded expected
+host and repository check runs before launching SSH. Admission launches bounded
+Git commands suspended, assigns them to a kill-on-close Windows Job Object, then
+resumes them. At the deadline it terminates the job and waits at most two seconds
+for retained descendant process handles. This covers SSH and HTTPS helpers;
+local object reading keeps its existing timer and disables lazy network fetches.
+The native Windows CI kit exercises spaces, authenticated stalls, and TCP black
+holes on SSH and HTTPS. This does not add attended prompting or qualify MSYS SSH.
