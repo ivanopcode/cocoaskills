@@ -17,11 +17,11 @@ the credential selection the operator provides.
    channel. Record the verified key in `~/.ssh/known_hosts`. csk requires
    an existing trusted host key and never accepts a new key interactively.
 3. Choose one credential mode below. For a key already loaded in your
-   agent, pin its public key and save a scope:
+   agent, prefer its private identity path when that file exists:
 
    ```sh
    csk config build-ssh add git.example.com/team \
-       --agent auto --identity ~/.ssh/build_key.pub
+       --agent auto --identity ~/.ssh/build_key
    csk config build-ssh list
    ```
 
@@ -75,7 +75,7 @@ csk config build-ssh add git.example.com/team --identity ~/.ssh/build_key
 
 | Mode | Requirement | Limit |
 | --- | --- | --- |
-| Agent | `--agent auto` uses the current `SSH_AUTH_SOCK`; `--agent /absolute/agent.sock` selects a specific socket. | Loaded keys are offered in turn; too many can exhaust the server's authentication budget. |
+| Agent | `--agent auto` uses `SSH_AUTH_SOCK` on POSIX or the standard service pipe on Windows; `--agent /absolute/agent.sock` selects a POSIX socket. | Loaded keys are offered in turn; too many can exhaust the server's authentication budget. |
 | Agent plus pinned `.pub` | Load the matching private key into the selected agent first. Export only its public key to the named file. | The public file pins one identity; it cannot sign by itself. |
 | File | Name the private key, without `.pub`. The file must be usable without a passphrase prompt. | No agent is used. Encrypted files need the agent route in the current implementation. |
 
@@ -85,7 +85,7 @@ on `PATH` before starting csk. The current SSH options include
 `BatchMode=yes` and `NumberOfPasswordPrompts=0`; there is no supported
 attended passphrase mode.
 
-When a private file exists, you may also combine `--agent auto` with
+When a private file exists, prefer combining `--agent auto` with
 `--identity ~/.ssh/build_key`. SSH can use the loaded agent key, or a
 usable plain file if that key is absent. An encrypted private file still
 requires its matching key loaded while SSH prompts are disabled.
@@ -102,12 +102,18 @@ csk config build-ssh doctor git.example.com/team/tools
 csk config build-ssh doctor git.example.com/team/tools --all-os
 ```
 
-Doctor reports the selected identity and agent, SSH path/version and local
-key metadata. `--identity PATH` and `--agent SOCKET` override the inspected
-selection. Environment selections override configured scopes. `--all-os`
-includes instructions for every OS. Doctor makes no network connection,
-requests no signatures, prompts for nothing and changes no agent state.
-It does not check repository permissions or prove that a token can sign.
+Doctor reports the selected identity and agent, SSH path/version, key
+metadata, terminal attachment, agent key count/membership when established,
+and local host-key presence. Terminal attachment does not enable prompts.
+A host-key record in `known_hosts` does not verify the server fingerprint.
+`--identity PATH` and `--agent SOCKET` override the inspected selection.
+Environment selections override configured scopes. `--all-os` includes
+instructions for every OS. Missing or invalid config produces a notice;
+doctor continues with explicit options and environment without creating or
+repairing config. Closed stdin or stderr does not prevent diagnostics.
+Doctor makes no network connection, requests no signatures, prompts for
+nothing and changes no agent state. It does not check repository read
+permissions or prove that a token can sign.
 
 The preflight inspects local metadata before an SSH fetch. A proven unusable
 selection produces `build_repository_ssh_credential_unusable` with a reason
@@ -117,12 +123,20 @@ signing ability. The preflight classifies a refusal as `auth-unavailable`,
 so an explicitly declared transport fallback can remain eligible.
 It does not create a fallback or switch to HTTPS automatically.
 
-If SSH reports that private-file permissions are too open and the file
-will be ignored, preflight refuses that file route. Correct the file's
+On POSIX, preflight checks file facts with `stat`: an operator-owned regular
+identity with group or other permission bits is too open for direct use.
+Diagnostic text alone cannot establish this refusal. Correct the file's
 permissions under your policy, or select a capable agent holding the matching
-key. csk never changes key permissions. A matching loaded agent can still
-serve the key when the private file is ignored. Unfamiliar provider output
-remains `unknown`.
+key. csk never changes key permissions. An unavailable or ambiguous selected
+agent leaves membership unknown; its socket name cannot prove inability
+to sign or trigger a refusal.
+
+Fingerprint inspection and empty-passphrase loading are independent probes.
+The latter covers security-key containers and legacy PEM files even when
+fingerprint discovery fails. A separate scrubbed SSH settings probe checks
+security-key provider support without using a token. Proven provider absence
+refuses an SK identity even if the agent lists its key. Unfamiliar provider
+output remains `unknown`. None of these checks proves hardware signing.
 
 The development diagnostics preserve attempt classifications and print
 `next:` actions, plus fixed `hint:` text for recognized signing or key-loading
@@ -186,11 +200,11 @@ a local SSH test. This route has not been verified with a real hardware token.
 ## macOS: passphrase key in an agent
 
 Use the operator's existing OpenSSH agent. Load the private key yourself
-with the task-sized `ssh-add -t` command above, then pin its public key:
+with the task-sized `ssh-add -t` command above, then select its private path:
 
 ```sh
 csk config build-ssh add git.example.com/team \
-    --agent auto --identity ~/.ssh/build_key.pub
+    --agent auto --identity ~/.ssh/build_key
 ```
 
 Start csk from the environment containing that agent's `SSH_AUTH_SOCK`.
@@ -260,32 +274,49 @@ Load the named key with `ssh-add -t`, then save the agent plus pinned `.pub`
 selection above. File mode uses an unencrypted private file. Hardware keys
 need a client and agent with FIDO support; desktop agents differ.
 
-Verification: these Linux setup steps were not run in the SSH research.
-No Linux route has been verified on a real hardware token.
+Verification: Linux software metadata and refusal checks have been verified
+with real OpenSSH and generated keys. These include legacy PEM and
+software-provider-generated SK containers, closed-stream doctor checks,
+agent enumeration and local host-key lookup. They do not qualify external
+builds or hardware signing. No Linux route has been verified
+on a real hardware token; hardware and custom-agent routes remain unverified.
 
 ## Windows
 
-Use absolute Windows paths in PowerShell. A file-mode selection looks like:
+Current main supports private SSH repositories on Windows with native
+OpenSSH. Use a csk version containing that support. Use absolute paths in
+PowerShell. For an existing unencrypted file, select:
 
 ```powershell
 csk config build-ssh add git.example.com/team --identity "$HOME\.ssh\build_key"
 ```
 
-This requires an unencrypted private file and an admitted OpenSSH client.
-The Windows csk SSH lane has not been verified end to end.
+For an operator-managed service agent holding the key, select:
 
-Windows OpenSSH's agent service uses a named pipe. The current csk
-implementation requires `SSH_AUTH_SOCK` for `auto` and admits a filesystem
-socket, so the native service and 1Password's Windows pipe are not usable
-through that selection. Starting the service does not fix this csk limit.
-Microsoft documents agent setup in its
+```powershell
+csk config build-ssh add git.example.com/team --agent auto --identity "$HOME\.ssh\build_key"
+```
+
+On Windows, `--agent auto` selects the standard `\\.\pipe\openssh-ssh-agent`
+pipe without requiring `SSH_AUTH_SOCK`. Only that standard pipe is admitted;
+csk does not start the service or load keys. Microsoft documents operator
+setup in its
 [OpenSSH key management guide](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_keymanagement).
-Git Bash, native OpenSSH and WSL have different environments; do not infer
-compatibility from a successful ordinary Git command. See
-[Windows agent refusal](troubleshooting.md#ssh-windows-agent-limit).
+A `.pub` pin remains valid for a key held only in the agent.
 
-Verification: Windows file, passphrase-agent and hardware routes were not
-run. None has been verified on a real hardware token.
+Paths containing spaces are not yet supported by the current wrapper.
+Use paths without spaces until the wrapper fix lands. Git Bash, native
+OpenSSH and WSL have different environments; ordinary Git success does not
+prove that csk selected the same client and credential. See
+[Windows agent troubleshooting](troubleshooting.md#ssh-windows-agent-limit).
+Some development doctor builds still print the older Windows pipe limitation;
+the behavior described here is implemented on main.
+
+Verification: native Windows software-key and standard service-agent paths
+have loopback coverage with real Git and SSH. Encrypted file-only keys must
+fail without their agent. Hardware tokens, PIN/Hello dialogs and custom-agent
+integration remain unverified. No Windows route has been verified on a real
+hardware token.
 
 ## Custom agents, including 1Password
 
@@ -304,8 +335,10 @@ insufficient. 1Password documents its socket locations and approval settings
 in [its SSH setup guide](https://www.1password.dev/ssh/get-started).
 Its approval dialog belongs to the operator's agent. Automation requires
 an operator-approved policy that can satisfy signing requests.
-The Windows named-pipe limitation above still applies; the Linux build
-platform gate still applies.
+On Windows, only the standard agent pipe is admitted. A custom agent using
+that pipe must be configured by its owner; 1Password integration remains
+unverified. The Windows path-with-spaces limitation and Linux build platform
+gate still apply.
 
 Verification: csk integration with 1Password and other custom agents was
 not run. No custom-agent route has been verified on a real hardware token.
