@@ -17,6 +17,8 @@ from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING
 
+from . import protocol_json
+
 if TYPE_CHECKING:
     from .config import GlobalConfig
 
@@ -157,7 +159,7 @@ def _check_bundle(path: Path) -> bytes:
                 raise GitTrustError(
                     INVALID, str(path), "expected a bounded regular PEM file"
                 )
-            content = bundle.read(MAX_BUNDLE_BYTES + 1)
+            content = protocol_json._read_bounded(bundle, MAX_BUNDLE_BYTES)
         if len(content) > MAX_BUNDLE_BYTES:
             raise GitTrustError(INVALID, str(path), "PEM bundle exceeds size limit")
     except (OSError, ValueError) as exc:
