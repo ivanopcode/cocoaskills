@@ -54,9 +54,9 @@ def test_cli_boundaries(tmp_path, skills_root, csk_home, monkeypatch, capsys, pl
         assert_safe(captured.out + captured.err)
 
     # JSON string controls stay semantic on disk; display keeps document indentation.
-    document = json.loads(cfg.path.read_text())
+    document = json.loads(cfg.path.read_text(encoding='utf-8'))
     document['skills_root'] = str(skills_root) + plant
-    cfg.path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + '\n')
+    cfg.path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     assert cli.main(['config', 'show']) == 0
     captured = capsys.readouterr()
     assert '\n  "' in captured.out
