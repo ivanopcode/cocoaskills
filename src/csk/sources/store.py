@@ -250,7 +250,7 @@ def _read_record(entry: Path, skill: str, package: str) -> _ValidatedRecord:
                         raise OSError("JSON input must be a regular file")
                     if opened.st_size > protocol_json.MAX_INPUT_BYTES:
                         raise protocol_json.ProtocolJSONSizeError("JSON input exceeds maximum size")
-                    raw = handle.read(protocol_json.MAX_INPUT_BYTES + 1)
+                    raw = protocol_json._read_bounded(handle, protocol_json.MAX_INPUT_BYTES)
                     if len(raw) > protocol_json.MAX_INPUT_BYTES:
                         raise protocol_json.ProtocolJSONSizeError("JSON input exceeds maximum size")
             except _FS_ERRORS as exc:

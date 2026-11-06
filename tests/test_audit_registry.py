@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 from typing import Any
@@ -285,6 +286,7 @@ def test_http_fetch_read_only_does_not_refresh_persistent_cache(
     assert after == before
 
 
+# Pagination consumes each finite response while preserving page order.
 def test_http_records_follows_bounded_pagination(monkeypatch):
     priv, _ = _make_key()
     first = _sign_record(priv, _record_body("audited"))
@@ -296,7 +298,7 @@ def test_http_records_follows_bounded_pagination(monkeypatch):
         headers = {"Content-Type": "application/json; charset=utf-8"}
 
         def __init__(self, payload: dict[str, Any]):
-            self.payload = payload
+            self.body = io.BytesIO(json.dumps(payload).encode("utf-8"))
 
         def __enter__(self):
             return self
@@ -305,7 +307,7 @@ def test_http_records_follows_bounded_pagination(monkeypatch):
             return False
 
         def read(self, size=-1):
-            return json.dumps(self.payload).encode("utf-8")
+            return self.body.read(size)
 
     def fake_urlopen(request, timeout=0):
         requested.append(request.full_url)

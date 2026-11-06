@@ -895,7 +895,7 @@ def _request_json(request: urllib.request.Request, *, timeout: int, label: str) 
                     content_type = headers.get("Content-Type", "") if headers is not None else ""
                     if content_type.split(";", 1)[0].strip().lower() != "application/json":
                         raise RegistryError(f"registry returned unsupported Content-Type for {label}")
-                    body = response.read(MAX_RESPONSE_BYTES + 1)
+                    body = protocol_json._read_bounded(response, MAX_RESPONSE_BYTES)
                     if len(body) > MAX_RESPONSE_BYTES:
                         raise RegistryError(f"registry {label} response exceeds 16 MiB")
                     return load_protocol_json(body)

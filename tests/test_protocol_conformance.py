@@ -4586,6 +4586,7 @@ def test_registry_client_snapshot_transition_vectors(case: dict[str, Any], tmp_p
     assert (registry_url not in unavailable) is case["accepted"]
 
 
+# Finite response streams preserve the vectors' specific pagination refusals.
 @pytest.mark.parametrize("case", REGISTRY_CLIENT_VECTOR.get("pagination_rejections", []))
 def test_registry_client_pagination_rejection_vectors(
     case: dict[str, Any], monkeypatch: pytest.MonkeyPatch
@@ -4606,7 +4607,9 @@ def test_registry_client_pagination_rejection_vectors(
             return None
 
         def read(self, size: int = -1) -> bytes:
-            return self.body if size < 0 else self.body[:size]
+            chunk = self.body if size < 0 else self.body[:size]
+            self.body = self.body[len(chunk):]
+            return chunk
 
     def fake_urlopen(request: urllib.request.Request, timeout: int = 0) -> FakeResponse:
         nonlocal calls
