@@ -90,10 +90,13 @@ def _install_fake_build_pipeline(
         if request.command == fail_command:
             if fail_error is not None:
                 raise fail_error
-            raise go_v1.GoV1Error(
+            error = go_v1.GoV1Error(
                 "fixture_build_failure",
                 f"forced failure for {request.command}",
             )
+            # This compiler fixture starts no worker, so its domain is empty.
+            error.worker_teardown_confirmed = True
+            raise error
         if target.goos == "windows":
             payload = (f"compiled fixture: {request.command}\n").encode()
         else:

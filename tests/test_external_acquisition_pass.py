@@ -718,3 +718,72 @@ def test_compile_failure_checker_rejects_blanket_latch(tmp_path, csk_home, skill
     monkeypatch.setattr(pipeline, 'build_go_v1', blanket)
     with pytest.raises(AssertionError, match='ordinary compile failure must not block next project'):
         _private_lifetime(tmp_path, csk_home, skills_root, monkeypatch, 'project', False, compile_fails=True)
+
+
+# Already admitted private phases may overlap after closure. Acquisition must
+# wait for both completions, and a successful sibling cannot erase a failed join.
+# These are builder threads at a seam, not native domain qualification.
+@pytest.mark.parametrize('unconfirmed', [False, True])
+def test_overlapping_builds_retain_all_pending_domains(tmp_path, monkeypatch, unconfirmed):
+    _overlapping_builds(tmp_path, monkeypatch, unconfirmed)
+
+
+def _overlapping_builds(tmp_path, monkeypatch, unconfirmed, plant=False):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from csk.builds import go_v1
+    entered = [Event(), Event()]
+    release = [Event(), Event()]
+    state = pipeline._PASS_STATE
+    def build(index):
+        entered[index].set()
+        assert release[index].wait(10), 'builder release timed out'
+        if index == 0 and unconfirmed:
+            raise go_v1.GoV1Error(go_v1.CODE_CONTROL_UNAVAILABLE, 'join unconfirmed')
+        return index
+    monkeypatch.setattr(go_v1, 'build', build)
+    if plant:
+        finish = state.finish_worker
+        def premature_finish(**kwargs):
+            finish(**kwargs)
+            state.workers_reaped = True
+        monkeypatch.setattr(state, 'finish_worker', premature_finish)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(pipeline.build_go_v1, 0)
+        second = None
+        try:
+            assert entered[0].wait(10)
+            second = pool.submit(pipeline.build_go_v1, 1)
+            assert entered[1].wait(10), 'already admitted builds must overlap'
+            release[0].set()
+            if unconfirmed:
+                with pytest.raises(go_v1.GoV1Error, match='join unconfirmed'):
+                    first.result(timeout=10)
+            else:
+                assert first.result(timeout=10) == 0
+            assert not state.workers_reaped, 'unfinished sibling must block acquisition'
+            events = []
+            with pytest.raises(pipeline.ExternalBuildError, match='worker teardown is unconfirmed'):
+                pipeline.run_pipelines(_requests(tmp_path / 'pending', events, _Compiler(events)))
+            assert events == []
+            release[1].set()
+            assert second.result(timeout=10) == 1
+        finally:
+            for event in release:
+                event.set()
+    assert state.workers_reaped is not unconfirmed
+    events = []
+    requests = _requests(tmp_path / 'finished', events, _Compiler(events))
+    if unconfirmed:
+        with pytest.raises(pipeline.ExternalBuildError, match='after build_execution_control_unavailable'):
+            pipeline.run_pipelines(requests)
+        assert events == []
+    else:
+        assert len(pipeline.run_pipelines(requests)) == 2
+
+
+# The same concurrency witness must reject declaring completion after only one
+# sibling finishes, before the second worker is released.
+def test_overlapping_worker_checker_rejects_premature_completion(tmp_path, monkeypatch):
+    with pytest.raises(AssertionError, match='unfinished sibling must block acquisition'):
+        _overlapping_builds(tmp_path, monkeypatch, False, plant=True)
