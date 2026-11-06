@@ -218,7 +218,8 @@ def test_transport_exhaustion_renders_classifications_and_table_remediation() ->
             repository_policy.CODE_ENDPOINT_UNAVAILABLE
         ]
     )
-    assert len(lines) == 2, rendered
+    assert len(lines) == 4, rendered
+    assert sum(line.startswith("next: ") for line in lines) == 2
     assert EXACT_LABEL not in rendered
 
 

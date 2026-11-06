@@ -115,6 +115,7 @@ PROBE_TIMING: Final = "pre-worker-launch"
 
 PLATFORM_MACOS: Final = "macos"
 PLATFORM_WINDOWS: Final = "windows"
+PLATFORM_LINUX: Final = "linux"
 AVAILABILITY_AVAILABLE: Final = "available"
 AVAILABILITY_UNAVAILABLE: Final = "unavailable"
 STATUS_APPLIED: Final = "applied"
@@ -7724,7 +7725,16 @@ def _validate_worker_environment(
                 CODE_WORKER_PROTOCOL_INVALID,
                 f"compiler environment has unexpected {name}",
             )
-    expected_goos = "darwin" if platform == PLATFORM_MACOS else "windows"
+    expected_goos = {
+        PLATFORM_MACOS: "darwin",
+        PLATFORM_WINDOWS: "windows",
+        PLATFORM_LINUX: "linux",
+    }.get(platform)
+    if expected_goos is None:
+        raise GoV1Error(
+            CODE_WORKER_PROTOCOL_INVALID,
+            "compiler environment has an unsupported platform",
+        )
     goarch = environment.get("GOARCH", "")
     if environment.get("GOOS") != expected_goos or not goarch:
         raise GoV1Error(
@@ -8063,7 +8073,11 @@ def _verify_artifact(
 def _native_executable_header(header: bytes, platform: str) -> bool:
     if platform == PLATFORM_WINDOWS:
         return header.startswith(b"MZ")
-    if len(header) < 4:
+    if platform == PLATFORM_LINUX:
+        # Format-only, like the existing PE/Mach-O checks: target and tuning
+        # belong to the admitted toolchain, not an interpreter ELF parser.
+        return header.startswith(b"\x7fELF")
+    if platform != PLATFORM_MACOS or len(header) < 4:
         return False
     return header in {
         b"\xfe\xed\xfa\xce",

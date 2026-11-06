@@ -63,11 +63,17 @@ _MAX_KNOWN_HOSTS_BYTES = 1 << 20
 
 class GitAdmissionError(RuntimeError):
     def __init__(
-        self, code: str, message: str, *, failure_class: str | None = None
+        self,
+        code: str,
+        message: str,
+        *,
+        failure_class: str | None = None,
+        hints: tuple[str, ...] = (),
     ) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
         self.failure_class = failure_class
+        self.hints = hints
 
 
 _CLEANUP_ATTEMPTS = 5
@@ -1015,12 +1021,14 @@ def _run_git_ls_remote(
             SOURCE_UNAVAILABLE,
             "private Git resolution timed out",
             failure_class="timeout",
+            hints=_git_failure_hints(exc.stderr),
         ) from exc
     except subprocess.CalledProcessError as exc:
         raise GitAdmissionError(
             SOURCE_UNAVAILABLE,
             "private Git resolution failed",
             failure_class=_classify_git_failure_output(exc.stderr),
+            hints=_git_failure_hints(exc.stderr),
         ) from exc
     except OSError as exc:
         raise GitAdmissionError(
@@ -1578,12 +1586,14 @@ def _run_git(
             SOURCE_UNAVAILABLE,
             "private Git operation timed out",
             failure_class="timeout",
+            hints=_git_failure_hints(exc.stderr),
         ) from exc
     except subprocess.CalledProcessError as exc:
         raise GitAdmissionError(
             SOURCE_UNAVAILABLE,
             "private Git operation failed",
             failure_class=_classify_git_failure_output(exc.stderr),
+            hints=_git_failure_hints(exc.stderr),
         ) from exc
     except OSError as exc:
         operation = "initialization" if "init" in arguments else "fetch"
@@ -1594,10 +1604,50 @@ def _run_git(
         ) from exc
 
 
+# Hints are fixed identifiers, never captured stderr or authentication evidence.
+# They supplement the terminal outcome without changing fallback eligibility.
+def _git_failure_hints(output: bytes | str | None) -> tuple[str, ...]:
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", "replace")
+    if not isinstance(output, str):
+        return ()
+    hints: list[str] = []
+    for raw in output.lower().split("\n"):
+        record = raw.removesuffix("\r").strip()
+        if record.startswith("remote:"):
+            continue
+        if re.fullmatch(r"sign_and_send_pubkey: signing failed(?: for .+|: .+)", record):
+            if record.endswith(": agent refused operation"):
+                hint = "ssh-agent-refused"
+            elif record.endswith(": device not found"):
+                hint = "ssh-device-missing"
+            elif record.endswith(": invalid format"):
+                hint = "ssh-token-not-signed"
+            elif re.search(r": incorrect passphrase supplied(?: to decrypt private key)?$", record):
+                hint = "ssh-pin-unavailable"
+            else:
+                hint = "ssh-signing-failed"
+        elif re.fullmatch(r'load key "[^"\n]+\.pub": .+', record):
+            hint = "ssh-pinned-key-not-loaded"
+        elif re.fullmatch(
+            r"load key .+: (?:incorrect passphrase supplied to decrypt private key|invalid format)",
+            record,
+        ):
+            hint = "ssh-key-load-failed"
+        elif re.fullmatch(r"warning: identity file .+ not accessible(?:[.:].*)?", record):
+            hint = "ssh-identity-inaccessible"
+        else:
+            continue
+        if hint not in hints:
+            hints.append(hint)
+    return tuple(hints)
+
+
 # A failing ``git fetch`` prints a transport envelope: the transport's own
 # outcome record(s), the remote server's relayed payload (``remote:``
 # lines), client-side diagnostics, and git's advisory footer.  Only outcome
-# records are evidence; everything else is ignored entirely.  Real envelopes
+# records are classification evidence; other records may supply fixed hints.
+# Real envelopes
 # captured through the production lane (git 2.50.1, curl 8.7.1,
 # OpenSSH 10.3; the partition test and the real-server regressions pin
 # this derivation):
@@ -1622,8 +1672,8 @@ def _run_git(
 # never a conflict either, because an attacker who can put bytes in a
 # response body could otherwise suppress a fallback at will.  Diagnostics
 # (askpass errors, signing failures, host-key warning blocks) state why a
-# helper step failed; the envelope's terminal outcome record states the
-# transport outcome, and the terminal record alone decides.  Unknown and
+# helper step failed and may supply hints; the terminal outcome record states the
+# transport outcome; all evidence records must agree on one class. Unknown and
 # future output carries no positive outcome and is ignored; conflict means
 # two evidence-bearing records disagreeing, and no evidence at all fails
 # closed to unclassified.
@@ -1638,9 +1688,9 @@ def _evidence_class(record: str) -> str | None:
     """Return the failure class when ``record`` states a transport outcome.
 
     The match is always an anchored full-line frame generated by git, curl
-    or ssh itself.  Attacker-controlled bytes can only arrive ``remote:``-
-    prefixed (ignored before this runs) or inside a quoted interior such as
-    a URL or ref name, where they cannot change the frame's class.
+    or ssh itself. Relayed ``remote:`` payloads are ignored. Quoted URL
+    and ref interiors are not classification evidence. Unframed helper
+    diagnostics may supply hints separately, never a transport class.
     """
 
     if re.fullmatch(r"fatal: couldn't find remote ref .+", record):

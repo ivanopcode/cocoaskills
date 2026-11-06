@@ -136,11 +136,21 @@ def failure_text(exc: BaseException, *, verbose: bool = False) -> str:
     notes and cause chain an exception carries. Notes hold actionable context;
     causes can hold the specific refusal hidden by a transport wrapper. Keep
     the outer stable code, use the deepest coded reason when a wrapper carries
-    only a generic message, and show the rest of the chain only in verbose mode.
+    only a generic message. Preserve structured transport resolution detail
+    and show the rest of the chain only in verbose mode.
     """
 
     chain = list(_failure_cause_chain(exc))
     message = _failure_message_with_specific_reason(exc, chain)
+    if isinstance(exc, git_admission.GitAdmissionError) and exc.failure_class:
+        failure_class = (
+            exc.failure_class
+            if exc.failure_class in source_diagnostics.NEXT_BY_FAILURE_CLASS
+            else "unclassified"
+        )
+        message += f"\nfailure class: {failure_class}\n" + source_diagnostics.transport_next_steps(
+            failure_class, exc.hints
+        )
     lines = [
         _sanitize_failure_secrets(message),
         *(_sanitize_failure_secrets(note) for note in getattr(exc, "__notes__", ())),
@@ -252,6 +262,9 @@ def _failure_message_with_specific_reason(
     code, detail = _coded_failure_parts(exc)
     if code is None or detail is None:
         return message
+
+    if isinstance(exc, source_transport.TransportResolutionError):
+        return source_diagnostics.format_transport_exception(exc) or message
 
     specific_detail = detail
     for cause in chain:
@@ -2460,16 +2473,23 @@ def _publish_external_builds(
             legacy_tool = (
                 git_tool if _is_legacy_transport_plan(network_plan) else None
             )
-            return source_transport.acquire_plan(
-                network_plan,
-                build_repository_model.LockedCommit(
-                    effective.object_format, effective.commit
-                ),
-                legacy_tool,
-                tag=tag,
-                tool_for_endpoint=None if legacy_tool is not None else endpoint_tool,
-                lane=source_transport.LANE_EXTERNAL_BUILD,
-            ).snapshot
+            try:
+                return source_transport.acquire_plan(
+                    network_plan,
+                    build_repository_model.LockedCommit(
+                        effective.object_format, effective.commit
+                    ),
+                    legacy_tool,
+                    tag=tag,
+                    tool_for_endpoint=None if legacy_tool is not None else endpoint_tool,
+                    lane=source_transport.LANE_EXTERNAL_BUILD,
+                ).snapshot
+            except git_admission.GitAdmissionError as exc:
+                exc.add_note(
+                    f"build repository {network_plan.identity!r}; "
+                    f"command {name!r} of skill {node.name!r}"
+                )
+                raise
 
         node_package = packages.get(node.name) if packages is not None else None
         result = build_repository_pipeline.run_pipeline(
