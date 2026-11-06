@@ -666,7 +666,8 @@ def test_build_failure_flushes_before_owned_cleanup(recorder, tmp_path, monkeypa
     monkeypatch.setattr(go_v1, "_resolve_manager_identity", lambda *a: identity)
     monkeypatch.setattr(go_v1, "_resolve_tool_process_identity", lambda *a: identity)
     monkeypatch.setattr(go_v1, "_private_roots", lambda *a: ())
-    def fail_launch(plan):
+    def fail_launch(plan, *, _lifecycle):
+        assert _lifecycle.teardown_confirmed  # No native launch at this seam.
         assert plan.worker_cache.is_dir()
         raise primary
     monkeypatch.setattr(go_v1._WorkerClient, "launch", fail_launch)

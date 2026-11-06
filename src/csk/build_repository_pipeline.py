@@ -641,6 +641,7 @@ class AcquisitionPassState:
         self.active = False
         self.workers_reaped = True
         self.worker_failure: str | None = None
+        self._pending_workers = 0
         self._lock = Lock()
 
     def require_idle(self) -> None:
@@ -665,6 +666,23 @@ class AcquisitionPassState:
         if not self.closed:
             raise ExternalBuildError(PROTECTED_BOUNDARY_UNTRUSTED, "acquisition pass boundary did not close")
 
+    def begin_worker(self) -> None:
+        with self._lock:
+            self.require_closed()
+            if self.worker_failure is not None or (
+                not self.workers_reaped and not self._pending_workers
+            ):
+                self.require_idle()
+            self._pending_workers += 1
+            self.workers_reaped = False
+
+    def finish_worker(self, *, confirmed: bool, failure: str = "build failure") -> None:
+        with self._lock:
+            self._pending_workers -= 1
+            if not confirmed:
+                self.worker_failure = failure
+            self.workers_reaped = not self._pending_workers and self.worker_failure is None
+
 
 _PASS_STATE = AcquisitionPassState()
 
@@ -676,20 +694,20 @@ def build_go_v1(request: go_v1.BuildRequest) -> go_v1.BuildResult:
     Unconfirmed teardown, interrupts and unclassified exceptions fail closed.
     """
     state = _PASS_STATE
-    if not state.workers_reaped:
-        state.require_idle()
-    state.workers_reaped = False
-    state.worker_failure = None
+    state.begin_worker()
     try:
         result = go_v1.build(request)
     except BaseException as exc:
         if isinstance(exc, go_v1.GoV1Error) and exc.worker_teardown_confirmed:
-            state.workers_reaped = True
+            state.finish_worker(confirmed=True)
             raise
         # Retain a manager diagnostic code, never arbitrary exception text.
-        state.worker_failure = exc.code if isinstance(exc, go_v1.GoV1Error) else "build failure"
+        state.finish_worker(
+            confirmed=False,
+            failure=exc.code if isinstance(exc, go_v1.GoV1Error) else "build failure",
+        )
         raise
-    state.workers_reaped = True
+    state.finish_worker(confirmed=True)
     return result
 
 

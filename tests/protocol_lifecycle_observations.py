@@ -1235,10 +1235,13 @@ def _install_identity_build_pipeline(
     def fake_build(request: go_v1.BuildRequest) -> go_v1.BuildResult:
         events.append(f"build:{request.command}")
         if request.command == fail_command:
-            raise go_v1.GoV1Error(
+            error = go_v1.GoV1Error(
                 "fixture_build_failure",
                 f"forced failure for {request.command}",
             )
+            # This compiler fixture starts no worker, so its domain is empty.
+            error.worker_teardown_confirmed = True
+            raise error
         payload = (
             f"compiled fixture: {request.command}\n".encode()
             if request.toolchain_session.target.goos == "windows"
