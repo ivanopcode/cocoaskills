@@ -91,30 +91,32 @@ def test_entropy_canary_never_enters_outputs(tmp_path, capsys, caplog, variant):
     assert all(value.lower().encode() not in file.read_bytes().lower() for file in cache_files)
 
 
-def test_secret_constructor_has_no_value_or_path_input():
-    # All secret findings have one fixed-schema constructor with no raw-text parameter.
-    assert set(inspect.signature(secret_values._secret_finding).parameters) == {'kind', 'line'}
-    finding = secret_values._secret_finding('high-entropy', 7)
-    assert finding.location.file == '[redacted]'
+def test_secret_constructor_uses_scan_location():
+    # The location comes from the scanned file, independently of the matched secret.
+    assert set(inspect.signature(secret_values._secret_finding).parameters) == {'kind', 'rel_path', 'line'}
+    finding = secret_values._secret_finding('high-entropy', 'scripts/run.py', 7)
+    assert finding.location.file == 'scripts/run.py'
     assert finding.location.span == (7, 7)
     assert finding.evidence == 'Potential high-entropy value (withheld)'
     with pytest.raises(ValueError, match='unknown secret kind'):
-        secret_values._secret_finding(canary(), 7)
+        secret_values._secret_finding(canary(), 'scripts/run.py', 7)
 
 
 @pytest.mark.parametrize('template', [
     'Authorization: Bearer {}', 'apiKey="{}"', 'apikey="{}"',
     'prefix {} suffix', '{{"data": "{}"}}', '  {}  \n',
+    '({})', '[{}]', '{},', 'https://example.invalid/?k={}',
 ])
 def test_realistic_entropy_placements(tmp_path, template):
     # Common credential placements block; a same-placement low-entropy control stays allowed.
     path = tmp_path / 'SKILL.md'
     path.write_text(template.format(canary()))
-    findings = detectors.detect_snapshot(tmp_path, CapabilityManifest())
+    caps = CapabilityManifest(network=('example.invalid',))
+    findings = detectors.detect_snapshot(tmp_path, caps)
     assert 'static.secret.high-entropy' in {f.id for f in findings}
     assert decide(findings, mode='strict', fail_on='high') == Decision.BLOCK
     path.write_text(template.format('a' * 40))
-    assert not detectors.detect_snapshot(tmp_path, CapabilityManifest())
+    assert not detectors.detect_snapshot(tmp_path, caps)
 
 
 @pytest.mark.parametrize('payload', [{'sub': 'fixture'}, 'fixture'])

@@ -13,17 +13,17 @@ import math
 import re
 from typing import Any
 
-from .model import Finding, Location, Severity, Surface
+from .model import Finding, Location, Severity, Surface, SECRET_REASONS, _ScanLocation
 
 MAX_FINDINGS_PER_FILE = 100
 _PATTERNS = (
     ("private-key", re.compile(r"-----BEGIN (?P<kind>(?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED) )?PRIVATE KEY)-----[\s\S]*?(?:-----END (?P=kind)-----|\Z)")),
-    ("aws-access-key", re.compile(r"(?<![A-Za-z0-9])AKIA[A-Z0-9]{16}(?![A-Za-z0-9])")),
+    ("aws-access-key", re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])")),
     ("github-token", re.compile(r"(?<![A-Za-z0-9_])(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,255})(?![A-Za-z0-9_])")),
 )
 _OUTPUT_PATTERNS = (
     ('private-key', re.compile(_PATTERNS[0][1].pattern, re.IGNORECASE)),
-    ('aws-access-key', re.compile(r'AKIA[A-Z0-9]{16}', re.IGNORECASE)),
+    ('aws-access-key', re.compile(r'(?:AKIA|ASIA)[A-Z0-9]{16}', re.IGNORECASE)),
 )
 _JWT_PART = re.compile(r"[A-Za-z0-9_-]+={0,2}")
 _TOKEN = re.compile(r"[A-Za-z0-9_+/-]+={0,2}")
@@ -31,19 +31,19 @@ _ASSIGNMENT = re.compile(r'''["']?([A-Za-z_][A-Za-z0-9_]*)["']?\s*([:=])\s*["']?
 _JSON_VALUE = re.compile(r'"[^"\n]{1,128}"\s*:\s*"$')
 _ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4}))")
 _PUBLIC_PEM = re.compile(r"-----BEGIN (PUBLIC KEY|CERTIFICATE)-----[\s\S]*?(?:-----END \1-----|\Z)")
-_SECRET_REASONS = {kind: f'Potential {kind} value (withheld)' for kind in (
-    'private-key', 'aws-access-key', 'github-token', 'jwt', 'high-entropy',
-)}
+# Output candidates include path/URL separators before any lossy transformation.
+_OUTPUT_TOKEN = re.compile(r"[A-Za-z0-9_+/.:@?&=%-]+")
 
 
-def _secret_finding(kind: str, line: int) -> Finding:
-    # This is the only secret-finding constructor. No match or path text enters it.
-    if kind not in _SECRET_REASONS:
+def _secret_finding(kind: str, rel_path: str, line: int) -> Finding:
+    # rel_path comes only from snapshot traversal, never from a matched value.
+    finding_id = f'static.secret.{kind}'
+    if finding_id not in SECRET_REASONS:
         raise ValueError('unknown secret kind')
     return Finding(
-        id=f'static.secret.{kind}', surface=Surface.CODE, category='secret-value',
-        severity=Severity.HIGH, location=Location('[redacted]', (line, line)),
-        evidence=_SECRET_REASONS[kind], detector='static.secret',
+        id=finding_id, surface=Surface.CODE, category='secret-value',
+        severity=Severity.HIGH, location=_ScanLocation(mask_output_text(rel_path), (line, line)),
+        evidence=SECRET_REASONS[finding_id], detector='static.secret',
         confidence='medium' if kind == 'high-entropy' else 'high', verifiable=True,
     )
 
@@ -115,6 +115,15 @@ def _secret_spans(decoded: str, *, contextual: bool) -> Iterator[tuple[int, int,
             continue
         if isinstance(header, dict) and isinstance(header.get('alg'), str):
             yield parts[0].start(), part.end(), 'jwt'
+    if not contextual:
+        # Preserve ordinary URL diagnostics, but mask a complete random-looking
+        # composite before ':' or '.' can split it into short reportable pieces.
+        for match in _OUTPUT_TOKEN.finditer(decoded):
+            value = match.group()
+            if (len(value) >= 32 and any(c.islower() for c in value)
+                    and any(c.isupper() for c in value) and any(c.isdigit() for c in value)
+                    and _entropy(value) >= 4.5):
+                yield match.start(), match.end(), 'masked-composite'
     public = list(_PUBLIC_PEM.finditer(decoded)) if contextual else []
     public_index = 0
     for match in _TOKEN.finditer(decoded):
@@ -139,8 +148,9 @@ def _secret_spans(decoded: str, *, contextual: bool) -> Iterator[tuple[int, int,
             sensitive = any(part in name for part in ('secret', 'token', 'password', 'credential', 'apikey', 'privatekey')) or name == 'value'
             json_value = _JSON_VALUE.search(prefix) is not None
             bearer = re.search(r'\bBearer\s+$', prefix, re.IGNORECASE) is not None
-            spaced = (match.start() == 0 or decoded[match.start() - 1].isspace()) and (match.end() == len(decoded) or decoded[match.end()].isspace())
-            if not (sensitive or json_value or bearer or spaced):
+            spaced = (match.start() == 0 or decoded[match.start() - 1].isspace() or decoded[match.start() - 1] in '([') and (match.end() == len(decoded) or decoded[match.end()].isspace() or decoded[match.end()] in ']),')
+            query = re.search(r'[?&][A-Za-z0-9_]{1,32}=$', prefix) is not None
+            if not (sensitive or json_value or bearer or spaced or query):
                 continue
             if value.startswith(('sha256-', 'sha384-', 'sha512-')) or re.fullmatch(r'[A-Za-z]{2,12}-[A-Za-z0-9-]+', value):
                 continue
@@ -150,9 +160,12 @@ def _secret_spans(decoded: str, *, contextual: bool) -> Iterator[tuple[int, int,
             continue
         if contextual and not (any(c.islower() for c in value) and any(c.isupper() for c in value)):
             continue
-        entropy = -sum((n / len(value)) * math.log2(n / len(value)) for n in Counter(value).values())
-        if entropy >= 4.5:
+        if _entropy(value) >= 4.5:
             yield match.start(), match.end(), 'high-entropy'
+
+
+def _entropy(value: str) -> float:
+    return -sum((n / len(value)) * math.log2(n / len(value)) for n in Counter(value).values())
 
 
 def _mask(text: str, offsets: list[tuple[int, int]], spans: list[tuple[int, int, str]]) -> str:
@@ -188,10 +201,16 @@ def detect_and_mask(rel_path: str, text: str, values: set[str] | None = None, *,
         if values is not None:
             values.add(decoded[start:end])
         source_start = offsets[start][0] if offsets else start
-        findings.append(_secret_finding(kind, bisect_left(newlines, source_start) + 1))
+        findings.append(_secret_finding(kind, rel_path, bisect_left(newlines, source_start) + 1))
     if truncated:
-        findings.append(finding_limit('[redacted]'))
+        findings.append(finding_limit(mask_output_text(rel_path)))
     return findings, _mask(text, offsets, spans)
+
+
+def mask_output_text(value: str) -> str:
+    """Mask complete output candidates before parsers can discard their prefixes."""
+    decoded, offsets = _decoded(value)
+    return _mask(value, offsets, list(_secret_spans(decoded, contextual=False)))
 
 
 def sanitize_findings(findings: list[Finding], values: set[str]) -> tuple[Finding, ...]:
@@ -200,8 +219,7 @@ def sanitize_findings(findings: list[Finding], values: set[str]) -> tuple[Findin
     @lru_cache(maxsize=256)
     def clean_text(value: str) -> str:
         value = pattern.sub('[withheld]', value) if pattern else value
-        decoded, offsets = _decoded(value)
-        return _mask(value, offsets, list(_secret_spans(decoded, contextual=False)))
+        return mask_output_text(value)
     def clean(value: Any) -> Any:
         if isinstance(value, Enum):
             return value
@@ -210,5 +228,8 @@ def sanitize_findings(findings: list[Finding], values: set[str]) -> tuple[Findin
         if is_dataclass(value) and not isinstance(value, type):
             return replace(value, **{field.name: clean(getattr(value, field.name)) for field in fields(value)})
         return value
-    sanitized = [clean(finding) for finding in findings]
+    # Identifiers and classification fields are fixed detector schema, not input text.
+    sanitized = [replace(finding, location=clean(finding.location),
+                         evidence=clean_text(finding.evidence),
+                         capability_violation=clean(finding.capability_violation)) for finding in findings]
     return tuple(replace(finding, evidence=finding.evidence[:160]) for finding in sanitized)
