@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve Windows SSH timeout hints after bounded tree cleanup and keep the Git
+  runner accessible to cross-platform regression tests.
+
 - Preserve spaces in native Windows SSH identity/private paths and enforce bounded
   Git descendant cleanup for SSH and HTTPS using a Windows Job Object.
 - Offer the standard Windows service agent in credential discovery and remove
