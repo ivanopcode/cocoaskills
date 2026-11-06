@@ -4,7 +4,7 @@
   "source_commit": "8026a2ee1eb22f98c57c42ccb3cf8fd06f166fcf",
   "protocol_commit": "0ed5c691e9208eea52f21db2fc05e226ce3516fd",
   "audited_files_sha256": {
-    "tests/test_protocol_conformance.py": "06d5fa20a02ac40e075d367d056961abbef6d38b4088b368180c715046fab435",
+    "tests/test_protocol_conformance.py": "1821ddc0a28cad79907569e3334bbda9acce986261d7dcf58c28947f5c339405",
     "tests/protocol_conformance_adapters.py": "d54d77b4c42c3addc2766c7c5ec6e43d35834589fa06e684b39cb24fa038ce69",
     "tests/protocol_lifecycle_observations.py": "709ae5d60854a9297b24e562270d9305a7a91b99c3df785e809694e5f90a671c",
     "tests/conftest.py": "cdb79830805ff831855183cbb0287bd327add2c060547fbfb4e2e2267b6fd3d9",

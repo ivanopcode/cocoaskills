@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import hashlib
 from pathlib import Path
@@ -35,6 +36,7 @@ def _record() -> dict[str, object]:
     }
 
 
+# A finite response acknowledges the posted record and file-sourced token.
 def test_publish_posts_record(tmp_path, skills_root, csk_home, monkeypatch, capsys):
     _configured(tmp_path, skills_root, csk_home, monkeypatch)
     record = tmp_path / "record.json"
@@ -46,6 +48,9 @@ def test_publish_posts_record(tmp_path, skills_root, csk_home, monkeypatch, caps
         status = 201
         headers = {"Content-Type": "application/json; charset=utf-8"}
 
+        def __init__(self):
+            self.body = io.BytesIO(json.dumps({"seq": 1, "entry_hash": "de" * 32}).encode())
+
         def __enter__(self):
             return self
 
@@ -53,7 +58,7 @@ def test_publish_posts_record(tmp_path, skills_root, csk_home, monkeypatch, caps
             return False
 
         def read(self, size=-1):
-            return json.dumps({"seq": 1, "entry_hash": "de" * 32}).encode()
+            return self.body.read(size)
 
     def fake_urlopen(request, timeout=0):
         captured["url"] = request.full_url
@@ -80,6 +85,7 @@ def test_publish_posts_record(tmp_path, skills_root, csk_home, monkeypatch, caps
     assert "dedede" in capsys.readouterr().out
 
 
+# The environment token remains valid with a consumed finite response.
 def test_publish_reads_token_from_env(tmp_path, skills_root, csk_home, monkeypatch):
     _configured(tmp_path, skills_root, csk_home, monkeypatch)
     monkeypatch.setenv("CSK_REGISTRY_TOKEN", "env-token")
@@ -92,6 +98,9 @@ def test_publish_reads_token_from_env(tmp_path, skills_root, csk_home, monkeypat
         status = 200
         headers = {"Content-Type": "application/json"}
 
+        def __init__(self):
+            self.body = io.BytesIO(json.dumps({"seq": 1, "entry_hash": "de" * 32}).encode())
+
         def __enter__(self):
             return self
 
@@ -99,7 +108,7 @@ def test_publish_reads_token_from_env(tmp_path, skills_root, csk_home, monkeypat
             return False
 
         def read(self, size=-1):
-            return json.dumps({"seq": 1, "entry_hash": "de" * 32}).encode()
+            return self.body.read(size)
 
     def fake_urlopen(request, timeout=0):
         captured["auth"] = request.headers.get("Authorization")

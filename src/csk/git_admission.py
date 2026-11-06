@@ -19,7 +19,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import IO, Callable, Mapping, Sequence
 
-from . import git_trust
+from . import git_trust, protocol_json
 from .build_repository import (
     LockedCommit,
     RepositorySource,
@@ -2978,7 +2978,7 @@ def _read_proved_file(path: Path, maximum: int) -> tuple[bytes, _FileProof]:
                 LOCAL_LAYOUT_UNSAFE, "repository file changed during open"
             )
         with os.fdopen(fd, "rb", closefd=False) as stream:
-            data = stream.read(maximum + 1)
+            data = protocol_json._read_bounded(stream, maximum)
     finally:
         os.close(fd)
     if len(data) > maximum:
