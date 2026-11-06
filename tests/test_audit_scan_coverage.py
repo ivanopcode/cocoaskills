@@ -41,7 +41,8 @@ def test_skipped_files_have_exact_reason(tmp_path, monkeypatch, name, raw, reaso
     assert findings[0].id == "static.opaque.unanalyzable-artifact"
     assert findings[0].evidence == "scan skipped: " + reason
     assert findings[0].location.file == name
-    path.write_bytes(b" " * 128)
+    # A manifest control must also be valid JSON after bounded parser admission.
+    path.write_bytes(b"{}" + b" " * 126 if name == "agent-skill.json" else b" " * 128)
     assert not scan(tmp_path)
 
 

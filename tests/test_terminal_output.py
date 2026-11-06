@@ -69,6 +69,12 @@ def test_audit_and_diagnostic_renderers():
 
     raw = "café\nforged\x1b[31m"
     finding = Finding("test", Surface.CODE, "test", Severity.HIGH, Location(raw), raw, "test", "high", True)
+    # Privacy admission rejects this shape; bypass it only in this renderer
+    # fixture to retain the independent terminal/JSON non-mutation assertions.
+    assert finding.evidence == "<withheld len=16>"
+    assert finding.location.file == "<withheld len=16>"
+    object.__setattr__(finding, "evidence", raw)
+    object.__setattr__(finding, "location", Location(raw))
     report = AuditReport("project", "demo", "demo", "tag", raw, "a" * 40, 1, None, (), "b" * 64, (finding,), Decision.WARN, "today")
     rendered = render_reports((report,))
     assert "\x1b" not in rendered
