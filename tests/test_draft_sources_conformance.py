@@ -3840,11 +3840,39 @@ def _marker_v5_evidence_payload(**changes: Any) -> dict[str, Any]:
     return payload
 
 
-def _drive_attestation_evidence(case: dict[str, Any]) -> None:
+@contextlib.contextmanager
+def _deny_json_descriptor_open(target: Path):
+    # Inject at the real opener, require the plant to be reached, and preserve
+    # other reads (including status marker reads) through the production opener.
+    original = protocol_json._open_regular
+    reached = []
+
+    def refuse(path: str, flags: int) -> int:
+        if Path(path) == target:
+            reached.append(True)
+            raise PermissionError("evidence store denied the read")
+        return original(path, flags)
+
+    with patch.object(protocol_json, "_open_regular", refuse):
+        yield
+    assert reached
+
+
+@contextlib.contextmanager
+def _deny_json_file_permissions(target: Path):
+    # Real permission denial with no patched methods; restore before tree hashes.
+    mode = target.stat().st_mode
+    target.chmod(0)
+    try:
+        yield
+    finally:
+        target.chmod(mode)
+
+
+def _drive_attestation_evidence_once(case: dict[str, Any], deny_read: Any) -> None:
     """Drive one ``attestation-evidence-*`` case through the one validator."""
 
     import tempfile
-    from unittest.mock import patch as mock_patch
 
     kit = _marker_v5_fixture_kit()
     install_marker = kit["install_marker"]
@@ -3910,16 +3938,15 @@ def _drive_attestation_evidence(case: dict[str, Any]) -> None:
             evidence_path.write_bytes(json.dumps(payload).encode("utf-8"))
         before_home = _marker_v5_tree_hash(csk_home)
         before_project = _marker_v5_tree_hash(project)
+        # The exact evidence succeeds before either injected or real denial.
+        if defect == "unreadable":
+            assert install_marker.validate_attestation_evidence(
+                evidence_path, expectation, evidence_fresh=fresh,
+                evidence_revoked=revoked,
+            ).name == "golden-skill"
         # Install, repair and refresh refuse through the one validator.
         if defect == "unreadable":
-            original_read_bytes = Path.read_bytes
-
-            def _refuse(self: Path) -> bytes:
-                if self == evidence_path:
-                    raise PermissionError("evidence store denied the read")
-                return original_read_bytes(self)
-
-            with mock_patch.object(Path, "read_bytes", _refuse):
+            with deny_read(evidence_path):
                 with pytest.raises(install_marker.InstallMarkerError) as refused:
                     install_marker.validate_attestation_evidence(
                         evidence_path,
@@ -3954,7 +3981,7 @@ def _drive_attestation_evidence(case: dict[str, Any]) -> None:
         before_home = _marker_v5_tree_hash(csk_home)
         before_project = _marker_v5_tree_hash(project)
         if defect == "unreadable":
-            with mock_patch.object(Path, "read_bytes", _refuse):
+            with deny_read(evidence_path):
                 verdict = install_marker.evaluate_schema2_status(
                     marker_path,
                     plan,
@@ -3974,6 +4001,14 @@ def _drive_attestation_evidence(case: dict[str, Any]) -> None:
         assert verdict.exit_code != 0
         assert _marker_v5_tree_hash(csk_home) == before_home
         assert _marker_v5_tree_hash(project) == before_project
+
+
+def _drive_attestation_evidence(case: dict[str, Any]) -> None:
+    _drive_attestation_evidence_once(case, _deny_json_descriptor_open)
+    # Repeat the same case and every typed/state assertion with real filesystem
+    # denial on POSIX. Windows ACL semantics are not modeled by chmod.
+    if case["id"] == "attestation-evidence-unreadable" and os.name != "nt" and os.geteuid() != 0:
+        _drive_attestation_evidence_once(case, _deny_json_file_permissions)
 
 
 for _evidence_case_id in (
@@ -4975,7 +5010,7 @@ def test_draft_sources_build_receipt_v3_schema_case_through_production_reader(
 # own binding in tests/test_source_audit.py.
 
 
-def _drive_missing_audit_report(case: dict[str, Any]) -> None:
+def _drive_missing_audit_report_once(case: dict[str, Any], deny_read: Any) -> None:
     """Drive ``missing-audit-report``: an unreadable report rejects.
 
     Re-pointed by TASK-260916-2je9f6: ``validate_source_audit`` has
@@ -5032,14 +5067,12 @@ def _drive_missing_audit_report(case: dict[str, Any]) -> None:
         )
         target = source_audit_module.source_audit_report_path(csk_home, content)
         before = _marker_v5_tree_hash(csk_home)
-        original_read_bytes = Path.read_bytes
-
-        def _refuse(self: Path) -> bytes:
-            if self == target:
-                raise PermissionError("audit store denied the read")
-            return original_read_bytes(self)
-
-        with patch.object(Path, "read_bytes", _refuse):
+        # A reader that refuses everything cannot satisfy this case.
+        assert source_audit_module.validate_stored_report(
+            package=package, content_sha256=content, csk_home=csk_home,
+            policy=policy,
+        ) is not None
+        with deny_read(target):
             with pytest.raises(source_audit_module.SourceAuditError) as refused:
                 source_audit_module.validate_stored_report(
                     package=package,
@@ -5049,6 +5082,14 @@ def _drive_missing_audit_report(case: dict[str, Any]) -> None:
                 )
         assert refused.value.code == source_audit_module.CODE_REPORT_UNREADABLE
         assert _marker_v5_tree_hash(csk_home) == before
+
+
+def _drive_missing_audit_report(case: dict[str, Any]) -> None:
+    _drive_missing_audit_report_once(case, _deny_json_descriptor_open)
+    # Repeat the same case and every typed/state assertion with real filesystem
+    # denial on POSIX. Windows ACL semantics are not modeled by chmod.
+    if os.name != "nt" and os.geteuid() != 0:
+        _drive_missing_audit_report_once(case, _deny_json_file_permissions)
 
 
 register_semantic_driver("missing-audit-report", _drive_missing_audit_report)
