@@ -1,6 +1,6 @@
 {
   "entries": {
-    "csk.build_repository_pipeline:run_pipeline": [
+    "csk.build_repository_pipeline:run_pipelines": [
       "external-build"
     ],
     "csk.builds.currentness:compare_external_build_evidence": [
