@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
 - Inspect selected SSH keys locally before repository traffic; proven unusable
   keys report an authentication availability failure and preserve declared fallback.
 - Add read-only `csk config build-ssh doctor` with platform guidance and explicit

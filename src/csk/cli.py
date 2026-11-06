@@ -1419,13 +1419,19 @@ def _cmd_config_show() -> int:
 
 
 def _cmd_config_build_ssh(args: argparse.Namespace) -> int:
-    cfg = config.load_config()
     if args.build_ssh_command == "doctor":
+        config_status = None
+        try:
+            rules = config.load_config(quiet=True).build_ssh
+        except (config.ConfigError, OSError, RuntimeError):
+            rules = ()
+            config_status = "Config: unavailable or invalid; inspecting explicit options and environment only"
         print(build_ssh.doctor(
-            cfg.build_ssh, args.scope, identity=args.identity, agent=args.agent,
-            all_os=args.all_os,
+            rules, args.scope, identity=args.identity, agent=args.agent,
+            all_os=args.all_os, config_status=config_status,
         ))
         return EXIT_OK
+    cfg = config.load_config()
     if args.build_ssh_command == "list":
         if not cfg.build_ssh:
             print("No build-ssh scopes configured")
