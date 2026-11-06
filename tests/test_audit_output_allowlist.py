@@ -230,3 +230,18 @@ def test_backend_echo_cannot_enter_reports_or_cache(tmp_path, monkeypatch):
     _assert_no_fragments(value, outputs + [p.read_bytes() for p in files])
     (snapshot / 'SKILL.md').write_text('different ordinary instructions')
     assert not pipeline.audit_plans([plan], cfg, scope='fixture')[0].findings
+
+
+def test_integrity_digest_can_contain_a_known_token_shape(tmp_path):
+    # The entire canonical digest is public, even if its bytes resemble a token; an outside token still blocks.
+    key = 'AKIA' + 'Z' * 16
+    digest = key + '/' + 'a' * 21 + 'A' + '='
+    assert base64.b64encode(base64.b64decode(digest)).decode() == digest
+    snapshot = tmp_path / 'package'
+    snapshot.mkdir()
+    (snapshot / 'go.sum').write_text('example.invalid/mod v1.2.3 h1:' + digest)
+    plan, cfg, _ = _plan(snapshot, tmp_path)
+    assert not pipeline.gate_plans([plan], cfg, scope='fixture').errors
+    (snapshot / 'token.txt').write_text(key)
+    gate = pipeline.gate_plans([plan], cfg, scope='fixture')
+    assert gate.errors and any(f.id == 'static.secret.aws-access-key' for f in gate.reports[0].findings)

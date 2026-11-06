@@ -89,8 +89,15 @@ def _predictable_base64(value: str) -> bool:
 
 
 def _secret_spans(decoded: str) -> Iterator[tuple[int, int, str]]:
+    integrity = list(_INTEGRITY.finditer(decoded))
     for kind, pattern in _PATTERNS:
+        integrity_index = 0
         for match in pattern.finditer(decoded):
+            while integrity_index < len(integrity) and integrity[integrity_index].end() <= match.start():
+                integrity_index += 1
+            if (integrity_index < len(integrity) and integrity[integrity_index].start() <= match.start()
+                    and match.end() <= integrity[integrity_index].end()):
+                continue
             yield match.start(), match.end(), kind
     # Lex segments once, retaining only a three-part window. Padding is part of a segment.
     parts: deque[re.Match[str]] = deque(maxlen=3)
@@ -111,7 +118,7 @@ def _secret_spans(decoded: str) -> Iterator[tuple[int, int, str]]:
             continue
         if isinstance(header, dict) and isinstance(header.get('alg'), str):
             yield parts[0].start(), part.end(), 'jwt'
-    public = sorted([*_PUBLIC_PEM.finditer(decoded), *_INTEGRITY.finditer(decoded)], key=lambda m: m.start())
+    public = sorted([*_PUBLIC_PEM.finditer(decoded), *integrity], key=lambda m: m.start())
     # Source tokens retain their context gates; colon/URL composites also get
     # classified as values, so low-entropy URL prefixes cannot dilute a secret.
     patterns = (_TOKEN, _OUTPUT_TOKEN)
