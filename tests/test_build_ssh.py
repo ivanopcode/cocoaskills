@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -325,6 +326,9 @@ def test_discover_candidates_reports_agent_socket(
     def unavailable(*args: object, **kwargs: object) -> None:
         raise FileNotFoundError
 
+    if sys.platform == "win32":
+        from csk import git_admission
+        monkeypatch.setattr(git_admission, "_windows_ssh_agent_pipe_available", lambda: True)
     monkeypatch.setattr(subprocess, "run", unavailable)
     found = build_ssh.discover_candidates(
         environment={"SSH_AUTH_SOCK": str(tmp_path / "sock"), "PATH": ""},
@@ -332,7 +336,7 @@ def test_discover_candidates_reports_agent_socket(
     )
     # ssh-add is unreachable with an empty PATH; the socket still lists as a
     # candidate with an unknown key count.
-    assert found.agent_socket == str(tmp_path / "sock")
+    assert found.agent_socket == (r"\\.\pipe\openssh-ssh-agent" if sys.platform == "win32" else str(tmp_path / "sock"))
     assert found.agent_key_count is None
 
 

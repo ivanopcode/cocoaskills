@@ -217,6 +217,19 @@ configuration and both known-host paths remain independently pinned.
 Ambient `PATH`, `USERPROFILE`, agent variables and executable overrides remain
 excluded. POSIX and HTTPS environments do not acquire this variable.
 
+On Windows, the guarded SSH wrapper owns a native subprocess with an argument
+list, preserving spaces in private directories and identity paths. Known-hosts
+paths are also quoted as SSH configuration list elements. The guarded expected
+host and repository check runs before launching SSH. Admission launches bounded
+Git commands suspended, assigns them to a kill-on-close Windows Job Object, then
+resumes them. At the deadline it terminates the job and waits at most two seconds
+for retained descendant process handles, at most two seconds for the direct
+child, and at most one second to recover timeout diagnostics (five seconds
+maximum additional wait). This covers SSH and HTTPS helpers;
+local object reading keeps its existing timer and disables lazy network fetches.
+The native Windows CI kit exercises spaces, authenticated stalls, and TCP black
+holes on SSH and HTTPS. This does not add attended prompting or qualify MSYS SSH.
+
 The native Windows regression matrix is opt-in for a disposable loopback server.
 The dedicated `windows-ssh.yml` CI job provisions this kit and requires all 12 native
 authentication, startup, destination-guard and deadline cases to pass without skips. To reproduce
@@ -456,15 +469,3 @@ hosts. Linux support is deliberately deferred and is not implied by generic
 CocoaSkills script/system-command support. Platform evidence must record the
 exact OS, architecture, Python, Git, Go, csk, Curator consumer, protocol commit,
 and corpus manifest used by the run.
-
-
-On Windows, the guarded SSH wrapper owns a native subprocess with an argument
-list, preserving spaces in private directories and identity paths. Known-hosts
-paths are also quoted as SSH configuration list elements. The guarded expected
-host and repository check runs before launching SSH. Admission launches bounded
-Git commands suspended, assigns them to a kill-on-close Windows Job Object, then
-resumes them. At the deadline it terminates the job and waits at most two seconds
-for retained descendant process handles. This covers SSH and HTTPS helpers;
-local object reading keeps its existing timer and disables lazy network fetches.
-The native Windows CI kit exercises spaces, authenticated stalls, and TCP black
-holes on SSH and HTTPS. This does not add attended prompting or qualify MSYS SSH.

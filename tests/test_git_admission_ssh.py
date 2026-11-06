@@ -824,3 +824,29 @@ def test_windows_destination_guard_with_space_paths(tmp_path: Path) -> None:
     result = subprocess.run([*command, "shifted.invalid", f"git-upload-pack '{EXPECTED_PATH}'"], capture_output=True)
     assert result.returncode == 1
     assert result.stderr.strip() == b"csk: refused unexpected ssh invocation"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="real Windows timeout diagnostics")
+def test_windows_timeout_preserves_signing_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A real child emits a signing error then stalls. Timeout retains the safe
+    # hint and classification; a normal child is the nearby positive control.
+    from csk import _windows_git_process as runner
+    run = runner.run
+    common = dict(stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    assert run([sys.executable, "-c", "print('ok')"], timeout=5, **common).stdout.strip() == b"ok"
+    code = "import sys,time;sys.stderr.write('sign_and_send_pubkey: signing failed: agent refused operation\\n');sys.stderr.flush();time.sleep(120)"
+    with pytest.raises(subprocess.TimeoutExpired) as error:
+        run([sys.executable, "-c", code], timeout=2, **common)
+    assert error.value.stderr and b"sign_and_send_pubkey" in error.value.stderr
+    assert "ssh-agent-refused" in git_admission._git_failure_hints(error.value.stderr)
+    # A cleanup bookkeeping error after actual termination must not replace
+    # the timeout or discard its diagnostic. The preceding run uses no stub.
+    end_job = runner._end_job
+    def failed_cleanup(kernel, job):
+        end_job(kernel, job)
+        raise OSError("injected cleanup bookkeeping failure")
+    monkeypatch.setattr(runner, "_end_job", failed_cleanup)
+    with pytest.raises(subprocess.TimeoutExpired) as cleanup_error:
+        run([sys.executable, "-c", code], timeout=2, **common)
+    assert "bounded Windows Git cleanup failed" in cleanup_error.value.__notes__
+    assert "ssh-agent-refused" in git_admission._git_failure_hints(cleanup_error.value.stderr)
