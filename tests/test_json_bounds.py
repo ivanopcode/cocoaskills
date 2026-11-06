@@ -2,6 +2,7 @@ import io
 from pathlib import Path
 
 import pytest
+from sparse_files import truncate_sparse
 
 from csk import manifest, protocol_json as pj
 
@@ -31,8 +32,7 @@ def test_sparse_read_refuses_before_open(tmp_path, monkeypatch, size):
     path = tmp_path / 'Skillfile.json'
     path.write_bytes(b'{}')
     assert pj.loads(pj.read_bytes(path)) == {}
-    with path.open('wb') as stream:
-        stream.truncate(size)
+    truncate_sparse(path, size)
     def forbidden(*args, **kwargs):
         pytest.fail('oversized input was opened')
     monkeypatch.setattr(io, 'open', forbidden)
@@ -117,8 +117,7 @@ def test_sparse_marker_status(tmp_path, monkeypatch):
     path = tmp_path / '.csk-install.json'
     path.write_bytes(b'{}')
     assert pj.loads(pj.read_bytes(path)) == {}
-    with path.open('wb') as stream:
-        stream.truncate(4 * 1024**3)
+    truncate_sparse(path, 4 * 1024**3)
     def forbidden(*args, **kwargs):
         pytest.fail('oversized marker was opened')
     monkeypatch.setattr(io, 'open', forbidden)
@@ -206,8 +205,7 @@ def test_lock_path_size_bound(tmp_path, monkeypatch):
     path = tmp_path / 'lock'
     path.write_bytes(b'{"pid":1}')
     assert locking._read_lock(path) == {'pid': 1}
-    with path.open('wb') as stream:
-        stream.truncate(4 * 1024**3)
+    truncate_sparse(path, 4 * 1024**3)
     def forbidden(*args, **kwargs):
         pytest.fail('oversized lock was opened')
     monkeypatch.setattr(io, 'open', forbidden)
@@ -224,8 +222,7 @@ def test_broker_state_bounds(tmp_path, monkeypatch):
     assert https_broker.answer(str(path), prompt, {}) == 'example'
     path.write_bytes(b'[' * 1200 + b'0' + b']' * 1200)
     assert https_broker.answer(str(path), prompt, {}) is None
-    with path.open('wb') as stream:
-        stream.truncate(4 * 1024**3)
+    truncate_sparse(path, 4 * 1024**3)
     def forbidden(*args, **kwargs):
         pytest.fail('oversized broker state was opened')
     monkeypatch.setattr(io, 'open', forbidden)
@@ -240,8 +237,7 @@ def test_status_marker_recheck_is_bounded(tmp_path, monkeypatch):
     path.write_bytes(b'{}')
     assert status._marker_bytes_unchanged(path, b'{}')
     assert not status._marker_bytes_unchanged(path, b'{"changed":true}')
-    with path.open('wb') as stream:
-        stream.truncate(4 * 1024**3)
+    truncate_sparse(path, 4 * 1024**3)
     def forbidden(*args, **kwargs):
         pytest.fail('oversized marker recheck was opened')
     monkeypatch.setattr(io, 'open', forbidden)
@@ -256,8 +252,7 @@ def test_config_show_is_bounded(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv('CSK_CONFIG', str(path))
     assert cli._cmd_config_show() == 0
     assert '{}' in capsys.readouterr().out
-    with path.open('wb') as stream:
-        stream.truncate(4 * 1024**3)
+    truncate_sparse(path, 4 * 1024**3)
     def forbidden(*args, **kwargs):
         pytest.fail('oversized config display was opened')
     monkeypatch.setattr(io, 'open', forbidden)
@@ -272,8 +267,7 @@ def test_atomic_publication_skips_oversized_comparison(tmp_path, monkeypatch):
     path = tmp_path / 'registry.json'
     path.write_bytes(b'{}')
     dispatch.atomic_write_bytes(path, b'{}', mode=0o644)
-    with path.open('wb') as stream:
-        stream.truncate(4 * 1024**3)
+    truncate_sparse(path, 4 * 1024**3)
     real_open = io.open
     def forbidden_target(file, *args, **kwargs):
         if not isinstance(file, int) and Path(file) == path:
