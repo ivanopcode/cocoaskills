@@ -63,6 +63,8 @@ def audit_plans(
 ) -> tuple[AuditReport, ...]:
     reports: list[AuditReport] = []
     for plan in plans:
+        # Configuration validation does not read skill content.
+        _backend_config_for_config(config)
         paths = _admit_snapshot(plan, config.audit.max_request_bytes)
         # Hashing, detectors and the backend consume the same bounded private
         # copy. A writer to the source cannot enlarge downstream reads.
@@ -234,12 +236,12 @@ def _gate_plan(
     try:
         reports = audit_plans([plan], config, scope=scope, record=record)
     except AuditInputTooLarge as exc:
-        decision = policy.decide((_too_large_finding(config.audit.max_request_bytes + 1, config.audit.max_request_bytes),),
-                                 mode=config.audit.mode, fail_on=config.audit.fail_on)
-        # A rejected legacy snapshot has no hash with which to verify a pin.
-        # Preserve strict legacy refusal even when HIGH is below fail_on.
-        if config.audit.mode == "strict" and plan.spec.schema_version < 3:
-            decision = Decision.BLOCK
+        # Unread bytes cannot establish absence of critical findings or a
+        # revoked digest. No synthetic finding can substitute for that evidence.
+        blocked = config.audit.mode == "strict" or any(
+            not item.startswith("source:") for item in config.audit.revocations
+        )
+        decision = Decision.BLOCK if blocked else Decision.WARN
         message = f"audit {'blocked' if decision == Decision.BLOCK else 'warning'}: {exc}"
         return GateResult(reports=(), errors=(message,)) if decision == Decision.BLOCK else GateResult(reports=(), warnings=(message,))
     except AuditCanaryError as exc:
