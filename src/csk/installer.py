@@ -2436,6 +2436,8 @@ def _publish_external_builds(
             )
 
         def acquire(
+            name: str = name,
+            node: closure.ClosureNode = node,
             repository: build_repository_model.BuildRepository = repository,
             substitution: dev_substitutions.BuildRepositorySubstitution | None = substitution,
             effective: build_repository_pipeline.EffectiveState = effective,

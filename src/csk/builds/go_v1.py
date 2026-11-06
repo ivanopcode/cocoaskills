@@ -313,7 +313,14 @@ class GoV1Error(RuntimeError):
     def __init__(self, code: str, detail: str):
         self.code = code
         self.detail = detail
+        # Only the manager's completed build/launch cleanup may certify this.
+        self.worker_teardown_confirmed = False
         super().__init__(f"go-v1 {code}: {detail}")
+
+
+@dataclass
+class _BuildLifecycle:
+    teardown_confirmed: bool = True  # No worker has been started yet.
 
 
 @dataclass(frozen=True)
@@ -6752,6 +6759,8 @@ class _WorkerClient:
     def launch(
         cls,
         plan: _WorkerPlan,
+        *,
+        _lifecycle: _BuildLifecycle | None = None,
     ) -> _WorkerClient:
         _observe("launch-start")
         nonce = secrets.token_hex(32)
@@ -6778,6 +6787,8 @@ class _WorkerClient:
                 plan.limits,
             )
             _observe("domain-launch")
+            if _lifecycle is not None:
+                _lifecycle.teardown_confirmed = False
             process = domain.launch(plan.executable, plan.worker_cache)
             _observe("domain-launched", process=process)
             identity_guard.verify()
@@ -6913,6 +6924,11 @@ class _WorkerClient:
                 # Teardown still has to complete, but it must not replace the
                 # diagnostic that rejected this launch.
                 primary.add_note(f"worker-domain teardown also failed: {exc}")
+            else:
+                # A failed launch may not have returned its process handle.
+                # terminate(None) cannot certify that unknown execution domain.
+                if _lifecycle is not None and process is not None:
+                    _lifecycle.teardown_confirmed = True
             raise
 
     def list(self) -> ProcessResult:
@@ -7240,6 +7256,28 @@ def build(
 ) -> BuildResult:
     """Run one closed portable manager-worker-v1 compile operation."""
 
+    lifecycle = _BuildLifecycle()
+    try:
+        return _build(
+            request,
+            _native_probe=_native_probe,
+            _state_observer=_state_observer,
+            _manager_executable=_manager_executable,
+            _lifecycle=lifecycle,
+        )
+    except GoV1Error as exc:
+        exc.worker_teardown_confirmed = lifecycle.teardown_confirmed
+        raise
+
+
+def _build(
+    request: BuildRequest,
+    *,
+    _native_probe: Callable[[str, ResourceLimits], bool] | None,
+    _state_observer: Callable[[str], None] | None,
+    _manager_executable: Path | None,
+    _lifecycle: _BuildLifecycle,
+) -> BuildResult:
     _validate_package_command_surface(request)
     limits = _normalize_limits(request.limits)
     _verify_frozen_inputs(
@@ -7341,7 +7379,7 @@ def build(
             probes=probes,
             limits=limits,
         )
-        client = _WorkerClient.launch(plan)
+        client = _WorkerClient.launch(plan, _lifecycle=_lifecycle)
         _emit_state(_state_observer, SESSION_STATES[3])
         _emit_state(_state_observer, SESSION_STATES[4])
         _emit_state(_state_observer, SESSION_STATES[5])
@@ -7419,6 +7457,7 @@ def build(
         if client is not None:
             try:
                 client.teardown()
+                _lifecycle.teardown_confirmed = True
                 _emit_state(_state_observer, SESSION_STATES[12])
             except BaseException as exc:
                 teardown_error = exc
