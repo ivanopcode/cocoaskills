@@ -524,7 +524,7 @@ def doctor(
         "Prefer --identity <private-key> together with --agent auto: the private path works with the key loaded or absent (a plain key can sign directly).",
         "Plain key: csk config build-ssh add <scope> --identity <private-key>",
         "Passphrase key: load into your capable agent using the steps below, then select --agent auto --identity <private-key>.",
-        "Custom agent, e.g. 1Password (unverified): unlock/configure it in its own UI, then:",
+        "Custom agent on POSIX only, e.g. 1Password (unverified): unlock/configure it in its own UI, then:",
         "  csk config build-ssh add <scope> --agent <socket> --identity <key>.pub",
         "A .pub only pins an agent key; it cannot sign by itself. Custom-agent support for FIDO/PIN is unverified.",
     ])
@@ -557,7 +557,8 @@ def doctor(
             "Windows (native software-key/service-agent route tested; hardware/custom-agent routes unverified):",
             "  Local software-key metadata and file-only passphrase refusal are tested with native Windows OpenSSH.",
             "  Plain key: select the private file; verify your OpenSSH build separately.",
-            "  A passphrase key without a matching loaded agent key refuses locally; prompts remain disabled.",
+            "  A passphrase key with no agent or a confirmed missing agent key refuses locally; prompts remain disabled.",
+            "  An unavailable or ambiguous agent leaves key membership unknown; it does not prove absence.",
             "  Passphrase key, operator setup in elevated PowerShell:",
             "    Get-Service ssh-agent | Set-Service -StartupType Manual",
             "    Start-Service ssh-agent",
