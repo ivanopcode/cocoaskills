@@ -89,6 +89,35 @@ def test_size_gate_precedes_open_and_read_is_bounded(tmp_path, monkeypatch):
     assert requests == [129]
 
 
+@pytest.mark.parametrize("maximum", [128, 1_000_000])
+@pytest.mark.parametrize("extra", [-1, 0, 1])
+def test_shared_reader_preserves_scan_limit_with_short_reads(tmp_path, monkeypatch, maximum, extra):
+    # Chunk requests stay <=64 KiB, short reads drain, and exactly limit bytes
+    # remain admitted while growth by one byte produces the specific omission.
+    import io
+    monkeypatch.setattr(detectors, "MAX_TEXT_BYTES", maximum)
+    path = tmp_path / "run.txt"
+    path.write_bytes(b"\n")
+    body = b"\n" * (maximum + extra)
+    requests = []
+    returned = []
+    class Reader(io.BytesIO):
+        def read(self, size=-1):
+            requests.append(size)
+            assert 0 < size <= 64 * 1024
+            chunk = super().read(min(size, 4093))
+            returned.append(len(chunk))
+            return chunk
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: Reader(body))
+    findings = scan(tmp_path)
+    assert requests and sum(returned) == len(body)
+    if extra > 0:
+        assert len(findings) == 1
+        assert findings[0].evidence == "scan skipped: size exceeds text limit"
+    else:
+        assert not findings
+
+
 def test_minified_text_in_custom_root_is_opaque(tmp_path):
     # Minification detection covers arbitrary roots, with a multiline control.
     path = tmp_path / "custom-runtime" / "bundle.js"

@@ -61,7 +61,6 @@ from . import source_identity as source_identity_mod
 from .audit import detectors as audit_detectors
 from .audit import pipeline as audit_pipeline
 from .audit.capabilities import CapabilityManifest
-from .audit.model import Finding as AuditFinding
 from .audit.model import Severity
 from .builds import cache as build_cache
 from .builds import go_v1
@@ -1422,42 +1421,16 @@ def _external_git_tool(
     )
 
 
-def _vendored_inert_text(snapshot_root: Path, finding: AuditFinding) -> bool:
-    """True for a high finding in non-executable text below a vendored module.
-
-    The external build session runs exactly ``go list`` and ``go build`` with
-    hooks, generators, and helpers denied, so prose in a vendored dependency
-    (a third-party Makefile or README) never executes.  Such text stays an
-    advisory finding but does not block the install; an executable file below
-    ``vendor/`` and every critical finding still block.
-    """
-
-    if finding.severity is not Severity.HIGH:
-        return False
-    if finding.location is None:
-        return False
-    segments = finding.location.file.split("/")
-    if "vendor" not in segments[:-1]:
-        return False
-    target = snapshot_root.joinpath(*segments)
-    try:
-        info = target.lstat()
-    except OSError:
-        return False
-    if not stat.S_ISREG(info.st_mode):
-        return False
-    return not info.st_mode & 0o111
-
-
 def _external_static_audit(subject: build_repository_pipeline.AuditSubject) -> None:
+    # The build session denies dependency helpers/generators. Apply its inert
+    # vendor policy while the scanner still owns the real, unsanitized path.
     findings = audit_detectors.detect_snapshot(
-        subject.snapshot_root, CapabilityManifest.implicit_none()
+        subject.snapshot_root, CapabilityManifest.implicit_none(), inert_vendor_text=True,
     )
     blocked = [
         finding
         for finding in findings
         if finding.severity in {Severity.HIGH, Severity.CRITICAL}
-        and not _vendored_inert_text(subject.snapshot_root, finding)
     ]
     if blocked:
         raise InstallError(

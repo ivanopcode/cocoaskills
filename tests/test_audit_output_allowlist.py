@@ -162,10 +162,10 @@ def test_deep_python_is_reasoned_not_a_crash(tmp_path, source):
 def test_python_inventory_and_bom(tmp_path, name, prefix):
     # All stated Python names/shebangs use AST detectors; a harmless program stays clean.
     path = tmp_path / name
-    path.write_text(prefix + 'eval("pass")')
+    path.write_text(prefix + 'eval("pass")', encoding='utf-8')
     findings = detectors.detect_snapshot(tmp_path, CapabilityManifest())
     assert any(f.id == 'static.python.dynamic-exec' for f in findings)
-    path.write_text(prefix + 'print("hello")')
+    path.write_text(prefix + 'print("hello")', encoding='utf-8')
     assert not detectors.detect_snapshot(tmp_path, CapabilityManifest())
 
 

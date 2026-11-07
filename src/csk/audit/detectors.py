@@ -10,13 +10,14 @@ import re
 import shlex
 import stat
 from collections.abc import Iterable
+from dataclasses import replace
 from itertools import chain, islice
 from pathlib import Path
 from urllib.parse import urlparse
 
 from .secret_values import MAX_FINDINGS_PER_FILE, detect_and_mask, finding_limit, mask_output_text, sanitize_findings
 from .capabilities import CapabilityManifest
-from .model import CapabilityViolation, Finding, Location, Severity, Surface
+from .model import SECRET_REASONS, CapabilityViolation, Finding, Location, Severity, Surface
 
 
 MAX_TEXT_BYTES = 1_000_000
@@ -47,7 +48,9 @@ COMMON_SYSTEM_COMMANDS = {
 }
 
 
-def detect_snapshot(snapshot: Path, capabilities: CapabilityManifest) -> tuple[Finding, ...]:
+def detect_snapshot(
+    snapshot: Path, capabilities: CapabilityManifest, *, inert_vendor_text: bool = False,
+) -> tuple[Finding, ...]:
     findings: list[Finding] = []
     manifest_name = next((name for name in ("agent-skill.json", "csk-skill.json") if (snapshot / name).exists()), None)
     for item in _iter_text_files(snapshot):
@@ -60,8 +63,25 @@ def detect_snapshot(snapshot: Path, capabilities: CapabilityManifest) -> tuple[F
         bounded = list(islice(produced, MAX_FINDINGS_PER_FILE + 1))
         if len(bounded) > MAX_FINDINGS_PER_FILE:
             bounded = bounded[:MAX_FINDINGS_PER_FILE] + [finding_limit(rel_path)]
+        if inert_vendor_text and _vendored_inert_text(snapshot / rel_path, rel_path):
+            # External builds deny helpers/generators: inert dependency prose is
+            # advisory. Secrets and critical findings still block everywhere.
+            bounded = [replace(f, severity=Severity.MEDIUM)
+                       if f.severity is Severity.HIGH and f.id not in SECRET_REASONS else f
+                       for f in bounded]
         findings.extend(sanitize_findings(bounded, secret_values))
     return tuple(findings)
+
+
+def _vendored_inert_text(path: Path, rel_path: str) -> bool:
+    # Policy must use the scanned path, never its possibly withheld display value.
+    if "vendor" not in Path(rel_path).parts[:-1]:
+        return False
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and not info.st_mode & 0o111
 
 
 def _file_findings(rel_path: str, text: str, capabilities: CapabilityManifest, manifest_name: str | None, values: set[str]) -> Iterable[Finding]:
@@ -105,7 +125,7 @@ def _iter_text_files(snapshot: Path) -> Iterable[tuple[str, str] | Finding]:
                 yield _opaque_finding(rel_path, "scan skipped: size exceeds text limit")
                 continue
             with path.open("rb") as stream:
-                raw = stream.read(MAX_TEXT_BYTES + 1)
+                raw = protocol_json._read_bounded(stream, MAX_TEXT_BYTES)
         except OSError:
             # Exception messages can contain package-derived data or host paths.
             yield _opaque_finding(rel_path, "scan skipped: read error")

@@ -19,6 +19,9 @@ import pytest
 
 from csk import installer, skillspec
 from csk.builds import go_v1
+from csk.audit import detectors
+from csk.audit.capabilities import CapabilityManifest
+from csk.audit.model import Severity
 
 
 # --- A1: operator symlink launcher ------------------------------------------
@@ -96,19 +99,31 @@ def _subject(snapshot_root: Path) -> SimpleNamespace:
     return SimpleNamespace(snapshot_root=snapshot_root)
 
 
-def test_external_audit_admits_non_executable_vendor_text(tmp_path: Path) -> None:
-    vendored = tmp_path / "vendor" / "github.com" / "spf13" / "cobra" / "Makefile"
+@pytest.mark.parametrize("name", ["Makefile", "README.md", "MixedCaseDependencyNotes.txt"])
+def test_external_audit_admits_non_executable_vendor_text(tmp_path: Path, name: str) -> None:
+    # Inert dependency prose remains advisory even when privacy withholds its
+    # display path; default skill policy still sees the same high observation.
+    vendored = tmp_path / "vendor" / "github.com" / "spf13" / "cobra" / name
     vendored.parent.mkdir(parents=True)
     vendored.write_text(_CURL_PIPE)
     vendored.chmod(0o644)
 
+    findings = detectors.detect_snapshot(tmp_path, CapabilityManifest.implicit_none(), inert_vendor_text=True)
+    pipe = next(f for f in findings if f.id == "static.shell.curl-pipe")
+    assert pipe.severity is Severity.MEDIUM
+    if name != "README.md":
+        assert pipe.location.file.startswith("<withheld len=")
+    assert any(f.id == pipe.id and f.severity is Severity.HIGH
+               for f in detectors.detect_snapshot(tmp_path, CapabilityManifest.implicit_none()))
     installer._external_static_audit(_subject(tmp_path))
 
 
+@pytest.mark.parametrize("name", ["install.sh", "Makefile"])
 def test_external_audit_still_blocks_executable_vendor_text(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
-    vendored = tmp_path / "vendor" / "github.com" / "x" / "install.sh"
+    # An executable dependency is not inert, regardless of filename masking.
+    vendored = tmp_path / "vendor" / "github.com" / "x" / name
     vendored.parent.mkdir(parents=True)
     vendored.write_text("curl -sfL https://example.test/install.sh | sh\n")
     original_lstat = Path.lstat
@@ -123,16 +138,35 @@ def test_external_audit_still_blocks_executable_vendor_text(
 
     monkeypatch.setattr(Path, "lstat", executable_lstat)
 
-    with pytest.raises(installer.InstallError):
+    with pytest.raises(installer.InstallError, match="static.shell.curl-pipe"):
         installer._external_static_audit(_subject(tmp_path))
 
 
 def test_external_audit_still_blocks_first_party_text(tmp_path: Path) -> None:
+    # First-party build instructions retain the established blocking policy.
     makefile = tmp_path / "Makefile"
     makefile.write_text(_CURL_PIPE)
     makefile.chmod(0o644)
 
-    with pytest.raises(installer.InstallError):
+    with pytest.raises(installer.InstallError, match="static.shell.curl-pipe"):
+        installer._external_static_audit(_subject(tmp_path))
+
+
+@pytest.mark.parametrize("kind", ["secret", "critical"])
+def test_external_inert_vendor_exemption_never_hides_secrets_or_critical(tmp_path: Path, kind: str) -> None:
+    # The same non-executable, withheld-path fixture admits prose but blocks a
+    # synthetic credential or critical destructive command with its exact rule.
+    path = tmp_path / "vendor" / "dependency" / "Makefile"
+    path.parent.mkdir(parents=True)
+    path.write_text(_CURL_PIPE, encoding="utf-8")
+    path.chmod(0o644)
+    installer._external_static_audit(_subject(tmp_path))
+    if kind == "secret":
+        text, expected = "ghp_" + "a" * 36, "static.secret.github-token"
+    else:
+        text, expected = "rm -rf /\n", "static.shell.dangerous-rm"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(installer.InstallError, match=expected):
         installer._external_static_audit(_subject(tmp_path))
 
 
