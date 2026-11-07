@@ -795,7 +795,7 @@ def test_windows_real_git_ssh_clean_environment_matrix(
             finally:
                 # Restore this test's generated identity for later native
                 # discovery tests; never mutate an operator-owned agent.
-                import getpass
+                from windows_acl_fixture import copy_dacl
                 from cryptography.hazmat.primitives import serialization
                 unlocked = root / 'restore-agent-key'
                 key = serialization.load_ssh_private_key((root / 'encrypted').read_bytes(),
@@ -803,9 +803,7 @@ def test_windows_real_git_ssh_clean_environment_matrix(
                 try:
                     unlocked.write_bytes(key.private_bytes(serialization.Encoding.PEM,
                         serialization.PrivateFormat.OpenSSH, serialization.NoEncryption()))
-                    subprocess.run([str(Path(os.environ['SYSTEMROOT']) / 'System32/icacls.exe'),
-                        str(unlocked), '/inheritance:r', '/grant:r', f'{getpass.getuser()}:F'],
-                        check=True, capture_output=True)
+                    copy_dacl(root / 'encrypted', unlocked)
                     subprocess.run([str(ssh.with_name('ssh-add.exe')), str(unlocked)],
                         env=environment, stdin=subprocess.DEVNULL, check=True, capture_output=True, timeout=10)
                 finally:
