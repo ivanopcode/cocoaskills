@@ -437,21 +437,44 @@ def test_prompt_abort(monkeypatch: pytest.MonkeyPatch) -> None:
     assert rule is None and persist is False
 
 
-def test_windows_picker_discovers_standard_pipe_without_ambient_socket(tmp_path, monkeypatch):
-    # Windows discovery offers only the native pipe; its absence offers no
-    # candidate even with a hostile ambient SSH_AUTH_SOCK. No user keys read.
-    import sys
+# Native discovery offers only an available service pipe, while doctor describes
+# the explicitly selected route even when unavailable. Probes are doubled: this
+# proves ambient isolation and matching guidance, not real agent availability.
+@pytest.mark.parametrize("ambient", [None, "", "/tmp/stale-agent", r"\\.\pipe\hostile-agent"])
+@pytest.mark.parametrize("available", [False, True])
+def test_windows_picker_and_doctor_agree_on_agent_route(tmp_path, monkeypatch, ambient, available):
     import subprocess
     from csk import git_admission
-    monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(build_ssh, "resolve_tool", lambda *a, **kw: "ssh-add")
+    monkeypatch.setattr(build_ssh.sys, "platform", "win32")
+    monkeypatch.delenv("CSK_BUILD_SSH_IDENTITY", raising=False)
+    monkeypatch.delenv("CSK_BUILD_SSH_AGENT", raising=False)
+    if ambient is None:
+        monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    else:
+        monkeypatch.setenv("SSH_AUTH_SOCK", ambient)
+    monkeypatch.setattr(build_ssh, "resolve_tool", lambda *a, **kw: "/tools/ssh-add")
+    monkeypatch.setattr(build_ssh, "_local_probe", lambda *a, **kw: None)
+    calls = []
     def listed(*args, **kwargs):
         assert "SSH_AUTH_SOCK" not in kwargs["env"]
+        calls.append(args)
         return subprocess.CompletedProcess(args, 0, "key\n", "")
     monkeypatch.setattr(subprocess, "run", listed)
-    monkeypatch.setattr(git_admission, "_windows_ssh_agent_pipe_available", lambda: True)
-    candidate = build_ssh.discover_candidates(environment={"SSH_AUTH_SOCK": "hostile"}, home=str(tmp_path))
-    assert candidate.agent_socket == git_admission._WINDOWS_SSH_AGENT_PIPE
-    assert candidate.agent_key_count == 1
-    monkeypatch.setattr(git_admission, "_windows_ssh_agent_pipe_available", lambda: False)
-    assert build_ssh.discover_candidates(environment={"SSH_AUTH_SOCK": "hostile"}, home=str(tmp_path)).agent_socket is None
+    monkeypatch.setattr(git_admission, "_windows_ssh_agent_pipe_available", lambda: available)
+    candidate = build_ssh.discover_candidates(environment=dict(build_ssh.os.environ), home=str(tmp_path))
+    pipe = git_admission._WINDOWS_SSH_AGENT_PIPE
+    assert candidate.agent_socket == (pipe if available else None)
+    assert candidate.agent_key_count == (1 if available else None)
+    assert len(calls) == int(available)
+    inspected = []
+    def inspect(ssh, identity, socket):
+        inspected.append(socket)
+        return build_ssh.KeyInspection()
+    monkeypatch.setattr(build_ssh, "inspect_key", inspect)
+    text = build_ssh.doctor((), agent="auto")
+    assert inspected == [Path(pipe)]
+    assert "An unavailable or ambiguous agent leaves key membership unknown" in text
+    command = "  csk config build-ssh add <scope> --agent <socket> --identity <key>.pub"
+    assert command not in text
+    assert "hostile-agent" not in text and "stale-agent" not in text
+    assert command in build_ssh.doctor((), agent="auto", all_os=True)

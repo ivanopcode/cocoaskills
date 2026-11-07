@@ -1047,92 +1047,102 @@ usage: csk config build-ssh add [-h] [--agent [SOCKET]] [--identity PATH]
 
 ### csk config build-ssh doctor
 
-Read-only local metadata inspection and operator setup guidance:
+Локальная проверка метаданных без изменения состояния и инструкции по настройке:
 
 ```text
 csk config build-ssh doctor [scope-or-identity] [--identity PATH] [--agent SOCKET] [--all-os]
 ```
 
-Doctor runs without a global config. Missing or malformed config produces a
-notice and leaves explicit options and environment selections available; it
-does not bootstrap or repair config. When config is usable, the longest matching
-scope is used; explicit options and `CSK_BUILD_SSH_*` take precedence. `--agent auto`
-selects the native OpenSSH service pipe on Windows and `SSH_AUTH_SOCK` on POSIX,
-matching build admission. Windows ignores an ambient `SSH_AUTH_SOCK`.
-Without `--all-os`, instructions fit the current OS. No network, prompts,
-signatures, token access or agent mutation occurs. Missing tools and inconclusive
-metadata report `unknown`, never an unusable-key refusal. On POSIX, stat facts
-establish a permission refusal when the selected identity belongs to the current
-user and has any group or other permission bits. This check is independent of
-fingerprint output and optional public siblings. A selected agent must be confirmed
-not to hold the key before this file-only refusal applies. Windows permission
-state remains unknown. csk does not change ownership or permissions. A `.pub`
-selection instead explains that public-key pins need a matching agent; changing
-permissions cannot turn a public key into a private signing key.
+Doctor работает и без глобального конфига. Отсутствующий или некорректный конфиг
+вызывает уведомление; явные флаги и переменные окружения остаются доступны.
+Команда не создаёт и не исправляет конфиг. При корректном конфиге выбирается
+самый длинный подходящий скоуп; явные флаги и `CSK_BUILD_SSH_*` имеют приоритет.
+`--agent auto` выбирает стандартный pipe службы OpenSSH на Windows и
+`SSH_AUTH_SOCK` на POSIX, как и допуск сборки. На Windows значение `SSH_AUTH_SOCK`
+из окружения игнорируется. Интерактивный выбор предлагает агент на Windows
+только при наличии стандартного pipe; произвольный сокет из окружения не
+становится запасным вариантом.
+Без `--all-os` инструкции соответствуют текущей ОС. Команда не обращается к сети,
+не показывает запросы ввода, не создаёт подписи, не обращается к токену и не
+изменяет агент. Отсутствующие инструменты и неоднозначные метаданные дают
+`unknown`, а не отказ из-за непригодного ключа. На POSIX проверка stat
+устанавливает непригодные права, если файл принадлежит текущему пользователю
+и допускает любые права для группы или остальных. Проверка не зависит от
+отпечатка и соседнего публичного файла. При выбранном агенте такой отказ для
+файла возможен только после подтверждения, что ключа нет в агенте. На Windows
+состояние прав остаётся неизвестным. csk не меняет владельца и права. Для `.pub`
+выводится пояснение: фиксация публичного ключа требует совпадающего ключа в
+агенте; смена прав не превращает публичный ключ в приватный ключ для подписи.
 
-The empty-passphrase `ssh-keygen -y -P ""` probe runs for security-key containers
-and legacy PEM files too, independently of fingerprint success. It reads the
-local container without signing or contacting a token. Exact passphrase evidence
-refuses when no selected agent can provide the key; an unavailable or ambiguous
-agent remains unknown. A matching agent does not prove signing ability.
+Проверка `ssh-keygen -y -P ""` с пустой парольной фразой выполняется также для
+контейнеров security key и старых PEM-файлов независимо от успешности получения
+отпечатка. Она читает локальный контейнер без подписи и обращения к токену.
+Однозначный признак парольной фразы вызывает отказ, если выбранный агент не
+может предоставить ключ; недоступный агент или неоднозначный результат остаются
+неизвестными. Совпадение ключа в агенте не доказывает возможность подписи.
 
-The provider probe uses `ssh -G -T -F <null-device>` with a scrubbed environment.
-Provider absence requires exactly one raw `securitykeyprovider none` or
-`securitykeyprovider $SSH_SK_PROVIDER` record: that literal variable has no value
-in either the probe or the SSH lane. Whitespace variants, conflicting records,
-stderr and unfamiliar metadata stay unknown. An SK identity with proven provider
-absence is refused even when listed in an agent, because Apple SSH drops that
-identity pin. An encrypted SK container without an agent reports its passphrase
-first. A `.pub` suffix or a macOS-looking agent socket alone does not prove failure.
+Проверка провайдера выполняет `ssh -G -T -F <null-device>` с очищенным окружением.
+Отсутствие провайдера устанавливается только по единственной необработанной
+строке `securitykeyprovider none` или `securitykeyprovider $SSH_SK_PROVIDER`:
+эта переменная не имеет значения ни в проверке, ни при SSH-загрузке. Варианты
+пробелов, противоречивые строки, stderr и незнакомые метаданные дают неизвестный
+результат. SK-ключ с доказанным отсутствием провайдера отклоняется даже при
+наличии в агенте: Apple SSH теряет фиксацию такого ключа. Для зашифрованного
+SK-контейнера без агента сначала сообщается о парольной фразе. Суффикс `.pub`
+или сокет агента, похожий на macOS-путь, сами по себе не доказывают сбой.
 
-Output includes terminal attachment (prompts still stay disabled), agent key
-count and membership when established, and distinct unknown reasons for missing,
-nonregular or unrecognized identity files. Failed home expansion also reports
-unknown. Closed stdin or stderr reports `not attached`; doctor still runs.
-With a repository scope, doctor checks local host-key presence using
-`ssh-keygen -F` and the selected `known_hosts` file, or `~/.ssh/known_hosts` by
-default; `CSK_BUILD_SSH_KNOWN_HOSTS` overrides it. A local entry is not verification
-of the server fingerprint and no host connection is made.
+Вывод содержит наличие терминала (запросы ввода всё равно отключены), число
+ключей агента и наличие выбранного ключа, если они установлены. Причины
+неизвестного состояния различаются для отсутствующего, необычного или
+нераспознанного файла. Ошибка раскрытия домашнего каталога тоже даёт неизвестный
+результат. Закрытый stdin или stderr отображается как `not attached`; doctor
+продолжает работать. При заданном скоупе репозитория doctor проверяет наличие
+локального ключа хоста через `ssh-keygen -F` и выбранный `known_hosts`, по
+умолчанию `~/.ssh/known_hosts`; `CSK_BUILD_SSH_KNOWN_HOSTS` переопределяет файл.
+Локальная запись не подтверждает отпечаток сервера; соединение с хостом не
+выполняется.
 
-Doctor and build-preflight diagnostics escape terminal controls in outside data
-such as paths and tool output. Suggested credential commands use shell quoting
-so their arguments survive copying into bash or zsh; JSON values retain their
-semantic contents.
+Диагностика doctor и проверки перед сборкой экранирует управляющие символы
+терминала во внешних данных, включая пути и вывод инструментов. Аргументы
+предлагаемых команд настройки учётных данных заключаются в кавычки оболочки
+для копирования в bash или zsh; значения JSON сохраняют исходное содержимое.
 
-SSH prompts remain disabled. A proven unusable selection fails locally with
-`build_repository_ssh_credential_unusable`, classified as `auth-unavailable` so
-an explicitly declared transport fallback remains eligible. Prefer a private
-identity path with an agent: SSH can use the loaded key or the file. A `.pub`
-only pins a key already available in the selected agent.
+SSH-запросы ввода отключены. Доказанно непригодный выбор отклоняется локально с
+`build_repository_ssh_credential_unusable` и классификацией `auth-unavailable`,
+поэтому явно объявленный запасной транспорт остаётся допустимым. Предпочтителен
+путь к приватному ключу вместе с агентом: SSH может использовать загруженный
+ключ или файл. `.pub` только фиксирует ключ, уже доступный выбранному агенту.
 
-The agent and its keys are managed by the person who owns the computer; csk
-does not manage them. When loading keys, use `ssh-add -t 1h <private-key>` with
-a lifetime chosen for the task and no longer than needed. Controlling that
-lifetime is a separate security matter for the operator.
+Агентом и ключами управляет владелец компьютера, а не csk. Загружая ключ,
+используйте `ssh-add -t 1h <private-key>` со временем жизни под задачу, не дольше
+необходимого. Управление этим сроком — отдельная ответственность оператора.
 
-On macOS the system agent cannot sign with USB security keys; adding one masks
-the file route. The operator can undo this with `ssh-add -d <key>.pub`. Use
-Homebrew OpenSSH and its agent for hardware keys; a PIN-requiring key in an
-agent additionally needs owner-configured askpass/display support. Doctor
-prints the commands and caveats. On POSIX, custom agents such as 1Password can be
-selected with `--agent <socket> --identity <key>.pub`.
+На macOS системный агент не умеет подписывать USB security key; добавленный
+ключ перекрывает файловый маршрут. Оператор может удалить его командой
+`ssh-add -d <key>.pub`. Для аппаратных ключей используйте Homebrew OpenSSH и его
+агент; ключ с PIN в агенте дополнительно требует настроенной владельцем
+поддержки askpass/display. Doctor выводит команды и ограничения. На POSIX
+произвольный агент, например 1Password, выбирается через
+`--agent <socket> --identity <key>.pub`. На native Windows doctor не предлагает
+эту POSIX-команду; `--all-os` показывает её с явной пометкой POSIX.
 
-All hardware routes are unverified on a real token; software middleware evidence
-does not establish hardware compatibility. Local software-key probes and refusal
-paths are tested on macOS, Linux and native Windows OpenSSH. Windows probes use
-an empty temporary system-data directory and normalize native CRLF output;
-they do not inherit system trust or change any agent. Windows ACL restrictions
-remain unknown rather than being inferred from POSIX mode bits.
-Linux external builds remain unsupported. Windows supports the native OpenSSH
-service agent through `--agent auto`; prefer `--identity <private-key>` with it.
-A proven encrypted file refuses before wrapper creation or network traffic on
-Windows and POSIX when no agent is selected, or the selected agent is confirmed
-not to hold its key. An unavailable or ambiguous agent stays unknown and does
-not prove absence. A matching loaded key permits the agent route; a confirmed
-empty agent cannot unlock the file. Doctor prints
-the owner-managed setup and selection commands. Native Windows software-key
-and service-agent fetches have real Git/SSH coverage; Windows hardware and
-arbitrary custom-agent pipes remain unverified or unsupported, respectively.
+Все аппаратные маршруты остаются непроверенными на реальном токене; результаты
+с программным посредником не доказывают совместимость оборудования. Локальные
+проверки программных ключей и отказы протестированы на macOS, Linux и native
+Windows OpenSSH. Windows-проверки используют пустой временный каталог системных
+данных и нормализуют CRLF; системное доверие не наследуется, агент не изменяется.
+Ограничения Windows ACL остаются неизвестными, их не выводят из POSIX mode bits.
+Внешние сборки на Linux пока не поддерживаются. На Windows служба OpenSSH
+поддерживается через `--agent auto`; предпочтителен `--identity <private-key>`.
+Доказанно зашифрованный файл отклоняется до создания wrapper и сетевого обращения
+на Windows и POSIX, если агент не выбран либо подтверждено отсутствие ключа в
+выбранном агенте. Недоступный агент или неоднозначный результат остаются
+неизвестными и не доказывают отсутствие ключа. Совпадающий загруженный ключ
+разрешает маршрут через агент; подтверждённо пустой агент не разблокирует файл.
+Doctor выводит команды настройки и выбора для владельца компьютера. Загрузки
+через программные ключи и службу агента на native Windows проверены настоящими
+Git/SSH; Windows hardware остаётся непроверенным, а произвольные pipe сторонних
+агентов не поддерживаются.
 
 ### csk config build-ssh list
 
