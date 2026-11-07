@@ -1056,7 +1056,9 @@ csk config build-ssh doctor [scope-or-identity] [--identity PATH] [--agent SOCKE
 Doctor runs without a global config. Missing or malformed config produces a
 notice and leaves explicit options and environment selections available; it
 does not bootstrap or repair config. When config is usable, the longest matching
-scope is used; explicit options and `CSK_BUILD_SSH_*` take precedence. `--agent auto` selects `SSH_AUTH_SOCK`.
+scope is used; explicit options and `CSK_BUILD_SSH_*` take precedence. `--agent auto`
+selects the native OpenSSH service pipe on Windows and `SSH_AUTH_SOCK` on POSIX,
+matching build admission. Windows ignores an ambient `SSH_AUTH_SOCK`.
 Without `--all-os`, instructions fit the current OS. No network, prompts,
 signatures, token access or agent mutation occurs. Missing tools and inconclusive
 metadata report `unknown`, never an unusable-key refusal. On POSIX, stat facts
