@@ -524,8 +524,8 @@ def test_private_build_end_required_before_next_project(tmp_path, csk_home, skil
 def _private_lifetime(tmp_path, csk_home, skills_root, monkeypatch, lane, teardown_fails, bypass=False, compile_fails=False):
     import subprocess
     import sys
-    from csk import installer, global_install, config
-    from csk.builds import go_v1
+    from csk import installer, global_install, config, locking
+    from csk.builds import cache as build_cache, go_v1
     from csk.sources import publish
     from conftest import make_config, make_project, make_skill_repo, write_skillfile
     from test_installer_transactions import _build_skill_files, _install_fake_build_pipeline
@@ -593,19 +593,21 @@ def _private_lifetime(tmp_path, csk_home, skills_root, monkeypatch, lane, teardo
         monkeypatch.setattr(pipeline, 'build_go_v1', lambda request: go_v1.build(request))
     try:
         if lane.startswith('repair'):
-            # Populate the lock with a successful build, then corrupt its live
-            # output and clear only this fixture's artifact cache to force repair.
+            # Populate the lock, then evict this fixture's sealed artifact under
+            # the real cache lock to force repair. Raw rmtree cannot remove a
+            # protected Windows entry, even after its worker has exited.
             original_build = go_v1.build
             monkeypatch.setattr(go_v1, 'build', fake_build)
             initial = installer.install(cfg, alias='app')
             assert all(not r.failed for r in initial), [r.errors for r in initial]
             lock = (first / 'Skillfile.lock.json').read_bytes()
-            import shutil
-            import os
             cache = csk_home / 'builds'
-            for directory, dirs, files in os.walk(cache, followlinks=False):
-                Path(directory).chmod(0o700)
-            shutil.rmtree(cache)
+            entries = list(cache.glob('*/*'))
+            assert len(entries) == 1
+            with locking.ManagerHomeLock(csk_home) as guard:
+                store = build_cache.cache_for_manager_home(csk_home)
+                assert store.quarantine('sha256:' + entries[0].name, guard=guard) is not None
+            assert not entries[0].exists()
 
             for path in first.rglob('tool'):
                 if path.is_file():
