@@ -386,9 +386,9 @@ select an unencrypted private file with `--identity` and omit `--agent`.
 Check `csk config build-ssh list`, scope boundaries and any overriding
 `--build-ssh-*` flags or `CSK_BUILD_SSH_*` values, then retry.
 
-### build_repository_ssh_credential_unusable (pending release)
+### build_repository_ssh_credential_unusable
 
-The development preflight rejects a selection only when local metadata
+The preflight rejects a selection only when local metadata
 establishes it cannot work in the non-prompting lane. It runs before the
 SSH fetch. Older releases do not have this check. With a version containing
 doctor, inspect the repository's selected credentials:
@@ -396,6 +396,10 @@ doctor, inspect the repository's selected credentials:
 ```sh
 csk config build-ssh doctor git.example.com/team/tools
 ```
+
+An encrypted file with no selected agent, or with confirmed missing agent
+membership, is refused before wrapper creation or network traffic. An unavailable
+or ambiguous agent stays `unknown` and does not prove that the key is absent.
 
 The error includes `cannot fetch`, the repository identity, `reason:` and
 `next:`. Follow the reason's next step:
@@ -429,9 +433,9 @@ presence. `Terminal: not attached` does not itself make credentials unusable.
 A found host-key record is only local presence; verify the fingerprint
 independently. Correct a missing host-key record before retrying the fetch.
 
-### SSH diagnostic actions (pending release)
+### SSH diagnostic actions
 
-The development diagnostics preserve `attempt 1=...` classifications for
+The diagnostics preserve `attempt 1=...` classifications for
 transport errors. Direct Git-admission errors can print `failure class:`.
 Each classified failure gets a `next:` action. Transport actions and hints
 include the attempt number, such as `next: attempt 2:` and `hint: attempt 2:`.
@@ -585,5 +589,5 @@ The current wrapper does not yet support paths containing spaces. Use
 paths without spaces until the wrapper fix lands. Native Windows loopback
 coverage exercises software keys and the standard service agent; it does
 not qualify hardware tokens or 1Password. Real-token behavior remains
-unverified. Some development doctor builds retain older Windows instructions;
-those do not describe the pipe support already implemented on main.
+unverified. Doctor uses the same Windows `auto` selection as admission and
+ignores an ambient `SSH_AUTH_SOCK`.
