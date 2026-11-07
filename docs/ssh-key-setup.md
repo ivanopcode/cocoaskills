@@ -91,10 +91,10 @@ usable plain file if that key is absent. An encrypted private file still
 requires its matching key loaded while SSH prompts are disabled.
 The `.pub` form remains appropriate for keys held only by an agent.
 
-## Local checks (pending release)
+## Local checks
 
-The development implementation adds a read-only doctor and local preflight.
-Use these commands only with a csk version whose `csk config build-ssh --help` lists
+The merged implementation includes a read-only doctor and local preflight.
+For older installed versions, check that `csk config build-ssh --help` lists
 `doctor`:
 
 ```sh
@@ -115,7 +115,11 @@ Doctor makes no network connection, requests no signatures, prompts for
 nothing and changes no agent state. It does not check repository read
 permissions or prove that a token can sign.
 
-The preflight inspects local metadata before an SSH fetch. A proven unusable
+The preflight inspects local metadata before wrapper creation or network traffic.
+A proven encrypted key file with no selected agent, or with an agent confirmed
+not to hold the matching key, is refused locally. An unavailable or ambiguous
+agent leaves membership `unknown`; it does not prove the key is absent.
+The same rule applies on Windows and POSIX. A proven unusable
 selection produces `build_repository_ssh_credential_unusable` with a reason
 and a doctor command. Inconclusive metadata remains `unknown`; it does not
 prove either readiness or failure. An agent listing alone never proves
@@ -138,15 +142,15 @@ security-key provider support without using a token. Proven provider absence
 refuses an SK identity even if the agent lists its key. Unfamiliar provider
 output remains `unknown`. None of these checks proves hardware signing.
 
-The development diagnostics preserve attempt classifications and print
+The diagnostics preserve attempt classifications and print
 `next:` actions, plus fixed `hint:` text for recognized signing or key-loading
 failures, including agent refusal, a missing device, invalid signing format,
 an unavailable PIN, an unloaded public-key pin and an inaccessible identity.
 Transport actions and hints carry their attempt number, such as
 `next: attempt 2:` and `hint: attempt 2:`. Timeout errors retain recognized
 hints too. Hints do not change the failure class or fallback rules. See
-[preflight refusals](troubleshooting.md#build_repository_ssh_credential_unusable-pending-release)
-and [diagnostic actions](troubleshooting.md#ssh-diagnostic-actions-pending-release).
+[preflight refusals](troubleshooting.md#build_repository_ssh_credential_unusable)
+and [diagnostic actions](troubleshooting.md#ssh-diagnostic-actions).
 An `ssh-auth-rejected` result can mean local key unusability or denied
 repository access; check both. For `unclassified`, review
 `csk config build-ssh list` and reproduce the selected Git/SSH command
@@ -298,7 +302,7 @@ csk config build-ssh add git.example.com/team --agent auto --identity "$HOME\.ss
 ```
 
 On Windows, `--agent auto` selects the standard `\\.\pipe\openssh-ssh-agent`
-pipe without requiring `SSH_AUTH_SOCK`. Only that standard pipe is admitted;
+pipe without requiring `SSH_AUTH_SOCK`; ambient `SSH_AUTH_SOCK` is ignored. Only that standard pipe is admitted;
 csk does not start the service or load keys. Microsoft documents operator
 setup in its
 [OpenSSH key management guide](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_keymanagement).
@@ -309,12 +313,13 @@ Use paths without spaces until the wrapper fix lands. Git Bash, native
 OpenSSH and WSL have different environments; ordinary Git success does not
 prove that csk selected the same client and credential. See
 [Windows agent troubleshooting](troubleshooting.md#ssh-windows-agent-limit).
-Some development doctor builds still print the older Windows pipe limitation;
-the behavior described here is implemented on main.
+Doctor uses the same Windows `auto` selection as build admission, including
+when an ambient `SSH_AUTH_SOCK` points elsewhere.
 
 Verification: native Windows software-key and standard service-agent paths
-have loopback coverage with real Git and SSH. Encrypted file-only keys must
-fail without their agent. Hardware tokens, PIN/Hello dialogs and custom-agent
+have loopback coverage with real Git and SSH. Encrypted file-only keys are
+refused locally with `build_repository_ssh_credential_unusable`, before
+wrapper creation or network traffic. Hardware tokens, PIN/Hello dialogs and custom-agent
 integration remain unverified. No Windows route has been verified on a real
 hardware token.
 
