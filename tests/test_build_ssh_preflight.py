@@ -189,9 +189,9 @@ def test_doctor_windows_agent_remedy(monkeypatch):
     assert 'ssh-add -t 1h <private-key>' in text
 
 
-# Windows guidance must qualify the socket example as POSIX-only, even with
-# --all-os. POSIX retains the exact command as a valid control. Probes are
-# doubled: this checks advice, not custom-agent integration or token signing.
+# Native Windows advice must omit the unusable socket example. --all-os may
+# include it with its POSIX heading; POSIX retains that exact heading/command.
+# Probes are doubled: this checks advice, not custom agents or token signing.
 @pytest.mark.parametrize('platform', ['win32', 'linux', 'darwin'])
 @pytest.mark.parametrize('all_os', [False, True])
 def test_doctor_custom_agent_posix_only(monkeypatch, platform, all_os):
@@ -201,13 +201,15 @@ def test_doctor_custom_agent_posix_only(monkeypatch, platform, all_os):
     text = build_ssh.doctor((), all_os=all_os)
     heading = 'Custom agent on POSIX only, e.g. 1Password (unverified): unlock/configure it in its own UI, then:'
     command = '  csk config build-ssh add <scope> --agent <socket> --identity <key>.pub'
-    if platform == 'win32':
+    if platform == 'win32' and not all_os:
+        assert command not in text
+        assert heading not in text
+    else:
         assert heading + '\n' + command in text
-        assert '\nCustom agent, e.g. 1Password' not in text
+    assert '\nCustom agent, e.g. 1Password' not in text
+    if platform == 'win32':
         assert 'Select the operator-managed Windows service agent:' in text
         assert 'arbitrary custom-agent sockets are not supported there' in text
-    else:
-        assert command in text
 
 
 # Doctor must inspect the same explicitly selected agent as admission: Windows

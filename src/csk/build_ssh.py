@@ -524,10 +524,13 @@ def doctor(
         "Prefer --identity <private-key> together with --agent auto: the private path works with the key loaded or absent (a plain key can sign directly).",
         "Plain key: csk config build-ssh add <scope> --identity <private-key>",
         "Passphrase key: load into your capable agent using the steps below, then select --agent auto --identity <private-key>.",
-        "Custom agent on POSIX only, e.g. 1Password (unverified): unlock/configure it in its own UI, then:",
-        "  csk config build-ssh add <scope> --agent <socket> --identity <key>.pub",
-        "A .pub only pins an agent key; it cannot sign by itself. Custom-agent support for FIDO/PIN is unverified.",
     ])
+    if all_os or sys.platform != "win32":
+        lines.extend([
+            "Custom agent on POSIX only, e.g. 1Password (unverified): unlock/configure it in its own UI, then:",
+            "  csk config build-ssh add <scope> --agent <socket> --identity <key>.pub",
+        ])
+    lines.append("A .pub only pins an agent key; it cannot sign by itself. Custom-agent support for FIDO/PIN is unverified.")
     if all_os or sys.platform == "darwin":
         lines.extend([
             "macOS:",
