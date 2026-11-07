@@ -477,7 +477,13 @@ def doctor(
     rule = match(rules, scope) if scope else None
     identity = identity or os.environ.get("CSK_BUILD_SSH_IDENTITY") or (rule.identity if rule else None)
     agent = agent or os.environ.get("CSK_BUILD_SSH_AGENT") or (rule.agent if rule else None)
-    socket = os.environ.get("SSH_AUTH_SOCK") if agent == "auto" else agent
+    socket = agent
+    if agent == "auto":
+        if sys.platform == "win32":
+            from .git_admission import _WINDOWS_SSH_AGENT_PIPE
+            socket = _WINDOWS_SSH_AGENT_PIPE
+        else:
+            socket = os.environ.get("SSH_AUTH_SOCK")
     known_hosts = os.environ.get("CSK_BUILD_SSH_KNOWN_HOSTS") or (rule.known_hosts if rule else None) or "~/.ssh/known_hosts"
     lines = [
         "Build SSH doctor (read-only; no network, prompts, signatures or agent changes)",

@@ -188,6 +188,35 @@ def test_doctor_windows_agent_remedy(monkeypatch):
     assert 'ssh-add -t 1h <private-key>' in text
 
 
+# Doctor must inspect the same explicitly selected agent as admission: Windows
+# auto ignores ambient sockets, POSIX auto adopts one, and explicit paths win.
+# Metadata is stubbed, so this never queries an operator's service agent.
+@pytest.mark.parametrize('platform,agent,ambient,expected', [
+    ('win32', 'auto', None, git_admission._WINDOWS_SSH_AGENT_PIPE),
+    ('win32', 'auto', '/forbidden-agent', git_admission._WINDOWS_SSH_AGENT_PIPE),
+    ('linux', 'auto', '/selected-agent', '/selected-agent'),
+    ('linux', 'auto', None, None),
+    ('linux', '/explicit-agent', '/forbidden-agent', '/explicit-agent'),
+])
+def test_doctor_auto_agent_matches_admission(monkeypatch, platform, agent, ambient, expected):
+    monkeypatch.setattr(build_ssh.sys, 'platform', platform)
+    monkeypatch.delenv('CSK_BUILD_SSH_IDENTITY', raising=False)
+    if ambient is None:
+        monkeypatch.delenv('SSH_AUTH_SOCK', raising=False)
+    else:
+        monkeypatch.setenv('SSH_AUTH_SOCK', ambient)
+    monkeypatch.setattr(build_ssh, 'resolve_tool', lambda *a: '/tools/ssh')
+    monkeypatch.setattr(build_ssh, '_local_probe', lambda *a, **k: None)
+    selected = []
+    def inspect(ssh, identity, socket):
+        selected.append(socket)
+        return build_ssh.KeyInspection()
+    monkeypatch.setattr(build_ssh, 'inspect_key', inspect)
+    text = build_ssh.doctor((), agent=agent)
+    assert selected == [Path(expected) if expected else None]
+    assert 'forbidden-agent' not in text
+
+
 # Regression: file-only menu choices must select the private sibling; an agent
 # choice is separately allowed to pin the public file in test_build_ssh.py.
 def test_file_only_menu_uses_private_sibling(monkeypatch, tmp_path):
