@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import shlex
 import sys
 import threading
 import tempfile
@@ -32,8 +33,27 @@ def real_ssh():
 def generate(ssh, path, *options):
     suffix = '.exe' if ssh.suffix.lower() == '.exe' else ''
     command = [str(ssh.parent / ('ssh-keygen' + suffix)), '-q', '-f', str(path), *options]
-    result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=60, env={'LC_ALL': 'C', **({'SystemRoot': os.environ['SystemRoot']} if 'SystemRoot' in os.environ else {})})
+    environment = {'LC_ALL': 'C', **({'SystemRoot': os.environ['SystemRoot']} if 'SystemRoot' in os.environ else {})}
+    # Fixture startup is independent of the product runner and never inherits
+    # Windows system trust. The generated key is the only input being inspected.
+    with tempfile.TemporaryDirectory(dir=path.parent) as program_data:
+        if os.name == 'nt':
+            environment['PROGRAMDATA'] = program_data
+        result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=60, env=environment)
     assert result.returncode == 0, result.stderr.decode(errors='replace')
+
+
+def private_acl_on_public(private):
+    if os.name == 'nt':
+        # Only fixture-owned generated files: public siblings inherit broad ACLs
+        # that make native keygen stop before it can report their actual format.
+        powershell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+        environment = {'SystemRoot': os.environ['SystemRoot'],
+                       'CSK_TEST_PRIVATE': str(private), 'CSK_TEST_PUBLIC': str(private) + '.pub'}
+        result = subprocess.run([str(powershell), '-NoProfile', '-NonInteractive', '-Command',
+                                 'Get-Acl -LiteralPath $env:CSK_TEST_PRIVATE | Set-Acl -LiteralPath $env:CSK_TEST_PUBLIC'],
+                                env=environment, stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+        assert result.returncode == 0, result.stderr.decode(errors='replace')
 
 
 @pytest.fixture(scope='module')
@@ -62,9 +82,15 @@ def software_sk(real_ssh, tmp_path_factory):
 
 
 # Real -G must stay noninteractive with closed stdin. A poisoned inherited
-# provider is scrubbed; -T removes the real warning that metadata stubs missed.
-def test_real_ssh_provider_probe(real_ssh, monkeypatch):
+# provider/system-data root is scrubbed, and an absent root still starts native
+# Windows SSH; -T removes the real warning that metadata stubs missed.
+@pytest.mark.parametrize('program_data', [None, '/forbidden-system-data'])
+def test_real_ssh_provider_probe(real_ssh, monkeypatch, program_data):
     monkeypatch.setenv('SSH_SK_PROVIDER', '/forbidden-provider')
+    if program_data is None:
+        monkeypatch.delenv('PROGRAMDATA', raising=False)
+    else:
+        monkeypatch.setenv('PROGRAMDATA', program_data)
     result = build_ssh._local_probe((str(real_ssh), '-G', '-T', '-F', os.devnull, 'example.invalid'))
     assert result is not None and result.returncode == 0
     assert result.stderr == ''
@@ -110,20 +136,88 @@ def test_real_legacy_pem_without_public(real_ssh, tmp_path, password, state):
 
 # Default-mode .pub pins must give actionable pin advice rather than calling a
 # public file a private key with bad permissions; an actual private .pub works.
-@pytest.mark.parametrize('kind', ['plain', 'encrypted'])
-def test_real_public_pin_reason(real_ssh, software_sk, kind, tmp_path):
-    keys, _ = software_sk
-    public = keys[kind].with_suffix('.pub')
+@pytest.mark.parametrize('password', ['', 'fixture-only'])
+def test_real_public_pin_reason(real_ssh, password, tmp_path):
+    key = tmp_path / 'key'
+    generate(real_ssh, key, '-t', 'ed25519', '-N', password)
+    private_acl_on_public(key)
+    public = key.with_suffix('.pub')
     facts = build_ssh.inspect_key(real_ssh, public)
     assert facts.state == 'unusable'
     assert 'public-key pins need a matching agent' in facts.reason or 'public key alone cannot sign' in facts.reason
     assert 'private key permissions' not in facts.reason
     private = tmp_path / 'private.pub'
     generate(real_ssh, private, '-t', 'ed25519', '-N', '')
+    private_acl_on_public(private)
     assert build_ssh.inspect_key(real_ssh, private).state == 'unknown'
     public_facts = build_ssh.inspect_key(real_ssh, Path(str(private) + '.pub'))
     assert public_facts.state == 'unusable'
     assert 'public-key pins need a matching agent' in public_facts.reason or 'public key alone cannot sign' in public_facts.reason
+
+
+# Windows ACL failure is not public-file or passphrase proof. Deliberately grant
+# read access to Everyone on a generated .pub, then remove that ambiguity using
+# its generated private sibling's ACL. Never alter an operator file or agent.
+@pytest.mark.skipif(os.name != 'nt', reason='native Windows ACL evidence; POSIX modes covered separately')
+def test_real_public_pin_acl_ambiguity(real_ssh, tmp_path):
+    key = tmp_path / 'key'
+    generate(real_ssh, key, '-t', 'ed25519', '-N', '')
+    public = key.with_suffix('.pub')
+    icacls = Path(os.environ['SystemRoot']) / 'System32/icacls.exe'
+    result = subprocess.run([str(icacls), str(public), '/grant', '*S-1-1-0:R'],
+                            stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+    assert result.returncode == 0, result.stderr.decode(errors='replace')
+    probe = build_ssh._local_probe((str(real_ssh.with_name('ssh-keygen.exe')), '-y', '-P', '', '-f', str(public)))
+    assert probe is not None and probe.returncode == 255 and 'bad permissions' in probe.stderr
+    assert build_ssh.inspect_key(real_ssh, public).state == 'unknown'
+    plain = build_ssh.inspect_key(real_ssh, key)
+    assert plain.state == 'unknown' and plain.passphrase is False
+    private_acl_on_public(key)
+    facts = build_ssh.inspect_key(real_ssh, public)
+    assert facts.state == 'unusable'
+    assert facts.reason == 'a public key alone cannot sign and no matching agent key is available'
+
+
+# Preserve the software SK public-pin control beside its Windows-capable
+# software-key equivalent above; this does not qualify a physical token.
+@pytest.mark.parametrize('kind', ['plain', 'encrypted'])
+def test_real_security_key_public_pin(real_ssh, software_sk, kind):
+    keys, _ = software_sk
+    facts = build_ssh.inspect_key(real_ssh, keys[kind].with_suffix('.pub'))
+    assert facts.state == 'unusable'
+    assert 'public-key pins need a matching agent' in facts.reason or 'public key alone cannot sign' in facts.reason
+
+
+# Native paths with spaces must retain their spelling through real keygen's
+# escaped diagnostic. An encrypted no-agent key refuses before wrapper creation;
+# the ordinary key reaches the wrapper control. No transport or agent is used.
+@pytest.mark.parametrize('password', ['', 'fixture-only'])
+def test_real_file_preflight_before_wrapper(real_ssh, tmp_path, monkeypatch, password):
+    identity = tmp_path / 'key with spaces'
+    generate(real_ssh, identity, '-t', 'ed25519', '-N', password)
+    facts = build_ssh.inspect_key(real_ssh, identity)
+    assert facts.passphrase is bool(password)
+    assert facts.key_kind == 'ED25519'
+    assert facts.state == ('unusable' if password else 'unknown')
+    doctor = build_ssh.doctor((), identity=str(identity))
+    assert 'Key: ED25519; passphrase: ' + ('set' if password else 'not set') in doctor
+    source = parse_repository_source('git@example.test:group/repo.git')
+    credentials = git_admission.OperatorSSHCredentials(identity=identity)
+    tool = git_admission.GitTool(Path('/git'), Path('/exec'), (), ssh=real_ssh, ssh_credentials=credentials)
+    monkeypatch.setattr(git_admission, 'validate_git_tool', lambda *a, **k: None)
+    monkeypatch.setattr(git_admission, 'validate_operator_ssh_credentials', lambda c: c)
+    def wrapper(*a, **k):
+        raise RuntimeError('wrapper reached')
+    monkeypatch.setattr(git_admission, '_materialize_ssh_wrapper', wrapper)
+    if password:
+        with pytest.raises(git_admission.GitAdmissionError) as caught:
+            git_admission.acquire_network(source, LockedCommit('sha1', '0' * 40), tool)
+        assert caught.value.code == git_admission.SSH_CREDENTIAL_UNUSABLE
+        assert 'example.test/group/repo' in str(caught.value)
+        assert 'key has a passphrase' in str(caught.value)
+    else:
+        with pytest.raises(RuntimeError, match='wrapper reached'):
+            git_admission.acquire_network(source, LockedCommit('sha1', '0' * 40), tool)
 
 
 # The real admission entry points must refuse an encrypted SK before a logging
@@ -379,4 +473,4 @@ def test_agent_candidate_prefers_private_path(tmp_path, private_exists):
         key.touch()
     candidates = build_ssh.DiscoveredCandidates(agent_socket='/agent', public_keys=(str(key)+'.pub',))
     first = build_ssh.candidate_commands('example.test/group', candidates)[0]
-    assert first.endswith('--identity ' + str(key) + ('' if private_exists else '.pub'))
+    assert shlex.split(first)[-2:] == ['--identity', str(key) + ('' if private_exists else '.pub')]
