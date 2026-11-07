@@ -2,12 +2,17 @@
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
+import shlex
 
 import pytest
 
 from csk import build_ssh, cli, config, git_admission, installer
 from csk.build_repository import LockedCommit, parse_repository_source
 from csk.sources import diagnostics, transport
+
+
+def _diagnostic_path(identity):
+    return str(identity).replace(chr(92), chr(92) * 2) if build_ssh.os.name == "nt" else str(identity)
 
 
 # Each case pairs refusal evidence with usable/unknown controls. No signatures
@@ -38,7 +43,7 @@ def test_key_evidence(monkeypatch, encrypted, agent, listing, public, kind, prov
         if '-l' in argv:
             return subprocess.CompletedProcess(argv, 0, f'256 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA label ({kind})', '')
         if '-y' in argv:
-            return None if encrypted is None else subprocess.CompletedProcess(argv, 255 if encrypted or public else 0, '', f'Load key "{argv[-1]}": invalid format\n' if public else f'Load key "{argv[-1]}": incorrect passphrase supplied to decrypt private key\n' if encrypted else '')
+            return None if encrypted is None else subprocess.CompletedProcess(argv, 255 if encrypted or public else 0, '', f'Load key "{_diagnostic_path(Path(argv[-1]))}": invalid format\n' if public else f'Load key "{_diagnostic_path(Path(argv[-1]))}": incorrect passphrase supplied to decrypt private key\n' if encrypted else '')
         return subprocess.CompletedProcess(argv, 0, f'securitykeyprovider {provider}\n', '')
     monkeypatch.setattr(build_ssh, '_local_probe', probe)
     result = build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/key.pub' if public else '/keys/key'), Path('/agent') if agent else None)
@@ -53,17 +58,56 @@ def test_key_evidence(monkeypatch, encrypted, agent, listing, public, kind, prov
 def test_probe_failure_and_environment(monkeypatch):
     monkeypatch.setenv('SSH_ASKPASS', '/forbidden')
     monkeypatch.setenv('SSH_AUTH_SOCK', '/forbidden')
+    monkeypatch.setenv('SSH_SK_PROVIDER', '/forbidden')
+    monkeypatch.setenv('PROGRAMDATA', '/forbidden')
+    scratch = []
     def run(argv, **kwargs):
         assert kwargs['stdin'] == subprocess.DEVNULL
         assert kwargs['timeout'] == 5
         expected = {'LC_ALL': 'C'}
         if build_ssh.os.name == 'nt' and build_ssh.os.environ.get('SystemRoot'):
             expected['SystemRoot'] = build_ssh.os.environ['SystemRoot']
+        if build_ssh.os.name == 'nt':
+            directory = Path(kwargs['env']['PROGRAMDATA'])
+            assert directory.is_absolute() and directory.is_dir()
+            assert not list(directory.iterdir())
+            assert str(directory) != '/forbidden'
+            scratch.append(directory)
+            expected['PROGRAMDATA'] = str(directory)
         assert kwargs['env'] == expected
         raise subprocess.TimeoutExpired(argv, 5)
     monkeypatch.setattr(build_ssh, 'resolve_tool', lambda *a, **k: '/tools/ssh-keygen')
     monkeypatch.setattr(subprocess, 'run', run)
     assert build_ssh.inspect_key(Path('/tools/ssh'), Path('/keys/key')).state == 'unknown'
+    assert all(not directory.exists() for directory in scratch)
+
+
+# At the binary boundary only native Windows CRLF becomes LF. Lone CR and
+# non-line controls survive for the strict evidence parsers to reject.
+def test_probe_native_line_endings(monkeypatch):
+    raw = b'first\r\nsecond\r\ntrailing\r\x1b\x00'
+    monkeypatch.setattr(build_ssh, 'resolve_tool', lambda *a, **k: '/tools/ssh')
+    monkeypatch.setattr(subprocess, 'run', lambda argv, **kw: subprocess.CompletedProcess(argv, 0, raw, raw))
+    result = build_ssh._local_probe(('/tools/ssh', '-G'))
+    assert result is not None
+    expected = raw.decode().replace('\r\n', '\n') if build_ssh.os.name == 'nt' else raw.decode()
+    assert result.stdout == result.stderr == expected
+    assert result.stdout.endswith('trailing\r\x1b\x00')
+
+
+# Real Windows line framing may expose an exact provider record, but whitespace,
+# bare CR and duplicate records remain ambiguous after the binary boundary.
+@pytest.mark.parametrize('raw,canonical', [
+    (b'securitykeyprovider none\r\n', True),
+    (b'securitykeyprovider none \r\n', False),
+    (b'securitykeyprovider none\r', False),
+    (b'securitykeyprovider none\r\nsecuritykeyprovider none\r\n', False),
+])
+def test_probe_provider_line_boundary(monkeypatch, raw, canonical):
+    monkeypatch.setattr(build_ssh, 'resolve_tool', lambda *a, **k: '/tools/ssh')
+    monkeypatch.setattr(subprocess, 'run', lambda argv, **kw: subprocess.CompletedProcess(argv, 0, raw, b''))
+    expected = 'none' if canonical and build_ssh.os.name == 'nt' else 'unknown'
+    assert build_ssh._security_key_provider(Path('/tools/ssh')) == expected
 
 
 # A planted unusable verdict blocks both acquisition entry points before wrapper
@@ -189,11 +233,13 @@ def test_macos_hardware_agent_mask(monkeypatch, socket):
 def test_real_key_metadata(tmp_path, passphrase, state):
     try:
         ssh = Path(build_ssh.resolve_tool('ssh'))
-        keygen = build_ssh.resolve_tool('ssh-keygen', executable=str(ssh.parent / 'ssh-keygen'))
+        suffix = '.exe' if ssh.suffix.lower() == '.exe' else ''
+        build_ssh.resolve_tool('ssh-keygen', executable=str(ssh.parent / ('ssh-keygen' + suffix)))
     except FileNotFoundError:
         pytest.skip('matching OpenSSH tools unavailable')
     identity = tmp_path / 'key'
-    subprocess.run([keygen, '-q', '-t', 'ed25519', '-N', passphrase, '-f', str(identity)], check=True, stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+    from test_build_ssh_real_metadata import generate
+    generate(ssh, identity, '-t', 'ed25519', '-N', passphrase)
     result = build_ssh.inspect_key(ssh, identity)
     assert result.state == state
     assert result.passphrase == bool(passphrase)
@@ -317,10 +363,10 @@ def test_orphan_public_key_is_not_a_file_candidate(tmp_path, monkeypatch, capsys
     candidates = build_ssh.DiscoveredCandidates(
         agent_socket=agent, public_keys=(str(orphan), str(private) + '.pub'),
     )
-    commands = build_ssh.candidate_commands('example.test/group', candidates)
-    assert any(f'--identity {private}' in command for command in commands)
+    commands = [shlex.split(command) for command in build_ssh.candidate_commands('example.test/group', candidates)]
+    assert any(command[-2:] == ['--identity', str(private)] for command in commands)
     assert all('--agent' in command for command in commands if str(orphan) in command)
-    assert not any(command.endswith(' --identity ' + str(orphan)[:-4]) and '--agent' not in command for command in commands)
+    assert not any(command[-2:] == ['--identity', str(orphan)[:-4]] and '--agent' not in command for command in commands)
     monkeypatch.setattr(build_ssh, 'discover_candidates', lambda: candidates)
     answers = iter(['n'])
     monkeypatch.setattr('builtins.input', lambda *a: next(answers))
@@ -406,7 +452,7 @@ def test_provider_mutations_never_refuse(monkeypatch, exact):
 def test_other_evidence_mutations_never_refuse(monkeypatch, evidence):
     fingerprint = '256 SHA256:' + 'A' * 43 + ' fixture (ED25519)\n'
     identity = Path('/keys/key')
-    error = f'Load key "{identity}": incorrect passphrase supplied to decrypt private key\n'
+    error = f'Load key "{_diagnostic_path(identity)}": incorrect passphrase supplied to decrypt private key\n'
     seed = _permission_error() if evidence == 'permissions' else error
     mutation = None
     def probe(argv, **kwargs):
@@ -447,7 +493,7 @@ def test_public_suffix_requires_unusable_file_evidence(monkeypatch, failed, stat
     def probe(argv, **kwargs):
         if '-l' in argv:
             return subprocess.CompletedProcess(argv, 0, '256 SHA256:' + 'A' * 43 + ' fixture (ED25519)\n', '')
-        return subprocess.CompletedProcess(argv, 255 if failed else 0, '' if failed else 'ssh-ed25519 AAAA\n', f'Load key "{identity}": invalid format\n' if failed else '')
+        return subprocess.CompletedProcess(argv, 255 if failed else 0, '' if failed else 'ssh-ed25519 AAAA\n', f'Load key "{_diagnostic_path(identity)}": invalid format\n' if failed else '')
     monkeypatch.setattr(build_ssh, '_local_probe', probe)
     verdict = build_ssh.inspect_key(Path('/tools/ssh'), identity)
     assert verdict.state == state
@@ -541,7 +587,7 @@ def test_security_key_passphrase_agent_rules(monkeypatch, agent, state):
             if agent == 'unavailable':
                 return None
             return subprocess.CompletedProcess(argv, 1 if agent == 'empty' else 0, 'The agent has no identities.\n' if agent == 'empty' else 'sk-ssh-ed25519@openssh.com AAAA\n', '')
-        return subprocess.CompletedProcess(argv, 255, '', f'Load key "{identity}": incorrect passphrase supplied to decrypt private key\n')
+        return subprocess.CompletedProcess(argv, 255, '', f'Load key "{_diagnostic_path(identity)}": incorrect passphrase supplied to decrypt private key\n')
     monkeypatch.setattr(build_ssh, '_local_probe', probe)
     facts = build_ssh.inspect_key(Path('/tools/ssh'), identity, Path('/agent') if agent else None)
     assert facts.state == state
