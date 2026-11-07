@@ -17,6 +17,8 @@ from csk.terminal import shell_word, terminal_document, terminal_text
 
 # Each outside field gets an ordinary value and each independent control plant.
 # Newlines are data, not trusted diagnostic layout; joiners/ordinary Unicode stay.
+# Windows auto selects the fixed native pipe: ambient socket plants must be
+# ignored rather than rendered or used by a probe. POSIX auto renders that input.
 VALUES = ['ordinary café', 'ESC-\x1b[31m-tail', 'OSC-\x1b]0;FORGED\x07-tail',
           'BEL-\x07-tail', 'CR-\rremediation: FORGED-tail',
           'LF-\nremediation: FORGED-tail', 'bidi-\u061c\u200e\u200f\u202eFORGED\u202c-tail']
@@ -93,7 +95,13 @@ def doctor_operation(tmp_path, monkeypatch, capsys, field, value):
     output = captured.out
     assert 'Build SSH doctor (read-only' in output and 'Local state: unknown;' in output
     assert_display(output)
-    if field not in {'agent_listing', 'agent_error'}:
+    if field == 'auto_agent' and build_ssh.sys.platform == 'win32':
+        pipe = git_admission._WINDOWS_SSH_AGENT_PIPE
+        assert 'Agent: ' + terminal_text(pipe) + '\n' in output
+        assert terminal_text('/agents/socket-' + value) not in output
+        agent_calls = [kw for argv, kw in calls if '-L' in argv]
+        assert agent_calls and all(kw['agent'] == Path(pipe) for kw in agent_calls)
+    elif field not in {'agent_listing', 'agent_error'}:
         assert terminal_text(value) in output
     elif field == 'agent_listing' and value == VALUES[0]:
         assert 'Agent keys: 1' in output and 'in agent: yes' in output
