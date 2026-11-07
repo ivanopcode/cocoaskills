@@ -336,7 +336,7 @@ usage: csk install [-h] [--all] [--dry-run] [--verbose] [--fix-gitignore]
 * `--strict-tags`: завершает работу ошибкой, если тег локально указывает на другой коммит.
 * `--audit [{advisory,strict}]`: запускает проверку аудита перед установкой (по умолчанию: `advisory`).
 * `--build-ssh-identity PATH`: файл идентичности SSH для приватных репозиториев сборки; приватный ключ или соответствующий публичный ключ в сочетании с `--build-ssh-agent` (переменная: `CSK_BUILD_SSH_IDENTITY`).
-* `--build-ssh-agent [SOCKET]`: сокет SSH-агента для приватных репозиториев сборки; голый флаг или `auto` берёт `SSH_AUTH_SOCK` (переменная: `CSK_BUILD_SSH_AGENT`).
+* `--build-ssh-agent [SOCKET]`: сокет SSH-агента для приватных репозиториев сборки; голый флаг или `auto` берёт `SSH_AUTH_SOCK` на POSIX, а на Windows выбирает стандартный pipe службы OpenSSH и игнорирует `SSH_AUTH_SOCK` (переменная: `CSK_BUILD_SSH_AGENT`).
 * `--build-ssh-known-hosts PATH`: путь к файлу known_hosts для проверки ключей хоста (по умолчанию: `~/.ssh/known_hosts`; переменная: `CSK_BUILD_SSH_KNOWN_HOSTS`).
 
 **Пример использования:**
@@ -510,7 +510,7 @@ usage: csk upgrade [-h] [--all] [--dry-run] [--verbose] [--fix-gitignore]
 * `--strict-tags`: завершает работу ошибкой, если тег локально указывает на другой коммит.
 * `--audit [{advisory,strict}]`: запускает проверку аудита перед установкой (по умолчанию: `advisory`).
 * `--build-ssh-identity PATH`: файл идентичности SSH для приватных репозиториев сборки; приватный ключ или соответствующий публичный ключ в сочетании с `--build-ssh-agent` (переменная: `CSK_BUILD_SSH_IDENTITY`).
-* `--build-ssh-agent [SOCKET]`: сокет SSH-агента для приватных репозиториев сборки; голый флаг или `auto` берёт `SSH_AUTH_SOCK` (переменная: `CSK_BUILD_SSH_AGENT`).
+* `--build-ssh-agent [SOCKET]`: сокет SSH-агента для приватных репозиториев сборки; голый флаг или `auto` берёт `SSH_AUTH_SOCK` на POSIX, а на Windows выбирает стандартный pipe службы OpenSSH и игнорирует `SSH_AUTH_SOCK` (переменная: `CSK_BUILD_SSH_AGENT`).
 * `--build-ssh-known-hosts PATH`: путь к файлу known_hosts для проверки ключей хоста (по умолчанию: `~/.ssh/known_hosts`; переменная: `CSK_BUILD_SSH_KNOWN_HOSTS`).
 
 **Пример использования:**
@@ -700,7 +700,7 @@ usage: csk global install [-h] [--dry-run] [--verbose] [--strict-tags]
 * `--audit [{advisory,strict}]`: запускает проверку аудита перед установкой (по умолчанию: `advisory`).
 * `--only NAME`: ограничивает операцию указанным глобальным скиллом (повторяемый флаг). Выбранный скилл затягивает свои обязательные зависимости в замыкание исполнения. Невыбранные декларации на диске остаются без изменений.
 * `--build-ssh-identity PATH`: файл идентичности SSH для приватных репозиториев сборки; приватный ключ или соответствующий публичный ключ в сочетании с `--build-ssh-agent` (переменная: `CSK_BUILD_SSH_IDENTITY`).
-* `--build-ssh-agent [SOCKET]`: сокет SSH-агента для приватных репозиториев сборки; голый флаг или `auto` берёт `SSH_AUTH_SOCK` (переменная: `CSK_BUILD_SSH_AGENT`).
+* `--build-ssh-agent [SOCKET]`: сокет SSH-агента для приватных репозиториев сборки; голый флаг или `auto` берёт `SSH_AUTH_SOCK` на POSIX, а на Windows выбирает стандартный pipe службы OpenSSH и игнорирует `SSH_AUTH_SOCK` (переменная: `CSK_BUILD_SSH_AGENT`).
 * `--build-ssh-known-hosts PATH`: путь к файлу known_hosts для проверки ключей хоста (по умолчанию: `~/.ssh/known_hosts`; переменная: `CSK_BUILD_SSH_KNOWN_HOSTS`).
 
 **Пример использования:**
@@ -757,7 +757,7 @@ usage: csk global upgrade [-h] [--dry-run] [--verbose] [--strict-tags]
 * `--audit [{advisory,strict}]`: запускает проверку аудита перед установкой (по умолчанию: `advisory`).
 * `--only NAME`: обновляет только один указанный скилл (повторяемый флаг).
 * `--build-ssh-identity PATH`: файл идентичности SSH для приватных репозиториев сборки; приватный ключ или соответствующий публичный ключ в сочетании с `--build-ssh-agent` (переменная: `CSK_BUILD_SSH_IDENTITY`).
-* `--build-ssh-agent [SOCKET]`: сокет SSH-агента для приватных репозиториев сборки; голый флаг или `auto` берёт `SSH_AUTH_SOCK` (переменная: `CSK_BUILD_SSH_AGENT`).
+* `--build-ssh-agent [SOCKET]`: сокет SSH-агента для приватных репозиториев сборки; голый флаг или `auto` берёт `SSH_AUTH_SOCK` на POSIX, а на Windows выбирает стандартный pipe службы OpenSSH и игнорирует `SSH_AUTH_SOCK` (переменная: `CSK_BUILD_SSH_AGENT`).
 * `--build-ssh-known-hosts PATH`: путь к файлу known_hosts для проверки ключей хоста (по умолчанию: `~/.ssh/known_hosts`; переменная: `CSK_BUILD_SSH_KNOWN_HOSTS`).
 
 **Пример использования:**
@@ -1041,7 +1041,7 @@ usage: csk config build-ssh add [-h] [--agent [SOCKET]] [--identity PATH]
 
 * `scope`: префикс канонической идентичности, например `gitlab.example.com/group`.
 * `-h`, `--help`: выводит краткое справочное сообщение.
-* `--agent [SOCKET]`: использовать сокет SSH-агента оператора. Голый флаг или значение `auto` подключают `SSH_AUTH_SOCK`.
+* `--agent [SOCKET]`: использовать сокет SSH-агента оператора. Голый флаг или значение `auto` подключают `SSH_AUTH_SOCK` на POSIX. На Windows они выбирают стандартный pipe службы OpenSSH и игнорируют `SSH_AUTH_SOCK`.
 * `--identity PATH`: путь к файлу идентичности. Указание файла `.pub` при заданном `--agent` фиксирует (пинит) предъявляемый ключ агента; без `--agent` определяет путь к приватному ключу на диске.
 * `--known-hosts PATH`: переопределение файла known_hosts для выбранного скоупа.
 
@@ -1125,9 +1125,11 @@ they do not inherit system trust or change any agent. Windows ACL restrictions
 remain unknown rather than being inferred from POSIX mode bits.
 Linux external builds remain unsupported. Windows supports the native OpenSSH
 service agent through `--agent auto`; prefer `--identity <private-key>` with it.
-An encrypted file without a matching loaded agent key refuses before wrapper
-creation or network traffic, on Windows and POSIX alike. A matching loaded key
-permits the agent route; an empty agent cannot unlock the file. Doctor prints
+A proven encrypted file refuses before wrapper creation or network traffic on
+Windows and POSIX when no agent is selected, or the selected agent is confirmed
+not to hold its key. An unavailable or ambiguous agent stays unknown and does
+not prove absence. A matching loaded key permits the agent route; a confirmed
+empty agent cannot unlock the file. Doctor prints
 the owner-managed setup and selection commands. Native Windows software-key
 and service-agent fetches have real Git/SSH coverage; Windows hardware and
 arbitrary custom-agent pipes remain unverified or unsupported, respectively.

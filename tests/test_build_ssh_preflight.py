@@ -182,10 +182,32 @@ def test_doctor_windows_agent_remedy(monkeypatch):
     monkeypatch.setattr(build_ssh, '_local_probe', lambda *a, **k: None)
     text = build_ssh.doctor(())
     assert 'csk config build-ssh add <host/scope> --agent auto --identity <private-key>' in text
-    assert 'without a matching loaded agent key refuses locally; prompts remain disabled' in text
+    assert 'with no agent or a confirmed missing agent key refuses locally; prompts remain disabled' in text
+    assert 'An unavailable or ambiguous agent leaves key membership unknown; it does not prove absence.' in text
     assert 'arbitrary custom-agent sockets are not supported there' in text
     assert 'cannot currently select the Windows service pipe' not in text
     assert 'ssh-add -t 1h <private-key>' in text
+
+
+# Windows guidance must qualify the socket example as POSIX-only, even with
+# --all-os. POSIX retains the exact command as a valid control. Probes are
+# doubled: this checks advice, not custom-agent integration or token signing.
+@pytest.mark.parametrize('platform', ['win32', 'linux', 'darwin'])
+@pytest.mark.parametrize('all_os', [False, True])
+def test_doctor_custom_agent_posix_only(monkeypatch, platform, all_os):
+    monkeypatch.setattr(build_ssh.sys, 'platform', platform)
+    monkeypatch.setattr(build_ssh, 'resolve_tool', lambda *a: '/tools/ssh')
+    monkeypatch.setattr(build_ssh, '_local_probe', lambda *a, **k: None)
+    text = build_ssh.doctor((), all_os=all_os)
+    heading = 'Custom agent on POSIX only, e.g. 1Password (unverified): unlock/configure it in its own UI, then:'
+    command = '  csk config build-ssh add <scope> --agent <socket> --identity <key>.pub'
+    if platform == 'win32':
+        assert heading + '\n' + command in text
+        assert '\nCustom agent, e.g. 1Password' not in text
+        assert 'Select the operator-managed Windows service agent:' in text
+        assert 'arbitrary custom-agent sockets are not supported there' in text
+    else:
+        assert command in text
 
 
 # Doctor must inspect the same explicitly selected agent as admission: Windows
