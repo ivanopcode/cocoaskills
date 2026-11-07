@@ -705,6 +705,9 @@ def test_windows_real_git_ssh_clean_environment_matrix(
     private_roots: list[Path] = []
     wrappers: list[Path] = []
     operations: list[tuple[str, ...]] = []
+    inspected: list[tuple[Path, Path | None, Path | None]] = []
+    from csk import build_ssh
+    inspect_key = build_ssh.inspect_key
     make_paths = git_admission._make_private_paths
     materialize = git_admission._materialize_ssh_wrapper
     run_git = git_admission._run_git
@@ -713,13 +716,30 @@ def test_windows_real_git_ssh_clean_environment_matrix(
         return make_paths(path)
     def record_wrapper(paths, *args, **kwargs):
         wrappers.append(paths.root)
-        return materialize(paths, *args, **kwargs)
+        result = materialize(paths, *args, **kwargs)
+        # Read the actual generated command, not a second invocation of its
+        # builder: the real preflight and guarded child must pin the same paths.
+        script = Path(result[1]).read_text(encoding='utf-8')
+        command = json.loads(next(line.removeprefix('COMMAND = ') for line in script.splitlines()
+                                  if line.startswith('COMMAND = ')))
+        inspected_ssh, inspected_identity, inspected_agent = inspected[-1]
+        assert command[0] == str(inspected_ssh)
+        assert (command[command.index('-i') + 1] if '-i' in command else None) == (
+            str(inspected_identity) if inspected_identity is not None else None)
+        expected_agent = inspected_agent.as_posix() if inspected_agent is not None else 'none'
+        assert f'IdentityAgent={expected_agent}' in command
+        assert 'csk: refused unexpected ssh invocation' in script
+        return result
+    def record_inspection(ssh, identity, agent):
+        inspected.append((ssh, identity, agent))
+        return inspect_key(ssh, identity, agent)
     def record_git(tool, paths, environment, *arguments, **kwargs):
         operations.append(arguments)
         return run_git(tool, paths, environment, *arguments, **kwargs)
     monkeypatch.setattr(git_admission, '_make_private_paths', record_paths)
     monkeypatch.setattr(git_admission, '_materialize_ssh_wrapper', record_wrapper)
     monkeypatch.setattr(git_admission, '_run_git', record_git)
+    monkeypatch.setattr(build_ssh, 'inspect_key', record_inspection)
     def acquire(selected_tool=tool) -> git_admission.Snapshot:
         return git_admission.acquire_network(
             source, LockedCommit("sha1", commit), selected_tool, connection=connection
@@ -745,6 +765,19 @@ def test_windows_real_git_ssh_clean_environment_matrix(
         assert [(f.path, f.content) for f in snapshot.files] == [("README.md", b"external tool\n")]
         assert wrappers and any('fetch' in operation for operation in operations)
         assert all(not path.exists() for path in private_roots)
+        if selection == 'ed25519':
+            import _winapi
+            from dataclasses import replace
+            # A clean alias resolves to the real key under First Last before
+            # both real preflight probes and the real guarded fetch.
+            link = tmp_path / 'clean identity junction'
+            _winapi.CreateJunction(str(identity.parent), str(link))
+            try:
+                aliased = replace(tool, ssh_credentials=replace(credentials, identity=link / selection))
+                assert acquire(aliased).files == snapshot.files
+                assert inspected[-1] == (ssh, identity.resolve(strict=True), None)
+            finally:
+                link.rmdir()
         if selection == "agent":
             from dataclasses import replace
             # Only the disposable kit owns this initially empty service agent.
@@ -757,7 +790,26 @@ def test_windows_real_git_ssh_clean_environment_matrix(
             removed = subprocess.run([str(ssh.with_name('ssh-add.exe')), '-d', str(root / 'encrypted.pub')],
                                      env=environment, stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
             assert removed.returncode == 0, removed.stderr
-            assert_local_refusal(pinned)
+            try:
+                assert_local_refusal(pinned)
+            finally:
+                # Restore this test's generated identity for later native
+                # discovery tests; never mutate an operator-owned agent.
+                import getpass
+                from cryptography.hazmat.primitives import serialization
+                unlocked = root / 'restore-agent-key'
+                key = serialization.load_ssh_private_key((root / 'encrypted').read_bytes(),
+                    password=b'csk-generated-test-passphrase')
+                try:
+                    unlocked.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                        serialization.PrivateFormat.OpenSSH, serialization.NoEncryption()))
+                    subprocess.run([str(Path(os.environ['SYSTEMROOT']) / 'System32/icacls.exe'),
+                        str(unlocked), '/inheritance:r', '/grant:r', f'{getpass.getuser()}:F'],
+                        check=True, capture_output=True)
+                    subprocess.run([str(ssh.with_name('ssh-add.exe')), str(unlocked)],
+                        env=environment, stdin=subprocess.DEVNULL, check=True, capture_output=True, timeout=10)
+                finally:
+                    unlocked.unlink(missing_ok=True)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Job Object descendant lifecycle")
@@ -921,11 +973,22 @@ def test_windows_timeout_preserves_signing_hint(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows pinned path expansion refusal")
 @pytest.mark.parametrize("segment", ["a%b", "a%hb", "a%%b", "a${HOME}b", "a${NOPE}b"])
-def test_windows_ssh_paths_refuse_token_expansion(tmp_path: Path, segment: str) -> None:
+def test_windows_ssh_paths_refuse_token_expansion(
+    tmp_path: Path, segment: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Expansion-capable identity and private trust paths must refuse before
     # SSH can substitute a sibling, including targets behind clean junctions.
     # Ordinary space paths and junctions to them remain valid controls.
     import _winapi
+    from csk import build_ssh
+
+    # Exercise the merged acquisition entry point too: token expansion must
+    # refuse before metadata probes, private directories or wrapper creation.
+    def forbidden(*args, **kwargs):
+        pytest.fail('token path reached preflight probes or wrapper creation')
+    monkeypatch.setattr(build_ssh, 'inspect_key', forbidden)
+    monkeypatch.setattr(git_admission, '_make_private_paths', forbidden)
+    monkeypatch.setattr(git_admission, '_materialize_ssh_wrapper', forbidden)
 
     valid = tmp_path / "First Last" / "identity"
     valid.parent.mkdir(); valid.write_text("fixture")
@@ -951,6 +1014,14 @@ def test_windows_ssh_paths_refuse_token_expansion(tmp_path: Path, segment: str) 
                     with pytest.raises(git_admission.GitAdmissionError, match="SSH would expand the pinned path") as error:
                         git_admission.validate_operator_ssh_credentials(credentials)
                     assert error.value.code == git_admission.IDENTITY_INVALID
+                    from dataclasses import replace
+                    selected = replace(git_admission.OperatorSSHCredentials(identity=valid, known_hosts=valid),
+                                       **{field: link / 'identity'})
+                    ssh = Path(os.environ['SYSTEMROOT']) / 'System32/OpenSSH/ssh.exe'
+                    with pytest.raises(git_admission.GitAdmissionError, match='SSH would expand the pinned path') as refused:
+                        git_admission.acquire_network(parse_repository_source(SOURCE),
+                            LockedCommit('sha1', '0' * 40), _tool(ssh, selected))
+                    assert refused.value.code == git_admission.IDENTITY_INVALID
         finally:
             link.rmdir()  # Remove only the junction, never its target.
 
