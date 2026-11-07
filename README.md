@@ -136,16 +136,23 @@
 
    Результат: команда `csk --version` выводит версию CocoaSkills.
 
-2. Configure credentials for private build repositories before installing skills.
-   SSH is the default. With the matching key already loaded in your agent, run:
+2. Создайте глобальную конфигурацию и настройте учётные данные до установки скиллов:
+
+   ```bash
+   csk bootstrap --if-missing --non-interactive --skills-root ~/skills --default-agents codex_cli
+   ```
+
+   Укажите каталог репозиториев скиллов в `--skills-root`; в PowerShell используйте `"$HOME\skills"`. Без глобального config команды `config build-ssh add` и `list` завершаются с `Global config not found`. Флаг `--if-missing` сохраняет существующий config.
+
+   SSH остаётся транспортом по умолчанию. Если соответствующий ключ уже загружен в ваш ssh-agent, выполните:
 
    ```bash
    csk config build-ssh add git.example.com/team --agent auto --identity ~/.ssh/build_key.pub
    ```
 
-   The command saves an operator-owned scope. Follow the
-   [SSH key setup guide](docs/ssh-key-setup.md) for file keys, passphrase keys,
-   hardware keys, platform limits and custom agents such as 1Password.
+   Для незашифрованного файла без ssh-agent используйте `csk config build-ssh add git.example.com/team --identity ~/.ssh/build_key`.
+
+   Команда сохраняет scope оператора. Режимы файла, ключи с passphrase, аппаратные ключи, ограничения платформ и другие ssh-agent, включая 1Password, описаны в [руководстве по SSH](docs/ssh-key-setup.md).
 
 3. Перейдите в каталог проекта и инициализируйте конфигурацию:
 
@@ -180,14 +187,22 @@
 
    Результат: агент считывает инструкции из адаптера `.claude/skills/` и применяет правила скилла `skill-tracker` в текущей сессии.
 
-### Private build repository credentials
+### Учётные данные приватных репозиториев сборки
 
-Set up credentials before the first install using the
-[SSH key setup guide](docs/ssh-key-setup.md). It covers agent, agent plus
-pinned public key, and file modes. The operator owns agent contents and key
-lifetimes. csk does not start, fill or manage an agent.
+После `csk bootstrap` настройте учётные данные до первой установки по
+[руководству по SSH](docs/ssh-key-setup.md). Оно описывает ssh-agent,
+ssh-agent с закреплённым публичным ключом и файловый режим. Содержимым
+ssh-agent и сроком ключей управляет оператор. csk не запускает, не наполняет
+и не обслуживает ssh-agent.
 
-HTTPS is an explicit option. See [HTTPS credentials](docs/external-build-repositories.md#private-https-build-repositories).
+Если для SSH-репозитория нет сохранённого выбора, `csk install` в терминале
+с интерактивными stdin и stdout показывает меню найденных кандидатов.
+Enter выбирает первый вариант; следующий Enter принимает scope по умолчанию.
+Без терминала отсутствие учётных данных даёт отказ с командами настройки.
+Это меню выбора учётных данных, а не запрос SSH passphrase или PIN:
+SSH-запросы остаются отключёнными, ключ загружает и разблокирует оператор.
+
+HTTPS выбирается явно. См. [учётные данные HTTPS](docs/external-build-repositories.md#private-https-build-repositories).
 
 ## Режимы установки скиллов
 
@@ -581,7 +596,7 @@ operator setup steps to stdout; `--all-os` includes every supported OS. See
 
 - [`docs/cli.md`](docs/cli.md): справочник команд `csk`, флагов и кодов завершения.
 - [`docs/reference.md`](docs/reference.md): справочник по матрице установки, зависимостям скиллов, манифестам и аудиту безопасности.
-- [`docs/ssh-key-setup.md`](docs/ssh-key-setup.md): early SSH credential setup, platform routes and verification limits.
+- [`docs/ssh-key-setup.md`](docs/ssh-key-setup.md): первоначальная настройка SSH, варианты для разных платформ и границы проверок.
 - [`docs/external-build-repositories.md`](docs/external-build-repositories.md): устройство внешних репозиториев сборки, брокеров кредов SSH/HTTPS и моделей доступа.
 - [`docs/design/linux-go-v1.md`](docs/design/linux-go-v1.md): Linux source-build design proposal, protocol requirements, qualification gates, and pending native probes.
 - [`docs/skillfile-sources.md`](docs/skillfile-sources.md): источники Skillfile schema 2, машинная транспортная политика и семантика лока.

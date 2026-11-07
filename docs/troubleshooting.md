@@ -349,245 +349,265 @@ CocoaSkill хранит отдельный блок для каждого про
 In 0.21.x an existing top-level `ignore_mode` field still selects the effective mode until migration. Run `csk ignore-mode show` to see the mode and its source. Use `csk ignore-mode set gitignore` to select a managed project block, or `csk ignore-mode set exclude` for local Git excludes. The switch preserves user rules and removes only the deprecated field. Without that field, block location selects the mode and exclude is the default. Global/hybrid modes are unchanged.
 
 
-### Local SSH credential checks
+### Локальная проверка SSH-учётных данных
 
-For local SSH credential problems, run `csk config build-ssh doctor <host/path>`
-(or add `--all-os`). It makes no network connection or agent changes. See
-[the doctor reference](cli.md#csk-config-build-ssh-doctor) for lifetime ownership,
-public-key pins, hardware-agent traps and unverified platform routes. Prefer
-a private identity path even with an agent so both loaded and file states
-can work; passphrase-protected files still need a capable loaded agent under
-the current non-prompting SSH policy.
-## SSH build repository failures
+При локальных проблемах SSH запустите `csk config build-ssh doctor <host/path>`
+(при необходимости с `--all-os`). Doctor не подключается к сети и не меняет
+ssh-agent. Срок ключей, ответственность оператора, закрепление публичного
+ключа и ограничения аппаратных вариантов описаны в
+[справочнике doctor](cli.md#csk-config-build-ssh-doctor). Предпочитайте
+приватный путь даже с ssh-agent: он подходит для загруженного ключа и
+пригодного файла. Ключ с passphrase всё ещё требует совместимый ssh-agent
+с загруженным ключом, пока SSH-запросы отключены.
 
-Configure credentials before the first install with the
-[SSH key setup guide](ssh-key-setup.md). csk isolates SSH fetches from
-`~/.ssh/config` and ordinary Git configuration. A working `git clone` does
-not prove that csk selected the same key, agent or client.
+<a id="ssh-build-repository-failures"></a>
+
+## Ошибки SSH-репозиториев сборки
+
+Настройте учётные данные до первой установки по [руководству по SSH](ssh-key-setup.md).
+Сначала создайте глобальный config через `csk bootstrap`: без него команды
+`config build-ssh add` и `list` дают `Global config not found`.
+csk изолирует SSH fetch от `~/.ssh/config` и обычной конфигурации Git.
+Успешный `git clone` не доказывает, что csk выбрал те же ключ, ssh-agent и клиент.
 
 ### build_repository_ssh_credential_missing
 
-No operator selection covers the repository, a trusted host-key file is
-missing, or POSIX `--agent auto` cannot find `SSH_AUTH_SOCK`. The latter reports
-`SSH agent was requested but SSH_AUTH_SOCK is not set`.
+Для репозитория нет выбора оператора, отсутствует файл проверенных ключей
+хоста либо POSIX `--agent auto` не находит `SSH_AUTH_SOCK`. Последний случай
+даёт `SSH agent was requested but SSH_AUTH_SOCK is not set`.
 
-Load the intended key into your own agent, make its socket available to
-csk, and save a scope with `csk config build-ssh add`. For a loaded key:
+Загрузите нужный ключ в свой ssh-agent, передайте csk его сокет и сохраните
+scope через `csk config build-ssh add`. Для загруженного ключа:
 
 ```sh
 csk config build-ssh add git.example.com/team --agent auto --identity ~/.ssh/build_key.pub
 ```
 
-For `SSH build repositories pin StrictHostKeyChecking and require operator host keys`,
-provide the verified host-key file with `--known-hosts` on `add`.
+Если `csk install` работает с интерактивными stdin и stdout, для репозитория
+без выбора появляется меню найденных кандидатов. Enter выбирает первый
+вариант; следующий Enter принимает scope по умолчанию. Без интерактивного
+терминала csk отказывает и печатает команды настройки. Это меню выбора
+учётных данных, а не запрос SSH passphrase или PIN: ключ загружает и
+разблокирует оператор, SSH-запросы остаются отключёнными.
 
-The command saves a selection; it does not load the key. For file mode,
-select an unencrypted private file with `--identity` and omit `--agent`.
-Check `csk config build-ssh list`, scope boundaries and any overriding
-`--build-ssh-*` flags or `CSK_BUILD_SSH_*` values, then retry.
+При `SSH build repositories pin StrictHostKeyChecking and require operator host keys`
+укажите проверенный файл ключей хоста через `--known-hosts` в команде `add`.
+Команда сохраняет выбор, но не загружает ключ. В файловом режиме выберите
+незашифрованный приватный файл через `--identity` без `--agent`.
+Проверьте `csk config build-ssh list`, границы scope и переопределения
+`--build-ssh-*` или `CSK_BUILD_SSH_*`, затем повторите команду.
 
 ### build_repository_ssh_credential_unusable
 
-The preflight rejects a selection only when local metadata
-establishes it cannot work in the non-prompting lane. It runs before the
-SSH fetch. Older releases do not have this check. With a version containing
-doctor, inspect the repository's selected credentials:
+Предварительная проверка отклоняет выбор, только когда локальные метаданные
+доказывают непригодность для работы без SSH-запросов. В старых версиях этой
+проверки нет. Проверьте выбранные учётные данные:
 
 ```sh
 csk config build-ssh doctor git.example.com/team/tools
 ```
 
-An encrypted file with no selected agent, or with confirmed missing agent
-membership, is refused before wrapper creation or network traffic. An unavailable
-or ambiguous agent stays `unknown` and does not prove that the key is absent.
+Доказанно зашифрованный файл отклоняется до создания wrapper и сетевого
+обращения, если ssh-agent не выбран либо подтверждено отсутствие ключа.
+Недоступный или неоднозначный ответ ssh-agent оставляет состояние `unknown`
+и не доказывает отсутствие ключа.
 
-The error includes `cannot fetch`, the repository identity, `reason:` and
-`next:`. Follow the reason's next step:
+Ошибка содержит `cannot fetch`, идентичность репозитория, `reason:` и `next:`.
+Следуйте действию для указанной причины:
 
-| Reason | Next step |
+| Причина | Следующий шаг |
 | --- | --- |
-| `key has a passphrase and no matching agent key is available; SSH prompts are disabled` | Load the key into your capable operator-managed agent with a task-sized `ssh-add -t`, then select that agent and identity. |
-| `a public key alone cannot sign and no matching agent key is available` | Load the matching private key into the selected agent, or choose a usable private file. |
-| `SSH has no configured security-key provider in this lane` | Select an OpenSSH client with built-in FIDO support on `PATH`, even if the key is listed in an agent; csk has no provider-selection flag. |
-| `private key permissions are too open; SSH will ignore this file` | Correct the private file permissions under your policy, or select a capable agent holding the matching key. csk never changes key permissions. |
-| `selected .pub file cannot sign directly; public-key pins need a matching agent; select a usable private identity` | Load the matching key into the selected agent, or select a usable private file. A public file cannot sign; this message does not ask you to change its permissions. |
+| `key has a passphrase and no matching agent key is available; SSH prompts are disabled` | Загрузите ключ в совместимый операторский ssh-agent со сроком задачи через `ssh-add -t`, затем выберите этот ssh-agent и идентичность. |
+| `a public key alone cannot sign and no matching agent key is available` | Загрузите соответствующий приватный ключ в выбранный ssh-agent либо выберите пригодный приватный файл. |
+| `SSH has no configured security-key provider in this lane` | Выберите первым в `PATH` OpenSSH со встроенной поддержкой FIDO, даже если ssh-agent перечисляет ключ; флага выбора provider в csk нет. |
+| `private key permissions are too open; SSH will ignore this file` | Исправьте права приватного файла по своей политике либо выберите совместимый ssh-agent с соответствующим ключом. csk никогда не меняет права ключа. |
+| `selected .pub file cannot sign directly; public-key pins need a matching agent; select a usable private identity` | Загрузите ключ в выбранный ssh-agent либо выберите пригодный приватный файл. Публичный файл не подписывает; сообщение не требует менять его права. |
 
-Permission refusal comes from POSIX `stat` facts about the selected file:
-an operator-owned regular file with group or other permission bits. It does
-not come from SSH diagnostic text. With a matching loaded agent, file
-permissions do not establish inability to sign. Unknown agent membership
-also cannot establish that the file is the only route. Socket names alone
-cannot establish agent implementation or signing failure.
+Отказ по правам основан на фактах POSIX `stat`: обычный файл принадлежит
+текущему пользователю и имеет биты доступа группы или остальных пользователей.
+Текст ошибки SSH сам по себе этого не доказывает. При загруженном ключе права
+файла не доказывают неспособность подписывать. Неизвестное наличие ключа
+также не доказывает, что остаётся только файловый режим. Имя сокета не
+устанавливает реализацию ssh-agent или отказ подписи.
 
-An independent empty-passphrase probe handles SK containers and legacy PEM
-files even without a fingerprint. Proven provider absence refuses an SK pin
-even with a matching agent key. Ambiguous provider output stays `unknown`.
-An `unknown` result does not promise signing success. No real-token route
-has been verified. Refusals remain `auth-unavailable` for explicitly declared
-fallback policy and do not authorize automatic HTTPS switching.
+Независимая проверка загрузки с пустой passphrase охватывает SK-контейнеры и
+старые PEM файлы даже без fingerprint. Доказанное отсутствие provider
+отклоняет SK-идентичность даже при соответствующем ключе в ssh-agent.
+Неоднозначный вывод provider остаётся `unknown`; это не обещает успеха подписи.
+На настоящем аппаратном токене не проверен ни один вариант. Отказ получает
+класс `auth-unavailable` для явно объявленной политики запасного транспорта
+и не разрешает автоматическое переключение на HTTPS.
 
-Doctor continues without usable config and with closed stdin or stderr.
-A config notice means it used explicit options/environment without repairing
-config. Check the reported terminal, agent count/membership and local host-key
-presence. `Terminal: not attached` does not itself make credentials unusable.
-A found host-key record is only local presence; verify the fingerprint
-independently. Correct a missing host-key record before retrying the fetch.
+Doctor работает без пригодного config и с закрытыми stdin или stderr.
+Уведомление о config означает использование явных параметров и окружения
+без исправления config. Проверьте терминал, число ключей и наличие выбранного
+ключа в ssh-agent, а также локальную запись ключа хоста.
+`Terminal: not attached` само по себе не делает ключ непригодным.
+Найденная запись подтверждает только локальное наличие: fingerprint
+сверяется независимо. Добавьте проверенную запись хоста перед повторным fetch.
 
-### SSH diagnostic actions
+<a id="ssh-diagnostic-actions"></a>
 
-The diagnostics preserve `attempt 1=...` classifications for
-transport errors. Direct Git-admission errors can print `failure class:`.
-Each classified failure gets a `next:` action. Transport actions and hints
-include the attempt number, such as `next: attempt 2:` and `hint: attempt 2:`.
-Recognized hints also survive timeout errors. Build failures name the
-repository, command and skill. Older releases can show only a generic
-private-Git message.
+### Действия по SSH-диагностике
 
-| Failure class | Next step |
+Транспортные ошибки сохраняют классы `attempt 1=...`. Прямой отказ допуска
+Git может печатать `failure class:`. Каждый класс получает действие `next:`.
+Действия и подсказки транспорта содержат номер попытки: `next: attempt 2:`
+и `hint: attempt 2:`. Распознанные подсказки сохраняются при timeout.
+Ошибка сборки называет репозиторий, команду и скилл. Старые версии могут
+показывать только общий отказ приватной операции Git.
+
+| Класс отказа | Следующий шаг |
 | --- | --- |
-| `dns` | Check DNS for the repository host and retry. |
-| `connection-refused` | Check the host, port and network access. |
-| `timeout` | Check network access and whether SSH awaits a passphrase, PIN or touch, or an operator-owned agent awaits approval. This advice does not enable passphrase prompts in csk. |
-| `endpoint-unavailable` | Check the listed repository endpoint and retry. |
-| `auth-unavailable` | Select usable SSH or explicitly chosen HTTPS credentials. |
-| `ssh-auth-rejected` | Check local key usability as well as server-side read access; a passphrase key may not be loaded in a capable agent. Review `csk config build-ssh list`. |
-| `auth-rejected` | Verify the selected account has repository read access. |
-| `host-key` | Independently verify the host fingerprint and update the selected `known_hosts` file. |
-| `unclassified` | Review `csk config build-ssh list`, then check the selected Git/SSH command locally with stderr attached. Use `csk --verbose` for the safe cause chain. |
+| `dns` | Проверьте DNS хоста репозитория и повторите команду. |
+| `connection-refused` | Проверьте хост, порт и сетевой доступ. |
+| `timeout` | Проверьте сеть и ожидание passphrase, PIN, касания или подтверждения ssh-agent оператора. Совет не включает запрос passphrase в csk. |
+| `endpoint-unavailable` | Проверьте указанную точку входа репозитория и повторите команду. |
+| `auth-unavailable` | Выберите пригодные SSH или явно выбранные HTTPS учётные данные. |
+| `ssh-auth-rejected` | Проверьте локальную пригодность ключа и права чтения на сервере; ключ с passphrase может быть не загружен в совместимый ssh-agent. Просмотрите `csk config build-ssh list`. |
+| `auth-rejected` | Проверьте права чтения репозитория выбранной учётной записью. |
+| `host-key` | Независимо сверьте fingerprint хоста и исправьте выбранный `known_hosts`. |
+| `unclassified` | Просмотрите `csk config build-ssh list`, затем проверьте выбранную команду Git/SSH локально с подключённым stderr. Для безопасной цепочки причин используйте `csk --verbose`. |
 
-The following fixed hint lines refine the next step. Transport errors insert
-`attempt N:` after `hint:`. These hints do not echo SSH stderr:
+Следующие точные строки подсказок уточняют действие. Транспорт вставляет
+`attempt N:` после `hint:`. Подсказки не повторяют исходный stderr SSH:
 
-| Hint line | Next step |
+| Точная строка подсказки | Следующий шаг |
 | --- | --- |
-| `hint: SSH reported failure loading a public-key pin; load the matching key into a capable agent or select the matching private identity path with csk config build-ssh add` | Load the matching key into the selected agent, or select the matching usable private file. |
-| `hint: SSH reported agent refusal; check whether the agent supports this key; for a PIN-required key use the file route with a usable provider rather than relying on a client terminal` | Check agent support and approval. A client terminal cannot supply a PIN to the agent; see the current file-route limit below. |
-| `hint: SSH reported a missing device; connect the security key and retry` | Connect the token and retry after checking client support. |
-| `hint: SSH reported invalid signing format; touch the security key when required and check that a usable security-key provider is selected` | Check required touch and provider support. This text alone does not prove either cause. |
-| `hint: SSH reported an unavailable PIN; use a PIN-capable attended file route or an agent configured with askpass` | Use an operator-managed agent configured to obtain the PIN through askpass, or another usable credential. The attended file route is unavailable in current csk. |
-| `hint: SSH reported an inaccessible identity; correct the selected identity path with csk config build-ssh add` | Correct the selected path and its accessibility, then retry. |
-| `hint: SSH reported a signing failure; check the selected key, agent and any required PIN or touch` | Check agent support and approval, then token availability. |
-| `hint: SSH reported a key-loading failure; check the selected key format and unlock method` | Check the selected file; use a capable loaded agent for an encrypted key. |
+| `hint: SSH reported failure loading a public-key pin; load the matching key into a capable agent or select the matching private identity path with csk config build-ssh add` | Загрузите ключ в выбранный ssh-agent либо выберите соответствующий пригодный приватный файл. |
+| `hint: SSH reported agent refusal; check whether the agent supports this key; for a PIN-required key use the file route with a usable provider rather than relying on a client terminal` | Проверьте поддержку ключа и подтверждения ssh-agent. Терминал клиента не передаёт PIN в ssh-agent; ограничение файлового режима описано ниже. |
+| `hint: SSH reported a missing device; connect the security key and retry` | Подключите токен и проверьте поддержку клиентом перед повтором. |
+| `hint: SSH reported invalid signing format; touch the security key when required and check that a usable security-key provider is selected` | Проверьте касание и поддержку provider. Один текст не доказывает конкретную причину. |
+| `hint: SSH reported an unavailable PIN; use a PIN-capable attended file route or an agent configured with askpass` | Используйте операторский ssh-agent с получением PIN через askpass либо другие пригодные учётные данные. Режим файла с участием оператора в текущем csk недоступен. |
+| `hint: SSH reported an inaccessible identity; correct the selected identity path with csk config build-ssh add` | Исправьте путь и доступность выбранного файла, затем повторите команду. |
+| `hint: SSH reported a signing failure; check the selected key, agent and any required PIN or touch` | Проверьте поддержку и подтверждения ssh-agent, затем доступность токена. |
+| `hint: SSH reported a key-loading failure; check the selected key format and unlock method` | Проверьте файл и формат; зашифрованный ключ загрузите в совместимый ssh-agent. |
 
-The file-route advice in the PIN and agent-refusal hints requires capabilities
-current csk does not provide. There is no supported attended mode or
-provider-selection flag. Use a capable operator-managed agent with the
-required approval/PIN mechanism, or choose another usable credential.
-No real-token route has been verified.
+Советы о файловом режиме в подсказках PIN и отказа ssh-agent требуют
+возможностей, которых текущий csk не предоставляет. Поддерживаемого режима
+с участием оператора и флага выбора provider нет. Используйте совместимый
+операторский ssh-agent с нужным подтверждением и получением PIN либо другие
+пригодные учётные данные. На настоящем аппаратном токене не проверен ни один вариант.
 
-A signing hint can accompany `unclassified`; it never changes the class.
-The diagnostics do not add raw SSH output in `--verbose` mode.
-If attempt details cannot be rendered safely, the fixed reason is
-`transport refusal recorded without attempt detail`. Review the safe cause
-chain and selected credentials before reproducing the command locally.
+Подсказка подписи может сопровождать `unclassified`, но не меняет класс.
+Диагностика не добавляет исходный вывод SSH даже при `--verbose`.
+Если подробности попытки нельзя безопасно показать, используется причина
+`transport refusal recorded without attempt detail`. Проверьте безопасную
+цепочку причин и выбранные учётные данные перед локальным повтором команды.
 
 ### build_repository_identity_invalid
 
-Read the accompanying detail. `SSH identity is unavailable` means the
-selected identity path could not be resolved. `SSH agent socket is
-unavailable` means the selected socket could not be resolved.
-`SSH identity path must be absolute` or `SSH agent socket path must be
-absolute` requires a full path. `SSH agent socket is not an admitted socket`
-requires a real supported POSIX socket. On Windows use the standard agent
-pipe through `--agent auto`; arbitrary pipes are not admitted.
+Прочитайте подробность ошибки. `SSH identity is unavailable` означает, что
+путь идентичности не удалось разрешить. `SSH agent socket is unavailable`
+означает то же для сокета. `SSH identity path must be absolute` и
+`SSH agent socket path must be absolute` требуют полного пути.
+`SSH agent socket is not an admitted socket` требует настоящего поддерживаемого
+POSIX-сокета. На Windows выбирайте стандартный pipe через `--agent auto`;
+произвольные pipes не допускаются.
 
-Correct the selected path and its accessibility. If an agent restarted,
-select its current socket. Do not replace the socket with a file or weaken
-file permissions to bypass admission.
+Исправьте путь и доступность. Если ssh-agent перезапущен, выберите его текущий
+сокет. Не заменяйте сокет обычным файлом и не ослабляйте права ради допуска.
 
-`operator known hosts file is unreadable` or a missing host-key file
-requires an accessible file containing independently verified server keys.
-Name a custom file with `--known-hosts` on `csk config build-ssh add`,
-keeping the same agent and identity selection.
+`operator known hosts file is unreadable` или отсутствие файла ключей хоста
+требует доступного файла с независимо проверенными ключами сервера.
+Укажите его через `--known-hosts` в `csk config build-ssh add`, сохранив
+тот же выбор ssh-agent и идентичности.
 
-### repository_endpoint_unavailable / Permission denied (publickey)
+### `repository_endpoint_unavailable` / `Permission denied (publickey)`
 
-The generic endpoint error alone does not prove a bad key. A visible
-`Permission denied (publickey)` indicates SSH authentication failed.
-Check the selected scope, loaded fingerprint, account access and repository
-path. The same error can result from an encrypted file that cannot prompt.
-For that file, load the key into your own agent using a task-sized
-`ssh-add -t`, then select the agent plus its matching `.pub`.
+Общая ошибка точки входа не доказывает непригодность ключа.
+`Permission denied (publickey)` означает отказ SSH-аутентификации.
+Проверьте scope, загруженный fingerprint, права учётной записи и путь
+репозитория. Причиной также может быть зашифрованный файл, который не может
+запросить passphrase. Загрузите ключ в свой ssh-agent через `ssh-add -t`
+со сроком задачи и выберите ssh-agent с соответствующим `.pub`.
 
-`Too many authentication failures` can mean an agent offered too many keys.
-Pin the intended public key with `--identity` alongside `--agent`.
-Do not upload a private key to the provider.
+`Too many authentication failures` может означать, что ssh-agent предложил
+слишком много ключей. Закрепите нужный публичный ключ через `--identity`
+вместе с `--agent`. Не передавайте приватный ключ провайдеру.
 
-### Host key verification failed
+### `Host key verification failed`
 
-An unknown or changed host key fails closed. Verify the fingerprint with
-the provider or administrator, then update the operator's selected
-`known_hosts` file. Do not disable host-key checks or blindly accept a
-replacement. Retry with the verified file.
+Неизвестный или изменившийся ключ хоста даёт отказ. Сверьте fingerprint с
+провайдером или администратором и исправьте выбранный `known_hosts` оператора.
+Не отключайте проверку и не принимайте замену вслепую. Повторите команду
+с проверенным файлом.
 
-### SSH hardware and agent failures
+<a id="ssh-hardware-and-agent-failures"></a>
 
-`signing failed ... from agent: agent refused operation` means the selected
-agent did not complete signing. Check agent lock/approval state and support
-for that key type. A public key listed by `ssh-add -l` proves enumeration,
-not signing. macOS system-agent software-provider tests reproduced this
-failure with security keys. Choose a compatible client and agent; loading
-an SK key into the same incompatible agent again does not fix it.
+### Отказы аппаратных ключей и ssh-agent
 
-If an incompatible agent copy masks a working file identity, the operator
-can remove just that copy with `ssh-add -d ~/.ssh/build_key_sk.pub`.
-Reconfigure the intended route before retrying. csk currently cannot use
-an encrypted file by asking for its passphrase.
+`signing failed ... from agent: agent refused operation` означает, что
+выбранный ssh-agent не завершил подпись. Проверьте разблокировку, подтверждения
+и поддержку типа ключа. `ssh-add -l` доказывает перечисление, а не способность
+подписывать. Проверки системного ssh-agent macOS с программным provider
+воспроизвели этот отказ для SK-ключей. Выберите совместимые клиент и ssh-agent;
+повторная загрузка в тот же несовместимый ssh-agent не исправляет проблему.
 
-`Load key "...pub": bad permissions` or `WARNING: UNPROTECTED PRIVATE KEY FILE!`
-can appear when SSH tries to use a pinned public file without its private
-key loaded. Load the matching private key into the selected agent; keep the
-`.pub` pin. Changing public-file permissions cannot make it sign.
+Если несовместимая копия в ssh-agent перекрывает пригодный файл, оператор
+может удалить только эту копию через `ssh-add -d ~/.ssh/build_key_sk.pub`.
+Перед повтором настройте нужный вариант. Текущий csk не может использовать
+зашифрованный файл, запросив его passphrase.
 
-`signing failed ... device not found` calls for checking token connection
-and client support. `signing failed ... invalid format` can have several
-causes, including provider problems or an incomplete touch.
-`signing failed ... incorrect passphrase supplied` can indicate an
-unavailable PIN on a security-key route. Do not infer a wrong passphrase
-from that text alone or repeatedly guess PINs.
+`Load key "...pub": bad permissions` или `WARNING: UNPROTECTED PRIVATE KEY FILE!`
+могут появиться, когда SSH пытается использовать публичный файл без
+соответствующего приватного ключа в ssh-agent. Загрузите приватный ключ
+в выбранный ssh-agent, сохранив `.pub`. Изменение прав публичного файла
+не позволяет ему подписывать.
 
-Apple SSH can ignore security-key identities without a provider. Current
-csk fetches do not import a provider from `~/.ssh/config` or
-`SSH_SK_PROVIDER`. Select a client with built-in FIDO support on `PATH`.
-Real-token behavior and these token-specific messages remain unverified;
-the research used a software provider.
+При `signing failed ... device not found` проверьте подключение токена и
+поддержку клиентом. У `signing failed ... invalid format` несколько возможных
+причин, включая provider и незавершённое касание.
+`signing failed ... incorrect passphrase supplied` может означать недоступный
+PIN аппаратного ключа. Один текст не доказывает неверную passphrase;
+не перебирайте PIN повторно.
+
+Apple SSH может игнорировать SK-идентичности без provider. Изолированный fetch
+csk не импортирует provider из `~/.ssh/config` или `SSH_SK_PROVIDER`.
+Выберите первым в `PATH` клиент со встроенной поддержкой FIDO.
+Поведение настоящих токенов и точные аппаратные сообщения не проверены:
+исследование использовало программный provider.
 
 ### build_repository_transport_unclassified / build_repository_source_unavailable
 
-These codes alone do not establish an authentication cause. Preserve the
-full sanitized diagnostic, repository identity and command name when
-reporting the failure. Check client selection, credentials and the provider's
-clone URL. A logging wrapper that redirects SSH stderr away from Git can
-remove classification evidence. Remove such a wrapper from your ordinary
-reproduction; do not add one to csk's isolated fetch.
+Коды сами по себе не устанавливают причину аутентификации. Для отчёта
+сохраните полную очищенную диагностику, идентичность репозитория и имя
+команды. Проверьте клиент, учётные данные и clone URL провайдера.
+Wrapper, перенаправляющий stderr SSH мимо Git, может убрать данные для
+классификации. Исключите его из обычного локального повтора; не добавляйте
+его в изолированный fetch csk.
 
-For a reported `timeout`, check network reachability and whether the chosen
-agent or token needs operator approval. Retry after fixing the cause.
-Do not assume that a longer timeout enables passphrase prompts.
+При `timeout` проверьте доступность сети и ожидание подтверждения оператора
+выбранным ssh-agent или токеном. Повторите после исправления причины.
+Увеличение timeout не включает запрос passphrase.
 
-### SSH build platform limit
+<a id="ssh-build-platform-limit"></a>
+
+### Ограничение платформы SSH-сборок
 
 `go-repository-v1 is supported only on macOS and Windows; Linux qualification is deferred`
-means external build publication is unavailable on the selected platform. Credential setup does
-not lift this gate. Use a supported build platform or wait for Linux support.
+означает, что публикация внешней сборки на выбранной платформе недоступна.
+Настройка учётных данных не снимает ограничение. Используйте поддерживаемую
+платформу либо дождитесь поддержки Linux.
 
-### SSH Windows agent limit
+<a id="ssh-windows-agent-limit"></a>
 
-Current main supports private SSH repositories with the standard Windows
-OpenSSH service pipe. `--agent auto` selects `\\.\pipe\openssh-ssh-agent`
-without `SSH_AUTH_SOCK`. Older releases can still report the POSIX socket
-limitations; use a version containing Windows pipe support.
+### Ограничения ssh-agent Windows
 
-`SSH agent pipe is unavailable` means csk could not establish availability
-of the standard pipe. Check that the operator's service agent is running and
-holds the intended key. csk does not start or fill it.
-`SSH agent socket is not the admitted Windows pipe` means another pipe was
-selected. Use `--agent auto` for the standard pipe; do not substitute a
-regular file or arbitrary named pipe.
+В текущем main приватные SSH-репозитории поддерживаются со стандартным
+pipe службы OpenSSH Windows. `--agent auto` выбирает `\\.\pipe\openssh-ssh-agent`
+без `SSH_AUTH_SOCK`. Старые версии ещё могут выдавать ограничения POSIX-сокетов;
+используйте версию с поддержкой Windows pipe.
 
-The current wrapper does not yet support paths containing spaces. Use
-paths without spaces until the wrapper fix lands. Native Windows loopback
-coverage exercises software keys and the standard service agent; it does
-not qualify hardware tokens or 1Password. Real-token behavior remains
-unverified. Doctor uses the same Windows `auto` selection as admission and
-ignores an ambient `SSH_AUTH_SOCK`.
+`SSH agent pipe is unavailable` означает, что доступность стандартного pipe
+не установлена. Проверьте, что служебный ssh-agent оператора запущен и содержит
+нужный ключ. csk не запускает и не наполняет его.
+`SSH agent socket is not the admitted Windows pipe` означает выбор другого
+pipe. Используйте стандартный через `--agent auto`; обычные файлы и произвольные
+pipes не подходят.
+
+Текущий wrapper пока не поддерживает пути с пробелами. Используйте пути без
+пробелов до выпуска исправления. Проверки Windows через loopback охватывают
+программные ключи и стандартный служебный ssh-agent, но не аппаратные токены
+и 1Password. Поведение настоящих токенов не проверено. Doctor использует тот
+же выбор Windows `auto`, что и допуск, игнорируя `SSH_AUTH_SOCK` окружения.

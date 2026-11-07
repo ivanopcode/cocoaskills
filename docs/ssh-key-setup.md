@@ -1,7 +1,8 @@
 # Set up SSH access to private build repositories
 
 Configure credentials before your first `csk install`. Operators and agents
-setting up csk should perform this step immediately after installing csk.
+setting up csk should create the global config, then configure credentials
+immediately after installing csk.
 SSH remains the default transport. HTTPS is an explicit operator option.
 
 A key loaded into an agent is managed by the person who owns the computer.
@@ -10,13 +11,25 @@ the credential selection the operator provides.
 
 ## First setup
 
-1. Obtain the provider's SSH clone URL. Register your public key with an
+1. Create the global configuration before `config build-ssh add` or `list`:
+
+   ```sh
+   csk bootstrap --if-missing --non-interactive --skills-root ~/skills --default-agents codex_cli
+   ```
+
+   Choose your skill-repository directory for `--skills-root`. On Windows,
+   use `"$HOME\skills"` for that path in PowerShell. `--if-missing` preserves
+   an existing config; on a new computer this creates
+   `~/.cocoaskills/config.json`. Without it, `add` and `list` exit with
+   `Global config not found`. Doctor can inspect SSH state without config;
+   `add` and `list` require bootstrap.
+2. Obtain the provider's SSH clone URL. Register your public key with an
    account or deploy key that can read the repository. Keep the private key
    on your computer.
-2. Verify the server's host-key fingerprint through a trusted provider
+3. Verify the server's host-key fingerprint through a trusted provider
    channel. Record the verified key in `~/.ssh/known_hosts`. csk requires
    an existing trusted host key and never accepts a new key interactively.
-3. Choose one credential mode below. For a key already loaded in your
+4. Choose one credential mode below. For a key already loaded in your
    agent, prefer its private identity path when that file exists:
 
    ```sh
@@ -25,9 +38,24 @@ the credential selection the operator provides.
    csk config build-ssh list
    ```
 
+   For an unencrypted private file without an agent, use this alternative:
+
+   ```sh
+   csk config build-ssh add git.example.com/team --identity ~/.ssh/build_key
+   csk config build-ssh list
+   ```
+
    `add` prints `Configured build-ssh scope git.example.com/team`.
    The selection lives in your `~/.cocoaskills/config.json`.
-4. Run `csk install` in the project. For failures, follow
+5. In an existing Git project, run `csk init --no-interactive` if it has no
+   `Skillfile.json`, then declare the skills you need before installing them:
+
+   ```sh
+   csk install
+   ```
+
+   An empty Skillfile installs no skills; it only checks the empty project.
+   For failures, follow
    [SSH troubleshooting](troubleshooting.md#ssh-build-repository-failures).
    Successful ordinary `git clone` alone does not prove this setup: csk
    isolates fetches from your SSH and Git configuration.
@@ -90,6 +118,21 @@ When a private file exists, prefer combining `--agent auto` with
 usable plain file if that key is absent. An encrypted private file still
 requires its matching key loaded while SSH prompts are disabled.
 The `.pub` form remains appropriate for keys held only by an agent.
+
+## Terminal credential selection
+
+Pre-configuration is the repeatable route for operators and automation.
+If an SSH build repository has no matching selection and `csk install` has
+interactive stdin and stdout, csk offers a credential-selection menu. It lists
+detected candidates and asks which key/agent to use and whether to save the
+scope. Enter chooses the first candidate; another Enter accepts the default
+scope. Discovery does not prove that a candidate can sign. Without an
+interactive terminal, missing credentials fail with
+`build_repository_ssh_credential_missing` and setup commands.
+
+This menu selects credentials; it does not request an SSH passphrase, PIN or
+token touch. SSH still uses `BatchMode=yes` and `NumberOfPasswordPrompts=0`.
+Loading or unlocking an agent remains the operator's task.
 
 ## Local checks
 
