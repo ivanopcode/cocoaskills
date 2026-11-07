@@ -65,9 +65,11 @@ def detect_snapshot(
             bounded = bounded[:MAX_FINDINGS_PER_FILE] + [finding_limit(rel_path)]
         if inert_vendor_text and _vendored_inert_text(snapshot / rel_path, rel_path):
             # External builds deny helpers/generators: inert dependency prose is
-            # advisory. Secrets and critical findings still block everywhere.
+            # advisory. Secrets, critical findings and the truncation witness
+            # still block.
             bounded = [replace(f, severity=Severity.MEDIUM)
-                       if f.severity is Severity.HIGH and f.id not in SECRET_REASONS else f
+                       if (f.severity is Severity.HIGH and f.id not in SECRET_REASONS
+                           and f.id != "static.opaque.finding-limit") else f
                        for f in bounded]
         findings.extend(sanitize_findings(bounded, secret_values))
     return tuple(findings)
