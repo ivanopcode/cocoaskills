@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import shlex
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -338,7 +339,8 @@ def test_discover_candidates_reports_agent_socket(
 
 def test_candidate_commands_prefer_pinned_agent(tmp_path: Path) -> None:
     # With an agent, an existing private sibling is preferred to its public pin;
-    # file candidates remain available too.
+    # file candidates remain available too. Parse the documented shell words so
+    # quoted Windows separators and spaces must retain the exact path.
     (tmp_path / "work").touch()
     candidates = build_ssh.DiscoveredCandidates(
         agent_socket="/tmp/sock",
@@ -346,10 +348,10 @@ def test_candidate_commands_prefer_pinned_agent(tmp_path: Path) -> None:
         public_keys=(str(tmp_path / "work.pub"), str(tmp_path / "b.pub")),
     )
     commands = build_ssh.candidate_commands("gitlab.example.com/portals", candidates)
-    assert commands[0] == (
-        "csk config build-ssh add gitlab.example.com/portals "
-        f"--agent auto --identity {tmp_path / 'work'}"
-    )
+    assert shlex.split(commands[0]) == [
+        "csk", "config", "build-ssh", "add", "gitlab.example.com/portals",
+        "--agent", "auto", "--identity", str(tmp_path / "work"),
+    ]
     assert commands[1] == "csk config build-ssh add gitlab.example.com/portals --agent auto"
     assert any("--identity" in c and ".pub" not in c.split("--identity ")[1] for c in commands[2:])
 
@@ -361,9 +363,9 @@ def test_candidate_commands_without_agent(tmp_path: Path) -> None:
         agent_socket=None, public_keys=(str(tmp_path / "k.pub"),)
     )
     commands = build_ssh.candidate_commands("gitlab.example.com", candidates)
-    assert commands == [
-        f"csk config build-ssh add gitlab.example.com --identity {tmp_path / 'k'}"
-    ]
+    assert [shlex.split(command) for command in commands] == [[
+        "csk", "config", "build-ssh", "add", "gitlab.example.com", "--identity", str(tmp_path / "k"),
+    ]]
 
 
 def test_missing_credentials_message_lists_candidates(
