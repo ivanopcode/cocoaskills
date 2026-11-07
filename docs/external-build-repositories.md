@@ -343,7 +343,8 @@ selection:
   RECOMMENDED, per curator-spec#22. The agent holds the private key and the
   named `.pub` pins which single key is offered.
 
-Manage the map with:
+Create the global config with `csk bootstrap` before managing the map
+(see the [first-setup steps](ssh-key-setup.md#first-setup)). Manage it with:
 
 ```sh
 csk config build-ssh add gitlab.example.com/portals/infra \
@@ -355,9 +356,10 @@ csk config build-ssh remove gitlab.example.com/portals/infra
 Before any fetch, the install resolves credentials for every declared SSH
 build repository. On an operator terminal an unmatched repository prompts with
 a menu of **detected candidates** (the live agent socket with its loaded key
-count and the `.pub` files below `~/.ssh`), so the usual answer is a single
-Enter on the default "agent + pinned key" entry. Discovery only lists what
-exists; nothing is ever used without the operator's explicit selection, and
+count and the `.pub` files below `~/.ssh`). Enter chooses the first candidate;
+a second Enter accepts the default persistence scope. This menu selects
+credentials; it does not enable SSH passphrase or PIN prompts. Discovery
+only lists what exists; nothing is ever used without the operator's explicit selection, and
 nothing persists without the explicit scope choice. A non-interactive run
 fails closed with `build_repository_ssh_credential_missing` and ready-to-run
 `csk config build-ssh add` commands built from the same detected candidates. `csk install --dry-run`
