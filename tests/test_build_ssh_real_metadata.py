@@ -39,7 +39,10 @@ def generate(ssh, path, *options):
     with tempfile.TemporaryDirectory(dir=path.parent) as program_data:
         if os.name == 'nt':
             environment['PROGRAMDATA'] = program_data
-        result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=60, env=environment)
+        try:
+            result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=60, env=environment)
+        except subprocess.TimeoutExpired:
+            pytest.fail('generate fixture: ssh-keygen exceeded 60 seconds')
     assert result.returncode == 0, result.stderr.decode(errors='replace')
 
 
@@ -47,13 +50,36 @@ def private_acl_on_public(private):
     if os.name == 'nt':
         # Only fixture-owned generated files: public siblings inherit broad ACLs
         # that make native keygen stop before it can report their actual format.
-        powershell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
-        environment = {'SystemRoot': os.environ['SystemRoot'],
-                       'CSK_TEST_PRIVATE': str(private), 'CSK_TEST_PUBLIC': str(private) + '.pub'}
-        result = subprocess.run([str(powershell), '-NoProfile', '-NonInteractive', '-Command',
-                                 'Get-Acl -LiteralPath $env:CSK_TEST_PRIVATE | Set-Acl -LiteralPath $env:CSK_TEST_PUBLIC'],
-                                env=environment, stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
-        assert result.returncode == 0, result.stderr.decode(errors='replace')
+        from windows_acl_fixture import copy_dacl
+        copy_dacl(private, Path(str(private) + '.pub'))
+
+
+def broad_public_acl(public):
+    icacls = Path(os.environ['SystemRoot']) / 'System32/icacls.exe'
+    try:
+        result = subprocess.run([str(icacls), str(public), '/grant', '*S-1-1-0:R'],
+                                stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        pytest.fail('broad_public_acl fixture: native icacls exceeded 60 seconds')
+    assert result.returncode == 0, result.stderr.decode(errors='replace')
+
+
+# Native executable fixtures keep their original bounds; expiry must identify
+# the operation and must fail immediately, without retrying or skipping it.
+@pytest.mark.parametrize('helper', ['generate', 'broad_public_acl'])
+def test_native_fixture_timeout_names_helper(tmp_path, monkeypatch, helper):
+    calls = []
+    def timeout(command, **kwargs):
+        calls.append(command)
+        raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+    monkeypatch.setattr(subprocess, 'run', timeout)
+    monkeypatch.setenv('SystemRoot', str(tmp_path))
+    with pytest.raises(pytest.fail.Exception, match=helper + ' fixture: .* exceeded 60 seconds'):
+        if helper == 'generate':
+            generate(tmp_path / 'ssh', tmp_path / 'key', '-t', 'ed25519', '-N', '')
+        else:
+            broad_public_acl(tmp_path / 'key.pub')
+    assert len(calls) == 1
 
 
 @pytest.fixture(scope='module')
@@ -163,10 +189,7 @@ def test_real_public_pin_acl_ambiguity(real_ssh, tmp_path):
     key = tmp_path / 'key'
     generate(real_ssh, key, '-t', 'ed25519', '-N', '')
     public = key.with_suffix('.pub')
-    icacls = Path(os.environ['SystemRoot']) / 'System32/icacls.exe'
-    result = subprocess.run([str(icacls), str(public), '/grant', '*S-1-1-0:R'],
-                            stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
-    assert result.returncode == 0, result.stderr.decode(errors='replace')
+    broad_public_acl(public)
     probe = build_ssh._local_probe((str(real_ssh.with_name('ssh-keygen.exe')), '-y', '-P', '', '-f', str(public)))
     assert probe is not None and probe.returncode == 255 and 'bad permissions' in probe.stderr
     assert build_ssh.inspect_key(real_ssh, public).state == 'unknown'
@@ -176,6 +199,38 @@ def test_real_public_pin_acl_ambiguity(real_ssh, tmp_path):
     facts = build_ssh.inspect_key(real_ssh, public)
     assert facts.state == 'unusable'
     assert facts.reason == 'a public key alone cannot sign and no matching agent key is available'
+
+
+# Read back native DACLs and exercise real keygen after a process-free copy.
+# An ineffective copy must fail the same verdict assertion as the valid control;
+# fixture-owned Everyone-read access makes the plant deterministic on Windows.
+@pytest.mark.skipif(os.name != 'nt', reason='Win32 DACL fixture; POSIX uses file modes')
+@pytest.mark.parametrize('leave_original', [False, True])
+def test_windows_private_acl_copy_control(real_ssh, tmp_path, monkeypatch, leave_original):
+    import windows_acl_fixture
+    key = tmp_path / 'key'
+    generate(real_ssh, key, '-t', 'ed25519', '-N', '')
+    public = key.with_suffix('.pub')
+    broad_public_acl(public)
+    original = windows_acl_fixture.dacl_sddl(public)
+    expected = windows_acl_fixture.dacl_sddl(key)
+    assert original != expected
+    if leave_original:
+        monkeypatch.setattr(windows_acl_fixture, 'copy_dacl', lambda *args: None)
+    with monkeypatch.context() as copy_only:
+        copy_only.setattr(subprocess, 'run', lambda *a, **k: pytest.fail('ACL copy must not start a process'))
+        private_acl_on_public(key)
+    actual = windows_acl_fixture.dacl_sddl(public)
+    facts = build_ssh.inspect_key(real_ssh, public)
+    if leave_original:
+        assert actual == original
+        assert facts.state == 'unknown'
+        with pytest.raises(AssertionError, match='public pin must refuse after ACL copy'):
+            assert facts.state == 'unusable', 'public pin must refuse after ACL copy'
+    else:
+        assert actual == expected
+        assert facts.state == 'unusable', 'public pin must refuse after ACL copy'
+        assert facts.reason == 'a public key alone cannot sign and no matching agent key is available'
 
 
 # Preserve the software SK public-pin control beside its Windows-capable
