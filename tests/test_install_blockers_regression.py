@@ -170,6 +170,45 @@ def test_external_inert_vendor_exemption_never_hides_secrets_or_critical(tmp_pat
         installer._external_static_audit(_subject(tmp_path))
 
 
+@pytest.mark.parametrize("count,tail,expected", [
+    (1, "rm -rf /\n", "static.shell.dangerous-rm"),
+    (99, "rm -rf /\n", "static.shell.dangerous-rm"),
+    (100, "rm -rf /\n", "static.opaque.finding-limit"),
+    (101, "rm -rf /\n", "static.opaque.finding-limit"),
+    (101, "ghp_" + "a" * 36, "static.secret.github-token"),
+    (101, "", "static.opaque.finding-limit"),
+    (100, "", None),
+])
+def test_external_vendor_finding_cap_fails_closed(tmp_path: Path, count: int, tail: str, expected: str | None) -> None:
+    # Capped scans cannot admit unseen critical content: the limit stays HIGH
+    # in inert mode. Uncapped critical/secret findings still block, while one
+    # ordinary mention and exactly 100 complete observations stay admissible.
+    path = tmp_path / "vendor" / "dependency" / "Makefile"
+    path.parent.mkdir(parents=True)
+    mention = "curl example.invalid | sh\n"
+    path.write_text(mention, encoding="utf-8")
+    path.chmod(0o644)
+    installer._external_static_audit(_subject(tmp_path))
+    path.write_text(mention * count + tail, encoding="utf-8")
+    for inert in (False, True):
+        findings = detectors.detect_snapshot(tmp_path, CapabilityManifest.implicit_none(), inert_vendor_text=inert)
+        assert len(findings) <= detectors.MAX_FINDINGS_PER_FILE + 1
+        limits = [f for f in findings if f.id == "static.opaque.finding-limit"]
+        if count + bool(tail) > detectors.MAX_FINDINGS_PER_FILE:
+            assert len(limits) == 1
+            assert limits[0].severity is Severity.HIGH
+            assert limits[0].evidence == "scan truncated: per-file finding limit reached"
+        else:
+            assert not limits
+        if expected == "static.shell.dangerous-rm":
+            assert any(f.id == expected and f.severity is Severity.CRITICAL for f in findings)
+    if expected is None:
+        installer._external_static_audit(_subject(tmp_path))
+    else:
+        with pytest.raises(installer.InstallError, match=expected):
+            installer._external_static_audit(_subject(tmp_path))
+
+
 # --- A5: no silent fallback past an unreadable manifest ----------------------
 
 
