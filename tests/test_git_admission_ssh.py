@@ -636,7 +636,10 @@ def test_windows_native_ssh_starts_with_private_program_data(
     tool = git_admission.GitTool(tmp_path / "git", tmp_path / "exec", ("git version",))
     environment = git_admission._clean_git_environment(paths, tool, "ssh")
     assert environment["PROGRAMDATA"] == str(paths.ssh / "program-data")
-    result = subprocess.run([str(ssh), "-V"], env=environment, capture_output=True, timeout=10)
+    try:
+        result = subprocess.run([str(ssh), "-V"], env=environment, capture_output=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        pytest.fail('native SSH startup fixture: ssh -V exceeded 10 seconds')
     assert result.returncode == 0, result.stderr
     assert b"OpenSSH_for_Windows" in result.stderr
     assert config.read_bytes() == b"ForbiddenTestOption yes\n"
