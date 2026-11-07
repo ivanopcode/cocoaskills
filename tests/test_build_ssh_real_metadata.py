@@ -441,6 +441,8 @@ def test_doctor_counts_private_agent(real_ssh, tmp_path, request):
     assert agent.exists()
     key = tmp_path / 'key'
     generate(real_ssh, key, '-t', 'ed25519', '-N', '')
+    plain = build_ssh.inspect_key(real_ssh, key)
+    assert plain.state == 'unknown' and plain.passphrase is False
     empty = build_ssh.inspect_key(real_ssh, key, agent)
     assert empty.agent_key_count == 0 and empty.loaded is False
     public = key.with_suffix('.pub')
@@ -462,6 +464,32 @@ def test_doctor_counts_private_agent(real_ssh, tmp_path, request):
     after = build_ssh._local_probe((add, '-L'), agent=agent)
     assert 'Agent keys: 1' in text and 'in agent: yes' in text
     assert before is not None and after is not None and before.stdout == after.stdout
+    # The same real encrypted file follows the Windows matrix rule: a loaded
+    # matching agent permits it; absent/empty agents refuse before admission.
+    subprocess.run([str(real_ssh.parent / 'ssh-keygen'), '-p', '-P', '', '-N', 'fixture-only', '-f', str(key)],
+                   env={'LC_ALL': 'C'}, stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=10)
+    source = parse_repository_source('git@example.test:group/repo.git')
+    credentials = git_admission.OperatorSSHCredentials(identity=key, agent_socket=agent)
+    tool = git_admission.GitTool(Path('/git'), Path('/exec'), (), ssh=real_ssh, ssh_credentials=credentials)
+    loaded = build_ssh.inspect_key(real_ssh, key, agent)
+    assert loaded.state == 'unknown' and loaded.passphrase is True and loaded.loaded is True
+    git_admission._preflight_ssh(source, tool)
+    from dataclasses import replace
+    without_agent = replace(tool, ssh_credentials=replace(credentials, agent_socket=None))
+    with pytest.raises(git_admission.GitAdmissionError) as absent:
+        git_admission._preflight_ssh(source, without_agent)
+    assert absent.value.code == git_admission.SSH_CREDENTIAL_UNUSABLE
+    assert absent.value.failure_class == 'auth-unavailable'
+    assert 'key has a passphrase and no matching agent key is available' in str(absent.value)
+    subprocess.run([add, '-d', str(public)], env={'LC_ALL':'C', 'SSH_AUTH_SOCK':str(agent)},
+                   stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=10)
+    empty = build_ssh.inspect_key(real_ssh, key, agent)
+    assert empty.state == 'unusable' and empty.loaded is False and empty.agent_key_count == 0
+    with pytest.raises(git_admission.GitAdmissionError) as emptied:
+        git_admission._preflight_ssh(source, tool)
+    assert emptied.value.code == absent.value.code
+    assert emptied.value.failure_class == absent.value.failure_class
+    assert str(emptied.value) == str(absent.value)
 
 
 # Existing private siblings are the first agent suggestion; an orphan public

@@ -548,15 +548,17 @@ def doctor(
         ])
     if all_os or sys.platform == "win32":
         lines.extend([
-            "Windows (token and agent routes unverified; current csk agent-pipe/wrapper support is incomplete):",
-            "  Local software-key metadata and file-only passphrase refusal are tested with native Windows OpenSSH; token/agent routes remain unverified.",
+            "Windows (native software-key/service-agent route tested; hardware/custom-agent routes unverified):",
+            "  Local software-key metadata and file-only passphrase refusal are tested with native Windows OpenSSH.",
             "  Plain key: select the private file; verify your OpenSSH build separately.",
+            "  A passphrase key without a matching loaded agent key refuses locally; prompts remain disabled.",
             "  Passphrase key, operator setup in elevated PowerShell:",
             "    Get-Service ssh-agent | Set-Service -StartupType Manual",
             "    Start-Service ssh-agent",
             "  Then unelevated: ssh-add -t 1h <private-key>",
             "  Verify your agent supports the requested lifetime before relying on it.",
-            "  csk cannot currently select the Windows service pipe through --agent; these are preparation steps, not a working csk agent route.",
+            "  Select the operator-managed Windows service agent: csk config build-ssh add <host/scope> --agent auto --identity <private-key>",
+            "  Only the native OpenSSH service pipe is admitted on Windows; arbitrary custom-agent sockets are not supported there.",
             "  FIDO without PIN: OpenSSH/token support and console integration need real-token verification.",
             "  FIDO with PIN: PIN/dialog and agent behavior need real-token verification; do not assume success.",
             "  Resident-key ssh-add -K is unsupported in documented Win32-OpenSSH versions.",
