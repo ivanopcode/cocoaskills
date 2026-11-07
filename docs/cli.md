@@ -1112,7 +1112,7 @@ On macOS the system agent cannot sign with USB security keys; adding one masks
 the file route. The operator can undo this with `ssh-add -d <key>.pub`. Use
 Homebrew OpenSSH and its agent for hardware keys; a PIN-requiring key in an
 agent additionally needs owner-configured askpass/display support. Doctor
-prints the commands and caveats. Custom agents such as 1Password can be
+prints the commands and caveats. On POSIX, custom agents such as 1Password can be
 selected with `--agent <socket> --identity <key>.pub`.
 
 All hardware routes are unverified on a real token; software middleware evidence
@@ -1121,10 +1121,14 @@ paths are tested on macOS, Linux and native Windows OpenSSH. Windows probes use
 an empty temporary system-data directory and normalize native CRLF output;
 they do not inherit system trust or change any agent. Windows ACL restrictions
 remain unknown rather than being inferred from POSIX mode bits.
-Linux external builds remain unsupported. Windows token and agent routes
-are unverified, and current csk agent-pipe/wrapper limitations remain. Doctor
-prints Windows preparation steps without claiming that these limitations are
-resolved.
+Linux external builds remain unsupported. Windows supports the native OpenSSH
+service agent through `--agent auto`; prefer `--identity <private-key>` with it.
+An encrypted file without a matching loaded agent key refuses before wrapper
+creation or network traffic, on Windows and POSIX alike. A matching loaded key
+permits the agent route; an empty agent cannot unlock the file. Doctor prints
+the owner-managed setup and selection commands. Native Windows software-key
+and service-agent fetches have real Git/SSH coverage; Windows hardware and
+arbitrary custom-agent pipes remain unverified or unsupported, respectively.
 
 ### csk config build-ssh list
 

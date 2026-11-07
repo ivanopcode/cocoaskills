@@ -649,12 +649,21 @@ def test_windows_real_git_ssh_clean_environment_matrix(
 ) -> None:
     # Opt-in disposable server kit: real Git, current guarded wrapper, native
     # ssh and full snapshot admission. Plain keys/loaded agent must succeed;
-    # the same authorized encrypted file without its agent must fail as auth.
+    # an encrypted file without a matching agent refuses locally before any
+    # wrapper, fetch or partial repository. Server authorization cannot unlock
+    # the local key. The agent case also checks the encrypted pin, then an empty
+    # agent by removing only this kit's generated identity (cleanup permits it).
     # This does not qualify interactive prompts, hardware keys or real hosts.
     configured = os.environ.get("CSK_TEST_WINDOWS_SSH_ROOT")
     if not configured:
         pytest.skip("requires a disposable Windows loopback sshd kit")
     root = Path(configured)
+    if selection == "agent":
+        # Validate fixture ownership before even selecting the service pipe.
+        # A server-only VM reproduction must never query an operator's agent.
+        state = json.loads((root / 'state.json').read_text())
+        assert state['kind'] == 'csk-windows-ssh-kit-v1'
+        assert state['root'] == str(root) and state['agent_add_attempted']
     # PROGRAMDATA is a startup prerequisite, not authority to import system
     # SSH config. If that config is read, this positive control cannot pass.
     system_data = tmp_path / "system-data"
@@ -682,16 +691,59 @@ def test_windows_real_git_ssh_clean_environment_matrix(
         url, url, source.identity, "ssh", "127.0.0.1", port,
         f"{user}@127.0.0.1", "/repository.git", port, port,
     )
-    def acquire() -> git_admission.Snapshot:
+    private_roots: list[Path] = []
+    wrappers: list[Path] = []
+    operations: list[tuple[str, ...]] = []
+    make_paths = git_admission._make_private_paths
+    materialize = git_admission._materialize_ssh_wrapper
+    run_git = git_admission._run_git
+    def record_paths(path):
+        private_roots.append(path)
+        return make_paths(path)
+    def record_wrapper(paths, *args, **kwargs):
+        wrappers.append(paths.root)
+        return materialize(paths, *args, **kwargs)
+    def record_git(tool, paths, environment, *arguments, **kwargs):
+        operations.append(arguments)
+        return run_git(tool, paths, environment, *arguments, **kwargs)
+    monkeypatch.setattr(git_admission, '_make_private_paths', record_paths)
+    monkeypatch.setattr(git_admission, '_materialize_ssh_wrapper', record_wrapper)
+    monkeypatch.setattr(git_admission, '_run_git', record_git)
+    def acquire(selected_tool=tool) -> git_admission.Snapshot:
         return git_admission.acquire_network(
-            source, LockedCommit("sha1", commit), tool, connection=connection
+            source, LockedCommit("sha1", commit), selected_tool, connection=connection
         )
-    if selection == "encrypted":
+    def assert_local_refusal(selected_tool):
+        private_roots.clear()
+        wrappers.clear()
+        operations.clear()
         with pytest.raises(git_admission.GitAdmissionError) as error:
-            acquire()
-        assert error.value.code == git_admission.SOURCE_UNAVAILABLE
-        assert error.value.failure_class == "ssh-auth-rejected"
+            acquire(selected_tool)
+        assert error.value.code == git_admission.SSH_CREDENTIAL_UNUSABLE
+        assert error.value.failure_class == "auth-unavailable"
+        assert source.identity in str(error.value)
+        assert 'key has a passphrase and no matching agent key is available' in str(error.value)
+        assert 'SSH prompts are disabled' in str(error.value)
+        assert 'next: run csk config build-ssh doctor' in str(error.value)
+        assert private_roots == wrappers == operations == []
+    if selection == "encrypted":
+        assert_local_refusal(tool)
     else:
         snapshot = acquire()
         assert snapshot.commit == commit
         assert [(f.path, f.content) for f in snapshot.files] == [("README.md", b"external tool\n")]
+        assert wrappers and any('fetch' in operation for operation in operations)
+        assert all(not path.exists() for path in private_roots)
+        if selection == "agent":
+            from dataclasses import replace
+            # Only the disposable kit owns this initially empty service agent.
+            # This branch must never run against an operator's existing agent.
+            pinned = replace(tool, ssh_credentials=replace(credentials, identity=root / 'encrypted'))
+            assert acquire(pinned).files == snapshot.files
+            environment = {'LC_ALL': 'C', 'SystemRoot': os.environ['SYSTEMROOT'],
+                           'PROGRAMDATA': str(tmp_path),
+                           'SSH_AUTH_SOCK': str(credentials.agent_socket)}
+            removed = subprocess.run([str(ssh.with_name('ssh-add.exe')), '-d', str(root / 'encrypted.pub')],
+                                     env=environment, stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+            assert removed.returncode == 0, removed.stderr
+            assert_local_refusal(pinned)

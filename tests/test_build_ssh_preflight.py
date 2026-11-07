@@ -174,6 +174,20 @@ def test_doctor_read_only_and_os_filter(monkeypatch, capsys, platform, label):
     assert 'ssh-add -d <key>.pub' in text
 
 
+# The remedy must name the service-agent route that Windows actually admits,
+# without claiming support for arbitrary pipes or re-enabling SSH prompts.
+def test_doctor_windows_agent_remedy(monkeypatch):
+    monkeypatch.setattr(build_ssh.sys, 'platform', 'win32')
+    monkeypatch.setattr(build_ssh, 'resolve_tool', lambda *a: '/tools/ssh')
+    monkeypatch.setattr(build_ssh, '_local_probe', lambda *a, **k: None)
+    text = build_ssh.doctor(())
+    assert 'csk config build-ssh add <host/scope> --agent auto --identity <private-key>' in text
+    assert 'without a matching loaded agent key refuses locally; prompts remain disabled' in text
+    assert 'arbitrary custom-agent sockets are not supported there' in text
+    assert 'cannot currently select the Windows service pipe' not in text
+    assert 'ssh-add -t 1h <private-key>' in text
+
+
 # Regression: file-only menu choices must select the private sibling; an agent
 # choice is separately allowed to pin the public file in test_build_ssh.py.
 def test_file_only_menu_uses_private_sibling(monkeypatch, tmp_path):
