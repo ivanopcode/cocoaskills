@@ -29,7 +29,9 @@ import os
 import stat
 import subprocess
 import sys
+from contextlib import ExitStack
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -289,12 +291,23 @@ def _local_probe(
         environment["SSH_AUTH_SOCK"] = str(agent)
     try:
         executable = resolve_tool(Path(argv[0]).name, executable=argv[0])
-        result = subprocess.run(
-            (executable, *argv[1:]), input=data.encode("utf-8") if data is not None else None, stdin=subprocess.DEVNULL if data is None else None,
-            capture_output=True, timeout=5, env=environment,
-        )
+        with ExitStack() as scratch:
+            if os.name == "nt":
+                # Win32-OpenSSH needs PROGRAMDATA even for metadata startup.
+                # Never expose ambient system trust; remove this empty directory
+                # after the probe, including failures. No operator state changes.
+                environment["PROGRAMDATA"] = scratch.enter_context(TemporaryDirectory(prefix="csk-ssh-metadata-"))
+            result = subprocess.run(
+                (executable, *argv[1:]), input=data.encode("utf-8") if data is not None else None, stdin=subprocess.DEVNULL if data is None else None,
+                capture_output=True, timeout=5, env=environment,
+            )
+        stdout, stderr = result.stdout.decode("utf-8"), result.stderr.decode("utf-8")
+        if os.name == "nt":
+            # Native Windows OpenSSH emits CRLF. Normalize only paired line
+            # endings at the binary boundary; lone CR and record bytes survive.
+            stdout, stderr = stdout.replace("\r\n", "\n"), stderr.replace("\r\n", "\n")
         return subprocess.CompletedProcess(
-            result.args, result.returncode, result.stdout.decode("utf-8"), result.stderr.decode("utf-8"),
+            result.args, result.returncode, stdout, stderr,
         )
     except (OSError, subprocess.SubprocessError, UnicodeError):
         return None
@@ -385,7 +398,9 @@ def inspect_key(
     passphrase = None
     invalid_public = False
     if decrypted is not None:
-        error = f'Load key "{identity}": '
+        # Native Windows keygen escapes path separators in its diagnostic.
+        diagnostic_identity = str(identity).replace("\\", "\\\\") if os.name == "nt" else str(identity)
+        error = f'Load key "{diagnostic_identity}": '
         passphrase_error = error + "incorrect passphrase supplied to decrypt private key\n"
         failed = decrypted.returncode == 255 and not decrypted.stdout
         if decrypted.returncode == 0:
@@ -533,7 +548,8 @@ def doctor(
         ])
     if all_os or sys.platform == "win32":
         lines.extend([
-            "Windows (all routes unverified; current csk agent-pipe/wrapper support is incomplete):",
+            "Windows (token and agent routes unverified; current csk agent-pipe/wrapper support is incomplete):",
+            "  Local software-key metadata and file-only passphrase refusal are tested with native Windows OpenSSH; token/agent routes remain unverified.",
             "  Plain key: select the private file; verify your OpenSSH build separately.",
             "  Passphrase key, operator setup in elevated PowerShell:",
             "    Get-Service ssh-agent | Set-Service -StartupType Manual",

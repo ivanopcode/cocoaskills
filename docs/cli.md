@@ -1117,7 +1117,11 @@ selected with `--agent <socket> --identity <key>.pub`.
 
 All hardware routes are unverified on a real token; software middleware evidence
 does not establish hardware compatibility. Local software-key probes and refusal
-paths are tested on macOS and Linux. Linux external builds remain unsupported. All Windows routes
+paths are tested on macOS, Linux and native Windows OpenSSH. Windows probes use
+an empty temporary system-data directory and normalize native CRLF output;
+they do not inherit system trust or change any agent. Windows ACL restrictions
+remain unknown rather than being inferred from POSIX mode bits.
+Linux external builds remain unsupported. Windows token and agent routes
 are unverified, and current csk agent-pipe/wrapper limitations remain. Doctor
 prints Windows preparation steps without claiming that these limitations are
 resolved.
