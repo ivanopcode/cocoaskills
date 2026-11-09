@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-11-09
+
 ### Added
 
 - Inspect selected SSH keys locally before repository traffic; proven unusable
@@ -14,7 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add read-only `csk config build-ssh doctor` with platform guidance and explicit
   real-token verification limits; fix file-only menu choices to use private paths.
 
-## [Unreleased]
+- Document SSH credential setup before private builds, including platform limits
+  and operator-managed agent lifetimes.
+- Document operator-managed Python environments outside installed runtimes,
+  including full recreation when the interpreter or locked dependencies change.
+
+### Changed
+
+- Scan every regular snapshot file regardless of suffix or runtime root, report
+  bounded scan omissions, and invalidate cached audit verdicts when detectors change.
+- Acquire and validate selected external build sources before audit, artifact
+  lookup or compilation; reuse successful acquisitions within a pass and guard
+  later passes until earlier build teardown is confirmed.
 
 ### Fixed
 
@@ -36,6 +49,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native Windows SSH build fetches synthesize an empty private `PROGRAMDATA`, required by Win32-OpenSSH initialization, ignoring its ambient value. The operation still excludes ambient PATH and pins SSH configuration and host trust files. A dedicated Windows CI job exercises real Git, native SSH and the service agent with generated loopback credentials, rejecting skipped native cases.
 
 - Windows SSH build repositories can explicitly select the OpenSSH service agent with `agent=auto` without `SSH_AUTH_SOCK`. Only the standard local agent pipe is admitted; missing services and other pipe paths refuse. Non-interactive SSH options remain unchanged.
+
+- Preserve private build repository failure classes and SSH hints through
+  install, with actionable credential and connection diagnostics.
+- Classify current curl connection and GnuTLS certificate verification failures
+  while retaining compatibility with older curl diagnostics.
+- Keep healthy sibling skills' status unchanged when another member fails;
+  report unavailable build currentness as a closure-resolution failure.
+- Allow bounded cold package ownership queries for Linux MCP launchers and
+  report incomplete verification on timeout without changing launcher trust policy.
+- Explain missing, excluded or non-executable system dependencies and invalid
+  declarations with repair advice appropriate to each failure.
+- Clean up POSIX build-worker process groups on manager loss; descendants
+  that create a separate session remain outside this cleanup.
+
+- Keep each repository transport attempt within the original timeout budget.
+
+### Security
+
+- Detect committed credential values as static audit findings, mask secret
+  evidence and backend diagnostics, and preserve complete integrity digests.
+- Bound audit input and backend output before processing; strict policy and
+  revocations reject unread inputs while batch audits retain other reports.
+- Bound JSON file reads and parser nesting, reject non-regular inputs, and keep
+  supported legacy encodings and existing file-error diagnostics.
+- Escape control characters in CLI output and prompts while preserving JSON
+  values and copyable, byte-preserving shell remediation commands.
 
 ## [0.21.1] - 2026-10-30
 
@@ -914,7 +953,8 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.21.1...main
+[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.22.0...main
+[0.22.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.21.1...v0.22.0
 [0.21.1]: https://github.com/ivanopcode/cocoaskills/compare/v0.21.0...v0.21.1
 [0.18.1]: https://github.com/ivanopcode/cocoaskills/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.17.0...v0.18.0
