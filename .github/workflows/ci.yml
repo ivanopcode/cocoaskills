@@ -186,6 +186,12 @@ jobs:
           "tests/test_cli_golden_v1.py::test_cli_v1_golden_byte_identical[init-empty]"
           tests/test_mcp_launcher_platform_native.py
 
+      - name: Run offline Linux non-build lifecycle
+        if: runner.os == 'Linux' && matrix.partition == 'core'
+        run: >-
+          python -m pytest -v -rA
+          tests/test_linux_l0_lifecycle.py tests/test_audit_sources.py
+
       - name: Run fast ordinary tests
         if: matrix.partition == 'core'
         env:
@@ -773,6 +779,12 @@ jobs:
       # from the ordinary pool. Cold package queries must work here too.
       - name: Run native launcher controls
         run: python -m pytest -v tests/test_mcp_launcher_platform_native.py
+
+      - name: Run offline Linux non-build lifecycle
+        if: runner.os == 'Linux' && matrix.python-version == '3.14'
+        run: >-
+          python -m pytest -v -rA
+          tests/test_linux_l0_lifecycle.py tests/test_audit_sources.py
 
       - name: Run full ordinary tests
         env:

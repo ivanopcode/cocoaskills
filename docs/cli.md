@@ -148,6 +148,9 @@ csk remove skill-tracker
 ```
 
 Команда удаляет запись `skill-tracker` из секции `skills` манифеста `Skillfile.json`.
+Для schema 2/3 примените удаление командой `csk upgrade`: `csk install`
+сохраняет отказ `source_lock_stale`, пока манифест расходится с lock.
+Для schema 1 используйте `csk install`.
 
 ### csk status
 

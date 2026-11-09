@@ -56,6 +56,16 @@
 
 Инструмент CocoaSkills доставляет скиллы и записывает объявления MCP в native project configs. csk не запускает MCP-серверы и не выполняет аутентификацию. Публичный реестр пакетов и runtime-среда агента остаются вне его задач.
 
+## Linux: проверенный объём поддержки
+
+Lifecycle скиллов без сборок проверен на Ubuntu 26.04.1 x86-64 и Ubuntu 26.04
+AArch64 (glibc 2.43): `bootstrap`, `init`, `install`, повторный `install`,
+`status`, `update`, `upgrade`, `audit`, затем `remove` и `upgrade`.
+Внешние Go-сборки на Linux по-прежнему отклоняются. Для Skillfile schema 2/3
+после `csk remove <name>` запускайте `csk upgrade`: обычный `install`
+отклоняет изменённый манифест со старым lock.
+[Границы проверки и команды](docs/testing/linux-lifecycle.md).
+
 ## Быстрый старт
 
 1. Установите CocoaSkills одним из способов. На macOS предпочтителен Homebrew:

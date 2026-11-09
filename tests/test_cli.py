@@ -991,7 +991,8 @@ def test_cli_add_and_remove_edit_project_skillfile(monkeypatch, tmp_path, csk_ho
     assert cli.main(["remove", "skill-a"]) == 0
     data = json.loads((project / "Skillfile.json").read_text(encoding="utf-8"))
     assert data["skills"] == []
-    capsys.readouterr()
+    # Schema-1 removal still applies with install; only source schemas need upgrade.
+    assert "Run 'csk install' to apply." in capsys.readouterr().out
 
     # Removing an undeclared skill is a config error.
     assert cli.main(["remove", "skill-a"]) == 2

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Audit every selected and transitive skill in schema-2/3 source closures through
+  confined snapshots, without publishing project, runtime or lock changes.
+  Empty or incomplete selections refuse instead of returning an empty success.
+- Guide schema-2/3 project removal through `csk upgrade`, preserving frozen
+  install's stale-lock refusal.
+
+### Added
+
+- Offline Ubuntu CI coverage for the non-build lifecycle, with native Ubuntu
+  x86-64 and AArch64 evidence and a bounded Linux support statement. External
+  Go builds remain refused on Linux.
+
 ## [0.22.0] - 2026-11-09
 
 ### Added

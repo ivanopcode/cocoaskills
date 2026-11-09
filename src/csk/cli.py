@@ -1100,7 +1100,12 @@ def _dispatch(args: argparse.Namespace) -> int:
         else:
             manifest.remove_skill_decl(project_root, args.name)
             print(f"Removed skill {terminal_text(args.name)} ({terminal_text(project_root / 'Skillfile.json')})")
-        print("Run 'csk install' to apply.")
+        current_manifest = manifest.load_manifest(project_root)
+        apply_command = (
+            "upgrade" if args.command == "remove" and current_manifest is not None
+            and current_manifest.schema_version in (2, 3) else "install"
+        )
+        print(f"Run 'csk {apply_command}' to apply.")
         return EXIT_OK
 
     if args.command == "hybrid":
