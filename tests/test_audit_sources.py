@@ -23,7 +23,7 @@ pytestmark = pytest.mark.skipif(
 
 def _tree(root: Path) -> dict[str, tuple[int, bytes | str]]:
     return {
-        str(p.relative_to(root)): (
+        p.relative_to(root).as_posix(): (
             p.lstat().st_mode,
             os.readlink(p) if p.is_symlink() else p.read_bytes() if p.is_file() else b"",
         )
@@ -34,6 +34,50 @@ def _tree(root: Path) -> dict[str, tuple[int, bytes | str]]:
 def _manager_tree(root: Path):
     return {p: value for p, value in _tree(root).items()
             if p != "audit" and not p.startswith("audit/")}
+
+
+def test_tree_snapshot_exempts_only_manager_audit_cache(tmp_path):
+    # Native nested paths use the same keys on Windows/POSIX. Cache writes
+    # change a full project/source snapshot but are exempt in a manager snapshot.
+    cache = tmp_path / "audit" / "digest" / "report.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_bytes(b"before")
+    before = _tree(tmp_path)
+    assert set(before) == {"audit", "audit/digest", "audit/digest/report.json"}
+    assert before["audit/digest/report.json"] == (cache.lstat().st_mode, b"before")
+    assert _manager_tree(tmp_path) == {}
+    cache.write_bytes(b"after")
+    (cache.parent / "another.json").write_bytes(b"new report")
+    assert before != _tree(tmp_path)
+    assert _manager_tree(tmp_path) == {}
+
+
+@pytest.mark.parametrize("relative", [
+    ".lock", "config.json", "runtime/skill/script", "source-v1/snapshots/record.json",
+    "audit-copy/report.json", "audit.json", "runtime/audit/report.json",
+])
+@pytest.mark.parametrize("mutation", ["write", "add", "remove", "mode"])
+def test_manager_tree_detects_non_cache_mutation(tmp_path, relative, mutation):
+    # Known forbidden byte, membership and file-mode changes remain detectable,
+    # including audit lookalikes and an audit directory nested inside runtime.
+    protected = tmp_path / relative
+    protected.parent.mkdir(parents=True, exist_ok=True)
+    protected.write_bytes(b"before")
+    before = _manager_tree(tmp_path)
+    assert relative in before
+    try:
+        if mutation == "write":
+            protected.write_bytes(b"after")
+        elif mutation == "add":
+            protected.with_name(protected.name + ".new").write_bytes(b"new")
+        elif mutation == "remove":
+            protected.unlink()
+        else:
+            protected.chmod(0o444)
+        assert before != _manager_tree(tmp_path)
+    finally:
+        if protected.exists():
+            protected.chmod(0o600)
 
 
 def _register(monkeypatch, csk_home, skills_root, project):
