@@ -171,7 +171,8 @@ def add_skill_decl(
     return path
 
 
-def remove_skill_decl(project_root: Path, name: str) -> Path:
+def remove_skill_decl(project_root: Path, name: str) -> ProjectManifest:
+    """Remove a declaration and return the manifest validated for that write."""
     path = manifest_path(project_root)
     data = _read_payload(path)
     skillfile_deprecations.require_writable(data)
@@ -182,9 +183,9 @@ def remove_skill_decl(project_root: Path, name: str) -> Path:
     if len(kept) == len(skills):
         raise ManifestError(f"Skill not declared in Skillfile: {name}")
     data["skills"] = kept
-    parse_manifest(data, path)
+    updated = parse_manifest(data, path)
     _write_payload(path, data)
-    return path
+    return updated
 
 
 def _read_payload(path: Path) -> dict[str, Any]:
