@@ -387,7 +387,8 @@ updates the computed checkout entry in global config before installation.
 `status .` and `project resolve .` are diagnostic and do not save config.
 
 There is no `csk uninstall` command in MVP. To uninstall a skill from a project,
-remove it from `Skillfile.json` and run `csk install`; cleanup removes the
+remove it with `csk remove <name>` and run `csk upgrade` for Skillfile schema
+2/3 (`csk install` for schema 1); cleanup removes the
 installed context, command shims, adapter entries, and unreferenced runtime
 artifacts.
 

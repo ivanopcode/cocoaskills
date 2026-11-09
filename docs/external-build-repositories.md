@@ -433,7 +433,9 @@ operator SSH options above to install exactly the private build repository the
 operator holds credentials for.
 
 To uninstall, remove the skill declaration from the project or global
-`Skillfile.json` and run the matching install command; reconciliation removes
+`Skillfile.json`. For project schema 2/3, run `csk upgrade` to refresh the lock
+and apply removal; a frozen `csk install` refuses the stale lock. For schema 1
+and the global manifest, run the matching install command. Reconciliation removes
 the stale marker and shim transactionally.
 
 Dry-run still acquires, proves, validates, audits, and inspects the candidate
