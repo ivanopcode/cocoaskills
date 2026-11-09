@@ -1086,6 +1086,7 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command in {"add", "remove"}:
         project_root = _resolve_project_root(cfg, args.project)
+        apply_command = "install"
         if args.command == "add":
             ref_kind, ref = _global_ref_from_args(args)
             manifest.add_skill_decl(
@@ -1098,13 +1099,10 @@ def _dispatch(args: argparse.Namespace) -> int:
             )
             print(f"Added skill {terminal_text(args.name)}: {terminal_text(ref_kind)} {terminal_text(ref)} ({terminal_text(project_root / 'Skillfile.json')})")
         else:
-            manifest.remove_skill_decl(project_root, args.name)
+            updated_manifest = manifest.remove_skill_decl(project_root, args.name)
+            if updated_manifest.schema_version in (2, 3):
+                apply_command = "upgrade"
             print(f"Removed skill {terminal_text(args.name)} ({terminal_text(project_root / 'Skillfile.json')})")
-        current_manifest = manifest.load_manifest(project_root)
-        apply_command = (
-            "upgrade" if args.command == "remove" and current_manifest is not None
-            and current_manifest.schema_version in (2, 3) else "install"
-        )
         print(f"Run 'csk {apply_command}' to apply.")
         return EXIT_OK
 
