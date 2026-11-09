@@ -999,6 +999,33 @@ def test_cli_add_and_remove_edit_project_skillfile(monkeypatch, tmp_path, csk_ho
     assert "not declared" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(("schema", "apply_command"), [(1, "install"), (2, "upgrade"), (3, "upgrade")])
+def test_cli_remove_guidance_matches_edited_schema(
+    monkeypatch, tmp_path, csk_home, skills_root, capsys, schema, apply_command,
+):
+    # Successful removal recommends the apply operation for the schema it edited;
+    # a repeated removal refuses without changing the already edited Skillfile.
+    project = make_project(tmp_path)
+    doc = {"schema_version": schema, "skills": [{"name": "skill-a", "tag": "v1"}]}
+    if schema in (2, 3):
+        doc["sources"] = {"local": {"path": str(skills_root)}}
+        doc["skills"] = [{"name": "skill-a", "from": "local", "directory": "skill-a"}]
+    write_skillfile(project, doc)
+    _register_project(monkeypatch, csk_home, skills_root, project)
+
+    assert cli.main(["remove", "skill-a", "--project", "app"]) == 0
+    output = capsys.readouterr().out
+    assert "Removed skill skill-a" in output
+    assert f"Run 'csk {apply_command}' to apply." in output
+    assert f"Run 'csk {'upgrade' if apply_command == 'install' else 'install'}'" not in output
+    path = project / "Skillfile.json"
+    edited = path.read_bytes()
+    assert json.loads(edited)["skills"] == []
+    assert cli.main(["remove", "skill-a", "--project", "app"]) == 2
+    assert "not declared" in capsys.readouterr().err
+    assert path.read_bytes() == edited
+
+
 def test_cli_add_rejects_invalid_name_without_writing(monkeypatch, tmp_path, csk_home, skills_root, capsys):
     project = make_project(tmp_path)
     write_skillfile(project, {"schema_version": 1, "skills": []})
