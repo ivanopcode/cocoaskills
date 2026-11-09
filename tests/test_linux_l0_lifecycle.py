@@ -14,8 +14,8 @@ from csk.sources import transport
 from test_source_closure_refresh import _write_skill, _write_skillfile_v2
 
 pytestmark = pytest.mark.skipif(
-    not _selection_fs.supports_descriptor_traversal(),
-    reason=_selection_fs.NO_DESCRIPTOR_TRAVERSAL_REASON,
+    sys.platform == "win32",
+    reason="L0 descriptor-based source lifecycle runs on POSIX",
 )
 
 
@@ -24,6 +24,9 @@ def test_offline_non_build_lifecycle(monkeypatch, tmp_path, capsys, schema):
     # Real CLI handlers install local text-only skills, remain idempotent, audit
     # each member and apply removal only through upgrade. Network attempts fail
     # at both source transport and Python socket boundaries; no skills are run.
+    # On Linux, loss of the required reader must fail this CI gate, not skip it.
+    assert _selection_fs.supports_descriptor_traversal()
+
     def no_network(*args, **kwargs):
         pytest.fail("offline lifecycle attempted network access")
 
