@@ -78,6 +78,7 @@ def test_transitive_requirement_installs_provider(tmp_path, skills_root, csk_hom
 def test_upgrade_fetches_transitive_dependency_closure(
     monkeypatch, tmp_path, skills_root, csk_home
 ):
+    # Only the selected closure is fetched, with each declared endpoint forwarded.
     project = make_project(tmp_path)
     provider_repo, _ = make_skill_repo(skills_root, "provider", _provider_files(), tag="v1")
     consumer_repo, _ = make_skill_repo(
@@ -93,12 +94,15 @@ def test_upgrade_fetches_transitive_dependency_closure(
     )
     cfg = make_config(csk_home, skills_root, project, agents=["claude_code"])
     fetched = []
-    monkeypatch.setattr(installer.git_ops, "fetch_repo", fetched.append)
+    def record_fetch(repo, declared_url=None):
+        fetched.append((repo, declared_url))
+
+    monkeypatch.setattr(installer.git_ops, "fetch_repo", record_fetch)
 
     result = installer.install(cfg, options=installer.InstallOptions(fetch=True))[0]
 
     assert not result.errors, result.errors
-    assert fetched == [consumer_repo, provider_repo]
+    assert fetched == [(consumer_repo, None), (provider_repo, str(provider_repo))]
 
 
 def test_transitive_source_is_cloned_into_skills_root(tmp_path, skills_root, csk_home):
