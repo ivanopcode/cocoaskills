@@ -24,6 +24,7 @@ from . import (
     build_https,
     build_ssh,
     config,
+    closure,
     deprecation,
     dev_substitutions,
     dispatch,
@@ -40,6 +41,8 @@ from . import (
     project_resolver,
     shell_init,
     skillcheck,
+    skillspec,
+    source_update,
     status,
     usage_errors,
 )
@@ -1890,7 +1893,13 @@ def _verify_schema2_project(
 
 
 def _cmd_update(cfg: config.GlobalConfig) -> int:
-    results = git_ops.fetch_all(cfg.skills_root)
+    try:
+        endpoints = source_update.declared_endpoints(cfg)
+    except (git_ops.GitError, manifest.ManifestError, hybrid.HybridError, ValueError,
+            closure.ClosureError, skillspec.SkillSpecError, source_errors.SourceError, OSError) as exc:
+        print(f"update refused: {installer.failure_text(exc)}", file=sys.stderr)
+        return EXIT_PARTIAL_FAIL
+    results = git_ops.fetch_all(cfg.skills_root, endpoints)
     failed = False
     for repo, error in results:
         if error:
