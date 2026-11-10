@@ -194,8 +194,11 @@ def test_two_refs_resolving_to_one_commit_are_compatible(tmp_path, skills_root, 
 
 
 def test_conflicting_source_identities_fail(tmp_path, skills_root, csk_home):
+    # Two authorized declarations cannot assign different identities to one
+    # provider; its cached origin first proves the valid initial declaration.
     project = make_project(tmp_path)
-    make_skill_repo(skills_root, "provider", _provider_files(), tag="v1")
+    provider, _ = make_skill_repo(skills_root, "provider", _provider_files(), tag="v1")
+    run(["git", "remote", "add", "origin", "git@one.example.com:skills/provider.git"], provider)
     make_skill_repo(
         skills_root,
         "consumer-a",

@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Fetch the declared URL and persist it after success; refuse identity changes
   without fetching or rewriting the remote. Redirect refusal and TLS trust
   pinning remain enforced.
+- Recheck source authorization and repository identity on cached installs and
+  every shared-cache declaration, including deduplicated upgrades. Whole-root
+  update resolves registered project, global, hybrid and cached dependency
+  endpoints and refuses conflicts before fetching. Reject HTTP(S) URL userinfo
+  before Git execution, preserve relative local sources after clone normalization,
+  and refuse unverified declarations when a cached clone has no remote.
 
 ## [0.22.1] - 2026-11-10
 

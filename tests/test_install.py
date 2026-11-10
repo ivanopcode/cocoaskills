@@ -1972,9 +1972,11 @@ def test_missing_skill_without_git_url_still_fails(tmp_path, skills_root, csk_ho
     assert "Skill repository not found" in result.errors[0]
 
 
-def test_install_uses_existing_local_clone_even_when_git_declared(tmp_path, skills_root, csk_home):
+def test_install_refuses_unverifiable_declaration_for_remote_less_repo(tmp_path, skills_root, csk_home):
+    # A local repository without provenance cannot satisfy an arbitrary declared
+    # source; refusal preserves its bytes and creates no installed skill.
     project = make_project(tmp_path)
-    make_skill_repo(
+    repo, _ = make_skill_repo(
         skills_root,
         "skill-a",
         {"SKILL.md": "---\nname: skill-a\n---\n\n# local wins\n"},
@@ -1988,11 +1990,14 @@ def test_install_uses_existing_local_clone_even_when_git_declared(tmp_path, skil
         },
     )
     cfg = make_config(csk_home, skills_root, project)
+    before = _filesystem_state((repo,))
 
     result = installer.install(cfg)[0]
 
-    assert not result.errors
-    assert "local wins" in (project / ".agents" / "skills" / "skill-a" / "SKILL.md").read_text(encoding="utf-8")
+    assert len(result.errors) == 1
+    assert "repository has no fetch remote" in result.errors[0]
+    assert _filesystem_state((repo,)) == before
+    assert not (project / ".agents" / "skills" / "skill-a").exists()
 
 
 def test_install_clone_failure_produces_clean_error(tmp_path, skills_root, csk_home):
