@@ -75,6 +75,7 @@ def test_upgrade_fetches_remote_branch_then_installs(monkeypatch, tmp_path, skil
 
 
 def test_upgrade_without_alias_updates_all_projects(monkeypatch, tmp_path, skills_root, csk_home):
+    # Both projects advance to the remote commit while their shared clone is fetched once.
     source = init_git_repo(tmp_path / "source-skill")
     write_files(source, {"SKILL.md": "---\nname: skill-a\n---\n\n# one\n"})
     first_commit = commit_all(source, "one")
@@ -118,9 +119,9 @@ def test_upgrade_without_alias_updates_all_projects(monkeypatch, tmp_path, skill
     fetched = []
     fetch_repo = cli.git_ops.fetch_repo
 
-    def recording_fetch(repo):
+    def recording_fetch(repo, declared_url=None):
         fetched.append(repo)
-        fetch_repo(repo)
+        fetch_repo(repo, declared_url)
 
     monkeypatch.setattr(cli.git_ops, "fetch_repo", recording_fetch)
 
