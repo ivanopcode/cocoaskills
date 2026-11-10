@@ -1765,6 +1765,7 @@ def test_global_upgrade_fetches_transitive_closure(
     skills_root: Path,
     csk_home: Path,
 ) -> None:
+    # Global upgrade forwards transitive endpoints and never fetches unrelated skills.
     transitive, _ = make_skill_repo(skills_root, "transitive", tag="v1")
     direct, _ = make_skill_repo(
         skills_root,
@@ -1801,13 +1802,20 @@ def test_global_upgrade_fetches_transitive_closure(
         },
     )
     fetched: list[Path] = []
-    monkeypatch.setattr(global_install.git_ops, "fetch_repo", fetched.append)
+    declarations: dict[Path, str | None] = {}
+
+    def record_fetch(repo, declared_url=None):
+        fetched.append(repo)
+        declarations[repo] = declared_url
+
+    monkeypatch.setattr(global_install.git_ops, "fetch_repo", record_fetch)
 
     assert cli.main(["global", "upgrade"]) == 0
 
     assert direct in fetched
     assert transitive in fetched
     assert unrelated not in fetched
+    assert declarations[transitive] == str(transitive)
 
 
 def test_global_upgrade_releases_update_lock_before_install_and_preserves_options(

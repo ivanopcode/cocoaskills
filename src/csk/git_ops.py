@@ -15,6 +15,8 @@ from typing import Any, Literal, overload
 
 from . import git_trust
 from .identifiers import is_valid_portable_path
+from .source_identity import SourceIdentityError, canonical_source_identity
+from .sources.errors import sanitize_credentials
 from .tool_paths import resolve_tool
 
 
@@ -170,7 +172,7 @@ def archive(repo: Path, commit: str, destination: Path) -> None:
         _extract_archive(archive_file, destination)
 
 
-def fetch_repo(repo: Path) -> None:
+def fetch_repo(repo: Path, declared_url: str | None = None) -> None:
     ensure_git_repo(repo)
     # Native discovery preserves include/includeIf and Git's boolean syntax.
     # The shared Git entry point checks trust even for this local command.
@@ -189,20 +191,76 @@ def fetch_repo(repo: Path) -> None:
     # Installed markers, rather than cache refs, anchor moved-tag policy.
     # One remote owns the shared tag namespace; fetching all remotes would
     # make conflicting tags depend on fetch order.
-    effective_url = git(repo, ["remote", "get-url", "--", remote]).stdout.strip()
+    fetch_target = remote
+    stored_url: str | None = None
+    if declared_url is not None:
+        # Compare declarations before insteadOf expansion: transport rewrites
+        # are operator configuration, not the repository's declared identity.
+        urls = git(repo, ["config", "--get-all", f"remote.{remote}.url"], check=False)
+        stored_urls = urls.stdout.splitlines() if urls.returncode == 0 else []
+        if len(stored_urls) != 1:
+            raise GitError("Cannot reconcile fetch URL: configure exactly one URL for the fetch remote")
+        stored_url = stored_urls[0]
+        try:
+            stored_identity = canonical_source_identity(stored_url)
+            declared_identity = canonical_source_identity(declared_url)
+            same_repository = (
+                stored_identity == declared_identity
+                and (stored_identity is not None or stored_url == declared_url)
+                and bool(declared_url.strip())
+                and not declared_url.startswith("-")
+                and not any(ord(char) < 0x20 for char in stored_url + declared_url)
+            )
+        except SourceIdentityError:
+            same_repository = False
+        if not same_repository:
+            # Drop all query/fragment data, including unknown credential keys.
+            safe_stored, safe_declared = (
+                sanitize_credentials(url.split("?", 1)[0].split("#", 1)[0])
+                for url in (stored_url, declared_url)
+            )
+            raise GitError(
+                f"Refusing fetch: stored {remote} URL {safe_stored!r} and declared URL "
+                f"{safe_declared!r} do not identify the same repository. Correct the "
+                "declaration or move the existing clone aside and clone the intended repository."
+            )
+        fetch_target = declared_url
+        discovery = git(repo, ["ls-remote", "--get-url", "--", declared_url], check=False)
+        if discovery.returncode:
+            raise GitError("Cannot resolve declared fetch URL through Git configuration")
+        effective_url = discovery.stdout.strip()
+    else:
+        effective_url = git(repo, ["remote", "get-url", "--", remote]).stdout.strip()
     if not effective_url:
         raise GitError("Cannot resolve fetch URL through Git configuration")
     with _private_trust() as trust:
         environment = _trust_environment(trust)
         args = [
-            "-C", str(repo), "fetch", "--force", "--prune", "--no-recurse-submodules", "--", remote,
+            "-C", str(repo), "fetch", "--force", "--prune", "--no-recurse-submodules", "--", fetch_target,
             f"+refs/heads/*:refs/remotes/{remote}/*", "+refs/tags/*:refs/tags/*",
         ]
         proc = _run(list(git_trust.pinned_command(
             [_git_executable(), *args], environment, url=effective_url,
         )), text=True, capture_output=True, env=environment)
     if proc.returncode != 0:
+        if declared_url is not None:
+            from .git_admission import _classify_git_failure_output
+
+            failure = _classify_git_failure_output(proc.stderr)
+            detail = "HTTP redirects are refused" if failure == "redirect" else failure
+            raise GitError(f"git fetch failed in {repo}: {detail}; verify the declared endpoint and authentication")
         raise GitError(f"git fetch failed in {repo}: {proc.stderr.strip()}")
+    if stored_url is not None and stored_url != declared_url:
+        assert declared_url is not None
+        updated = git(repo, ["remote", "set-url", "--", remote, declared_url], check=False)
+        if updated.returncode:
+            raise GitError("Fetch succeeded but the stored remote URL could not be updated; check repository configuration")
+        persisted = git(repo, ["config", "--get-all", f"remote.{remote}.url"], check=False)
+        if persisted.returncode or persisted.stdout.splitlines() != [declared_url]:
+            raise GitError(
+                "Fetch succeeded but the stored remote URL is still ambiguous; "
+                "configure exactly one URL for the fetch remote, including included Git configuration"
+            )
 
 
 def fetch_all(skills_root: Path) -> list[tuple[Path, str | None]]:

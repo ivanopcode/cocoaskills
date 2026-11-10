@@ -513,7 +513,10 @@ def _ensure_repo(
             and repo_key not in fetched_repos
         ):
             try:
-                git_ops.fetch_repo(repo)
+                if item.git is None:
+                    git_ops.fetch_repo(repo)
+                else:
+                    git_ops.fetch_repo(repo, item.git)
             except git_ops.GitError as exc:
                 raise ClosureError(f"Failed to fetch {item.name} at {repo} (via {item.chain}): {exc}") from exc
             fetched_repos.add(repo_key)
@@ -558,7 +561,7 @@ def _ensure_dev_repo(
     repo = config.path.parent / "dev" / name
     if repo.exists() and (repo / ".git").exists():
         if not read_only:
-            git_ops.fetch_repo(repo)
+            git_ops.fetch_repo(repo, git_url)
         return repo
     if read_only:
         raise ClosureError(

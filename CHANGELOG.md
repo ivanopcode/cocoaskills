@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Reconcile existing skill clone remotes with the declared endpoint when both
+  identify the same repository, including explicit `.git` URL corrections.
+  Fetch the declared URL and persist it after success; refuse identity changes
+  without fetching or rewriting the remote. Redirect refusal and TLS trust
+  pinning remain enforced.
+
 ## [0.22.1] - 2026-11-10
 
 ### Fixed
