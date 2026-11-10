@@ -269,6 +269,8 @@ def build_closure(
 
     while pending:
         item = pending.pop(0)
+        if node_resolver is None and item.git is not None:
+            git_ops.validate_git_url(item.git)
         node = nodes.get(item.name)
         if node is None:
             if node_resolver is not None:
@@ -301,7 +303,11 @@ def build_closure(
                     )
                 )
         else:
+            if node_resolver is None and node.substituted is None and item.git is not None:
+                _gate_source(config, item.name, item.git, item.chain)
             _unify(node, item, error_factory=error_factory, ref_comparator=ref_comparator)
+            if node_resolver is None and node.substituted is None and item.git is not None:
+                git_ops.validate_repo_source(node.repo, item.git)
         node.edges.append(item.edge)
         node.chains.append(item.chain)
 
@@ -502,10 +508,15 @@ def _ensure_repo(
     read_only: bool,
 ) -> Path:
     repo = config.skills_root / item.source
+    if item.git is not None:
+        _gate_source(config, item.name, item.git, item.chain)
     if repo.exists():
         if not (repo / ".git").exists():
             raise ClosureError(f"Local skill path exists but is not a git repository: {repo}")
         repo_key = repo.resolve()
+        source = git_ops.validate_repo_source(repo, item.git)
+        if item.git is None and source is not None:
+            _gate_source(config, item.name, source.stored_url, item.chain)
         if (
             fetch_existing
             and use_cache
@@ -527,7 +538,6 @@ def _ensure_repo(
         raise ClosureError(
             f"Skill repository not found for {item.name}: {repo} (read-only status does not clone sources)"
         )
-    _gate_source(config, item.name, item.git, item.chain)
     destination = repo if use_cache else _temp_repo_dir(stack, item.source)
     try:
         git_ops.clone_repo(item.git, destination)
@@ -560,6 +570,7 @@ def _ensure_dev_repo(
     # declared source repository.
     repo = config.path.parent / "dev" / name
     if repo.exists() and (repo / ".git").exists():
+        git_ops.validate_repo_source(repo, git_url)
         if not read_only:
             git_ops.fetch_repo(repo, git_url)
         return repo
@@ -635,6 +646,7 @@ def _temp_repo_dir(stack: ExitStack | None, source: str) -> Path:
 
 
 def _gate_source(config: GlobalConfig, name: str, git_url: str, chain: str) -> None:
+    git_ops.validate_git_url(git_url)
     identity = canonical_source_identity(git_url)
     if not config.allowed_sources:
         return

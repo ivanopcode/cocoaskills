@@ -993,6 +993,8 @@ def _install_project_once(
                 _publish_empty_dispatch_scope(config, project, options, result)
                 return result
             for substitution in substitutions.values():
+                if substitution.git is not None:
+                    git_ops.validate_git_url(substitution.git)
                 result.messages.append(
                     f"{terminal_text(project.alias)}: SUBSTITUTION {terminal_text(substitution.name)} -> {substitution.describe()}"
                 )
@@ -4013,10 +4015,15 @@ def _ensure_skill_repo(
     stack: ExitStack | None,
 ) -> Path:
     repo = config.skills_root / decl.source
+    if decl.git is not None:
+        closure._gate_source(config, decl.name, decl.git, "declared skill")
     if repo.exists():
         if not (repo / ".git").exists():
             raise InstallError(f"Local skill path exists but is not a git repository: {terminal_text(repo)}")
         git_ops.ensure_git_repo(repo)
+        source = git_ops.validate_repo_source(repo, decl.git)
+        if decl.git is None and source is not None:
+            closure._gate_source(config, decl.name, source.stored_url, "declared skill")
         return repo
     if not decl.git:
         raise InstallError(f"Skill repository not found for {terminal_text(decl.name)}: {terminal_text(repo)}")

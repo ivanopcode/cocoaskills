@@ -150,14 +150,16 @@ def test_identity_refusal_preserves_clone_and_redacts_urls(tmp_path, monkeypatch
         return real_run(command, **kwargs)
 
     monkeypatch.setattr(git_ops, "_run", no_fetch)
-    with pytest.raises(git_ops.GitError, match="do not identify the same repository") as caught:
+    credential_case = "CANARY" in stored + declared
+    reason = "must not contain userinfo" if credential_case else "do not identify the same repository"
+    with pytest.raises(git_ops.GitError, match=reason) as caught:
         git_ops.fetch_repo(repo, declared)
     message = str(caught.value)
-    assert "stored origin URL" in message and "declared URL" in message
-    assert "Correct the declaration" in message and "move the existing clone aside" in message
     for secret in ("USER_CANARY", "PASS_CANARY", "QUERY_CANARY", "FRAGMENT_CANARY"):
         assert secret not in message
-    if "CANARY" not in stored + declared:
+    if not credential_case:
+        assert "stored origin URL" in message and "declared URL" in message
+        assert "Correct the declaration" in message and "move the existing clone aside" in message
         assert stored in message
         assert declared.replace("ssh://git@", "ssh://***@") in message
     assert _repo_bytes(repo) == before
