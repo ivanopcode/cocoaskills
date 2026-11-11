@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tarfile
 import unicodedata
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
@@ -325,13 +325,41 @@ def fetch_repo(repo: Path, declared_url: str | None = None) -> None:
             )
 
 
-def fetch_all(skills_root: Path, declared_urls: Mapping[str, str] | None = None) -> list[tuple[Path, str | None]]:
-    results: list[tuple[Path, str | None]] = []
+def skill_source_path(skills_root: Path, source: str) -> Path:
+    """Resolve only the declared portable path, without following source symlinks."""
+    if not is_valid_portable_path(source):
+        raise GitError("Skill source must be a portable relative path")
+    repo = skills_root
+    parts = source.split("/")
+    for part in parts:
+        repo = repo / part
+        if part.casefold() == ".git" or repo.is_symlink():
+            raise GitError(f"Refusing skill source {source!r}: Git metadata or symlink in source path")
+    if (repo / ".git").is_symlink():
+        raise GitError(f"Refusing skill source {source!r}: symlinked Git metadata")
+    return repo
+
+
+def skill_repositories(skills_root: Path, declared_sources: Iterable[str] = ()) -> dict[str, Path]:
+    """Select immediate clones plus explicit full source paths; never crawl contents."""
+    repositories: dict[str, Path] = {}
     for child in sorted(skills_root.iterdir()):
-        if not child.is_dir() or not (child / ".git").exists():
+        if child.is_symlink() or not child.is_dir() or not (child / ".git").exists():
             continue
+        repositories[child.name] = skill_source_path(skills_root, child.name)
+    for source in declared_sources:
+        repo = skill_source_path(skills_root, source)
+        if not repo.is_dir() or not (repo / ".git").exists():
+            raise GitError(f"Declared skill repository not found: {source!r}; install the source before updating")
+        repositories[source] = repo
+    return dict(sorted(repositories.items()))
+
+
+def fetch_all(skills_root: Path, declared_urls: Mapping[str, str | None] | None = None) -> list[tuple[Path, str | None]]:
+    results: list[tuple[Path, str | None]] = []
+    for source, child in skill_repositories(skills_root, declared_urls or ()).items():
         try:
-            declared_url = (declared_urls or {}).get(child.name)
+            declared_url = (declared_urls or {}).get(source)
             if declared_url is None:
                 fetch_repo(child)
             else:
