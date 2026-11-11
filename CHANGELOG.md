@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Include explicitly declared nested skill sources in whole-root update and
+  source-policy preflight, preserving their full paths without recursively
+  scanning repository contents or following source symlinks.
 - Reconcile existing skill clone remotes with the declared endpoint when both
   identify the same repository, including explicit `.git` URL corrections.
   Fetch the declared URL and persist it after success; refuse identity changes

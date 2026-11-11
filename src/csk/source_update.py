@@ -9,7 +9,7 @@ from . import closure, git_ops, global_install, hybrid, manifest, skillspec
 from .config import GlobalConfig
 
 
-def declared_endpoints(config: GlobalConfig) -> dict[str, str]:
+def declared_endpoints(config: GlobalConfig) -> dict[str, str | None]:
     """Resolve known legacy declarations without network or persistent writes.
 
     Source-schema projects own private acquisitions and never select a
@@ -35,11 +35,14 @@ def declared_endpoints(config: GlobalConfig) -> dict[str, str]:
     if global_manifest is not None:
         pending.extend(global_manifest.skills)
 
-    endpoints: dict[str, str] = {}
+    endpoints: dict[str, str | None] = {}
     inspected: set[tuple[Path, str]] = set()
     while pending:
         decl = pending.pop(0)
-        repo = config.skills_root / decl.source
+        repo = git_ops.skill_source_path(config.skills_root, decl.source)
+        # Keep URL-less declarations too: their full paths still select clones
+        # whose stored source needs policy preflight and a bulk fetch.
+        endpoints.setdefault(decl.source, None)
         if decl.git is not None:
             closure._gate_source(config, decl.name, decl.git, "whole-root update")
             target = git_ops.declared_fetch_url(decl.git)
@@ -83,12 +86,11 @@ def declared_endpoints(config: GlobalConfig) -> dict[str, str]:
 
     # Preflight every clone before the first fetch, including declarations
     # without a git field and otherwise unreferenced, stored-remote clones.
-    for repo in sorted(config.skills_root.iterdir()):
-        if not repo.is_dir() or not (repo / ".git").exists():
-            continue
-        selected = git_ops.validate_repo_source(repo, endpoints.get(repo.name))
+    for source, repo in git_ops.skill_repositories(config.skills_root, endpoints).items():
+        declared = endpoints.get(source)
+        selected = git_ops.validate_repo_source(repo, declared)
         if selected is not None:
             closure._gate_source(
-                config, repo.name, endpoints.get(repo.name, selected.stored_url), "whole-root update",
+                config, source, declared or selected.stored_url, "whole-root update",
             )
     return endpoints
