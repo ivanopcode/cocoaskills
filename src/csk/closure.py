@@ -280,7 +280,10 @@ def build_closure(
     enqueued, and a repository is refused before it is cloned or fetched
     when its identity is declared with more than one spelling. With
     ``fetch_existing`` a repeated declaration with another spelling refuses
-    too, even after its repository was fetched.
+    too, even after its repository was fetched. A clone in
+    ``fetched_repos`` (fetched or cloned earlier in the same command, possibly
+    for another root) is checked as if it had to be fetched or cloned again,
+    so each root gets the verdict it would get on its own.
     """
     nodes: dict[str, ClosureNode] = {}
     bases = declaration_bases or {}
@@ -578,14 +581,13 @@ def _ensure_repo(
         source = git_ops.validate_repo_source(repo, declared)
         if item.git is None and source is not None:
             _gate_source(config, item.name, source.stored_url, item.chain)
-        if (
-            fetch_existing
-            and use_cache
-            and not read_only
-            and repo_key not in fetched_repos
-        ):
-            if spelling_guard is not None:
-                _require_canonical(spelling_guard, item, declared, repo=repo, source=source)
+        fetch = fetch_existing and use_cache and not read_only
+        # Each root is judged on its own view: a clone that an earlier root of
+        # this command already fetched or cloned is checked again, exactly as
+        # if this root had to fetch or clone it itself.
+        if spelling_guard is not None and (fetch or repo_key in fetched_repos):
+            _require_canonical(spelling_guard, item, declared, repo=repo, source=source)
+        if fetch and repo_key not in fetched_repos:
             try:
                 if declared is None:
                     git_ops.fetch_repo(repo)
@@ -608,7 +610,9 @@ def _ensure_repo(
         git_ops.clone_repo(declared or item.git, destination)
     except git_ops.GitError as exc:
         raise ClosureError(f"Failed to clone {item.name} from {item.git}: {exc}") from exc
-    if use_cache and fetch_existing:
+    if use_cache:
+        # Also without fetch_existing (install): a later root that finds this
+        # new clone is checked as if it had to clone it.
         fetched_repos.add(destination.resolve())
     return destination
 

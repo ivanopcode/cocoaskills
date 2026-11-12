@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
-import tempfile
 import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -406,27 +406,51 @@ def canonical_from_redirect(declared: str, effective_url: str, location: str | N
     return None if canonical == declared or not origin.path.strip("/") else canonical
 
 
+_TRACE_RECORD = re.compile(r"\d{2}:\d{2}:\d{2}\.\d+ ")
+
+
+def _split_curl_trace(stderr: str) -> tuple[list[str], str]:
+    """Split Git's stderr into curl trace records and Git's own messages.
+
+    Every Git trace record starts with an ``HH:MM:SS.micro`` timestamp; Git's
+    messages (``fatal:``, ``error:``, ``remote:`` ...) never do. The messages
+    only feed the failure classifier, which matches anchored Git and curl
+    frames; neither part is printed.
+    """
+    records: list[str] = []
+    messages: list[str] = []
+    for line in stderr.split("\n"):
+        (records if _TRACE_RECORD.match(line) else messages).append(line)
+    return records, "\n".join(messages)
+
+
 def _anonymous_discovery(
     target: str, effective_url: str, repo: Path | None,
 ) -> tuple[subprocess.CompletedProcess[str] | None, str | None]:
-    """Make Git's discovery request for ``target`` once, anonymously.
+    """Make Git's discovery request for ``target`` once, without csk credentials.
 
-    The same trust pins apply and redirects stay refused; credential helpers,
-    prompts, cookie files and extra HTTP headers are disabled, so no
-    credential is sent. Only the Location header is read from a private curl
-    trace, which is deleted with its directory. Returns the finished process
-    (None when Git could not run) and the refused redirect's Location.
+    The same trust pins apply and redirects stay refused. Credential helpers,
+    prompts, cookie files and extra HTTP headers are disabled, so the request
+    carries no credential of csk's or Git's configuration. Git always lets
+    libcurl read ``~/.netrc``, though: when the host answers with an
+    authentication challenge, libcurl may answer it from there, as it does for
+    the fetch itself, and only to that same host (redirects are refused).
+
+    The curl trace goes to Git's stderr pipe, never to a file, so no response
+    header (``Set-Cookie`` included) reaches the disk, also if csk is killed.
+    Only the Location header is read from it. Returns the finished process,
+    whose stderr holds Git's own messages without the trace (None when Git
+    could not run), and the refused redirect's Location.
     """
     if urlsplit(effective_url).scheme.lower() not in {"http", "https"}:
         return None, None
     try:
-        with _private_trust() as trust, tempfile.TemporaryDirectory(prefix="csk-redirect-") as scratch:
+        with _private_trust() as trust:
             environment = _trust_environment(trust)
             for key in ("GIT_TRACE", "GIT_TRACE_PACKET", "GIT_CURL_VERBOSE"):
                 environment.pop(key, None)
-            trace = Path(scratch) / "curl-trace"
             environment.update({
-                "GIT_TRACE_CURL": str(trace),
+                "GIT_TRACE_CURL": "2",
                 "GIT_TRACE_CURL_NO_DATA": "1",
                 "GIT_TRACE_REDACT": "1",
                 "GIT_TERMINAL_PROMPT": "0",
@@ -444,13 +468,14 @@ def _anonymous_discovery(
                 list(git_trust.pinned_command(command, environment, url=effective_url)),
                 text=True, capture_output=True, env=environment, timeout=REDIRECT_PROBE_TIMEOUT,
             )
-            records = "" if proc.returncode == 0 or not trace.is_file() else trace.read_text(
-                encoding="utf-8", errors="replace",
-            )
     except (GitError, OSError, subprocess.SubprocessError, ValueError):
         return None, None
+    records, messages = _split_curl_trace(proc.stderr or "")
+    proc = subprocess.CompletedProcess(proc.args, proc.returncode, proc.stdout, messages)
+    if proc.returncode == 0:
+        return proc, None
     marker = "<= Recv header:"
-    for line in records.splitlines():
+    for line in records:
         _, found, header = line.partition(marker)
         name, separator, value = header.partition(":")
         if found and separator and name.strip().lower() == "location" and value.strip():
@@ -473,12 +498,13 @@ class RedirectProbe:
 
 
 def probe_declared_url(url: str) -> RedirectProbe:
-    """Check, anonymously, whether a declared HTTP(S) URL answers with a redirect.
+    """Check whether a declared HTTP(S) URL answers with a redirect.
 
     Used by ``csk check --canonical-urls --network``: one discovery request
     per URL, under the same trust pins as a fetch, with redirects refused and
-    no credentials sent. A server that requires authentication before it
-    would redirect reports ``unverified``.
+    no credential helper, prompt, extra header or cookie (see
+    :func:`_anonymous_discovery` for ``~/.netrc``). A server that requires
+    authentication before it would redirect reports ``unverified``.
     """
     validate_git_url(url)
     from .git_admission import _classify_git_failure_output

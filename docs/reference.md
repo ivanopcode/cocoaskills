@@ -183,6 +183,13 @@ The spelling is the exact string csk fetches: the declared URL as written, or
 the anchored absolute path for a relative local path. Two declarations of one
 repository agree only when their spellings are equal.
 
+To connect over SSH and keep one spelling, declare the HTTPS URL everywhere
+and map it to SSH in your own Git configuration, for example
+`git config --global url."git@host:".insteadOf "https://host/"`. csk compares
+declarations before Git rewrites them, so the rewrite adds no spelling, and
+the clone's `origin` keeps the declared HTTPS URL. Declaring the SSH form in
+one place and the HTTPS form in another is two spellings and refuses.
+
 ### What csk does
 
 - `csk update`, `csk upgrade`, `csk global update` and `csk global upgrade`
@@ -196,22 +203,33 @@ repository agree only when their spellings are equal.
   refused, including an undeclared clone whose stored `origin` names it.
   `csk update` still fetches the other clones; `csk upgrade` fails the
   projects that need the repository and still upgrades the others.
-- `csk update` reads the registered schema-1 projects, the applicable hybrid
-  declarations, the global Skillfile and the dependency specs cached in the
-  clones at the declared refs. `csk upgrade` reads the same registry and takes
-  the declarations of the projects it upgrades live, after fetching them, so
-  both commands reach the same verdict on the same state.
+- `csk update` and `csk global update` read the registered schema-1 projects,
+  the applicable hybrid declarations, the global Skillfile and the dependency
+  specs cached in the clones at the declared refs. `csk upgrade` reads the
+  same registry and takes the declarations of the project it upgrades live,
+  after fetching them, so the commands reach the same verdict on the same
+  state. `csk upgrade --all` and `csk install --all` judge each project on its
+  own: its live declarations plus the registry as read before the command's
+  first clone or fetch, so the verdict does not depend on the project order or
+  on earlier projects failing. A clone that an earlier project fetched or
+  cloned in the same command is checked again. When one project's upgrade
+  fetches a corrected dependency declaration, the other projects see it from
+  the next command.
 - A dependency read from cached HEAD, because its declared ref is not cached
   yet, only locates clones; it declares no spelling. `csk upgrade` fetches the
   declared ref and checks its dependencies.
 - When the declared URL answers with a redirect, the fetch fails with
   `declared URL '...' is not canonical`. csk then repeats the discovery request
-  once, anonymously (no credential helper, prompt, cookie file or extra
-  header), to read the redirect's `Location`. If the target is the same
-  repository on the same scheme, host and port, differing only in `.git` or a
-  trailing slash, the error names the canonical spelling. Otherwise it asks for
-  the URL the server serves without a redirect. csk never fetches the redirect
-  target and never prints it.
+  once to read the redirect's `Location`. The repeat uses no credential helper,
+  prompt, cookie file or extra header. Git always lets libcurl read
+  `~/.netrc`, so a netrc entry for the host may still answer an authentication
+  challenge, as it does for the fetch, and only for that same host because
+  redirects stay refused. csk reads the response headers from Git's trace in
+  memory and writes no trace file. If the target is the same repository on the
+  same scheme, host and port, differing only in `.git` or a trailing slash, the
+  error names the canonical spelling. Otherwise it asks for the URL the server
+  serves without a redirect. csk never fetches the redirect target and never
+  prints it. `csk update` adds the places that declare the redirecting URL.
 
 ### Fix a project, its branches and the registry
 
@@ -236,8 +254,9 @@ repository agree only when their spellings are equal.
 
 `csk check --canonical-urls` compares one Skillfile with its dependency specs
 and the registry, offline, and exits 1 on any disagreement. `--all` checks
-every registered project. `--network` adds one anonymous request per declared
-HTTP(S) URL and exits 1 when a URL redirects. A server that requires
+every registered project, or only the global Skillfile when no project is
+registered. `--network` adds one request per declared HTTP(S) URL, made like
+the repeat above, and exits 1 when a URL redirects. A server that requires
 authentication before it would redirect reports `not verified` and does not
 fail the check.
 
