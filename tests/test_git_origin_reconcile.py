@@ -202,9 +202,9 @@ def test_failed_declared_fetch_preserves_origin_and_hides_untrusted_output(tmp_p
 
     def failed_fetch(command, **kwargs):
         if "ls-remote" in command and "--heads" in command:
-            # The anonymous Location probe; injected so no real host is contacted.
+            # The Location probe (bytes, like the real one); injected so no real host is contacted.
             probes.append(command)
-            return subprocess.CompletedProcess(command, 128, "", "fatal: probe refused\n")
+            return subprocess.CompletedProcess(command, 128, b"", b"fatal: probe refused\n")
         if "fetch" not in command:
             return real_run(command, **kwargs)
         attempts.append(command)
@@ -270,8 +270,8 @@ def test_invalid_trust_refuses_reconcile_before_any_git(tmp_path, monkeypatch):
 def test_declared_redirect_still_refuses_without_persisting(redirecting_repository):
     # Explicitly switching to a redirecting endpoint of the same identity
     # still fails: no redirect target is fetched and origin stays untouched.
-    # The refused discovery request is repeated once, anonymously, only to
-    # read Location, so the error names the canonical .git spelling.
+    # The refused discovery request is repeated once, without credentials,
+    # only to read Location, so the error names the canonical .git spelling.
     repo, old_url, declared_url, _, requests = redirecting_repository
     run(["git", "remote", "set-url", "origin", declared_url], repo)
     with pytest.raises(git_ops.GitError, match="HTTP redirects are refused") as caught:

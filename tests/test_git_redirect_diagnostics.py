@@ -73,7 +73,7 @@ def test_cli_clone_redirect_refuses_with_canonical_url_guidance(
 ):
     # Real Git redirects fail through CLI install, without fetching Location or publishing a partial skill.
     # A fixture-only Git rewrite routes the valid public-form declaration to anonymous loopback HTTP.
-    # The refused request is repeated once, anonymously, to read Location; neither target here is the
+    # The refused request is repeated once, without credentials, to read Location; neither target here is the
     # same repository, so no canonical spelling is named and the generic guidance remains.
     base, requests = smart_http
     gitconfig = tmp_path / "gitconfig"
@@ -118,7 +118,7 @@ def test_cli_redirect_diagnostic_does_not_echo_git_secrets(
     tmp_path, csk_home, skills_root, monkeypatch, capsys, verbose,
 ):
     # An injected Git failure exercises public CLI rendering and cleanup; no secret URL is contacted.
-    # The anonymous Location probe is injected too (it fails), so the generic guidance is shown.
+    # The Location probe is injected too (it fails, with bytes like the real one), so the generic guidance is shown.
     project = make_project(tmp_path)
     write_skillfile(project, {"schema_version": 1, "skills": [
         {"name": "fixture-skill", "git": "https://example.test/alias", "tag": "v1"},
@@ -131,7 +131,7 @@ def test_cli_redirect_diagnostic_does_not_echo_git_secrets(
     def fail_clone(command, **kwargs):
         if "ls-remote" in command and "--heads" in command:
             probes.append(command)
-            return subprocess.CompletedProcess(command, 128, "", "fatal: probe refused\n")
+            return subprocess.CompletedProcess(command, 128, b"", b"fatal: probe refused\n")
         if "clone" not in command:
             return real_run(command, **kwargs)
         clones.append(command)
