@@ -42,6 +42,8 @@ class UpdateItem:
     repo: Path | None = None
     endpoint: str | None = None
     detail: str | None = None
+    # Where the endpoint spelling is declared, for fetch failure messages.
+    places: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -310,9 +312,11 @@ def _preflight(config: GlobalConfig, clone: _Clone, spellings: canonical_urls.Sp
         # names every place that declares each of them.
         endpoint = targets[0] if targets else None
         selected = git_ops.validate_repo_source(clone.repo, endpoint)
-        conflict = spellings.conflict(_clone_identity(clone, selected, endpoint))
+        identity = _clone_identity(clone, selected, endpoint)
+        conflict = spellings.conflict(identity)
         if conflict is not None:
             raise canonical_urls.SpellingConflictError(conflict)
+        places = tuple(sorted(set(spellings.spellings(identity or "").get(endpoint or "", ()))))
         if endpoint is None and selected is not None:
             closure._gate_source(config, clone.source, selected.stored_url, "whole-root update")
     except git_ops.GitError as exc:
@@ -321,7 +325,7 @@ def _preflight(config: GlobalConfig, clone: _Clone, spellings: canonical_urls.Sp
         return refused(str(exc))
     except (closure.ClosureError, ValueError) as exc:
         return refused(str(exc))
-    return UpdateItem(clone.source, "fetch", clone.repo, endpoint=endpoint)
+    return UpdateItem(clone.source, "fetch", clone.repo, endpoint=endpoint, places=places)
 
 
 @dataclass
@@ -332,6 +336,7 @@ class RegistryScan:
     declarations: list[_Declaration]
     unreadable: list[str]
     not_checked: list[tuple[str | None, str]]
+    roots: int = 0
 
     def declared(self) -> list[canonical_urls.Declared]:
         return [
@@ -404,7 +409,7 @@ def scan_registry(config: GlobalConfig, *, lenient: bool = False) -> RegistrySca
                 )
                 for requirement in requirements
             )
-    return RegistryScan(inventory, declarations, unreadable, not_checked)
+    return RegistryScan(inventory, declarations, unreadable, not_checked, len(roots))
 
 
 def registry_declarations(config: GlobalConfig) -> list[canonical_urls.Declared]:
@@ -438,6 +443,9 @@ class CanonicalUrlReport:
     conflicts: list[str]
     unreadable: list[str]
     not_checked: list[str]
+    # Readable closure roots scanned: registered schema-1 projects and the
+    # global Skillfile.
+    roots: int = 0
 
 
 def canonical_url_report(config: GlobalConfig, *, root: str | None) -> CanonicalUrlReport:
@@ -461,4 +469,4 @@ def canonical_url_report(config: GlobalConfig, *, root: str | None) -> Canonical
     })
     conflicts = [message for identity in identities if (message := index.conflict(identity)) is not None]
     not_checked = sorted({text for owner, text in scan.not_checked if root is None or owner == root})
-    return CanonicalUrlReport(scoped, len(identities), conflicts, list(scan.unreadable), not_checked)
+    return CanonicalUrlReport(scoped, len(identities), conflicts, list(scan.unreadable), not_checked, scan.roots)

@@ -737,7 +737,10 @@ def _build_check_parser() -> argparse.ArgumentParser:
             "  check compares the target Skillfile (or, with --all, every registered\n"
             "  project) with the registry and the dependency specs cached under\n"
             "  skills_root, and exits 1 on any disagreement. --network adds one\n"
-            "  anonymous request per declared HTTP(S) URL and reports URLs that redirect.\n\n"
+            "  request per declared HTTP(S) URL and reports URLs that redirect. The\n"
+            "  request uses no credential helper, prompt, extra header or cookie;\n"
+            "  libcurl may still answer an authentication challenge from the same host\n"
+            "  with ~/.netrc credentials, as it does for a fetch.\n\n"
             "Exit codes:\n"
             "  0 every checked Skillfile is valid, 1 one or more are invalid,\n"
             "  2 config error, 3 lock contention.\n\n"
@@ -764,7 +767,8 @@ def _build_check_parser() -> argparse.ArgumentParser:
         "--network",
         action="store_true",
         help="with --canonical-urls: also report declared HTTP(S) URLs that answer with a redirect "
-        "(one anonymous request per URL; no credentials are sent)",
+        "(one request per URL without credential helpers, prompts, extra headers or cookies; "
+        "~/.netrc may still answer an authentication challenge from the same host)",
     )
     return parser
 
@@ -1861,7 +1865,13 @@ def _cmd_check_canonical_urls(cfg: config.GlobalConfig, args: argparse.Namespace
 
     from . import canonical_urls
 
-    cfg, alias = _cfg_and_alias_for_target(cfg, args)
+    # With no registered project, --all still checks the global Skillfile.
+    global_only = bool(
+        getattr(args, "all", False) and getattr(args, "target", None) is None and not cfg.projects
+    )
+    alias: str | None = None
+    if not global_only:
+        cfg, alias = _cfg_and_alias_for_target(cfg, args)
     root = None if alias is None else canonical_urls.project_root_id(cfg.projects[alias].path)
     if alias is not None:
         target = manifest.load_manifest(cfg.projects[alias].path)
@@ -1872,7 +1882,13 @@ def _cmd_check_canonical_urls(cfg: config.GlobalConfig, args: argparse.Namespace
                 "declarations"
             )
     report = source_update.canonical_url_report(cfg, root=root)
-    scope = "all registered projects" if alias is None else f"project {alias}"
+    if global_only and not report.roots and not report.unreadable:
+        # No global Skillfile either: the usual "no registered projects" error.
+        _cfg_and_alias_for_target(cfg, args)
+    if global_only:
+        scope = "the global Skillfile"
+    else:
+        scope = "all registered projects" if alias is None else f"project {alias}"
     print(
         f"canonical URLs: {len(report.spellings)} declared spelling(s) of {report.repositories} "
         f"repository(ies) checked for {terminal_text(scope)}"
@@ -2001,7 +2017,8 @@ def _cmd_update(cfg: config.GlobalConfig) -> int:
             git_ops.fetch_repo(item.repo, item.endpoint)
         except git_ops.GitError as exc:
             failed = True
-            print(f"fetch failed {name}: {terminal_text(str(exc))}", file=sys.stderr)
+            declared = f" (declared in: {'; '.join(item.places)})" if item.places else ""
+            print(f"fetch failed {name}: {terminal_text(str(exc) + declared)}", file=sys.stderr)
         else:
             print(f"fetched {name}")
     return EXIT_PARTIAL_FAIL if failed else EXIT_OK

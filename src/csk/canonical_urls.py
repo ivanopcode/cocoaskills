@@ -144,10 +144,14 @@ class SpellingIndex:
 class SpellingGuard:
     """Per-command view used before csk clones or fetches a repository.
 
-    It combines the registry's declarations (loaded lazily, once) with the live
-    declarations of the closures this command builds. Declarations of the roots
-    the command itself resolves are taken live, never from the cached registry
-    view, so a root that is being upgraded speaks for itself with fresh data.
+    It combines the registry's declarations (loaded lazily, once per command,
+    at the first check, which precedes every clone or fetch it guards) with
+    the live declarations of the root being resolved. That root's cached
+    registry entries are replaced by its live ones, so a root that is being
+    upgraded speaks for itself with fresh data; every other root counts with
+    its registry entries. A root is therefore judged on the same view whether
+    it is resolved alone or with others, in any order, and whether earlier
+    roots succeeded or failed.
     """
 
     def __init__(
@@ -159,20 +163,25 @@ class SpellingGuard:
         self._load_registry = load_registry
         self._registry: Sequence[Declared] | None = None
         self._live: list[Declared] = []
-        self._live_roots: set[str] = set()
+        self._live_root: str | None = None
         self.label = label
         self.chain_root = ""
 
     def enter_root(self, root: str | None, label: str, chain_root: str = "") -> None:
-        """Start resolving one root; its cached registry entries stop counting.
+        """Start resolving one root on its own view.
+
+        The root's cached registry entries stop counting, and the live
+        declarations noted for any earlier root are dropped: another root
+        counts with its registry entries only, never with whatever part of
+        its closure an earlier resolution happened to reach.
 
         ``label`` decorates the root's manifest place ("project app") and
         ``chain_root`` starts its dependency chains ("app -> a -> b"), exactly
         as the registry scan writes them, so every command words a conflict
         identically.
         """
-        if root is not None:
-            self._live_roots.add(root)
+        self._live = []
+        self._live_root = root
         self.label = label
         self.chain_root = chain_root
 
@@ -184,7 +193,7 @@ class SpellingGuard:
         if self._registry is None:
             self._registry = tuple(self._load_registry()) if self._load_registry is not None else ()
         index = SpellingIndex(
-            entry for entry in self._registry if entry.root is None or entry.root not in self._live_roots
+            entry for entry in self._registry if entry.root is None or entry.root != self._live_root
         )
         for entry in self._live:
             index.add(entry.spelling, entry.place)
