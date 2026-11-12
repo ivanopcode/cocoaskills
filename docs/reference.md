@@ -147,6 +147,125 @@ Python с python.org использует хранилище Windows. Миним
 * `Skillfile.dev.json` подменяет провайдеров локально путем указания пути к рабочей копии или git-ссылки. Файл не отслеживается в git. Строгий режим аудита отвергает установки с активными подменами.
 * Параметр `allowed_sources` в `~/.cocoaskills/config.json` задает разрешенные префиксы `host/path` для git-источников. Установщик нормализует SSH и HTTPS URL для проверки идентичности источника.
 
+## Canonical source URLs
+
+A repository has exactly one canonical URL spelling. Every project, branch,
+worktree, global or hybrid declaration and dependency declaration that names
+the repository uses that one spelling. csk treats mixed spellings as an
+invalid state: it reports them and does not choose a winner.
+
+### Why the rule exists
+
+Skill clones under `skills_root` are shared. Every registered project and
+every registered worktree (csk registers each checkout it installs) uses the
+same clone. csk fetches the declared URL, never the clone's stored `origin`,
+and rewrites `origin` only after that fetch succeeds. Two spellings of one
+repository would make csk alternate between them. Typically one of them
+answers with an HTTP redirect, for example a GitLab path without `.git`, and
+csk refuses redirects (`http.followRedirects=false`) for security. A fallback
+to the stored `origin` would hide a broken declaration until the clone is
+recreated, so csk has none.
+
+### Repository identity
+
+Two URLs name the same repository when their identities are equal:
+
+- network URLs: the lowercase host plus the case-sensitive path, ignoring the
+  transport (scheme and user), trailing slashes and one trailing `.git`.
+  `https://host/team/x`, `https://host/team/x.git`, `https://host/team/x/`,
+  `https://Host/team/x.git` and `git@host:team/x.git` are one repository.
+  Different hosts or different paths are never merged; explicit ports, queries,
+  fragments and HTTP(S) userinfo are refused outright;
+- local sources: the resolved absolute path. A relative path resolves against
+  the directory of the declaring Skillfile (or `Skillfile.dev.json`).
+
+The spelling is the exact string csk fetches: the declared URL as written, or
+the anchored absolute path for a relative local path. Two declarations of one
+repository agree only when their spellings are equal.
+
+### What csk does
+
+- `csk update`, `csk upgrade`, `csk global update` and `csk global upgrade`
+  refuse to fetch a repository whose identity is declared with more than one
+  spelling. `csk install` refuses to clone such a repository; installing from
+  an existing clone does not contact any URL and is not affected.
+- The refusal is per repository. It names the repository, every spelling and
+  every place that declares it: the Skillfile path and project alias, the
+  global or hybrid manifest, or the skill spec and tag of the skill that
+  declares the dependency, with its chain. Every clone of that repository is
+  refused, including an undeclared clone whose stored `origin` names it.
+  `csk update` still fetches the other clones; `csk upgrade` fails the
+  projects that need the repository and still upgrades the others.
+- `csk update` reads the registered schema-1 projects, the applicable hybrid
+  declarations, the global Skillfile and the dependency specs cached in the
+  clones at the declared refs. `csk upgrade` reads the same registry and takes
+  the declarations of the projects it upgrades live, after fetching them, so
+  both commands reach the same verdict on the same state.
+- A dependency read from cached HEAD, because its declared ref is not cached
+  yet, only locates clones; it declares no spelling. `csk upgrade` fetches the
+  declared ref and checks its dependencies.
+- When the declared URL answers with a redirect, the fetch fails with
+  `declared URL '...' is not canonical`. csk then repeats the discovery request
+  once, anonymously (no credential helper, prompt, cookie file or extra
+  header), to read the redirect's `Location`. If the target is the same
+  repository on the same scheme, host and port, differing only in `.git` or a
+  trailing slash, the error names the canonical spelling. Otherwise it asks for
+  the URL the server serves without a redirect. csk never fetches the redirect
+  target and never prints it.
+
+### Fix a project, its branches and the registry
+
+1. Pick the canonical spelling: the clone URL your Git host shows, the one
+   that answers without a redirect. `csk check --canonical-urls --network`
+   reports redirecting declarations and names the canonical form when the
+   server identifies it.
+2. Use that spelling in the project Skillfile on every branch that is checked
+   out anywhere, including long-lived branches such as `master` or `main`.
+   Merge or cherry-pick the change into older worktrees you keep.
+3. Dependency declarations live in the skill spec of the declaring skill at a
+   tag. Publish a new tag of that skill with the canonical spelling and pin it.
+4. Clean up the registry. csk lists every registered project in the `projects`
+   object of its config (`csk config show` prints the path). Remove the
+   entries of worktrees you no longer use, or delete those worktrees: a
+   registered path without a Skillfile is ignored.
+5. Run `csk check --canonical-urls --all`. It exits 0 when every repository has
+   one spelling. Then `csk upgrade` or `csk update` fetches the canonical URL
+   and rewrites the clone's `origin` itself; you do not edit clones by hand.
+
+### Run the check in CI
+
+`csk check --canonical-urls` compares one Skillfile with its dependency specs
+and the registry, offline, and exits 1 on any disagreement. `--all` checks
+every registered project. `--network` adds one anonymous request per declared
+HTTP(S) URL and exits 1 when a URL redirects. A server that requires
+authentication before it would redirect reports `not verified` and does not
+fail the check.
+
+The commands below check a checkout in CI:
+
+```bash
+csk bootstrap --if-missing --non-interactive --skills-root "$PWD/.csk-skills"
+csk check --canonical-urls --network .
+csk install .
+csk check --canonical-urls .
+```
+
+The first check covers the project's own declarations. Dependency specs are
+read from clones under `skills_root`, so the check after `csk install` also
+covers dependency declarations. The output lists dependencies it could not
+read as `note: not checked`.
+
+The rule covers schema-1 declarations, which share `skills_root` clones.
+Schema-2/3 sources are acquired per project, and `Skillfile.dev.json`
+substitutions use their own clones; neither joins the comparison.
+
+### Credentials in URL rewrites
+
+csk refuses HTTP(S) URLs with userinfo, including an effective URL produced by
+a Git rewrite such as `url."https://user:token@host/".insteadOf
+"https://host/"`. Configure a credential helper instead, for example a CI job
+token through `git credential approve` or the platform's helper.
+
 ## Источники Skillfile schema 2
 
 Проектный `Skillfile.json` поддерживает schema 1, 2 и 3. Schema 3 добавляет MCP declarations к schema 2.

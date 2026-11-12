@@ -27,6 +27,16 @@ def command_warnings() -> Iterator[None]:
         _warned.reset(token)
 
 
+@contextmanager
+def silenced() -> Iterator[None]:
+    """Read Skillfiles the command does not act on without repeating their migration hints."""
+    token = _warned.set({'ignore_mode', 'cursor'})
+    try:
+        yield
+    finally:
+        _warned.reset(token)
+
+
 def forms(data: Mapping[str, Any]) -> dict[str, str]:
     found = {}
     if not isinstance(data, Mapping):

@@ -185,7 +185,10 @@ def test_symlinked_clone_keeps_identity_and_policy_refusals(
 # Decision: a reconcile or policy refusal fails that clone only. It is named
 # on stderr, gets no traffic and keeps its bytes; the unrelated healthy clone
 # is still reconciled, and the command exits nonzero. N1: a stored origin with
-# HTTP(S) userinfo is one such per-clone refusal and is never echoed.
+# HTTP(S) userinfo is one such per-clone refusal and is never echoed. In the
+# conflict case 'other' is a different repository (example.test/other) whose
+# two projects disagree on its spelling; the canonical-URL rule refuses that
+# repository only.
 @pytest.mark.parametrize('case', ['identity', 'policy', 'conflict', 'stored-userinfo'])
 def test_refusal_fails_only_that_clone(
     redirecting_repository, tmp_path, csk_home, skills_root, monkeypatch, capsys, case,
@@ -204,9 +207,12 @@ def test_refusal_fails_only_that_clone(
         run(['git', 'config', f'url.{effective}.insteadOf', denied], other)
         overrides['allowed_sources'] = ('example.test',)
     elif case == 'conflict':
+        run(['git', 'remote', 'set-url', 'origin', 'https://example.test/other'], other)
         second = make_project(tmp_path, name='second')
-        write_skillfile(second, {'schema_version': 1, 'skills': [{'name': 'other', 'git': old, 'tag': 'v2'}]})
-        skills.append({'name': 'other', 'git': declared, 'tag': 'v2'})
+        write_skillfile(second, {'schema_version': 1, 'skills': [
+            {'name': 'other', 'git': 'https://example.test/other', 'tag': 'v2'},
+        ]})
+        skills.append({'name': 'other', 'git': 'https://example.test/other.git', 'tag': 'v2'})
     else:
         stored = 'https://SYNTHETIC_USER@example.test/repo.git'
         run(['git', 'remote', 'set-url', 'origin', stored], other)
@@ -220,7 +226,7 @@ def test_refusal_fails_only_that_clone(
     output = capsys.readouterr()
     reason = {
         'identity': 'do not identify the same repository', 'policy': 'Source not allowed',
-        'conflict': 'Conflicting declared endpoints', 'stored-userinfo': 'must not contain userinfo',
+        'conflict': 'is declared with 2 different URL spellings', 'stored-userinfo': 'must not contain userinfo',
     }[case]
     assert rc == cli.EXIT_PARTIAL_FAIL
     assert 'update refused other:' in output.err and reason in output.err

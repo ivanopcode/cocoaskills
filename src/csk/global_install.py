@@ -15,6 +15,7 @@ from typing import Any
 from . import (
     adapters,
     build_repository_pipeline,
+    canonical_urls,
     closure,
     config as config_module,
     consumers,
@@ -44,6 +45,7 @@ from .builds import planner as build_planner
 from .builds import source as build_source
 from .builds import toolchain as build_toolchain
 from .config import DEFAULT_AGENTS, GlobalConfig
+from .source_identity import SourceIdentityError, canonical_source_identity
 from .sources import publish as source_publish
 
 
@@ -1279,11 +1281,23 @@ def update(
     result = GlobalResult()
     try:
         global_manifest = load_manifest(config.path.parent)
+        guard = installer.registry_spelling_guard(config)
+        guard.enter_root(canonical_urls.GLOBAL_ROOT_ID, "global", "global")
+        base = global_manifest.path.parent
+        for decl in global_manifest.skills:
+            if decl.git is not None:
+                guard.note(_spelling(decl.git, base), f"{global_manifest.path} (global)")
         for decl in _select_declarations(global_manifest, only):
             try:
-                base = global_manifest.path.parent
+                declared = None if decl.git is None else git_ops.declared_fetch_url(decl.git, base)
+                if declared is not None:
+                    guard.require(canonical_urls.repository_identity(declared))
                 repo = installer._ensure_skill_repo(config, decl, use_persistent_clone=True, stack=None, base=base)
-                git_ops.fetch_repo(repo, None if decl.git is None else git_ops.declared_fetch_url(decl.git, base))
+                if declared is None:
+                    stored = git_ops.validate_repo_source(repo, None)
+                    if stored is not None:
+                        guard.require(_stored_identity(stored.stored_url, repo))
+                git_ops.fetch_repo(repo, declared)
                 result.messages.append(f"fetched {terminal_text(decl.source)}")
             except Exception as exc:  # noqa: BLE001 - report every per-source fetch failure
                 result.errors.append(f"fetch failed {terminal_text(decl.source)}: {installer.failure_text(exc)}")
@@ -1292,6 +1306,22 @@ def update(
         result.status = "failed"
         result.errors.append(terminal_text(exc))
         return result
+
+
+def _spelling(git: str, base: Path) -> str | None:
+    try:
+        return git_ops.declared_fetch_url(git, base)
+    except git_ops.GitError:
+        return None
+
+
+def _stored_identity(stored_url: str, repo: Path) -> str | None:
+    try:
+        if canonical_source_identity(stored_url) is None:
+            stored_url = str(git_ops._local_source_path(stored_url, repo))
+    except (SourceIdentityError, git_ops.GitError, OSError):
+        return None
+    return canonical_urls.repository_identity(stored_url)
 
 
 def render_status(config: GlobalConfig) -> str:
@@ -1333,6 +1363,14 @@ def _build_nodes(
     stack: ExitStack,
     result: GlobalResult,
 ) -> list[closure.ClosureNode]:
+    # One canonical-URL guard for every resolution below: all global
+    # declarations count, also when a failing one is isolated.
+    guard = installer.registry_spelling_guard(config)
+    guard.enter_root(canonical_urls.GLOBAL_ROOT_ID, "global", "global")
+    for decl in global_manifest.skills:
+        if decl.git is not None:
+            guard.note(_spelling(decl.git, global_manifest.path.parent), f"{global_manifest.path} (global)")
+
     def resolve(
         decls: list[manifest.SkillDecl],
         *,
@@ -1347,6 +1385,7 @@ def _build_nodes(
             fetched_repos=set(),
             stack=stack,
             check_system_commands=check_system_commands,
+            spelling_guard=guard,
         )
 
     try:

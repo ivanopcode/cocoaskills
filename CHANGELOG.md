@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- Mixed URL spellings of one repository now refuse. csk requires one
+  canonical spelling per repository across every registered project and
+  worktree, the global and hybrid declarations and dependency specs (see
+  "Canonical source URLs" in `docs/reference.md`). If an old worktree still
+  declares `https://host/team/skill` while your branch declares
+  `https://host/team/skill.git`, `csk update` and `csk upgrade` refuse that
+  repository and name both places until every place uses one spelling or the
+  stale worktree leaves the registry. Run `csk check --canonical-urls --all`
+  before upgrading to find them.
+- csk fetches only the declared URL. A Skillfile or dependency declaration
+  whose URL redirects now fails even when you corrected the clone's `origin`
+  by hand: the stored `origin` is not a fallback. Correct the declaration on
+  every branch; dependency declarations need a new tag of the declaring skill.
+- HTTP(S) credentials injected through a Git URL rewrite, such as
+  `url."https://user:token@host/".insteadOf "https://host/"`, are refused,
+  like userinfo in a declared URL. Use a credential helper instead.
+
+### Added
+
+- `csk check --canonical-urls [--all] [target]` reports repositories declared
+  with more than one URL spelling, offline, and exits 1 on any disagreement;
+  it is meant for CI. `--network` adds one anonymous request per declared
+  HTTP(S) URL and reports URLs that answer with a redirect, with the canonical
+  form when the server identifies it.
+
 ### Fixed
 
 - Reconcile existing skill clone remotes with the declared endpoint when both
@@ -23,7 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resolve relative local `git` paths against the directory of the declaring
   Skillfile (project, global or hybrid root) in install, upgrade, status and
   update, instead of the invocation directory. An install started from another
-  directory now clones the project-relative path.
+  directory now clones the project-relative path. Relative `git` paths in
+  `Skillfile.dev.json` resolve against the project root, like its `path`
+  entries.
 
 ### Changed
 
@@ -34,13 +63,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not cloned. Symlinked clones are followed as install and upgrade follow them.
 - `csk update` refusals are per clone and name it (`update refused <source>:
   ...`): a different repository identity, a source outside `allowed_sources`,
-  conflicting spellings of one endpoint, a stored `origin` with HTTP(S)
+  a repository declared with more than one URL spelling, a stored `origin` with HTTP(S)
   userinfo, a declared clone whose `origin` has several URLs, or a skill spec
   that cannot be read at the cached declared ref. Other clones are still
   fetched and the command exits 1. A clone whose stored `origin` contains
   userinfo stops updating, and install and upgrade refuse it too, until the
   userinfo is removed from the remote. A malformed registered Skillfile, hybrid
   or global manifest refuses the whole update before any fetch.
+- `csk upgrade`, `csk install` (when it clones), `csk global update` and
+  `csk global upgrade` apply the same canonical-URL rule as `csk update`, over
+  the same registry scan, so the commands give one verdict on one state.
+- A declared URL that answers with a redirect fails with csk's own error:
+  the URL is not canonical, and, when the redirect target is the same
+  repository, the canonical spelling to declare. csk reads the target from one
+  anonymous repeat of the refused request and never fetches it.
+- `csk install` with a tag or branch missing from the local clone suggests
+  `csk upgrade`, which fetches it.
 
 ## [0.22.1] - 2026-11-10
 

@@ -73,6 +73,8 @@ def test_cli_clone_redirect_refuses_with_canonical_url_guidance(
 ):
     # Real Git redirects fail through CLI install, without fetching Location or publishing a partial skill.
     # A fixture-only Git rewrite routes the valid public-form declaration to anonymous loopback HTTP.
+    # The refused request is repeated once, anonymously, to read Location; neither target here is the
+    # same repository, so no canonical spelling is named and the generic guidance remains.
     base, requests = smart_http
     gitconfig = tmp_path / "gitconfig"
     gitconfig.write_text(f'[url "{base}/"]\n insteadOf = https://example.test/\n')
@@ -99,7 +101,8 @@ def test_cli_clone_redirect_refuses_with_canonical_url_guidance(
     assert "login or browser" in output.err
     assert "LOCATION_CANARY" not in output.out + output.err
     assert "STDERR_CANARY" not in output.out + output.err
-    assert requests == [f"/{route}/info/refs?service=git-upload-pack"]
+    assert requests == [f"/{route}/info/refs?service=git-upload-pack"] * 2
+    assert "same repository at" not in output.err
     assert not (skills_root / "fixture-skill").exists()
     assert not (project / ".agents").exists()
     assert not (csk_home / "runtime/fixture-skill").exists()
@@ -115,6 +118,7 @@ def test_cli_redirect_diagnostic_does_not_echo_git_secrets(
     tmp_path, csk_home, skills_root, monkeypatch, capsys, verbose,
 ):
     # An injected Git failure exercises public CLI rendering and cleanup; no secret URL is contacted.
+    # The anonymous Location probe is injected too (it fails), so the generic guidance is shown.
     project = make_project(tmp_path)
     write_skillfile(project, {"schema_version": 1, "skills": [
         {"name": "fixture-skill", "git": "https://example.test/alias", "tag": "v1"},
@@ -122,8 +126,12 @@ def test_cli_redirect_diagnostic_does_not_echo_git_secrets(
     monkeypatch.setattr(cli.config, "load_config", lambda: make_config(csk_home, skills_root, project))
     real_run = git_ops._run
     clones = []
+    probes = []
 
     def fail_clone(command, **kwargs):
+        if "ls-remote" in command and "--heads" in command:
+            probes.append(command)
+            return subprocess.CompletedProcess(command, 128, "", "fatal: probe refused\n")
         if "clone" not in command:
             return real_run(command, **kwargs)
         clones.append(command)
@@ -143,6 +151,7 @@ def test_cli_redirect_diagnostic_does_not_echo_git_secrets(
         assert secret not in output.out + output.err
     assert len(clones) == 1
     assert clones[0][-2] == "https://example.test/alias"
+    assert len(probes) == 1 and probes[0][-1] == "https://example.test/alias"
     assert not (skills_root / "fixture-skill").exists()
 
 
