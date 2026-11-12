@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from conftest import make_config, make_project, make_skill_repo, write_skillfile
+from conftest import make_config, make_project, make_skill_repo, run, write_skillfile
 from csk import cli, config, global_install
 
 
@@ -426,8 +426,11 @@ def test_cli_audit_revocation_blocks_cached_hash(monkeypatch, tmp_path, csk_home
     assert payload["reports"][0]["decision"] == "block"
 
 
+# A revoked source blocks its cached clone. The clone's origin is the declared
+# endpoint: a remote-less clone cannot vouch for a network declaration (that
+# refusal is covered by test_remote_less_local_repository_requires_proven_local_identity).
 def test_cli_audit_source_revocation_blocks_git_source(monkeypatch, tmp_path, csk_home, skills_root, capsys):
-    make_skill_repo(
+    repo, _ = make_skill_repo(
         skills_root,
         "skill-a",
         {
@@ -441,6 +444,7 @@ def test_cli_audit_source_revocation_blocks_git_source(monkeypatch, tmp_path, cs
         },
         tag="v1",
     )
+    run(["git", "remote", "add", "origin", "git@gitlab.example.com:skills/skill-a.git"], repo)
     project = make_project(tmp_path)
     write_skillfile(
         project,

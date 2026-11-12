@@ -264,8 +264,8 @@ def test_bulk_update_preflights_all_declared_endpoints(
     redirecting_repository, tmp_path, csk_home, skills_root, monkeypatch, capsys, scope, conflict,
 ):
     # Project/global/hybrid/transitive endpoints are all collected before any
-    # fetch. Contradictory same-identity spellings refuse (no guessed .git winner);
-    # identical declarations fetch once from the corrected URL.
+    # fetch. Contradictory same-identity spellings refuse that clone by name (no
+    # guessed .git winner); identical declarations fetch once from the corrected URL.
     repo, old, declared, commit, requests = redirecting_repository
     project, cfg = _project(tmp_path, csk_home, skills_root, monkeypatch, declared, 'v2')
     other_url = old if conflict else declared
@@ -301,7 +301,7 @@ def test_bulk_update_preflights_all_declared_endpoints(
     output = capsys.readouterr()
     if conflict:
         assert rc == cli.EXIT_PARTIAL_FAIL
-        assert 'Conflicting declared endpoints' in output.err
+        assert 'update refused fixture-skill: Conflicting declared endpoints' in output.err
         assert requests == []
         assert {child.name: _repo_bytes(child) for child in skills_root.iterdir()} == before
     else:
@@ -385,9 +385,10 @@ def test_http_userinfo_refuses_before_any_git_child(tmp_path, monkeypatch, opera
 def test_bulk_update_gates_even_unreferenced_remotes_before_first_fetch(
     redirecting_repository, tmp_path, csk_home, skills_root, monkeypatch, capsys, allowed,
 ):
-    # A late disallowed stored remote stops the entire preflight before an
-    # earlier authorized clone fetches; the same setup with allowed origins works.
-    repo, _, declared, _, requests = redirecting_repository
+    # An undeclared clone's stored remote is gated before any fetch: a denied one
+    # is refused by name with no traffic or mutation, while the authorized clone
+    # is still fetched. The same setup with allowed origins fetches both.
+    repo, _, declared, commit, requests = redirecting_repository
     _, cfg = _project(tmp_path, csk_home, skills_root, monkeypatch, declared)
     cfg = replace(cfg, allowed_sources=('example.test',))
     monkeypatch.setattr(cli.config, 'load_config', lambda: cfg)
@@ -403,11 +404,13 @@ def test_bulk_update_gates_even_unreferenced_remotes_before_first_fetch(
     if allowed:
         assert rc == cli.EXIT_OK, output.err
         assert requests and all(path.startswith('/repo.git/') for path in requests)
+        assert requests.count('/repo.git/info/refs?service=git-upload-pack') == 2
     else:
         assert rc == cli.EXIT_PARTIAL_FAIL
-        assert 'Source not allowed' in output.err
-        assert requests == []
-        assert {child.name: _repo_bytes(child) for child in skills_root.iterdir()} == before
+        assert 'update refused z-spare:' in output.err and 'Source not allowed' in output.err
+        assert requests.count('/repo.git/info/refs?service=git-upload-pack') == 1
+        assert git_ops.resolve_ref(repo, 'tag', 'v2').commit == commit
+        assert _repo_bytes(spare) == before['z-spare']
 
 
 @pytest.mark.parametrize('operation', ['clone', 'fetch'])

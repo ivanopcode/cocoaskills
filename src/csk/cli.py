@@ -1893,20 +1893,31 @@ def _verify_schema2_project(
 
 
 def _cmd_update(cfg: config.GlobalConfig) -> int:
+    # Planning is local and fails the whole run only when the declarations
+    # themselves cannot be read; per-clone refusals never block other clones.
     try:
-        endpoints = source_update.declared_endpoints(cfg)
-        results = git_ops.fetch_all(cfg.skills_root, endpoints)
+        plan = source_update.plan_update(cfg)
     except (git_ops.GitError, manifest.ManifestError, hybrid.HybridError, ValueError,
             closure.ClosureError, skillspec.SkillSpecError, source_errors.SourceError, OSError) as exc:
         print(f"update refused: {installer.failure_text(exc)}", file=sys.stderr)
         return EXIT_PARTIAL_FAIL
     failed = False
-    for repo, error in results:
-        if error:
+    for item in plan:
+        name = terminal_text(item.source)
+        if item.action == "skipped":
+            print(f"skipped {name}: {terminal_text(item.detail)}")
+            continue
+        if item.action == "refused" or item.repo is None:
             failed = True
-            print(f"fetch failed {terminal_text(repo.name)}: {terminal_text(error)}", file=sys.stderr)
+            print(f"update refused {name}: {terminal_text(item.detail)}", file=sys.stderr)
+            continue
+        try:
+            git_ops.fetch_repo(item.repo, item.endpoint)
+        except git_ops.GitError as exc:
+            failed = True
+            print(f"fetch failed {name}: {terminal_text(str(exc))}", file=sys.stderr)
         else:
-            print(f"fetched {terminal_text(repo.name)}")
+            print(f"fetched {name}")
     return EXIT_PARTIAL_FAIL if failed else EXIT_OK
 
 

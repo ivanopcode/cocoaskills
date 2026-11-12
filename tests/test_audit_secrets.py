@@ -601,8 +601,10 @@ def test_audit_backend_git_auth_boundary(tmp_path, monkeypatch, capsys, mode, ki
         assert "http.sslVerify=true" in observed["argv"][:clone_index]
         assert "http.followRedirects=false" in observed["argv"][:clone_index]
     else:
+        # A cached clone's provenance is read (git remote) before its ref is
+        # resolved; that local source-resolution command keeps transport auth.
         directory_index = observed["argv"].index("-C")
-        assert observed["argv"][directory_index + 2:directory_index + 4] == ["rev-parse", "--verify"]
+        assert observed["argv"][directory_index + 2:] == ["remote"]
     _assert_backend_child_environment_is_allowlisted(tmp_path, monkeypatch, kind, phase)
 
 
