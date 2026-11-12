@@ -31,11 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `csk check --canonical-urls [--all] [target]` reports repositories declared
   with more than one URL spelling, offline, and exits 1 on any disagreement;
   it is meant for CI. With `--all` and no registered project it checks the
-  global Skillfile. `--network` adds one request per declared HTTP(S) URL and
-  reports URLs that answer with a redirect, with the canonical form when the
-  server identifies it. That request uses no credential helper, prompt, extra
-  header or cookie; Git always lets libcurl read `~/.netrc`, so a netrc entry
-  may still answer an authentication challenge from the same host.
+  global Skillfile. `--network` adds one discovery request per declared
+  HTTP(S) URL and reports URLs that answer with a redirect, with the canonical
+  form when the server identifies it. That request uses no credential helper,
+  prompt, extra header or cookie; Git always lets libcurl read `~/.netrc`, so a
+  netrc entry may still answer an authentication challenge from the same host,
+  which makes it two HTTP requests.
 
 ### Fixed
 
@@ -80,7 +81,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `csk upgrade <project>` or `csk install <project>` would at the start of the
   command, whatever the project order and whether earlier projects failed.
   When one project's upgrade fetches a corrected dependency declaration, the
-  other projects see it from the next command. `csk global update` counts the
+  other projects see it from the next command. Within one project the verdict
+  does not depend on the declaration order in its Skillfile: when a dependency
+  spec read later declares a repository that the command already cloned or
+  fetched with another spelling, the command refuses at that declaration.
+  `csk global update` counts the
   dependency declarations of the global Skillfile's cached skill specs, like
   `csk update`.
 - A declared URL that answers with a redirect fails with csk's own error:
@@ -88,9 +93,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repository, the canonical spelling to declare. csk reads the target from one
   repeat of the refused request and never fetches it. The repeat uses no
   credential helper, prompt, extra header or cookie (a `~/.netrc` entry may
-  answer an authentication challenge from the same host, as for the fetch),
-  and its response headers stay in memory: csk writes no trace file. `csk
-  update` also names the places that declare the redirecting URL.
+  answer an authentication challenge from the same host, as for the fetch,
+  which makes the repeat two HTTP requests), and its response headers stay in
+  memory: csk writes no trace file. When any fetch of a declared URL fails,
+  `csk update` also names the places that declare that URL.
 - `csk install` with a tag or branch missing from the local clone suggests
   `csk upgrade`, which fetches it.
 

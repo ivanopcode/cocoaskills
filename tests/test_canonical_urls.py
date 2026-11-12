@@ -17,7 +17,7 @@ import os
 import sys
 import tempfile
 import threading
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 
@@ -35,6 +35,8 @@ class Gitlab:
     served: Path
     sources: Path
     requests: list[str]
+    # Raw header lines added to every 301, as a server might send them.
+    redirect_headers: list[bytes] = field(default_factory=list)
 
     def publish(self, name: str, tag: str, files: dict[str, str] | None = None) -> str:
         """Commit ``files`` to the source of ``name``, tag it and serve it."""
@@ -70,6 +72,7 @@ def gitlab(tmp_path, monkeypatch):
     sources = tmp_path / 'sources'
     sources.mkdir()
     requests: list[str] = []
+    redirect_headers: list[bytes] = []
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         def do_GET(self):
@@ -82,6 +85,7 @@ def gitlab(tmp_path, monkeypatch):
                 self.send_response(301)
                 self.send_header('Location', f'/team/{parts[2]}.git/{parts[3]}')
                 self.send_header('Content-Length', '0')
+                self._headers_buffer.extend(redirect_headers)
                 self.end_headers()
             else:
                 super().do_GET()
@@ -96,7 +100,7 @@ def gitlab(tmp_path, monkeypatch):
     gitconfig.write_text(f'[url "http://127.0.0.1:{server.server_port}/"]\n insteadOf = https://gitlab.test/\n')
     monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(gitconfig))
     try:
-        yield Gitlab(served, sources, requests)
+        yield Gitlab(served, sources, requests, redirect_headers)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -243,8 +247,8 @@ def test_redirecting_declaration_names_the_canonical_url(
         assert output.err.rstrip().endswith(f'(declared in: {place})')
     assert "HTTP redirects are refused" in output.err
     assert f"The server redirects to the same repository at {NEW.format('b')!r}" in output.err
-    # One refused fetch and one anonymous repeat to read Location; the
-    # stored .git origin is never used as a fallback.
+    # One refused fetch and one repeat without credentials to read Location;
+    # the stored .git origin is never used as a fallback.
     assert gitlab.hits('b') == ['/team/b/info/refs?service=git-upload-pack'] * 2
     assert _origin(repo_b) == NEW.format('b')
     with pytest.raises(git_ops.GitError):
@@ -420,7 +424,7 @@ def test_canonical_url_comes_only_from_a_same_repository_redirect(declared, effe
 # refused, and the curl trace goes to Git's stderr (fd 2), not to a file. A
 # failure that is not a redirect never starts the probe (control).
 @pytest.mark.parametrize('declared', ['redirecting', 'missing'])
-def test_location_probe_is_anonymous_and_only_follows_a_redirect_failure(
+def test_location_probe_adds_no_credentials_and_only_follows_a_redirect_failure(
     gitlab, tmp_path, monkeypatch, declared,
 ):
     gitlab.publish('b', 'v1')
@@ -833,11 +837,15 @@ def _basic(user: str, password: str) -> str:
 # its first request carries no Authorization. The fetch before it (control)
 # does send the helper credentials, the header and the cookie, so the
 # fixture is effective. The documented exception: Git always lets libcurl
-# read ~/.netrc, so a netrc entry answers a 401 from the same host, for the
-# probe as for the fetch, on the same path; the canary never reaches output.
+# read ~/.netrc, so a netrc entry answers a 401, for the probe as for the
+# fetch, on the same path (a second HTTP request); the canary never reaches
+# output. This fixture has one host, so it does not show the same-host
+# limit: that comes from the followRedirects=false pin, which
+# test_location_probe_adds_no_credentials_and_only_follows_a_redirect_failure
+# asserts.
 @pytest.mark.parametrize('credentials', ['helper', 'netrc'])
 @pytest.mark.parametrize('command', ['fetch', 'check-network'])
-def test_redirect_probe_adds_no_credentials_and_netrc_answers_only_the_same_host(
+def test_redirect_probe_adds_no_credentials_and_netrc_answers_on_the_same_path(
     gitlab, auth_gitlab, tmp_path, monkeypatch, credentials, command,
 ):
     gitlab.publish('b', 'v1')
@@ -909,7 +917,8 @@ def test_redirect_probe_writes_no_response_header_to_disk(gitlab, auth_gitlab, t
                 for path in root.rglob('*'):
                     if path.is_file() and not path.is_symlink() and b'SETCOOKIE_CANARY' in path.read_bytes():
                         on_disk.append(str(path))
-            received.append('SETCOOKIE_CANARY' in (proc.stderr or ''))
+            stderr = proc.stderr or b''
+            received.append(b'SETCOOKIE_CANARY' in (stderr if isinstance(stderr, bytes) else stderr.encode()))
         return proc
 
     monkeypatch.setattr(git_ops, '_run', observed)
@@ -974,3 +983,104 @@ def test_insteadof_to_ssh_keeps_one_https_spelling(
     assert log.read_text().splitlines()[0] == "git@gitlab.test git-upload-pack 'team/b.git'"
     assert git_ops.resolve_ref(repo_b, 'tag', 'v2').commit == newest
     assert _origin(repo_b) == NEW.format('b')
+
+
+# R7 N1: the redirect probe reads Git's stderr as bytes, splits it on LF
+# before decoding each line with replacement, and runs without the user's
+# trace settings. So a non-UTF-8 byte in a 301 header, a bare CR followed by
+# text that looks like a Git message, GIT_TRACE_BARE (no timestamp prefix) or
+# a brief trace2 target on stderr leave the verdict unchanged: 'check
+# --network' exits 1 and, like the fetch, names the canonical spelling. A
+# brief trace2 target set in Git's global configuration (which the probe
+# keeps) only adds lines that the classifier ignores. No trace line or
+# header text reaches the output and nothing is written to TMPDIR.
+# Witnesses that fail on bd9eef1 (strict decoding, universal newlines,
+# GIT_TRACE_BARE kept): check-network with the non-UTF-8 or CR header (exit
+# 0, "not verified") or GIT_TRACE_BARE, and fetch with the non-UTF-8 header
+# or GIT_TRACE_BARE (no canonical spelling). Controls that bd9eef1 passes:
+# 'plain', the trace2 rows, and fetch with the CR header.
+_PROBE_HAZARDS = {
+    'plain': (b'', {}, ''),
+    'non-utf8-header': (b'X-Odd: caf\xe9\r\n', {}, ''),
+    'bare-cr-header': (b"X-Cr: a\rfatal: Authentication failed for 'https://gitlab.test/team/b/'\r\n", {}, ''),
+    'trace-bare-env': (b'', {'GIT_TRACE_BARE': '1'}, ''),
+    'trace2-brief-env': (b'', {'GIT_TRACE2': '2', 'GIT_TRACE2_BRIEF': '1'}, ''),
+    'trace2-brief-config': (b'', {}, '[trace2]\n normalTarget = 2\n normalBrief = true\n'),
+}
+
+
+@pytest.mark.parametrize('hazard', list(_PROBE_HAZARDS))
+@pytest.mark.parametrize('command', ['check-network', 'fetch'])
+def test_redirect_probe_verdict_ignores_header_bytes_and_trace_settings(
+    gitlab, tmp_path, csk_home, skills_root, monkeypatch, capsys, hazard, command,
+):
+    extra, environment, gitconfig = _PROBE_HAZARDS[hazard]
+    gitlab.publish('b', 'v1')
+    repo_b = gitlab.clone(tmp_path / 'skills', 'b', NEW.format('b'))
+    _projects(tmp_path, csk_home, skills_root, monkeypatch, app=[_b_declaration(OLD.format('b'))])
+    gitlab.redirect_headers.append(extra)
+    scratch = tmp_path / 'tmpdir'
+    scratch.mkdir()
+    monkeypatch.setenv('TMPDIR', str(scratch))
+    monkeypatch.setattr(tempfile, 'tempdir', None)
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
+    with open(os.environ['GIT_CONFIG_GLOBAL'], 'a') as config:
+        config.write(gitconfig)
+
+    if command == 'check-network':
+        rc = cli.main(['check', '--canonical-urls', '--network', 'app'])
+        output = capsys.readouterr()
+        shown = output.out + output.err
+        assert rc == cli.EXIT_PARTIAL_FAIL, shown
+        assert 'not verified' not in shown
+    else:
+        with pytest.raises(git_ops.GitError) as refused:
+            git_ops.fetch_repo(repo_b, OLD.format('b'))
+        shown = str(refused.value)
+    assert f"declared URL {OLD.format('b')!r} is not canonical" in shown
+    assert f"same repository at {NEW.format('b')!r}" in shown, shown
+    for trace in ('Recv header', 'Send header', '== Info', 'http.c:', 'X-Odd', 'X-Cr', 'caf'):
+        assert trace not in shown
+    assert gitlab.hits('b')[-1] == '/team/b/info/refs?service=git-upload-pack'
+    assert not list(scratch.iterdir())
+
+
+# R7 N2: one project's install verdict does not depend on the declaration
+# order in its Skillfile. 'app' declares b (.git) and a, and a's spec at v1
+# requires b with the old spelling; nothing is cloned yet. In both orders,
+# also as --dry-run, the command refuses b with the same conflict line and
+# installs nothing. bd9eef1 installed with mixed spellings when b came first
+# (install and install --dry-run, b-first rows). 'upgrade' already refused
+# in both orders (control), and with one spelling (aligned control) every
+# command succeeds in both orders and b's clone keeps the .git origin.
+@pytest.mark.parametrize('mixed', [True, False])
+@pytest.mark.parametrize('order', ['b-first', 'a-first'])
+@pytest.mark.parametrize('command', ['install', 'install --dry-run', 'upgrade'])
+def test_project_verdict_does_not_depend_on_declaration_order(
+    gitlab, tmp_path, csk_home, skills_root, monkeypatch, capsys, mixed, order, command,
+):
+    gitlab.publish('b', 'v2')
+    gitlab.publish('a', 'v1', {'csk-skill.json': _spec({'b': (OLD if mixed else NEW).format('b')})})
+    declarations = {'a': {'name': 'a', 'git': NEW.format('a'), 'tag': 'v1'}, 'b': _b_declaration(NEW.format('b'))}
+    names = ['b', 'a'] if order == 'b-first' else ['a', 'b']
+    _, paths = _projects(tmp_path, csk_home, skills_root, monkeypatch, app=[declarations[n] for n in names])
+
+    rc = cli.main([*command.split(), 'app'])
+    output = capsys.readouterr()
+
+    installed = paths['app'] / '.agents' / 'skills'
+    if not mixed:
+        assert rc == cli.EXIT_OK, output.err
+        assert 'is declared with 2 different URL spellings' not in output.err
+        if command != 'install --dry-run':
+            assert (installed / 'a').exists() and (installed / 'b').exists()
+            assert _origin(skills_root / 'b') == NEW.format('b')
+        return
+    assert rc == cli.EXIT_PARTIAL_FAIL, output.err
+    expected = _expected_conflict({
+        OLD.format('b'): ["the skill spec of 'a' at tag v1 (via app -> a -> b)"],
+        NEW.format('b'): [f"{paths['app'] / 'Skillfile.json'} (project app)"],
+    })
+    assert _conflict(output.err) == expected
+    assert not (installed / 'a').exists() and not (installed / 'b').exists()
