@@ -1281,8 +1281,10 @@ def update(
     result = GlobalResult()
     try:
         global_manifest = load_manifest(config.path.parent)
+        # Fetch-only, like 'csk update': no closure is resolved, so the global
+        # root keeps its registry entries, including the dependency spellings
+        # read from cached specs, and both commands judge on the same view.
         guard = installer.registry_spelling_guard(config)
-        guard.enter_root(canonical_urls.GLOBAL_ROOT_ID, "global", "global")
         base = global_manifest.path.parent
         for decl in global_manifest.skills:
             if decl.git is not None:

@@ -30,9 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `csk check --canonical-urls [--all] [target]` reports repositories declared
   with more than one URL spelling, offline, and exits 1 on any disagreement;
-  it is meant for CI. `--network` adds one anonymous request per declared
-  HTTP(S) URL and reports URLs that answer with a redirect, with the canonical
-  form when the server identifies it.
+  it is meant for CI. With `--all` and no registered project it checks the
+  global Skillfile. `--network` adds one request per declared HTTP(S) URL and
+  reports URLs that answer with a redirect, with the canonical form when the
+  server identifies it. That request uses no credential helper, prompt, extra
+  header or cookie; Git always lets libcurl read `~/.netrc`, so a netrc entry
+  may still answer an authentication challenge from the same host.
 
 ### Fixed
 
@@ -73,10 +76,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `csk upgrade`, `csk install` (when it clones), `csk global update` and
   `csk global upgrade` apply the same canonical-URL rule as `csk update`, over
   the same registry scan, so the commands give one verdict on one state.
+  `csk upgrade --all` and `csk install --all` judge each project as
+  `csk upgrade <project>` or `csk install <project>` would at the start of the
+  command, whatever the project order and whether earlier projects failed.
+  When one project's upgrade fetches a corrected dependency declaration, the
+  other projects see it from the next command. `csk global update` counts the
+  dependency declarations of the global Skillfile's cached skill specs, like
+  `csk update`.
 - A declared URL that answers with a redirect fails with csk's own error:
   the URL is not canonical, and, when the redirect target is the same
   repository, the canonical spelling to declare. csk reads the target from one
-  anonymous repeat of the refused request and never fetches it.
+  repeat of the refused request and never fetches it. The repeat uses no
+  credential helper, prompt, extra header or cookie (a `~/.netrc` entry may
+  answer an authentication challenge from the same host, as for the fetch),
+  and its response headers stay in memory: csk writes no trace file. `csk
+  update` also names the places that declare the redirecting URL.
 - `csk install` with a tag or branch missing from the local clone suggests
   `csk upgrade`, which fetches it.
 
