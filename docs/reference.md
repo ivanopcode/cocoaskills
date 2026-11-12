@@ -147,120 +147,47 @@ Python с python.org использует хранилище Windows. Миним
 * `Skillfile.dev.json` подменяет провайдеров локально путем указания пути к рабочей копии или git-ссылки. Файл не отслеживается в git. Строгий режим аудита отвергает установки с активными подменами.
 * Параметр `allowed_sources` в `~/.cocoaskills/config.json` задает разрешенные префиксы `host/path` для git-источников. Установщик нормализует SSH и HTTPS URL для проверки идентичности источника.
 
-## Canonical source URLs
+## Канонические URL источников (Canonical source URLs)
 
-A repository has exactly one canonical URL spelling. Every project, branch,
-worktree, global or hybrid declaration and dependency declaration that names
-the repository uses that one spelling. csk treats mixed spellings as an
-invalid state: it reports them and does not choose a winner.
+У репозитория ровно одно каноническое написание URL. Каждый проект, ветка, worktree, глобальное или hybrid-объявление и объявление зависимости, которые называют репозиторий, используют это одно написание. csk считает несколько написаний одного репозитория недопустимым состоянием: команда сообщает о них и сама не выбирает ни одно.
 
-### Why the rule exists
+### Зачем нужно правило
 
-Skill clones under `skills_root` are shared. Every registered project and
-every registered worktree (csk registers each checkout it installs) uses the
-same clone. csk fetches the declared URL, never the clone's stored `origin`,
-and rewrites `origin` only after that fetch succeeds. Two spellings of one
-repository would make csk alternate between them. Typically one of them
-answers with an HTTP redirect, for example a GitLab path without `.git`, and
-csk refuses redirects (`http.followRedirects=false`) for security. A fallback
-to the stored `origin` would hide a broken declaration until the clone is
-recreated, so csk has none.
+Клоны скиллов в `skills_root` общие. Все зарегистрированные проекты и все зарегистрированные worktree (csk регистрирует каждую рабочую копию, в которую устанавливает скиллы) используют один и тот же клон. csk выполняет fetch по объявленному URL, никогда по сохранённому `origin` клона, и переписывает `origin` только после успешного fetch. При двух написаниях одного репозитория csk переключался бы между ними. Обычно одно из написаний отвечает HTTP-перенаправлением (например, путь GitLab без `.git`), а csk из соображений безопасности отказывается следовать перенаправлениям (`http.followRedirects=false`). Откат к сохранённому `origin` скрыл бы ошибочное объявление до пересоздания клона, поэтому csk такого отката не делает.
 
-### Repository identity
+### Идентичность репозитория
 
-Two URLs name the same repository when their identities are equal:
+Два URL называют один репозиторий, когда их идентичности совпадают:
 
-- network URLs: the lowercase host plus the case-sensitive path, ignoring the
-  transport (scheme and user), trailing slashes and one trailing `.git`.
-  `https://host/team/x`, `https://host/team/x.git`, `https://host/team/x/`,
-  `https://Host/team/x.git` and `git@host:team/x.git` are one repository.
-  Different hosts or different paths are never merged; explicit ports, queries,
-  fragments and HTTP(S) userinfo are refused outright;
-- local sources: the resolved absolute path. A relative path resolves against
-  the directory of the declaring Skillfile (or `Skillfile.dev.json`).
+* Для сетевых URL идентичность состоит из хоста в нижнем регистре и пути с учётом регистра. Транспорт (схема и пользователь), завершающие слеши и одно завершающее `.git` не учитываются. `https://host/team/x`, `https://host/team/x.git`, `https://host/team/x/`, `https://Host/team/x.git` и `git@host:team/x.git` называют один репозиторий. Разные хосты и разные пути никогда не объединяются; явные порты, query, фрагменты и userinfo в HTTP(S) URL csk отклоняет сразу.
+* Для локальных источников идентичность равна разрешённому абсолютному пути. Относительный путь разрешается от каталога объявляющего Skillfile (или `Skillfile.dev.json`).
 
-The spelling is the exact string csk fetches: the declared URL as written, or
-the anchored absolute path for a relative local path. Two declarations of one
-repository agree only when their spellings are equal.
+Написание означает точную строку, по которой csk выполняет fetch: объявленный URL в том виде, в каком он записан, или абсолютный путь для относительного локального пути, разрешённый от каталога объявления. Два объявления одного репозитория согласованы, только если их написания совпадают.
 
-To connect over SSH and keep one spelling, declare the HTTPS URL everywhere
-and map it to SSH in your own Git configuration, for example
-`git config --global url."git@host:".insteadOf "https://host/"`. csk compares
-declarations before Git rewrites them, so the rewrite adds no spelling, and
-the clone's `origin` keeps the declared HTTPS URL. Declaring the SSH form in
-one place and the HTTPS form in another is two spellings and refuses.
+Чтобы подключаться по SSH и сохранить одно написание, объявите HTTPS URL во всех местах и сопоставьте его с SSH в своей конфигурации Git, например `git config --global url."git@host:".insteadOf "https://host/"`. csk сравнивает объявления до того, как Git их перепишет, поэтому правило не добавляет второе написание, а `origin` клона сохраняет объявленный HTTPS URL. SSH-форма в одном месте и HTTPS-форма в другом дают два написания, и команда отказывает.
 
-### What csk does
+### Что делает csk
 
-- `csk update`, `csk upgrade`, `csk global update` and `csk global upgrade`
-  refuse to fetch a repository whose identity is declared with more than one
-  spelling. `csk install` refuses to clone such a repository; installing from
-  an existing clone does not contact any URL and is not affected.
-- The refusal is per repository. It names the repository, every spelling and
-  every place that declares it: the Skillfile path and project alias, the
-  global or hybrid manifest, or the skill spec and tag of the skill that
-  declares the dependency, with its chain. Every clone of that repository is
-  refused, including an undeclared clone whose stored `origin` names it.
-  `csk update` still fetches the other clones; `csk upgrade` fails the
-  projects that need the repository and still upgrades the others.
-- `csk update` and `csk global update` read the registered schema-1 projects,
-  the applicable hybrid declarations, the global Skillfile and the dependency
-  specs cached in the clones at the declared refs. `csk upgrade` reads the
-  same registry and takes the declarations of the project it upgrades live,
-  after fetching them, so the commands reach the same verdict on the same
-  state. `csk upgrade --all` and `csk install --all` judge each project on its
-  own: its live declarations plus the registry as read before the command's
-  first clone or fetch, so the verdict does not depend on the project order or
-  on earlier projects failing. A clone that an earlier project fetched or
-  cloned in the same command is checked again. When one project's upgrade
-  fetches a corrected dependency declaration, the other projects see it from
-  the next command.
-- A dependency read from cached HEAD, because its declared ref is not cached
-  yet, only locates clones; it declares no spelling. `csk upgrade` fetches the
-  declared ref and checks its dependencies.
-- When the declared URL answers with a redirect, the fetch fails with
-  `declared URL '...' is not canonical`. csk then repeats the discovery request
-  once to read the redirect's `Location`. The repeat uses no credential helper,
-  prompt, cookie file or extra header. Git always lets libcurl read
-  `~/.netrc`, so a netrc entry for the host may still answer an authentication
-  challenge, as it does for the fetch, and only for that same host because
-  redirects stay refused. csk reads the response headers from Git's trace in
-  memory and writes no trace file. If the target is the same repository on the
-  same scheme, host and port, differing only in `.git` or a trailing slash, the
-  error names the canonical spelling. Otherwise it asks for the URL the server
-  serves without a redirect. csk never fetches the redirect target and never
-  prints it. `csk update` adds the places that declare the redirecting URL.
+* `csk update`, `csk upgrade`, `csk global update` и `csk global upgrade` отказываются выполнять fetch репозитория, идентичность которого объявлена в нескольких написаниях. `csk install` отказывается клонировать такой репозиторий. Установка из существующего клона не обращается ни к одному URL, и правило её не затрагивает.
+* Отказ относится к репозиторию. Сообщение называет репозиторий, каждое написание и каждое место объявления: путь к Skillfile и алиас проекта, глобальный или hybrid-манифест либо спецификацию и тег скилла, который объявляет зависимость, вместе с цепочкой зависимостей. csk отказывает для каждого клона этого репозитория, включая необъявленный клон, сохранённый `origin` которого называет этот репозиторий. `csk update` при этом выполняет fetch остальных клонов, а `csk upgrade` завершает ошибкой проекты, которым нужен этот репозиторий, и обновляет остальные.
+* `csk update` и `csk global update` читают зарегистрированные проекты schema 1, применимые hybrid-объявления, глобальный Skillfile и спецификации зависимостей, сохранённые в клонах на объявленных refs. `csk upgrade` читает тот же реестр, а объявления обновляемого проекта берёт свежими, после их fetch, поэтому на одном состоянии команды выносят один вердикт. `csk upgrade --all` и `csk install --all` оценивают каждый проект отдельно: по его свежим объявлениям и по реестру, прочитанному до первого клонирования или fetch в команде. Поэтому вердикт не зависит ни от порядка проектов, ни от ошибок в предыдущих проектах. Клон, который предыдущий проект той же команды получил через fetch или клонирование, csk проверяет ещё раз. Когда upgrade одного проекта получает исправленное объявление зависимости, другие проекты видят его начиная со следующей команды.
+* Внутри одного проекта вердикт не зависит от порядка объявлений в Skillfile. Спецификацию зависимости csk читает только после того, как получил клон объявляющего скилла. Если эта спецификация объявляет уже клонированный или скачанный в той же команде репозиторий в другом написании, команда отказывает на этом объявлении. Клонирование или fetch, выполненные до этого, остаются.
+* Зависимость, прочитанная из закешированного HEAD, потому что объявленный ref ещё не скачан, только помогает найти клоны и не объявляет написание. `csk upgrade` выполняет fetch объявленного ref и проверяет его зависимости.
+* Если объявленный URL отвечает перенаправлением, fetch завершается ошибкой `declared URL '...' is not canonical`. Затем csk один раз повторяет начальный запрос Git к `info/refs`, чтобы прочитать заголовок `Location` перенаправления. Повтор идёт без credential helper, запроса пароля, файла cookie и дополнительных заголовков. Git всегда разрешает libcurl читать `~/.netrc`, поэтому запись netrc для хоста может ответить на запрос аутентификации, как и при fetch; тогда повтор состоит из двух HTTP-запросов. Ответить netrc может только тому же хосту, потому что перенаправления по-прежнему запрещены. csk читает заголовки ответа из трассировки Git в памяти и не пишет файл трассировки. Если перенаправление ведёт в тот же репозиторий на той же схеме, хосте и порту и отличается только `.git` или завершающим слешем, ошибка называет каноническое написание. Иначе ошибка просит объявить URL, который сервер обслуживает без перенаправления. csk никогда не выполняет fetch цели перенаправления и не выводит её. `csk update` добавляет к любой ошибке fetch по объявленному URL места, где этот URL объявлен (`declared in: ...`).
 
-### Fix a project, its branches and the registry
+### Исправление проекта, его веток и реестра
 
-1. Pick the canonical spelling: the clone URL your Git host shows, the one
-   that answers without a redirect. `csk check --canonical-urls --network`
-   reports redirecting declarations and names the canonical form when the
-   server identifies it.
-2. Use that spelling in the project Skillfile on every branch that is checked
-   out anywhere, including long-lived branches such as `master` or `main`.
-   Merge or cherry-pick the change into older worktrees you keep.
-3. Dependency declarations live in the skill spec of the declaring skill at a
-   tag. Publish a new tag of that skill with the canonical spelling and pin it.
-4. Clean up the registry. csk lists every registered project in the `projects`
-   object of its config (`csk config show` prints the path). Remove the
-   entries of worktrees you no longer use, or delete those worktrees: a
-   registered path without a Skillfile is ignored.
-5. Run `csk check --canonical-urls --all`. It exits 0 when every repository has
-   one spelling. Then `csk upgrade` or `csk update` fetches the canonical URL
-   and rewrites the clone's `origin` itself; you do not edit clones by hand.
+1. Выберите каноническое написание: URL клонирования, который показывает ваш Git-хостинг и который отвечает без перенаправления. `csk check --canonical-urls --network` сообщает об объявлениях с перенаправлением и называет каноническую форму, когда сервер её указывает.
+2. Используйте это написание в Skillfile проекта на каждой ветке, которая где-либо извлечена, включая долгоживущие ветки вроде `master` или `main`. Перенесите изменение через merge или cherry-pick в старые worktree, которые вы оставляете.
+3. Объявления зависимостей находятся в спецификации объявляющего скилла на теге. Опубликуйте новый тег этого скилла с каноническим написанием и закрепите его.
+4. Очистите реестр. csk хранит все зарегистрированные проекты в объекте `projects` своей конфигурации (путь к ней выводит `csk config show`). Удалите записи worktree, которыми вы больше не пользуетесь, или удалите сами worktree: зарегистрированный путь без Skillfile csk пропускает.
+5. Запустите `csk check --canonical-urls --all`. Команда завершается с кодом 0, когда у каждого репозитория одно написание. После этого `csk upgrade` или `csk update` выполняет fetch по каноническому URL и сам переписывает `origin` клона; править клоны вручную не нужно.
 
-### Run the check in CI
+### Проверка в CI
 
-`csk check --canonical-urls` compares one Skillfile with its dependency specs
-and the registry, offline, and exits 1 on any disagreement. `--all` checks
-every registered project, or only the global Skillfile when no project is
-registered. `--network` adds one request per declared HTTP(S) URL, made like
-the repeat above, and exits 1 when a URL redirects. A server that requires
-authentication before it would redirect reports `not verified` and does not
-fail the check.
+`csk check --canonical-urls` без сетевых обращений сравнивает один Skillfile со спецификациями его зависимостей и с реестром и при любом расхождении завершается с кодом 1. С `--all` команда проверяет все зарегистрированные проекты, а если ни один проект не зарегистрирован, только глобальный Skillfile. `--network` добавляет для каждого объявленного HTTP(S) URL один запрос к `info/refs`, устроенный как повтор выше (два HTTP-запроса, если на запрос аутентификации отвечает `~/.netrc`), и завершает проверку с кодом 1, когда URL отвечает перенаправлением. Сервер, который требует аутентификацию раньше, чем ответил бы перенаправлением, даёт `not verified` и не проваливает проверку.
 
-The commands below check a checkout in CI:
+Следующие команды проверяют рабочую копию в CI:
 
 ```bash
 csk bootstrap --if-missing --non-interactive --skills-root "$PWD/.csk-skills"
@@ -269,21 +196,13 @@ csk install .
 csk check --canonical-urls .
 ```
 
-The first check covers the project's own declarations. Dependency specs are
-read from clones under `skills_root`, so the check after `csk install` also
-covers dependency declarations. The output lists dependencies it could not
-read as `note: not checked`.
+Первая проверка охватывает собственные объявления проекта. Спецификации зависимостей csk читает из клонов в `skills_root`, поэтому проверка после `csk install` охватывает и объявления зависимостей. Зависимости, которые прочитать не удалось, вывод перечисляет как `note: not checked`.
 
-The rule covers schema-1 declarations, which share `skills_root` clones.
-Schema-2/3 sources are acquired per project, and `Skillfile.dev.json`
-substitutions use their own clones; neither joins the comparison.
+Правило распространяется на объявления schema 1, которые делят клоны в `skills_root`. Источники schema 2/3 приобретаются для каждого проекта отдельно, а подмены из `Skillfile.dev.json` используют собственные клоны; ни те, ни другие в сравнении не участвуют.
 
-### Credentials in URL rewrites
+### Учётные данные при переписывании URL
 
-csk refuses HTTP(S) URLs with userinfo, including an effective URL produced by
-a Git rewrite such as `url."https://user:token@host/".insteadOf
-"https://host/"`. Configure a credential helper instead, for example a CI job
-token through `git credential approve` or the platform's helper.
+csk отклоняет HTTP(S) URL с userinfo, в том числе итоговый URL после переписывания Git, например `url."https://user:token@host/".insteadOf "https://host/"`. Вместо этого настройте credential helper, например передайте токен задания CI через `git credential approve` или используйте helper платформы.
 
 ## Источники Skillfile schema 2
 

@@ -278,14 +278,18 @@ def build_closure(
     ``spelling_guard`` applies the canonical-URL rule
     (:mod:`csk.canonical_urls`): every declaration is noted when it is
     enqueued, and a repository is refused before it is cloned or fetched
-    when its identity is declared with more than one spelling. With
-    ``fetch_existing`` a repeated declaration with another spelling refuses
-    too, even after its repository was fetched. A clone in
-    ``fetched_repos`` (fetched or cloned earlier in the same command, possibly
-    for another root) is checked as if it had to be fetched or cloned again,
-    so each root gets the verdict it would get on its own.
+    when its identity is declared with more than one spelling. A repeated
+    declaration is checked too whenever its repository was checked when it
+    was cloned or fetched (always with ``fetch_existing``), so a spelling that
+    only a later dependency spec reveals refuses in every declaration order.
+    A clone in ``fetched_repos`` (fetched or cloned earlier in the same
+    command, possibly for another root) is checked as if it had to be fetched
+    or cloned again, so each root gets the verdict it would get on its own.
     """
     nodes: dict[str, ClosureNode] = {}
+    # Repositories whose spelling was checked when this resolution cloned or
+    # fetched them, or found them cloned or fetched earlier in the command.
+    spelling_checked: set[Path] = set()
     bases = declaration_bases or {}
     fetched_repos = fetched_repos if fetched_repos is not None else set()
     label = spelling_guard.label if spelling_guard is not None else ""
@@ -329,6 +333,7 @@ def build_closure(
                     stack=stack,
                     read_only=read_only,
                     spelling_guard=spelling_guard,
+                    spelling_checked=spelling_checked,
                 )
             nodes[item.name] = node
             for requirement in node.spec.requirements.values():
@@ -358,7 +363,10 @@ def build_closure(
             _unify(node, item, error_factory=error_factory, ref_comparator=ref_comparator)
             if node_resolver is None and node.substituted is None and item.git is not None:
                 git_ops.validate_repo_source(node.repo, item.declared_url())
-                if spelling_guard is not None and fetch_existing:
+                # The repository was contacted (or would have been) on an
+                # earlier view: the spelling this declaration adds must agree
+                # too, whichever of the two declarations came first.
+                if spelling_guard is not None and (fetch_existing or node.repo.resolve() in spelling_checked):
                     _require_canonical(spelling_guard, item, item.declared_url())
         node.edges.append(item.edge)
         node.chains.append(item.chain)
@@ -471,6 +479,7 @@ def _resolve_node(
     stack: ExitStack | None,
     read_only: bool,
     spelling_guard: canonical_urls.SpellingGuard | None = None,
+    spelling_checked: set[Path] | None = None,
 ) -> ClosureNode:
     substituted: str | None = None
     if substitution is not None and substitution.path is not None:
@@ -503,6 +512,7 @@ def _resolve_node(
             stack=stack,
             read_only=read_only,
             spelling_guard=spelling_guard,
+            spelling_checked=spelling_checked,
         )
         try:
             resolved = git_ops.resolve_ref(repo, item.ref.kind, item.ref.value)
@@ -569,6 +579,7 @@ def _ensure_repo(
     stack: ExitStack | None,
     read_only: bool,
     spelling_guard: canonical_urls.SpellingGuard | None = None,
+    spelling_checked: set[Path] | None = None,
 ) -> Path:
     repo = config.skills_root / item.source
     if item.git is not None:
@@ -587,6 +598,8 @@ def _ensure_repo(
         # if this root had to fetch or clone it itself.
         if spelling_guard is not None and (fetch or repo_key in fetched_repos):
             _require_canonical(spelling_guard, item, declared, repo=repo, source=source)
+            if spelling_checked is not None:
+                spelling_checked.add(repo_key)
         if fetch and repo_key not in fetched_repos:
             try:
                 if declared is None:
@@ -610,6 +623,8 @@ def _ensure_repo(
         git_ops.clone_repo(declared or item.git, destination)
     except git_ops.GitError as exc:
         raise ClosureError(f"Failed to clone {item.name} from {item.git}: {exc}") from exc
+    if spelling_guard is not None and spelling_checked is not None:
+        spelling_checked.add(destination.resolve())
     if use_cache:
         # Also without fetch_existing (install): a later root that finds this
         # new clone is checked as if it had to clone it.

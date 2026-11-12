@@ -409,22 +409,29 @@ def canonical_from_redirect(declared: str, effective_url: str, location: str | N
 _TRACE_RECORD = re.compile(r"\d{2}:\d{2}:\d{2}\.\d+ ")
 
 
-def _split_curl_trace(stderr: str) -> tuple[list[str], str]:
-    """Split Git's stderr into curl trace records and Git's own messages.
+def _split_curl_trace(stderr: bytes) -> tuple[list[str], str]:
+    """Split Git's raw stderr into curl trace records and Git's own messages.
 
-    Every Git trace record starts with an ``HH:MM:SS.micro`` timestamp; Git's
-    messages (``fatal:``, ``error:``, ``remote:`` ...) never do. The messages
+    Git writes each trace record as one line that starts with an
+    ``HH:MM:SS.micro`` timestamp (the probe runs without the user's trace
+    settings, so ``GIT_TRACE_BARE`` cannot remove it); Git's messages
+    (``fatal:``, ``error:``, ``remote:`` ...) never start that way. The bytes
+    are split on LF only, before decoding, and each line is decoded on its
+    own with replacement characters: a non-UTF-8 byte or a bare CR that a
+    server puts in a response header stays inside its record and cannot
+    break the split or turn header text into a Git message. The messages
     only feed the failure classifier, which matches anchored Git and curl
     frames; neither part is printed.
     """
     records: list[str] = []
     messages: list[str] = []
-    for line in stderr.split("\n"):
+    for raw in stderr.split(b"\n"):
+        line = raw.decode("utf-8", "replace")
         (records if _TRACE_RECORD.match(line) else messages).append(line)
     return records, "\n".join(messages)
 
 
-def _anonymous_discovery(
+def _discovery_without_credentials(
     target: str, effective_url: str, repo: Path | None,
 ) -> tuple[subprocess.CompletedProcess[str] | None, str | None]:
     """Make Git's discovery request for ``target`` once, without csk credentials.
@@ -438,17 +445,23 @@ def _anonymous_discovery(
 
     The curl trace goes to Git's stderr pipe, never to a file, so no response
     header (``Set-Cookie`` included) reaches the disk, also if csk is killed.
-    Only the Location header is read from it. Returns the finished process,
-    whose stderr holds Git's own messages without the trace (None when Git
-    could not run), and the refused redirect's Location.
+    The user's trace environment (``GIT_TRACE*``, ``GIT_CURL_VERBOSE``) is
+    removed, so the curl trace keeps Git's default record format with its
+    timestamp prefix. Other lines on the pipe (a trace2 target configured in
+    Git's own configuration, say) count as Git's messages; the classifier
+    only accepts anchored outcome records. Only the Location header is read
+    from the trace. Returns the finished process, whose stderr holds Git's
+    own messages without the trace (None when Git could not run), and the
+    refused redirect's Location.
     """
     if urlsplit(effective_url).scheme.lower() not in {"http", "https"}:
         return None, None
     try:
         with _private_trust() as trust:
-            environment = _trust_environment(trust)
-            for key in ("GIT_TRACE", "GIT_TRACE_PACKET", "GIT_CURL_VERBOSE"):
-                environment.pop(key, None)
+            environment = {
+                key: value for key, value in _trust_environment(trust).items()
+                if not key.upper().startswith("GIT_TRACE") and key.upper() != "GIT_CURL_VERBOSE"
+            }
             environment.update({
                 "GIT_TRACE_CURL": "2",
                 "GIT_TRACE_CURL_NO_DATA": "1",
@@ -466,12 +479,13 @@ def _anonymous_discovery(
             ]
             proc = _run(
                 list(git_trust.pinned_command(command, environment, url=effective_url)),
-                text=True, capture_output=True, env=environment, timeout=REDIRECT_PROBE_TIMEOUT,
+                capture_output=True, env=environment, timeout=REDIRECT_PROBE_TIMEOUT,
             )
     except (GitError, OSError, subprocess.SubprocessError, ValueError):
         return None, None
-    records, messages = _split_curl_trace(proc.stderr or "")
-    proc = subprocess.CompletedProcess(proc.args, proc.returncode, proc.stdout, messages)
+    records, messages = _split_curl_trace(proc.stderr or b"")
+    stdout = (proc.stdout or b"").decode("utf-8", "replace")
+    proc = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, messages)
     if proc.returncode == 0:
         return proc, None
     marker = "<= Recv header:"
@@ -484,8 +498,8 @@ def _anonymous_discovery(
 
 
 def _redirect_location(target: str, effective_url: str, repo: Path | None) -> str | None:
-    """Location of a redirect Git just refused, via one anonymous repeat of the request."""
-    return _anonymous_discovery(target, effective_url, repo)[1]
+    """Location of a redirect Git just refused, from one repeat of the request without credentials."""
+    return _discovery_without_credentials(target, effective_url, repo)[1]
 
 
 @dataclass(frozen=True)
@@ -501,9 +515,10 @@ def probe_declared_url(url: str) -> RedirectProbe:
     """Check whether a declared HTTP(S) URL answers with a redirect.
 
     Used by ``csk check --canonical-urls --network``: one discovery request
-    per URL, under the same trust pins as a fetch, with redirects refused and
-    no credential helper, prompt, extra header or cookie (see
-    :func:`_anonymous_discovery` for ``~/.netrc``). A server that requires
+    per URL (two HTTP requests when ``~/.netrc`` answers an authentication
+    challenge), under the same trust pins as a fetch, with redirects refused
+    and no credential helper, prompt, extra header or cookie (see
+    :func:`_discovery_without_credentials`). A server that requires
     authentication before it would redirect reports ``unverified``.
     """
     validate_git_url(url)
@@ -520,7 +535,7 @@ def probe_declared_url(url: str) -> RedirectProbe:
     validate_git_url(effective_url)
     if urlsplit(effective_url).scheme.lower() not in {"http", "https"}:
         return RedirectProbe("ok", detail="not an HTTP(S) endpoint; redirects do not apply")
-    proc, location = _anonymous_discovery(url, effective_url, None)
+    proc, location = _discovery_without_credentials(url, effective_url, None)
     if proc is None:
         return RedirectProbe("unverified", detail="the request could not be completed")
     if proc.returncode == 0:

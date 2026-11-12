@@ -737,10 +737,11 @@ def _build_check_parser() -> argparse.ArgumentParser:
             "  check compares the target Skillfile (or, with --all, every registered\n"
             "  project) with the registry and the dependency specs cached under\n"
             "  skills_root, and exits 1 on any disagreement. --network adds one\n"
-            "  request per declared HTTP(S) URL and reports URLs that redirect. The\n"
-            "  request uses no credential helper, prompt, extra header or cookie;\n"
-            "  libcurl may still answer an authentication challenge from the same host\n"
-            "  with ~/.netrc credentials, as it does for a fetch.\n\n"
+            "  discovery request per declared HTTP(S) URL and reports URLs that\n"
+            "  redirect. The request uses no credential helper, prompt, extra header or\n"
+            "  cookie; libcurl may still answer an authentication challenge from the\n"
+            "  same host with ~/.netrc credentials, as it does for a fetch, which makes\n"
+            "  it two HTTP requests.\n\n"
             "Exit codes:\n"
             "  0 every checked Skillfile is valid, 1 one or more are invalid,\n"
             "  2 config error, 3 lock contention.\n\n"
@@ -767,8 +768,8 @@ def _build_check_parser() -> argparse.ArgumentParser:
         "--network",
         action="store_true",
         help="with --canonical-urls: also report declared HTTP(S) URLs that answer with a redirect "
-        "(one request per URL without credential helpers, prompts, extra headers or cookies; "
-        "~/.netrc may still answer an authentication challenge from the same host)",
+        "(one discovery request per URL without credential helpers, prompts, extra headers or cookies; "
+        "~/.netrc may still answer an authentication challenge from the same host, with a second request)",
     )
     return parser
 
