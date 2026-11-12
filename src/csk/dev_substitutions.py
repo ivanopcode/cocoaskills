@@ -36,6 +36,9 @@ class Substitution:
     git: str | None = None
     ref_kind: str | None = None
     ref_value: str | None = None
+    # Directory holding Skillfile.dev.json: a relative local ``git`` path
+    # resolves against it, exactly like a relative ``path`` entry.
+    base: Path | None = None
 
     def describe(self) -> str:
         if self.path is not None:
@@ -211,7 +214,7 @@ def _parse_entry(project_root: Path, name: str, entry: Any, *, schema: int) -> S
     value = ref.get("value")
     if not _valid_bounded_string(value, 1024 if schema == 2 else None):
         raise DevSubstitutionError(f"{label}.ref.value must be a non-empty string")
-    return Substitution(name=name, git=git_raw, ref_kind=kind, ref_value=value)
+    return Substitution(name=name, git=git_raw, ref_kind=kind, ref_value=value, base=project_root)
 
 
 def _parse_build_repository_substitutions(

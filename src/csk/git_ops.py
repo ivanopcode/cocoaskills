@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -12,7 +13,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Literal, overload
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 from urllib.request import url2pathname
 
 from . import git_trust
@@ -126,11 +127,10 @@ def clone_repo(remote_url: str, destination: Path) -> None:
         from .git_admission import _classify_git_failure_output
 
         if _classify_git_failure_output(stderr) == "redirect":
-            raise GitError(
-                "git clone failed: HTTP redirects are refused. Verify the provider's "
-                "canonical Git clone URL in its Clone UI or API; .git is provider-specific. "
-                "Do not use an arbitrary redirect target: it may be a login or browser page."
+            canonical = canonical_from_redirect(
+                remote_url, effective_url, _redirect_location(remote_url, effective_url, None),
             )
+            raise GitError(f"git clone failed: {redirect_refusal(remote_url, canonical)}")
         raise GitError(f"git clone failed for {remote_url} -> {destination}: {stderr}")
 
 
@@ -323,8 +323,12 @@ def fetch_repo(repo: Path, declared_url: str | None = None) -> None:
             from .git_admission import _classify_git_failure_output
 
             failure = _classify_git_failure_output(proc.stderr)
-            detail = "HTTP redirects are refused" if failure == "redirect" else failure
-            raise GitError(f"git fetch failed in {repo}: {detail}; verify the declared endpoint and authentication")
+            if failure == "redirect":
+                canonical = canonical_from_redirect(
+                    fetch_target, effective_url, _redirect_location(fetch_target, effective_url, repo),
+                )
+                raise GitError(f"git fetch failed in {repo}: {redirect_refusal(fetch_target, canonical)}")
+            raise GitError(f"git fetch failed in {repo}: {failure}; verify the declared endpoint and authentication")
         raise GitError(f"git fetch failed in {repo}: {proc.stderr.strip()}")
     if declared_url is not None and stored_url != fetch_target:
         updated = git(repo, ["remote", "set-url", "--", remote, fetch_target], check=False)
@@ -336,6 +340,169 @@ def fetch_repo(repo: Path, declared_url: str | None = None) -> None:
                 "Fetch succeeded but the stored remote URL is still ambiguous; "
                 "configure exactly one URL for the fetch remote, including included Git configuration"
             )
+
+
+REDIRECT_PROBE_TIMEOUT = 60
+
+
+def redirect_refusal(declared: str, canonical: str | None) -> str:
+    """csk's own refusal for a declared URL that the server answers with a redirect."""
+    head = (
+        f"declared URL {display_url(declared)!r} is not canonical: the server answers it with an "
+        "HTTP redirect, and HTTP redirects are refused"
+    )
+    where = (
+        "everywhere this repository is declared (Skillfiles on every branch and worktree, global "
+        "and hybrid declarations, dependency declarations); see 'Canonical source URLs' in the csk documentation"
+    )
+    if canonical is not None:
+        return (
+            f"{head}. The server redirects to the same repository at {display_url(canonical)!r}: "
+            f"declare exactly that URL {where}"
+        )
+    return (
+        f"{head}. Declare the URL the server serves without a redirect, for example with .git "
+        "(check the provider's canonical Git clone URL in its Clone UI or API; .git is provider-specific; "
+        "do not copy an arbitrary redirect target: it may be a login or browser page), "
+        f"{where}"
+    )
+
+
+def _strip_repository_suffix(path: str) -> str:
+    path = path.rstrip("/")
+    return path[: -len(".git")].rstrip("/") if path.endswith(".git") else path
+
+
+def canonical_from_redirect(declared: str, effective_url: str, location: str | None) -> str | None:
+    """Derive the canonical spelling of ``declared`` from a refused redirect.
+
+    Only a redirect of Git's discovery request to the same scheme, host, port
+    and repository path, differing in the ``.git`` suffix or a trailing slash,
+    determines it. The result is a respelling of the declared URL itself; the
+    raw Location (which may carry credentials, queries or a login page) is
+    never returned.
+    """
+    if not location:
+        return None
+    request = effective_url.rstrip("/") + "/info/refs?service=git-upload-pack"
+    try:
+        source, target, origin = urlsplit(request), urlsplit(urljoin(request, location.strip())), urlsplit(declared)
+        same_endpoint = (
+            target.scheme.lower() == source.scheme.lower()
+            and target.hostname == source.hostname
+            and target.port == source.port
+        )
+    except ValueError:
+        return None
+    if not same_endpoint or not target.path.endswith("/info/refs") or origin.scheme.lower() not in {"http", "https"}:
+        return None
+    served = target.path[: -len("/info/refs")]
+    requested = source.path[: -len("/info/refs")]
+    if not served or _strip_repository_suffix(served) != _strip_repository_suffix(requested):
+        return None
+    suffix = ".git" if served.rstrip("/").endswith(".git") else ""
+    host = origin.netloc.rpartition("@")[2]
+    canonical = urlunsplit((origin.scheme, host, _strip_repository_suffix(origin.path) + suffix, "", ""))
+    return None if canonical == declared or not origin.path.strip("/") else canonical
+
+
+def _anonymous_discovery(
+    target: str, effective_url: str, repo: Path | None,
+) -> tuple[subprocess.CompletedProcess[str] | None, str | None]:
+    """Make Git's discovery request for ``target`` once, anonymously.
+
+    The same trust pins apply and redirects stay refused; credential helpers,
+    prompts, cookie files and extra HTTP headers are disabled, so no
+    credential is sent. Only the Location header is read from a private curl
+    trace, which is deleted with its directory. Returns the finished process
+    (None when Git could not run) and the refused redirect's Location.
+    """
+    if urlsplit(effective_url).scheme.lower() not in {"http", "https"}:
+        return None, None
+    try:
+        with _private_trust() as trust, tempfile.TemporaryDirectory(prefix="csk-redirect-") as scratch:
+            environment = _trust_environment(trust)
+            for key in ("GIT_TRACE", "GIT_TRACE_PACKET", "GIT_CURL_VERBOSE"):
+                environment.pop(key, None)
+            trace = Path(scratch) / "curl-trace"
+            environment.update({
+                "GIT_TRACE_CURL": str(trace),
+                "GIT_TRACE_CURL_NO_DATA": "1",
+                "GIT_TRACE_REDACT": "1",
+                "GIT_TERMINAL_PROMPT": "0",
+                "GIT_ASKPASS": "",
+                "SSH_ASKPASS": "",
+            })
+            command = [
+                _git_executable(), *(["-C", str(repo)] if repo is not None else []),
+                "-c", "credential.helper=",
+                "-c", "http.extraHeader=", "-c", f"http.{effective_url}.extraHeader=",
+                "-c", "http.cookieFile=", "-c", f"http.{effective_url}.cookieFile=",
+                "ls-remote", "--heads", "--", target,
+            ]
+            proc = _run(
+                list(git_trust.pinned_command(command, environment, url=effective_url)),
+                text=True, capture_output=True, env=environment, timeout=REDIRECT_PROBE_TIMEOUT,
+            )
+            records = "" if proc.returncode == 0 or not trace.is_file() else trace.read_text(
+                encoding="utf-8", errors="replace",
+            )
+    except (GitError, OSError, subprocess.SubprocessError, ValueError):
+        return None, None
+    marker = "<= Recv header:"
+    for line in records.splitlines():
+        _, found, header = line.partition(marker)
+        name, separator, value = header.partition(":")
+        if found and separator and name.strip().lower() == "location" and value.strip():
+            return proc, value.strip()
+    return proc, None
+
+
+def _redirect_location(target: str, effective_url: str, repo: Path | None) -> str | None:
+    """Location of a redirect Git just refused, via one anonymous repeat of the request."""
+    return _anonymous_discovery(target, effective_url, repo)[1]
+
+
+@dataclass(frozen=True)
+class RedirectProbe:
+    """Outcome of :func:`probe_declared_url`: ``ok``, ``redirect`` or ``unverified``."""
+
+    outcome: Literal["ok", "redirect", "unverified"]
+    canonical: str | None = None
+    detail: str | None = None
+
+
+def probe_declared_url(url: str) -> RedirectProbe:
+    """Check, anonymously, whether a declared HTTP(S) URL answers with a redirect.
+
+    Used by ``csk check --canonical-urls --network``: one discovery request
+    per URL, under the same trust pins as a fetch, with redirects refused and
+    no credentials sent. A server that requires authentication before it
+    would redirect reports ``unverified``.
+    """
+    validate_git_url(url)
+    from .git_admission import _classify_git_failure_output
+
+    with _private_trust() as trust:
+        environment = _trust_environment(trust)
+        discovery = _run(list(git_trust.pinned_command(
+            [_git_executable(), "ls-remote", "--get-url", "--", url], environment,
+        )), text=True, capture_output=True, env=environment)
+    effective_url = discovery.stdout.strip() if discovery.returncode == 0 else ""
+    if not effective_url:
+        return RedirectProbe("unverified", detail="cannot resolve the URL through Git configuration")
+    validate_git_url(effective_url)
+    if urlsplit(effective_url).scheme.lower() not in {"http", "https"}:
+        return RedirectProbe("ok", detail="not an HTTP(S) endpoint; redirects do not apply")
+    proc, location = _anonymous_discovery(url, effective_url, None)
+    if proc is None:
+        return RedirectProbe("unverified", detail="the request could not be completed")
+    if proc.returncode == 0:
+        return RedirectProbe("ok")
+    failure = _classify_git_failure_output(proc.stderr)
+    if failure == "redirect":
+        return RedirectProbe("redirect", canonical=canonical_from_redirect(url, effective_url, location))
+    return RedirectProbe("unverified", detail=failure)
 
 
 def skill_source_path(skills_root: Path, source: str) -> Path:

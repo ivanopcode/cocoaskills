@@ -219,7 +219,7 @@ MCP authentication and connectivity: not checked.
 **Синопсис:**
 
 ```bash
-usage: csk check [-h] [--all] [target]
+usage: csk check [-h] [--all] [--canonical-urls] [--network] [target]
 ```
 
 **Аргументы и флаги:**
@@ -227,6 +227,8 @@ usage: csk check [-h] [--all] [target]
 * `target`: алиас проекта, `.` или путь к проекту.
 * `-h`, `--help`: выводит краткое справочное сообщение.
 * `--all`: проверяет все зарегистрированные проекты.
+* `--canonical-urls`: checks that every repository is declared with exactly one URL spelling across the target Skillfile, the dependency specs cached under `skills_root` and the registry (schema 1), offline; exit 1 on any disagreement.
+* `--network`: with `--canonical-urls`, sends one anonymous request per declared HTTP(S) URL and reports URLs that answer with a redirect (exit 1), naming the canonical form when the server identifies it.
 
 **Пример использования:**
 
@@ -491,6 +493,8 @@ csk update
 Update is fetch-only over clones that already exist: every immediate clone in `skills_root` (a symlink to a clone included) and every declared source path, nested ones included, that has a clone. It reads the registered schema-1 project Skillfiles, applicable hybrid declarations, the global Skillfile and cached dependency specs before the first fetch. When a declared `git` URL identifies the same repository as the clone's stored `origin`, update fetches the declared URL and stores it as `origin` after success, for example after adding `.git`; undeclared clones fetch through their stored `origin`. Relative local `git` paths resolve against the declaring Skillfile's directory, not the current directory.
 
 A declared source without a clone prints `skipped <source>: ...`; update never clones it, so run `csk install` or `csk upgrade`. Refusals are per clone and print `update refused <source>: <reason>` on stderr: a different repository identity, a source outside `allowed_sources`, conflicting spellings of one endpoint, a stored `origin` with HTTP(S) userinfo, or a declared clone whose `origin` has several URLs. Other clones are still fetched and the exit code is 1. A malformed registered Skillfile, hybrid or global manifest refuses the whole run before any fetch. See `docs/v0.4-design.md` section 11.
+
+A repository declared with more than one URL spelling (for example `https://host/team/skill` in an old worktree and `https://host/team/skill.git` in the current branch) is refused in `csk update`, `csk upgrade`, `csk global update` and `csk global upgrade`, and `csk install` does not clone it. The message names every spelling and every declaring place. Update fetches only the declared URL; a redirecting declaration fails with `declared URL '...' is not canonical` even when the clone's `origin` is already correct. See "Canonical source URLs" in `docs/reference.md` and `csk check --canonical-urls`.
 
 ### csk upgrade
 

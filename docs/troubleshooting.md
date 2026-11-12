@@ -316,6 +316,8 @@ Verify the provider's canonical **Git clone URL** in its Clone UI or API, then c
 
 Use that exact URL. The `.git` suffix is provider-specific; a suffixless URL serving Git smart HTTP directly is also valid. Do not append `.git` automatically, copy an arbitrary redirect destination, or enable redirects/disable TLS verification to bypass the refusal. If the provider's clone URL itself redirects, ask its server/proxy administrator to check routing and authentication. Static `csk check` validates declarations offline; it does not prove that an endpoint serves Git without redirects.
 
+For legacy skills (`skills[*].git` and dependency declarations) the error reads `declared URL '...' is not canonical`. When the server redirects Git's discovery request to the same repository with a different `.git` suffix or trailing slash, csk names that canonical spelling; it reads the redirect from one anonymous repeat of the refused request and never fetches the target. Correct the declaration on every branch and worktree, and in dependency specs, then run `csk check --canonical-urls --network --all` to confirm. csk fetches only the declared URL: correcting the clone's `origin` by hand does not help. See "Canonical source URLs" in `docs/reference.md`.
+
 ## Cannot resolve tag '...' ... Needed a single revision
 
 Локальный клон репозитория в `skills_root` не содержит указанного тега. Команда `csk install` работает по локальным refs и не выполняет сетевой fetch.
