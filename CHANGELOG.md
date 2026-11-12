@@ -9,20 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Include explicitly declared nested skill sources in whole-root update and
-  source-policy preflight, preserving their full paths without recursively
-  scanning repository contents or following source symlinks.
 - Reconcile existing skill clone remotes with the declared endpoint when both
   identify the same repository, including explicit `.git` URL corrections.
-  Fetch the declared URL and persist it after success; refuse identity changes
-  without fetching or rewriting the remote. Redirect refusal and TLS trust
-  pinning remain enforced.
-- Recheck source authorization and repository identity on cached installs and
-  every shared-cache declaration, including deduplicated upgrades. Whole-root
-  update resolves registered project, global, hybrid and cached dependency
-  endpoints and refuses conflicts before fetching. Reject HTTP(S) URL userinfo
-  before Git execution, preserve relative local sources after clone normalization,
-  and refuse unverified declarations when a cached clone has no remote.
+  Upgrade, global upgrade, global update and `csk update` fetch the declared
+  URL and store it as `origin` only after the fetch succeeds; a different
+  repository identity is refused without fetching or rewriting the remote.
+  Redirect refusal and TLS trust pinning remain enforced.
+- Recheck source authorization and repository identity on cached installs,
+  audits and every shared-cache declaration, including deduplicated upgrades,
+  and refuse a declaration that a remote-less cached clone cannot verify (any
+  source other than that clone's own local path). Reject HTTP(S) URL userinfo
+  before Git execution, in declarations and in stored remotes.
+- Resolve relative local `git` paths against the directory of the declaring
+  Skillfile (project, global or hybrid root) in install, upgrade, status and
+  update, instead of the invocation directory. An install started from another
+  directory now clones the project-relative path.
+
+### Changed
+
+- `csk update` applies registered project, global, applicable hybrid and
+  cached dependency declarations to existing clones, including nested source
+  paths and dependencies that resolve to a nested project source. It remains
+  fetch-only: a declared source without a clone is reported as skipped and is
+  not cloned. Symlinked clones are followed as install and upgrade follow them.
+- `csk update` refusals are per clone and name it (`update refused <source>:
+  ...`): a different repository identity, a source outside `allowed_sources`,
+  conflicting spellings of one endpoint, a stored `origin` with HTTP(S)
+  userinfo, a declared clone whose `origin` has several URLs, or a skill spec
+  that cannot be read at the cached declared ref. Other clones are still
+  fetched and the command exits 1. A clone whose stored `origin` contains
+  userinfo stops updating, and install and upgrade refuse it too, until the
+  userinfo is removed from the remote. A malformed registered Skillfile, hybrid
+  or global manifest refuses the whole update before any fetch.
 
 ## [0.22.1] - 2026-11-10
 

@@ -475,14 +475,17 @@ def test_trusted_registries_disabled_excludes_inactive(tmp_path):
 
 # --- installer end-to-end ---
 
-from conftest import make_config, make_project, make_skill_repo, write_skillfile  # noqa: E402
+from conftest import make_config, make_project, make_skill_repo, run, write_skillfile  # noqa: E402
 from csk import audit_registry as registry_mod, installer  # noqa: E402
 
 
+# The cached clone's origin is its declared endpoint: a remote-less clone cannot
+# vouch for a network declaration, which is a separate refusal.
 def _install_with_registry(tmp_path, skills_root, csk_home, monkeypatch, *, status: str):
     priv, pinned = _make_key()
     project = make_project(tmp_path)
-    _, commit = make_skill_repo(skills_root, "skill-tracker", tag="v1")
+    repo, commit = make_skill_repo(skills_root, "skill-tracker", tag="v1")
+    run(["git", "remote", "add", "origin", "git@gitlab.example.com:skills/skill-tracker.git"], repo)
     write_skillfile(
         project,
         {
@@ -548,7 +551,8 @@ from csk.config import AuditConfig  # noqa: E402
 def test_strict_policy_fails_unknown_skill(tmp_path, skills_root, csk_home, monkeypatch):
     _, pinned = _make_key()
     project = make_project(tmp_path)
-    make_skill_repo(skills_root, "skill-tracker", tag="v1")
+    repo, _ = make_skill_repo(skills_root, "skill-tracker", tag="v1")
+    run(["git", "remote", "add", "origin", "git@gitlab.example.com:skills/skill-tracker.git"], repo)
     write_skillfile(
         project,
         {

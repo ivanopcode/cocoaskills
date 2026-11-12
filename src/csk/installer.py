@@ -1050,6 +1050,9 @@ def _install_project_once(
                 fetch_existing=options.fetch,
                 fetched_repos=fetched_repos,
                 stack=stack,
+                declaration_bases={
+                    decl.name: hybrid.hybrid_root(config.path.parent) for decl in hybrid_direct
+                },
             )
             if options.fetch:
                 for repo in sorted(fetched_repos - fetched_before):
@@ -3984,7 +3987,9 @@ def _build_plans(
 ) -> list[SkillPlan]:
     plans: list[SkillPlan] = []
     for decl in project_manifest.skills:
-        repo = _ensure_skill_repo(config, decl, use_persistent_clone=use_cache, stack=stack)
+        repo = _ensure_skill_repo(
+            config, decl, use_persistent_clone=use_cache, stack=stack, base=project_manifest.path.parent,
+        )
         resolved = git_ops.resolve_ref(repo, decl.ref.kind, decl.ref.value)
         if use_cache:
             snap = snapshot.get_snapshot(config.path.parent, decl.source, repo, resolved.commit)
@@ -4013,23 +4018,26 @@ def _ensure_skill_repo(
     *,
     use_persistent_clone: bool,
     stack: ExitStack | None,
+    base: Path | None = None,
 ) -> Path:
+    """Locate or acquire a declared clone; ``base`` anchors relative local paths."""
     repo = config.skills_root / decl.source
     if decl.git is not None:
         closure._gate_source(config, decl.name, decl.git, "declared skill")
+    declared = None if decl.git is None else git_ops.declared_fetch_url(decl.git, base)
     if repo.exists():
         if not (repo / ".git").exists():
             raise InstallError(f"Local skill path exists but is not a git repository: {terminal_text(repo)}")
         git_ops.ensure_git_repo(repo)
-        source = git_ops.validate_repo_source(repo, decl.git)
+        source = git_ops.validate_repo_source(repo, declared)
         if decl.git is None and source is not None:
             closure._gate_source(config, decl.name, source.stored_url, "declared skill")
         return repo
-    if not decl.git:
+    if not decl.git or declared is None:
         raise InstallError(f"Skill repository not found for {terminal_text(decl.name)}: {terminal_text(repo)}")
     if use_persistent_clone:
         try:
-            git_ops.clone_repo(decl.git, repo)
+            git_ops.clone_repo(declared, repo)
         except git_ops.GitError as exc:
             raise InstallError(f"Failed to clone {terminal_text(decl.name)} from {terminal_text(decl.git)}: {exc}") from exc
         return repo
@@ -4038,7 +4046,7 @@ def _ensure_skill_repo(
     tmp_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="csk-dry-run-source-")))
     tmp_repo = tmp_root / decl.source
     try:
-        git_ops.clone_repo(decl.git, tmp_repo)
+        git_ops.clone_repo(declared, tmp_repo)
     except git_ops.GitError as exc:
         raise InstallError(f"Failed to clone {terminal_text(decl.name)} from {terminal_text(decl.git)}: {exc}") from exc
     return tmp_repo

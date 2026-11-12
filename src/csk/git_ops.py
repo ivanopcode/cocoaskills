@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tarfile
 import unicodedata
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
@@ -177,11 +177,11 @@ def archive(repo: Path, commit: str, destination: Path) -> None:
 def validate_git_url(url: str) -> None:
     """Reject unsafe declarations before they can enter Git argv or diagnostics."""
     if not url.strip() or url.startswith("-") or any(ord(char) < 0x20 for char in url):
-        raise GitError("Refusing invalid Git source URL")
+        raise GitError("Refusing suspicious Git source URL")
     try:
         parsed = urlsplit(url)
     except ValueError as exc:
-        raise GitError("Refusing invalid Git source URL") from exc
+        raise GitError("Refusing suspicious Git source URL") from exc
     if parsed.scheme.lower() in {"http", "https"} and "@" in parsed.netloc:
         raise GitError("HTTP(S) Git URLs must not contain userinfo; use a credential helper")
 
@@ -199,16 +199,26 @@ def _local_source_path(url: str, base: Path) -> Path:
     return (base / path).resolve()
 
 
-def declared_fetch_url(url: str) -> str:
-    """Anchor local declarations where clone would interpret them, before Git -C."""
+def declared_fetch_url(url: str, base: Path | None = None) -> str:
+    """Anchor local declarations before Git -C can reinterpret them.
+
+    ``base`` is the directory of the manifest that roots the declaration
+    (project, global or hybrid Skillfile). Without one, a relative local path
+    keeps Git's own meaning: relative to the invoking working directory.
+    """
     validate_git_url(url)
     try:
         identity = canonical_source_identity(url)
     except SourceIdentityError as exc:
         raise GitError(f"Invalid declared Git source: {exc}") from exc
     if identity is None and not url.lower().startswith("file:"):
-        return str(_local_source_path(url, Path.cwd()))
+        return str(_local_source_path(url, base if base is not None else Path.cwd()))
     return url
+
+
+def display_url(url: str) -> str:
+    """Render a URL for diagnostics without userinfo, query or fragment data."""
+    return sanitize_credentials(url.split("?", 1)[0].split("#", 1)[0])
 
 
 @dataclass(frozen=True)
@@ -255,7 +265,13 @@ def validate_repo_source(repo: Path, declared_url: str | None) -> FetchSource | 
     if not stored_urls or (declared_url is not None and len(stored_urls) != 1):
         raise GitError("Cannot reconcile fetch URL: configure exactly one URL for the fetch remote")
     stored_url = stored_urls[0]
-    validate_git_url(stored_url)
+    try:
+        validate_git_url(stored_url)
+    except GitError as exc:
+        raise GitError(
+            f"Stored {remote} URL of {repo} is not usable: {exc}. Correct it with "
+            f"'git -C <clone> remote set-url {remote} <url>'"
+        ) from exc
     if target is not None:
         try:
             stored_identity = canonical_source_identity(stored_url)
@@ -269,10 +285,7 @@ def validate_repo_source(repo: Path, declared_url: str | None) -> FetchSource | 
             same_repository = False
         if not same_repository:
             # Drop all query/fragment data, including unknown credential keys.
-            safe_stored, safe_declared = (
-                sanitize_credentials(url.split("?", 1)[0].split("#", 1)[0])
-                for url in (stored_url, target)
-            )
+            safe_stored, safe_declared = (display_url(url) for url in (stored_url, target))
             raise GitError(
                 f"Refusing fetch: stored {remote} URL {safe_stored!r} and declared URL "
                 f"{safe_declared!r} do not identify the same repository. Correct the "
@@ -326,48 +339,30 @@ def fetch_repo(repo: Path, declared_url: str | None = None) -> None:
 
 
 def skill_source_path(skills_root: Path, source: str) -> Path:
-    """Resolve only the declared portable path, without following source symlinks."""
+    """Join a declared portable source path below skills_root.
+
+    Symlinks are followed exactly as install and upgrade follow them; callers
+    validate the repository they reach. Git metadata never names a source.
+    """
     if not is_valid_portable_path(source):
         raise GitError("Skill source must be a portable relative path")
-    repo = skills_root
     parts = source.split("/")
-    for part in parts:
-        repo = repo / part
-        if part.casefold() == ".git" or repo.is_symlink():
-            raise GitError(f"Refusing skill source {source!r}: Git metadata or symlink in source path")
-    if (repo / ".git").is_symlink():
-        raise GitError(f"Refusing skill source {source!r}: symlinked Git metadata")
-    return repo
+    if any(part.casefold() == ".git" for part in parts):
+        raise GitError(f"Refusing skill source {source!r}: Git metadata in source path")
+    return skills_root.joinpath(*parts)
 
 
-def skill_repositories(skills_root: Path, declared_sources: Iterable[str] = ()) -> dict[str, Path]:
-    """Select immediate clones plus explicit full source paths; never crawl contents."""
-    repositories: dict[str, Path] = {}
-    for child in sorted(skills_root.iterdir()):
-        if child.is_symlink() or not child.is_dir() or not (child / ".git").exists():
-            continue
-        repositories[child.name] = skill_source_path(skills_root, child.name)
-    for source in declared_sources:
-        repo = skill_source_path(skills_root, source)
-        if not repo.is_dir() or not (repo / ".git").exists():
-            raise GitError(f"Declared skill repository not found: {source!r}; install the source before updating")
-        repositories[source] = repo
-    return dict(sorted(repositories.items()))
+def skill_clones(skills_root: Path) -> dict[str, Path]:
+    """Immediate skills_root entries that are Git clones, symlinked ones included.
 
-
-def fetch_all(skills_root: Path, declared_urls: Mapping[str, str | None] | None = None) -> list[tuple[Path, str | None]]:
-    results: list[tuple[Path, str | None]] = []
-    for source, child in skill_repositories(skills_root, declared_urls or ()).items():
-        try:
-            declared_url = (declared_urls or {}).get(source)
-            if declared_url is None:
-                fetch_repo(child)
-            else:
-                fetch_repo(child, declared_url)
-            results.append((child, None))
-        except GitError as exc:
-            results.append((child, str(exc)))
-    return results
+    Entry names come from the filesystem rather than a declaration, so they
+    need not be portable. Nothing below an entry is crawled.
+    """
+    try:
+        children = sorted(skills_root.iterdir())
+    except FileNotFoundError:
+        return {}
+    return {child.name: child for child in children if child.is_dir() and (child / ".git").exists()}
 
 
 def repository_has_submodules(snapshot: Path) -> bool:

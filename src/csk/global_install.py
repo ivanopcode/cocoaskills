@@ -1281,8 +1281,9 @@ def update(
         global_manifest = load_manifest(config.path.parent)
         for decl in _select_declarations(global_manifest, only):
             try:
-                repo = installer._ensure_skill_repo(config, decl, use_persistent_clone=True, stack=None)
-                git_ops.fetch_repo(repo, decl.git)
+                base = global_manifest.path.parent
+                repo = installer._ensure_skill_repo(config, decl, use_persistent_clone=True, stack=None, base=base)
+                git_ops.fetch_repo(repo, None if decl.git is None else git_ops.declared_fetch_url(decl.git, base))
                 result.messages.append(f"fetched {terminal_text(decl.source)}")
             except Exception as exc:  # noqa: BLE001 - report every per-source fetch failure
                 result.errors.append(f"fetch failed {terminal_text(decl.source)}: {installer.failure_text(exc)}")
