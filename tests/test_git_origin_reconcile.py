@@ -198,8 +198,13 @@ def test_failed_declared_fetch_preserves_origin_and_hides_untrusted_output(tmp_p
     before = _repo_bytes(repo)
     real_run = git_ops._run
     attempts = []
+    probes = []
 
     def failed_fetch(command, **kwargs):
+        if "ls-remote" in command and "--heads" in command:
+            # The anonymous Location probe; injected so no real host is contacted.
+            probes.append(command)
+            return subprocess.CompletedProcess(command, 128, "", "fatal: probe refused\n")
         if "fetch" not in command:
             return real_run(command, **kwargs)
         attempts.append(command)
@@ -212,6 +217,8 @@ def test_failed_declared_fetch_preserves_origin_and_hides_untrusted_output(tmp_p
     with pytest.raises(git_ops.GitError, match="HTTP redirects are refused") as caught:
         git_ops.fetch_repo(repo, old_url + ".git")
     assert len(attempts) == 1 and attempts[0][-3] == old_url + ".git"
+    assert len(probes) == 1 and probes[0][-1] == old_url + ".git"
+    assert "credential.helper=" in probes[0]
     assert "CANARY" not in str(caught.value)
     assert _repo_bytes(repo) == before
 
@@ -263,11 +270,15 @@ def test_invalid_trust_refuses_reconcile_before_any_git(tmp_path, monkeypatch):
 def test_declared_redirect_still_refuses_without_persisting(redirecting_repository):
     # Explicitly switching to a redirecting endpoint of the same identity
     # still fails: no redirect target is fetched and origin stays untouched.
+    # The refused discovery request is repeated once, anonymously, only to
+    # read Location, so the error names the canonical .git spelling.
     repo, old_url, declared_url, _, requests = redirecting_repository
     run(["git", "remote", "set-url", "origin", declared_url], repo)
-    with pytest.raises(git_ops.GitError, match="HTTP redirects are refused"):
+    with pytest.raises(git_ops.GitError, match="HTTP redirects are refused") as caught:
         git_ops.fetch_repo(repo, old_url)
-    assert requests == ["/repo/info/refs?service=git-upload-pack"]
+    assert requests == ["/repo/info/refs?service=git-upload-pack"] * 2
+    assert f"declared URL {old_url!r} is not canonical" in str(caught.value)
+    assert f"same repository at {declared_url!r}" in str(caught.value)
     assert run(["git", "config", "--get", "remote.origin.url"], repo).stdout.strip() == declared_url
 
 

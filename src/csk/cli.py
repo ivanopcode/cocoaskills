@@ -15,6 +15,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, NoReturn
 from collections.abc import Callable
+from urllib.parse import urlsplit
 
 from . import (
     __version__,
@@ -730,6 +731,13 @@ def _build_check_parser() -> argparse.ArgumentParser:
             "  ~/.cocoaskills/config.json, <project>/Skillfile.json,\n"
             "  <project>/Skillfile.lock.json when present, ~/.cocoaskills/source-policy.json\n"
             "  when present.\n\n"
+            "Canonical source URLs (--canonical-urls):\n"
+            "  One repository must be declared with exactly one URL spelling in every\n"
+            "  project, branch, global or hybrid declaration and dependency spec. The\n"
+            "  check compares the target Skillfile (or, with --all, every registered\n"
+            "  project) with the registry and the dependency specs cached under\n"
+            "  skills_root, and exits 1 on any disagreement. --network adds one\n"
+            "  anonymous request per declared HTTP(S) URL and reports URLs that redirect.\n\n"
             "Exit codes:\n"
             "  0 every checked Skillfile is valid, 1 one or more are invalid,\n"
             "  2 config error, 3 lock contention.\n\n"
@@ -737,11 +745,27 @@ def _build_check_parser() -> argparse.ArgumentParser:
             "  csk check\n"
             "  csk check --all\n"
             "  csk check demo-app-ios\n"
-            "  csk check ."
+            "  csk check .\n"
+            "  csk check --canonical-urls .\n"
+            "  csk check --canonical-urls --network --all"
         ),
     )
     parser.add_argument("target", nargs="?", help="project alias, '.', or project path")
     parser.add_argument("--all", action="store_true", help="check all registered projects")
+    parser.add_argument(
+        "--canonical-urls",
+        action="store_true",
+        help=(
+            "check that every repository is declared with exactly one URL spelling across the "
+            "Skillfile, its cached dependency specs and the registry (schema 1); no network"
+        ),
+    )
+    parser.add_argument(
+        "--network",
+        action="store_true",
+        help="with --canonical-urls: also report declared HTTP(S) URLs that answer with a redirect "
+        "(one anonymous request per URL; no credentials are sent)",
+    )
     return parser
 
 
@@ -1757,6 +1781,11 @@ def _cmd_dispatch_recover(args: argparse.Namespace) -> int:
 def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
     """Validate Skillfiles without installing."""
 
+    if getattr(args, "network", False) and not getattr(args, "canonical_urls", False):
+        print("error: --network requires --canonical-urls", file=sys.stderr)
+        return EXIT_CONFIG
+    if getattr(args, "canonical_urls", False):
+        return _cmd_check_canonical_urls(cfg, args)
     cfg, alias = _cfg_and_alias_for_target(cfg, args)
     projects = _select_check_projects(cfg, alias)
     # Pass 1 validates structure only: a malformed Skillfile refuses
@@ -1824,6 +1853,63 @@ def _cmd_check(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
             _print_check_failure(exc)
             failed = True
             continue
+    return EXIT_PARTIAL_FAIL if failed else EXIT_OK
+
+
+def _cmd_check_canonical_urls(cfg: config.GlobalConfig, args: argparse.Namespace) -> int:
+    """CI lint for the canonical-URL rule; see 'Canonical source URLs' in the docs."""
+
+    from . import canonical_urls
+
+    cfg, alias = _cfg_and_alias_for_target(cfg, args)
+    root = None if alias is None else canonical_urls.project_root_id(cfg.projects[alias].path)
+    if alias is not None:
+        target = manifest.load_manifest(cfg.projects[alias].path)
+        if target is not None and target.schema_version != 1:
+            print(
+                f"note: {terminal_text(alias)} uses schema_version {target.schema_version}: its sources are "
+                "acquired per project, not as shared skills_root clones; the canonical-URL rule covers schema 1 "
+                "declarations"
+            )
+    report = source_update.canonical_url_report(cfg, root=root)
+    scope = "all registered projects" if alias is None else f"project {alias}"
+    print(
+        f"canonical URLs: {len(report.spellings)} declared spelling(s) of {report.repositories} "
+        f"repository(ies) checked for {terminal_text(scope)}"
+    )
+    failed = False
+    for text in report.unreadable:
+        failed = True
+        print(f"error: cannot read declarations: {terminal_text(text)}", file=sys.stderr)
+    for message in report.conflicts:
+        failed = True
+        print(f"error: {terminal_text(message)}", file=sys.stderr)
+    for text in report.not_checked:
+        print(f"note: not checked: {terminal_text(text)}")
+    if args.network:
+        for spelling in sorted(report.spellings):
+            if urlsplit(spelling).scheme.lower() not in {"http", "https"}:
+                continue
+            shown = terminal_text(git_ops.display_url(spelling))
+            try:
+                probe = git_ops.probe_declared_url(spelling)
+            except git_ops.GitError as exc:
+                if exc.code is not None:
+                    raise
+                print(f"warning: not verified {shown!r}: {terminal_text(exc)}")
+                continue
+            if probe.outcome == "redirect":
+                failed = True
+                places = "; ".join(report.spellings[spelling])
+                print(
+                    f"error: {terminal_text(git_ops.redirect_refusal(spelling, probe.canonical))} "
+                    f"(declared in: {terminal_text(places)})",
+                    file=sys.stderr,
+                )
+            elif probe.outcome == "unverified":
+                print(f"warning: not verified {shown!r}: {terminal_text(probe.detail or 'unknown failure')}")
+            else:
+                print(f"ok: {shown!r} answers without a redirect")
     return EXIT_PARTIAL_FAIL if failed else EXIT_OK
 
 

@@ -27,6 +27,7 @@ from . import (
     adapters,
     audit_registry,
     build_repository_pipeline,
+    canonical_urls,
     closure,
     consumers,
     dev_substitutions,
@@ -351,6 +352,7 @@ def install(config: GlobalConfig, *, alias: str | None = None, options: InstallO
     selected = _selected_projects(config, alias)
     results: list[ProjectResult] = []
     fetched_repos: set[Path] = set()
+    spelling_guard = registry_spelling_guard(config)
     operator_search_path = build_toolchain.capture_operator_search_path()
     operator_ssh_credentials = _capture_operator_ssh_credentials(options)
     operator_https_token = _capture_operator_https_token()
@@ -364,6 +366,7 @@ def install(config: GlobalConfig, *, alias: str | None = None, options: InstallO
                 operator_search_path=operator_search_path,
                 operator_ssh_credentials=operator_ssh_credentials,
                 operator_https_token=operator_https_token,
+                spelling_guard=spelling_guard,
             )
         )
     if (
@@ -450,6 +453,18 @@ def _capture_operator_ssh_credentials(
         raise InstallError(str(exc)) from exc
 
 
+def registry_spelling_guard(config: GlobalConfig) -> canonical_urls.SpellingGuard:
+    """One canonical-URL guard per command; the registry is scanned only if a
+    repository is about to be cloned or fetched."""
+
+    def load() -> list[canonical_urls.Declared]:
+        from . import source_update
+
+        return source_update.registry_declarations(config)
+
+    return canonical_urls.SpellingGuard(load)
+
+
 def _selected_projects(config: GlobalConfig, alias: str | None) -> list[ProjectConfig]:
     if alias is None:
         return list(config.projects.values())
@@ -468,6 +483,7 @@ def _install_project(
     operator_search_path: build_toolchain.OperatorSearchPath | None,
     operator_ssh_credentials: git_admission.OperatorSSHCredentials | None = None,
     operator_https_token: OperatorHTTPSToken | None = None,
+    spelling_guard: canonical_urls.SpellingGuard | None = None,
 ) -> ProjectResult:
     generation_probe = _project_generation_probe(config, project)
     attempts = 2 if options.dry_run else 3
@@ -491,6 +507,7 @@ def _install_project(
                     operator_https_token=operator_https_token,
                     generation_probe=generation_probe,
                     expected_generation=expected_generation,
+                    spelling_guard=spelling_guard,
                 )
             except build_planner.BuildPlanningError as exc:
                 if exc.code != "concurrent_state_change":
@@ -910,6 +927,7 @@ def _install_project_once(
     operator_https_token: OperatorHTTPSToken | None = None,
     generation_probe: build_planner.GenerationProbe | None,
     expected_generation: Mapping[str, str] | None,
+    spelling_guard: canonical_urls.SpellingGuard | None = None,
 ) -> ProjectResult:
     result = ProjectResult(alias=project.alias, path=project.path, status="ok")
     try:
@@ -1040,6 +1058,10 @@ def _install_project_once(
         )
 
         effective_locale = project_manifest.locale or config.preferred_locale
+        if spelling_guard is not None:
+            spelling_guard.enter_root(
+                canonical_urls.project_root_id(project.path), f"project {project.alias}", project.alias,
+            )
         with ExitStack() as stack:
             fetched_before = set(fetched_repos)
             nodes = closure.build_closure(
@@ -1053,6 +1075,7 @@ def _install_project_once(
                 declaration_bases={
                     decl.name: hybrid.hybrid_root(config.path.parent) for decl in hybrid_direct
                 },
+                spelling_guard=spelling_guard,
             )
             if options.fetch:
                 for repo in sorted(fetched_repos - fetched_before):

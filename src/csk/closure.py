@@ -8,7 +8,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import git_ops, manifest, skillspec, snapshot
+from . import canonical_urls, git_ops, manifest, skillspec, snapshot
 from .command_names import require_unreserved_command_name
 from .config import GlobalConfig
 from .dev_substitutions import Substitution
@@ -214,9 +214,18 @@ class _Pending:
     # Directory of the manifest that roots this declaration; relative local
     # ``git`` paths resolve against it instead of the working directory.
     base: Path | None = None
+    # Where this declaration is written, for canonical-URL diagnostics.
+    place: str = ""
 
     def declared_url(self) -> str | None:
         return None if self.git is None else git_ops.declared_fetch_url(self.git, self.base)
+
+    def spelling(self) -> str | None:
+        """The declared spelling, or None when there is none or it is invalid."""
+        try:
+            return self.declared_url()
+        except git_ops.GitError:
+            return None
 
 
 def build_closure(
@@ -234,6 +243,7 @@ def build_closure(
     ref_comparator: Callable[[ClosureNode, _Pending], str] | None = None,
     check_system_commands: bool = True,
     declaration_bases: Mapping[str, Path] | None = None,
+    spelling_guard: canonical_urls.SpellingGuard | None = None,
 ) -> list[ClosureNode]:
     """Expand direct skills and their requirements into an ordered closure.
 
@@ -264,10 +274,18 @@ def build_closure(
     manifest's directory, or ``declaration_bases[name]`` for declarations
     merged from another manifest (hybrid); requirements inherit the base of
     the declaration that pulled them in.
+
+    ``spelling_guard`` applies the canonical-URL rule
+    (:mod:`csk.canonical_urls`): every declaration is noted when it is
+    enqueued, and a repository is refused before it is cloned or fetched
+    when its identity is declared with more than one spelling. With
+    ``fetch_existing`` a repeated declaration with another spelling refuses
+    too, even after its repository was fetched.
     """
     nodes: dict[str, ClosureNode] = {}
     bases = declaration_bases or {}
     fetched_repos = fetched_repos if fetched_repos is not None else set()
+    label = spelling_guard.label if spelling_guard is not None else ""
     pending: list[_Pending] = [
         _Pending(
             name=decl.name,
@@ -277,9 +295,17 @@ def build_closure(
             edge=ActivationEdge(consumer=PROJECT_EDGE, mode="full"),
             chain=f"{PROJECT_EDGE} -> {decl.name}",
             base=bases.get(decl.name, project_manifest.path.parent),
+            place=(
+                f"{bases[decl.name] / manifest.MANIFEST_NAME} (hybrid declaration{', for ' + label if label else ''})"
+                if decl.name in bases
+                else f"{project_manifest.path}{f' ({label})' if label else ''}"
+            ),
         )
         for decl in project_manifest.skills
     ]
+    if spelling_guard is not None:
+        for queued in pending:
+            spelling_guard.note(queued.spelling(), queued.place)
 
     while pending:
         item = pending.pop(0)
@@ -299,30 +325,38 @@ def build_closure(
                     fetched_repos=fetched_repos,
                     stack=stack,
                     read_only=read_only,
+                    spelling_guard=spelling_guard,
                 )
             nodes[item.name] = node
             for requirement in node.spec.requirements.values():
-                pending.append(
-                    _Pending(
-                        name=requirement.name,
-                        git=requirement.git,
-                        ref=manifest.SkillRef(requirement.ref_kind, requirement.ref_value),
-                        source=requirement.name,
-                        edge=ActivationEdge(
-                            consumer=item.name,
-                            mode=requirement.mode,
-                            commands=requirement.commands,
-                        ),
-                        chain=f"{item.chain} -> {requirement.name}",
-                        base=item.base,
-                    )
+                queued = _Pending(
+                    name=requirement.name,
+                    git=requirement.git,
+                    ref=manifest.SkillRef(requirement.ref_kind, requirement.ref_value),
+                    source=requirement.name,
+                    edge=ActivationEdge(
+                        consumer=item.name,
+                        mode=requirement.mode,
+                        commands=requirement.commands,
+                    ),
+                    chain=f"{item.chain} -> {requirement.name}",
+                    base=item.base,
+                    place=canonical_urls.dependency_place(
+                        item.name, node.resolved.kind, node.resolved.ref,
+                        _place_chain(f"{item.chain} -> {requirement.name}", spelling_guard),
+                    ),
                 )
+                if spelling_guard is not None:
+                    spelling_guard.note(queued.spelling(), queued.place)
+                pending.append(queued)
         else:
             if node_resolver is None and node.substituted is None and item.git is not None:
                 _gate_source(config, item.name, item.git, item.chain)
             _unify(node, item, error_factory=error_factory, ref_comparator=ref_comparator)
             if node_resolver is None and node.substituted is None and item.git is not None:
                 git_ops.validate_repo_source(node.repo, item.declared_url())
+                if spelling_guard is not None and fetch_existing:
+                    _require_canonical(spelling_guard, item, item.declared_url())
         node.edges.append(item.edge)
         node.chains.append(item.chain)
 
@@ -433,6 +467,7 @@ def _resolve_node(
     fetched_repos: set[Path],
     stack: ExitStack | None,
     read_only: bool,
+    spelling_guard: canonical_urls.SpellingGuard | None = None,
 ) -> ClosureNode:
     substituted: str | None = None
     if substitution is not None and substitution.path is not None:
@@ -464,12 +499,21 @@ def _resolve_node(
             fetched_repos=fetched_repos,
             stack=stack,
             read_only=read_only,
+            spelling_guard=spelling_guard,
         )
         try:
             resolved = git_ops.resolve_ref(repo, item.ref.kind, item.ref.value)
         except git_ops.GitError as exc:
+            # Install and status read refs already in the clone; only
+            # upgrade fetches, so say how to obtain a newly published ref.
+            hint = (
+                "; csk install uses refs already in the local clone: run 'csk upgrade' "
+                "(or 'csk global upgrade') to fetch new tags and branches"
+                if not fetch_existing and not read_only and exc.code is None
+                else ""
+            )
             raise ClosureError(
-                f"Cannot resolve {item.ref.kind} {item.ref.value!r} for {item.name} (via {item.chain}): {exc}"
+                f"Cannot resolve {item.ref.kind} {item.ref.value!r} for {item.name} (via {item.chain}): {exc}{hint}"
             ) from exc
 
     snap = _snapshot_for(
@@ -521,6 +565,7 @@ def _ensure_repo(
     fetched_repos: set[Path],
     stack: ExitStack | None,
     read_only: bool,
+    spelling_guard: canonical_urls.SpellingGuard | None = None,
 ) -> Path:
     repo = config.skills_root / item.source
     if item.git is not None:
@@ -539,6 +584,8 @@ def _ensure_repo(
             and not read_only
             and repo_key not in fetched_repos
         ):
+            if spelling_guard is not None:
+                _require_canonical(spelling_guard, item, declared, repo=repo, source=source)
             try:
                 if declared is None:
                     git_ops.fetch_repo(repo)
@@ -554,6 +601,8 @@ def _ensure_repo(
         raise ClosureError(
             f"Skill repository not found for {item.name}: {repo} (read-only status does not clone sources)"
         )
+    if spelling_guard is not None:
+        _require_canonical(spelling_guard, item, declared)
     destination = repo if use_cache else _temp_repo_dir(stack, item.source)
     try:
         git_ops.clone_repo(declared or item.git, destination)
@@ -573,7 +622,9 @@ def _ensure_dev_repo(
     stack: ExitStack | None,
     read_only: bool,
 ) -> Path:
-    git_url = substitution.git or ""
+    # Relative local paths in Skillfile.dev.json resolve against the project
+    # root that holds the file, like its 'path' entries, not the cwd.
+    git_url = git_ops.declared_fetch_url(substitution.git or "", substitution.base)
     if not use_cache:
         if read_only:
             raise ClosureError(
@@ -659,6 +710,37 @@ def _temp_repo_dir(stack: ExitStack | None, source: str) -> Path:
         raise ClosureError("dry-run source cloning requires an ExitStack")
     tmp_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="csk-dry-run-source-")))
     return tmp_root / source
+
+
+def _place_chain(chain: str, guard: canonical_urls.SpellingGuard | None) -> str:
+    if guard is not None and guard.chain_root and chain.startswith(PROJECT_EDGE):
+        return guard.chain_root + chain[len(PROJECT_EDGE):]
+    return chain
+
+
+def _require_canonical(
+    guard: canonical_urls.SpellingGuard,
+    item: _Pending,
+    declared: str | None,
+    *,
+    repo: Path | None = None,
+    source: git_ops.FetchSource | None = None,
+) -> None:
+    """Refuse to clone or fetch a repository whose declared spellings disagree."""
+    url = declared
+    if url is None and source is not None and repo is not None:
+        url = source.stored_url
+        try:
+            if canonical_source_identity(url) is None:
+                url = str(git_ops._local_source_path(url, repo))
+        except (SourceIdentityError, git_ops.GitError, OSError):
+            return
+    if url is None:
+        return
+    try:
+        guard.require(canonical_urls.repository_identity(url))
+    except canonical_urls.SpellingConflictError as exc:
+        raise ClosureError(f"Refusing {item.name} (via {item.chain}): {exc}") from exc
 
 
 def _gate_source(config: GlobalConfig, name: str, git_url: str, chain: str) -> None:

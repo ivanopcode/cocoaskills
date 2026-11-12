@@ -211,7 +211,7 @@ def test_full_source_keys_disambiguate_basename_and_preflight_conflicts(
     output = capsys.readouterr()
     if selection == 'conflict':
         assert rc == cli.EXIT_PARTIAL_FAIL
-        assert 'update refused a/fixture-skill: Conflicting declared endpoints' in output.err
+        assert 'update refused a/fixture-skill: repository example.test/repo is declared with 2 different URL spellings' in output.err
         assert requests == []
         assert (_repo_bytes(first), _repo_bytes(second)) == before
     else:

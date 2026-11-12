@@ -301,7 +301,7 @@ def test_bulk_update_preflights_all_declared_endpoints(
     output = capsys.readouterr()
     if conflict:
         assert rc == cli.EXIT_PARTIAL_FAIL
-        assert 'update refused fixture-skill: Conflicting declared endpoints' in output.err
+        assert 'update refused fixture-skill: repository example.test/repo is declared with 2 different URL spellings' in output.err
         assert requests == []
         assert {child.name: _repo_bytes(child) for child in skills_root.iterdir()} == before
     else:
