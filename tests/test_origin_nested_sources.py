@@ -24,9 +24,9 @@ def test_bulk_update_reconciles_supported_nested_source(
     ]})
     cfg = make_config(csk_home, skills_root, project, agents=['codex_cli'])
     monkeypatch.setattr(cli.config, 'load_config', lambda: cfg)
-    endpoints = source_update.declared_endpoints(cfg)
-    assert endpoints[source] == declared
-    assert requests == [], 'preflight must not fetch'
+    planned = {item.source: item for item in source_update.plan_update(cfg)}
+    assert planned[source].action == 'fetch' and planned[source].endpoint == declared
+    assert requests == [], 'planning must not fetch'
     rc = cli.main([command, 'app'] if command == 'upgrade' else [command])
     output = capsys.readouterr()
     stored = run(['git', 'config', '--get', 'remote.origin.url'], repo).stdout.strip()
@@ -44,8 +44,8 @@ def test_nested_sources_preflight_policy_and_preserve_portable_paths(
     source, with_url, allowed,
 ):
     # Full portable paths (including spaces accepted by the manifest) survive
-    # selection with/without a URL. A denied nested source stops even an earlier
-    # allowed top-level clone before network or clone mutation.
+    # selection with/without a URL. A denied nested source is refused by name
+    # without network or clone mutation; the allowed top-level clone still fetches.
     from dataclasses import replace
     import shutil
     repo, _, declared, commit, requests = redirecting_repository
@@ -73,23 +73,28 @@ def test_nested_sources_preflight_policy_and_preserve_portable_paths(
         assert git_ops.resolve_ref(nested, 'tag', 'v2').commit == commit
     else:
         assert rc == cli.EXIT_PARTIAL_FAIL
-        assert 'Source not allowed' in output.err
-        assert requests == []
-        assert (_repo_bytes(repo), _repo_bytes(nested)) == before
+        assert f'update refused {source}:' in output.err and 'Source not allowed' in output.err
+        assert requests.count('/repo.git/info/refs?service=git-upload-pack') == 1
+        assert git_ops.resolve_ref(repo, 'tag', 'v2').commit == commit
+        assert _repo_bytes(nested) == before[1]
 
 
-@pytest.mark.parametrize('layout', ['parent-link', 'leaf-link', 'metadata-link', 'missing'])
-def test_declared_source_scope_refused_before_any_fetch(
+@pytest.mark.parametrize('layout', ['plain', 'parent-link', 'leaf-link', 'metadata-link', 'missing'])
+def test_declared_source_paths_follow_links_like_upgrade(
     redirecting_repository, tmp_path, csk_home, skills_root, monkeypatch, capsys, layout,
 ):
-    # Explicit source paths cannot follow links or disappear silently.
-    # The adjacent normal nested fixtures work.
+    # Declared nested paths reach a linked clone the way install and upgrade
+    # reach it, and reconcile it; a missing clone is skipped by name, never
+    # cloned. "plain" (no link) is the positive control of the same fixture.
     import shutil
-    repo, _, declared, _, requests = redirecting_repository
+    repo, _, declared, commit, requests = redirecting_repository
     outside = tmp_path / 'outside'
     shutil.copytree(repo, outside)
+    shutil.rmtree(repo)
     source = 'internal/fixture-skill'
-    if layout == 'parent-link':
+    if layout == 'plain':
+        shutil.copytree(outside, skills_root / source)
+    elif layout == 'parent-link':
         (skills_root / 'internal').symlink_to(tmp_path, target_is_directory=True)
         source = 'internal/outside'
     elif layout == 'leaf-link':
@@ -105,14 +110,21 @@ def test_declared_source_scope_refused_before_any_fetch(
     ]})
     cfg = make_config(csk_home, skills_root, project)
     monkeypatch.setattr(cli.config, 'load_config', lambda: cfg)
-    before = (_repo_bytes(repo), _repo_bytes(outside))
+    before = _repo_bytes(outside)
     rc = cli.main(['update'])
     output = capsys.readouterr()
-    assert rc == cli.EXIT_PARTIAL_FAIL
-    expected = 'not found' if layout == 'missing' else 'symlink'
-    assert expected in output.err
-    assert requests == []
-    assert (_repo_bytes(repo), _repo_bytes(outside)) == before
+    assert rc == cli.EXIT_OK, output.err
+    if layout == 'missing':
+        assert f'skipped {source}: no clone under skills_root' in output.out
+        assert requests == []
+        assert _repo_bytes(outside) == before
+        assert not (skills_root / source).exists()
+        return
+    assert f'fetched {source}' in output.out
+    assert requests.count('/repo.git/info/refs?service=git-upload-pack') == 1
+    clone = skills_root / source
+    assert git_ops.resolve_ref(clone, 'tag', 'v2').commit == commit
+    assert run(['git', 'config', '--get', 'remote.origin.url'], clone).stdout.strip() == declared
 
 
 @pytest.mark.parametrize('declare_embedded', [False, True])
@@ -120,8 +132,10 @@ def test_bulk_selection_does_not_crawl_unrelated_or_repository_contents(
     redirecting_repository, tmp_path, csk_home, skills_root, monkeypatch, capsys, declare_embedded,
 ):
     # Updating a declared clone must not discover repos through an undeclared
-    # namespace, a symlink, or another repo's working tree. An explicitly declared
-    # embedded repository is authorized by its full path, without a recursive scan.
+    # namespace (including a link inside it) or another repo's working tree. An
+    # explicitly declared embedded repository is authorized by its full path,
+    # without a recursive scan. Top-level links are clones in their own right
+    # (test_symlinked_clone_follows_the_upgrade_policy).
     import shutil
     repo, _, declared, commit, requests = redirecting_repository
     unrelated = skills_root / 'unrelated/hidden'
@@ -132,7 +146,7 @@ def test_bulk_selection_does_not_crawl_unrelated_or_repository_contents(
     shutil.copytree(tmp_path / 'copy', embedded)
     outside = tmp_path / 'outside'
     shutil.copytree(tmp_path / 'copy', outside)
-    (skills_root / 'shortcut').symlink_to(outside, target_is_directory=True)
+    (skills_root / 'unrelated/shortcut').symlink_to(outside, target_is_directory=True)
     project = make_project(tmp_path)
     declarations = [
         {'name': 'fixture-skill', 'git': declared, 'tag': 'v2'},
@@ -155,15 +169,18 @@ def test_bulk_selection_does_not_crawl_unrelated_or_repository_contents(
         assert _repo_bytes(embedded) == embedded_before
 
 
-@pytest.mark.parametrize('source', ['../outside', '/outside', 'a/../b', 'a//b', 'a\\b', '.git/objects'])
+@pytest.mark.parametrize('source', ['../outside', '/outside', 'a/../b', 'a//b', 'a\\b', '.git/objects', 'a/.GIT'])
 def test_bulk_source_path_guard_rejects_unsafe_paths_before_git(tmp_path, monkeypatch, source):
-    # The shared selector validates raw path syntax before joining it or calling
-    # Git, even when invoked without the CLI manifest parser.
+    # The shared source-path guard validates raw syntax before joining it or
+    # calling Git, even without the CLI manifest parser. Valid nested and
+    # spaced paths are the adjacent controls.
     def forbidden(*args, **kwargs):
         pytest.fail('Git called for an unsafe source path')
     monkeypatch.setattr(git_ops, '_run', forbidden)
     with pytest.raises(git_ops.GitError, match='portable relative path|Git metadata'):
-        git_ops.fetch_all(tmp_path, {source: 'https://example.test/repo.git'})
+        git_ops.skill_source_path(tmp_path, source)
+    for valid in ('internal/fixture-skill', 'internal group/fixture skill'):
+        assert git_ops.skill_source_path(tmp_path, valid) == tmp_path.joinpath(*valid.split('/'))
 
 
 @pytest.mark.parametrize('selection', ['distinct', 'shared', 'conflict'])
@@ -171,7 +188,7 @@ def test_full_source_keys_disambiguate_basename_and_preflight_conflicts(
     redirecting_repository, tmp_path, csk_home, skills_root, monkeypatch, capsys, selection,
 ):
     # Equal basenames in distinct declared paths each fetch; a shared path fetches
-    # once. Contradictory endpoints for that shared path refuse before any fetch.
+    # once. Contradictory endpoints for that shared path refuse it by name, before any fetch.
     import shutil
     repo, old, declared, commit, requests = redirecting_repository
     first = skills_root / 'a/fixture-skill'
@@ -194,7 +211,7 @@ def test_full_source_keys_disambiguate_basename_and_preflight_conflicts(
     output = capsys.readouterr()
     if selection == 'conflict':
         assert rc == cli.EXIT_PARTIAL_FAIL
-        assert 'Conflicting declared endpoints' in output.err
+        assert 'update refused a/fixture-skill: Conflicting declared endpoints' in output.err
         assert requests == []
         assert (_repo_bytes(first), _repo_bytes(second)) == before
     else:

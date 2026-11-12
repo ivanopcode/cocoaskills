@@ -311,6 +311,7 @@ def _collect_project_status(
             csk_home / "hybrid" / "skills",
         ),
         project_declared=declared,
+        declaration_bases={decl.name: hybrid.hybrid_root(csk_home) for decl in hybrid_direct},
     )
     if errors:
         result = replace(result, errors=(*result.errors, *errors))
@@ -333,6 +334,7 @@ def _collect_scope(
     agents: list[str],
     generation_paths: tuple[Path, ...],
     project_declared: set[str] | None = None,
+    declaration_bases: Mapping[str, Path] | None = None,
 ) -> ProjectStatus:
     csk_home = config.path.parent
     try:
@@ -345,6 +347,7 @@ def _collect_scope(
                 fetch_existing=False,
                 stack=stack,
                 read_only=True,
+                declaration_bases=declaration_bases,
             )
             if hybrid_store_names is None:
                 hybrid_store_names = frozenset(

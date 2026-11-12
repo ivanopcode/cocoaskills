@@ -488,6 +488,10 @@ csk update
 
 Команда обновляет локальные git-репозитории в каталоге источников без изменения проектов.
 
+Update is fetch-only over clones that already exist: every immediate clone in `skills_root` (a symlink to a clone included) and every declared source path, nested ones included, that has a clone. It reads the registered schema-1 project Skillfiles, applicable hybrid declarations, the global Skillfile and cached dependency specs before the first fetch. When a declared `git` URL identifies the same repository as the clone's stored `origin`, update fetches the declared URL and stores it as `origin` after success, for example after adding `.git`; undeclared clones fetch through their stored `origin`. Relative local `git` paths resolve against the declaring Skillfile's directory, not the current directory.
+
+A declared source without a clone prints `skipped <source>: ...`; update never clones it, so run `csk install` or `csk upgrade`. Refusals are per clone and print `update refused <source>: <reason>` on stderr: a different repository identity, a source outside `allowed_sources`, conflicting spellings of one endpoint, a stored `origin` with HTTP(S) userinfo, or a declared clone whose `origin` has several URLs. Other clones are still fetched and the exit code is 1. A malformed registered Skillfile, hybrid or global manifest refuses the whole run before any fetch. See `docs/v0.4-design.md` section 11.
+
 ### csk upgrade
 
 Скачивает свежие коммиты источников для указанного проекта и сразу запускает процесс установки.

@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 import stat
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -211,6 +211,12 @@ class _Pending:
     source: str
     edge: ActivationEdge
     chain: str
+    # Directory of the manifest that roots this declaration; relative local
+    # ``git`` paths resolve against it instead of the working directory.
+    base: Path | None = None
+
+    def declared_url(self) -> str | None:
+        return None if self.git is None else git_ops.declared_fetch_url(self.git, self.base)
 
 
 def build_closure(
@@ -227,6 +233,7 @@ def build_closure(
     error_factory: Callable[[str, str], BaseException] | None = None,
     ref_comparator: Callable[[ClosureNode, _Pending], str] | None = None,
     check_system_commands: bool = True,
+    declaration_bases: Mapping[str, Path] | None = None,
 ) -> list[ClosureNode]:
     """Expand direct skills and their requirements into an ordered closure.
 
@@ -252,8 +259,14 @@ def build_closure(
     the schema-2 plan-time and status gates, so no validation, freezing,
     build planning, build-repository fetch or publication starts. The
     schema-2 full closure disables this and keeps its own plan-time gate.
+
+    Relative local ``git`` paths of direct declarations resolve against the
+    manifest's directory, or ``declaration_bases[name]`` for declarations
+    merged from another manifest (hybrid); requirements inherit the base of
+    the declaration that pulled them in.
     """
     nodes: dict[str, ClosureNode] = {}
+    bases = declaration_bases or {}
     fetched_repos = fetched_repos if fetched_repos is not None else set()
     pending: list[_Pending] = [
         _Pending(
@@ -263,6 +276,7 @@ def build_closure(
             source=decl.source,
             edge=ActivationEdge(consumer=PROJECT_EDGE, mode="full"),
             chain=f"{PROJECT_EDGE} -> {decl.name}",
+            base=bases.get(decl.name, project_manifest.path.parent),
         )
         for decl in project_manifest.skills
     ]
@@ -300,6 +314,7 @@ def build_closure(
                             commands=requirement.commands,
                         ),
                         chain=f"{item.chain} -> {requirement.name}",
+                        base=item.base,
                     )
                 )
         else:
@@ -307,7 +322,7 @@ def build_closure(
                 _gate_source(config, item.name, item.git, item.chain)
             _unify(node, item, error_factory=error_factory, ref_comparator=ref_comparator)
             if node_resolver is None and node.substituted is None and item.git is not None:
-                git_ops.validate_repo_source(node.repo, item.git)
+                git_ops.validate_repo_source(node.repo, item.declared_url())
         node.edges.append(item.edge)
         node.chains.append(item.chain)
 
@@ -510,11 +525,12 @@ def _ensure_repo(
     repo = config.skills_root / item.source
     if item.git is not None:
         _gate_source(config, item.name, item.git, item.chain)
+    declared = item.declared_url()
     if repo.exists():
         if not (repo / ".git").exists():
             raise ClosureError(f"Local skill path exists but is not a git repository: {repo}")
         repo_key = repo.resolve()
-        source = git_ops.validate_repo_source(repo, item.git)
+        source = git_ops.validate_repo_source(repo, declared)
         if item.git is None and source is not None:
             _gate_source(config, item.name, source.stored_url, item.chain)
         if (
@@ -524,10 +540,10 @@ def _ensure_repo(
             and repo_key not in fetched_repos
         ):
             try:
-                if item.git is None:
+                if declared is None:
                     git_ops.fetch_repo(repo)
                 else:
-                    git_ops.fetch_repo(repo, item.git)
+                    git_ops.fetch_repo(repo, declared)
             except git_ops.GitError as exc:
                 raise ClosureError(f"Failed to fetch {item.name} at {repo} (via {item.chain}): {exc}") from exc
             fetched_repos.add(repo_key)
@@ -540,7 +556,7 @@ def _ensure_repo(
         )
     destination = repo if use_cache else _temp_repo_dir(stack, item.source)
     try:
-        git_ops.clone_repo(item.git, destination)
+        git_ops.clone_repo(declared or item.git, destination)
     except git_ops.GitError as exc:
         raise ClosureError(f"Failed to clone {item.name} from {item.git}: {exc}") from exc
     if use_cache and fetch_existing:
