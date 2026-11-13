@@ -126,11 +126,9 @@ def clone_repo(remote_url: str, destination: Path) -> None:
         stderr = proc.stderr.strip() or proc.stdout.strip()
         from .git_admission import _classify_git_failure_output
 
-        if _classify_git_failure_output(stderr) == "redirect":
-            canonical = canonical_from_redirect(
-                remote_url, effective_url, _redirect_location(remote_url, effective_url, None),
-            )
-            raise GitError(f"git clone failed: {redirect_refusal(remote_url, canonical)}")
+        refused = _refused_redirect(_classify_git_failure_output(stderr), stderr, remote_url, effective_url, None)
+        if refused is not None:
+            raise GitError(f"git clone failed: {redirect_refusal(remote_url, refused.canonical)}")
         raise GitError(f"git clone failed for {remote_url} -> {destination}: {stderr}")
 
 
@@ -323,11 +321,9 @@ def fetch_repo(repo: Path, declared_url: str | None = None) -> None:
             from .git_admission import _classify_git_failure_output
 
             failure = _classify_git_failure_output(proc.stderr)
-            if failure == "redirect":
-                canonical = canonical_from_redirect(
-                    fetch_target, effective_url, _redirect_location(fetch_target, effective_url, repo),
-                )
-                raise GitError(f"git fetch failed in {repo}: {redirect_refusal(fetch_target, canonical)}")
+            refused = _refused_redirect(failure, proc.stderr, fetch_target, effective_url, repo)
+            if refused is not None:
+                raise GitError(f"git fetch failed in {repo}: {redirect_refusal(fetch_target, refused.canonical)}")
             raise GitError(f"git fetch failed in {repo}: {failure}; verify the declared endpoint and authentication")
         raise GitError(f"git fetch failed in {repo}: {proc.stderr.strip()}")
     if declared_url is not None and stored_url != fetch_target:
@@ -431,9 +427,73 @@ def _split_curl_trace(stderr: bytes) -> tuple[list[str], str]:
     return records, "\n".join(messages)
 
 
-def _discovery_without_credentials(
-    target: str, effective_url: str, repo: Path | None,
-) -> tuple[subprocess.CompletedProcess[str] | None, str | None]:
+# Event markers Git puts in front of each curl trace record. Server bytes
+# only ever follow the marker, so the earliest marker in a record is Git's.
+_TRACE_EVENTS = (
+    "== Info:", "=> Send header", "<= Recv header", "=> Send data", "<= Recv data",
+    "=> Send SSL data", "<= Recv SSL data",
+)
+_STATUS_LINE = re.compile(r"HTTP/\d(?:\.\d)? ([1-5]\d\d)(?: .*)?")
+
+
+def _last_response(records: list[str]) -> tuple[int | None, str | None]:
+    """Status code and ``Location`` of the last response in a curl trace.
+
+    A response's status line is the first header Git records after a request
+    (``=> Send header``), and one more after an interim 1xx response; any
+    later header that looks like a status line is server text, not a status.
+    Each record is attributed by its earliest event marker, so a header value
+    that quotes another marker cannot start a request or a response.
+    """
+    status: int | None = None
+    location: str | None = None
+    expect_status = False
+    for line in records:
+        found = [(index, marker) for marker in _TRACE_EVENTS if (index := line.find(marker)) >= 0]
+        if not found:
+            continue
+        index, marker = min(found)
+        rest = line[index + len(marker):]
+        if marker == "=> Send header":
+            expect_status = True
+        elif marker == "<= Recv header" and rest.startswith(":"):
+            header = rest[1:].strip()
+            if expect_status:
+                match = _STATUS_LINE.fullmatch(header)
+                status = int(match.group(1)) if match else None
+                location = None
+                expect_status = status is not None and status < 200
+                continue
+            name, separator, value = header.partition(":")
+            if separator and name.strip().lower() == "location" and value.strip():
+                location = value.strip()
+    return status, location
+
+
+@dataclass(frozen=True)
+class RedirectProbe:
+    """Outcome of :func:`probe_declared_url`: ``ok``, ``redirect`` or ``unverified``."""
+
+    outcome: Literal["ok", "redirect", "unverified"]
+    canonical: str | None = None
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
+class _Discovery:
+    """One discovery request without credentials, as seen in Git's curl trace."""
+
+    proc: subprocess.CompletedProcess[str]
+    status: int | None
+    location: str | None
+
+    @property
+    def redirected(self) -> bool:
+        """Git failed, and the server answered the last request with a 3xx status line."""
+        return self.proc.returncode != 0 and self.status is not None and 300 <= self.status < 400
+
+
+def _discovery_without_credentials(target: str, effective_url: str, repo: Path | None) -> _Discovery | None:
     """Make Git's discovery request for ``target`` once, without csk credentials.
 
     The same trust pins apply and redirects stay refused. Credential helpers,
@@ -449,13 +509,14 @@ def _discovery_without_credentials(
     removed, so the curl trace keeps Git's default record format with its
     timestamp prefix. Other lines on the pipe (a trace2 target configured in
     Git's own configuration, say) count as Git's messages; the classifier
-    only accepts anchored outcome records. Only the Location header is read
-    from the trace. Returns the finished process, whose stderr holds Git's
-    own messages without the trace (None when Git could not run), and the
-    refused redirect's Location.
+    only accepts anchored outcome records. Only the status line and the
+    Location header of the last response are read from the trace (see
+    :func:`_last_response`). Returns the finished process, whose stderr
+    holds Git's own messages without the trace, with that status and
+    Location; None when Git could not run.
     """
     if urlsplit(effective_url).scheme.lower() not in {"http", "https"}:
-        return None, None
+        return None
     try:
         with _private_trust() as trust:
             environment = {
@@ -482,33 +543,66 @@ def _discovery_without_credentials(
                 capture_output=True, env=environment, timeout=REDIRECT_PROBE_TIMEOUT,
             )
     except (GitError, OSError, subprocess.SubprocessError, ValueError):
-        return None, None
+        return None
     records, messages = _split_curl_trace(proc.stderr or b"")
     stdout = (proc.stdout or b"").decode("utf-8", "replace")
     proc = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, messages)
-    if proc.returncode == 0:
-        return proc, None
-    marker = "<= Recv header:"
-    for line in records:
-        _, found, header = line.partition(marker)
-        name, separator, value = header.partition(":")
-        if found and separator and name.strip().lower() == "location" and value.strip():
-            return proc, value.strip()
-    return proc, None
+    status, location = _last_response(records) if proc.returncode else (None, None)
+    return _Discovery(proc, status, location)
 
 
-def _redirect_location(target: str, effective_url: str, repo: Path | None) -> str | None:
-    """Location of a redirect Git just refused, from one repeat of the request without credentials."""
-    return _discovery_without_credentials(target, effective_url, repo)[1]
+def _answers_with_redirect(discovery: _Discovery) -> bool:
+    """Whether the discovery request was answered with a redirect that Git refused.
+
+    Git's own redirect record decides. libcurl may also refuse a response
+    after its status line, for a header it rejects (newer releases reject a
+    bare CR, for example); Git then reports that libcurl error, which csk
+    does not classify, and the server's 3xx status line in the trace decides.
+    """
+    from .git_admission import _classify_git_failure_output
+
+    if discovery.proc.returncode == 0:
+        return False
+    failure = _classify_git_failure_output(discovery.proc.stderr)
+    return failure == "redirect" or (failure == "unclassified" and discovery.redirected)
 
 
-@dataclass(frozen=True)
-class RedirectProbe:
-    """Outcome of :func:`probe_declared_url`: ``ok``, ``redirect`` or ``unverified``."""
+_ACCESS_FAILURE = re.compile(r"fatal: unable to access '[^']+': .+")
 
-    outcome: Literal["ok", "redirect", "unverified"]
-    canonical: str | None = None
-    detail: str | None = None
+
+def _unclassified_access_failure(stderr: str) -> bool:
+    """Git's own frame for a failed HTTP request with a libcurl error csk does not classify."""
+    from .git_admission import _evidence_class
+
+    for raw in stderr.lower().split("\n"):
+        record = raw.removesuffix("\r").strip()
+        if _ACCESS_FAILURE.fullmatch(record) and _evidence_class(record) is None:
+            return True
+    return False
+
+
+def _refused_redirect(
+    failure: str, stderr: str, target: str, effective_url: str, repo: Path | None,
+) -> RedirectProbe | None:
+    """The redirect verdict for a failed clone or fetch of ``target``, or None.
+
+    When Git reports the redirect, one repeat of the request without
+    credentials only reads its Location. When Git reports an HTTP failure
+    that csk does not classify (``unable to access`` with a libcurl error),
+    the server may still have answered with a redirect that libcurl refused
+    for a later header; the same single repeat then decides, through
+    :func:`_answers_with_redirect`. Any other failure makes no request.
+    """
+    if failure == "redirect":
+        discovery = _discovery_without_credentials(target, effective_url, repo)
+    elif failure == "unclassified" and _unclassified_access_failure(stderr):
+        discovery = _discovery_without_credentials(target, effective_url, repo)
+        if discovery is None or not _answers_with_redirect(discovery):
+            return None
+    else:
+        return None
+    location = discovery.location if discovery is not None else None
+    return RedirectProbe("redirect", canonical=canonical_from_redirect(target, effective_url, location))
 
 
 def probe_declared_url(url: str) -> RedirectProbe:
@@ -535,15 +629,14 @@ def probe_declared_url(url: str) -> RedirectProbe:
     validate_git_url(effective_url)
     if urlsplit(effective_url).scheme.lower() not in {"http", "https"}:
         return RedirectProbe("ok", detail="not an HTTP(S) endpoint; redirects do not apply")
-    proc, location = _discovery_without_credentials(url, effective_url, None)
-    if proc is None:
+    answer = _discovery_without_credentials(url, effective_url, None)
+    if answer is None:
         return RedirectProbe("unverified", detail="the request could not be completed")
-    if proc.returncode == 0:
+    if answer.proc.returncode == 0:
         return RedirectProbe("ok")
-    failure = _classify_git_failure_output(proc.stderr)
-    if failure == "redirect":
-        return RedirectProbe("redirect", canonical=canonical_from_redirect(url, effective_url, location))
-    return RedirectProbe("unverified", detail=failure)
+    if _answers_with_redirect(answer):
+        return RedirectProbe("redirect", canonical=canonical_from_redirect(url, effective_url, answer.location))
+    return RedirectProbe("unverified", detail=_classify_git_failure_output(answer.proc.stderr))
 
 
 def skill_source_path(skills_root: Path, source: str) -> Path:

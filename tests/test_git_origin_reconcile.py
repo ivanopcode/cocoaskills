@@ -161,7 +161,12 @@ def test_identity_refusal_preserves_clone_and_redacts_urls(tmp_path, monkeypatch
         assert "stored origin URL" in message and "declared URL" in message
         assert "Correct the declaration" in message and "move the existing clone aside" in message
         assert stored in message
-        assert declared.replace("ssh://git@", "ssh://***@") in message
+        # A local declaration is compared, and named, as the absolute path it
+        # resolves to (docs/reference.md: a local source's identity is its
+        # resolved absolute path). '/local/two' is already that path on POSIX;
+        # on Windows it is drive-relative and resolves onto the current drive.
+        shown = str(Path(declared).resolve()) if declared.startswith("/local/") else declared
+        assert repr(shown.replace("ssh://git@", "ssh://***@")) in message
     assert _repo_bytes(repo) == before
 
 

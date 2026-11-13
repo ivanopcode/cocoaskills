@@ -37,6 +37,8 @@ class Gitlab:
     requests: list[str]
     # Raw header lines added to every 301, as a server might send them.
     redirect_headers: list[bytes] = field(default_factory=list)
+    # Status of that answer: 301 unless a test makes the route fail otherwise.
+    redirect_status: dict[str, int] = field(default_factory=lambda: {'code': 301})
 
     def publish(self, name: str, tag: str, files: dict[str, str] | None = None) -> str:
         """Commit ``files`` to the source of ``name``, tag it and serve it."""
@@ -73,6 +75,7 @@ def gitlab(tmp_path, monkeypatch):
     sources.mkdir()
     requests: list[str] = []
     redirect_headers: list[bytes] = []
+    redirect_status = {'code': 301}
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         def do_GET(self):
@@ -82,7 +85,7 @@ def gitlab(tmp_path, monkeypatch):
                 len(parts) == 4 and parts[1] == 'team' and not parts[2].endswith('.git')
                 and (served / 'team' / f'{parts[2]}.git').is_dir()
             ):
-                self.send_response(301)
+                self.send_response(redirect_status['code'])
                 self.send_header('Location', f'/team/{parts[2]}.git/{parts[3]}')
                 self.send_header('Content-Length', '0')
                 self._headers_buffer.extend(redirect_headers)
@@ -100,7 +103,7 @@ def gitlab(tmp_path, monkeypatch):
     gitconfig.write_text(f'[url "http://127.0.0.1:{server.server_port}/"]\n insteadOf = https://gitlab.test/\n')
     monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(gitconfig))
     try:
-        yield Gitlab(served, sources, requests, redirect_headers)
+        yield Gitlab(served, sources, requests, redirect_headers, redirect_status)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -813,11 +816,17 @@ def auth_gitlab(gitlab, tmp_path, monkeypatch):
     cookies = tmp_path / 'cookies.txt'
     cookies.write_text('127.0.0.1\tFALSE\t/\tFALSE\t0\tjar\tCOOKIE_CANARY\n')
     gitconfig = tmp_path / 'auth-gitconfig'
+    # Forward slashes: Git config treats a backslash as an escape, so a
+    # Windows path written as is ('D:\a\...') makes the whole file invalid
+    # and every Git command fails before it sends a request.
     gitconfig.write_text(
         f'[url "{url}"]\n insteadOf = https://gitlab.test/\n'
-        f'[http]\n extraHeader = X-Canary: HEADER_CANARY\n cookieFile = {cookies}\n'
+        f'[http]\n extraHeader = X-Canary: HEADER_CANARY\n cookieFile = {cookies.as_posix()}\n'
         '[credential]\n helper =\n'
     )
+    # The fixture is effective only if Git can read this file.
+    assert run(['git', 'config', '--file', str(gitconfig), '--get', 'http.cookieFile'],
+               tmp_path).stdout.strip() == cookies.as_posix()
     monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(gitconfig))
     try:
         yield _AuthServer(url, requests, challenge)
@@ -990,15 +999,23 @@ def test_insteadof_to_ssh_keeps_one_https_spelling(
 # trace settings. So a non-UTF-8 byte in a 301 header, a bare CR followed by
 # text that looks like a Git message, GIT_TRACE_BARE (no timestamp prefix) or
 # a brief trace2 target on stderr leave the verdict unchanged: 'check
-# --network' exits 1 and, like the fetch, names the canonical spelling. A
-# brief trace2 target set in Git's global configuration (which the probe
-# keeps) only adds lines that the classifier ignores. No trace line or
-# header text reaches the output and nothing is written to TMPDIR.
+# --network' exits 1 and, like the fetch and the clone of 'csk install',
+# names the canonical spelling. A brief trace2 target set in Git's global
+# configuration (which the probe keeps) only adds lines that the classifier
+# ignores. No trace line or header text reaches the output and nothing is
+# written to TMPDIR.
+# The bare-CR rows depend on libcurl. Older releases (8.7.1, Apple Git)
+# pass the header and Git reports the 301. Newer ones (8.23.0, as linked by
+# Homebrew Git 2.56 and, by the CI evidence, Git for Windows 2.56) refuse
+# the response after the status line ('Carriage return found in header'),
+# so Git reports that libcurl error instead; csk then repeats the request
+# once and the server's 301 status line in the trace decides (R8). On such a
+# libcurl these rows failed at 314bba8 for fetch and check-network.
 # Witnesses that fail on bd9eef1 (strict decoding, universal newlines,
 # GIT_TRACE_BARE kept): check-network with the non-UTF-8 or CR header (exit
 # 0, "not verified") or GIT_TRACE_BARE, and fetch with the non-UTF-8 header
 # or GIT_TRACE_BARE (no canonical spelling). Controls that bd9eef1 passes:
-# 'plain', the trace2 rows, and fetch with the CR header.
+# 'plain', the trace2 rows, and fetch with the CR header (on older libcurl).
 _PROBE_HAZARDS = {
     'plain': (b'', {}, ''),
     'non-utf8-header': (b'X-Odd: caf\xe9\r\n', {}, ''),
@@ -1010,7 +1027,7 @@ _PROBE_HAZARDS = {
 
 
 @pytest.mark.parametrize('hazard', list(_PROBE_HAZARDS))
-@pytest.mark.parametrize('command', ['check-network', 'fetch'])
+@pytest.mark.parametrize('command', ['check-network', 'fetch', 'clone'])
 def test_redirect_probe_verdict_ignores_header_bytes_and_trace_settings(
     gitlab, tmp_path, csk_home, skills_root, monkeypatch, capsys, hazard, command,
 ):
@@ -1034,16 +1051,81 @@ def test_redirect_probe_verdict_ignores_header_bytes_and_trace_settings(
         shown = output.out + output.err
         assert rc == cli.EXIT_PARTIAL_FAIL, shown
         assert 'not verified' not in shown
-    else:
+    elif command == 'fetch':
         with pytest.raises(git_ops.GitError) as refused:
             git_ops.fetch_repo(repo_b, OLD.format('b'))
         shown = str(refused.value)
+    else:
+        with pytest.raises(git_ops.GitError) as refused:
+            git_ops.clone_repo(OLD.format('b'), tmp_path / 'fresh' / 'b')
+        shown = str(refused.value)
+        assert not (tmp_path / 'fresh' / 'b').exists()
     assert f"declared URL {OLD.format('b')!r} is not canonical" in shown
     assert f"same repository at {NEW.format('b')!r}" in shown, shown
     for trace in ('Recv header', 'Send header', '== Info', 'http.c:', 'X-Odd', 'X-Cr', 'caf'):
         assert trace not in shown
     assert gitlab.hits('b')[-1] == '/team/b/info/refs?service=git-upload-pack'
     assert not list(scratch.iterdir())
+
+
+# R8: when Git reports an HTTP failure that csk does not classify, the fetch
+# and the clone repeat the request once without credentials, and only a 3xx
+# status line, the first header of the server's answer, makes it a redirect.
+# A 500 that carries a same-repository Location is not a redirect, and
+# neither is a 500 with a later header that only looks like a 301 status
+# line (libcurl 8.7.1 and 8.23.0 both pass 'HTTP/1.1 301 Moved: x' into the
+# trace, and Git reports the 500), also when a header before it quotes Git's
+# request marker '=> Send header'. The fetch and the clone keep their own
+# error after exactly one repeat, and 'check --network' reports the URL as
+# not verified, exit 0. The plain 301 row is the positive control of the
+# same route and the same request count.
+_ANSWERS = {
+    'redirect': (301, []),
+    'server-error': (500, []),
+    'server-error-forged-status': (500, [b'HTTP/1.1 301 Moved: x\r\n']),
+    'server-error-forged-request': (500, [b'X-Q: => Send header: GET /\r\n', b'HTTP/1.1 301 Moved: x\r\n']),
+}
+
+
+@pytest.mark.parametrize('answer', list(_ANSWERS))
+@pytest.mark.parametrize('command', ['check-network', 'fetch', 'clone'])
+def test_only_a_3xx_status_line_makes_an_unclassified_failure_a_redirect(
+    gitlab, tmp_path, csk_home, skills_root, monkeypatch, capsys, answer, command,
+):
+    status, extra = _ANSWERS[answer]
+    gitlab.publish('b', 'v1')
+    repo_b = gitlab.clone(tmp_path / 'skills', 'b', NEW.format('b'))
+    _projects(tmp_path, csk_home, skills_root, monkeypatch, app=[_b_declaration(OLD.format('b'))])
+    gitlab.redirect_status['code'] = status
+    gitlab.redirect_headers.extend(extra)
+    destination = tmp_path / 'fresh' / 'b'
+    if command == 'check-network':
+        rc = cli.main(['check', '--canonical-urls', '--network', 'app'])
+        output = capsys.readouterr()
+        shown = output.out + output.err
+    else:
+        with pytest.raises(git_ops.GitError) as failed:
+            if command == 'fetch':
+                git_ops.fetch_repo(repo_b, OLD.format('b'))
+            else:
+                git_ops.clone_repo(OLD.format('b'), destination)
+        shown = str(failed.value)
+    assert gitlab.hits('b') == ['/team/b/info/refs?service=git-upload-pack'] * (1 if command == 'check-network' else 2)
+    assert not destination.exists()
+    if answer == 'redirect':
+        assert f"declared URL {OLD.format('b')!r} is not canonical" in shown
+        assert f"same repository at {NEW.format('b')!r}" in shown
+        assert command != 'check-network' or rc == cli.EXIT_PARTIAL_FAIL
+        return
+    assert 'not canonical' not in shown and 'HTTP redirect' not in shown
+    if command == 'check-network':
+        assert rc == cli.EXIT_OK, shown
+        assert f"warning: not verified {OLD.format('b')!r}: unclassified" in shown
+    elif command == 'fetch':
+        assert shown.endswith(': unclassified; verify the declared endpoint and authentication')
+    else:
+        assert shown.startswith(f"git clone failed for {OLD.format('b')} -> {destination}: ")
+        assert shown.endswith('The requested URL returned error: 500')
 
 
 # R7 N2: one project's install verdict does not depend on the declaration
