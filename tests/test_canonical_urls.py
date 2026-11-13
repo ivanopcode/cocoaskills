@@ -14,6 +14,7 @@ import base64
 import http.server
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -769,6 +770,8 @@ class _AuthServer:
     url: str
     requests: list[dict[str, str | None]]
     challenge: dict[str, bool]
+    # Status of the authenticated answer on /team/<n>/: 301, or 500 (R9).
+    answer: dict[str, int]
 
 
 @pytest.fixture
@@ -776,12 +779,14 @@ def auth_gitlab(gitlab, tmp_path, monkeypatch):
     """A loopback host that challenges every unauthenticated request with 401.
 
     Authenticated requests to /team/<n>/ get a real 301 to /team/<n>.git/ with
-    a Set-Cookie canary; ``challenge['on'] = False`` drops the 401. The Git
+    a Set-Cookie canary (``answer['status'] = 500`` makes it a 500 with the
+    same headers); ``challenge['on'] = False`` drops the 401. The Git
     configuration adds an extra header and a cookie file, both canaries, for
     every request to the host.
     """
     requests: list[dict[str, str | None]] = []
     challenge = {'on': True}
+    answer = {'status': 301}
     served = gitlab.served
 
     class Handler(http.server.SimpleHTTPRequestHandler):
@@ -798,7 +803,7 @@ def auth_gitlab(gitlab, tmp_path, monkeypatch):
                 return
             parts = self.path.split('/', 3)
             if len(parts) == 4 and parts[1] == 'team' and not parts[2].endswith('.git'):
-                self.send_response(301)
+                self.send_response(answer['status'])
                 self.send_header('Location', f'/team/{parts[2]}.git/{parts[3]}')
                 self.send_header('Set-Cookie', 'sid=SETCOOKIE_CANARY; Path=/')
                 self.send_header('Content-Length', '0')
@@ -829,7 +834,7 @@ def auth_gitlab(gitlab, tmp_path, monkeypatch):
                tmp_path).stdout.strip() == cookies.as_posix()
     monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(gitconfig))
     try:
-        yield _AuthServer(url, requests, challenge)
+        yield _AuthServer(url, requests, challenge, answer)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -843,20 +848,25 @@ def _basic(user: str, password: str) -> str:
 
 # R6 N3: the probe after a refused redirect, and 'check --network', add no
 # credentials: no credential helper, extra header or cookie reaches it, and
-# its first request carries no Authorization. The fetch before it (control)
-# does send the helper credentials, the header and the cookie, so the
-# fixture is effective. The documented exception: Git always lets libcurl
-# read ~/.netrc, so a netrc entry answers a 401, for the probe as for the
-# fetch, on the same path (a second HTTP request); the canary never reaches
-# output. This fixture has one host, so it does not show the same-host
-# limit: that comes from the followRedirects=false pin, which
+# its first request carries no Authorization. The fetch or clone before it
+# (control) does send the helper credentials, the header and the cookie, so
+# the fixture is effective. The documented exception: Git always lets
+# libcurl read ~/.netrc, so a netrc entry answers a 401, for the probe as for
+# the fetch, on the same path (a second HTTP request); the canary never
+# reaches output. R9: the same holds for the repeat after a failure that csk
+# does not classify ('server-error': the authenticated answer is a 500, so
+# Git reports 'unable to access ... returned error: 500'), and that repeat
+# finds no redirect. This fixture has one host, so it does not show the
+# same-host limit: that comes from the followRedirects=false pin, which
 # test_location_probe_adds_no_credentials_and_only_follows_a_redirect_failure
 # asserts.
+@pytest.mark.parametrize('answer', ['redirect', 'server-error'])
 @pytest.mark.parametrize('credentials', ['helper', 'netrc'])
-@pytest.mark.parametrize('command', ['fetch', 'check-network'])
+@pytest.mark.parametrize('command', ['fetch', 'clone', 'check-network'])
 def test_redirect_probe_adds_no_credentials_and_netrc_answers_on_the_same_path(
-    gitlab, auth_gitlab, tmp_path, monkeypatch, credentials, command,
+    gitlab, auth_gitlab, tmp_path, monkeypatch, credentials, command, answer,
 ):
+    auth_gitlab.answer['status'] = 301 if answer == 'redirect' else 500
     gitlab.publish('b', 'v1')
     repo_b = gitlab.clone(tmp_path / 'skills', 'b', NEW.format('b'))
     home = Path(os.environ['HOME'])
@@ -871,13 +881,16 @@ def test_redirect_probe_adds_no_credentials_and_netrc_answers_on_the_same_path(
             config.write(' helper = "!f() { echo username=helperuser; echo password=HELPER_CANARY; }; f"\n')
         expected_auth = _basic('helperuser', 'HELPER_CANARY')
     probe_start = 0
-    if command == 'fetch':
+    if command in ('fetch', 'clone'):
         with pytest.raises(git_ops.GitError) as refused:
-            git_ops.fetch_repo(repo_b, OLD.format('b'))
+            if command == 'fetch':
+                git_ops.fetch_repo(repo_b, OLD.format('b'))
+            else:
+                git_ops.clone_repo(OLD.format('b'), tmp_path / 'fresh' / 'b')
         shown = str(refused.value)
         fetch = auth_gitlab.requests[:2]
         probe_start = 2
-        # Control: the fetch sends the configured header, cookie and credentials.
+        # Control: the fetch or clone sends the configured header, cookie and credentials.
         assert [item['authorization'] for item in fetch] == [None, expected_auth]
         assert all(item['extra'] == 'HEADER_CANARY' for item in fetch)
         assert all('COOKIE_CANARY' in (item['cookie'] or '') for item in fetch)
@@ -898,7 +911,9 @@ def test_redirect_probe_adds_no_credentials_and_netrc_answers_on_the_same_path(
             # libcurl answers the challenge from ~/.netrc; the probe then
             # reads the redirect and names the canonical spelling.
             assert sent == [expected_auth]
-            assert NEW.format('b') in shown
+            assert (NEW.format('b') in shown) is (answer == 'redirect')
+    if answer == 'server-error':
+        assert 'not canonical' not in shown
 
 
 # R6 N4: the probe's curl trace never reaches the disk. At the moment Git
@@ -1069,8 +1084,9 @@ def test_redirect_probe_verdict_ignores_header_bytes_and_trace_settings(
 
 
 # R8: when Git reports an HTTP failure that csk does not classify, the fetch
-# and the clone repeat the request once without credentials, and only a 3xx
-# status line, the first header of the server's answer, makes it a redirect.
+# and the clone repeat the request once (its credentials: the server-error
+# rows of the R6 N3 test), and only a 3xx status of the final answer to the
+# discovery request makes it a redirect.
 # A 500 that carries a same-repository Location is not a redirect, and
 # neither is a 500 with a later header that only looks like a 301 status
 # line (libcurl 8.7.1 and 8.23.0 both pass 'HTTP/1.1 301 Moved: x' into the
@@ -1078,7 +1094,10 @@ def test_redirect_probe_verdict_ignores_header_bytes_and_trace_settings(
 # request marker '=> Send header'. The fetch and the clone keep their own
 # error after exactly one repeat, and 'check --network' reports the URL as
 # not verified, exit 0. The plain 301 row is the positive control of the
-# same route and the same request count.
+# same route and the same request count. The forged rows need libcurl to pass
+# the forged header into the trace, as both releases do today;
+# test_only_the_final_answer_to_the_discovery_request_decides checks the
+# parser on fixed traces, independent of libcurl.
 _ANSWERS = {
     'redirect': (301, []),
     'server-error': (500, []),
@@ -1126,6 +1145,381 @@ def test_only_a_3xx_status_line_makes_an_unclassified_failure_a_redirect(
     else:
         assert shown.startswith(f"git clone failed for {OLD.format('b')} -> {destination}: ")
         assert shown.endswith('The requested URL returned error: 500')
+
+
+def _trace(*events: tuple[str, str], message: str) -> bytes:
+    """Probe stderr as Git writes it: timestamped curl trace records, then Git's message."""
+    lines = [f'12:00:00.000001 http.c:953              {marker}: {text}'.rstrip() for marker, text in events]
+    return ('\n'.join([*lines, message]) + '\n').encode()
+
+
+_GET = ('=> Send header', 'GET /team/b/info/refs?service=git-upload-pack HTTP/1.1')
+_CONNECT = ('=> Send header', 'CONNECT example.test:443 HTTP/1.1')
+_SENT = ('=> Send header', '')
+_END = ('<= Recv header', '')
+
+
+def _recv(text: str) -> tuple[str, str]:
+    return ('<= Recv header', text)
+
+
+_LOC = _recv('Location: /team/b.git/info/refs?service=git-upload-pack')
+_REFUSED = "fatal: unable to access 'https://example.test/team/b/': Carriage return found in header"
+_REDIRECT = "fatal: unable to access 'https://example.test/team/b/': The requested URL returned error: 301"
+_ERROR_500 = "fatal: unable to access 'https://example.test/team/b/': The requested URL returned error: 500"
+_TUNNEL_302 = "fatal: unable to access 'https://example.test/team/b/': CONNECT tunnel failed, response 302"
+_FORGED = _recv('HTTP/1.1 301 Moved: x')
+_TRACES = {
+    # Redirects: the 3xx is the final answer to the discovery GET.
+    'redirect': ('canonical', [_GET, _SENT, _recv('HTTP/1.1 301 Moved Permanently'), _LOC, _END], _REDIRECT),
+    'refused-after-status': ('canonical', [_GET, _SENT, _recv('HTTP/1.1 301 Moved Permanently'), _LOC], _REFUSED),
+    'continue-then-redirect': ('canonical', [_GET, _SENT, _recv('HTTP/1.1 100 Continue'), _END,
+                                      _recv('HTTP/1.1 301 Moved Permanently'), _LOC], _REFUSED),
+    'hints-then-redirect': ('canonical', [_GET, _SENT, _recv('HTTP/1.1 103 Early Hints'), _recv('Link: </x>; rel=preload'),
+                                   _END, _recv('HTTP/1.1 301 Moved Permanently'), _LOC], _REFUSED),
+    'netrc-then-redirect': ('canonical', [_GET, _SENT, _recv('HTTP/1.1 401 Unauthorized'), _END, _GET,
+                                   ('=> Send header', 'Authorization: Basic <redacted>'), _SENT,
+                                   _recv('HTTP/1.1 301 Moved Permanently'), _LOC], _REFUSED),
+    'tunnel-then-redirect': ('canonical', [_CONNECT, _SENT, _recv('HTTP/1.1 200 Connection established'), _END,
+                                    _GET, _SENT, _recv('HTTP/1.1 301 Moved Permanently'), _LOC], _REFUSED),
+    # A redirect whose own answer has no Location: the 401's earlier one does not count.
+    'stale-location': ('generic', [_GET, _SENT, _recv('HTTP/1.1 401 Unauthorized'), _LOC, _END, _GET, _SENT,
+                                   _recv('HTTP/1.1 301 Moved Permanently')], _REFUSED),
+    # Not redirects.
+    'hints-forged-then-500': ('unverified', [_GET, _SENT, _recv('HTTP/1.1 103 Early Hints'), _FORGED, _END,
+                                      _recv('HTTP/1.1 500 Internal Server Error'), _LOC, _END], _ERROR_500),
+    'hints-forged-then-200': ('unverified', [_GET, _SENT, _recv('HTTP/1.1 103 Early Hints'), _FORGED, _END,
+                                      _recv('HTTP/1.1 200 OK'), _LOC], _REFUSED),
+    'hints-refused': ('unverified', [_GET, _SENT, _recv('HTTP/1.1 103 Early Hints'), _FORGED, _LOC], _REFUSED),
+    'connect-302-relative': ('unverified', [_CONNECT, _SENT, _recv('HTTP/1.1 302 Found'), _LOC, _END], _TUNNEL_302),
+    'connect-302-absolute': ('unverified', [_CONNECT, _SENT, _recv('HTTP/1.1 302 Found'),
+                                     _recv('Location: http://portal.example/login'), _END], _TUNNEL_302),
+    'proxy-auth-then-connect-302': ('unverified', [_CONNECT, _SENT, _recv('HTTP/1.1 407 Proxy Authentication Required'),
+                                            _END, _CONNECT, _SENT, _recv('HTTP/1.1 302 Found'), _LOC, _END],
+                                    _TUNNEL_302),
+    'answer-to-post': ('unverified', [_GET, _SENT, _recv('HTTP/1.1 200 OK'), _END,
+                               ('=> Send header', 'POST /team/b/git-upload-pack HTTP/1.1'), _SENT,
+                               _recv('HTTP/1.1 301 Moved Permanently'), _LOC], _REFUSED),
+    'forged-request-marker': ('unverified', [_GET, _SENT, _recv('HTTP/1.1 500 Internal Server Error'),
+                                      _recv('X-Q: => Send header: ' + _GET[1]), _FORGED, _LOC], _REFUSED),
+    'no-access-frame': ('unverified', [_GET, _SENT, _recv('HTTP/1.1 301 Moved Permanently'), _LOC],
+                        'error: RPC failed; curl 56 Recv failure: Connection reset by peer'),
+}
+
+
+# R9 B1: only the final, non-1xx answer to Git's discovery request (GET
+# .../info/refs?service=git-upload-pack) decides a redirect, read from fixed
+# traces in the record format Git writes (captured from Git 2.54/libcurl
+# 8.7.1 and Git 2.56/libcurl 8.23.0), so this holds whatever libcurl does.
+# A proxy's answer to CONNECT (with a relative or an absolute Location, also
+# after a 407), an interim 1xx block and the header that ends it, a forged
+# status line inside a 1xx or after a quoted request marker, a 3xx answer to
+# a later POST, and a trace that never reaches a final answer are not
+# redirects. Positive controls: a 301 after 100 Continue, after a 103 with a
+# Link header, after a 401 that netrc answered, and through a CONNECT tunnel,
+# each with the canonical spelling; a Location from an earlier answer is not
+# carried into a final 301 that has none ('stale-location': a redirect, but
+# no spelling is named). 'no-access-frame' pins that 'check
+# --network' needs the same Git frame (an unclassified 'unable to access')
+# that the fetch and the clone need before they repeat.
+@pytest.mark.parametrize('case', list(_TRACES))
+def test_only_the_final_answer_to_the_discovery_request_decides(monkeypatch, case):
+    expected, events, message = _TRACES[case]
+    url = 'https://example.test/team/b'
+
+    def fake_run(command, **kwargs):
+        if '--get-url' in command:
+            return subprocess.CompletedProcess(command, 0, url + '\n', '')
+        assert 'ls-remote' in command and '--heads' in command
+        return subprocess.CompletedProcess(command, 128, b'', _trace(*events, message=message))
+
+    monkeypatch.setattr(git_ops, '_run', fake_run)
+    result = git_ops.probe_declared_url(url)
+    if expected == 'canonical':
+        assert result == git_ops.RedirectProbe('redirect', canonical=url + '.git')
+    elif expected == 'generic':
+        assert result == git_ops.RedirectProbe('redirect', canonical=None)
+    else:
+        assert result.outcome == 'unverified' and result.canonical is None
+
+
+# R9 N2: only an 'unable to access' failure that csk does not classify, or
+# Git's own redirect record, starts the one repeat after a failed fetch or
+# clone. A classified access failure (DNS, TLS, 503 on https://), an
+# unclassified failure without that frame, the same frame relayed as a
+# 'remote:' line, and a redirect frame that conflicts with an authentication
+# record start none. Git's stderr is injected, and so is the repeat, so no
+# host is contacted. The two repeating rows are the positive controls.
+_FAILURES = {
+    'refused-response': ("fatal: unable to access 'https://example.test/team/b/': "
+                         "Carriage return found in header", 1),
+    'redirect': ("fatal: unable to access 'https://example.test/team/b/': The requested URL returned error: 301", 1),
+    'dns': ("fatal: unable to access 'https://example.test/team/b/': Could not resolve host: example.test", 0),
+    'tls': ("fatal: unable to access 'https://example.test/team/b/': SSL certificate problem: "
+            "unable to get local issuer certificate", 0),
+    'http-503': ("fatal: unable to access 'https://example.test/team/b/': The requested URL returned error: 503", 0),
+    'rpc-failure': ('error: RPC failed; curl 56 Recv failure: Connection reset by peer\n'
+                    'fatal: expected flush after ref listing', 0),
+    'relayed': ("remote: fatal: unable to access 'https://example.test/team/b/': "
+                "Carriage return found in header", 0),
+    'conflict': ("fatal: unable to access 'https://example.test/team/b/': The requested URL returned error: 301\n"
+                 "fatal: Authentication failed for 'https://example.test/team/b/'", 0),
+}
+
+
+@pytest.mark.parametrize('case', list(_FAILURES))
+@pytest.mark.parametrize('command', ['fetch', 'clone'])
+def test_only_an_unclassified_access_failure_starts_the_repeat(tmp_path, monkeypatch, command, case):
+    stderr, repeats = _FAILURES[case]
+    url = 'https://example.test/team/b'
+    repo = init_git_repo(tmp_path / 'clone')
+    run(['git', 'remote', 'add', 'origin', url + '.git'], repo)
+    real_run = git_ops._run
+    probes = []
+
+    def failing(command_line, **kwargs):
+        if 'ls-remote' in command_line and '--heads' in command_line:
+            probes.append(command_line)
+            return subprocess.CompletedProcess(command_line, 128, b'', b'fatal: probe refused\n')
+        if command in command_line:
+            return subprocess.CompletedProcess(command_line, 128, '', stderr + '\n')
+        return real_run(command_line, **kwargs)
+
+    monkeypatch.setattr(git_ops, '_run', failing)
+    with pytest.raises(git_ops.GitError) as failed:
+        if command == 'fetch':
+            git_ops.fetch_repo(repo, url)
+        else:
+            git_ops.clone_repo(url, tmp_path / 'fresh')
+    assert len(probes) == repeats
+    assert ('not canonical' in str(failed.value)) is (case == 'redirect')
+
+
+LOCATION = b'Location: /team/b.git/info/refs?service=git-upload-pack\r\n'
+CLOSE = b'Content-Length: 0\r\nConnection: close\r\n\r\n'
+BARE_CR = b'X-Cr: a\rb\r\n'
+FORGED_STATUS = b'HTTP/1.1 301 Moved: x\r\n'
+MOVED = b'HTTP/1.1 301 Moved Permanently\r\n' + LOCATION
+# (route, redirect?, canned answer). 'origin': the declared server, reached
+# directly; 'proxy': http.proxy answers CONNECT itself; 'tunnel': the proxy
+# accepts CONNECT and relays to a TLS origin, which gives the answer.
+_RAW = {
+    'continue-301': ('origin', True, b'HTTP/1.1 100 Continue\r\n\r\n' + MOVED + CLOSE),
+    'continue-301-cr': ('origin', True, b'HTTP/1.1 100 Continue\r\n\r\n' + MOVED + BARE_CR + CLOSE),
+    'hints-301-cr': ('origin', True, b'HTTP/1.1 103 Early Hints\r\nLink: </x>; rel=preload\r\n\r\n'
+                     + MOVED + BARE_CR + CLOSE),
+    'hints-forged-500': ('origin', False, b'HTTP/1.1 103 Early Hints\r\n' + FORGED_STATUS + b'\r\n'
+                         b'HTTP/1.1 500 Internal Server Error\r\n' + LOCATION + CLOSE),
+    'hints-forged-200-cr': ('origin', False, b'HTTP/1.1 103 Early Hints\r\n' + FORGED_STATUS + b'\r\n'
+                            b'HTTP/1.1 200 OK\r\nContent-Type: application/x-git-upload-pack-advertisement\r\n'
+                            + LOCATION + BARE_CR + CLOSE),
+    'connect-302-relative': ('proxy', False, b'HTTP/1.1 302 Found\r\n' + LOCATION + CLOSE),
+    'connect-302-absolute': ('proxy', False, b'HTTP/1.1 302 Found\r\nLocation: http://portal.example/login\r\n' + CLOSE),
+    'tunnel-301': ('tunnel', True, MOVED + CLOSE),
+    'tunnel-301-cr': ('tunnel', True, MOVED + BARE_CR + CLOSE),
+}
+
+
+def _read_head(conn) -> bytes | None:
+    data = b''
+    while b'\r\n\r\n' not in data:
+        chunk = conn.recv(65536)
+        if not chunk:
+            return None
+        data += chunk
+    return data
+
+
+class _RawEndpoint:
+    """Loopback endpoint giving every request one canned answer, optionally over TLS or as a CONNECT tunnel."""
+
+    def __init__(self, answer: bytes, *, tls=None, tunnel_to: int | None = None):
+        import socket
+
+        self.answer, self.tls, self.tunnel_to = answer, tls, tunnel_to
+        self.requests: list[str] = []
+        self.sock = socket.create_server(('127.0.0.1', 0))
+        self.port = self.sock.getsockname()[1]
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
+
+    def _handle(self, conn):
+        import socket
+
+        try:
+            if self.tls is not None:
+                conn = self.tls.wrap_socket(conn, server_side=True)
+            head = _read_head(conn)
+            if head is None:
+                return
+            self.requests.append(head.split(b'\r\n', 1)[0].decode('latin-1'))
+            if self.tunnel_to is not None and head.startswith(b'CONNECT '):
+                upstream = socket.create_connection(('127.0.0.1', self.tunnel_to))
+                conn.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n')
+                relay = threading.Thread(target=self._copy, args=(upstream, conn), daemon=True)
+                relay.start()
+                self._copy(conn, upstream)
+                relay.join(timeout=10)
+                return
+            conn.sendall(self.answer)
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _copy(source, target):
+        try:
+            while chunk := source.recv(65536):
+                target.sendall(chunk)
+        except OSError:
+            pass
+        finally:
+            for side in (source, target):
+                try:
+                    side.shutdown(2)
+                except OSError:
+                    pass
+
+    def close(self):
+        self.sock.close()
+
+
+def _tls_origin(tmp_path, host: str):
+    """A server TLS context for ``host`` and the CA file that trusts it (generated, test-only)."""
+    import ssl
+    from datetime import UTC, datetime, timedelta
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+
+    now = datetime.now(UTC)
+    ca_key, leaf_key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'R9 test root')])
+    ca = (x509.CertificateBuilder().subject_name(ca_name).issuer_name(ca_name).public_key(ca_key.public_key())
+          .serial_number(1).not_valid_before(now - timedelta(hours=1)).not_valid_after(now + timedelta(days=1))
+          .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+          .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False, key_encipherment=False,
+                                       data_encipherment=False, key_agreement=False, key_cert_sign=True,
+                                       crl_sign=True, encipher_only=False, decipher_only=False), critical=True)
+          .sign(ca_key, hashes.SHA256()))
+    leaf = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)]))
+            .issuer_name(ca_name).public_key(leaf_key.public_key()).serial_number(2)
+            .not_valid_before(now - timedelta(hours=1)).not_valid_after(now + timedelta(days=1))
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName(host)]), critical=False)
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+            .sign(ca_key, hashes.SHA256()))
+    pem = serialization.Encoding.PEM
+    ca_file, chain, key = tmp_path / 'r9-ca.pem', tmp_path / 'r9-leaf.pem', tmp_path / 'r9-leaf.key'
+    ca_file.write_bytes(ca.public_bytes(pem))
+    chain.write_bytes(leaf.public_bytes(pem))
+    key.write_bytes(leaf_key.private_bytes(pem, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(chain, key)
+    key.unlink()
+    return context, ca_file
+
+
+# R9 B1 with real Git: the same rule as the fixed-trace test above, end to
+# end, for the fetch, the clone and 'check --network'. The declared server
+# reached directly answers after an interim response (100 Continue, or a 103
+# whose first header is a forged 'HTTP/1.1 301 Moved: x'), or a proxy
+# (http.proxy, https:// declaration) refuses CONNECT with a 302 carrying a
+# relative or an absolute Location. Only the declared server's own final 3xx
+# is a redirect: the 301 after 100 and after a 103 with a Link header, also
+# with a later bare-CR header, and the 301 a TLS origin sends through an
+# accepted CONNECT tunnel, are redirects with the canonical spelling
+# (positive controls; libcurl 8.23.0 refuses the bare-CR rows after the
+# status line, libcurl 8.7.1 passes them and Git reports the 301). The other
+# rows keep their own error, after at most one repeat.
+@pytest.mark.parametrize('case', list(_RAW))
+@pytest.mark.parametrize('command', ['check-network', 'fetch', 'clone'])
+def test_redirect_verdict_comes_only_from_the_declared_servers_final_answer(
+    gitlab, tmp_path, csk_home, skills_root, monkeypatch, capsys, case, command,
+):
+    from csk import git_trust
+
+    route, redirect, answer = _RAW[case]
+    gitlab.publish('b', 'v1')
+    repo_b = gitlab.clone(tmp_path / 'skills', 'b', NEW.format('b'))
+    _projects(tmp_path, csk_home, skills_root, monkeypatch, app=[_b_declaration(OLD.format('b'))])
+    for key in ('http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY',
+                'no_proxy', 'NO_PROXY'):
+        monkeypatch.delenv(key, raising=False)
+    endpoints = []
+    if route == 'origin':
+        origin = _RawEndpoint(answer)
+        endpoints.append(origin)
+        config = f'[url "http://127.0.0.1:{origin.port}/"]\n insteadOf = https://gitlab.test/\n'
+        answered = origin
+    elif route == 'proxy':
+        proxy = _RawEndpoint(answer)
+        endpoints.append(proxy)
+        config = f'[http]\n proxy = http://127.0.0.1:{proxy.port}\n'
+        answered = proxy
+    else:
+        context, ca_file = _tls_origin(tmp_path, 'gitlab.test')
+        monkeypatch.setenv('CSK_GIT_CA_BUNDLE', str(ca_file))
+        git_trust._VALIDATED.clear()
+        origin = _RawEndpoint(answer, tls=context)
+        proxy = _RawEndpoint(b'', tunnel_to=origin.port)
+        endpoints += [origin, proxy]
+        config = f'[http]\n proxy = http://127.0.0.1:{proxy.port}\n'
+        answered = origin
+    gitconfig = tmp_path / 'r9-gitconfig'
+    gitconfig.write_text(config)
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(gitconfig))
+    destination = tmp_path / 'fresh' / 'b'
+    try:
+        if command == 'check-network':
+            rc = cli.main(['check', '--canonical-urls', '--network', 'app'])
+            output = capsys.readouterr()
+            shown = output.out + output.err
+        else:
+            with pytest.raises(git_ops.GitError) as failed:
+                if command == 'fetch':
+                    git_ops.fetch_repo(repo_b, OLD.format('b'))
+                else:
+                    git_ops.clone_repo(OLD.format('b'), destination)
+            shown = str(failed.value)
+    finally:
+        for endpoint in endpoints:
+            endpoint.close()
+    expected_line = 'CONNECT gitlab.test:443 HTTP/1.1' if route == 'proxy' else \
+        'GET /team/b/info/refs?service=git-upload-pack HTTP/1.1'
+    assert set(answered.requests) == {expected_line}, answered.requests
+    if command == 'check-network':
+        assert len(answered.requests) == 1
+    elif case == 'hints-forged-200-cr':
+        # libcurl 8.7.1 passes the bare CR and Git reports a protocol error
+        # without the 'unable to access' frame, so it makes no repeat.
+        assert len(answered.requests) in (1, 2)
+    else:
+        assert len(answered.requests) == 2
+    assert not destination.exists()
+    if redirect:
+        assert f"declared URL {OLD.format('b')!r} is not canonical" in shown, shown
+        assert f"same repository at {NEW.format('b')!r}" in shown
+        assert command != 'check-network' or rc == cli.EXIT_PARTIAL_FAIL
+        return
+    assert 'not canonical' not in shown and 'HTTP redirect' not in shown, shown
+    if command == 'check-network':
+        assert rc == cli.EXIT_OK, shown
+        assert f"warning: not verified {OLD.format('b')!r}" in shown
+    elif command == 'fetch':
+        assert shown.endswith('; verify the declared endpoint and authentication')
+    else:
+        assert shown.startswith(f"git clone failed for {OLD.format('b')} -> {destination}: ")
 
 
 # R7 N2: one project's install verdict does not depend on the declaration

@@ -434,20 +434,31 @@ _TRACE_EVENTS = (
     "=> Send SSL data", "<= Recv SSL data",
 )
 _STATUS_LINE = re.compile(r"HTTP/\d(?:\.\d)? ([1-5]\d\d)(?: .*)?")
+# Git's discovery request: ``GET <path>/info/refs?service=git-upload-pack``, in
+# origin form, or in absolute form when Git sends it through a forward proxy.
+_DISCOVERY_REQUEST = re.compile(r"GET \S*/info/refs\?service=git-upload-pack HTTP/\d(?:\.\d)?")
 
 
-def _last_response(records: list[str]) -> tuple[int | None, str | None]:
-    """Status code and ``Location`` of the last response in a curl trace.
+def _discovery_answer(records: list[str]) -> tuple[int | None, str | None]:
+    """Status and ``Location`` of the final answer to Git's discovery request.
 
-    A response's status line is the first header Git records after a request
-    (``=> Send header``), and one more after an interim 1xx response; any
-    later header that looks like a status line is server text, not a status.
-    Each record is attributed by its earliest event marker, so a header value
-    that quotes another marker cannot start a request or a response.
+    The trace is read as requests, each a block of ``=> Send header`` records
+    whose first line is the request line, and the responses that follow each.
+    Only the last request counts, and only when it is Git's discovery request
+    (``GET .../info/refs?service=git-upload-pack``): the answer to anything
+    else, a proxy's answer to ``CONNECT`` in particular, decides nothing. Of
+    the responses to that request only the final one counts: an interim 1xx
+    response is skipped together with its headers, up to the empty record
+    that ends it. The final response's status line is the first header after
+    the request or after the last interim block, and its Location comes only
+    from its own header block. Each record is attributed by its earliest Git
+    event marker, so server bytes cannot start a request, a response or a
+    header block. Returns ``(None, None)`` when there is no such answer.
     """
+    request: str | None = None
     status: int | None = None
     location: str | None = None
-    expect_status = False
+    phase = "idle"
     for line in records:
         found = [(index, marker) for marker in _TRACE_EVENTS if (index := line.find(marker)) >= 0]
         if not found:
@@ -455,18 +466,37 @@ def _last_response(records: list[str]) -> tuple[int | None, str | None]:
         index, marker = min(found)
         rest = line[index + len(marker):]
         if marker == "=> Send header":
-            expect_status = True
-        elif marker == "<= Recv header" and rest.startswith(":"):
-            header = rest[1:].strip()
-            if expect_status:
-                match = _STATUS_LINE.fullmatch(header)
-                status = int(match.group(1)) if match else None
-                location = None
-                expect_status = status is not None and status < 200
+            if phase != "request":
+                request, status, location, phase = None, None, None, "request"
+            if request is None and rest.startswith(":"):
+                request = rest[1:].strip()
+            continue
+        if phase == "request":
+            phase = "status"
+        if marker != "<= Recv header" or not rest.startswith(":"):
+            continue
+        header = rest[1:].strip()
+        if phase == "status":
+            match = _STATUS_LINE.fullmatch(header)
+            code = int(match.group(1)) if match else None
+            if code is None:
+                phase = "done"
+            elif code < 200:
+                phase = "interim"
+            else:
+                status, phase = code, "final"
+        elif phase == "interim":
+            if not header:
+                phase = "status"
+        elif phase == "final":
+            if not header:
+                phase = "done"
                 continue
             name, separator, value = header.partition(":")
             if separator and name.strip().lower() == "location" and value.strip():
                 location = value.strip()
+    if request is None or not _DISCOVERY_REQUEST.fullmatch(request):
+        return None, None
     return status, location
 
 
@@ -481,7 +511,12 @@ class RedirectProbe:
 
 @dataclass(frozen=True)
 class _Discovery:
-    """One discovery request without credentials, as seen in Git's curl trace."""
+    """One discovery request without credentials, as seen in Git's curl trace.
+
+    ``status`` and ``location`` belong to the final answer to Git's discovery
+    request (see :func:`_discovery_answer`), never to an interim response or
+    to a proxy's answer to ``CONNECT``.
+    """
 
     proc: subprocess.CompletedProcess[str]
     status: int | None
@@ -489,7 +524,7 @@ class _Discovery:
 
     @property
     def redirected(self) -> bool:
-        """Git failed, and the server answered the last request with a 3xx status line."""
+        """Git failed, and the final answer to its discovery request has a 3xx status."""
         return self.proc.returncode != 0 and self.status is not None and 300 <= self.status < 400
 
 
@@ -510,10 +545,10 @@ def _discovery_without_credentials(target: str, effective_url: str, repo: Path |
     timestamp prefix. Other lines on the pipe (a trace2 target configured in
     Git's own configuration, say) count as Git's messages; the classifier
     only accepts anchored outcome records. Only the status line and the
-    Location header of the last response are read from the trace (see
-    :func:`_last_response`). Returns the finished process, whose stderr
-    holds Git's own messages without the trace, with that status and
-    Location; None when Git could not run.
+    Location header of the final answer to the discovery request are read
+    from the trace (see :func:`_discovery_answer`). Returns the finished
+    process, whose stderr holds Git's own messages without the trace, with
+    that status and Location; None when Git could not run.
     """
     if urlsplit(effective_url).scheme.lower() not in {"http", "https"}:
         return None
@@ -547,7 +582,7 @@ def _discovery_without_credentials(target: str, effective_url: str, repo: Path |
     records, messages = _split_curl_trace(proc.stderr or b"")
     stdout = (proc.stdout or b"").decode("utf-8", "replace")
     proc = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, messages)
-    status, location = _last_response(records) if proc.returncode else (None, None)
+    status, location = _discovery_answer(records) if proc.returncode else (None, None)
     return _Discovery(proc, status, location)
 
 
@@ -556,15 +591,21 @@ def _answers_with_redirect(discovery: _Discovery) -> bool:
 
     Git's own redirect record decides. libcurl may also refuse a response
     after its status line, for a header it rejects (newer releases reject a
-    bare CR, for example); Git then reports that libcurl error, which csk
-    does not classify, and the server's 3xx status line in the trace decides.
+    bare CR, for example); Git then reports that libcurl error in its
+    ``unable to access`` frame, which csk does not classify, and the 3xx
+    status of the final answer to the discovery request decides. This is the
+    rule a fetch or clone failure must meet before csk repeats the request,
+    so ``check --network`` and the fetch and clone give one verdict.
     """
     from .git_admission import _classify_git_failure_output
 
     if discovery.proc.returncode == 0:
         return False
-    failure = _classify_git_failure_output(discovery.proc.stderr)
-    return failure == "redirect" or (failure == "unclassified" and discovery.redirected)
+    stderr = discovery.proc.stderr
+    failure = _classify_git_failure_output(stderr)
+    if failure == "redirect":
+        return True
+    return failure == "unclassified" and _unclassified_access_failure(stderr) and discovery.redirected
 
 
 _ACCESS_FAILURE = re.compile(r"fatal: unable to access '[^']+': .+")
@@ -591,7 +632,8 @@ def _refused_redirect(
     that csk does not classify (``unable to access`` with a libcurl error),
     the server may still have answered with a redirect that libcurl refused
     for a later header; the same single repeat then decides, through
-    :func:`_answers_with_redirect`. Any other failure makes no request.
+    :func:`_answers_with_redirect`. Any other failure makes no request. The
+    repeat is bounded by ``REDIRECT_PROBE_TIMEOUT``.
     """
     if failure == "redirect":
         discovery = _discovery_without_credentials(target, effective_url, repo)
