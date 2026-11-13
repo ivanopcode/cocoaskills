@@ -99,20 +99,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports an HTTP failure that csk does not classify (`unable to access` with
   a libcurl error): newer libcurl releases refuse some redirect responses
   after the status line, for example for a header with a bare CR, and Git then
-  reports that error instead of the redirect. Then only a 3xx status of the
-  declared server's final answer to Git's discovery request
-  (`GET .../info/refs`) makes it a redirect, here and in
-  `csk check --canonical-urls --network`, and the canonical spelling comes
-  only from that answer's `Location`; interim 1xx responses, a proxy's answer
-  to `CONNECT` and headers that only look like a status line do not count.
-  For a plain `http://` URL through a proxy, csk, like Git, cannot tell the
-  proxy's own answer from the server's. The repeat is limited to 60 seconds,
+  reports that error instead of the redirect. Then csk reads, from Git's
+  trace, the status of the declared server's final answer to Git's discovery
+  request (`GET .../info/refs`) and counts a 3xx as a redirect, here and in
+  `csk check --canonical-urls --network`; the canonical spelling comes from
+  that answer's `Location`. Interim 1xx responses, a proxy's answer to
+  `CONNECT` and headers that only look like a status line do not count. Two
+  limits remain. For a plain `http://` URL through a proxy, csk, like Git,
+  cannot tell the proxy's own answer from the server's. A server that
+  deliberately sends malformed HTTP/2 header fields can make csk report a
+  redirect it never sent, because libcurl copies those bytes into the trace;
+  only a hostile server can do this, and it could get the same verdict with
+  a genuine 301. Either way csk still fetches only the declared URL, the
+  repeat still uses no credential helper, cookie or extra header, and
+  nothing is written to disk. The repeat is limited to 60 seconds,
   so a failure that timed out can take up to 60 seconds longer, and when the
   repeat succeeds Git also lists the refs (one more request with protocol
-  v2). On `http://` URLs csk does not classify DNS, connection and timeout
-  failures or 403 and 503 (those patterns expect `https://`), so they also
-  start the repeat. When any fetch of a declared URL fails,
-  `csk update` also names the places that declare that URL.
+  v2). On `http://` URLs csk does not classify DNS failures, refused or
+  timed-out connections, or the statuses 401, 403, 502, 503 and 504 (those
+  patterns expect `https://`), so they also start the repeat. When any fetch
+  of a declared URL fails, `csk update` also names the places that declare
+  that URL.
 - `csk install` with a tag or branch missing from the local clone suggests
   `csk upgrade`, which fetches it.
 
