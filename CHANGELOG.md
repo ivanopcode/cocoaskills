@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-13
+
 ### Upgrade notes
 
 - Mixed URL spellings of one repository now refuse. csk requires one
@@ -18,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repository and name both places until every place uses one spelling or the
   stale worktree leaves the registry. Run `csk check --canonical-urls --all`
   before upgrading to find them.
+- A refused `csk install` keeps the clones it made before the refusal. A
+  later `csk install` installs from those clones without the spelling check;
+  `csk check --canonical-urls`, `csk update` and `csk upgrade` keep reporting
+  the conflict until every place uses one spelling.
 - csk fetches only the declared URL. A Skillfile or dependency declaration
   whose URL redirects now fails even when you corrected the clone's `origin`
   by hand: the stored `origin` is not a fallback. Correct the declaration on
@@ -1085,7 +1091,8 @@ Initial public release.
 - `csk status` with stable labels: `up-to-date`, `missing`, `update-available`,
   `content-drift`, `error`.
 
-[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.22.1...main
+[Unreleased]: https://github.com/ivanopcode/cocoaskills/compare/v0.23.0...main
+[0.23.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/ivanopcode/cocoaskills/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/ivanopcode/cocoaskills/compare/v0.21.1...v0.22.0
 [0.21.1]: https://github.com/ivanopcode/cocoaskills/compare/v0.21.0...v0.21.1
