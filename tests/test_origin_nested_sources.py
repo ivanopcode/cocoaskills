@@ -89,8 +89,9 @@ def test_declared_source_paths_follow_links_like_upgrade(
     import shutil
     repo, _, declared, commit, requests = redirecting_repository
     outside = tmp_path / 'outside'
-    shutil.copytree(repo, outside)
-    shutil.rmtree(repo)
+    # Move, not copy and delete: Git for Windows keeps object files
+    # read-only, and shutil.rmtree cannot unlink them there.
+    repo.rename(outside)
     source = 'internal/fixture-skill'
     if layout == 'plain':
         shutil.copytree(outside, skills_root / source)

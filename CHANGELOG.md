@@ -95,7 +95,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credential helper, prompt, extra header or cookie (a `~/.netrc` entry may
   answer an authentication challenge from the same host, as for the fetch,
   which makes the repeat two HTTP requests), and its response headers stay in
-  memory: csk writes no trace file. When any fetch of a declared URL fails,
+  memory: csk writes no trace file. csk makes the same single repeat when Git
+  reports an HTTP failure that csk does not classify (`unable to access` with
+  a libcurl error): newer libcurl releases refuse some redirect responses
+  after the status line, for example for a header with a bare CR, and Git then
+  reports that error instead of the redirect. Only a 3xx status line, the
+  first header of the server's answer, makes it a redirect, here and in
+  `csk check --canonical-urls --network`. When any fetch of a declared URL fails,
   `csk update` also names the places that declare that URL.
 - `csk install` with a tag or branch missing from the local clone suggests
   `csk upgrade`, which fetches it.
