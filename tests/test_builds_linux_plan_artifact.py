@@ -2,10 +2,33 @@ from __future__ import annotations
 
 import hashlib
 import os
+import struct
 
 import pytest
 
 from csk.builds import go_v1, toolchain
+
+
+def _elf_header(*, ei_class=2, ei_data=1, e_type=2, e_machine=62, size=64,
+                ei_osabi=0, ei_abiversion=0, ei_pad_last=0, e_version=1,
+                e_ehsize=64):
+    data = bytearray(size)
+    data[:4] = b"\x7fELF"
+    data[4] = ei_class
+    data[5] = ei_data
+    data[6] = 1
+    data[7] = ei_osabi
+    if size > 8:
+        data[8] = ei_abiversion
+    if size > 15:
+        data[15] = ei_pad_last
+    if size >= 20:
+        struct.pack_into("<HH", data, 16, e_type, e_machine)
+    if size >= 24:
+        struct.pack_into("<I", data, 20, e_version)
+    if size >= 54:
+        struct.pack_into("<H", data, 52, e_ehsize)
+    return bytes(data)
 
 
 def _environment(root):
@@ -46,27 +69,52 @@ def test_linux_private_environment(tmp_path, override, platform, diagnostic):
         assert error.value.code == go_v1.CODE_WORKER_PROTOCOL_INVALID
 
 
-# Format magic only: not ELF structure, machine/type, loadability or execution.
-# The positive control prevents reject-all success.
-@pytest.mark.parametrize("payload", [
-    b"\x7fELFnot executed", b"MZpe", b"\xcf\xfa\xed\xfe",
-    b"", b"\x7f", b"\x7fE", b"\x7fEL", b"#!/bin/sh\n",
+# ELF class/encoding/machine/type must match the x86-64 host target; the
+# valid EXEC and DYN controls next to each plant prevent reject-all success.
+@pytest.mark.parametrize(("payload", "accepted"), [
+    (_elf_header(), True),
+    (_elf_header(e_type=3), True),
+    (_elf_header(ei_class=1), False),
+    (_elf_header(ei_data=2), False),
+    (_elf_header(e_machine=183), False),
+    (_elf_header(e_machine=40), False),
+    (_elf_header(e_type=1), False),
+    (_elf_header(e_type=4), False),
+    (_elf_header(size=63), False),
+    (_elf_header(size=20), False),
+    (_elf_header(size=19), False),
+    (_elf_header(size=8), False),
+    (_elf_header(e_version=0), False),
+    (_elf_header(e_ehsize=0), False),
+    (_elf_header(ei_osabi=9), False),
+    (_elf_header(ei_abiversion=1), False),
+    (_elf_header(ei_pad_last=1), False),
+    (b"\x7fELFnot executed", False),
+    (b"MZpe", False),
+    (b"\xcf\xfa\xed\xfe", False),
+    (b"", False),
+    (b"#!/bin/sh\n", False),
 ])
-def test_linux_artifact_format(tmp_path, monkeypatch, payload):
+def test_linux_artifact_format(tmp_path, monkeypatch, payload, accepted):
     def forbidden(*args, **kwargs):
         pytest.fail("artifact verification attempted execution")
     monkeypatch.setattr(go_v1.subprocess, "Popen", forbidden)
+    # Positive control: the exact host header is accepted by the same check.
+    assert go_v1._native_executable_header(
+        _elf_header(), "linux", _host_machine="x86_64")
     stage = tmp_path / "stage"
     output = stage / "bin" / "tool"
     output.parent.mkdir(parents=True)
     output.write_bytes(payload)
-    if payload.startswith(b"\x7fELF"):
-        result = go_v1._verify_artifact(stage, output, "bin/tool", 100, "linux")
+    if accepted:
+        result = go_v1._verify_artifact(
+            stage, output, "bin/tool", 100, "linux", _host_machine="x86_64")
         assert result.sha256 == "sha256:" + hashlib.sha256(payload).hexdigest()
         assert result.size == len(payload)
     else:
         with pytest.raises(go_v1.GoV1Error, match="not a native executable") as error:
-            go_v1._verify_artifact(stage, output, "bin/tool", 100, "linux")
+            go_v1._verify_artifact(
+                stage, output, "bin/tool", 100, "linux", _host_machine="x86_64")
         assert error.value.code == "artifact_output_invalid"
     assert output.read_bytes() == payload
 
@@ -81,7 +129,7 @@ def test_linux_artifact_storage(tmp_path, kind, code):
     output = stage / "bin" / "tool"
     output.parent.mkdir(parents=True)
     original = tmp_path / "original"
-    original.write_bytes(b"\x7fELFpayload")
+    original.write_bytes(_elf_header())
     if kind == "symlink":
         output.symlink_to(original)
     elif kind == "hardlink":
@@ -90,12 +138,16 @@ def test_linux_artifact_storage(tmp_path, kind, code):
         output.write_bytes(original.read_bytes())
     limit = 4 if kind == "oversize" else 100
     if code is None:
-        assert go_v1._verify_artifact(stage, output, "bin/tool", limit, "linux").size == 11
+        assert go_v1._verify_artifact(
+            stage, output, "bin/tool", limit, "linux",
+            _host_machine="x86_64").size == 64
     else:
         with pytest.raises(go_v1.GoV1Error) as error:
-            go_v1._verify_artifact(stage, output, "bin/tool", limit, "linux")
+            go_v1._verify_artifact(
+                stage, output, "bin/tool", limit, "linux",
+                _host_machine="x86_64")
         assert error.value.code == code
-    assert original.read_bytes() == b"\x7fELFpayload"
+    assert original.read_bytes() == _elf_header()
 
 
 # Actual bytes discriminate Linux tool launchers; a flag alone is insufficient.
